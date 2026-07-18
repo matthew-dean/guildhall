@@ -6295,7 +6295,8 @@ describe('Orchestrator.tick — feedback loop', () => {
         status: 'in_progress',
         assignedTo: 'worker-agent',
         title: 'Pantry Pulse app spec',
-        spec: 'Build a local web app with browser-proofable UI.',
+        description: 'Build a local web app with browser-proofable UI.',
+        spec: VALID_SPEC,
         notes: [{
           agentId: 'worker-agent',
           role: 'self-critique',
@@ -6336,6 +6337,56 @@ describe('Orchestrator.tick — feedback loop', () => {
     const task = (await readQueue()).tasks.find(candidate => candidate.id === 'pantry-live')!
     expect(task.notes.at(-1)?.role).toBe('worker-progress-review')
     expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
+  })
+
+  it('rejects proof-setup handoffs that claim a broad build without recording the exact command', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'proof-setup',
+        title: 'Establish concrete proof for the model task',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        workKind: 'verification',
+        proposalRationale: 'proof-recovery: establish a concrete project-backed proof command for the containing task',
+        spec: VALID_SPEC,
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            '- AC-1: Met — pnpm build passed.',
+            '',
+            'Review proof packet:',
+            '- Verification commands passed: pnpm build passed.',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const reviewer = stubAgent('reviewer-agent')
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer, worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    const out = await orch.tick()
+
+    expect(reviewer.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-remediation')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'proof-setup')!
+    expect(task.notes.at(-1)?.content).toContain('exact task-specific project command')
+
+    const retry = await orch.tick()
+
+    expect(retry.kind).toBe('processed')
+    expect(worker.calls).toHaveLength(1)
+    expect(reviewer.calls).toHaveLength(0)
   })
 
   it('rejects artifact worker handoff without project-file changes before review can approve it', async () => {

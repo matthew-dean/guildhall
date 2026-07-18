@@ -47563,3 +47563,75 @@ User job:
   the same honest outcome. It does not prove that the Narrative Harness MVP
   release is complete; this task still needs a source-grounded plan and real
   provider-backed proof.
+
+## 2026-07-18 proof setup must record an exact project command
+
+User job:
+
+> When Guildhall creates proof-setup work, it must establish the concrete
+> project-backed command that proves the containing task. A broad workspace
+> build or test claim must not make the proof work look complete.
+
+### Contract Touch Decision
+
+- Work id: `codex:proof-setup-exact-command-2026-07-18`.
+- Touched contracts: orchestrator proof-setup dispatch, worker handoff
+  validation, and the existing acceptance/proof read model.
+- Considered but not touched: task schema, release schema, proof-path schema,
+  and owner-approval semantics. The fix uses existing command/proof fields and
+  does not add another proof authority.
+- Required follow-up: retry the installed Narrative Harness proof child and
+  continue the remaining release blockers; a proof child without an exact
+  command remains active work.
+- Proof required: focused orchestrator regression, build, fresh install and
+  restart, stale-server check, then the real Narrative Harness proof child.
+- Apply/revert: keep the proof-setup prompt, handoff guard, regression, and
+  installed retry together; reverting one would reopen the generic-build path.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. This is a derived workflow guard over the
+  existing acceptance criteria and proof-path records.
+- Scope/change class: execution-handoff validation; no stored shape changed.
+- Existing data impact: an existing proof-setup child in `review` without a
+  concrete command is routed back to `in_progress`; no proof is created and no
+  completed work is invalidated.
+- Migration id: none.
+- Compatibility reader: none added.
+- Fixtures/tests: `src/runtime/__tests__/orchestrator.test.ts`, including the
+  existing stale-worker regression and the new exact-command regression.
+- Owner-facing plan text: the exact command and matching proof path are part
+  of Guildhall's proof setup; a generic workspace build is not an owner
+  checkpoint and must be repaired by Guildhall.
+- Rollback/revert: revert the guard, prompt, and tests together.
+
+### Live finding this closes
+
+- The installed Narrative Harness proof child reached `review` with a
+  self-critique claiming `pnpm build`, despite its task contract requiring a
+  task-specific project proof command. It had no `proofPaths` command and no
+  concrete automated criterion command. The prior flow would have allowed the
+  reviewer lane to consume that handoff.
+- The source-level regression now routes that state back to `in_progress`,
+  records the exact-command reason in the shared task notes, and tells the
+  worker to create or record the narrow project-backed proof before review.
+- Installed proof is intentionally pending until this patch is rebuilt and
+  restarted. The child is not considered complete merely because its previous
+  status was `review`.
+
+### Installed retry result
+
+- Fresh installed artifact: `/api/stale-server` returned `stale:false` after
+  rebuilding, reinstalling, and restarting. Startup again reported seven
+  projects, zero refreshes, and zero errors; listener-ready to refresh-complete
+  remained under 40 ms.
+- The real child first moved `review -> in_progress` through the
+  proof-specific coordinator remediation, then reached `worker-agent` on the
+  next tick instead of repeating the rejection. The worker attempted a
+  task-specific proof script and returned the task to `review` with the honest
+  blocker `spec_ambiguous: Proof script module resolution failing`.
+- Task detail now shows `proofPaths: []`, no concrete acceptance command, and a
+  self-critique that marks the criterion not met because `pnpm build` does not
+  prove the broad-genre model slice. This is the expected fail-closed result;
+  Narrative Harness remains below the 0.11 release threshold until the script
+  resolves its project module and records a passing exact command.

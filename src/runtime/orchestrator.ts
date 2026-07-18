@@ -61,6 +61,7 @@ import {
   checkpointIsFreshForTask,
   writeCheckpoint,
   ensureExploringTranscriptEntry,
+  isProofSetupTask,
   activeEscalations,
   hasOpenEscalation,
   resolveSupersededEscalations,
@@ -320,6 +321,23 @@ function isLeanCommandBackedTask(task: Task): boolean {
     task.sizePlan?.score === 1 &&
     task.sizePlan.reviewBudgetHint === 'lean' &&
     task.acceptanceCriteria.some((criterion) => typeof criterion.command === 'string' && criterion.command.trim().length > 0)
+  )
+}
+
+function taskHasConcreteProjectProofCommand(task: Task): boolean {
+  const criterionCommand = task.acceptanceCriteria.some((criterion) =>
+    typeof criterion.command === 'string' &&
+    isConcreteProjectProofCommand(criterion.command),
+  )
+  if (criterionCommand) return true
+  return (task.proofPaths ?? []).some((path) =>
+    Boolean(
+      path &&
+      typeof path === 'object' &&
+      !Array.isArray(path) &&
+      typeof path.command === 'string' &&
+      isConcreteProjectProofCommand(path.command),
+    ),
   )
 }
 
@@ -7609,11 +7627,15 @@ export class Orchestrator {
         }
       }
       case 'in_progress':
+        const proofSetupPrompt = isProofSetupTask(task)
+          ? ' This is a proof-setup child. Its durable deliverable is one exact, task-specific project command recorded in an automated acceptance criterion and matching proof path. Do not claim pnpm build, pnpm test, or another broad workspace convention as proof. If the visible project evidence does not name a command, create the smallest repo-local proof command needed for this containing task, run it, and record the exact command and expected result before review.'
+          : ''
         return {
           kind: 'agent',
           agent: this.opts.agents.worker,
           promptSuffix:
-            "Implement this task per the spec. Internal toolchain, module-resolution, package-script, build, test, or proof-command failures are implementation work: fix them in the project and keep going. Do not raise a decision_required escalation or ask the owner to choose between a compile step and a TypeScript runtime for a proof script. Only escalate when a genuine external access requirement or an actual product decision outside the task contract is required. Before any review handoff, persist a self-critique note that includes: acceptance-criterion status, a minimum-scope check, a Review proof packet with changed files/diff scope, exact verification commands and pass/fail results, proof path updates for actual commands/routes/manual workflows/provider dashboards/blocking setup, the current working hypothesis, and known gaps. Only after that proof packet is durable should you transition status to 'review'.",
+            proofSetupPrompt +
+            " Implement this task per the spec. Internal toolchain, module-resolution, package-script, build, test, or proof-command failures are implementation work: fix them in the project and keep going. Do not raise a decision_required escalation or ask the owner to choose between a compile step and a TypeScript runtime for a proof script. Only escalate when a genuine external access requirement or an actual product decision outside the task contract is required. Before any review handoff, persist a self-critique note that includes: acceptance-criterion status, a minimum-scope check, a Review proof packet with changed files/diff scope, exact verification commands and pass/fail results, proof path updates for actual commands/routes/manual workflows/provider dashboards/blocking setup, the current working hypothesis, and known gaps. Only after that proof packet is durable should you transition status to 'review'.",
         }
       case 'review':
         return {
@@ -12701,7 +12723,8 @@ export class Orchestrator {
     const hasCommandBackedAcceptance = task.acceptanceCriteria.some((criterion) =>
       typeof criterion.command === 'string' && criterion.command.trim().length > 0,
     )
-    if (!likelyLocalWebStarter && !hasCommandBackedAcceptance) return null
+    const proofSetupNeedsCommand = isProofSetupTask(task) && !taskHasConcreteProjectProofCommand(task)
+    if (!proofSetupNeedsCommand && !likelyLocalWebStarter && !hasCommandBackedAcceptance) return null
     if (
       beforeStatus === 'review' &&
       hasMixedReviewAndAutomatedAcceptanceCriteria(task) &&
@@ -12713,7 +12736,7 @@ export class Orchestrator {
       return null
     }
     const dirtyTaskFiles = await this.changedFilesForTask(task)
-    if (dirtyTaskFiles.length > 0) return null
+    if (!proofSetupNeedsCommand && dirtyTaskFiles.length > 0) return null
 
     const now = this.now()
     await this.withQueueWriteLock(async () => {
@@ -12729,7 +12752,9 @@ export class Orchestrator {
         agentId: 'coordinator',
         role: 'worker-progress-review',
         content:
-          'Guildhall rejected the stale worker self-critique without project-file changes outside `.guildhall`. Resume implementation by creating or editing the likely target files, then run focused verification before writing another self-critique.',
+          proofSetupNeedsCommand
+            ? 'Guildhall rejected the proof-setup handoff because it did not record an exact task-specific project command. Do not use a broad workspace build or test as proof; record the concrete command and matching proof path before writing another self-critique.'
+            : 'Guildhall rejected the stale worker self-critique without project-file changes outside `.guildhall`. Resume implementation by creating or editing the likely target files, then run focused verification before writing another self-critique.',
         timestamp: now,
       })
       queuedTask.updatedAt = now
@@ -12743,7 +12768,9 @@ export class Orchestrator {
       agent_name: 'coordinator-remediation',
       is_error: true,
       message:
-        'Rejected a stale worker self-critique because the project has no implementation-file changes.',
+        proofSetupNeedsCommand
+          ? 'Rejected a proof-setup handoff because no exact task-specific project command was recorded.'
+          : 'Rejected a stale worker self-critique because the project has no implementation-file changes.',
     })
 
     return {
@@ -14280,7 +14307,7 @@ function findLatestWorkerSelfCritiqueRejectionIndex(task: Task): number {
     if (
       note?.agentId === 'coordinator' &&
       note.role === 'worker-progress-review' &&
-      /self-critique without project-file changes/i.test(note.content)
+      /self-critique without project-file changes|proof-setup handoff because it did not record an exact task-specific project command/i.test(note.content)
     ) {
       return i
     }
