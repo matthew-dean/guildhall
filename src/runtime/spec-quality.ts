@@ -64,7 +64,9 @@ export function currentPlanProcessLeakage(text: string): string | null {
   return match ? match.source : null
 }
 
-function groundingContext(task: Pick<Task, 'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief'>): string {
+type GroundingTask = Pick<Task, 'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief'>
+
+function groundingContext(task: GroundingTask, includeProductBrief = true): string {
   return JSON.stringify({
     title: task.title,
     description: task.description,
@@ -72,7 +74,7 @@ function groundingContext(task: Pick<Task, 'title' | 'description' | 'references
     sourceClaims: task.sourceClaims,
     request: task.request,
     requestIntake: task.requestIntake,
-    productBrief: task.productBrief,
+    ...(includeProductBrief ? { productBrief: task.productBrief } : {}),
   }).toLowerCase()
 }
 
@@ -91,34 +93,49 @@ function unsupportedMatches(text: string, context: string, pattern: RegExp): str
  * admission rule deterministic: a spec may elaborate documented intent, but
  * it may not manufacture commands, paths, model families, or named artifacts.
  */
-export function validateSpecGrounding(task: Pick<Task,
-  'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief' | 'spec'
->): SpecGroundingResult {
-  const text = task.spec?.trim() ?? ''
+function validateImportedPlanningText(
+  task: GroundingTask,
+  text: string,
+  label: 'Spec' | 'Product brief',
+  includeProductBriefInContext: boolean,
+): SpecGroundingResult {
   if (!text) return { ok: true, errors: [] }
   const imported = (task.sourceClaims?.length ?? 0) > 0 ||
     task.requestIntake?.createdBy === 'workspace-importer' ||
     task.requestIntake?.evidenceRefs?.some(ref => /^import:/.test(ref)) === true
   if (!imported) return { ok: true, errors: [] }
-  const context = groundingContext(task)
+  const context = groundingContext(task, includeProductBriefInContext)
   const errors: string[] = []
   const executable = unsupportedMatches(text, context, EXECUTABLE_DETAIL_PATTERN)
   if (executable.length > 0) {
-    errors.push(`Spec contains executable detail not present in the visible task/source context: ${executable.join(', ')}.`)
+    errors.push(`${label} contains executable detail not present in the visible task/source context: ${executable.join(', ')}.`)
   }
   const paths = unsupportedMatches(text, context, PROJECT_PATH_PATTERN)
   if (paths.length > 0) {
-    errors.push(`Spec names project paths or files not present in the visible task/source context: ${paths.join(', ')}.`)
+    errors.push(`${label} names project paths or files not present in the visible task/source context: ${paths.join(', ')}.`)
   }
   const models = unsupportedMatches(text, context, MODEL_FAMILY_PATTERN)
   if (models.length > 0) {
-    errors.push(`Spec names model families not present in the visible task/source context: ${models.join(', ')}.`)
+    errors.push(`${label} names model families not present in the visible task/source context: ${models.join(', ')}.`)
   }
   const symbols = unsupportedMatches(text, context, INVENTED_SYMBOL_PATTERN)
   if (symbols.length > 0) {
-    errors.push(`Spec names artifacts or interfaces not present in the visible task/source context: ${symbols.join(', ')}.`)
+    errors.push(`${label} names artifacts or interfaces not present in the visible task/source context: ${symbols.join(', ')}.`)
   }
   return { ok: errors.length === 0, errors }
+}
+
+export function validateSpecGrounding(task: Pick<Task,
+  'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief' | 'spec'
+>): SpecGroundingResult {
+  return validateImportedPlanningText(task, task.spec?.trim() ?? '', 'Spec', true)
+}
+
+export function validateProductBriefGrounding(
+  task: GroundingTask,
+  productBrief: NonNullable<Task['productBrief']>,
+): SpecGroundingResult {
+  return validateImportedPlanningText(task, JSON.stringify(productBrief), 'Product brief', false)
 }
 
 export function stripCurrentPlanProcessLeakage(text: string): string {

@@ -47250,3 +47250,63 @@ User job:
   `idle_limit`; it recorded `123112/3140/76544` input/output/cache tokens and
   `$0.006816`. This remains a failed installed-artifact proof, not a model
   success claim.
+
+## 2026-07-18 imported product briefs fail closed on invented executable detail
+
+User job:
+
+> Re-intake must not save a guessed command, file path, model family, fixture,
+> or artifact name merely because it appears in an agent-authored success
+> metric. The brief and spec must share the same visible-source boundary.
+
+### Contract Touch Decision
+
+- Work id: `codex:imported-brief-grounding-2026-07-18`.
+- Touched contracts: imported product-brief persistence and the existing
+  source-grounded planning admission helper.
+- Considered but not touched: ProductBrief schema, source-claim schema, task
+  status, release membership, and provider configuration; the guard uses
+  existing provenance and does not add another authority field.
+- Required follow-up: keep the remaining import/recovery brief writers on this
+  same shared boundary before calling imported planning fully closed. The
+  installed agent-tool path is now covered: NH re-intake rejected the old
+  `scripts/proof-broad-genre-drafting.mjs` success metric and left the task
+  without a newly persisted guessed brief.
+- Proof required: product-brief grounding unit tests, existing brief/tool
+  tests, installed re-intake/API inspection, and a subsequent source-grounded
+  spec pass.
+- Apply/revert: keep the shared validator, write-boundary call, and tests
+  together; reverting only one would reopen the same hallucinated intake path.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new persisted fields. Existing ProductBrief
+  values are checked before the existing writer commits them.
+- Scope/change class: imported planning write-boundary validation.
+- Existing data impact: old malformed briefs remain historical evidence; new
+  imported/re-intaken writes fail closed instead of adding more unsupported
+  detail. A later cleanup may re-save affected active briefs through the same
+  boundary.
+- Migration id: none.
+- Compatibility reader: none added.
+- Fixtures/tests: `spec-quality.test.ts` and `product-brief.test.ts`.
+- Owner-facing plan text: unsupported executable detail remains an honest
+  shaping/open-question boundary; no owner action is manufactured by the
+  validator.
+- Rollback/revert: revert the validator and product-brief write check together.
+
+### Installed proof
+
+- Fresh installed artifact: `/api/stale-server` returned `stale:false` for
+  `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Fresh startup: listener and completion were both observed at roughly 67 ms;
+  seven registered projects were available, `refreshedProjectCount` was `0`,
+  and `errorCount` was `0`.
+- Re-intake: `POST
+  /api/project/task/task-broad-genre-drafting-model-proof/reframe-task?projectId=narrative-harness`
+  returned `{"ok":true,"status":"exploring"}`. A one-tick run attempted to
+  author the task brief, but the shared validator rejected unsupported
+  executable detail. The task detail API then showed `spec:null` and
+  `productBrief:null`, with the visible source claim and reference preserved.
+- This is a successful honesty proof, not an MVP-completion proof: the task
+  still needs a source-grounded brief/spec and a real provider-backed proof.

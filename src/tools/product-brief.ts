@@ -11,7 +11,7 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueueWithSummary,
 } from '../runtime/project-state-boundary.js'
-import { currentPlanProcessLeakage } from '../runtime/spec-quality.js'
+import { currentPlanProcessLeakage, validateProductBriefGrounding } from '../runtime/spec-quality.js'
 
 // ---------------------------------------------------------------------------
 // update-product-brief: the Spec Agent's authoring surface for the product
@@ -434,6 +434,10 @@ export async function updateProductBrief(
         existing?.successMetric === input.successMetric
         ? { approvedBy: existing.approvedBy, approvedAt: existing.approvedAt }
         : {}),
+    }
+    const grounding = validateProductBriefGrounding(task, brief)
+    if (!grounding.ok) {
+      return { success: false, error: grounding.errors.join(' ') }
     }
     task.productBrief = brief
     task.updatedAt = now
