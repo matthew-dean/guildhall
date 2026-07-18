@@ -3,6 +3,7 @@ import { summarizeCurrentProof } from '../shared/current-proof.js'
 import {
   executionScopeRows,
   releaseLabelFromId,
+  summarizeProjectScopeOutsideWork,
   taskScopeEligibility,
   taskScopeNodeId,
   type ProjectScope,
@@ -2169,6 +2170,7 @@ function sourceHealth(nodes: OrientationNode[], gaps: OrientationGap[]): Orienta
 function summarizeStartReadiness(input: {
   workLabel: string | null
   progress: OrientationProgress
+  outsideWork: { count: number } | null
   startReadiness: NonNullable<BuildProjectOrientationSpineInput['startReadiness']>
 }): { headline: string; topBlocker: string | null; nextAction: string } | null {
   const { workLabel, startReadiness } = input
@@ -2186,6 +2188,13 @@ function summarizeStartReadiness(input: {
     : 'Project start is blocked until the current issue is resolved.'
   switch (startReadiness.code) {
     case 'all_terminal':
+      if (input.outsideWork?.count) {
+        return {
+          headline: `${genericWorkLabel} is complete.`,
+          topBlocker: message,
+          nextAction: 'Review completed scope.',
+        }
+      }
       if (input.progress.total > input.progress.done + input.progress.deferred) {
         return {
           headline: `${genericWorkLabel} is waiting on proof.`,
@@ -2259,6 +2268,7 @@ function buildSummary(input: {
   pins: OrientationPin[]
   blockers: OrientationBlocker[]
   startReadiness?: BuildProjectOrientationSpineInput['startReadiness']
+  scopeProjection?: ProjectScopeProjection | null
   runStatus?: BuildProjectOrientationSpineInput['runStatus']
 }): ProjectOrientationSummary {
   const purpose = input.charter.goal ?? `Project ${input.projectId} needs a confirmed purpose.`
@@ -2268,6 +2278,9 @@ function buildSummary(input: {
     ? summarizeStartReadiness({
         workLabel,
         progress: input.progress,
+        outsideWork: input.scopeProjection
+          ? summarizeProjectScopeOutsideWork(input.scopeProjection.rows, input.scopeProjection.selectedScope)
+          : null,
         startReadiness: input.startReadiness,
       })
     : null
@@ -2582,6 +2595,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     pins: activePinsForSummary,
     blockers,
     startReadiness,
+    scopeProjection: input.scopeProjection,
     runStatus: input.runStatus,
   }), gaps)
   const sourceTrail = buildSourceTrail({

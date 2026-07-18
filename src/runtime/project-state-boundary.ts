@@ -42,6 +42,7 @@ import {
   type ProjectStateDatabaseTaskOverlay,
   type ProjectStateDatabaseTaskOverlayStores,
   type ProjectStateDatabaseTaskRelationships,
+  type ProjectStateDatabaseSummary,
   type ProjectStateDatabaseSurfaceReadOptions,
   type ProjectStateDatabaseSurfaceState,
   type ProjectStateDatabaseTaskEvidenceCurrentManyRead,
@@ -53,6 +54,7 @@ import type {
   TaskEvidenceKind,
 } from '@guildhall/core'
 import {
+  PROJECT_SUMMARY_PROJECTION_VERSION,
   buildProjectSummaryProjectionFromIndexedState,
   prepareProjectSummaryProjectionFromUnknownQueue,
   readProjectSummaryProjection,
@@ -62,6 +64,20 @@ import {
 import { executionScopeRows, taskScopeNodeId, type ProjectScope } from './project-scope-projection.js'
 import { buildEffectiveTask, buildEffectiveTasks } from './effective-task.js'
 import { appendTaskEvidence, TASK_EVIDENCE_RETENTION } from './task-state-store.js'
+
+function projectSummaryAtRuntimeVersion(
+  summary: ProjectStateDatabaseSummary<ProjectSummaryProjection>,
+): ProjectSummaryProjection {
+  const version = summary.payload && typeof summary.payload === 'object'
+    ? (summary.payload as { version?: unknown }).version
+    : undefined
+  return {
+    ...summary.payload,
+    freshness: typeof version !== 'number' || version === PROJECT_SUMMARY_PROJECTION_VERSION
+      ? summary.freshness
+      : 'stale',
+  }
+}
 
 export const FORBIDDEN_PROJECT_TASK_FIELDS = [
   'assignedTo',
@@ -301,7 +317,12 @@ async function buildProjectCanonicalCurrentState(
     repositories: currentState.repositories,
     diagnostics: currentState.diagnostics,
     memoryHealth: currentState.memoryHealth,
-    summary: currentState.summary,
+    summary: currentState.summary
+      ? {
+          ...currentState.summary,
+          payload: projectSummaryAtRuntimeVersion(currentState.summary),
+        }
+      : null,
     authority: currentState.authority,
     queueRevision: currentState.queueRevision,
     projectRevision: currentState.projectRevision,
@@ -382,11 +403,7 @@ export function readProjectSavedReleaseState(projectRoot: string): ProjectSavedR
   const releases = Array.isArray(queue.releases)
     ? queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
     : []
-  const summary = current.summary
-    ? 'payload' in current.summary
-      ? { ...current.summary.payload, freshness: current.summary.freshness }
-      : current.summary
-    : null
+  const summary = current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null
   const scope = projectScopeFromSavedState({
     releases,
     selectedReleaseId: typeof queue.selectedReleaseId === 'string' ? queue.selectedReleaseId : undefined,
@@ -454,9 +471,8 @@ export function readProjectSummaryShellAtBoundary(projectRoot: string): ProjectS
     return {
       summary: saved.summary
         ? {
-            ...saved.summary.payload,
+            ...projectSummaryAtRuntimeVersion(saved.summary),
             orientationSpine: null,
-            freshness: saved.summary.freshness,
           }
         : null,
       authority: saved.authority,
@@ -490,10 +506,7 @@ export function readProjectSummaryForProjectAtBoundary(projectRoot: string): Pro
   })
   if (saved) {
     return saved.summary
-      ? {
-          ...saved.summary.payload,
-          freshness: saved.summary.freshness,
-      }
+      ? projectSummaryAtRuntimeVersion(saved.summary)
       : null
   }
   if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') return null
@@ -518,9 +531,7 @@ export interface ProjectCompactStateReadModel {
 function compactStateFromDatabaseProjection(
   current: NonNullable<ReturnType<typeof readProjectStateDatabaseProjectionState<ProjectSummaryProjection>>>,
 ): ProjectCompactStateReadModel {
-  const summary = current.summary
-    ? { ...current.summary.payload, freshness: current.summary.freshness }
-    : null
+  const summary = current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null
   return {
     queue: current.queue as ProjectStateDatabaseQueue,
     inventory: current.inventory,
@@ -644,12 +655,7 @@ export function readProjectSurfaceStateAtBoundary(
   return {
     authority: current.authority,
     compact: current.projection ? compactStateFromDatabaseProjection(current.projection) : null,
-    summary: current.summary
-      ? {
-          ...current.summary.payload,
-          freshness: current.summary.freshness,
-        }
-      : null,
+    summary: current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null,
     thread: current.thread,
     attentionRecords: current.attentionRecords,
     attentionWatermark: current.attentionWatermark,

@@ -53,6 +53,50 @@ export interface ProjectScopeRow {
   sourceRefs: string[]
 }
 
+/**
+ * A shaping boundary belongs to Guildhall's planning lane. It can prevent a
+ * release from being complete without being an owner decision. Keeping this
+ * predicate beside the scope row model prevents compact reads from treating
+ * every release blocker as a human checkpoint.
+ */
+export function projectScopeRowNeedsOwnerInput(row: Pick<ProjectScopeRow, 'scope' | 'status' | 'handoffState' | 'humanBlocking'>): boolean {
+  return row.scope === 'included' && row.humanBlocking && !projectScopeRowIsGuildhallShaping(row)
+}
+
+export function projectScopeRowIsGuildhallShaping(row: Pick<ProjectScopeRow, 'scope' | 'status' | 'handoffState'>): boolean {
+  return row.scope === 'included' &&
+    row.handoffState === 'not_shaped' &&
+    (row.status === 'exploring' || row.status === 'import_draft')
+}
+
+/**
+ * Re-derive the three readiness flags when reading a compact persisted row.
+ * Older snapshots stored shaping as `humanBlocking`; the current model keeps
+ * that historical bit readable but repairs its meaning at the shared boundary
+ * instead of letting stale flags leak into release summaries.
+ */
+export function normalizeProjectScopeRowReadModel(row: ProjectScopeRow): ProjectScopeRow {
+  const humanBlocking = projectScopeRowIsGuildhallShaping(row)
+    ? false
+    : row.humanBlocking
+  const canStartShaping = row.scope === 'included' && row.status === 'exploring' && row.handoffState === 'not_shaped'
+  const blocksStart = row.scope === 'included' && (
+    row.proofBlocked ||
+    row.handoffState === 'blocked' ||
+    row.handoffState === 'brief_cleanup' ||
+    (row.handoffState === 'spec_review' && humanBlocking) ||
+    (row.handoffState === 'not_shaped' && !canStartShaping)
+  )
+  const blocksRelease = row.scope === 'included' && (
+    row.proofBlocked ||
+    row.handoffState === 'blocked' ||
+    row.handoffState === 'brief_cleanup' ||
+    row.handoffState === 'not_shaped' ||
+    (row.handoffState === 'spec_review' && humanBlocking)
+  )
+  return { ...row, humanBlocking, blocksStart, blocksRelease }
+}
+
 export interface ProjectScopeProjection {
   selectedScope: ProjectScope | null
   rows: ProjectScopeRow[]
@@ -89,6 +133,30 @@ export interface ProjectScopeProjection {
   release: {
     state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
     blockers: Array<{ id: string; label: string; owningTaskId?: string }>
+  }
+}
+
+export interface ProjectScopeOutsideWorkSummary {
+  count: number
+  byStatus: Record<string, number>
+}
+
+export function summarizeProjectScopeOutsideWork(
+  rows: readonly ProjectScopeRow[],
+  selectedScope: ProjectScope | null,
+): ProjectScopeOutsideWorkSummary {
+  if (!selectedScope || selectedScope.id === 'current-work') return { count: 0, byStatus: {} }
+  const byStatus: Record<string, number> = {}
+  const deferredNodeIds = new Set(selectedScope.deferredNodeIds)
+  for (const row of executionRows(rows)) {
+    if (row.scope !== 'deferred') continue
+    if (!deferredNodeIds.has(taskScopeNodeId(row.taskId))) continue
+    if (['done', 'blocked', 'shelved', 'pending_pr', 'archived', 'cancelled'].includes(row.status)) continue
+    byStatus[row.status] = (byStatus[row.status] ?? 0) + 1
+  }
+  return {
+    count: Object.values(byStatus).reduce((sum, count) => sum + count, 0),
+    byStatus,
   }
 }
 
@@ -510,7 +578,7 @@ function buildScopeRow(
   })
   const proofBlocked = completionProofBlockedForTask(task, input.suppressedProofTaskIds, input.requiresScriptProof)
   const humanBlocking = proofBlocked ? false : humanBlockingFor(task, handoffState, scope)
-  return {
+  return normalizeProjectScopeRowReadModel({
     taskId: task.id,
     title: taskDisplayLabel(task, task.id),
     ...(parent ? { parentTaskId: parent.id } : {}),
@@ -528,7 +596,7 @@ function buildScopeRow(
       ? { blockerSummary: proofBlocked ? 'Completion proof is missing or stale.' : blockerSummaryForTask(task) }
       : {}),
     sourceRefs: sourceRefsForTask(task),
-  }
+  })
 }
 
 function buildChildMap(tasks: readonly Task[]): Map<string, string[]> {
@@ -627,7 +695,12 @@ function hasInScopeMaterializedChildWork(
 
 function humanBlockingFor(task: Task, handoffState: ProjectScopeHandoffState, scope: 'included' | 'deferred'): boolean {
   if (scope === 'deferred') return false
-  if (handoffState === 'brief_cleanup' || handoffState === 'not_shaped' || handoffState === 'blocked') return true
+  // Imported and actively exploring work belongs to Guildhall's planning lane.
+  // A proposed task is different: it still represents an owner decision about
+  // whether that candidate belongs in the plan.
+  if (handoffState === 'not_shaped' && (task.status === 'exploring' || task.status === 'import_draft')) return false
+  if (handoffState === 'not_shaped') return true
+  if (handoffState === 'brief_cleanup' || handoffState === 'blocked') return true
   return handoffState === 'spec_review' && specReviewRequiresOwnerApproval(task)
 }
 
@@ -683,9 +756,9 @@ function summarizeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection
     paused: included.filter(row => row.handoffState === 'paused').length,
     active: included.filter(row => row.handoffState === 'paused' || row.handoffState === 'review').length,
     done: included.filter(row => row.handoffState === 'done').length,
-    ownerBlocked: included.filter(row => row.humanBlocking).length,
+    ownerBlocked: included.filter(projectScopeRowNeedsOwnerInput).length,
     proofBlocked: included.filter(row => row.proofBlocked).length,
-    humanBlocking: included.filter(row => row.humanBlocking).length,
+    humanBlocking: included.filter(projectScopeRowNeedsOwnerInput).length,
   }
 }
 
@@ -871,6 +944,20 @@ export function summarizeProjectScopeStart(
     }
   }
   const scopeLabel = selectedScope?.label ?? 'Current work'
+  const outsideWork = summarizeProjectScopeOutsideWork(rows, selectedScope)
+  if (outsideWork.count > 0) {
+    const outsideFragments = Object.entries(outsideWork.byStatus)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([status, count]) => `${count} ${status.replaceAll('_', ' ')}`)
+    return {
+      canStart: false,
+      code: 'all_terminal',
+      label: 'Review',
+      focusKind: 'terminal',
+      message: `${scopeLabel} is complete. ${outsideFragments.join(', ')} ${outsideWork.count === 1 ? 'task remains' : 'tasks remain'} outside this release.`,
+      actionHref: '/work',
+    }
+  }
   return {
     canStart: false,
     code: 'all_terminal',
@@ -890,7 +977,13 @@ export function summarizeProjectScopeRelease(rows: readonly ProjectScopeRow[]): 
       owningTaskId: row.taskId,
       label: blockerLabelFor(row),
     }))
-  if (blockers.length > 0) return { state: 'blocked', blockers }
+  if (blockers.length > 0) {
+    const shapingOnly = blockers.every(blocker => {
+      const row = included.find(candidate => candidate.taskId === blocker.owningTaskId)
+      return row ? projectScopeRowIsGuildhallShaping(row) : false
+    })
+    return { state: shapingOnly ? 'shaping' : 'blocked', blockers }
+  }
   if (included.length === 0) return { state: 'unknown', blockers: [] }
   if (included.every(row => row.handoffState === 'done')) return { state: 'ready', blockers: [] }
   if (included.some(row => row.handoffState === 'not_shaped' || row.handoffState === 'brief_cleanup')) return { state: 'shaping', blockers: [] }

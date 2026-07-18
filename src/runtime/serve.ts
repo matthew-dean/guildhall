@@ -228,7 +228,7 @@ import {
   type ProjectOrientationCharter,
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
-import { buildProjectScopeProjection, executionScopeRows, releaseLabelFromId, selectedProjectScopeForQueue, taskScopeNodeId, type ProjectScope, type ProjectScopeProjection, type ProjectScopeRow } from './project-scope-projection.js'
+import { buildProjectScopeProjection, executionScopeRows, normalizeProjectScopeRowReadModel, projectScopeRowNeedsOwnerInput, releaseLabelFromId, selectedProjectScopeForQueue, summarizeProjectScopeOutsideWork, taskScopeNodeId, type ProjectScope, type ProjectScopeProjection, type ProjectScopeRow } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -2749,7 +2749,7 @@ function summarizeScopedReleaseWork(
   const persistedScopeRows: ProjectScopeRow[] | null = options.scopeRows
     ? options.scopeRows.map(row => {
         const task = tasksById.get(row.taskId)
-        return {
+        return normalizeProjectScopeRowReadModel({
           taskId: row.taskId,
           title: task?.title ?? row.taskId,
           ...(task?.hierarchy?.parentId ? { parentTaskId: task.hierarchy.parentId } : {}),
@@ -2765,7 +2765,7 @@ function summarizeScopedReleaseWork(
           proofBlocked: row.proofBlocked ?? false,
           ...(row.blockerSummary ? { blockerSummary: row.blockerSummary } : {}),
           sourceRefs: [...row.sourceRefs],
-        }
+        })
       })
     : null
   const currentScopeRows = persistedScopeRows ?? scopeProjection!.rows
@@ -2916,7 +2916,9 @@ function summarizeScopedReleaseWork(
 
   const humanBlockingKeys = new Set<string>()
   for (const escalation of openEscalations) humanBlockingKeys.add(`task:${escalation.taskId}`)
-  for (const brief of incompleteBriefs) humanBlockingKeys.add(`task:${brief.id}`)
+  for (const brief of incompleteBriefs) {
+    if (tasksByScopeRowId.get(brief.id)?.humanBlocking === true) humanBlockingKeys.add(`task:${brief.id}`)
+  }
   for (const brief of unapprovedBriefs) humanBlockingKeys.add(`task:${brief.id}`)
   for (const spec of unapprovedSpecs) humanBlockingKeys.add(`task:${spec.id}`)
   for (const blocked of blockedByAgent) humanBlockingKeys.add(`task:${blocked.id}`)
@@ -2946,6 +2948,10 @@ function summarizeScopedReleaseWork(
           label: blocker.label,
         }
       })
+  const projectionOwnerBlockingCount = executionScopeRows(currentScopeRows)
+    .filter(row => row.scope === 'included' && row.countInProjectTotals !== false)
+    .filter(projectScopeRowNeedsOwnerInput)
+    .length
 
   return {
     statusCounts,
@@ -2957,7 +2963,7 @@ function summarizeScopedReleaseWork(
     blockedByAgent,
     proofMissingDoneTasks,
     releaseBlockers: projectionReleaseBlockers.length > 0 ? projectionReleaseBlockers : [...releaseBlockersById.values()],
-    humanBlockingCount: Math.max(projectionReleaseBlockers.length, humanBlockingKeys.size),
+    humanBlockingCount: Math.max(projectionOwnerBlockingCount, humanBlockingKeys.size),
     unfinishedCount,
     scopedTasks,
     gitStoryTasks: scopedTasks,
@@ -5036,8 +5042,9 @@ function buildOverviewOrientationPreviewSpine(input: {
     ? start.actionHref
     : projection.start.actionHref
   const terminalCompleteMessage = start?.code === 'all_terminal'
+  const outsideWork = summarizeProjectScopeOutsideWork(projection.rows, scope)
   const firstBlocker = projection.release.blockers[0]
-  const topBlocker = start?.canStart === false && !terminalCompleteMessage && startMessage
+  const topBlocker = start?.canStart === false && startMessage && (!terminalCompleteMessage || outsideWork.count > 0)
     ? startMessage
     : firstBlocker?.label ?? (
       projection.start.canStart || projection.start.code === 'all_terminal'
@@ -5081,7 +5088,7 @@ function buildOverviewOrientationPreviewSpine(input: {
         : projection.start.message,
     progress,
   }
-  const summary = input.sourceSpine?.summary && start?.canStart === false && !terminalCompleteMessage
+  const summary = input.sourceSpine?.summary && start?.canStart === false && (!terminalCompleteMessage || outsideWork.count > 0)
     ? {
         ...input.sourceSpine.summary,
         pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],

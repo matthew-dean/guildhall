@@ -5,6 +5,159 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+2026-07-18T22:20:00Z - Release shaping is no longer reported as owner blocking.
+
+User job:
+
+> When a selected release still needs Guildhall to shape imported or actively
+> explored work, the project should say that Guildhall is shaping the release.
+> It must not tell the owner to intervene unless the row represents an actual
+> owner decision, approval, unresolved block, or missing proof.
+
+- Work id: `codex:release-shaping-vs-owner-input-2026-07-18`.
+- Live finding: Narrative Harness reported a selected release with 4 release
+  blockers and 4 owner blockers while the shared Start summary simultaneously
+  said it could advance an actively exploring shaping task. The contradiction
+  came from `humanBlocking` being treated as both “release is unfinished” and
+  “the owner must act,” plus an indexed summary path recomputing release state
+  independently from the full scope projection.
+- Root fix: `projectScopeRowIsGuildhallShaping` identifies included
+  `exploring`/`import_draft` rows in `not_shaped` as Guildhall planning work;
+  `projectScopeRowNeedsOwnerInput` identifies only real owner checkpoints.
+  `normalizeProjectScopeRowReadModel` repairs stale compact flags at the shared
+  read boundary. Indexed project summaries now call
+  `summarizeProjectScopeRelease` instead of maintaining a second release-state
+  calculation. Release readiness derives owner-blocking counts from the same
+  normalized rows.
+- Projection freshness: the compact summary contract is now version `15`.
+  Existing version-13 and version-14 summaries are marked stale by the state
+  boundary and refreshed through the bounded indexed projector at startup. This makes the
+  semantic change a one-time compact projection refresh, not a request-time
+  reconstruction of rich task state and not a second persisted authority.
+- Resulting semantics: shaping work can keep a release from being complete and
+  can appear in release blockers, but it does not inflate owner-blocking counts.
+  A `ready` row that is still unshaped remains an owner checkpoint, preserving
+  the existing distinction between a candidate that Guildhall can shape and a
+  plan item that needs an owner decision.
+- Focused proof: project-scope, indexed-summary, and release-readiness suites
+  pass with 131 tests. The broader orientation suite retains 6 failures that
+  also fail on the pre-change baseline; they concern older proof/fixture
+  expectations and are not attributed to this change.
+- Installed proof after rebuilding and restarting Guildhall: `/api/stale-server`
+  reports `stale:false`; all 7 registered projects refreshed through the
+  bounded projector with 0 errors in about 0.43 seconds. Narrative Harness
+  reports `summaryFreshness: current` from `/api/service/projects` and from
+  Overview, Work, and Map project responses. The same Start action points to
+  `task-broad-genre-drafting-model-proof` and the selected release
+  `stage-1-headless-drafting-and-evaluation-mvp` with 15 scoped tasks and 24
+  deferred tasks. Release readiness reports 15 total, 11 done, 4 unfinished,
+  13 blocking items, 9 proof-evidence blockers, and 0 owner blockers. This is
+  proof that the shared state and owner-action semantics are coherent; it is
+  explicitly not proof that the Narrative Harness release is complete.
+
+## 2026-07-18 named release completion preserves later work
+
+User job:
+
+> When the selected release has consumed its included work, Guildhall should
+> say that release is complete while showing that later scoped work remains
+> deferred. That fact must survive the compact API, Overview, Work, and Map
+> surfaces without inventing or consuming the later work.
+
+### Contract Touch Decision
+
+- Work id: `codex:named-release-completion-boundary-2026-07-18`.
+- Touched contracts: selected-release start readiness, orientation summary,
+  indexed summary refresh, and compact project surface parity.
+- Considered but not touched: task status values, release membership schema,
+  execution commands, proof evidence, and the release lifecycle API.
+- Required follow-up: use the same shared outside-release summary when release
+  selection and Start execution are exercised against a real project.
+- Proof required: shared projection tests, rendered release fixture, fresh
+  installed artifact, restart/stale-server proof, and cross-surface API parity.
+- Proof provided: 134 focused tests passed; the rendered
+  `release-consumed` fixture passed through default API, Overview, and Work;
+  installed Narrative Harness Overview, Work, and Map responses agree.
+- Apply/revert: keep the shared outside-work helper, orientation synchronization,
+  and release fixture together; reverting any one recreates a false-complete
+  or cross-surface state.
+
+### Schema Migration Decision
+
+- Persisted schema touched: derived project summary projection payload only;
+  no table or authoritative task/release field changed.
+- Scope/change class: projection contract refresh from version 14 to 15, plus
+  a defensive refresh miss when the durable orientation store is unavailable.
+- Existing data impact: version-13 and version-14 summaries are rebuilt from
+  indexed rows. An indexed refresh cannot publish `orientationSpine: null` and
+  erase the saved spine; it yields to the explicit queue-backed repair path.
+- Migration id: none; the existing projection-version refresh boundary is
+  sufficient.
+- Compatibility reader: no new historical-shape reader was added.
+- Fixtures/tests: project-scope, indexed-summary, release-readiness, and
+  rendered `release-consumed` tests.
+- Owner-facing plan text: a completed release can have later work; Guildhall
+  reports the boundary instead of making the project look globally finished.
+- Rollback/revert: revert the projection version, shared outside-work helper,
+  orientation patch, and regression together.
+
+### Installed proof
+
+- Fresh installed artifact: `/api/stale-server` reported `stale:false` for
+  `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`; the service had 7
+  projects, 0 refresh errors, and a roughly 20ms startup refresh after a
+  listener was ready.
+- Narrative Harness is current across Overview, Work, and Map. Each surface
+  reports the same Start action, selected release
+  `stage-1-headless-drafting-and-evaluation-mvp`, 15 scoped tasks, and 24
+  deferred tasks. Release readiness independently reports 15 total, 11 done,
+  4 unfinished, 13 blocking items, 9 proof-evidence blockers, and 0 owner
+  blockers.
+- This proves the compact release boundary and state agreement. It does not
+  prove Narrative Harness release readiness: that release still has unfinished
+  work and proof blockers.
+
+### Contract Touch Decision
+
+- Work id: `codex:release-shaping-vs-owner-input-2026-07-18`.
+- Touched contracts: `ProjectScopeRow` derived readiness flags, project summary
+  release state/counts, release-readiness totals, and orientation inputs that
+  consume those projections.
+- Considered but not touched: persisted task identity, release membership,
+  release lifecycle commands, task status values, ProductBrief/Spec schemas,
+  and user-facing route payload names.
+- Required follow-up: installed Narrative Harness API and browser proof across
+  overview, map, work, release-readiness, and task detail; then prove a bounded
+  named release cannot consume deferred work.
+- Proof required: focused projection tests, cross-surface state agreement,
+  fresh installed artifact, restart proof, and live Narrative Harness state.
+- Apply/revert: keep the shared predicates, normalization boundary, indexed
+  projection, and readiness count changes together; reverting one recreates
+  the contradictory state.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no table or field shape changed. The derived
+  summary projection contract advanced from version 13 to 14; existing compact
+  `work_scope` rows may contain the historical derived `humanBlocking` bit.
+- Scope/change class: derived read-model semantic correction and cache
+  normalization, not a new persisted authority.
+- Existing data impact: old rows are normalized when read; the next normal
+  summary write refreshes the compact flags. No task, release, or evidence data
+  is rewritten or discarded.
+- Migration id: none; the existing projection-version refresh path is the
+  migration boundary. A separate schema migration would add machinery without
+  changing the authoritative task/release model.
+- Compatibility reader: no new legacy reader. Version-13 summaries are marked
+  stale and rebuilt from indexed current rows; the shared normalizer is the
+  read boundary for compact row flags.
+- Fixtures/tests: project-scope projection, indexed project summary, and
+  release-readiness tests, including mixed shaping/owner-blocking rows.
+- Owner-facing plan text: the owner sees “Guildhall is shaping” as unfinished
+  release work, while genuine approval/block/proof rows remain actionable.
+- Rollback/revert: revert the normalizer, shared predicates, indexed summary
+  delegation, and readiness-count changes together.
+
 2026-07-15T19:20:00Z - Ordinary current-state writes now have one durable
 representation.
 

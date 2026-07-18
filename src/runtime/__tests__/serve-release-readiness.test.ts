@@ -3711,7 +3711,7 @@ describe('GET /api/project/release-readiness', () => {
       },
     ])
     expect(body.diagnostics.totals.incompleteBriefBlockingCount).toBe(1)
-    expect(body.totals.humanBlockingCount).toBe(1)
+    expect(body.totals.humanBlockingCount).toBe(0)
     expect(body.diagnostics.ready).toBe(false)
   })
 
@@ -3762,7 +3762,7 @@ describe('GET /api/project/release-readiness', () => {
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
 
-    expect(body.totals.humanBlockingCount).toBe(3)
+    expect(body.totals.humanBlockingCount).toBe(1)
     expect(body.releaseBlockers.map((blocker: any) => blocker.id)).toEqual([
       'task-imported',
       'task-ready-unshaped',
@@ -4511,7 +4511,7 @@ describe('GET /api/project/release-readiness', () => {
       },
     ])
     expect(body.diagnostics.totals.incompleteBriefBlockingCount).toBe(1)
-    expect(body.totals.humanBlockingCount).toBe(1)
+    expect(body.totals.humanBlockingCount).toBe(0)
     expect(body.diagnostics.ready).toBe(false)
   })
 

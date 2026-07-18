@@ -135,6 +135,54 @@ describe('buildProjectScopeProjection', () => {
     })
   })
 
+  it('keeps Guildhall-owned shaping separate from owner blocking', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-shaping',
+        title: 'Shape imported work',
+        status: 'exploring',
+        releaseIds: ['stage-1'],
+      }),
+    ]))
+
+    expect(projection.rows.find(row => row.taskId === 'task-shaping')).toMatchObject({
+      handoffState: 'not_shaped',
+      blocksStart: false,
+      blocksRelease: true,
+      humanBlocking: false,
+    })
+    expect(projection.counts).toMatchObject({ ownerBlocked: 0, humanBlocking: 0 })
+    expect(projection.release).toMatchObject({ state: 'shaping' })
+    expect(projection.start).toMatchObject({ canStart: true, focusTaskId: 'task-shaping' })
+  })
+
+  it('reports later work when a named release is complete', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-done'],
+        deferredNodeIds: ['work:task-later'],
+      }],
+      tasks: [
+        task({ id: 'task-done', status: 'done', releaseIds: ['stage-1'] }),
+        task({ id: 'task-later', title: 'Later task', status: 'ready' }),
+      ],
+    })
+
+    expect(projection.start).toMatchObject({
+      canStart: false,
+      code: 'all_terminal',
+      message: 'Stage 1 is complete. 1 ready task remains outside this release.',
+    })
+  })
+
   it('derives visible release containers from task membership and selects unfinished scoped work', () => {
     const derived = deriveReleaseContainersFromTaskMembership([
       task({

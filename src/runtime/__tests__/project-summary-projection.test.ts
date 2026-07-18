@@ -10,6 +10,7 @@ import {
   buildProjectSummaryProjection,
   buildProjectSummaryProjectionFromIndexedState,
   backfillProjectSummaryProjection,
+  PROJECT_SUMMARY_PROJECTION_VERSION,
   projectSummaryProjectionPath,
   queueForProjectSummaryScope,
   readProjectSummaryProjection,
@@ -180,6 +181,7 @@ describe('project-summary-projection', () => {
     })
 
     expect(indexed).not.toBeNull()
+    expect(indexed?.version).toBe(PROJECT_SUMMARY_PROJECTION_VERSION)
     expect(indexed?.counts).toMatchObject({
       total: full.counts.total,
       included: full.counts.included,
@@ -192,6 +194,63 @@ describe('project-summary-projection', () => {
     expect(indexed?.releaseSummary).toEqual(full.releaseSummary)
     expect(indexed?.nextAction).toEqual(full.nextAction)
     expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks.every(task => Object.keys(task.definition).length === 0)).toBe(true)
+  })
+
+  it('keeps the indexed orientation note when a named release has later work', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-later-work-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('task-current-done', 'done'),
+      task('task-later-ready', 'ready'),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current-done'],
+        deferredNodeIds: ['work:task-later-ready'],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'indexed-later-work', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+    const indexed = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'indexed-later-work',
+      sourceQueueLastUpdated: now,
+    })
+
+    expect(indexed?.nextAction).toMatchObject({
+      code: 'all_terminal',
+      message: 'Current release is complete. 1 ready task remains outside this release.',
+    })
+    expect(indexed?.orientationSpine?.summary).toMatchObject({
+      topBlocker: 'Current release is complete. 1 ready task remains outside this release.',
+      nextAction: 'Current release is complete. 1 ready task remains outside this release.',
+    })
+  })
+
+  it('does not publish an indexed summary when the orientation store is missing', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-missing-orientation-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([task('task-ready', 'ready')])
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'missing-orientation', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    const database = new DatabaseSync(projectStateDatabasePath(temp))
+    database.prepare('DELETE FROM project_orientation').run()
+    database.close()
+
+    expect(buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'missing-orientation',
+      generatedAt: now,
+      sourceQueueLastUpdated: now,
+    })).toBeNull()
+    expect(writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'missing-orientation',
+      sourceQueueLastUpdated: now,
+    })).toBeNull()
   })
 
   it('refreshes a reopened task proof contract from the bounded indexed summary', async () => {

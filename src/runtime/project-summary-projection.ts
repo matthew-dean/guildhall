@@ -26,8 +26,12 @@ import { statSync } from 'node:fs'
 import {
   buildProjectScopeProjection,
   executionScopeRows,
+  normalizeProjectScopeRowReadModel,
+  projectScopeRowNeedsOwnerInput,
   summarizeProjectScopeRelease,
+  summarizeProjectScopeOutsideWork,
   summarizeProjectScopeStart,
+  type ProjectScope,
   type ProjectScopeProjection,
   type ProjectScopeRow,
 } from './project-scope-projection.js'
@@ -37,9 +41,9 @@ import { buildProjectActionModel, type ProjectActionModel } from './project-acti
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 13 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 15 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -542,15 +546,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-function indexedBlockerLabel(row: IndexedSummaryScopeRow): string {
-  return summarizeProjectScopeRelease([row as unknown as ProjectScopeRow]).blockers[0]?.label ??
-    `${row.title.replace(/[.!?]+$/, '')}: needs attention.`
-}
-
-function indexedReleaseState(rows: readonly IndexedSummaryScopeRow[]): ProjectSummaryReleaseSummary['state'] {
-  return summarizeProjectScopeRelease(rows as unknown as ProjectScopeRow[]).state
-}
-
 function indexedStartReadiness(
   rows: readonly IndexedSummaryScopeRow[],
   releases: readonly Record<string, unknown>[],
@@ -566,10 +561,16 @@ function indexedStartReadiness(
     ? {
         id: selectedReleaseId ?? String(selectedRelease.id),
         label: String(selectedRelease.label ?? selectedRelease.id),
-        kind: 'release' as const,
-        source: 'inferred' as const,
-        nodeIds: [],
-        deferredNodeIds: [],
+        kind: selectedRelease.kind === 'milestone' ? 'milestone' as const : 'release' as const,
+        source: selectedRelease.source === 'owner_approved' || selectedRelease.source === 'spec' || selectedRelease.source === 'release_plan'
+          ? selectedRelease.source
+          : 'inferred' as const,
+        nodeIds: Array.isArray(selectedRelease.nodeIds)
+          ? selectedRelease.nodeIds.filter((value): value is string => typeof value === 'string')
+          : [],
+        deferredNodeIds: Array.isArray(selectedRelease.deferredNodeIds)
+          ? selectedRelease.deferredNodeIds.filter((value): value is string => typeof value === 'string')
+          : [],
       }
     : null
   return summarizeProjectScopeStart(
@@ -637,6 +638,11 @@ export function buildProjectSummaryProjectionFromIndexedState(
   })
   if (!current?.summary) return null
   const base = current.summary.payload
+  // An indexed refresh can update release/count facts, but it cannot rebuild
+  // the orientation tree. Never publish a null spine over the durable one:
+  // treat this as a projection miss and let the explicit queue-backed refresh
+  // repair it instead.
+  if (!base.orientationSpine) return null
   const inventory = current.inventory
   const queue = current.queue
   const generatedAt = input.generatedAt ?? new Date().toISOString()
@@ -648,7 +654,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const scopeRowOverrides = new Map(
     (input.scopeRowOverrides ?? []).map(row => [row?.taskId ?? '', row]),
   )
-  const indexedRows: IndexedSummaryScopeRow[] = tasks.flatMap<IndexedSummaryScopeRow>(task => {
+  const rawIndexedRows: IndexedSummaryScopeRow[] = tasks.flatMap<IndexedSummaryScopeRow>(task => {
     const row = scopeRowOverrides.has(task.id) ? scopeRowOverrides.get(task.id) ?? null : task.scopeRow
     return row
       ? [{
@@ -659,6 +665,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
         } satisfies IndexedSummaryScopeRow]
       : []
   })
+  const indexedRows = rawIndexedRows.map(row => normalizeProjectScopeRowReadModel(row as unknown as ProjectScopeRow) as unknown as IndexedSummaryScopeRow)
   const currentProofByTaskId = new Map<string, IndexedCurrentProof>(
     tasks.flatMap(task => {
       const proof = task.currentSummary?.proof
@@ -718,9 +725,8 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const selectedRelease = selectedReleaseRow && priorRelease?.id === selectedReleaseRow.id
     ? { ...selectedReleaseRow, ...priorRelease }
     : selectedReleaseRow
-  const taskReleaseBlockers = includedRows
-    .filter(row => row.blocksRelease)
-    .map(row => ({ id: row.taskId, owningTaskId: row.taskId, label: indexedBlockerLabel(row) }))
+  const indexedRelease = summarizeProjectScopeRelease(rows as unknown as ProjectScopeRow[])
+  const taskReleaseBlockers = indexedRelease.blockers
   const releaseExecutionRows = includedRows.filter(row => row.hierarchyRole !== 'parent' || !includedRows.some(child => child.parentTaskId === row.taskId))
   const releaseSummary: ProjectSummaryReleaseSummary = {
     scopeMode: selectedRelease ? 'named_release' : 'unreleased',
@@ -733,7 +739,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
           source: String(selectedRelease.source ?? 'inferred'),
         }
       : null,
-    state: taskReleaseBlockers.length > 0 ? 'blocked' : indexedReleaseState(rows),
+    state: indexedRelease.state,
     counts: {
       total: releaseExecutionRows.length,
       done: releaseExecutionRows.filter(row => row.handoffState === 'done').length,
@@ -742,7 +748,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
       active: releaseExecutionRows.filter(row => ['paused', 'review'].includes(row.handoffState)).length,
       blocked: releaseExecutionRows.filter(row => row.blocksRelease).length,
       deferred: deferredRows.length,
-      ownerBlocked: releaseExecutionRows.filter(row => row.humanBlocking).length,
+      ownerBlocked: releaseExecutionRows.filter(projectScopeRowNeedsOwnerInput).length,
       proofBlocked: releaseExecutionRows.filter(row => row.proofBlocked).length,
     },
     taskStatusCounts: taskStatusCounts(releaseExecutionRows),
@@ -800,6 +806,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   })
   return {
     ...base,
+    version: PROJECT_SUMMARY_PROJECTION_VERSION,
     projectId: input.projectId ?? base.projectId,
     generatedAt,
     freshness: 'current',
@@ -813,7 +820,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
       deferred: deferredRows.length,
       ready: includedRows.filter(row => row.handoffState === 'ready').length,
       paused: includedRows.filter(row => row.handoffState === 'paused').length,
-      ownerBlocked: includedRows.filter(row => row.humanBlocking).length,
+      ownerBlocked: includedRows.filter(projectScopeRowNeedsOwnerInput).length,
       proofBlocked: includedRows.filter(row => row.proofBlocked).length,
     },
     scope,
@@ -905,6 +912,8 @@ function synchronizeIndexedOrientationSpine(
   })
   const counts = input.releaseSummary.counts
   const label = input.releaseSummary.release?.label ?? spine.summary.selectedScopeLabel ?? 'Current scope'
+  const selectedScope = (spine.selectedTaskScope ?? spine.scope) as ProjectScope | null
+  const outsideWork = summarizeProjectScopeOutsideWork(input.rows as unknown as ProjectScopeRow[], selectedScope)
   const progress = {
     ...spine.summary.progress,
     scopeId: releaseId,
@@ -969,7 +978,9 @@ function synchronizeIndexedOrientationSpine(
       includedWorkCount: counts.total,
       deferredCount: counts.deferred,
       deferredWorkCount: counts.deferred,
-      topBlocker: blockers[0]?.label ?? null,
+      topBlocker: input.nextAction.code === 'all_terminal' && outsideWork.count > 0
+        ? input.nextAction.message
+        : blockers[0]?.label ?? null,
       nextAction: input.nextAction.message,
       progress,
     },
