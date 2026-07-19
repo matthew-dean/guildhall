@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { execFileSync } from 'node:child_process'
+import { DatabaseSync } from 'node:sqlite'
 import {
   Orchestrator,
   pickNextTask,
@@ -13,8 +14,8 @@ import {
   type ReviewerFanoutRunner,
 } from '../orchestrator.js'
 import { LivenessTracker } from '../liveness.js'
-import { upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
 import { buildEffectiveTask } from '../effective-task.js'
+import { hasUsableBlueprint } from '../task-plan-recovery.js'
 import { updateProjectConfig, type ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
 import { getProjectSystemStatePath } from '../../sessions/local-history.js'
@@ -26,7 +27,7 @@ import {
   type LeverSettings,
 } from '@guildhall/levers'
 import { InMemoryGitDriver } from '../git-driver.js'
-import { writeCheckpoint } from '@guildhall/tools'
+import { PROOF_SETUP_RATIONALE, writeCheckpoint } from '@guildhall/tools'
 import { appendFailureClassificationNote, classifyAgentFailure } from '../policy.js'
 import { commandEvidence, touchedFiles } from './policy-fixtures.js'
 import { readProjectLearning } from '../learning.js'
@@ -38,9 +39,24 @@ import {
   getProjectTaskLocalHistoryDir,
   getProjectTranscriptPath,
   appendTaskEvidence,
+  promoteProjectStateDatabaseAuthority,
+  readProjectStateDatabaseAuthority,
+  projectStateDatabasePath,
+  readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseTaskPointWithRevision,
+  writeProjectStateDatabaseSnapshot,
   readTaskEvidence,
   readTaskRuntimeStore,
+  upsertTaskRuntimeState,
+  upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
+import {
+  sanitizeTaskQueueForProjectWrite,
+  readProjectTaskQueueSync as readProjectTaskQueueFromBoundary,
+  writeProjectTaskQueue,
+} from '../project-state-boundary.js'
+import { prepareProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
+import { applyProjectMigrations } from '../migrations.js'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
 import { readMemoryEvents } from '@guildhall/memory-core'
 
@@ -60,6 +76,16 @@ let memoryDir: string
 let tasksPath: string
 let progressPath: string
 let agentSettingsPath: string
+
+// These tests exercise migration/overlay compatibility. Keep the retired
+// runtime fields in a test-only patch/view type rather than adding them back
+// to the authoritative Task definition.
+type TestTaskPatch = Partial<Task> & Record<string, unknown>
+type LegacyTaskView = Task & {
+  runtime?: { proofRecovery?: { reason?: string } }
+  proofRecovery?: { reason?: string; reopenedAt?: string }
+  workerRecovery?: Record<string, unknown>
+}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-orch-test-'))
@@ -155,7 +181,7 @@ const VALID_SPEC = [
   '1. Thing is done.',
 ].join('\n')
 
-function mkTask(overrides: Partial<Task> = {}): Task {
+function mkTask(overrides: TestTaskPatch = {}): Task {
   const task: Task = {
     id: 'task-001',
     title: 'Do a thing',
@@ -180,7 +206,11 @@ function mkTask(overrides: Partial<Task> = {}): Task {
     updatedAt: '2026-04-01T00:00:00Z',
     ...overrides,
   }
-  if (task.status === 'ready' && !Object.hasOwn(overrides, 'spec')) {
+  const statusesThatRequireAWorkerBlueprint: TaskStatus[] = [
+    'ready',
+    'in_progress',
+  ]
+  if (statusesThatRequireAWorkerBlueprint.includes(task.status) && !Object.hasOwn(overrides, 'spec')) {
     task.spec = VALID_SPEC
   }
   if (task.status !== 'exploring' && task.spec === VALID_SPEC) {
@@ -203,36 +233,182 @@ function mkTask(overrides: Partial<Task> = {}): Task {
 }
 
 async function writeQueue(tasks: Task[]): Promise<void> {
+  await writeQueueState({ tasks })
+}
+
+async function ownerInputsForTask(taskId: string) {
+  return (await listOwnerInputRequests(tmpDir)).filter((request) =>
+    request.source.kind === 'task' && request.source.taskId === taskId,
+  )
+}
+
+async function writeQueueState(input: Partial<TaskQueue> & { tasks: Task[] }): Promise<void> {
+  // The execution lane now requires the same completion-boundary contract as
+  // production. Older loop fixtures used short prose specs as placeholders;
+  // keep explicit empty/undefined specs intact for recovery tests, but make
+  // non-empty legacy worker specs honest before they reach the write boundary.
+  const tasks = input.tasks.map((task) => {
+    const legacyTask = task as LegacyTaskView
+    const explicitlyMissingSpec = Object.hasOwn(task, 'spec') &&
+      (task.spec === undefined || task.spec.trim() === '')
+    const legacyWorkerSpec = task.status === 'in_progress' &&
+      !legacyTask.proofRecovery &&
+      !explicitlyMissingSpec &&
+      (!Object.hasOwn(task, 'spec') || !hasUsableBlueprint(task))
+    if (!legacyWorkerSpec) return task
+    return {
+      ...task,
+      spec: `${VALID_SPEC}\n\n${typeof task.spec === 'string' ? task.spec : ''}`.trim(),
+      acceptanceCriteria: task.acceptanceCriteria.length > 0
+        ? task.acceptanceCriteria
+        : [{
+            id: 'ac-1',
+            description: 'The requested change is complete.',
+            verifiedBy: 'review' as const,
+            met: false,
+          }],
+      productBrief: task.productBrief ?? {
+        userJob: 'I want the requested task completed.',
+        successMetric: 'The acceptance criterion is met.',
+        approvedAt: '2026-05-26T00:00:00.000Z',
+      },
+    }
+  })
   const queue: TaskQueue = {
     version: 1,
     lastUpdated: '2026-04-01T00:00:00Z',
+    ...input,
     tasks,
   }
-  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-  const tmpPath = `${tasksPath}.tmp`
-  await fs.writeFile(tmpPath, JSON.stringify(queue, null, 2), 'utf-8')
-  await fs.rename(tmpPath, tasksPath)
+  if (readProjectStateDatabaseAuthority(tmpDir) === 'database') {
+    const sanitizedQueue = sanitizeTaskQueueForProjectWrite(queue).queue as TaskQueue
+    const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 'test-ws',
+      projectRoot: tmpDir,
+      queue: sanitizedQueue,
+      taskDefinitionsAlreadySanitized: true,
+    })
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: prepared.detailQueue,
+      summary: prepared.projection,
+      scopeRows: prepared.scopeRows,
+      projectRoot: tmpDir,
+    })
+    await seedTaskOverlays(queue.tasks)
+    await seedTaskEvidence(queue.tasks)
+    return
+  }
+
+  const sanitizedQueue = sanitizeTaskQueueForProjectWrite(queue).queue as TaskQueue
+  writeProjectTaskQueue(tasksPath, sanitizedQueue, { projectRoot: tmpDir })
+  await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.12.21/task-overlay-authority'],
+  })
+  await seedTaskOverlays(queue.tasks)
+  await seedTaskEvidence(queue.tasks)
+}
+
+async function seedTaskOverlays(tasks: readonly Task[]): Promise<void> {
+  for (const task of tasks) {
+    const legacyTask = task as LegacyTaskView
+    await upsertTaskRuntimeState(tmpDir, task.id, {
+      ...(task.assignedTo !== undefined ? { assignedTo: task.assignedTo } : {}),
+      ...(task.revisionCount !== undefined ? { revisionCount: task.revisionCount } : {}),
+      ...(task.retryWindow !== undefined ? { retryWindow: task.retryWindow } : {}),
+      ...(legacyTask.proofRecovery !== undefined ? { proofRecovery: legacyTask.proofRecovery } : {}),
+      ...(task.remediationAttempts !== undefined ? { remediationAttempts: task.remediationAttempts } : {}),
+      ...(legacyTask.workerRecovery !== undefined ? { workerRecovery: legacyTask.workerRecovery } : {}),
+      ...(task.handoffStep !== undefined ? { handoffStep: task.handoffStep } : {}),
+      ...(task.shelveReason !== undefined ? { shelveReason: task.shelveReason } : {}),
+      ...(task.escalations !== undefined
+        ? { openEscalationIds: task.escalations.filter((item) => !item.resolvedAt).map((item) => item.id) }
+        : {}),
+      ...(task.agentIssues !== undefined
+        ? { openIssueIds: task.agentIssues.filter((item) => !item.resolvedAt).map((item) => item.id) }
+        : {}),
+      updatedAt: task.updatedAt,
+    } as unknown as Parameters<typeof upsertTaskRuntimeState>[2])
+    if (task.worktreePath !== undefined || task.branchName !== undefined || task.baseBranch !== undefined) {
+      await upsertTaskWorkspaceState(tmpDir, task.id, {
+        ...(task.worktreePath !== undefined ? { worktreePath: task.worktreePath } : {}),
+        ...(task.branchName !== undefined ? { branchName: task.branchName } : {}),
+        ...(task.baseBranch !== undefined ? { baseBranch: task.baseBranch } : {}),
+        updatedAt: task.updatedAt,
+      })
+    }
+  }
+}
+
+async function seedTaskEvidence(tasks: readonly Task[]): Promise<void> {
+  for (const task of tasks) {
+    const evidence = [
+      ...(task.notes ?? []).map((payload, index) => ({
+        id: `note-${task.id}-${payload.timestamp.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'note' as const,
+        recordedAt: payload.timestamp,
+        payload,
+      })),
+      ...(task.gateResults ?? []).map((payload, index) => ({
+        id: `gate-${task.id}-${payload.checkedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'gate_result' as const,
+        recordedAt: payload.checkedAt,
+        payload,
+      })),
+      ...(task.reviewVerdicts ?? []).map((payload, index) => ({
+        id: `review-${task.id}-${payload.recordedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'review_verdict' as const,
+        recordedAt: payload.recordedAt,
+        payload,
+      })),
+      ...(task.adjudications ?? []).map((payload, index) => ({
+        id: `adjudication-${task.id}-${payload.decidedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'adjudication' as const,
+        recordedAt: payload.decidedAt,
+        payload,
+      })),
+      ...(task.escalations ?? []).map((payload, index) => ({
+        id: payload.id || `escalation-${task.id}-${payload.raisedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'escalation' as const,
+        recordedAt: payload.resolvedAt ?? payload.raisedAt,
+        payload,
+      })),
+      ...(task.agentIssues ?? []).map((payload, index) => ({
+        id: payload.id || `issue-${task.id}-${payload.raisedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'agent_issue' as const,
+        recordedAt: payload.resolvedAt ?? payload.raisedAt,
+        payload,
+      })),
+      ...(task.mergeRecord ? [{
+        id: `merge-${task.id}-${(task.mergeRecord.mergedAt ?? task.updatedAt).replace(/[^0-9A-Za-z]/g, '')}`,
+        kind: 'merge_record' as const,
+        recordedAt: task.mergeRecord.mergedAt ?? task.updatedAt,
+        payload: task.mergeRecord,
+      }] : []),
+      ...(task.doneSummaryBundle ? [{
+        id: `completion-${task.id}-${(task.doneSummaryBundle.completedAt ?? task.updatedAt).replace(/[^0-9A-Za-z]/g, '')}`,
+        kind: 'completion_summary' as const,
+        recordedAt: task.doneSummaryBundle.completedAt ?? task.updatedAt,
+        payload: task.doneSummaryBundle,
+      }] : []),
+    ]
+    for (const event of evidence) {
+      await appendTaskEvidence(tmpDir, task.id, event)
+    }
+  }
 }
 
 async function writeManagedQueue(tasks: Task[]): Promise<void> {
-  const queue: TaskQueue = {
-    version: 1,
-    lastUpdated: '2026-04-01T00:00:00Z',
-    tasks,
-  }
-  const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-  await fs.mkdir(path.dirname(managedTasksPath), { recursive: true })
-  await fs.writeFile(managedTasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+  await writeQueueState({ tasks })
 }
 
 async function readQueue(): Promise<TaskQueue> {
   const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-  const raw = await fs.readFile(managedTasksPath, 'utf-8')
-  const queue = JSON.parse(raw) as TaskQueue
+  const queue = readProjectTaskQueueFromBoundary(managedTasksPath) as TaskQueue
   return {
     ...queue,
     tasks: await Promise.all(queue.tasks.map(async (task) => {
-      const effective = await buildEffectiveTask(tmpDir, task) as unknown as Task
+      const effective = await buildEffectiveTask(tmpDir, task, { evidence: 'full' }) as unknown as Task
       effective.notes ??= []
       effective.gateResults ??= []
       effective.reviewVerdicts ??= []
@@ -245,14 +421,13 @@ async function readQueue(): Promise<TaskQueue> {
 }
 
 async function readManagedQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(getProjectSystemStatePath(tmpDir, 'TASKS.json'), 'utf-8')
-  return JSON.parse(raw)
+  return readProjectTaskQueueFromBoundary(getProjectSystemStatePath(tmpDir, 'TASKS.json')) as TaskQueue
 }
 
 async function readEffectiveTaskFromQueue(taskId: string): Promise<Task | undefined> {
   const queue = await readQueue()
   const task = queue.tasks.find((candidate) => candidate.id === taskId)
-  return task ? await buildEffectiveTask(tmpDir, task) as unknown as Task : undefined
+  return task ? await buildEffectiveTask(tmpDir, task, { evidence: 'full' }) as unknown as Task : undefined
 }
 
 async function seedTaskOwnerInput(input: {
@@ -305,7 +480,7 @@ function queueOf(tasks: Task[]): TaskQueue {
 /**
  * Mutate a task on disk as if the real agent had called the update-task tool.
  */
-async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
+async function mutateTask(id: string, patch: TestTaskPatch): Promise<void> {
   const q = await readManagedQueue()
   const t = q.tasks.find((t) => t.id === id)
   if (!t) throw new Error(`No task ${id}`)
@@ -314,8 +489,11 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
     assignedTo,
     revisionCount,
     retryWindow,
+    proofRecovery,
+    workerRecovery,
     remediationAttempts,
     handoffStep,
+    shelveReason,
     worktreePath,
     branchName,
     baseBranch,
@@ -328,6 +506,61 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
     mergeRecord,
     ...definitionPatch
   } = patch
+  // A real update-task completion carries durable proof. Keep callback
+  // fixtures honest so the orchestrator's proof-health gate does not reopen a
+  // bare status mutation and make these loop tests exercise the wrong state.
+  if (definitionPatch.status === 'done' && !definitionPatch.doneSummaryBundle) {
+    const completedAt = patch.updatedAt ?? t.updatedAt ?? '2026-04-01T00:00:00Z'
+    definitionPatch.doneSummaryBundle = {
+      taskId: id,
+      status: 'done',
+      completedAt,
+      summary: {
+        journey: 'Test worker completed the requested task.',
+        decision: 'The task is complete.',
+        evidence: 'Test harness completion proof recorded.',
+        learningCandidates: [],
+        openResidue: 'None recorded.',
+      },
+      retention: {
+        transcriptPrimaryArtifact: false,
+        compactedFullTranscript: false,
+        fullEvidenceAvailable: true,
+      },
+      evidenceRefs: [],
+      createdAt: completedAt,
+      createdBy: 'test-harness',
+    }
+  }
+  if (definitionPatch.status === 'done' && !definitionPatch.completionHandoff &&
+    (!Array.isArray(t.proofPaths) || t.proofPaths.length === 0)) {
+    definitionPatch.completionHandoff = {
+      id: `${id}-completion-handoff`,
+      taskId: id,
+      completedAt: patch.updatedAt ?? t.updatedAt ?? '2026-04-01T00:00:00Z',
+      completedBy: 'test-harness',
+      summary: 'Test worker completed the requested task.',
+      proofPathIds: [],
+      verificationSummary: 'Test harness completion proof recorded.',
+      automatedProof: [],
+      manualProof: [],
+      providerProof: [],
+      residualRisk: 'None recorded.',
+      followUpTaskIds: [],
+      evidenceRefs: [{
+        scope: 'test',
+        collection: 'completion',
+        id: 'test:completion',
+        path: 'test-harness',
+      }],
+    }
+  }
+  if (definitionPatch.status === 'done' && !definitionPatch.acceptanceCriteria && t.acceptanceCriteria.length > 0) {
+    definitionPatch.acceptanceCriteria = t.acceptanceCriteria.map((criterion) => ({
+      ...criterion,
+      met: true,
+    }))
+  }
   Object.assign(t, definitionPatch)
 
   const updatedAt = patch.updatedAt ?? t.updatedAt ?? '2026-04-01T00:00:00Z'
@@ -335,11 +568,14 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
     ...(Object.prototype.hasOwnProperty.call(patch, 'assignedTo') ? { assignedTo } : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, 'revisionCount') ? { revisionCount } : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, 'retryWindow') ? { retryWindow } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'proofRecovery') ? { proofRecovery } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'workerRecovery') ? { workerRecovery } : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, 'remediationAttempts') ? { remediationAttempts } : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, 'handoffStep') ? { handoffStep } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'shelveReason') ? { shelveReason } : {}),
   }
   if (Object.keys(runtimePatch).length > 0) {
-    await upsertTaskRuntimeState(tmpDir, id, { ...runtimePatch, updatedAt })
+    await upsertTaskRuntimeState(tmpDir, id, { ...runtimePatch, updatedAt } as unknown as Parameters<typeof upsertTaskRuntimeState>[2])
   }
 
   const workspacePatch = {
@@ -399,12 +635,22 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
     await appendTaskEvidence(tmpDir, id, event)
   }
 
-  const tmpPath = `${tasksPath}.tmp`
-  await fs.writeFile(tmpPath, JSON.stringify(q, null, 2), 'utf-8')
-  await fs.rename(tmpPath, tasksPath)
-  const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-  await fs.mkdir(path.dirname(managedTasksPath), { recursive: true })
-  await fs.writeFile(managedTasksPath, JSON.stringify(q, null, 2), 'utf-8')
+  // The public mutation carries mergeRecord through the same rich boundary as
+  // the other evidence-owned fields. The boundary strips it from the
+  // definition and records it in normalized evidence; appending it only to a
+  // side ledger would not exercise that contract.
+  if (mergeRecord !== undefined) t.mergeRecord = mergeRecord
+
+  // Simulate the public update-task boundary. The queue write must carry the
+  // same CAS token and envelope as a real tool mutation; a direct detail-row
+  // write would bypass summary/scope projection and make callbacks appear to
+  // succeed while the orchestrator still sees the old status.
+  q.lastUpdated = updatedAt
+  writeProjectTaskQueue(tasksPath, q, {
+    projectId: 'test-ws',
+    projectRoot: tmpDir,
+    expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
+  })
 }
 
 interface StubAgent {
@@ -445,6 +691,218 @@ function agentSet(partial: Partial<OrchestratorAgentSet> = {}): OrchestratorAgen
     coordinators: partial.coordinators ?? {},
   }
 }
+
+function readTaskDetailRevision(taskId: string): number {
+  const database = new DatabaseSync(projectStateDatabasePath(tmpDir), { readOnly: true })
+  try {
+    const row = database.prepare('SELECT revision FROM work_item_detail WHERE task_id = ?').get(taskId) as { revision?: number } | undefined
+    return Number(row?.revision ?? 0)
+  } finally {
+    database.close()
+  }
+}
+
+describe('Orchestrator queue writes', () => {
+  it('hydrates dispatch through the promoted task boundary so proof recovery survives the queue projection', async () => {
+    const initialUpdatedAt = '2026-07-18T13:30:36.646Z'
+    const initialQueue: TaskQueue = {
+      version: 1,
+      lastUpdated: initialUpdatedAt,
+      tasks: [mkTask({
+        id: 'task-proof-recovery',
+        status: 'exploring',
+        updatedAt: initialUpdatedAt,
+        spec: undefined,
+        acceptanceCriteria: [],
+        productBrief: undefined,
+      })],
+    }
+    writeProjectTaskQueue(tasksPath, initialQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await upsertTaskRuntimeState(tmpDir, 'task-proof-recovery', {
+      proofRecovery: {
+        reopenedAt: initialUpdatedAt,
+        reason: 'The selected release requires script proof, but the current proof command is missing.',
+      },
+      updatedAt: initialUpdatedAt,
+    })
+
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    const hydrated = await (orch as unknown as {
+      hydrateEffectiveTaskForDispatch(task: Task): Promise<Task>
+    }).hydrateEffectiveTaskForDispatch(initialQueue.tasks[0]!)
+    const hydratedLegacy = hydrated as LegacyTaskView
+
+    expect(hydratedLegacy.runtime?.proofRecovery?.reason).toContain('current proof command is missing')
+    expect(hydratedLegacy.proofRecovery?.reason).toContain('current proof command is missing')
+  })
+
+  it('keeps a promoted proof-recovery task in source-backed shaping instead of seeding a generic spec', async () => {
+    const initialUpdatedAt = '2026-07-18T13:30:36.646Z'
+    const task = mkTask({
+      id: 'task-proof-recovery-dispatch',
+      status: 'exploring',
+      updatedAt: initialUpdatedAt,
+      spec: undefined,
+      acceptanceCriteria: [],
+      productBrief: undefined,
+    })
+    const initialQueue: TaskQueue = {
+      version: 1,
+      lastUpdated: initialUpdatedAt,
+      tasks: [task],
+    }
+    writeProjectTaskQueue(tasksPath, initialQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await upsertTaskRuntimeState(tmpDir, task.id, {
+      proofRecovery: {
+        reopenedAt: initialUpdatedAt,
+        reason: 'The selected release requires script proof, but the current proof command is missing.',
+      },
+      updatedAt: initialUpdatedAt,
+    })
+
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const outcome = await orch.tick()
+
+    expect(outcome).toMatchObject({
+      kind: 'processed',
+      taskId: task.id,
+      agent: 'spec-agent',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+    })
+    expect(spec.calls).toHaveLength(1)
+    const forcedRecovery = await (orch as unknown as {
+      maybeWriteExploringRecoverySpecSeed(task: Task, options: { force: boolean }): Promise<unknown>
+    }).maybeWriteExploringRecoverySpecSeed(task, { force: true })
+    expect(forcedRecovery).toBeNull()
+    const current = await readEffectiveTaskFromQueue(task.id)
+    expect(current?.status).toBe('exploring')
+    expect(current?.spec).toBeUndefined()
+    expect(current?.notes.some(note => /deterministic recovery spec seed/i.test(note.content))).toBe(false)
+  })
+
+  it('uses the promoted point mutation for one task while preserving runtime and evidence side effects', async () => {
+    const initialUpdatedAt = '2026-07-15T00:00:00.000Z'
+    const initialQueue: TaskQueue = {
+      version: 1,
+      lastUpdated: initialUpdatedAt,
+      tasks: [
+        mkTask({ id: 'task-one', status: 'ready', updatedAt: initialUpdatedAt }),
+        mkTask({ id: 'task-two', status: 'ready', updatedAt: initialUpdatedAt }),
+      ],
+    }
+    writeProjectTaskQueue(tasksPath, initialQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await upsertTaskRuntimeState(tmpDir, 'task-one', {
+      assignedTo: 'worker-agent',
+      revisionCount: 2,
+      updatedAt: initialUpdatedAt,
+    })
+    await appendTaskEvidence(tmpDir, 'task-one', {
+      id: 'note-task-one',
+      kind: 'note',
+      recordedAt: initialUpdatedAt,
+      payload: {
+        agentId: 'worker-agent',
+        role: 'worker',
+        content: 'Keep this evidence.',
+        timestamp: initialUpdatedAt,
+      },
+    })
+
+    const beforeQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+    const beforeUntouchedRevision = readTaskDetailRevision('task-two')
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+
+    await orch.updateQueueAtomically(queue => {
+      const task = queue.tasks.find(candidate => candidate.id === 'task-one')!
+      task.status = 'in_progress'
+      task.updatedAt = '2026-07-15T00:01:00.000Z'
+      queue.lastUpdated = task.updatedAt
+    })
+
+    expect(readProjectStateDatabaseQueueRevision(tasksPath)).toBeGreaterThan(beforeQueueRevision!)
+    expect(readTaskDetailRevision('task-two')).toBe(beforeUntouchedRevision)
+    expect(readProjectStateDatabaseTaskPointWithRevision(tasksPath, 'task-one')?.task.definition).toMatchObject({
+      id: 'task-one',
+      status: 'in_progress',
+    })
+    expect((await readTaskRuntimeStore(tmpDir)).tasks['task-one']).toMatchObject({
+      assignedTo: 'worker-agent',
+      revisionCount: 2,
+    })
+    expect((await readTaskEvidence(tmpDir, 'task-one')).some(event => event.id === 'note-task-one')).toBe(true)
+  })
+
+  it('rejects malformed runtime fields at the rich-task write boundary', async () => {
+    const initialUpdatedAt = '2026-07-15T00:00:00.000Z'
+    const initialQueue: TaskQueue = {
+      version: 1,
+      lastUpdated: initialUpdatedAt,
+      tasks: [mkTask({ id: 'task-runtime-boundary', status: 'ready', updatedAt: initialUpdatedAt })],
+    }
+    writeProjectTaskQueue(tasksPath, initialQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    await orch.updateQueueAtomically(queue => {
+      const task = queue.tasks.find(candidate => candidate.id === 'task-runtime-boundary')!
+      task.status = 'in_progress'
+      task.updatedAt = '2026-07-15T00:01:00.000Z'
+      ;(task as unknown as { retryWindow: unknown }).retryWindow = {
+        startedAt: '2026-07-15T00:01:00.000Z',
+      }
+      ;(task as unknown as { workerRecovery: unknown }).workerRecovery = {
+        noProgressAttempts: 2,
+      }
+      queue.lastUpdated = task.updatedAt
+    })
+
+    const runtime = (await readTaskRuntimeStore(tmpDir)).tasks['task-runtime-boundary']
+    expect(runtime?.retryWindow).toBeUndefined()
+    expect(runtime?.workerRecovery).toEqual({ noProgressAttempts: 2 })
+    expect(readProjectStateDatabaseTaskPointWithRevision(tasksPath, 'task-runtime-boundary')?.task.definition)
+      .not.toHaveProperty('retryWindow')
+  })
+
+  it('keeps multi-task structural writes on the aggregate boundary', async () => {
+    const initialUpdatedAt = '2026-07-15T00:00:00.000Z'
+    const initialQueue: TaskQueue = {
+      version: 1,
+      lastUpdated: initialUpdatedAt,
+      tasks: [
+        mkTask({ id: 'task-one', status: 'ready', updatedAt: initialUpdatedAt }),
+        mkTask({ id: 'task-two', status: 'ready', updatedAt: initialUpdatedAt }),
+      ],
+    }
+    writeProjectTaskQueue(tasksPath, initialQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    const beforeQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+
+    await orch.updateQueueAtomically(queue => {
+      const first = queue.tasks.find(candidate => candidate.id === 'task-one')!
+      const second = queue.tasks.find(candidate => candidate.id === 'task-two')!
+      first.status = 'in_progress'
+      first.updatedAt = '2026-07-15T00:01:00.000Z'
+      second.title = 'Second task, clarified'
+      second.updatedAt = first.updatedAt
+      queue.lastUpdated = first.updatedAt
+    })
+
+    const afterQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+    expect(afterQueueRevision).toBeGreaterThan(beforeQueueRevision!)
+    expect(readTaskDetailRevision('task-one')).toBe(afterQueueRevision)
+    expect(readTaskDetailRevision('task-two')).toBe(afterQueueRevision)
+  })
+})
 
 describe('context debug records', () => {
   it('records meaningful task progress through memory-core system-local storage', async () => {
@@ -525,7 +983,7 @@ describe('context debug records', () => {
       .filter(Boolean)
       .map((line) => JSON.parse(line) as Record<string, any>)
     expect(records.some((record) => record.taskId === 'task-context')).toBe(true)
-    expect(records.some((record) => typeof record.promptPreview === 'string' && record.promptPreview.length > 0)).toBe(true)
+    expect(records.some((record) => record.taskId === 'task-context' && record.promptPreview === '' && typeof record.promptHash === 'string')).toBe(true)
   })
 
   it('refreshes the corpus map after a worker changes files', async () => {
@@ -579,6 +1037,72 @@ describe('pickNextTask', () => {
       ],
     }
     expect(pickNextTask(q)?.id).toBe('t-review')
+  })
+
+  it('bounds continuous ticks to the selected release scope', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'current-parent',
+        title: 'Current scoped parent',
+        status: 'spec_review',
+        priority: 'normal',
+        hierarchy: { childIds: ['current-child'], order: 0 },
+      }),
+      mkTask({
+        id: 'current-child',
+        title: 'Runnable current child',
+        status: 'ready',
+        priority: 'normal',
+        hierarchy: { parentId: 'current-parent', childIds: [], order: 0 },
+      }),
+      mkTask({
+        id: 'later-critical',
+        title: 'Critical later work',
+        status: 'ready',
+        priority: 'critical',
+      }),
+    ])
+    const scopedQueue = await readQueue()
+    scopedQueue.selectedReleaseId = 'current-scope'
+    scopedQueue.releases = [{
+      id: 'current-scope',
+      label: 'Current scope',
+      kind: 'release',
+      state: 'active',
+      source: 'owner_approved',
+      nodeIds: ['work:current-parent'],
+      deferredNodeIds: ['work:later-critical'],
+      proofStyle: 'unspecified',
+    }]
+    await writeQueueState(scopedQueue)
+
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask('current-child', { status: 'review' })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver(),
+    })
+
+    const first = await orch.tick()
+    expect(first).toMatchObject({
+      kind: 'processed',
+      taskId: 'current-child',
+      agent: 'task-claimer',
+      beforeStatus: 'ready',
+      afterStatus: 'in_progress',
+    })
+    expect(worker.calls).toHaveLength(0)
+
+    await orch.tick()
+
+    expect(worker.calls).toHaveLength(1)
+    expect(worker.calls[0]?.prompt).toContain('## Current Task: current-child')
+    expect(worker.calls[0]?.prompt).not.toContain('## Current Task: later-critical')
+    const queue = await readQueue()
+    expect(queue.tasks.find(task => task.id === 'current-child')?.status).toBe('review')
+    expect(queue.tasks.find(task => task.id === 'later-critical')?.status).toBe('ready')
   })
 
   it('runs gate checks before sending reviewed work back through other stages', async () => {
@@ -903,7 +1427,7 @@ describe('pickNextTask', () => {
     expect(pickNextTask(q, 'knit')?.id).toBe('t-knit')
   })
 
-  it('dispatches drafted spec_review tasks for normal coordinator approval work', async () => {
+  it('selects malformed spec_review drafts for deterministic repair before owner approval', async () => {
     const q: TaskQueue = {
       version: 1,
       lastUpdated: 'now',
@@ -1084,6 +1608,86 @@ describe('Orchestrator.tick — idle handling', () => {
     const out = await orch.tick()
     expect(out.kind).toBe('idle')
     if (out.kind === 'idle') expect(out.consecutiveIdleTicks).toBe(2)
+  })
+
+  it('reconciles active queue rows to done when durable merge evidence already exists', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'already-landed',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        escalations: [{
+          id: 'esc-already-landed',
+          taskId: 'already-landed',
+          agentId: 'worker-agent',
+          reason: 'human_judgment_required',
+          summary: 'Stale escalation after provider timeout.',
+          details: 'Should not survive durable merge evidence.',
+          raisedAt: '2026-04-01T00:10:00.000Z',
+        }],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'already-landed', {
+      id: 'merge-already-landed',
+      taskId: 'already-landed',
+      kind: 'merge_record',
+      recordedAt: '2026-04-01T00:20:00.000Z',
+      payload: {
+        fromBranch: 'guildhall/task-already-landed',
+        toBranch: 'main',
+        strategy: 'cherry_pick_local',
+        result: 'merged',
+        mergedAt: '2026-04-01T00:20:00.000Z',
+        commitSha: 'abc123',
+      },
+    })
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('idle')
+    expect(worker.calls).toHaveLength(0)
+    const task = await readEffectiveTaskFromQueue('already-landed')
+    expect(task?.status).toBe('done')
+    expect(task?.assignedTo).toBeNull()
+    expect(task?.completedAt).toBe('2026-04-01T00:20:00.000Z')
+    expect(task?.escalations.every(escalation => escalation.resolvedAt)).toBe(true)
+    expect(task?.notes.some(note => note.content.includes('durable merge evidence'))).toBe(true)
+  })
+
+  it('reports deferred release work when the selected scope is exhausted', async () => {
+    await writeQueueState({
+      selectedReleaseId: 'current-scope',
+      releases: [{
+        id: 'current-scope',
+        label: 'Current scope',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:a'],
+        deferredNodeIds: ['work:later-one', 'work:later-two'],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        mkTask({ id: 'a', status: 'done' }),
+        mkTask({ id: 'later-one', status: 'ready' }),
+        mkTask({ id: 'later-two', status: 'ready' }),
+      ],
+    })
+
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    const out = await orch.tick()
+    expect(out.kind).toBe('idle')
+    if (out.kind === 'idle') {
+      expect(out.allDone).toBe(true)
+      expect(out.summary?.reason).toBe('all_terminal')
+      expect(out.summary?.message).toContain('Current task scope is exhausted')
+      expect(out.summary?.message).toContain('2 later documented tasks')
+    }
   })
 
   it('resets the idle counter when a task is processed', async () => {
@@ -1270,7 +1874,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations[0]!.reason).toBe('human_judgment_required')
   })
 
-  it('escalates immediately when the spec agent ignores the durable-progress nudge', async () => {
+  it('seeds a recovery spec immediately when the spec agent ignores the durable-progress nudge', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
       name: 'spec-agent',
@@ -1296,13 +1900,18 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('escalated')
-    if (out.kind === 'escalated') expect(out.reason).toContain('kept researching')
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-recovery')
+      expect(out.beforeStatus).toBe('exploring')
+      expect(out.afterStatus).toBe('spec_review')
+    }
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('blocked')
-    expect(task.blockReason).toContain('Spec agent kept researching')
-    expect(task.escalations[0]?.details).toContain('durable-progress nudge')
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.spec).toContain('## Completion Boundary')
+    expect(task.escalations ?? []).toHaveLength(0)
   })
 
   it('treats the live durable-progress refusal wording as spec-agent no-progress', async () => {
@@ -1331,14 +1940,206 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('escalated')
+    expect(out.kind).toBe('processed')
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('blocked')
-    expect(task.blockReason).toContain('Spec agent kept researching')
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.spec).toContain('## Completion Boundary')
   })
 
-  it('treats the live durable-progress nudge wording as spec-agent no-progress', async () => {
+  it('recovers the live durable-progress spec-agent blocker on resume', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        title: 'Build AlertDialog primitive',
+        blockReason: 'human_judgment_required: Spec agent kept researching after Guildhall asked for durable progress.',
+        escalations: [{
+          id: 'esc-a-1',
+          taskId: 'a',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+          details: 'Task remained in exploring after the agent ignored the durable-progress nudge and kept using read-only exploration.',
+          raisedAt: '2026-07-04T14:37:04.468Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('a', {
+        status: 'spec_review',
+        assignedTo: null,
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Thing is done',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        productBrief: {
+          userJob: 'I want the task shaped into implementable work.',
+          successMetric: 'The task has a reviewable spec.',
+          antiPatterns: ['Do not loop on read-only research.'],
+        },
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+      transitioned: true,
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    const durableEvidence = await readTaskEvidence(tmpDir, 'a')
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+    expect(durableEvidence.some(event =>
+      /failed to save a durable draft|preserved transcript notes/i.test(
+        typeof event.payload === 'object' && event.payload !== null && 'content' in event.payload
+          ? String(event.payload.content)
+          : '',
+      ),
+    )).toBe(true)
+    expect(task.notes.some(note =>
+      /wrote a deterministic recovery spec seed/i.test(note.content ?? ''),
+    )).toBe(true)
+    // Recovery reopens this task's bounded essential history so the new seed
+    // can preserve prior answers; the stale narration must stay out of the
+    // new spec, not disappear from the task's evidence trail.
+    expect(task.notes.some(note =>
+      /failed to save a durable draft|preserved transcript notes/i.test(note.content ?? ''),
+    )).toBe(true)
+    expect(task.spec).not.toMatch(/failed to save a durable draft|preserved transcript notes/i)
+    expect(task.escalations[0]).toMatchObject({
+      resolvedBy: 'system',
+    })
+  })
+
+  it('recovers spec shaping timeout blockers as Guildhall-owned retry work', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        title: 'Recover source-backed contract surface',
+        blockReason: 'human_judgment_required: Spec shaping timed out before saving durable progress.',
+        escalations: [{
+          id: 'esc-a-1',
+          taskId: 'a',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          summary: 'Spec shaping timed out before saving durable progress.',
+          details:
+            'spec-agent timed out after 120000ms of inactivity\n\nGuildhall did not get a saved brief, question, spec, or task transition before the spec lane timed out.',
+          raisedAt: '2026-07-05T17:11:48.808Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('a', {
+        status: 'spec_review',
+        assignedTo: null,
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Thing is done',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        productBrief: {
+          userJob: 'I want the task shaped into implementable work.',
+          successMetric: 'The task has a reviewable spec.',
+          antiPatterns: ['Do not loop on read-only research.'],
+        },
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+      transitioned: true,
+    })
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.escalations[0]).toMatchObject({
+      resolvedBy: 'system',
+    })
+  })
+
+  it('recovers generated internal split durable-progress blockers even without an escalation record', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        title: 'Define fixture contracts',
+        blockReason: 'human_judgment_required: Spec agent kept researching after Guildhall asked for durable progress.',
+        origination: 'system',
+        proposedBy: 'task-sizing',
+        workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+        hierarchy: { parentId: 'parent', childIds: [], order: 0, relation: 'decomposes' },
+      }),
+      mkTask({
+        id: 'parent',
+        status: 'ready',
+        title: 'Define fixture schemas',
+        hierarchy: { childIds: ['a'], order: 0, relation: 'contains' },
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('a', {
+        status: 'spec_review',
+        assignedTo: null,
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Thing is done',
+          verifiedBy: 'review',
+          met: false,
+        }],
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+      transitioned: true,
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'a')!
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+  })
+
+  it('seeds a recovery spec for live durable-progress nudge wording', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
       name: 'spec-agent',
@@ -1364,11 +2165,69 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('escalated')
+    expect(out.kind).toBe('processed')
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('blocked')
-    expect(task.blockReason).toContain('Spec agent kept researching')
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.spec).toContain('## Completion Boundary')
+  })
+
+  it('preserves durable-progress nudge stalls with an existing spec as runtime recovery', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'Recover source-backed contract surface',
+        assignedTo: 'spec-agent',
+        spec: [
+          '## What this is',
+          'Repair the imported handoff.',
+          '',
+          '## Verification',
+          '- Confirm the worker handoff no longer depends on an empty placeholder.',
+        ].join('\n'),
+      }),
+    ])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as { prompt: string }[],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept researching without recording durable progress; asking it to write the brief, question, spec, or escalation now.',
+        })
+        return { text: '' }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'spec-agent',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+      transitioned: false,
+    })
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBeNull()
+    expect(task.escalations ?? []).toHaveLength(0)
+    expect(task.notes.at(-1)?.content)
+      .toContain('instead of asking the owner')
   })
 
   it('persists a visible question from the whole spec turn before escalating durable-progress nudges', async () => {
@@ -1425,9 +2284,10 @@ describe('Orchestrator.tick — routing', () => {
     const task = queue.tasks[0]!
     expect(task.status).toBe('exploring')
     expect(task.blockReason).toBeUndefined()
-    expect(task.openQuestions).toHaveLength(1)
-    expect(task.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'What exactly should this task do now that both dependencies are done?',
       choices: [
         'Create the inventory document that was supposed to exist, then verify it',
@@ -1435,6 +2295,41 @@ describe('Orchestrator.tick — routing', () => {
         'Both — create the missing inventory AND verify the implementation',
       ],
     })
+  })
+
+  it('does not turn evidence-summary bullets into owner-input choices', async () => {
+    await writeQueue([mkTask({
+      id: 'a',
+      status: 'exploring',
+      title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+    })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Now I have the full picture. This is a Docusaurus documentation site.',
+        '',
+        'The existing schemas already have:',
+        '- `src/schemas/fixture.ts` — `FixtureManifest`, `ExpectedRecordSet`',
+        '- `src/schemas/evaluation.ts` — `PrototypeRun`, `RunEvaluation`',
+        '- `src/schemas/index.ts` — barrel export',
+        '',
+        'Let me now write the product brief and draft the spec.',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+    expect(task.status).toBe('exploring')
+    expect(task.blockReason).toBeUndefined()
   })
 
 
@@ -1480,13 +2375,18 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
     expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.afterStatus).toBe('exploring')
+      expect(out.transitioned).toBe(false)
+    }
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
     expect(task.status).toBe('exploring')
-    expect(task.openQuestions).toHaveLength(1)
-    expect(task.openQuestions?.[0]?.kind).toBe('choice')
-    expect(task.openQuestions?.[0] && 'prompt' in task.openQuestions[0] ? task.openQuestions[0].prompt : '').toContain('Pick one')
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]?.prompt).toContain('Pick one')
 
     const transcript = await fs.readFile(
       getProjectTranscriptPath(tmpDir, 'exploring', 'a'),
@@ -1571,12 +2471,12 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(1)
-    expect(task.openQuestions?.[0]?.kind).toBe('choice')
-    expect(task.openQuestions?.[0] && 'prompt' in task.openQuestions[0] ? task.openQuestions[0].prompt : '').toBe('Pick one')
-    expect(task.openQuestions?.[0]).toMatchObject({
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]?.prompt).toBe('Pick one')
+    expect(ownerInputs[0]).toMatchObject({
       choices: ['happy path only', 'error cases too'],
-      selectionMode: 'single',
     })
 
     const transcript = await fs.readFile(getProjectTranscriptPath(tmpDir, 'exploring', 'a'), 'utf-8')
@@ -1617,21 +2517,23 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(3)
-    expect(task.openQuestions?.map((q) => q.kind)).toEqual(['choice', 'choice', 'choice'])
-    expect(task.openQuestions?.[0]).toMatchObject({
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(3)
+    expect(ownerInputs.every((request) => request.choices?.length === 3 || request.choices?.length === 2)).toBe(true)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'Primary scenario to spec',
       choices: ['Validation failure', 'Empty assistant message', 'Any of the above'],
       selectionMode: 'single',
     })
-    expect(task.openQuestions?.[1]).toMatchObject({
+    expect(ownerInputs[1]).toMatchObject({
       prompt: 'What the fallback must do',
       choices: [
         'Post one structured choice question, then stop turn',
         'Post structured question + transcript entry + stop turn',
       ],
     })
-    expect(task.openQuestions?.[2]).toMatchObject({
+    expect(ownerInputs[2]).toMatchObject({
       prompt: 'Out-of-scope guardrails',
       choices: [
         'Don’t redesign the task state machine',
@@ -1676,9 +2578,10 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(3)
-    expect(task.openQuestions?.map((q) => q.kind)).toEqual(['choice', 'choice', 'choice'])
-    expect(task.openQuestions?.map((q) => ('prompt' in q ? q.prompt : ''))).toEqual([
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(3)
+    expect(ownerInputs.map((request) => request.prompt)).toEqual([
       'First',
       'Second',
       'Third',
@@ -1717,8 +2620,10 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(2)
-    expect(task.openQuestions?.[0]).toMatchObject({
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(2)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'To lock scope before I draft acceptance criteria, pick one:',
       choices: [
         'Behavior spec only',
@@ -1727,7 +2632,7 @@ describe('Orchestrator.tick — routing', () => {
         'Other',
       ],
     })
-    expect(task.openQuestions?.[1]).toMatchObject({
+    expect(ownerInputs[1]).toMatchObject({
       prompt: 'Also, what should success look like in one concrete check?',
       choices: [
         'In first turn, agent asks at most N questions and yields.',
@@ -1789,8 +2694,10 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(3)
-    expect(task.openQuestions?.map((q) => ('prompt' in q ? q.prompt : ''))).toEqual([
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(3)
+    expect(ownerInputs.map((request) => request.prompt)).toEqual([
       'Test level target (pick one)',
       'Coverage posture (pick one)',
       'If first-turn data is still insufficient (pick one)',
@@ -1956,14 +2863,14 @@ describe('Orchestrator.tick — routing', () => {
         'We want to verify fallback brief creation and structured question recovery after spec-agent failures.',
       authoredBy: 'spec-agent',
     })
-    expect(task.openQuestions).toHaveLength(2)
-    expect(task.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(2)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'Primary outcome',
       choices: ['Spec-agent flow only', 'Shared orchestration recovery', 'Both'],
     })
-    expect(task.openQuestions?.[1]).toMatchObject({
-      kind: 'choice',
+    expect(ownerInputs[1]).toMatchObject({
       prompt: 'Test depth',
       choices: ['Unit only', 'Unit + integration'],
     })
@@ -2101,6 +3008,31 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions ?? []).toHaveLength(0)
   })
 
+  it('does not turn a process follow-up into owner input', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'I have enough context to continue.',
+        '',
+        "I'll start by reading the existing task and source records.",
+        '',
+        "What's the remaining delta?",
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('does not convert transcript-note summaries into fallback questions', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Autoencoder baseline quality pass' })])
     const spec = stubAgent(
@@ -2194,9 +3126,10 @@ describe('Orchestrator.tick — routing', () => {
       userJob: 'Add unit coverage for the use-collections happy path and one state-update behavior.',
       authoredBy: 'spec-agent',
     })
-    expect((task.openQuestions ?? []).filter((q) => !q.answeredAt)).toHaveLength(1)
-    expect(task.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'Which state update matters most first?',
       choices: ['Initial collection tree normalization', 'Optimistic create/update behavior'],
     })
@@ -2234,7 +3167,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations ?? []).toHaveLength(0)
   })
 
-  it('blocks the task after repeated spec-agent inactivity timeouts without durable progress', async () => {
+  it('preserves repeated spec-agent inactivity timeouts as runtime recovery instead of owner input', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
       name: 'spec-agent',
@@ -2251,18 +3184,79 @@ describe('Orchestrator.tick — routing', () => {
 
     await orch.tick()
     const out = await orch.tick()
-    expect(out.kind).toBe('escalated')
-    if (out.kind !== 'escalated') throw new Error(`expected escalation, got ${out.kind}`)
-    expect(out.reason).toBe('Spec shaping timed out before saving durable progress.')
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'spec-agent',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+      transitioned: false,
+    })
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('blocked')
-    expect(task.escalations[0]).toMatchObject({
-      reason: 'human_judgment_required',
-      summary: 'Spec shaping timed out before saving durable progress.',
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBeNull()
+    expect(task.escalations ?? []).toHaveLength(0)
+    expect(task.blockReason ?? '').not.toContain('Spec shaping timed out')
+    expect(task.notes.at(-1)?.content).toContain('instead of asking the owner')
+  })
+
+  it('preserves spec timeout after durable-progress nudge as runtime recovery instead of owner input', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'Recover source-backed contract surface',
+        assignedTo: 'spec-agent',
+        spec: [
+          '## What this is',
+          'Repair the imported handoff.',
+          '',
+          '## Verification',
+          '- Confirm the worker handoff no longer depends on an empty placeholder.',
+        ].join('\n'),
+      }),
+    ])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as Array<{ prompt: string }>,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('spec-agent timed out after 120000ms of inactivity')
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept researching without recording durable progress; asking it to write the brief, question, spec, or escalation now.',
+        })
+        throw new Error('spec-agent timed out after 120000ms of inactivity')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: spec as any }),
     })
-    expect(task.blockReason).toContain('Spec shaping timed out')
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'spec-agent',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+      transitioned: false,
+    })
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBeNull()
+    expect(task.escalations ?? []).toHaveLength(0)
+    expect(task.notes.at(-1)?.content)
+      .toContain('instead of asking the owner')
   })
 
   it('preserves newly saved durable spec progress when the spec agent times out', async () => {
@@ -2318,20 +3312,16 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations ?? []).toHaveLength(0)
   })
 
-  it('writes a deterministic recovery spec seed before redispatching a reframed shaping task', async () => {
+  it('does not replace a fresh reframe with a deterministic recovery seed', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
         status: 'exploring',
         title: 'Block menu / block side menu',
         description: 'looma/docs/editor-roadmap.md: - **Block menu / block side menu**',
-        productBrief: {
-          userJob: 'I want the old broken build failure repaired.',
-          successMetric: 'The stale missing import disappears.',
-          antiPatterns: ['Keep researching instead of writing a spec.'],
-          authoredBy: 'spec-agent',
-          authoredAt: '2026-05-25T06:59:09.130Z',
-        },
+        productBrief: undefined,
+        spec: undefined,
+        acceptanceCriteria: [],
         notes: [
           preservedQuestionNote(
             "I've drafted the product brief and posted three focused questions:",
@@ -2364,7 +3354,13 @@ describe('Orchestrator.tick — routing', () => {
         ],
       }),
     ])
-    const spec = stubAgent('spec-agent')
+    let resetCount = 0
+    const spec = {
+      ...stubAgent('spec-agent'),
+      resetConversation() {
+        resetCount += 1
+      },
+    }
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ spec }),
@@ -2374,37 +3370,1203 @@ describe('Orchestrator.tick — routing', () => {
     expect(out).toMatchObject({
       kind: 'processed',
       taskId: 'a',
+      agent: 'spec-agent',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+      transitioned: false,
+    })
+    expect(spec.calls).toHaveLength(1)
+    expect(resetCount).toBe(1)
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.productBrief).toBeUndefined()
+    expect(task.spec).toBeUndefined()
+    expect(task.acceptanceCriteria).toEqual([])
+    expect(task.notes.some(note => note.content.includes('deterministic recovery spec seed'))).toBe(false)
+  })
+
+  it('writes a deterministic recovery spec seed after repeated durable-draft recovery', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+        description: 'Imported contract work should materialize the named schema and record surfaces directly from the cited docs.',
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
       agent: 'coordinator-recovery',
       beforeStatus: 'exploring',
       afterStatus: 'spec_review',
       transitioned: true,
     })
     expect(spec.calls).toHaveLength(0)
-
     const queue = await readQueue()
     const task = queue.tasks[0]!
     expect(task.status).toBe('spec_review')
-    expect(task.productBrief).toMatchObject({
-      authoredBy: 'coordinator-recovery',
-    })
-    expect(task.productBrief?.userJob).toContain('Block menu / block side menu')
-    expect(task.productBrief?.userJob).not.toContain('old broken build failure')
     expect(task.spec).toContain('## Completion Boundary')
-    expect(task.spec).toContain('Drag-handle is out of scope')
-    expect(task.spec).toContain('Block menu / block side menu from looma/docs/editor-roadmap.md')
-    expect(task.spec).not.toContain('looma/docs/editor-roadmap.md: - **')
-    expect(task.spec).not.toContain('Should drag-and-drop reordering be in scope?')
-    expect(task.spec).not.toContain("I've drafted the product brief")
-    expect(task.spec).not.toContain('Build failing due to unresolved import')
-    expect(task.spec).not.toContain('Superseded by a task reframe request')
     expect(task.acceptanceCriteria).toHaveLength(3)
-    expect(task.notes.some(note => note.content.includes('deterministic recovery spec seed'))).toBe(true)
+  })
+
+  it('uses parent contract evidence when seeding a recovered child spec', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'ready',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        spec: [
+          '## Acceptance Criteria',
+          '1. The cited contracts are explicitly defined and usable in code: `FixtureManifest`, `ExpectedRecordSet`, `ExpectedSignal`.',
+          '2. `PrototypeRun`, `RunEvaluation`, and `PacketQualityScore` capture the prototype run and trace evidence.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'contracts-defined',
+          description: 'The cited contracts are explicitly defined and usable in code: `FixtureManifest`, `ExpectedRecordSet`, `ExpectedSignal`.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        hierarchy: { childIds: ['a'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+        description: 'Imported contract work should materialize the named schema and record surfaces directly from the cited docs.',
+        hierarchy: { parentId: 'parent', childIds: [], order: 0, relation: 'decomposes' },
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'a')!
+    expect(task.spec).toContain('Contract terms to account for')
+    expect(task.spec).toContain('`FixtureManifest`')
+    expect(task.spec).toContain('`RunEvaluation`')
+    expect(task.spec).toContain('Do not introduce Rust contracts')
+    expect(task.spec).not.toContain('appropriate repo surface')
+    expect(task.acceptanceCriteria).toHaveLength(4)
+  })
+
+  it('inherits scoped parent packet criteria for recovered Narrative Harness child specs', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'done',
+        domain: 'harness',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        description: '3. Implement a no-UI runner that builds a packet from fixture records.',
+        spec: [
+          '## What this is',
+          'Implement a no-UI runner that builds a packet from fixture records.',
+          '',
+          '## Acceptance Criteria',
+          '1. The runner ingests a fixture, builds records, runs a packet, and saves the run output.',
+          '2. The harness run works without a frontend and stays inside the no-UI prototype boundary.',
+          '3. The runner builds a bounded writer packet from the documented fields: `BookBrief`; `ManuscriptUnit`; `CharacterTrace`; `ReaderStateTrace`; `OutlineNode`; one `AuthorDecision`; writer packet names what the character believes; writer packet names what the reader knows.',
+          '4. The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included.',
+        ].join('\n'),
+        acceptanceCriteria: [
+          {
+            id: 'runner-flow',
+            description: 'The runner ingests a fixture, builds records, runs a packet, and saves the run output.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'no-ui-boundary',
+            description: 'The harness run works without a frontend and stays inside the no-UI prototype boundary.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'bounded-writer-packet',
+            description: 'The runner builds a bounded writer packet from the documented fields: `BookBrief`; `ManuscriptUnit`; `CharacterTrace`; `ReaderStateTrace`; `OutlineNode`; one `AuthorDecision`; writer packet names what the character believes; writer packet names what the reader knows.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'privacy-scope',
+            description: 'The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: { childIds: ['packet-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'packet-child',
+        status: 'exploring',
+        title: 'Build the bounded writer packet instead of rereading the manuscript',
+        description: 'The documented harness loop is supposed to prove packet discipline, not brute-force full-manuscript prompts.',
+        proposalRationale: 'The documented harness loop is supposed to prove packet discipline, not brute-force full-manuscript prompts.',
+        hierarchy: { parentId: 'parent', childIds: [], order: 1, relation: 'decomposes' },
+        escalations: [{
+          id: 'esc-durable',
+          taskId: 'packet-child',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+          details: 'Task remained in exploring after the agent ignored the durable-progress nudge and kept using read-only exploration. Review the task transcript or provider behavior before retrying.',
+          raisedAt: '2026-07-05T02:09:53.524Z',
+          resolvedAt: '2026-07-05T02:31:06.450Z',
+          resolvedBy: 'coordinator',
+          resolution: 'Superseded after Guildhall learned to preserve useful transcript context and retry spec drafting from the last durable notes.',
+        }],
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'packet-child',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'packet-child')!
+    expect(task.spec).toContain('Parent acceptance this child satisfies')
+    expect(task.spec).toContain('bounded writer packet')
+    expect(task.spec).toContain('writer packet names what the character believes')
+    expect(task.spec).not.toContain('appropriate repo surface')
+    expect(task.spec).not.toContain('Spec agent kept researching')
+    expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).toContain('BookBrief')
+    expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).not.toContain('provenance/privacy')
+  })
+
+  it('writes source-backed recovery specs for provenance privacy child work', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'done',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        description: '3. Implement a no-UI runner that builds a packet from fixture records.',
+        references: [
+          '/repo/docs/harness/implementation-roadmap.md',
+          '/repo/docs/specs/agent-context-packets-and-compaction.md',
+        ],
+        spec: [
+          '## What this is',
+          'Implement a no-UI runner that builds a packet from fixture records.',
+          '',
+          '## Acceptance Criteria',
+          '1. The runner builds a bounded writer packet from the documented fields: `BookBrief`; `ManuscriptUnit`; `CharacterTrace`; `ReaderStateTrace`; `OutlineNode`; one `AuthorDecision`; writer packet names what the character believes; writer packet names what the reader knows.',
+          '2. The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included, including privacy manifest says what was included.',
+        ].join('\n'),
+        acceptanceCriteria: [
+          {
+            id: 'bounded-writer-packet',
+            description: 'The runner builds a bounded writer packet from the documented fields: `BookBrief`; `ManuscriptUnit`; `CharacterTrace`; `ReaderStateTrace`; `OutlineNode`; one `AuthorDecision`; writer packet names what the character believes; writer packet names what the reader knows.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'privacy-scope',
+            description: 'The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included, including privacy manifest says what was included.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: { childIds: ['privacy-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'privacy-child',
+        status: 'exploring',
+        title: 'Prove provenance/privacy scope in packet output',
+        description: 'The docs treat provenance scope as part of the proof loop, not a later polish layer.',
+        proposalRationale: 'The docs treat provenance scope as part of the proof loop, not a later polish layer.',
+        hierarchy: { parentId: 'parent', childIds: [], order: 3, relation: 'decomposes' },
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'privacy-child',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'privacy-child')!
+    const criteria = task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')
+    expect(task.references).toEqual([
+      '/repo/docs/harness/implementation-roadmap.md',
+      '/repo/docs/specs/agent-context-packets-and-compaction.md',
+    ])
+    expect(task.productBrief?.userJob).toBe('I want Prove provenance/privacy scope in packet output implemented or proven from The docs treat provenance scope as part of the proof loop, not a later polish layer.')
+    expect(task.productBrief?.whyItMattersNow).toContain('one child of "Implement a no-UI runner that builds a packet from fixture records."')
+    expect(task.productBrief?.successMetric).toBe('The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included.')
+    expect(task.spec).toContain('Parent acceptance this child satisfies')
+    expect(task.spec).toContain('privacy manifest says what was included.')
+    expect(task.spec).not.toContain('including privacy manifest says what was included')
+    expect(task.spec).not.toContain('bounded writer packet')
+    expect(task.spec).not.toContain('appropriate repo surface')
+    expect(criteria).toContain('privacy manifest says what was included.')
+    expect(criteria).not.toContain('including privacy manifest says what was included')
+  })
+
+  it('repairs under-shaped recovery specs from the task graph before approval', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'done',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        references: [
+          '/repo/docs/harness/implementation-roadmap.md',
+          '/repo/docs/specs/agent-context-packets-and-compaction.md',
+        ],
+        acceptanceCriteria: [
+          {
+            id: 'privacy-scope',
+            description: 'The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included, including privacy manifest says what was included.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: { childIds: ['privacy-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'privacy-child',
+        status: 'spec_review',
+        domain: 'harness',
+        title: 'Prove provenance/privacy scope in packet output',
+        description: 'The docs treat provenance scope as part of the proof loop, not a later polish layer.',
+        proposalRationale: 'The docs treat provenance scope as part of the proof loop, not a later polish layer.',
+        spec: [
+          '## Summary',
+          'Prove provenance/privacy scope in packet output from the current project evidence.',
+          '',
+          '## Acceptance Criteria',
+          '1. The runner records provenance/privacy scope in packet output: privacy manifest says what was included, including privacy manifest says what was included.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: bad generic recovery text.',
+        ].join('\n'),
+        productBrief: {
+          userJob: 'I want Prove provenance/privacy scope in packet output turned into concrete project work using the evidence and owner decisions already recorded.',
+          successMetric: 'Prove provenance/privacy scope in packet output has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: '2026-07-05T05:33:44.793Z',
+        },
+        hierarchy: { parentId: 'parent', childIds: [], order: 3, relation: 'decomposes' },
+        notes: [{
+          agentId: 'coordinator-recovery',
+          role: 'system',
+          content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
+          timestamp: '2026-07-05T05:33:44.793Z',
+        }],
+      }),
+    ])
+    const coord = stubAgent('harness-coordinator', async () => {
+      throw new Error('coordinator should not review an under-shaped recovery spec before repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: stubAgent('spec-agent'), coordinators: { harness: coord } }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'privacy-child',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(coord.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'privacy-child')!
+    expect(task.status).toBe('spec_review')
+    expect(task.references).toEqual([
+      '/repo/docs/harness/implementation-roadmap.md',
+      '/repo/docs/specs/agent-context-packets-and-compaction.md',
+    ])
+    expect(task.productBrief?.userJob).toBe('I want Prove provenance/privacy scope in packet output implemented or proven from The docs treat provenance scope as part of the proof loop, not a later polish layer.')
+    expect(task.productBrief?.successMetric).toContain('privacy manifest says what was included.')
+    expect(task.spec).toContain('Parent acceptance this child satisfies')
+    expect(task.spec).not.toContain('including privacy manifest says what was included')
+    expect(task.notes.at(-1)?.content).toContain('under-shaped recovery spec')
+  })
+
+  it('repairs standalone recovery specs with numbered owner requirements into concrete criteria', async () => {
+    await writeQueueState({
+      selectedReleaseId: 'stage-1-fixture-and-evaluation-harness',
+      releases: [{
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1 Fixture And Evaluation Harness',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+      mkTask({
+        id: 'model-proof',
+        status: 'spec_review',
+        domain: 'harness',
+        title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+        description:
+          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks. These should become source-backed MVP scope/tasks or explicit deferred work, and Guildhall should show them clearly in the project map/overview/work queue instead of treating them as hidden Codex knowledge. from For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for.',
+        spec: [
+          '## Summary',
+          'Define Narrative Harness MVP drafting model and physical-world review lanes from the current project evidence.',
+          '',
+          '## Acceptance Criteria',
+          '1. Given the current project evidence, when Define Narrative Harness MVP drafting model and physical-world review lanes is implemented, then the repo-local proof demonstrates that exact child outcome without adding unrelated later-stage work.',
+          '2. Given the parent task boundary, when this task is reviewed, then it satisfies the relevant parent acceptance criteria and leaves sibling child work to its own task.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: Define Narrative Harness MVP drafting model and physical-world review lanes is proven inside the no-UI Narrative Harness Stage 1 boundary.',
+        ].join('\n'),
+        productBrief: {
+          userJob: 'I want Define Narrative Harness MVP drafting model and physical-world review lanes implemented or proven from current evidence.',
+          successMetric: 'Define Narrative Harness MVP drafting model and physical-world review lanes has a concrete completion boundary.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: '2026-07-05T18:15:02.867Z',
+        },
+        notes: [{
+          agentId: 'coordinator-recovery',
+          role: 'system',
+          content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
+          timestamp: '2026-07-05T18:15:02.867Z',
+        }],
+      }),
+    ]})
+    const coord = stubAgent('harness-coordinator', async () => {
+      throw new Error('coordinator should not review generic numbered recovery specs before repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: stubAgent('spec-agent'), coordinators: { harness: coord } }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'model-proof',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(coord.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'model-proof')!
+    const criteria = task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')
+    expect(criteria).toContain('DeepInfra-accessible model')
+    expect(criteria).toContain('adult genres')
+    expect(criteria).toContain('wet hair drying')
+    expect(criteria).toContain('walking speed for fantasy epics')
+    expect(task.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Select and prove DeepInfra drafting model',
+      'Define world-state continuity review lane',
+      'Define spatial/geographic continuity review lane',
+    ])
+    expect(task.releaseIds).toEqual(['stage-1-fixture-and-evaluation-harness'])
+    expect(criteria).not.toContain('repo-local proof demonstrates that exact child outcome')
+    expect(criteria).not.toContain('satisfies the relevant parent acceptance criteria')
+    expect(criteria).not.toContain(';.')
+    expect(criteria).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task.spec).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task.spec).not.toContain('from For the Narrative Harness')
+    expect(task.productBrief?.userJob).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task.productBrief?.userJob).not.toContain('from For the Narrative Harness')
+    expect(task.productBrief?.successMetric).toContain('DeepInfra-accessible model')
+    expect(task.notes.at(-1)?.content).toContain('under-shaped recovery spec')
+  })
+
+  it('repairs clean recovery specs that still cannot materialize required child work', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'model-proof',
+        status: 'spec_review',
+        domain: 'harness',
+        title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+        description:
+          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+        spec: [
+          '## Summary',
+          'Define Narrative Harness MVP drafting model and physical-world review lanes from the current project evidence.',
+          '',
+          '## Acceptance Criteria',
+          '1. The DeepInfra-accessible drafting model proof is scoped.',
+          '2. The world-state continuity review lane is scoped.',
+          '3. The spatial/geographic continuity review lane is scoped.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: Define Narrative Harness MVP drafting model and physical-world review lanes is proven inside the no-UI Narrative Harness Stage 1 boundary.',
+          '- What must be split or blocked: split before execution.',
+        ].join('\n'),
+        productBrief: {
+          userJob: 'I want Define Narrative Harness MVP drafting model and physical-world review lanes implemented or proven from current evidence.',
+          successMetric: 'The DeepInfra-accessible drafting model proof is scoped.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: '2026-07-05T18:15:02.867Z',
+        },
+        sizePlan: {
+          taskId: 'model-proof',
+          score: 5,
+          band: 'large',
+          action: 'decompose_before_execution',
+          factors: [],
+          recommendedChildren: [],
+          reviewBudgetHint: 'thorough',
+          reasons: ['Task size score: 5.'],
+          createdAt: '2026-07-05T18:15:02.867Z',
+          createdBy: 'task-sizing',
+        },
+        taskReadiness: {
+          taskKind: 'decision',
+          recommendation: 'requires_child_work',
+          summary: 'Task must be planned as smaller child work before execution.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['The drafting model and physical-world review lanes are scoped.'],
+            evidenceRequired: ['Source-backed child tasks exist.'],
+            updatedAt: '2026-07-05T18:15:02.867Z',
+            createdBy: 'task-sizing',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 12000,
+            risk: 'high',
+            fitsInOneWorkerBrief: false,
+            reasons: ['Requires child work.'],
+          },
+          assessedAt: '2026-07-05T18:15:02.867Z',
+          assessedBy: 'task-sizing',
+        },
+        notes: [{
+          agentId: 'coordinator-recovery',
+          role: 'system',
+          content: 'Guildhall repaired an under-shaped recovery spec from the current task graph before approval.',
+          timestamp: '2026-07-05T18:15:02.867Z',
+        }],
+      }),
+    ])
+    const coord = stubAgent('harness-coordinator', async () => {
+      throw new Error('coordinator should not run before missing child units are repaired')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: stubAgent('spec-agent'), coordinators: { harness: coord } }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({ kind: 'processed', taskId: 'model-proof', agent: 'coordinator-recovery' })
+    expect(coord.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'model-proof')!
+    expect(task.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Select and prove DeepInfra drafting model',
+      'Define world-state continuity review lane',
+      'Define spatial/geographic continuity review lane',
+    ])
+  })
+
+  it('scopes numbered-requirement child recovery specs to the matching child requirement', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'model-proof',
+        status: 'ready',
+        domain: 'harness',
+        title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+        description:
+          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+        acceptanceCriteria: [
+          {
+            id: 'model',
+            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'world',
+            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'space',
+            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: {
+          childIds: ['model-child'],
+          order: 0,
+          relation: 'contains',
+        },
+      }),
+      mkTask({
+        id: 'model-child',
+        status: 'spec_review',
+        domain: 'harness',
+        title: 'Select and prove DeepInfra drafting model',
+        description: 'Recovered from numbered owner requirement 1 for Define Narrative Harness MVP drafting model and physical-world review lanes.',
+        spec: [
+          '## Summary',
+          'Select and prove DeepInfra drafting model from the current project evidence.',
+          '',
+          '## Acceptance Criteria',
+          '1. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient.',
+          '2. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate.',
+          '3. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+        ].join('\n'),
+        productBrief: {
+          userJob: 'I want Select and prove DeepInfra drafting model implemented or proven from current evidence.',
+          successMetric: 'The DeepInfra-accessible drafting model proof is scoped.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: '2026-07-05T18:15:02.867Z',
+        },
+        hierarchy: {
+          parentId: 'model-proof',
+          childIds: [],
+          order: 1,
+          relation: 'decomposes',
+        },
+        notes: [{
+          agentId: 'task-sizing',
+          role: 'coordinator',
+          content: 'Created from execution-planning decomposition of model-proof. Recovered from numbered owner requirement 1 for Define Narrative Harness MVP drafting model and physical-world review lanes.',
+          timestamp: '2026-07-05T19:31:37.428Z',
+        }],
+      }),
+    ])
+    const coord = stubAgent('harness-coordinator', async () => {
+      throw new Error('coordinator should not review an over-broad numbered child before repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: stubAgent('spec-agent'), coordinators: { harness: coord } }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({ kind: 'processed', taskId: 'model-child', agent: 'coordinator-recovery' })
+    expect(coord.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'model-child')!
+    const criteria = task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')
+    expect(criteria).toContain('DeepInfra-accessible model')
+    expect(criteria).toContain('adult genres')
+    expect(criteria).not.toContain('wet hair drying')
+    expect(criteria).not.toContain('walking speed for fantasy epics')
+    expect(task.spec).toContain('Parent acceptance this child satisfies:')
+    expect(task.spec).toContain('DeepInfra-accessible model')
+    expect(task.spec).not.toContain('wet hair drying')
+    expect(task.productBrief?.successMetric).toContain('DeepInfra-accessible model')
+  })
+
+  it('turns source-recovery research spikes with named surfaces into ready work', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'contract-recovery',
+        title: 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types',
+        status: 'blocked',
+        domain: 'harness',
+        taskKind: 'research',
+        description: [
+          'Recommended first task title: Implement author-involvement-modes contract and involvement-dial types',
+          '',
+          'Original imported title: Implement author-involvement-modes contract and involvement-dial types',
+          '',
+          'Guildhall imported this as executable contract/type work, but the saved task does not name the concrete contract or type surfaces it owns.',
+        ].join('\n'),
+        references: [
+          'docs/harness/remaining-spec-decomposition-inventory.md',
+          'docs/specs/author-involvement-modes.md',
+        ],
+        spec: [
+          '## What this is',
+          'Repair the imported handoff for Implement author-involvement-modes contract and involvement-dial types.',
+          '',
+          '## Acceptance criteria',
+          '1. Implement author-involvement-modes contract and involvement-dial types names the concrete contract/type surfaces recovered from cited sources, or is reshaped to match the documented source structure before implementation.',
+        ].join('\n'),
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types needs concrete contract names before Guildhall can hand it to a worker.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['Recover source-backed contract surface names the concrete contracts/types it owns.'],
+            evidenceRequired: ['Source-backed contract/type names are present.'],
+            updatedAt: '2026-07-05T20:18:20.333Z',
+            createdBy: 'imported-work-integrity',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 1056,
+            risk: 'medium',
+            fitsInOneWorkerBrief: true,
+            reasons: ['The task needs source repair before implementation context matters.'],
+          },
+          assessedAt: '2026-07-05T20:18:20.333Z',
+          assessedBy: 'imported-work-integrity',
+        },
+        escalations: [{
+          id: 'esc-contract-recovery-1',
+          taskId: 'contract-recovery',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          summary: 'Spec author stopped after hitting its turn limit.',
+          details: 'Exceeded maximum turn limit (8)',
+          raisedAt: '2026-07-05T20:11:43.063Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      throw new Error('spec agent should not rerun when source recovery can be seeded deterministically')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'contract-recovery',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'blocked',
+      afterStatus: 'ready',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'contract-recovery')!
+    expect(task.status).toBe('ready')
+    expect(task.taskReadiness?.recommendation).toBe('ready')
+    expect(task.spec).toContain('`author-involvement-modes contract`')
+    expect(task.spec).toContain('`involvement-dial types`')
+    expect(task.productBrief?.successMetric).toContain('author-involvement-modes contract')
+    expect(task.escalations?.[0]?.resolvedBy).toBe('system')
+    expect(task.notes.at(-1)?.content).toContain('Guildhall-owned shaping')
+  })
+
+  it('turns import-draft source recovery tasks with workflow surfaces into ready work', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'contract-recovery',
+        title: 'Recover source-backed contract surface for editor-writer feedback chain contract and weighted-feedback pipeline',
+        status: 'import_draft',
+        domain: 'harness',
+        taskKind: 'research',
+        description: [
+          'Recommended first task title: Implement editor-writer feedback chain contract and weighted-feedback pipeline',
+          '',
+          'Original imported title: Implement editor-writer feedback chain contract and weighted-feedback pipeline',
+          '',
+          'Guildhall imported this as executable contract/type work, but the saved task does not name the concrete contract or type surfaces it owns.',
+        ].join('\n'),
+        references: [
+          'docs/harness/remaining-spec-decomposition-inventory.md',
+          'docs/specs/editor-writer-feedback-chain.md',
+        ],
+        spec: [
+          '## What this is',
+          'Repair the imported handoff for Implement editor-writer feedback chain contract and weighted-feedback pipeline.',
+          '',
+          '## Acceptance criteria',
+          '1. Implement editor-writer feedback chain contract and weighted-feedback pipeline names the concrete contract/type surfaces recovered from cited sources, or is reshaped to match the documented source structure before implementation.',
+        ].join('\n'),
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'Recover source-backed contract surface for editor-writer feedback chain contract and weighted-feedback pipeline needs concrete contract names before Guildhall can hand it to a worker.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['Recover source-backed contract surface names the concrete contracts/types it owns.'],
+            evidenceRequired: ['Source-backed contract/type names are present.'],
+            updatedAt: '2026-07-05T22:02:31.420Z',
+            createdBy: 'imported-work-integrity',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 1088,
+            risk: 'medium',
+            fitsInOneWorkerBrief: true,
+            reasons: ['The task needs source repair before implementation context matters.'],
+          },
+          assessedAt: '2026-07-05T22:02:31.420Z',
+          assessedBy: 'imported-work-integrity',
+        },
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      throw new Error('spec agent should not rerun when import-draft source recovery can be seeded deterministically')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'contract-recovery',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'import_draft',
+      afterStatus: 'ready',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'contract-recovery')!
+    expect(task.status).toBe('ready')
+    expect(task.taskReadiness?.recommendation).toBe('ready')
+    expect(task.spec).toContain('## Contract / Type / Workflow Surfaces')
+    expect(task.spec).toContain('`editor-writer feedback chain contract`')
+    expect(task.spec).toContain('`weighted-feedback pipeline`')
+    expect(task.productBrief?.successMetric).toContain('weighted-feedback pipeline')
+    expect(task.notes.at(-1)?.content).toContain('Guildhall-owned shaping')
+  })
+
+  it('repairs stale source-recovery readiness after named surfaces exist', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'contract-recovery',
+        title: 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types',
+        status: 'done',
+        domain: 'harness',
+        taskKind: 'research',
+        spec: [
+          '## Contract / Type Surfaces',
+          '- `author-involvement-modes contract`',
+          '- `involvement-dial types`',
+          '',
+          '## Acceptance Criteria',
+          '1. Proof targets `author-involvement-modes contract` and `involvement-dial types`.',
+          '',
+          '## Completion Boundary',
+          '- What counts as done: each named surface is proven.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Proof targets `author-involvement-modes contract` and `involvement-dial types`.',
+          verifiedBy: 'review',
+          source: 'documented',
+          met: true,
+        }],
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'Needs concrete contract names before Guildhall can hand it to a worker.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['The concrete contract surface is named.'],
+            evidenceRequired: ['Source-backed contract/type names are present.'],
+            updatedAt: '2026-07-05T20:18:20.333Z',
+            createdBy: 'imported-work-integrity',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 1056,
+            risk: 'medium',
+            fitsInOneWorkerBrief: true,
+            reasons: ['The task needs source repair before implementation context matters.'],
+          },
+          assessedAt: '2026-07-05T20:18:20.333Z',
+          assessedBy: 'imported-work-integrity',
+        },
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      throw new Error('spec agent should not rerun for stale readiness repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'contract-recovery',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'done',
+      afterStatus: 'done',
+      transitioned: false,
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'contract-recovery')!
+    expect(task.status).toBe('done')
+    expect(task.taskReadiness?.recommendation).toBe('ready')
+    expect(task.notes.at(-1)?.content).toContain('stale source-recovery readiness')
+  })
+
+  it('repairs stale readiness on approved fixed-spec reviewer lanes', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'dialogue-lane',
+        title: 'Implement dialogue-and-character-voice reviewer lane',
+        status: 'ready',
+        domain: 'coherence',
+        description: 'Evaluate documented review questions and add bounded local workspace proof.',
+        spec: [
+          '## Acceptance Criteria',
+          '1. Implement dialogue-and-character-voice reviewer lane can ask and answer documented review prompts.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: The reviewer lane records documented fiction-specific findings for a bounded proof fixture.',
+          '- What counts as done: The lane emits actionable findings and proof is recorded.',
+          '- What must be split or blocked: Nothing to split before this source-backed task runs.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The lane can ask and answer documented review prompts.',
+          verifiedBy: 'review',
+          source: 'documented',
+          met: false,
+        }],
+        sizePlan: {
+          taskId: 'dialogue-lane',
+          score: 5,
+          band: 'large',
+          action: 'proceed_with_warning',
+          factors: [],
+          recommendedChildren: [],
+          reviewBudgetHint: 'thorough',
+          reasons: [
+            'Task size score: 5.',
+            'Kept as runnable fixed-spec work because the accepted completion boundary says nothing must be split or blocked.',
+          ],
+          createdAt: '2026-07-05T13:48:19.876Z',
+          createdBy: 'task-shaping',
+        },
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'Task should run research or a spike before implementation.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['Research output names the recommended option.'],
+            evidenceRequired: ['Acceptance criteria are checked or explicitly marked unverified.'],
+            updatedAt: '2026-07-05T13:48:19.876Z',
+            createdBy: 'task-readiness',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 100,
+            risk: 'low',
+            fitsInOneWorkerBrief: true,
+            reasons: [],
+          },
+          assessedAt: '2026-07-05T13:48:19.876Z',
+          assessedBy: 'coordinator-readiness',
+        },
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      throw new Error('worker should not run during readiness repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'dialogue-lane',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'ready',
+      afterStatus: 'ready',
+      transitioned: false,
+    })
+    expect(worker.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'dialogue-lane')!
+    expect(task.taskReadiness?.recommendation).toBe('ready')
+    expect(task.taskReadiness?.dimensions.find(dimension => dimension.id === 'uncertainty')?.status).toBe('ok')
+    expect(task.notes.at(-1)?.content).toContain('settled fixed-spec work')
+  })
+
+  it('seeds empty source-backed split children without waiting for a recovery note', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'done',
+        domain: 'harness',
+        releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        references: [
+          '/repo/docs/harness/implementation-roadmap.md',
+          '/repo/docs/specs/agent-context-packets-and-compaction.md',
+        ],
+        acceptanceCriteria: [
+          {
+            id: 'invalidation-boundary',
+            description: 'The runner marks stale packet context after source edits: existing traces and findings; a source-text edit that changes a character belief or object state; invalidation edges; affected records become stale; unrelated records stay available; packet builder excludes or flags stale context, including affected records become stale.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: { childIds: ['stale-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'stale-child',
+        status: 'exploring',
+        domain: 'core',
+        title: 'Invalidate stale packet context after source edits',
+        description: 'The runner should prove stale-context handling before later phases pile more intelligence on top.',
+        proposalRationale: 'The runner should prove stale-context handling before later phases pile more intelligence on top.',
+        delivery: { supports: ['parent'], usesPrimitives: [], provesPrimitives: [] },
+        hierarchy: { parentId: 'parent', childIds: [], order: 4, relation: 'decomposes' },
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'stale-child',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'stale-child')!
+    expect(task.domain).toBe('harness')
+    expect(task.releaseIds).toEqual(['stage-1-fixture-and-evaluation-harness'])
+    expect(task.references).toEqual([
+      '/repo/docs/harness/implementation-roadmap.md',
+      '/repo/docs/specs/agent-context-packets-and-compaction.md',
+    ])
+    expect(task.productBrief?.userJob).toBe('I want Invalidate stale packet context after source edits implemented or proven from The runner should prove stale-context handling before later phases pile more intelligence on top.')
+    expect(task.productBrief?.successMetric).toContain('affected records become stale')
+    expect(task.spec).toContain('Parent acceptance this child satisfies')
+    expect(task.spec).toContain('unrelated records stay available')
+    expect(task.spec).not.toContain('including affected records become stale')
+    expect(task.spec).not.toContain('bounded writer packet')
+    const criteria = task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')
+    expect(criteria).toContain('packet builder excludes or flags stale context')
+    expect(criteria).not.toContain('including affected records become stale')
+  })
+
+  it('narrows recovered fixture child specs instead of copying parent prototype scope', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'ready',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        spec: [
+          '## Acceptance Criteria',
+          '1. The cited contracts are explicitly defined and usable in code: `FixtureManifest`, `SyntheticAuthorProfile`, `FixturePermissionSetup`, `ExpectedRecordSet`, `ExpectedSignal`.',
+          '2. `PrototypeRun`, `RunEvaluation`, `SchemaFieldUsage`, and `PacketQualityScore` capture the prototype run and trace evidence.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'contracts-defined',
+          description: 'The cited contracts include `FixtureManifest`, `ExpectedRecordSet`, `ExpectedSignal`, `PrototypeRun`, and `RunEvaluation`.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        hierarchy: { childIds: ['fixture-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'fixture-child',
+        status: 'exploring',
+        title: 'Shape fixture and expected-record ground truth',
+        description: 'The first proof loop needs explicit fixture and ground-truth records instead of ad hoc fixture shape.',
+        hierarchy: { parentId: 'parent', childIds: [], order: 0, relation: 'decomposes' },
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'fixture-child',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'fixture-child')!
+    expect(task.spec).toContain('`FixtureManifest`')
+    expect(task.spec).toContain('`ExpectedRecordSet`')
+    expect(task.spec).toContain('human-authored ground truth')
+    expect(task.spec).not.toContain('`PrototypeRun`')
+    expect(task.spec).not.toContain('`RunEvaluation`')
+    expect(task.spec).not.toContain('prototype run and evaluation boundary')
+    expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).toContain('fixture manifest')
+    expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).not.toContain('prototype run record')
+  })
+
+  it('narrows recovered reviewer-loop child specs instead of copying sibling packet/privacy/stale scope', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'ready',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        acceptanceCriteria: [
+          {
+            id: 'run-output',
+            description: 'The runner ingests a fixture, builds records, runs a packet, and saves the run output.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'no-ui-boundary',
+            description: 'The harness run works without a frontend and stays inside the no-UI prototype boundary.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'bounded-writer-packet',
+            description: 'The runner builds a bounded writer packet from the documented fields: `BookBrief`; `ManuscriptUnit`; `CharacterTrace`; `ReaderStateTrace`; `OutlineNode`; one `AuthorDecision`; writer packet names what the character believes; writer packet names what the reader knows.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'privacy-scope',
+            description: 'The runner records provenance/privacy scope in packet output: one global author profile note; permissions that allow one and block another; privacy manifest says what was included.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'stale-context',
+            description: 'The runner marks stale packet context after source edits: affected records become stale and unrelated records stay available.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: { childIds: ['loop-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'loop-child',
+        status: 'exploring',
+        title: 'Run the bounded reviewer and writer loop headlessly',
+        description: 'The Stage 1 harness should exercise the real review/writer loop, not a generic one-step command.',
+        hierarchy: { parentId: 'parent', childIds: [], order: 1, relation: 'decomposes' },
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'loop-child',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'loop-child')!
+    const criteria = task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')
+    expect(criteria).toContain('saves the run output')
+    expect(criteria).toContain('without a frontend')
+    expect(criteria).not.toContain('BookBrief')
+    expect(criteria).not.toContain('provenance/privacy')
+    expect(criteria).not.toContain('stale packet context')
   })
 
   it('does not fossilize legacy cropped task titles into recovered specs or briefs', async () => {
     const fullTitle = 'What commands should I run to smoke test this project without changing files?'
-    await writeQueue([
-      mkTask({
+    // Seed this one fixture as historical raw queue data. Normal writes repair
+    // the title at the boundary, so only a legacy read can exercise the
+    // coordinator's re-intake path for an already-persisted clipped title.
+    const legacyTask = mkTask({
         id: 'a',
         status: 'exploring',
         title: 'What commands should I run to smoke test this project without changin...',
@@ -2430,8 +4592,8 @@ describe('Orchestrator.tick — routing', () => {
           content: 'Reframe requested from blocked. Guildhall will rebuild the task in plain language before continuing.',
           timestamp: '2026-06-15T18:48:51.097Z',
         }],
-      }),
-    ])
+      })
+    await fs.writeFile(tasksPath, JSON.stringify(queueOf([legacyTask]), null, 2), 'utf8')
     const spec = stubAgent('spec-agent')
     const orch = new Orchestrator({
       config: baseConfig(),
@@ -2495,9 +4657,10 @@ describe('Orchestrator.tick — routing', () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!
     expect(task.productBrief).toBeUndefined()
-    expect((task.openQuestions ?? []).filter((q) => !q.answeredAt)).toHaveLength(1)
-    expect(task.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'Which host shape matters most first?',
       choices: ['localhost and bare root domains', 'malformed hosts and unexpected dots'],
     })
@@ -2542,8 +4705,10 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(2)
-    expect(task.openQuestions?.[0]).toMatchObject({
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(2)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'What should be the **primary success signal** for this task? (pick one)',
       choices: [
         'Spec quality only: clear ACs + testing strategy, no implementation expectations',
@@ -2551,7 +4716,7 @@ describe('Orchestrator.tick — routing', () => {
         'End-to-end governance: includes ACs for behavior, tests, task-state transitions, and transcript persistence as release gates',
       ],
     })
-    expect(task.openQuestions?.[1]).toMatchObject({
+    expect(ownerInputs[1]).toMatchObject({
       prompt: 'Coverage posture for the future implementation (pick one)',
       choices: [
         'Standard floor only (existing project defaults; no extra target)',
@@ -2562,7 +4727,7 @@ describe('Orchestrator.tick — routing', () => {
   })
 
   it('routes in_progress tasks to the worker agent', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
+    await writeQueue([mkTask({ id: 'a', status: 'in_progress', spec: VALID_SPEC })])
     const worker = stubAgent('worker-agent')
     const gitDriver = new InMemoryGitDriver()
     gitDriver.setClean(true)
@@ -2574,6 +4739,8 @@ describe('Orchestrator.tick — routing', () => {
     const out = await orch.tick()
     if (out.kind === 'processed') expect(out.agent).toBe('worker-agent')
     expect(worker.calls).toHaveLength(1)
+    expect(worker.calls[0]?.prompt).toContain('Internal toolchain, module-resolution, package-script, build, test, or proof-command failures are implementation work')
+    expect(worker.calls[0]?.prompt).toContain('Do not raise a decision_required escalation')
   })
 
   it('sets a stable prompt cache key before dispatching an agent turn', async () => {
@@ -2904,6 +5071,34 @@ describe('Orchestrator.tick — routing', () => {
     expect(q.tasks[0]!.notes.at(-1)?.content).toContain('revise_blueprint')
   })
 
+  it('refuses to dispatch an in-progress task without a usable blueprint', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'in_progress', domain: 'ghost', spec: '' })])
+    const worker = stubAgent('worker-agent', async () => {
+      throw new Error('worker must not receive an unshaped task')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'blueprint-recovery',
+      beforeStatus: 'in_progress',
+      afterStatus: 'exploring',
+    })
+    expect(worker.calls).toHaveLength(0)
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('exploring')
+    expect(q.tasks[0]!.assignedTo).toBe('spec-agent')
+    expect(q.tasks[0]!.spec).toBeUndefined()
+    expect(q.tasks[0]!.acceptanceCriteria).toEqual([])
+    expect(q.tasks[0]!.notes.at(-1)?.content).toContain('source-backed implementation contract')
+  })
+
   it('revalidates ready task blueprints even when an earlier blueprint review note exists', async () => {
     await writeQueue([
       mkTask({
@@ -2941,7 +5136,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(q.tasks[0]!.notes.at(-1)?.content).toContain('revise_blueprint')
   })
 
-  it('dispatches drafted spec_review tasks to the owning coordinator and clears stale ownership', async () => {
+  it('holds valid drafted spec_review tasks for owner approval instead of coordinator dispatch', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -2959,10 +5154,10 @@ describe('Orchestrator.tick — routing', () => {
       agents: agentSet({ coordinators: { looma: coord } }),
     })
     const out = await orch.tick()
-    expect(out.kind).toBe('processed')
-    expect(coord.calls).toHaveLength(1)
+    expect(out.kind).toBe('idle')
+    expect(coord.calls).toHaveLength(0)
     const queue = await readQueue()
-    expect(queue.tasks[0]!.status).toBe('ready')
+    expect(queue.tasks[0]!.status).toBe('spec_review')
     expect(queue.tasks[0]!.assignedTo).toBeNull()
   })
 
@@ -3023,7 +5218,7 @@ describe('Orchestrator.tick — routing', () => {
     )).toBe(true)
   })
 
-  it('approves valid deterministically repaired spec_review blueprints without coordinator dispatch', async () => {
+  it('holds valid deterministically repaired spec_review blueprints for owner approval', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -3060,15 +5255,11 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('processed')
-    if (out.kind === 'processed') {
-      expect(out.agent).toBe('blueprint-sanity-review')
-      expect(out.afterStatus).toBe('ready')
-    }
+    expect(out.kind).toBe('idle')
     expect(coord.calls).toHaveLength(0)
     const queue = await readQueue()
-    expect(queue.tasks[0]!.status).toBe('ready')
-    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('approve_blueprint')
+    expect(queue.tasks[0]!.status).toBe('spec_review')
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('repaired a malformed spec_review blueprint')
   })
 
   it('still leaves the reserved meta-intake draft idle for manual approval and clears stale ownership', async () => {
@@ -3219,14 +5410,14 @@ describe('Orchestrator.tick — routing', () => {
     expect(q.tasks[0]!.notes.some(note => note.content.includes('saved spec draft'))).toBe(false)
   })
 
-  it('reports no-coordinator when spec_review needs a missing domain coordinator', async () => {
+  it('holds spec_review work for owner approval before missing coordinator routing', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'ghost', spec: VALID_SPEC })])
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     const out = await orch.tick()
-    expect(out.kind).toBe('no-coordinator')
-    if (out.kind === 'no-coordinator') {
-      expect(out.taskId).toBe('a')
-      expect(out.domain).toBe('ghost')
+    expect(out.kind).toBe('idle')
+    if (out.kind === 'idle') {
+      expect(out.summary?.reason).toBe('awaiting_human')
+      expect(out.summary?.message).toMatch(/awaiting approval/)
     }
   })
 
@@ -3277,6 +5468,7 @@ describe('Orchestrator.tick — routing', () => {
     if (first.kind === 'processed') {
       expect(first.afterStatus).toBe('in_progress')
       expect(first.transitioned).toBe(false)
+      expect(first.note).toContain('will retry once')
     }
 
     const second = await orch.tick()
@@ -4011,6 +6203,36 @@ describe('Orchestrator.tick — feedback loop', () => {
     )).toBe(true)
   })
 
+  it('keeps a fresh spec claim while the shaping pass is allowed to run', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'fresh-draft',
+        status: 'exploring',
+        assignedTo: 'spec-agent',
+        updatedAt: new Date().toISOString(),
+        openQuestions: [{
+          kind: 'text',
+          id: 'q-fresh-draft',
+          askedBy: 'spec-agent',
+          askedAt: new Date().toISOString(),
+          prompt: 'Which bounded outcome should the spec prove?',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    await orch.tick()
+
+    const q = await readQueue()
+    const draft = q.tasks.find((task) => task.id === 'fresh-draft')
+    expect(draft?.assignedTo).toBe('spec-agent')
+    expect(draft?.notes.some((note) => note.content.includes('cleared a stale spec-agent claim'))).toBe(false)
+  })
+
   it('normalizes stale reviewer ownership before dispatching a gate_check task', async () => {
     await writeQueue([
       mkTask({
@@ -4045,6 +6267,7 @@ describe('Orchestrator.tick — feedback loop', () => {
     if (out.kind === 'processed') {
       expect(out.afterStatus).toBe('in_progress')
       expect(out.transitioned).toBe(false)
+      expect(out.note).toContain('no visible progress pass')
     }
   })
 
@@ -4122,7 +6345,8 @@ describe('Orchestrator.tick — feedback loop', () => {
         status: 'in_progress',
         assignedTo: 'worker-agent',
         title: 'Pantry Pulse app spec',
-        spec: 'Build a local web app with browser-proofable UI.',
+        description: 'Build a local web app with browser-proofable UI.',
+        spec: VALID_SPEC,
         notes: [{
           agentId: 'worker-agent',
           role: 'self-critique',
@@ -4163,6 +6387,56 @@ describe('Orchestrator.tick — feedback loop', () => {
     const task = (await readQueue()).tasks.find(candidate => candidate.id === 'pantry-live')!
     expect(task.notes.at(-1)?.role).toBe('worker-progress-review')
     expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
+  })
+
+  it('rejects proof-setup handoffs that claim a broad build without recording the exact command', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'proof-setup',
+        title: 'Establish concrete proof for the model task',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        workKind: 'verification',
+        proposalRationale: 'proof-recovery: establish a concrete project-backed proof command for the containing task',
+        spec: VALID_SPEC,
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            '- AC-1: Met — pnpm build passed.',
+            '',
+            'Review proof packet:',
+            '- Verification commands passed: pnpm build passed.',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }],
+      }),
+    ])
+    const reviewer = stubAgent('reviewer-agent')
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer, worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+    })
+
+    const out = await orch.tick()
+
+    expect(reviewer.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-remediation')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'proof-setup')!
+    expect(task.notes.at(-1)?.content).toContain('exact task-specific project command')
+
+    const retry = await orch.tick()
+
+    expect(retry.kind).toBe('processed')
+    expect(worker.calls).toHaveLength(1)
+    expect(reviewer.calls).toHaveLength(0)
   })
 
   it('rejects artifact worker handoff without project-file changes before review can approve it', async () => {
@@ -4280,6 +6554,25 @@ describe('Orchestrator.tick — feedback loop', () => {
           output: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md — non-zero exit",
         }],
         notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Self-critique:**',
+            '- [AC-1]: Met — the implementation is complete.',
+            '',
+            'Minimum-scope check:',
+            '- Files changed: RELEASE_NOTES.md.',
+            '- Smallest useful change?: yes.',
+            '- Anything to revert before review?: none.',
+            '',
+            'Review proof packet:',
+            '- Changed files / diff scope: RELEASE_NOTES.md.',
+            '- Verification commands passed: pnpm test passed.',
+            '- Working hypothesis at handoff: ready.',
+            '- Known gaps / follow-up: none.',
+          ].join('\n'),
+          timestamp: '2026-04-01T00:02:00Z',
+        }, {
           agentId: 'acceptance-command-gates',
           role: 'gate-checker',
           content: [
@@ -4293,10 +6586,11 @@ describe('Orchestrator.tick — feedback loop', () => {
     ])
 
     const worker = stubAgent('worker-agent')
+    const gitDriver = new InMemoryGitDriver({ clean: false, currentBranch: 'main' })
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ worker }),
-      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
+      gitDriver,
     })
 
     await orch.tick()
@@ -5060,6 +7354,169 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(task.notes.at(-1)?.content).toContain('Acceptance command gates failed')
   })
 
+  it('treats an explicitly expected non-zero command as passing proof', async () => {
+    const projectPath = path.join(tmpDir, 'expected-negative-proof')
+    await fs.mkdir(projectPath, { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'package.json'), '{"name":"expected-negative-proof"}\n', 'utf8')
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+
+    await writeQueue([
+      mkTask({
+        id: 'negative-fixture-proof',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        acceptanceCriteria: [{
+          id: 'AC-negative',
+          description: 'The invalid fixture is rejected.',
+          verifiedBy: 'automated',
+          command: "node -e \"console.log('invalid fixture'); process.exit(1)\"",
+          expectedExit: 'non_zero',
+          expectedOutputIncludes: ['invalid fixture'],
+          met: false,
+        }],
+      }),
+    ])
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not narrate before command proof')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gateChecker.calls).toHaveLength(0)
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'negative-fixture-proof',
+      beforeStatus: 'gate_check',
+      afterStatus: 'done',
+    })
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'negative-fixture-proof')!
+    expect(task.acceptanceCriteria[0]).toMatchObject({
+      command: "pnpm exec node -e \"console.log('invalid fixture'); process.exit(1)\"",
+      expectedExit: 'non_zero',
+      met: true,
+    })
+    expect(task.gateResults.at(-1)).toMatchObject({
+      gateId: 'AC-negative',
+      type: 'hard',
+      passed: true,
+    })
+    expect(task.gateResults.at(-1)?.output).toContain('expected exit non_zero')
+    expect(task.proofPaths?.some((proofPath) => proofPath.status === 'verified')).toBe(true)
+  })
+
+  it('returns self-referential acceptance proof to shaping instead of retrying the worker', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          proof: 'pnpm exec guildhall run --task=stale-proof-task',
+        },
+      }),
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'self-referential-proof',
+        status: 'gate_check',
+        projectPath: tmpDir,
+        assignedTo: 'gate-checker-agent',
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The project proof passes.',
+          verifiedBy: 'automated',
+          command: 'pnpm proof',
+          met: true,
+        }],
+      }),
+    ])
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run for an invalid project proof command')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'self-referential-proof',
+      beforeStatus: 'gate_check',
+      afterStatus: 'exploring',
+      agent: 'acceptance-command-recovery',
+    })
+    expect(gateChecker.calls).toHaveLength(0)
+    const task = (await readQueue()).tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBe('spec-agent')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.spec).toBeUndefined()
+    expect(task.acceptanceCriteria).toHaveLength(0)
+    expect(task.proofPaths).toBeUndefined()
+    expect(task.gateResults.at(-1)).toMatchObject({
+      gateId: 'AC-1',
+      passed: false,
+      output: expect.stringContaining('Rejected before execution'),
+    })
+    expect(task.notes.at(-1)?.content).toContain('re-intake the visible project scripts')
+  })
+
+  it('hands a failed proof-recovery command to the worker instead of retrying it forever', async () => {
+    const projectPath = path.join(tmpDir, 'proof-recovery-worker-handoff')
+    await fs.mkdir(projectPath, { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'package.json'), JSON.stringify({ name: 'proof-recovery-worker-handoff' }), 'utf8')
+    const reopenedAt = '2026-05-04T00:00:00.000Z'
+    await writeQueue([
+      mkTask({
+        id: 'proof-recovery-task',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath,
+        spec: VALID_SPEC,
+        proofRecovery: {
+          reopenedAt,
+          reason: 'Missing executable release proof.',
+        },
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The focused proof passes.',
+          verifiedBy: 'automated',
+          command: 'false',
+          met: false,
+        }],
+        gateResults: [{
+          gateId: 'AC-1',
+          type: 'hard',
+          passed: false,
+          output: 'false — non-zero exit',
+          checkedAt: '2026-05-04T00:00:01.000Z',
+        }],
+      }),
+    ])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    expect(worker.calls).toHaveLength(1)
+    expect(out).toMatchObject({
+      taskId: 'proof-recovery-task',
+      agent: 'worker-agent',
+      beforeStatus: 'in_progress',
+    })
+  })
+
   it('ignores Guildhall bookkeeping when acceptance git-diff gates check task file scope', async () => {
     const projectPath = path.join(tmpDir, 'acceptance-command-git-scope')
     await fs.mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
@@ -5117,6 +7574,16 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       type: 'hard',
       passed: true,
     })
+    expect(task.proofPaths).toMatchObject([{
+      kind: 'command',
+      command: "git diff --name-only --exit-code -- . ':!RELEASE_NOTES.md' ':!.guildhall' ':!.guildhall/**'",
+      status: 'verified',
+      verificationRecords: [{
+        evidenceId: 'AC-1',
+        status: 'passed',
+        recordedBy: 'acceptance-command-gates',
+      }],
+    }])
   })
 
   it('applies Guildhall bookkeeping exclusions to git-diff gates before a shell pipeline', async () => {
@@ -5481,6 +7948,897 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(queue.tasks[0]!.status).toBe('done')
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('Gate-check scope exception applied')
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('test:')
+  })
+
+  it('completes gate_check from recorded passing hard gates without another model turn', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        acceptanceCriteria: [{
+          id: 'review-copy',
+          description: 'Reviewer confirmed the script stays deterministic.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        gateResults: [{
+          gateId: 'npm-run-build',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-07-04T10:07:21.557Z',
+          output: 'npm run build passed',
+        }],
+      }),
+    ])
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run when recorded hard gates already passed')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('done')
+      expect(out.agent).toBe('recorded-hard-gates')
+    }
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('done')
+    expect(queue.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded passing hard gates')
+  })
+
+  it('completes gate_check from sidecar-recorded passing hard gates without another model turn', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        acceptanceCriteria: [{
+          id: 'review-copy',
+          description: 'Reviewer confirmed the script stays deterministic.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        gateResults: [],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'a', {
+      id: 'a-gate-npm-run-build',
+      kind: 'gate_result',
+      recordedAt: '2026-07-04T10:07:21.557Z',
+      payload: {
+        gateId: 'npm-run-build',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-07-04T10:07:21.557Z',
+        output: 'npm run build passed',
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run when sidecar hard gates already passed')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('done')
+      expect(out.agent).toBe('recorded-hard-gates')
+    }
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('done')
+    expect(queue.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded passing hard gates')
+  })
+
+  it('completes review-verified gate_check from an approving sidecar review without another model turn', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Reviewer confirmed stale context is invalidated.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        reviewVerdicts: [],
+        gateResults: [],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'a', {
+      id: 'a-review-approve',
+      kind: 'review_verdict',
+      recordedAt: '2026-07-04T10:07:21.557Z',
+      payload: {
+        verdict: 'approve',
+        reviewerPath: 'llm',
+        reason: 'Reviewer approved.',
+        reasoning: 'AC 1: Met.',
+        failingSignals: [],
+        recordedAt: '2026-07-04T10:07:21.557Z',
+      },
+    })
+    await appendTaskEvidence(tmpDir, 'a', {
+      id: 'a-gate-content',
+      kind: 'gate_result',
+      recordedAt: '2026-07-04T10:07:22.557Z',
+      payload: {
+        gateId: 'content.no-truncated-data',
+        type: 'soft',
+        passed: true,
+        checkedAt: '2026-07-04T10:07:22.557Z',
+        output: 'no ellipsized semantic task data detected',
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run when review-only criteria are already approved')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('done')
+      expect(out.agent).toBe('approved-review-gates')
+    }
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('done')
+    expect(queue.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded approving review')
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks.a?.assignedTo).toBeNull()
+  })
+
+  it('uses the promoted current evidence projection for review-only gate completion', async () => {
+    const taskId = 'task-promoted-review-current-evidence'
+    await writeQueue([mkTask({
+      id: taskId,
+      status: 'gate_check',
+      assignedTo: 'gate-checker-agent',
+      acceptanceCriteria: [{
+        id: 'ac-review',
+        description: 'The review-only task has durable approval.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+      proofPaths: [{
+        id: 'review-proof-path',
+        kind: 'review',
+        expectedEvidence: ['The review-only task has durable approval.'],
+        verificationRecords: [],
+      }],
+      reviewVerdicts: [],
+      gateResults: [],
+    })])
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await appendTaskEvidence(tmpDir, taskId, {
+      id: 'review-current-approval',
+      kind: 'review_verdict',
+      recordedAt: '2026-07-04T10:07:21.557Z',
+      payload: {
+        verdict: 'approve',
+        reviewerPath: 'llm',
+        reason: 'Reviewer approved.',
+        reasoning: 'The review-only task is complete.',
+        failingSignals: [],
+        recordedAt: '2026-07-04T10:07:21.557Z',
+      },
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId,
+      beforeStatus: 'gate_check',
+      afterStatus: 'done',
+      agent: 'approved-review-gates',
+    })
+    const queue = await readQueue()
+    expect(queue.tasks[0]?.status).toBe('done')
+    expect(queue.tasks[0]?.proofPaths?.[0]?.verificationRecords).toEqual([
+      expect.objectContaining({
+        evidenceId: 'review-proof-path-evidence-0',
+        status: 'passed',
+      }),
+    ])
+    expect(queue.tasks[0]?.proofPaths?.[0]?.expectedEvidence).toEqual([{
+      id: 'review-proof-path-evidence-0',
+      kind: 'artifact',
+      description: 'The review-only task has durable approval.',
+      required: true,
+    }])
+  })
+
+  it('repairs synthetic bootstrap verification ellipses from older Guildhall task data', async () => {
+    const task = mkTask({
+      id: 'a',
+      status: 'in_progress',
+      notes: [{
+        agentId: 'coordinator',
+        role: 'bootstrap-verification',
+        content:
+          'worktree bootstrap failed on gate `pnpm build` (exit 1). The task worktree already has edits, so Guildhall is handing the failing verification back to the worker instead of blocking setup.\n' +
+          'Verification output:\nstack line\n...',
+        timestamp: '2026-07-04T10:07:20.557Z',
+      }],
+    })
+    const queue: TaskQueue = { version: 1, tasks: [task], lastUpdated: '2026-07-04T10:07:20.557Z' }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+    })
+
+    const repair = (orch as unknown as {
+      repairSyntheticBootstrapOutputTruncationInQueue(queue: TaskQueue): { changed: boolean }
+    }).repairSyntheticBootstrapOutputTruncationInQueue(queue)
+
+    expect(repair.changed).toBe(true)
+    expect(queue.tasks[0]!.notes[0]?.content).toContain('full output is unavailable')
+    expect(queue.tasks[0]!.notes[0]?.content).not.toContain('\n...')
+  })
+
+  it('normalizes gate-check ownership in runtime state as well as the queue', async () => {
+    const task = mkTask({
+      id: 'a',
+      status: 'gate_check',
+      assignedTo: 'reviewer-agent',
+    })
+    await writeQueue([task])
+    await upsertTaskRuntimeState(tmpDir, 'a', {
+      assignedTo: 'reviewer-agent',
+      updatedAt: '2026-07-04T10:07:20.557Z',
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+    })
+
+    await (orch as unknown as {
+      normalizeGateCheckOwnership(task: Task): Promise<void>
+    }).normalizeGateCheckOwnership(task)
+
+    const queue = await readQueue()
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(queue.tasks[0]?.assignedTo).toBe('gate-checker-agent')
+    expect(runtime.tasks.a?.assignedTo).toBe('gate-checker-agent')
+    expect(task.assignedTo).toBe('gate-checker-agent')
+  })
+
+  it('does not promote an old review proof packet after newer proof recovery reopened the task', async () => {
+    const task = mkTask({
+      id: 'a',
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      worktreePath: path.join(tmpDir, 'task-a-worktree'),
+      proofRecovery: {
+        reopenedAt: '2026-07-06T21:52:58.418Z',
+        reason: 'Missing release proof evidence.',
+      },
+      notes: [{
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: [
+          '**Acceptance criteria:**',
+          '- [ac-1]: Met',
+          '- Minimum-scope check: Met',
+          '## Review proof packet',
+          'Verification command passed.',
+          'Changed files: src/cli/generate.ts',
+        ].join('\n'),
+        timestamp: '2026-07-06T13:18:49.959Z',
+      }],
+    })
+    await writeQueue([task])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const out = await (orch as unknown as {
+      maybePromoteExistingWorkerReviewProof(input: {
+        task: typeof task
+        beforeStatus: TaskStatus
+        activeWorktreePath: string
+      }): Promise<unknown>
+    }).maybePromoteExistingWorkerReviewProof({
+      task,
+      beforeStatus: 'in_progress',
+      activeWorktreePath: task.worktreePath!,
+    })
+
+    const queue = await readQueue()
+    expect(out).toBeNull()
+    expect(queue.tasks[0]?.status).toBe('in_progress')
+    expect(queue.tasks[0]?.assignedTo).toBe('worker-agent')
+  })
+
+  it('does not promote an existing review proof packet after newer proof-missing gate feedback', async () => {
+    const task = mkTask({
+      id: 'a',
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      worktreePath: path.join(tmpDir, 'task-a-worktree'),
+      proofRecovery: {
+        reopenedAt: '2026-07-06T21:52:58.418Z',
+        reason: 'Missing release proof evidence.',
+      },
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Acceptance criteria:**',
+            '- [ac-1]: Met',
+            '- Minimum-scope check: Met',
+            '## Review proof packet',
+            'Verification command passed.',
+            'Changed files: src/cli/generate.ts',
+          ].join('\n'),
+          timestamp: '2026-07-06T21:54:03.691Z',
+        },
+        {
+          agentId: 'recorded-hard-gates',
+          role: 'gate-checker',
+          content:
+            'Gate check could not complete from recorded evidence because the task still lacks the proof evidence required by its proof path. Keep the task open and attach the missing proof before marking it done.',
+          timestamp: '2026-07-06T22:04:26.096Z',
+        },
+      ],
+    })
+    await writeQueue([task])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const out = await (orch as unknown as {
+      maybePromoteExistingWorkerReviewProof(input: {
+        task: typeof task
+        beforeStatus: TaskStatus
+        activeWorktreePath: string
+      }): Promise<unknown>
+    }).maybePromoteExistingWorkerReviewProof({
+      task,
+      beforeStatus: 'in_progress',
+      activeWorktreePath: task.worktreePath!,
+    })
+
+    const queue = await readQueue()
+    expect(out).toBeNull()
+    expect(queue.tasks[0]?.status).toBe('in_progress')
+    expect(queue.tasks[0]?.assignedTo).toBe('worker-agent')
+  })
+
+  it('routes proof recovery without a durable blueprint through spec shaping before the worker', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        spec: undefined,
+        proofRecovery: {
+          reopenedAt: '2026-07-06T21:52:58.418Z',
+          reason: 'Missing release proof evidence.',
+        },
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('a', {
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The recovered work has an executable completion boundary.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+      })
+    })
+    const worker = stubAgent('worker-agent', async () => {
+      throw new Error('worker must not receive proof recovery without a blueprint')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec, worker }),
+      gitDriver: new InMemoryGitDriver(),
+    })
+
+    const out = await orch.tick()
+
+    expect(spec.calls).toHaveLength(1)
+    expect(spec.calls[0]?.prompt).toContain('Proof recovery reopened this task')
+    expect(worker.calls).toHaveLength(0)
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'spec-agent',
+      beforeStatus: 'in_progress',
+      afterStatus: 'spec_review',
+    })
+  })
+
+  it('keeps a valid script recovery spec available for approval instead of clearing it', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'script-proof-recovery',
+        status: 'spec_review',
+        proofRecovery: {
+          reopenedAt: '2026-07-06T21:52:58.418Z',
+          reason: 'The selected release requires script proof, but the current proof command is missing.',
+        },
+        productBrief: {
+          userJob: 'Recover the missing project proof.',
+          successMetric: 'The proof command is recorded against this task.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: '2026-07-06T21:52:58.418Z',
+        },
+        spec: [
+          '## Summary',
+          'Recover the missing project proof.',
+          '',
+          '## Acceptance Criteria',
+          '1. The proof command is recorded against this task.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: The proof command is recorded against this task.',
+          '- What Guildhall can complete in code: the project-backed proof setup and evidence.',
+          '- External dependencies: None known.',
+          '- Owner-only setup: None known.',
+          '- Verification environment: The local project checkout.',
+          '- What counts as done: The proof result is recorded.',
+          '- What must be split or blocked: Newly discovered work only.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The proof command is recorded against this task.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      throw new Error('spec agent must not review an unproven recovery blueprint')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const queueBefore = await readQueue()
+    const out = await orch.dispatchOne(queueBefore.tasks[0]!, queueBefore)
+
+    expect(spec.calls).toHaveLength(0)
+    expect(out).toMatchObject({ kind: 'no-coordinator', taskId: 'script-proof-recovery' })
+    const task = (await readQueue()).tasks[0]!
+    expect(task.status).toBe('spec_review')
+    expect(task.spec).toContain('Recover the missing project proof.')
+    expect(task.acceptanceCriteria).toHaveLength(1)
+    expect(task.productBrief?.userJob).toBe('Recover the missing project proof.')
+  })
+
+  it('rejects simulated provider proof before review-only gate_check completion', async () => {
+    const worktreePath = path.join(tmpDir, 'provider-proof-worktree')
+    await fs.mkdir(path.join(worktreePath, 'scripts'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktreePath, 'scripts', 'run-deepinfra-drafting-test.mjs'),
+      [
+        '// Simulate API call to DeepInfra model',
+        'const voicePreserved = true // Assumed for simulation',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        worktreePath,
+        acceptanceCriteria: [{
+          id: 'provider-proof',
+          description: 'The model is tested against chapter-drafting scenarios and records refusal, repetition, cost, latency, and voice preservation.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        proofPaths: [{
+          kind: 'review',
+          source: 'inferred',
+          expectedEvidence: [
+            'The proof records refusal behavior, repetition/runaway behavior, cost, latency, and whether the output preserves author voice and genre constraints.',
+          ],
+        }],
+        reviewVerdicts: [],
+        gateResults: [],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'a', {
+      id: 'a-review-approve',
+      kind: 'review_verdict',
+      recordedAt: '2026-07-04T10:07:21.557Z',
+      payload: {
+        verdict: 'approve',
+        reviewerPath: 'llm',
+        reason: 'Reviewer approved.',
+        reasoning: 'AC 1: Met.',
+        failingSignals: [],
+        recordedAt: '2026-07-04T10:07:21.557Z',
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run when proof integrity fails first')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.agent).toBe('proof-integrity-gates')
+    }
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('in_progress')
+    expect(queue.tasks[0]!.gateResults.at(-1)).toMatchObject({
+      gateId: 'proof.real-provider-evidence',
+      passed: false,
+    })
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('simulated provider evidence')
+  })
+
+  it('rejects a blocked provider proof artifact even when the reviewer claims success', async () => {
+    const worktreePath = path.join(tmpDir, 'blocked-provider-proof-worktree')
+    await fs.mkdir(path.join(worktreePath, 'proof-results'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktreePath, 'proof-results', 'deepinfra-proof-results.json'),
+      JSON.stringify({
+        summary: {
+          passed: false,
+          status: 'blocked',
+          reason: 'DEEPINFRA_API_TOKEN is required for live generation.',
+        },
+        results: [],
+      }),
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        worktreePath,
+        acceptanceCriteria: [{
+          id: 'provider-proof',
+          description: 'The model is tested against chapter-drafting scenarios and records refusal, repetition, cost, latency, and voice preservation.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        proofPaths: [{
+          kind: 'review',
+          source: 'inferred',
+          expectedEvidence: ['The model proof records live provider evidence.'],
+        }],
+        reviewVerdicts: [],
+        gateResults: [],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'a', {
+      id: 'a-review-approve',
+      kind: 'review_verdict',
+      recordedAt: '2026-07-04T10:07:21.557Z',
+      payload: {
+        verdict: 'approve',
+        reviewerPath: 'llm',
+        reason: 'Reviewer approved.',
+        reasoning: 'All provider proof criteria are met.',
+        failingSignals: [],
+        recordedAt: '2026-07-04T10:07:21.557Z',
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run when the proof artifact is blocked')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') expect(out.afterStatus).toBe('in_progress')
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('in_progress')
+    expect(queue.tasks[0]!.gateResults.at(-1)).toMatchObject({
+      gateId: 'proof.real-provider-evidence',
+      passed: false,
+      output: expect.stringContaining('DEEPINFRA_API_TOKEN'),
+    })
+  })
+
+  it('turns a passing provider proof artifact into durable command evidence', async () => {
+    const worktreePath = tmpDir
+    await fs.mkdir(path.join(worktreePath, 'proof-results'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktreePath, 'proof-results', 'deepinfra-proof-results.json'),
+      JSON.stringify({
+        summary: {
+          passed: true,
+          status: 'passed',
+          model: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+          scenarioCount: 5,
+          checkedAt: '2026-07-14T02:26:39.091Z',
+        },
+        results: [
+          { name: 'fantasy', passed: true },
+          { name: 'legal-adult-fiction-boundary', passed: true },
+        ],
+      }),
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        worktreePath,
+        acceptanceCriteria: [{
+          id: 'provider-proof',
+          description: 'The model is tested against live provider scenarios.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        proofPaths: [{
+          id: 'command-proof-path',
+          kind: 'command',
+          command: 'pnpm run prove:deepinfra-drafting-model',
+          source: 'documented',
+          status: 'blocked',
+          expectedEvidence: [{
+            id: 'command-proof-path-evidence-0',
+            kind: 'artifact',
+            description: 'The live provider proof artifact passes.',
+            required: true,
+          }],
+          verificationRecords: [{
+            id: 'legacy-provider-proof',
+            evidenceId: 'provider-artifact-0',
+            kind: 'provider',
+            status: 'passed',
+            summary: 'Legacy provider proof record.',
+            recordedAt: '2026-07-14T02:25:30.000Z',
+            recordedBy: 'legacy-import',
+            evidenceRefs: [],
+          }],
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Reviewer approved.',
+          reasoning: 'The provider proof is present.',
+          failingSignals: [],
+          recordedAt: '2026-07-14T02:25:00.000Z',
+        }],
+        gateResults: [],
+      }),
+    ])
+    await upsertTaskRuntimeState(tmpDir, 'a', {
+      proofRecovery: {
+        reopenedAt: '2026-07-14T02:25:30.000Z',
+        reason: 'Recovery was opened before the provider artifact arrived.',
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run before artifact proof is recorded')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+    const first = await orch.tick()
+    expect(first.kind).toBe('processed')
+    if (first.kind === 'processed') expect(first.afterStatus).toBe('gate_check')
+    const recorded = await readQueue()
+    expect(recorded.tasks[0]!.gateResults.at(-1)).toMatchObject({
+      gateId: 'pnpm run prove:deepinfra-drafting-model',
+      command: 'pnpm run prove:deepinfra-drafting-model',
+      type: 'hard',
+      passed: true,
+    })
+    expect(recorded.tasks[0]!.proofPaths?.[0]).toMatchObject({ status: 'verified' })
+    expect((recorded.tasks[0]!.proofPaths?.[0] as unknown as { verificationRecords?: unknown[] })?.verificationRecords?.[0]).toMatchObject({
+      status: 'passed',
+      evidenceId: 'command-proof-path-evidence-0',
+    })
+
+    const second = await orch.tick()
+    expect(second.kind).toBe('processed')
+    const completed = await readQueue()
+    expect(completed.tasks[0]!.status).toBe('done')
+    expect(completed.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
+    expect((await readTaskRuntimeStore(tmpDir)).tasks.a?.proofRecovery).toBeUndefined()
+    expect(gc.calls).toHaveLength(0)
+  })
+
+  it('does not complete review-only gate_check while checkpoint verification still records a failure', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Reviewer confirmed the proof doc.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Reviewer approved.',
+          reasoning: 'AC 1: Met.',
+          failingSignals: [],
+          recordedAt: '2026-07-04T10:07:21.557Z',
+        }],
+        gateResults: [],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'a',
+      agentId: 'worker-agent',
+      intent: 'Repair proof docs',
+      nextPlannedAction:
+        'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails.',
+      filesTouched: ['docs/coherence/dialogue-and-character-voice-reviewer.md'],
+      resumeContext: {
+        verification: [{
+          command: 'pnpm run build',
+          passed: false,
+          observedAt: '2026-07-04T10:07:00.000Z',
+          summary: 'Docusaurus found broken links.',
+        }],
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', undefined, '')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(1)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('gate_check')
+      expect(out.agent).toBe('gate-checker-agent')
+      expect(out.transitioned).toBe(false)
+    }
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('gate_check')
+    expect(queue.tasks[0]!.notes.some(note =>
+      note.agentId === 'approved-review-gates' &&
+      /recorded approving review/.test(note.content),
+    )).toBe(false)
+  })
+
+  it('repairs completed task evidence display from recorded passing hard gates', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'done',
+        acceptanceCriteria: [
+          {
+            id: 'ac-3',
+            description: 'Saved reviewer finding is inspectable.',
+            verifiedBy: 'automated',
+            command: 'node -e "const r=require(\'./runs/\'+require(\'fs\').readdirSync(\'runs\').find(f=>f.startsWith(\'run-fixture-demo\'))); console.log(JSON.stringify(r.reviewerFinding))"',
+            met: true,
+          },
+          {
+            id: 'ac-5',
+            description: 'Reviewer confirmed the script stays deterministic.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        gateResults: [{
+          gateId: 'ac-3',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-07-04T10:07:21.557Z',
+          output:
+            'node -e "const r=require(\'./runs/\'+require(\'fs\').readdirSync(\'runs\').find(f=>f.startsWith(\'run-fixture-demo\')&&f.endsWith(\'.json\'))); console.log(JSON.stringify(r.reviewerFinding))" — exit 0',
+        }],
+      }),
+    ])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('idle')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.acceptanceCriteria[0]?.command).toContain("f.endsWith('.json')")
+    expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
+    expect(task.notes.at(-1)?.content).toContain('normalized completed task proof evidence')
+  })
+
+  it('preserves gate_check when the gate checker times out after recording passing hard gates', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        gateResults: [],
+      }),
+    ])
+    const gc = stubAgent('gate-checker-agent', async () => {
+      await mutateTask('a', {
+        gateResults: [{
+          gateId: 'npm-run-build',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-07-04T10:07:21.557Z',
+          output: 'npm run build passed',
+        }] as any,
+      })
+      throw new Error('gate-checker-agent timed out after 120000ms of inactivity')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('gate_check')
+      expect(out.agent).toBe('gate-checker-agent')
+    }
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('gate_check')
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('timed out after recording passing hard gates')
   })
 
   it('lets scoped gate adjudication overrule a pessimistic gate-checker bounce for unrelated hard test failures', async () => {
@@ -6016,7 +9374,7 @@ it('filters node_modules noise out of recovery checkpoints and falls back to met
     expect(checkpoint.filesTouched).toContain('frontend/app/pages/register.vue')
   })
 
-  it('stays silent across many no-op ticks (no PROGRESS.md churn)', async () => {
+  it('stops no-op churn with one recoverable escalation after the retry budget', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
     const worker = stubAgent('worker-agent')
     const orch = new Orchestrator({
@@ -6027,7 +9385,8 @@ it('filters node_modules noise out of recovery checkpoints and falls back to met
     const progress = await fs
       .readFile(progressPath, 'utf-8')
       .catch(() => '')
-    expect(progress).toBe('')
+    expect(progress).toContain('ESCALATION')
+    expect(progress).toContain('Worker made no visible progress after 5 passes.')
   })
 
   it('writes an ESCALATION entry when max revisions is exceeded (FR-10 supersedes BLOCKED)', async () => {
@@ -6297,13 +9656,14 @@ describe('Orchestrator.tick — error handling', () => {
     expect(task.status).toBe('exploring')
     expect(task.escalations).toHaveLength(0)
     expect(task.blockReason).toBeUndefined()
-    const question = task.openQuestions?.[0]
-    expect(question?.kind).toBe('text')
-    if (question?.kind === 'text') {
-      expect(question.prompt).toContain('Zapier / webhook support')
-      expect(question.prompt).toContain('concrete success boundary')
-      expect(question.description).toContain('knit/docs/features.md')
-    }
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('draft-a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]).toMatchObject({
+      prompt: expect.stringContaining('Zapier / webhook support'),
+    })
+    expect(ownerInputs[0]?.prompt).toContain('concrete success boundary')
+    expect(ownerInputs[0]?.boundedChatSessionId).toBeTruthy()
   })
 
   it('preserves worker progress instead of escalating when turn limit hits after dirtying the worktree', async () => {
@@ -6464,21 +9824,7 @@ describe('Orchestrator.run — full loops', () => {
 
     // Each agent transitions the task one step forward.
     const advance = (next: TaskStatus) => async () => {
-      await mutateTask('a', {
-        status: next,
-        ...(next === 'done'
-          ? {
-              mergeRecord: {
-                fromBranch: 'guildhall/task-a',
-                toBranch: 'main',
-                strategy: 'cherry_pick_local',
-                result: 'merged',
-                commitSha: 'abc123',
-                mergedAt: '2026-04-29T00:00:00.000Z',
-              },
-            }
-          : {}),
-      })
+      await mutateTask('a', { status: next })
     }
 
     const agents: OrchestratorAgentSet = {
@@ -6503,8 +9849,8 @@ describe('Orchestrator.run — full loops', () => {
     expect(packet).toContain('- Status: done')
     expect(packet).toContain('- [x] ac-1: Thing is done')
     expect(packet).toContain('## Merge')
-    expect(packet).toContain('- merged: guildhall/task-a -> main via cherry_pick_local (abc123); 2026-04-29T00:00:00.000Z')
-    expect(packet).toContain('Task is complete and merged.')
+    expect(packet).toContain('- skipped: <unknown> -> <unknown> via cherry_pick_local')
+    expect(packet).toContain('Task is complete.')
   })
 
   it('records a skipped merge when worktree isolation is disabled', async () => {
@@ -6551,7 +9897,7 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
-  it('checkpoints shared-checkout work into a task branch when worktree isolation is disabled and the repo is dirty', async () => {
+  it('does not fabricate a shared-checkout checkpoint when worktree isolation is disabled', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -6588,21 +9934,15 @@ describe('Orchestrator.run — full loops', () => {
 
     const q = await readQueue()
     expect(q.tasks[0]!.status).toBe('done')
-    expect(gitDriver.state.checkpoints).toHaveLength(1)
-    expect(gitDriver.state.checkpoints[0]?.branch).toBe('guildhall/task-a')
-    expect(q.tasks[0]!.branchName).toBe('guildhall/task-a')
-    expect(q.tasks[0]!.baseBranch).toBe('main')
+    expect(gitDriver.state.checkpoints).toHaveLength(0)
+    expect(q.tasks[0]!.branchName).toBeUndefined()
+    expect(q.tasks[0]!.baseBranch).toBeUndefined()
     expect(q.tasks[0]!.mergeRecord).toMatchObject({
       result: 'skipped',
-      detail: 'worktree isolation disabled — shared-checkout work checkpointed to task branch',
-      fromBranch: 'guildhall/task-a',
-      toBranch: 'main',
-      commitSha: 'checkpoint-1',
+      detail: 'worktree isolation disabled — merge skipped',
+      fromBranch: '<unknown>',
+      toBranch: '<unknown>',
     })
-    expect(q.tasks[0]!.notes.some((note) =>
-      note.role === 'checkpoint' &&
-      note.content.includes('Checkpointed shared-checkout work into guildhall/task-a'),
-    )).toBe(true)
   })
 
   it('uses the task project repo for worktree and merge operations in multi-repo workspaces', async () => {
@@ -6813,6 +10153,70 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.blockReason).toContain(`base repo has uncommitted changes at ${subrepo}`)
   })
 
+  it('reopens a dirty-repo blocker when the shared Git authority reports the repo clean', async () => {
+    const subrepo = path.join(tmpDir, 'knit-cleaned')
+    await fs.mkdir(subrepo, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: agentSettingsPath,
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        domain: 'knit',
+        projectPath: subrepo,
+        spec: VALID_SPEC,
+        blockReason:
+          `Guildhall could not start work because the target repo is dirty: ` +
+          `base repo has uncommitted changes at ${subrepo}. ` +
+          'Commit or stash those changes, then resume the task.',
+        notes: [
+          {
+            agentId: 'task-claimer',
+            role: 'orchestrator',
+            content: 'Claimed ready task for worker-agent.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver,
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).not.toBe('blocked')
+    expect(task?.blockReason).toBeUndefined()
+    expect(task?.notes.some((note) => note.content.includes('found it clean'))).toBe(true)
+  })
+
   it('packages Guildhall-owned shared-checkout edits into a task branch before creating a worktree', async () => {
     const subrepo = path.join(tmpDir, 'frontend')
     const guildhallHome = path.join(tmpDir, '.guildhall-home')
@@ -6894,6 +10298,234 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.notes.some((note) => note.role === 'recovery')).toBe(true)
     expect(task?.notes.some((note) => note.role === 'checkpoint')).toBe(true)
     delete process.env.GUILDHALL_CONFIG_DIR
+  })
+
+  it('reopens likely-target worker timeouts without requiring a recovery checkpoint', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: VALID_SPEC,
+        blockReason: 'human_judgment_required: Worker timed out after failing to mutate the likely target file.',
+        escalations: [
+          {
+            id: 'esc-a',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'human_judgment_required',
+            summary: 'Worker timed out after failing to mutate the likely target file.',
+            details: 'worker-agent timed out after 10ms of inactivity.',
+            raisedAt: '2026-05-03T00:00:00.000Z',
+          } as any,
+        ],
+      }),
+    ])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver: new InMemoryGitDriver(),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('internal execution miss as owner judgment'),
+    )).toBe(true)
+  })
+
+  it('reopens stale no-output worker timeouts as provider recovery instead of owner judgment', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Select and prove DeepInfra drafting model',
+        status: 'blocked',
+        assignedTo: 'worker-agent',
+        spec: VALID_SPEC,
+        blockReason: 'human_judgment_required: Worker timed out after producing no visible progress.',
+        notes: [
+          {
+            agentId: 'coordinator',
+            role: 'failure-classification',
+            content: JSON.stringify({
+              class: 'provider_unavailable',
+              confidence: 'medium',
+              needsHuman: true,
+              humanQuestion:
+                'The worker timed out without producing visible progress. Should Guildhall retry this lane, switch provider, or narrow the task?',
+            }),
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'human_judgment_required',
+            summary: 'Worker timed out after producing no visible progress.',
+            details:
+              'worker-agent timed out after 10ms of inactivity.\n\n' +
+              'Task stayed in progress without visible worktree edits, a checkpoint, focused verification, or an explicit escalation after Guildhall retried the worker lane.',
+            raisedAt: '2026-05-03T00:00:00.000Z',
+          } as any,
+        ],
+      }),
+    ])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver: new InMemoryGitDriver(),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('provider/runtime recovery')
+    expect(task?.notes.some((note) =>
+      note.role === 'provider-recovery' &&
+      note.content.includes('stale no-output worker timeout as provider/runtime recovery'),
+    )).toBe(true)
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery-playbook' &&
+      note.content.includes('"playbook":"retry_current_task_context"'),
+    )).toBe(true)
+    expect(task?.notes.some((note) =>
+      note.role === 'policy-classification' &&
+      note.content.includes('"needsHuman":false'),
+    )).toBe(true)
+  })
+
+  it('reopens stale no-output worker timeouts as partial progress when the task worktree is dirty', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'dirty-no-output')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Select and prove DeepInfra drafting model',
+        status: 'blocked',
+        assignedTo: 'worker-agent',
+        spec: VALID_SPEC,
+        worktreePath,
+        blockReason: 'human_judgment_required: Worker timed out after producing no visible progress.',
+        notes: [
+          {
+            agentId: 'coordinator',
+            role: 'failure-classification',
+            content: JSON.stringify({
+              class: 'provider_unavailable',
+              confidence: 'medium',
+              needsHuman: true,
+              humanQuestion:
+                'The worker timed out without producing visible progress. Should Guildhall retry this lane, switch provider, or narrow the task?',
+            }),
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'human_judgment_required',
+            summary: 'Worker timed out after producing no visible progress.',
+            details:
+              'worker-agent timed out after 10ms of inactivity.\n\n' +
+              'Task stayed in progress without visible worktree edits, a checkpoint, focused verification, or an explicit escalation after Guildhall retried the worker lane.',
+            raisedAt: '2026-05-03T00:00:00.000Z',
+          } as any,
+        ],
+      }),
+    ])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(false)
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('dirty task-worktree progress')
+    expect(task?.notes.some((note) =>
+      note.role === 'provider-recovery' &&
+      note.content.includes('provider/runtime recovery'),
+    )).toBe(false)
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('preserving that partial worker output'),
+    )).toBe(true)
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery-playbook' &&
+      note.content.includes('"playbook":"retry_current_task_context"'),
+    )).toBe(true)
+    expect(task?.notes.some((note) =>
+      note.role === 'policy-classification' &&
+      note.content.includes('"class":"model_tool_use_failure"'),
+    )).toBe(true)
   })
 
   it('reopens a stale review-handoff tool-loop blocker after the validator bug is fixed', async () => {
@@ -7086,6 +10718,70 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.blockReason ?? null).toBeNull()
     expect(task?.escalations[0]?.resolvedBy).toBe('system')
     expect(task?.escalations[0]?.resolution).toContain('Superseded')
+  })
+
+  it('reopens a stale review-handoff blocker when the self-critique was stored as a JSON wrapper string', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: VALID_SPEC,
+        blockReason:
+          "decision_required: Cannot transition task to 'review' — guard keeps blocking despite self-critique note being persisted",
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content:
+              '{"agentId":"worker-agent","role":"self-critique","content":"**Self-critique:**\\n\\nAC 1: Met — implementation exists and build passes.\\n\\nMinimum-scope check:\\n- Files changed: scripts/run-packet.mjs.\\n- Smallest useful change?: yes.',
+            timestamp: '2026-07-04T09:50:53.838Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'decision_required',
+            summary:
+              "Cannot transition task to 'review' — guard keeps blocking despite self-critique note being persisted",
+            details:
+              'Blocked transition to review: persist a structured self-critique note with a review proof packet via update-task first.',
+            raisedAt: '2026-07-04T09:52:54.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'review' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('review handoff validator bug'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
   })
 
   it('reopens a stale gate_hard_failure review-handoff blocker after the validator bug is fixed', async () => {
@@ -7352,7 +11048,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: `**Self-critique:**\n\nAC-1 (Conversion): Met — focused tests cover the touched files.\n\n**Minimum-scope check:**\n- Files changed: packages/converter/src/features/variableDeclaration.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.\n\n**Review proof packet:**\n- Changed files / diff scope: packages/converter/src/features/variableDeclaration.ts, packages/converter/test/ts-to-jsdoc.test.ts.\n- Verification commands passed: cd /tmp/project/packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts passed.\n- Working hypothesis at handoff: The converter change and focused tests are ready for reviewer evaluation.\n- Known gaps / follow-up: none.`,
+            content: `**Self-critique:**\n\n**Acceptance criteria:**\n- AC 1 (Conversion): Met — focused tests cover the touched files.\n\n**Minimum-scope check:**\n- Files changed: packages/converter/src/features/variableDeclaration.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.\n\n**Review proof packet:**\n- Changed files / diff scope: packages/converter/src/features/variableDeclaration.ts, packages/converter/test/ts-to-jsdoc.test.ts.\n- Verification commands passed: cd /tmp/project/packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts passed.\n- Working hypothesis at handoff: The converter change and focused tests are ready for reviewer evaluation.\n- Known gaps / follow-up: none.`,
             timestamp: '2026-05-13T15:00:00.000Z',
           },
         ],
@@ -7403,6 +11099,70 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.status).toBe('review')
     expect(task?.assignedTo).toBe('reviewer-agent')
     expect(task?.blockReason ?? null).toBeNull()
+  })
+
+  it('synthesizes checkpoint-backed self-critique when verified work is stuck in handoff ceremony', async () => {
+    const worktreePath = path.join(tmpDir, 'checkpoint-backed-handoff')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'debug-report',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: 'Generate a developer-readable debug report for each run.',
+        acceptanceCriteria: [{
+          id: 'AC1',
+          description: 'Debug report command generates a report.',
+          verifiedBy: 'automated',
+          command: 'node scripts/generate-debug-report.mjs runs/example.json',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate() {
+        return { text: 'Build passes, but I failed to call update-task correctly.' }
+      },
+      getToolMetadata() {
+        return {
+          current_task_checkpoint_next_action:
+            'All authoritative verification commands have passed. Persist the structured self-critique note, then transition the task to review.',
+          current_task_checkpoint_files_touched: [
+            'scripts/generate-debug-report.mjs',
+            'runs/example-debug-report.md',
+          ],
+          recent_verified_work: [
+            'Ran bash command node scripts/generate-debug-report.mjs runs/example.json',
+            'Ran bash command npm run build',
+          ],
+        }
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.afterStatus).toBe('review')
+      expect(out.transitioned).toBe(true)
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'debug-report')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    const selfCritique = task?.notes.find((note) => note.role === 'self-critique')
+    expect(selfCritique?.content).toContain('synthesized by Guildhall from durable checkpoint evidence')
+    expect(selfCritique?.content).toContain('Review proof packet:')
   })
 
   it('auto-promotes fresh worker self-critique handoffs with verified target-file changes', async () => {
@@ -7513,6 +11273,231 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.status).toBe('review')
     expect(task?.assignedTo).toBe('reviewer-agent')
     expect(task?.notes.some((note) => note.role === 'worker-progress-review')).toBe(false)
+  })
+
+  it('promotes an existing worker review proof packet before redispatching the worker', async () => {
+    const worktreePath = path.join(tmpDir, 'existing-proof-worktree')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'schema-narrowing',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        worktreePath,
+        spec: VALID_SPEC,
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'backend-engineer',
+            content: [
+              '**Self-critique:**',
+              '',
+              'For each acceptance criterion:',
+              '- AC1: Met — docs/specs/mvp-story-memory-schema-narrowing.md records the narrowed schema.',
+              '',
+              'Minimum-scope check:',
+              '- Files changed: docs/specs/mvp-story-memory-schema-narrowing.md, docs/specs/schema-contract-roadmap.md.',
+              '- Smallest useful change?: yes — documentation-only narrowing proof.',
+              '- Anything to revert before review?: none.',
+              '',
+              'Review proof packet:',
+              '- Changed files / diff scope: docs/specs/mvp-story-memory-schema-narrowing.md and docs/specs/schema-contract-roadmap.md.',
+              '- Verification commands passed: npm run build passed.',
+              '- Working hypothesis at handoff: The schema-narrowing proof is ready for review.',
+              '- Known gaps / follow-up: none.',
+            ].join('\n'),
+            timestamp: '2026-07-04T11:45:33.236Z',
+          },
+        ],
+      }),
+    ])
+
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate() {
+        throw new Error('worker should not be redispatched')
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+      expect(out.transitioned).toBe(true)
+      expect(out.agent).toBe('coordinator-recovery')
+    }
+
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'schema-narrowing')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('existing worker self-critique with a review proof packet'),
+    )).toBe(true)
+  })
+
+  it('does not promote stale worker proof when newer review feedback requests revisions', async () => {
+    const worktreePath = path.join(tmpDir, 'stale-proof-worktree')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'schema-narrowing',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        worktreePath,
+        spec: VALID_SPEC,
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'backend-engineer',
+            content: [
+              '**Self-critique:**',
+              '',
+              'For each acceptance criterion:',
+              '- AC1: Met — docs/specs/mvp-story-memory-schema-narrowing.md records the narrowed schema.',
+              '',
+              'Minimum-scope check:',
+              '- Files changed: docs/specs/mvp-story-memory-schema-narrowing.md.',
+              '- Smallest useful change?: yes.',
+              '',
+              'Review proof packet:',
+              '- Changed files / diff scope: docs/specs/mvp-story-memory-schema-narrowing.md.',
+              '- Verification commands passed: npm run build passed.',
+              '- Working hypothesis at handoff: The schema-narrowing proof is ready for review.',
+            ].join('\n'),
+            timestamp: '2026-07-04T11:45:33.236Z',
+          },
+          {
+            agentId: 'reviewer-fanout',
+            role: 'reviewer',
+            content: [
+              '**Aggregated revisions from 1 persona:**',
+              '',
+              'Recommended task-local revisions:',
+              '- Add the missing proof command capture before acceptance.',
+            ].join('\n'),
+            timestamp: '2026-07-04T11:50:33.236Z',
+          },
+          {
+            agentId: 'coordinator-harness-prototype',
+            role: 'coordinator',
+            content: [
+              '**Coordinator adjudication (round 5):**',
+              '',
+              'Coordinator adjudicated: worker to address 1 scoped item from security-engineer',
+              '',
+              '**Scoped instructions (address exactly these items):**',
+              '- Add the missing proof command capture before acceptance.',
+            ].join('\n'),
+            timestamp: '2026-07-04T11:51:33.236Z',
+          },
+          {
+            agentId: 'coordinator',
+            role: 'recovery',
+            content:
+              'User restarted the project after Guildhall hit the review revision cap. Reopened the task so the worker can address the latest substantive review feedback instead of treating that cap as terminal.',
+            timestamp: '2026-07-04T11:52:33.236Z',
+          },
+        ],
+      }),
+    ])
+
+    let workerCalled = false
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate() {
+        workerCalled = true
+        await mutateTask('schema-narrowing', {
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+        })
+        return { text: 'worker resumed' }
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+    const out = await orch.tick()
+
+    expect(workerCalled).toBe(true)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.agent).toBe('worker-agent')
+    }
+
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'schema-narrowing')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('existing worker self-critique with a review proof packet'),
+    )).toBe(false)
+  })
+
+  it('returns a complete processed outcome for coordinator adjudication handoff', async () => {
+    const task = mkTask({
+      id: 'scene-lane',
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+      domain: 'coherence-lenses',
+      spec: VALID_SPEC,
+    })
+    const queue: TaskQueue = {
+      version: 1,
+      tasks: [task],
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await (orch as any).routeToCoordinatorAdjudication({
+      queue,
+      task,
+      aggregate: {
+        verdict: 'revise',
+        combinedFeedback: 'Add a working reviewer function.',
+        dissenting: [{
+          guildSlug: 'copywriter',
+          guildName: 'The Copywriter',
+          verdict: 'revise',
+          reasoning: 'The lane only defines types.',
+          revisionItems: ['Add a working reviewer function.'],
+          rawOutput: '**Verdict:** revise',
+        }],
+        approving: [],
+        needsAdjudication: true,
+        adjudicationTrigger: 'policy_conflict',
+      },
+      verdicts: [],
+      round: 1,
+      now: '2026-07-06T00:00:00.000Z',
+      beforeStatus: 'review',
+    })
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-default')
+      expect(out.beforeStatus).toBe('review')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(true)
+      expect(out.revisionCount).toBe(1)
+      expect(out.note).toContain('coordinator adjudicated')
+    }
   })
 
   it('uses handoff-specific immediate resume instructions instead of file-open instructions when a review handoff checkpoint exists', async () => {
@@ -7916,12 +11901,8 @@ describe('Orchestrator.run — full loops', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('processed')
-    if (out.kind === 'processed') {
-      expect(out.beforeStatus).toBe('spec_review')
-      expect(out.afterStatus).toBe('ready')
-    }
-    expect(coordinator.calls).toHaveLength(1)
+    expect(out.kind).toBe('idle')
+    expect(coordinator.calls).toHaveLength(0)
 
     const queue = await readQueue()
     const inspected = queue.tasks.find((candidate) => candidate.id === 'a')
@@ -8082,13 +12063,9 @@ describe('Orchestrator.run — full loops', () => {
         title: 'Proper invite flow',
         status: 'blocked',
         assignedTo: null,
+        spec: VALID_SPEC,
         blockReason:
           'spec_ambiguous: Unable to resolve type errors in settings.vue and invite.post.ts due to missing imports and utilities.',
-        spec: [
-          'Implement the Supabase invite flow in Knit settings.',
-          '- web/app/pages/settings.vue should expose the invite form and send handler.',
-          '- web/server/api/workspaces/[id]/invite.post.ts should validate roles and send the invite.',
-        ].join('\n'),
         acceptanceCriteria: [{
           id: 'ac-1',
           description: 'typecheck passes',
@@ -8493,13 +12470,15 @@ describe('Orchestrator.run — full loops', () => {
       }),
     ])
 
+    const longFailure = `settings.vue type error ${'x'.repeat(1900)} tail-token`
+    const failingGate = `node -e 'console.error(${JSON.stringify(longFailure)}); process.exit(1)'`
     const worker = stubAgent('worker-agent')
     const orch = new Orchestrator({
       config: baseConfig({
         projectPath: tmpDir,
         bootstrap: {
           commands: ['node -e "process.exit(0)"'],
-          successGates: ['node -e "console.error(\'settings.vue type error\'); process.exit(1)"'],
+          successGates: [failingGate],
           timeoutMs: 30_000,
           verifiedAt: '2026-05-03T00:00:00Z',
         },
@@ -8521,6 +12500,8 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.status).toBe('in_progress')
     expect(task?.blockReason ?? null).toBeNull()
     expect(task?.notes.at(-1)?.role).toBe('bootstrap-verification')
+    expect(task?.notes.at(-1)?.content).toContain('tail-token')
+    expect(task?.notes.at(-1)?.content).toContain('[durable evidence excerpt bounded; raw diagnostic text is not retained]')
 
     const checkpoint = JSON.parse(
       await fs.readFile(taskHistoryPath('a', 'checkpoint.json'), 'utf8'),
@@ -8533,15 +12514,17 @@ describe('Orchestrator.run — full loops', () => {
         workingHypothesis?: string
       }
     }
-    expect(checkpoint.nextPlannedAction).toContain('recorded verification evidence')
+    expect(checkpoint.nextPlannedAction).toContain('recorded bootstrap verification failure')
     expect(checkpoint.filesTouched).toContain('web/app/pages/settings.vue')
     expect(checkpoint.resumeContext?.verification).toEqual([
       expect.objectContaining({
-        command: 'node -e "console.error(\'settings.vue type error\'); process.exit(1)"',
+        command: failingGate,
         passed: false,
         summary: expect.stringContaining('settings.vue type error'),
       }),
     ])
+    expect(checkpoint.resumeContext?.verification?.[0]?.summary).toContain('tail-token')
+    expect(checkpoint.resumeContext?.verification?.[0]?.summary).not.toContain('\n...')
     expect(checkpoint.resumeContext?.safeNextMutationSurface).toContain('web/app/pages/settings.vue')
     expect(checkpoint.resumeContext?.workingHypothesis).toContain('last authoritative verification failed')
     expect(worker.calls[0]?.prompt).toContain('Latest authoritative verification')
@@ -8964,6 +12947,117 @@ describe('Orchestrator.run — full loops', () => {
     expect(q.tasks.find((t) => t.id === 'b')?.status).toBe('ready')
   })
 
+  it('resets a role-scoped worker conversation before dispatching a different task', async () => {
+    await writeQueue([
+      mkTask({ id: 'task-a', title: 'First task', status: 'ready', domain: 'looma', spec: VALID_SPEC }),
+      mkTask({ id: 'task-b', title: 'Second task', status: 'ready', domain: 'looma', spec: VALID_SPEC }),
+    ])
+
+    const seen: Array<{ taskId: string; resetCount: number; priorMessages: number }> = []
+    const worker: OrchestratorAgent & {
+      messages: Array<{ role?: string; content?: unknown }>
+      metadata: Record<string, unknown>
+      resetCount: number
+    } = {
+      name: 'worker-agent',
+      messages: [] as Array<{ role?: string; content?: unknown }>,
+      metadata: {} as Record<string, unknown>,
+      resetCount: 0,
+      loadToolMetadata(metadata: Record<string, unknown>) {
+        this.metadata = { ...this.metadata, ...metadata }
+      },
+      getToolMetadata() {
+        return this.metadata
+      },
+      resetConversation() {
+        this.resetCount += 1
+        this.messages = []
+        this.metadata = {}
+      },
+      async generate(prompt: string) {
+        const matchedTaskId = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)?.[1]
+        if (!matchedTaskId) throw new Error('missing current task id in prompt')
+        const taskId = matchedTaskId
+        seen.push({ taskId, resetCount: this.resetCount, priorMessages: this.messages.length })
+        this.messages.push({ role: 'user', content: prompt })
+        await mutateTask(taskId, { status: 'done' })
+        return { text: 'done' }
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    await orch.run({ maxTicks: 5, tickDelayMs: 0 })
+
+    expect(seen.map((entry) => entry.taskId)).toEqual(['task-a', 'task-b'])
+    expect(seen[0]).toMatchObject({ resetCount: 0, priorMessages: 0 })
+    expect(seen[1]).toMatchObject({ resetCount: 1, priorMessages: 0 })
+  })
+
+  it('loads active recovery tool metadata from current policy instead of stale note payloads', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-recovery',
+        title: 'Retry current task',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        domain: 'looma',
+        spec: VALID_SPEC,
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery-playbook',
+          timestamp: '2026-07-06T12:29:59.160Z',
+          content: JSON.stringify({
+            status: 'started',
+            playbook: 'retry_current_task_context',
+            allowedTools: ['edit-file', 'write-checkpoint', 'raise-escalation'],
+          }),
+        }],
+      }),
+    ])
+
+    const seenMetadata: Record<string, unknown>[] = []
+    const worker = {
+      name: 'worker-agent',
+      metadata: {} as Record<string, unknown>,
+      loadToolMetadata(metadata: Record<string, unknown>) {
+        this.metadata = { ...this.metadata, ...metadata }
+        seenMetadata.push({ ...this.metadata })
+      },
+      getToolMetadata() {
+        return this.metadata
+      },
+      resetConversation() {},
+      async generate() {
+        await mutateTask('task-recovery', { status: 'done' })
+        return { text: 'done' }
+      },
+    } satisfies OrchestratorAgent & { metadata: Record<string, unknown> }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    await orch.tick({ dispatchLimit: 1 })
+
+    expect(seenMetadata.at(-1)?.current_task_recovery_playbook).toBe('retry_current_task_context')
+    expect(seenMetadata.at(-1)?.current_task_recovery_allowed_tools).toEqual([
+      'list-files',
+      'read-file',
+      'edit-file',
+      'write-file',
+      'run-shell-command',
+      'write-checkpoint',
+      'log-progress',
+      'update-task',
+      'raise-escalation',
+    ])
+  })
+
   it('scoped one-task runs finish selected parent child work before stopping', async () => {
     await writeQueue([
       mkTask({
@@ -9019,7 +13113,7 @@ describe('Orchestrator.run — full loops', () => {
     expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
   })
 
-  it('scoped one-task runs continue when selected child reaches spec review', async () => {
+  it('scoped one-task runs stop when selected child reaches spec review for owner approval', async () => {
     await writeQueue([
       mkTask({
         id: 'context-menu',
@@ -9070,10 +13164,10 @@ describe('Orchestrator.run — full loops', () => {
     })
 
     expect(result.stopReason).toBe('one_task')
-    expect(picked).toEqual(['context-menu-component', 'context-menu-component'])
+    expect(picked).toEqual([])
     const q = await readManagedQueue()
-    expect(q.tasks.find((t) => t.id === 'context-menu')?.status).toBe('done')
-    expect(q.tasks.find((t) => t.id === 'context-menu-component')?.status).toBe('done')
+    expect(q.tasks.find((t) => t.id === 'context-menu')?.status).toBe('ready')
+    expect(q.tasks.find((t) => t.id === 'context-menu-component')?.status).toBe('spec_review')
     expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
   })
 
@@ -9122,8 +13216,10 @@ describe('Orchestrator.run — full loops', () => {
 
     expect(result.stopReason).toBe('max_ticks')
     const q = await readManagedQueue()
+    const selected = await readEffectiveTaskFromQueue('selected')
     expect(q.tasks.find((t) => t.id === 'selected')?.status).toBe('in_progress')
-    expect(q.tasks.find((t) => t.id === 'selected')?.escalations).toHaveLength(0)
+    expect(selected?.status).toBe('in_progress')
+    expect(selected?.escalations).toHaveLength(0)
     expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
   })
 
@@ -9242,6 +13338,74 @@ describe('Orchestrator.run — full loops', () => {
       note.role === 'git-story' &&
       note.content.includes('Auto-committed completed task work'),
     )).toBe(true)
+  })
+
+  it('recovers stale auto-commit landing failures instead of leaving proven work blocked', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-auto')
+    await writeQueue([
+      mkTask({
+        id: 'task-auto',
+        title: 'Implement feature workflow',
+        status: 'blocked',
+        blockReason: 'Guildhall could not auto-commit completed work: stale index.lock.',
+        worktreePath,
+        branchName: 'guildhall/task-auto',
+        baseBranch: 'main',
+        mergeRecord: {
+          fromBranch: 'guildhall/task-auto',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'skipped',
+          mergedAt: '2026-07-04T00:00:00.000Z',
+          detail: 'auto-commit failed before landing',
+        },
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setStatusSummary(worktreePath, {
+      branch: 'guildhall/task-auto',
+      changedCount: 1,
+      untrackedCount: 0,
+      samplePaths: ['src/feature.ts'],
+      clean: false,
+    })
+    const orch = new Orchestrator({
+      config: baseConfig({
+        gitStory: {
+          completionTarget: 'open_pr',
+          commit: 'auto',
+          push: 'ask',
+          pullRequest: 'ask',
+          merge: 'ask',
+          localOnlyAllowed: true,
+          deferAllowed: true,
+          requireCleanRelease: true,
+          allowForcePush: false,
+          allowSharedBranchRebase: false,
+          discoveredFrom: [],
+        },
+      }),
+      agents: agentSet({}),
+      gitDriver,
+    })
+
+    await orch.tick()
+
+    expect(gitDriver.state.commits).toHaveLength(1)
+    expect(gitDriver.state.cherryPicks).toEqual([
+      expect.objectContaining({
+        branch: 'guildhall/task-auto',
+        baseBranch: 'main',
+      }),
+    ])
+    const q = await readQueue()
+    expect(q.tasks[0]?.status).toBe('done')
+    expect(q.tasks[0]?.blockReason).toBeUndefined()
+    expect(q.tasks[0]?.mergeRecord).toMatchObject({
+      result: 'merged',
+      strategy: 'cherry_pick_local',
+    })
   })
 
   it('auto-commits dirty task worktree changes from matching workspace child Git Story policy', async () => {
@@ -9447,6 +13611,281 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
+  it('lands completed active rows from done-summary evidence instead of rerunning the worker', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-done-summary')
+    await writeQueue([
+      mkTask({
+        id: 'task-done-summary',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        worktreePath,
+        branchName: 'guildhall/task-done-summary',
+        baseBranch: 'main',
+        doneSummaryBundle: {
+          taskId: 'task-done-summary',
+          status: 'done',
+          completedAt: '2026-04-01T00:20:00.000Z',
+          summary: {
+            journey: 'Worker finished and reviewer approved.',
+            decision: 'Task finished as done.',
+            evidence: 'npm-run-build passed.',
+            learningCandidates: [],
+            openResidue: 'No open residue recorded.',
+          },
+          retention: {
+            transcriptPrimaryArtifact: false,
+            compactedFullTranscript: false,
+            fullEvidenceAvailable: true,
+          },
+          evidenceRefs: [],
+          createdAt: '2026-04-01T00:20:00.000Z',
+          createdBy: 'orchestrator',
+        },
+        mergeRecord: {
+          fromBranch: 'guildhall/task-done-summary',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'skipped',
+          mergedAt: '2026-04-01T00:21:00.000Z',
+          detail: 'previous cherry-pick failed before retry',
+        },
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('idle')
+    expect(worker.calls).toHaveLength(0)
+    expect(gitDriver.state.cherryPicks).toEqual([
+      expect.objectContaining({
+        branch: 'guildhall/task-done-summary',
+        baseBranch: 'main',
+      }),
+    ])
+    const q = await readQueue()
+    expect(q.tasks[0]?.status).toBe('done')
+    expect(q.tasks[0]?.assignedTo).toBeNull()
+    expect(q.tasks[0]?.completedAt).toBe('2026-04-01T00:20:00.000Z')
+    expect(q.tasks[0]?.mergeRecord).toMatchObject({
+      result: 'merged',
+      fromBranch: 'guildhall/task-done-summary',
+      toBranch: 'main',
+    })
+  })
+
+  it('routes proof-recovery work without a blueprint through the spec lane before implementation', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-proof-recovery')
+    await writeQueue([
+      mkTask({
+        id: 'task-proof-recovery',
+        status: 'in_progress',
+        spec: undefined,
+        assignedTo: 'worker-agent',
+        worktreePath,
+        branchName: 'guildhall/task-proof-recovery',
+        baseBranch: 'main',
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: [
+            'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+          ],
+        }],
+        doneSummaryBundle: {
+          taskId: 'task-proof-recovery',
+          status: 'done',
+          completedAt: '2026-04-01T00:20:00.000Z',
+          summary: {
+            journey: 'Worker finished and reviewer approved.',
+            decision: 'Task finished as done.',
+            evidence: 'npm-run-build passed.',
+            learningCandidates: [],
+            openResidue: 'No open residue recorded.',
+          },
+          retention: {
+            transcriptPrimaryArtifact: false,
+            compactedFullTranscript: false,
+            fullEvidenceAvailable: true,
+          },
+          evidenceRefs: [],
+          createdAt: '2026-04-01T00:20:00.000Z',
+          createdBy: 'orchestrator',
+        },
+        mergeRecord: {
+          fromBranch: 'guildhall/task-proof-recovery',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'skipped',
+          mergedAt: '2026-04-01T00:21:00.000Z',
+          detail: 'previous cherry-pick failed before proof recovery',
+        },
+      }),
+    ])
+    await upsertTaskRuntimeState(tmpDir, 'task-proof-recovery', {
+      assignedTo: 'worker-agent',
+      proofRecovery: {
+        reopenedAt: '2026-04-01T00:30:00.000Z',
+        reason: 'Run the real provider proof and attach the evidence.',
+      },
+      updatedAt: '2026-04-01T00:30:00.000Z',
+    })
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    const worker = stubAgent('worker-agent')
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker, spec }),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(gitDriver.state.cherryPicks).toEqual([])
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'task-proof-recovery',
+      agent: 'spec-agent',
+    })
+    const q = await readQueue()
+    expect(q.tasks[0]?.status).toBe('in_progress')
+    expect(q.tasks[0]?.mergeRecord).toMatchObject({ result: 'skipped' })
+    expect(spec.calls).toHaveLength(1)
+    expect(worker.calls).toHaveLength(0)
+  })
+
+  it('does not re-close a task intentionally reopened for a fresh spec pass', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-reopened-for-spec',
+        status: 'exploring',
+        spec: 'The prior spec is being revisited.',
+        doneSummaryBundle: {
+          taskId: 'task-reopened-for-spec',
+          status: 'reopened',
+          reopenedAt: '2026-04-01T00:30:00.000Z',
+          summary: {
+            journey: 'A previous pass completed.',
+            decision: 'The old task was marked done.',
+            evidence: 'The old proof passed.',
+            learningCandidates: [],
+            openResidue: 'Fresh scope is being shaped.',
+          },
+          retention: {
+            transcriptPrimaryArtifact: false,
+            compactedFullTranscript: false,
+            fullEvidenceAvailable: true,
+          },
+          evidenceRefs: [],
+          createdAt: '2026-04-01T00:30:00.000Z',
+          createdBy: 'rerun-stage',
+        },
+        mergeRecord: {
+          fromBranch: 'guildhall/task-reopened-for-spec',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'merged',
+          mergedAt: '2026-04-01T00:21:00.000Z',
+          detail: 'Historical completion from the prior pass.',
+        },
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'task-reopened-for-spec', {
+      id: 'completion-task-reopened-for-spec',
+      taskId: 'task-reopened-for-spec',
+      kind: 'completion_summary',
+      recordedAt: '2026-04-01T00:30:00.000Z',
+      payload: {
+        taskId: 'task-reopened-for-spec',
+        status: 'reopened',
+        reopenedAt: '2026-04-01T00:30:00.000Z',
+        reopenReason: 'A fresh spec pass was requested from current project reality.',
+        summary: {
+          journey: 'A previous pass completed.',
+          decision: 'The old task was marked done.',
+          evidence: 'The old proof passed.',
+          learningCandidates: [],
+          openResidue: 'Fresh scope is being shaped.',
+        },
+        retention: {
+          transcriptPrimaryArtifact: false,
+          compactedFullTranscript: false,
+          fullEvidenceAvailable: true,
+        },
+        evidenceRefs: [],
+        createdAt: '2026-04-01T00:30:00.000Z',
+        createdBy: 'rerun-stage',
+      },
+    })
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    expect(spec.calls).toHaveLength(1)
+    expect((await readQueue()).tasks[0]?.status).toBe('exploring')
+  })
+
+  it('does not complete approved gate-check work when the proof path remains missing', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-proof-path',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        acceptanceCriteria: [{
+          id: 'ac-proof',
+          description: 'Attach proof evidence',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: [
+            'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+          ],
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Reviewer approved.',
+          reasoning: 'The implementation appears complete.',
+          failingSignals: [],
+          recordedAt: '2026-04-01T00:30:00.000Z',
+        }],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'task-proof-path',
+      afterStatus: 'in_progress',
+    })
+    const q = await readQueue()
+    expect(q.tasks[0]?.status).toBe('in_progress')
+    expect(q.tasks[0]?.assignedTo).toBe('worker-agent')
+    expect(q.tasks[0]?.notes.at(-1)?.content).toContain('still lacks the proof evidence')
+  })
+
   it('marks pending PR tasks done and removes the worktree once the PR is merged', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-pr')
     await writeQueue([
@@ -9517,8 +13956,10 @@ describe('Orchestrator.run — full loops', () => {
     const q = await readQueue()
     const task = q.tasks.find((t) => t.id === 'a')!
     expect(task.status).toBe('exploring')
-    expect(task.openQuestions).toHaveLength(1)
-    expect(task.openQuestions?.[0]?.answeredAt).toBeUndefined()
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]?.status).toBe('waiting_for_owner')
   })
 
   it('adds immediate resume instructions for in-progress worker tasks with likely target files', async () => {
@@ -9835,11 +14276,7 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
         assignedTo: 'worker-agent',
         projectPath: tmpDir,
         worktreePath,
-        spec: [
-          'Implement the Supabase invite flow in Knit settings.',
-          '- web/app/pages/settings.vue should expose the invite form and send handler.',
-          '- web/server/api/workspaces/[id]/invite.post.ts should validate roles and send the invite.',
-        ].join('\n'),
+        spec: VALID_SPEC,
         acceptanceCriteria: [{
           id: 'ac-1',
           description: 'typecheck passes',
@@ -9941,6 +14378,191 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
     expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
   })
 
+  it('classifies proof-setup module failures from checkpoint evidence even when the escalation omits the filename', async () => {
+    const proofPath = 'scripts/proof-broad-genre-drafting.mjs'
+    await writeQueue([
+      mkTask({
+        id: 'task-proof-setup-repair',
+        title: 'Establish concrete proof for the drafting model',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        workKind: 'verification',
+        proposalRationale: PROOF_SETUP_RATIONALE,
+        spec: VALID_SPEC,
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-proof-setup-repair',
+      agentId: 'worker-agent',
+      intent: 'Repair the proof script',
+      nextPlannedAction: 'Fix the proof script module imports and rerun it.',
+      filesTouched: [proofPath],
+      resumeContext: {
+        verification: [{
+          command: `node ${proofPath}`,
+          passed: false,
+          observedAt: '2026-05-16T00:00:00.000Z',
+          summary: 'The proof script cannot resolve the SynopsisGenerationPipeline and AuthorIntentAndVoice modules.',
+        }],
+        safeNextMutationSurface: [proofPath],
+      },
+    })
+    const worker = {
+      ...stubAgent('worker-agent', async () => {
+        await mutateTask('task-proof-setup-repair', {
+          status: 'review',
+          assignedTo: 'reviewer-agent',
+          blockReason: 'spec_ambiguous: Proof script module resolution failing',
+          escalations: [{
+            id: 'esc-task-proof-setup-repair-1',
+            taskId: 'task-proof-setup-repair',
+            agentId: 'worker-agent',
+            reason: 'spec_ambiguous',
+            summary: 'Proof script module resolution failing',
+            details: 'The proof script cannot resolve the SynopsisGenerationPipeline and AuthorIntentAndVoice modules with current import paths.',
+            raisedAt: '2026-05-16T00:00:01Z',
+          }],
+        })
+      }),
+      loadToolMetadata() {
+        return {}
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const outcome = await orch.tick()
+
+    expect(outcome.kind).toBe('processed')
+    if (outcome.kind === 'processed') {
+      expect(outcome.agent).toBe('worker-agent')
+      expect(outcome.afterStatus).toBe('in_progress')
+    }
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-proof-setup-repair')!
+    expect(task.status).toBe('in_progress')
+    expect(task.assignedTo).toBe('worker-agent')
+    expect(task.blockReason ?? null).toBeNull()
+    expect(task.escalations[0]?.resolvedBy).toBe('orchestrator')
+    expect(task.escalations[0]?.resolution).toContain('self-authored verification failure')
+  })
+
+  it('reopens an existing proof-setup review escalation after a project restart', async () => {
+    const proofPath = 'scripts/proof-broad-genre-drafting.mjs'
+    await writeQueue([
+      mkTask({
+        id: 'task-proof-setup-restart',
+        title: 'Establish concrete proof after restart',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        workKind: 'verification',
+        proposalRationale: PROOF_SETUP_RATIONALE,
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The exact project proof passes.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        blockReason: 'spec_ambiguous: Proof script module resolution failing',
+        escalations: [{
+          id: 'esc-task-proof-setup-restart-1',
+          taskId: 'task-proof-setup-restart',
+          agentId: 'worker-agent',
+          reason: 'spec_ambiguous',
+          summary: 'Proof script module resolution failing',
+          details: 'The proof script cannot resolve its project modules after the worker attempted the exact command.',
+          raisedAt: '2026-05-16T00:00:01Z',
+        }],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-proof-setup-restart',
+      agentId: 'worker-agent',
+      intent: 'Repair the proof script after restart',
+      nextPlannedAction: 'Fix the proof script module imports and rerun it.',
+      filesTouched: [proofPath],
+      resumeContext: {
+        safeNextMutationSurface: [proofPath],
+      },
+    })
+    let workerCalled = false
+    const worker = {
+      ...stubAgent('worker-agent', async () => {
+        workerCalled = true
+        await mutateTask('task-proof-setup-restart', { status: 'in_progress' })
+      }),
+      loadToolMetadata() {
+        return {}
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const outcome = await orch.tick()
+
+    expect(outcome.kind).toBe('processed')
+    expect(workerCalled).toBe(true)
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-proof-setup-restart')!
+    expect(task.status).toBe('in_progress')
+    expect(task.assignedTo).toBe('worker-agent')
+    expect(task.blockReason ?? null).toBeNull()
+    expect(task.escalations[0]?.resolvedBy).toBe('system')
+    expect(task.escalations[0]?.resolution).toContain('worker-owned verification confusion')
+  })
+
+  it('routes an implementation target-shape mismatch back through spec shaping', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-target-shape',
+        title: 'Build the missing pipeline',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'Create src/pipelines/missing.ts.',
+        blockReason: 'spec_ambiguous: Target directory structure does not match expected paths',
+        escalations: [{
+          id: 'esc-task-target-shape-1',
+          taskId: 'task-target-shape',
+          agentId: 'worker-agent',
+          reason: 'spec_ambiguous',
+          summary: 'Target directory structure does not match expected paths',
+          details: 'The expected file path /worktree/src/pipelines/missing.ts and its parent directories do not exist.',
+          raisedAt: '2026-04-01T00:00:01Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const outcome = await orch.tick()
+
+    expect(outcome.kind).toBe('processed')
+    expect(spec.calls).toHaveLength(1)
+    const task = (await readQueue()).tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBe('spec-agent')
+    expect(task.blockReason ?? null).toBeNull()
+    expect(task.escalations[0]?.resolvedBy).toBe('system')
+    expect(task.escalations[0]?.resolution).toContain('path/context routing')
+    expect(task.notes.some(note =>
+      note.role === 'spec-recovery' &&
+      note.content.includes('visible project tree'),
+    )).toBe(true)
+  })
+
   it('keeps worker-owned verification environment claims out of the human queue', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'listing-form')
     await fs.mkdir(path.join(worktreePath, 'frontend', 'app', 'pages', 'listings'), { recursive: true })
@@ -9970,6 +14592,7 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
         title: 'Basic project listing',
         status: 'blocked',
         assignedTo: null,
+        spec: VALID_SPEC,
         blockReason:
           "spec_ambiguous: Verification commands don't work in this environment but implementation is complete",
         projectPath: 'frontend/',
@@ -10405,7 +15028,7 @@ describe('Orchestrator.tick — FR-21 proposal promotion', () => {
     })
   }
 
-  function proposal(overrides: Partial<Task> = {}): Task {
+  function proposal(overrides: TestTaskPatch = {}): Task {
     return mkTask({
       id: 'prop-1',
       status: 'proposed',
@@ -10634,7 +15257,7 @@ describe('Orchestrator.tick — FR-22 pre-rejection policy', () => {
     })
   }
 
-  function shelved(overrides: Partial<Task> = {}): Task {
+  function shelved(overrides: TestTaskPatch = {}): Task {
     return mkTask({
       id: 'shelve-1',
       status: 'shelved',
@@ -10946,7 +15569,7 @@ describe('Orchestrator — FR-31 agent-issue channel', () => {
     expect(second).toEqual([])
 
     const q = await readManagedQueue()
-    expect(q.tasks[0]!.agentIssues.every((i) => i.broadcast === false)).toBe(true)
+    expect(q.tasks[0]).not.toHaveProperty('agentIssues')
     const evidence = await readTaskEvidence(tmpDir, 't-1', { kind: 'agent_issue' })
     const latestById = new Map(evidence.map((event) => [
       (event.payload as { id: string }).id,
@@ -10986,7 +15609,7 @@ describe('Orchestrator — FR-31 agent-issue channel', () => {
     expect(await orch.drainPendingIssues()).toEqual([])
 
     const q = await readManagedQueue()
-    expect(q.tasks[0]!.agentIssues).toEqual([])
+    expect(q.tasks[0]).not.toHaveProperty('agentIssues')
     const evidence = await readTaskEvidence(tmpDir, 't-1', { kind: 'agent_issue' })
     expect(evidence.map((event) => (event.payload as { broadcast?: boolean }).broadcast)).toEqual([false, true])
   })
@@ -11613,6 +16236,135 @@ describe('Orchestrator — FR-32 remediation wiring', () => {
 })
 
 describe('Orchestrator worker no-progress escalation', () => {
+  it('checkpoints dirty worker progress even when task bookkeeping changed', async () => {
+    const worktreePath = tmpDir
+    await fs.mkdir(path.join(worktreePath, 'docs', 'coherence'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktreePath, 'docs', 'coherence', 'dialogue-and-character-voice-reviewer.md'),
+      '# Dialogue and Character Voice Reviewer\n',
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'task-dirty-bookkeeping',
+        title: 'Implement dialogue reviewer lane',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: 'Implement the reviewer lane and record proof.',
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent', async () => {
+      const queue = await readQueue()
+      const task = queue.tasks.find(candidate => candidate.id === 'task-dirty-bookkeeping')
+      if (task) {
+        task.updatedAt = '2026-04-01T00:00:09Z'
+        await writeQueue(queue.tasks)
+      }
+    }, '')
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    gitDriver.setStatusSummary(worktreePath, {
+      clean: false,
+      changedCount: 0,
+      untrackedCount: 1,
+      samplePaths: ['docs/coherence/dialogue-and-character-voice-reviewer.md'],
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    const outcome = await orch.tick({ dispatchLimit: 1 })
+
+    expect(outcome.kind).toBe('processed')
+    const checkpoint = JSON.parse(
+      await fs.readFile(taskHistoryPath('task-dirty-bookkeeping', 'checkpoint.json'), 'utf8'),
+    ) as {
+      intent: string
+      filesTouched: string[]
+      resumeContext?: {
+        verification?: Array<{ command: string; passed: boolean; observedAt: string; summary?: string }>
+      }
+    }
+    expect(checkpoint.intent).toContain('dirty worktree progress')
+    expect(checkpoint.filesTouched).toContain('docs/coherence/dialogue-and-character-voice-reviewer.md')
+    checkpoint.resumeContext = {
+      verification: [{
+        command: 'npm run build',
+        passed: false,
+        observedAt: '2026-04-01T00:00:10Z',
+        summary: 'Docusaurus found broken links.',
+      }],
+    }
+    await fs.writeFile(
+      taskHistoryPath('task-dirty-bookkeeping', 'checkpoint.json'),
+      JSON.stringify(checkpoint, null, 2),
+      'utf8',
+    )
+
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.note).toContain('Worker made no visible progress pass 1')
+    }
+    const checkpointAfterSecond = JSON.parse(
+      await fs.readFile(taskHistoryPath('task-dirty-bookkeeping', 'checkpoint.json'), 'utf8'),
+    ) as { step: number; filesTouched: string[] }
+    expect(checkpointAfterSecond.step).toBe(1)
+    const task = await readEffectiveTaskFromQueue('task-dirty-bookkeeping')
+    expect(task?.notes.some(note =>
+      note.role === 'worker-progress-review' &&
+      /Worker made no visible progress pass 1/.test(note.content),
+    )).toBe(true)
+  })
+
+  it('persists no-progress counts across separate worker runs without likely targets', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-no-targets',
+        title: 'Implement reviewer lane',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        spec: 'Implement the reviewer lane and record proof.',
+      }),
+    ])
+
+    let finalOutcome: Awaited<ReturnType<Orchestrator['tick']>> | null = null
+    for (let pass = 1; pass <= 6; pass += 1) {
+      const worker = stubAgent('worker-agent', async () => {
+        const queue = await readQueue()
+        const task = queue.tasks.find(candidate => candidate.id === 'task-no-targets')
+        if (task) {
+          task.updatedAt = `2026-04-01T00:00:0${pass}Z`
+          await writeQueue(queue.tasks)
+        }
+      }, '')
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ worker }),
+        gitDriver: new InMemoryGitDriver({ clean: true }),
+      })
+      const outcome = await orch.tick({ dispatchLimit: 1 })
+      finalOutcome = outcome
+      if (outcome.kind === 'escalated') break
+    }
+
+    expect(finalOutcome?.kind).toBe('escalated')
+    if (finalOutcome?.kind === 'escalated') expect(finalOutcome.reason).toContain('Worker made no visible progress')
+    const task = await readEffectiveTaskFromQueue('task-no-targets')
+    expect(task?.status).toBe('blocked')
+    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress after 5 passes')
+    const history = await readTaskEvidence(tmpDir, 'task-no-targets', { kind: 'note' })
+    expect(history.filter(event => {
+      const content = typeof event.payload.content === 'string' ? event.payload.content : ''
+      return event.payload.role === 'worker-progress-review' && /Worker made no visible progress pass \d+/.test(content)
+    }).length).toBeGreaterThanOrEqual(4)
+  })
+
   it('gives the worker five no-op passes before escalating likely-target no-progress', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-011')
     await fs.mkdir(path.join(worktreePath, 'web', 'tests', 'unit', 'composables'), { recursive: true })
@@ -11691,7 +16443,11 @@ describe('Orchestrator worker no-progress escalation', () => {
         status: 'in_progress',
         assignedTo: 'worker-agent',
         projectPath: tmpDir,
-        spec: `Edit \`${targetPath}\` and verify the converter tests.`,
+        spec: `${VALID_SPEC}\n\nTarget file: \`${targetPath}\`.`,
+        productBrief: {
+          userJob: 'Repair the converter comment behavior.',
+          successMetric: 'The converter test passes.',
+        },
         acceptanceCriteria: [{
           id: 'ac-1',
           description: 'converter test passes',
@@ -11715,7 +16471,7 @@ describe('Orchestrator worker no-progress escalation', () => {
         await onEvent({
           type: 'status',
           message:
-            'Assistant kept returning no tool call after checkpoint-directed nudges; ending this turn so the coordinator can treat it as no progress.',
+            'Assistant drifted away from a mutation checkpoint; demanding one exact file mutation or escalation next.',
         })
         return { text: '' }
       },
@@ -11852,7 +16608,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(worker.calls[0]?.prompt).toContain('cd web && pnpm typecheck')
   })
 
-  it('escalates instead of surfacing agent-error when a resumed worker times out without mutating likely target files', async () => {
+  it('retries once before escalating when a resumed worker times out without mutating likely target files', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-012')
     await fs.mkdir(path.join(worktreePath, 'web', 'tests', 'unit', 'composables'), { recursive: true })
     await writeQueue([
@@ -11889,18 +16645,213 @@ describe('Orchestrator worker no-progress escalation', () => {
       agentGenerateTimeoutMs: 10,
     })
 
-    const outcome = await orch.tick({ dispatchLimit: 1 })
-    expect(outcome.kind).toBe('escalated')
-    if (outcome.kind === 'escalated') {
-      expect(outcome.reason).toContain('timed out after 10ms')
+    const first = await orch.tick({ dispatchLimit: 1 })
+    expect(first.kind).toBe('processed')
+    if (first.kind === 'processed') {
+      expect(first.afterStatus).toBe('in_progress')
+      expect(first.transitioned).toBe(false)
+    }
+
+    const retried = await readEffectiveTaskFromQueue('task-012')
+    expect(retried?.status).toBe('in_progress')
+    expect(retried?.escalations.length).toBe(0)
+    expect(retried?.notes.find((note) => note.role === 'runtime')?.content)
+      .toContain('will retry once')
+
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.agent).toBe('coordinator-worker-recovery')
+      expect(second.afterStatus).toBe('in_progress')
+      expect(second.transitioned).toBe(false)
+      expect(second.note).toBe('model/tool-use recovery recorded')
     }
 
     const task = await readEffectiveTaskFromQueue('task-012')
-    expect(task?.status).toBe('blocked')
-    expect(task?.escalations.length).toBe(1)
-    expect(task?.escalations[0]?.summary).toContain('Worker timed out after failing to mutate')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason).toBeUndefined()
+    expect(task?.escalations.length).toBe(0)
+    expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"model_tool_use_failure"')
+    expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"needsHuman":false')
+    expect(task?.notes.find((note) => note.role === 'recovery-playbook')?.content)
+      .toContain('"playbook":"retry_current_task_context"')
+  })
+
+  it('enforces the default worker turn budget even when hidden stream events reset inactivity', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-hidden-stream')
+    await fs.mkdir(path.join(worktreePath, 'src'), { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-hidden-stream',
+        title: 'Invalidate stale packet context after source edits',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: `Edit \`${path.join(worktreePath, 'src', 'packet-context.ts')}\` and verify stale packet context invalidation.`,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'stale packet context invalidates after source edits',
+          verifiedBy: 'automated',
+          command: 'pnpm test stale-packet-context',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate() {
+        return { text: '' }
+      },
+      async generateWithEvents(_prompt, onEvent, options) {
+        await new Promise<void>((resolve) => {
+          const interval = setInterval(() => {
+            void onEvent({ type: 'hidden_stream_tick' } as any)
+          }, 10)
+          options?.signal?.addEventListener('abort', () => {
+            clearInterval(interval)
+            resolve()
+          }, { once: true })
+        })
+        return { text: '' }
+      },
+    }
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(true)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 100,
+    })
+
+    const first = await orch.tick({ dispatchLimit: 1 })
+    expect(first.kind).toBe('processed')
+    if (first.kind === 'processed') {
+      expect(first.afterStatus).toBe('in_progress')
+      expect(first.transitioned).toBe(false)
+      expect(first.note).toContain('will retry once')
+    }
+
+    const task = await readEffectiveTaskFromQueue('task-hidden-stream')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.escalations.length).toBe(0)
+    expect(task?.notes.find((note) => note.role === 'runtime')?.content)
+      .toContain('will retry once')
+  }, 1000)
+
+  it('records a visible retry note when a worker times out without likely target paths', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-no-targets',
+        title: 'Finish the harness behavior',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'behavior is proven',
+          verifiedBy: 'review',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    worker.generate = async () => await new Promise(() => {}) as never
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(true)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 60_000,
+      agentGenerateWallClockTimeoutMs: 100,
+    })
+
+    const first = await orch.tick({ dispatchLimit: 1 })
+    expect(first.kind).toBe('processed')
+    if (first.kind === 'processed') {
+      expect(first.afterStatus).toBe('in_progress')
+      expect(first.transitioned).toBe(false)
+    }
+
+    const retried = await readEffectiveTaskFromQueue('task-no-targets')
+    expect(retried?.status).toBe('in_progress')
+    expect(retried?.escalations.length).toBe(0)
+    expect(retried?.notes.find((note) => note.role === 'runtime')?.content)
+      .toContain('timed out before producing visible progress')
+
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.afterStatus).toBe('in_progress')
+      expect(second.transitioned).toBe(false)
+      expect(second.note).toBe('provider recovery recorded')
+    }
+
+    const recovered = await readEffectiveTaskFromQueue('task-no-targets')
+    expect(recovered?.status).toBe('in_progress')
+    expect(recovered?.escalations.length).toBe(0)
+    expect(recovered?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"provider_unavailable"')
+    expect(recovered?.notes.find((note) => note.role === 'recovery-playbook')?.content)
+      .toContain('"playbook":"retry_current_task_context"')
+  })
+
+  it('keeps provider-unavailable no-progress worker timeouts in Guildhall recovery instead of asking the owner', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-provider-recovery',
+        title: 'Select and prove DeepInfra drafting model',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'DeepInfra drafting model is selected and proven.',
+          verifiedBy: 'review',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    worker.generate = async () => await new Promise(() => {}) as never
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(true)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 60_000,
+      agentGenerateWallClockTimeoutMs: 100,
+    })
+
+    await orch.tick({ dispatchLimit: 1 })
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.afterStatus).toBe('in_progress')
+      expect(second.transitioned).toBe(false)
+      expect(second.note).toBe('provider recovery recorded')
+    }
+
+    const task = await readEffectiveTaskFromQueue('task-provider-recovery')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason).toBeUndefined()
+    expect(task?.escalations.length).toBe(0)
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"provider_unavailable"')
+    expect(task?.notes.find((note) => note.role === 'recovery-playbook')?.content)
+      .toContain('"playbook":"retry_current_task_context"')
   })
 
   it('preserves dirty worktree progress when a worker exceeds its total turn budget', async () => {
@@ -11944,13 +16895,81 @@ describe('Orchestrator worker no-progress escalation', () => {
       expect(outcome.beforeStatus).toBe('in_progress')
       expect(outcome.afterStatus).toBe('in_progress')
       expect(outcome.transitioned).toBe(false)
+      expect(outcome.note).toContain('preserving that partial implementation')
     }
     const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-013')
     expect(task?.status).toBe('in_progress')
     expect(task?.escalations).toEqual([])
+    expect(task?.notes.at(-1)).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'runtime',
+      content:
+        'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.',
+    })
   })
 
-  it('blocks after repeated dirty worktree worker turn-budget retries', async () => {
+  it('preserves dirty worker progress when the worktree path lives in task workspace state', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-013-workspace-state')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await upsertTaskWorkspaceState(tmpDir, 'task-013-workspace-state', {
+      worktreePath,
+      branchName: 'guildhall/task-task-013-workspace-state',
+      baseBranch: 'main',
+      updatedAt: '2026-05-03T00:00:00.000Z',
+    })
+    await writeQueue([
+      mkTask({
+        id: 'task-013-workspace-state',
+        title: 'Select and prove a drafting model',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        spec: 'Select the model and save the proof artifact.',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'model selection proof exists',
+          verifiedBy: 'review',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    worker.generate = async () => await new Promise(() => {}) as never
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(false)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 60_000,
+      agentGenerateWallClockTimeoutMs: 10,
+    })
+
+    const outcome = await orch.tick({ dispatchLimit: 1 })
+
+    expect(outcome.kind).toBe('processed')
+    if (outcome.kind === 'processed') {
+      expect(outcome.agent).toBe('worker-agent')
+      expect(outcome.beforeStatus).toBe('in_progress')
+      expect(outcome.afterStatus).toBe('in_progress')
+      expect(outcome.transitioned).toBe(false)
+      expect(outcome.note).toContain('preserving that partial implementation')
+    }
+    const task = await readEffectiveTaskFromQueue('task-013-workspace-state')
+    expect(task?.worktreePath).toBe(worktreePath)
+    expect(task?.status).toBe('in_progress')
+    expect(task?.escalations).toEqual([])
+    expect(task?.notes.at(-1)).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'runtime',
+      content:
+        'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.',
+    })
+    expect(task?.notes.some((note) => note.role === 'policy-classification')).toBe(false)
+  })
+
+  it('hands repeated dirty worktree worker turn-budget retries to review instead of owner input', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-014')
     await fs.mkdir(worktreePath, { recursive: true })
     await writeQueue([
@@ -11989,16 +17008,84 @@ describe('Orchestrator worker no-progress escalation', () => {
 
     expect(first.kind).toBe('processed')
     expect(second.kind).toBe('processed')
-    expect(third.kind).toBe('escalated')
-    if (third.kind === 'escalated') {
-      expect(third.reason).toContain('repeatedly hit its turn budget')
+    expect(third.kind).toBe('processed')
+    if (third.kind === 'processed') {
+      expect(third.afterStatus).toBe('review')
+      expect(third.transitioned).toBe(true)
     }
     const task = await readEffectiveTaskFromQueue('task-014')
-    expect(task?.status).toBe('blocked')
-    expect(task?.escalations.at(-1)?.summary)
-      .toContain('repeatedly hit its turn budget')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.escalations).toEqual([])
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"model_tool_use_failure"')
+    expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"needsHuman":false')
+    expect(task?.notes.at(-1)?.content)
+      .toContain('handing the saved partial diff to review instead of asking the owner')
+  })
+
+  it('uses durable runtime notes when handing repeated dirty worktree retries to review after restart', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-015')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-015',
+        title: 'Finish debug report script',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: 'Finish the debug report and hand off to review.',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'debug report is verified',
+          verifiedBy: 'review',
+          met: false,
+        } as any],
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'runtime',
+            content:
+              'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+          {
+              agentId: 'worker-agent',
+              role: 'runtime',
+              content:
+                'The worker hit its turn budget again with dirty work preserved. Guildhall will retry once more before handing the saved partial diff to review.',
+              timestamp: '2026-05-03T00:01:00.000Z',
+            },
+        ],
+        workerRecovery: { dirtyTimeoutRetries: 2 },
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    worker.generate = async () => await new Promise(() => {}) as never
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(false)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 60_000,
+      agentGenerateWallClockTimeoutMs: 10,
+    })
+
+    const outcome = await orch.tick({ dispatchLimit: 1 })
+
+    expect(outcome.kind).toBe('processed')
+    if (outcome.kind === 'processed') {
+      expect(outcome.afterStatus).toBe('review')
+      expect(outcome.transitioned).toBe(true)
+    }
+    const task = await readEffectiveTaskFromQueue('task-015')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.escalations).toEqual([])
   })
 })
 
@@ -12264,7 +17351,7 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
 
   /** A review-ready task with ACs met and a passing hard gate, so the
    *  deterministic rubric clears the 0.8 threshold and returns approve. */
-  function reviewReadyTask(overrides: Partial<Task> = {}): Task {
+  function reviewReadyTask(overrides: TestTaskPatch = {}): Task {
     return mkTask({
       id: 't-review',
       status: 'review',
@@ -12320,6 +17407,122 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
       expect(verdict.verdict).toBe('approve')
       expect(verdict.llmError).toContain('provider timeout')
       expect(verdict.score).toBeGreaterThanOrEqual(0.8)
+    },
+  )
+
+  it(
+    'does not let deterministic fallback erase a substantive reviewer revision',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([
+        reviewReadyTask({
+          gateResults: [],
+          reviewVerdicts: [
+            {
+              verdict: 'revise',
+              reviewerPath: 'llm',
+              reason: 'Reviewer found an implementation defect.',
+              reasoning: 'The implementation still has a concrete correctness defect.',
+              failingSignals: ['implementation-correctness'],
+              recordedAt: '2026-04-20T00:00:00Z',
+            },
+          ],
+        }),
+      ])
+
+      const throwingReviewer: StubAgent = {
+        name: 'reviewer-agent',
+        calls: [],
+        async generate(prompt: string) {
+          this.calls.push({ prompt })
+          throw new Error('provider timeout')
+        },
+      }
+
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: throwingReviewer }),
+      })
+      const out = await orch.tick()
+
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('in_progress')
+        expect(out.agent).toBe('reviewer-deterministic-fallback')
+      }
+
+      const task = (await readQueue()).tasks[0]!
+      expect(task.status).toBe('in_progress')
+      expect(task.reviewVerdicts.at(-1)?.verdict).toBe('revise')
+      expect(task.reviewVerdicts.at(-1)?.llmError).toContain('provider timeout')
+    },
+  )
+
+  it(
+    'does not let its own preservation verdict keep a repaired task in the review loop',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([
+        reviewReadyTask({
+          gateResults: [],
+          reviewVerdicts: [
+            {
+              verdict: 'revise',
+              reviewerPath: 'llm',
+              reason: 'Reviewer found an implementation defect.',
+              reasoning: 'The implementation still has a concrete correctness defect.',
+              failingSignals: ['implementation-correctness'],
+              recordedAt: '2026-04-20T00:00:00Z',
+            },
+            {
+              verdict: 'revise',
+              reviewerPath: 'deterministic',
+              reason: 'Deterministic review preserved the latest substantive reviewer revision; a fresh approval is required.',
+              reasoning: 'The worker handoff needs a fresh reviewer approval.',
+              failingSignals: ['unresolved-review-feedback'],
+              recordedAt: '2026-04-21T00:00:00Z',
+            },
+          ],
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'implementation is repaired', verifiedBy: 'review', met: false },
+            { id: 'ac-2', description: 'build passes', verifiedBy: 'automated', command: 'pnpm build', met: false },
+          ],
+          notes: [
+            {
+              agentId: 'worker-agent',
+              role: 'worker',
+              content: [
+                '**Self-critique:**',
+                '1. **Implementation is repaired:** Met — Fixed the reviewer findings.',
+                '2. **Build passes:** Met — Verified via pnpm build.',
+              ].join('\n'),
+              timestamp: '2026-04-22T00:00:00Z',
+            },
+          ],
+        }),
+      ])
+
+      const throwingReviewer: StubAgent = {
+        name: 'reviewer-agent',
+        calls: [],
+        async generate(prompt: string) {
+          this.calls.push({ prompt })
+          throw new Error('provider timeout')
+        },
+      }
+
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: throwingReviewer }),
+      })
+      const out = await orch.tick()
+
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('gate_check')
+        expect(out.agent).toBe('reviewer-deterministic-fallback')
+      }
+      expect((await readQueue()).tasks[0]!.status).toBe('gate_check')
     },
   )
 
@@ -12599,6 +17802,68 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
   )
 
   it(
+    'llm_with_deterministic_fallback: reconciles positional AC shorthand onto semantic criteria ids',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([
+        reviewReadyTask({
+          acceptanceCriteria: [
+            { id: 'synopsis-to-outline-chain', description: 'Generate/load synopsis, outline, voices, and facts.', verifiedBy: 'review', met: false },
+            { id: 'chapter-draft-command', description: 'A pnpm script or CLI drafts one chapter.', verifiedBy: 'review', met: false },
+            { id: 'author-voice-preservation', description: 'Proof records author voice and genre fit.', verifiedBy: 'review', met: false },
+          ] as any,
+          gateResults: [],
+          notes: [
+            {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: [
+                '**Self-critique:**',
+                '- AC1: Met — generated synopsis, outline, character voice records, world facts, and chapter draft.',
+                '- AC2: Met — `npm run build` and `node scripts/prove-generation.mjs` passed.',
+                '- AC3: Met — proof records requested author voice, genre, audience, and character voices.',
+                '',
+                'Minimum-scope check:',
+                '- Files changed: src/cli/generate.ts, scripts/prove-generation.mjs, fixtures/story-output.json.',
+                '',
+                'Review proof packet:',
+                '- Changed files / diff scope: src/cli/generate.ts, scripts/prove-generation.mjs, fixtures/story-output.json.',
+                '- Verification commands passed: npm run build; node scripts/prove-generation.mjs.',
+              ].join('\n'),
+              timestamp: '2026-04-21T00:00:00Z',
+            },
+          ],
+        }),
+      ])
+
+      const timedOutReviewer: StubAgent = {
+        name: 'reviewer-agent',
+        calls: [],
+        async generate(prompt: string) {
+          this.calls.push({ prompt })
+          throw new Error('reviewer-agent exceeded 120000ms total turn budget')
+        },
+      }
+
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: timedOutReviewer }),
+      })
+      const out = await orch.tick()
+
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('gate_check')
+        expect(out.agent).toBe('reviewer-deterministic-fallback')
+      }
+
+      const task = (await readQueue()).tasks[0]!
+      expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
+      expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
+    },
+  )
+
+  it(
     'llm_with_deterministic_fallback: when the LLM reviewer succeeds, the verdict is recorded as reviewerPath=llm',
     async () => {
       await writeReviewerMode('llm_with_deterministic_fallback')
@@ -12669,6 +17934,100 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
       expect(t.reviewVerdicts[0]!.reasoning).toContain('**Verdict:** Approved')
     },
   )
+
+  it('llm_only: reconciles stale no-proof reviewer revisions against concrete worker proof artifacts', async () => {
+    await writeReviewerMode('llm_only')
+    const worktree = path.join(tmpDir, 'spatial-proof-worktree')
+    await fs.mkdir(path.join(worktree, 'scripts'), { recursive: true })
+    await fs.mkdir(path.join(worktree, 'fixtures/spatial-geographic-continuity'), { recursive: true })
+    execFileSync('git', ['init'], { cwd: worktree, stdio: 'ignore' })
+    await fs.writeFile(
+      path.join(worktree, 'scripts/prove-spatial-geographic-continuity.mjs'),
+      'console.log(JSON.stringify({ ok: true }))\n',
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(worktree, 'fixtures/spatial-geographic-continuity/impossible-walk.json'),
+      '{"id":"spatial-impossible-walk-001"}\n',
+      'utf-8',
+    )
+
+    await writeQueue([
+      reviewReadyTask({
+        id: 'spatial-proof',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        worktreePath: worktree,
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Spatial continuity has executable proof.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        gateResults: [],
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'worker',
+            content: [
+              '**Self-critique:**',
+              '',
+              'For each acceptance criterion:',
+              '- ac-1: Met — `scripts/prove-spatial-geographic-continuity.mjs` reads `fixtures/spatial-geographic-continuity/impossible-walk.json` and emits the expected finding.',
+              '',
+              'Minimum-scope check:',
+              '- Files changed: scripts/prove-spatial-geographic-continuity.mjs, fixtures/spatial-geographic-continuity/impossible-walk.json.',
+              '- Smallest useful change?: yes.',
+              '',
+              'Review proof packet:',
+              '- Changed files / diff scope: scripts/prove-spatial-geographic-continuity.mjs, fixtures/spatial-geographic-continuity/impossible-walk.json.',
+              '- Verification commands passed: npm run prove:spatial-geographic-continuity emitted ok: true; npm run build passed.',
+            ].join('\n'),
+            timestamp: '2026-04-21T00:00:00Z',
+          },
+        ],
+      }),
+    ])
+
+    const reviewer = stubAgent('reviewer-agent', async () => {
+      await mutateTask('spatial-proof', {
+        status: 'in_progress',
+        notes: [
+          {
+            agentId: 'reviewer-agent',
+            role: 'reviewer',
+            content:
+              '**Review:** ac-1: Not met — the deliverable supplies only documentation and no concrete proof artifact or runnable test.',
+            timestamp: '2026-04-21T00:05:00Z',
+          },
+        ],
+      })
+    }, '**Review:** ac-1: Not met - the deliverable supplies only documentation and no concrete proof artifact or runnable test.')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+    })
+
+    const out = await orch.tick()
+
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.afterStatus).toBe('gate_check')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'spatial-proof')!
+    expect(task.status).toBe('gate_check')
+    expect(task.assignedTo).toBe('gate-checker-agent')
+    expect(task.acceptanceCriteria[0]?.met).toBe(true)
+    expect(task.reviewVerdicts.at(-1)).toMatchObject({
+      verdict: 'approve',
+      reviewerPath: 'deterministic',
+      failingSignals: [],
+    })
+    expect(task.reviewVerdicts.at(-1)?.reasoning).toContain('scripts/prove-spatial-geographic-continuity.mjs')
+  })
 
   it('deterministic_only: skips the LLM reviewer entirely', async () => {
     await writeReviewerMode('deterministic_only')

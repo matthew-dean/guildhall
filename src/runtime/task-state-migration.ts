@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TaskQueue, type Task, type TaskEvidenceEvent } from '@guildhall/core'
-import { atomicWriteText, getLegacyProjectStatePath, getProjectLocalHistoryDir } from '@guildhall/sessions'
+import { getLegacyProjectStatePath, getProjectMigrationSnapshotDir } from '@guildhall/sessions'
 import {
   legacyEvidenceFromTask,
   legacyRuntimeFromTask,
@@ -15,6 +15,12 @@ import {
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
 } from './task-state-store.js'
+import { writeMigrationSnapshot } from './migration-snapshot.js'
+import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
+import {
+  assertLegacyCurrentStateMigrationAccess,
+  legacyCurrentStateMigrationAvailable,
+} from './runtime-compatibility.js'
 
 export interface TaskStateMigrationInput {
   projectRoot: string
@@ -29,6 +35,7 @@ export interface TaskStateMigrationResult {
   evidenceRecords: number
   taskDefinitionsRewritten: number
   backupPath?: string
+  manifestPath?: string
 }
 
 function tasksPath(projectRoot: string): string {
@@ -37,8 +44,7 @@ function tasksPath(projectRoot: string): string {
 
 function backupPath(projectRoot: string): string {
   return path.join(
-    getProjectLocalHistoryDir(projectRoot),
-    'migrations',
+    getProjectMigrationSnapshotDir(projectRoot),
     'task-state',
     'TASKS.before-task-state-split.json',
   )
@@ -82,6 +88,17 @@ async function appendEvidenceBatch(
 export async function migrateTaskState(
   input: TaskStateMigrationInput,
 ): Promise<TaskStateMigrationResult> {
+  if (!legacyCurrentStateMigrationAvailable(input.projectRoot)) {
+    if (input.apply) assertLegacyCurrentStateMigrationAccess(input.projectRoot, '0.8.0/task-state-split')
+    return {
+      applied: false,
+      tasksInspected: 0,
+      runtimeRecords: 0,
+      workspaceRecords: 0,
+      evidenceRecords: 0,
+      taskDefinitionsRewritten: 0,
+    }
+  }
   const file = tasksPath(input.projectRoot)
   const raw = await fs.readFile(file, 'utf-8')
   const queue = TaskQueue.parse(JSON.parse(raw))
@@ -132,19 +149,20 @@ export async function migrateTaskState(
   }
 
   const backup = backupPath(input.projectRoot)
-  await fs.mkdir(path.dirname(backup), { recursive: true })
-  try {
-    await fs.writeFile(backup, raw, { encoding: 'utf-8', flag: 'wx' })
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
-  }
+  const snapshot = await writeMigrationSnapshot({
+    projectRoot: input.projectRoot,
+    migrationId: '0.8.0/task-state-split',
+    sourcePath: file,
+    snapshotPath: backup,
+    sourceBytes: raw,
+  })
 
   const rewritten = {
     version: queue.version,
     lastUpdated: new Date().toISOString(),
     tasks: strippedTasks,
   }
-  atomicWriteText(file, `${JSON.stringify(rewritten, null, 2)}\n`)
+  writeProjectTaskQueueWithSummary(file, rewritten, { projectRoot: input.projectRoot, fullCompatibility: true })
 
   return {
     applied: true,
@@ -154,5 +172,6 @@ export async function migrateTaskState(
     evidenceRecords,
     taskDefinitionsRewritten,
     backupPath: backup,
+    manifestPath: snapshot.manifestPath,
   }
 }

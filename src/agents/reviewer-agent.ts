@@ -63,6 +63,9 @@ correct task-local work just because you can imagine a broader renovation.
    review the proof as a first-class contract. Require revision when a
    task-scoped proof path is missing, required evidence has no passed record, or
    the handoff claims manual/provider proof that has not actually been recorded.
+   Do not invent a proof command. If the task/spec names an exact command, check
+   that exact command. If it only asks for a "local proof command", judge the
+   command actually recorded in the worker proof packet or gate results.
 
 ## Your review note is your reasoning trace (load-bearing — don't shortcut)
 

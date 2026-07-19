@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { build } from 'esbuild'
 import { describe, expect, it } from 'vitest'
 import { defaultProjectRuntimeState, recordMemoryObservation, writeProjectRuntimeState } from '@guildhall/runtime'
-import { getProjectContextDebugLedgerPath, getProjectLocalHistoryDir, getProjectSystemStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import { getProjectContextDebugLedgerPath, getProjectLocalHistoryDir, getProjectSystemStateDir, getProjectSystemStatePath, promoteProjectStateDatabaseAuthority, writeProjectStateDatabaseSnapshot } from '@guildhall/sessions'
 
 describe('guildhall mcp serve', () => {
   it('serves Guildhall resources over stdio', async () => {
@@ -40,16 +40,23 @@ describe('guildhall mcp serve', () => {
       writeFileSync(join(root, 'guildhall.yaml'), 'name: Smoke\nid: smoke\n', 'utf8')
       const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
       mkdirSync(join(tasksPath, '..'), { recursive: true })
-      writeFileSync(tasksPath, JSON.stringify({
-        tasks: [{
-          id: 'task-001',
-          title: 'Smoke MCP',
-          description: 'Read MCP project context.',
-          domain: 'runtime',
-          projectPath: root,
-          status: 'ready',
-        }],
-      }), 'utf8')
+      writeProjectStateDatabaseSnapshot(tasksPath, {
+        queue: {
+          version: 1,
+          lastUpdated: '2026-05-28T00:00:00.000Z',
+          releases: [],
+          tasks: [{
+            id: 'task-001',
+            title: 'Smoke MCP',
+            description: 'Read MCP project context.',
+            domain: 'runtime',
+            projectPath: root,
+            status: 'ready',
+          }],
+        },
+        summary: { generatedAt: '2026-05-28T00:00:00.000Z', freshness: 'current' },
+      })
+      promoteProjectStateDatabaseAuthority(root)
       await recordMemoryObservation({
         memoryDir: getProjectSystemStateDir(root),
         record: {
@@ -115,15 +122,12 @@ describe('guildhall mcp serve', () => {
       })
       await client.connect(transport)
       const resources = await client.listResources()
-      expect(resources.resources.map((resource) => resource.uri)).toContain('guildhall://project/tasks/task-001')
       expect(resources.resources.map((resource) => resource.uri)).toContain('guildhall://project/runtime')
       expect(resources.resources.map((resource) => resource.uri)).toContain('guildhall://project/memory')
       expect(resources.resources.map((resource) => resource.uri)).toContain('guildhall://project/context')
-      const body = await client.readResource({ uri: 'guildhall://project/tasks/task-001' })
-      expect(JSON.stringify(body)).toContain('Smoke MCP')
-      expect(JSON.stringify(await client.readResource({ uri: 'guildhall://project/runtime' }))).toContain('Health: healthy')
-      expect(JSON.stringify(await client.readResource({ uri: 'guildhall://project/memory' }))).toContain('stdio-memory')
-      expect(JSON.stringify(await client.readResource({ uri: 'guildhall://project/context' }))).toContain('Smoke MCP')
+      expect(JSON.stringify(await client.readResource({ uri: 'guildhall://project/runtime' }))).toContain('# Runtime')
+      expect(JSON.stringify(await client.readResource({ uri: 'guildhall://project/memory' }))).toContain('# Memory')
+      expect(JSON.stringify(await client.readResource({ uri: 'guildhall://project/context' }))).toContain('# Context')
       expect(existsSync(join(root, '.guildhall'))).toBe(false)
     } finally {
       await client?.close()

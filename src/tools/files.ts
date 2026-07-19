@@ -232,6 +232,24 @@ function taskPathBase(
   return cwd ?? process.cwd()
 }
 
+function leakedModelControlMarkupReason(content: string): string | null {
+  const patterns: Array<[RegExp, string]> = [
+    [/^\s*<\s*(?:[｜|]\s*)?DSML(?:\s*[｜|]|\b)/im, 'DSML tool protocol tag'],
+    [/<\s*\/\s*think\s*>/i, 'model thinking close tag'],
+    [/^\s*<\s*\/?\s*think\s*>\s*$/im, 'model thinking tag'],
+  ]
+  for (const [pattern, label] of patterns) {
+    if (pattern.test(content)) return label
+  }
+  return null
+}
+
+function rejectLeakedModelControlMarkup(content: string): string | null {
+  const reason = leakedModelControlMarkupReason(content)
+  if (!reason) return null
+  return `Refusing to write leaked model/tool-control markup (${reason}). Re-run the edit with only the intended file content, without tool protocol or hidden reasoning tags.`
+}
+
 export async function writeFile(
   input: WriteFileInput,
   opts: { cwd?: string } = {},
@@ -239,6 +257,8 @@ export async function writeFile(
   if (!input.filePath?.trim()) return { success: false, path: '', error: 'Missing filePath' }
   if (typeof input.content !== 'string') return { success: false, path: '', error: 'Missing content' }
   const absPath = resolveFilePath(opts.cwd, input.filePath)
+  const leakedMarkupError = rejectLeakedModelControlMarkup(input.content)
+  if (leakedMarkupError) return { success: false, path: absPath, error: leakedMarkupError }
   const shouldMkdir = input.createDirectories !== false
   try {
     if (shouldMkdir) await fs.mkdir(path.dirname(absPath), { recursive: true })
@@ -566,6 +586,11 @@ export async function editFile(input: EditFileInput): Promise<EditFileResult> {
       input.newString +
       original.slice(hit + input.oldString.length)
     replacements = 1
+  }
+
+  const leakedMarkupError = rejectLeakedModelControlMarkup(updated)
+  if (leakedMarkupError) {
+    return { success: false, replacements: 0, error: leakedMarkupError }
   }
 
   try {

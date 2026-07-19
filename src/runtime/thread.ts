@@ -38,9 +38,11 @@ import { thresholdMs } from './liveness.js'
 import { listPressureTestIntakes, summarizeProjectCheckIn, type PressureTestIntake, type ProjectCheckInSummary } from './pressure-test-intake.js'
 import { listBoundedChatSessions, type BoundedChatSession } from './bounded-chat.js'
 import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import { projectTaskStateExistsSync, readProjectTaskQueueSync } from './project-state-boundary.js'
 import type { GitStorySnapshot } from './git-story.js'
 import { userFacingText } from './user-facing-text.js'
-import { specReviewRequiresOwnerApproval } from './orchestrator-picker.js'
+import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { taskShapingBlockers, type TaskShapingBlocker } from '@guildhall/shared'
 
 // ---------------------------------------------------------------------------
 // Turn shape
@@ -233,6 +235,7 @@ export interface InFlightTurn extends TurnBase {
   taskStatus?: string | undefined
   summary: string
   importedDraft?: boolean | undefined
+  shapingBlockers?: TaskShapingBlocker[] | undefined
   liveAgent?: {
     name: string
     startedAt?: string | undefined
@@ -361,14 +364,6 @@ export interface BuildThreadOptions {
       is_error?: boolean | null | undefined
     } | undefined
   }>
-}
-
-function readJsonSafe(path: string): unknown {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'))
-  } catch {
-    return null
-  }
 }
 
 function tasksArray(raw: unknown): Task[] {
@@ -509,6 +504,7 @@ function taskNeedsSpecFill(task: Pick<Task, 'spec' | 'acceptanceCriteria' | 'pro
 }
 
 function isQueuedSpecRevision(task: Task): boolean {
+  if (taskShapingBlockers(task).length > 0) return false
   return (
     (task.status === 'exploring' || task.status === 'spec_review') &&
     hasSpecDraftContent(task)
@@ -1674,7 +1670,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
   const snap = opts.snapshot ?? buildSnapshot({ projectPath: opts.projectPath })
   const turns: ThreadTurn[] = []
   const tasksPath = getProjectSystemStatePath(opts.projectPath, 'TASKS.json')
-  const tasks = opts.tasks ?? (existsSync(tasksPath) ? tasksArray(readJsonSafe(tasksPath)) : [])
+  const tasks = opts.tasks ?? (projectTaskStateExistsSync(tasksPath) ? tasksArray(readProjectTaskQueueSync(tasksPath)) : [])
   const boundedChats = opts.boundedChatSessions ?? listBoundedChatSessions(getProjectStateDir(opts.projectPath))
   const pressureTests = opts.pressureTestIntakes ?? listPressureTestIntakes(getProjectStateDir(opts.projectPath))
   turns.push(...boundedChatTurns(opts.projectPath, boundedChats))
@@ -2086,6 +2082,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const hasUnansweredQuestions = openQs.some(q => !q.answeredAt)
     const hasActiveBriefTurn = hasReviewableProductBrief(brief) && !approvedAt && taskStatus === 'exploring' && !hasSpecDraft
     const importedDraft = taskStatus === 'import_draft' || shouldUseImportDraftState(t)
+    const shapingBlockers = taskShapingBlockers(t)
     if (importedDraft && taskId !== leadingImportDraftId) {
       continue
     }
@@ -2093,7 +2090,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     // Spec review
     const shouldSurfaceSpecReview =
       (taskStatus === 'spec_review' || (taskStatus === 'exploring' && hasSpecDraft)) &&
-      specReviewRequiresOwnerApproval(t)
+      specReviewRequiresOwnerApproval(t) &&
+      shapingBlockers.length === 0
     if (shouldSurfaceSpecReview && !hasUnansweredQuestions) {
       const status: TurnStatus = hasUnansweredQuestions
         ? 'pending'
@@ -2209,6 +2207,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskStatus,
         summary,
         importedDraft,
+        shapingBlockers: shapingBlockers.length > 0 ? shapingBlockers : undefined,
         liveAgent: effectiveLiveAgent,
         activity: liveActivity.get(taskId),
         checklist:

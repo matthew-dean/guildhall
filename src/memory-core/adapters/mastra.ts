@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 
 import { initializeMemoryStoreDirectory, resolveMemoryPaths } from '../data-access.js'
 import { scopeToMastraIds } from '../scopes.js'
+import { isEphemeralProjectRoot } from '@guildhall/sessions'
 import type {
   GuildhallMemoryScope,
   MastraMemoryCoreAdapter,
@@ -27,16 +28,23 @@ export async function createMastraMemoryCoreAdapter(input: {
   projectRoot: string
   scope: GuildhallMemoryScope
   readOnly?: boolean
+  /** Temporary project roots must not allocate durable memory databases. */
+  storage?: 'auto' | 'persistent' | 'ephemeral'
   semanticRecall?: boolean
   observationalMemory?: boolean
 }): Promise<MastraMemoryCoreAdapter> {
   const { Memory, LibSQLStore, versions } = loadMastraRuntime()
   const paths = resolveMemoryPaths({ projectRoot: input.projectRoot, scope: input.scope })
-  await initializeMemoryStoreDirectory(paths)
+  // Read-only construction must not allocate a durable database. Persistent
+  // storage is explicit for reads; write-mode auto storage remains durable for
+  // registered projects unless the caller selects ephemeral storage.
+  const persistentStorage = input.storage === 'persistent' ||
+    (!input.readOnly && input.storage !== 'ephemeral' && !isEphemeralProjectRoot(input.projectRoot))
+  if (persistentStorage) await initializeMemoryStoreDirectory(paths)
   const scope = scopeToMastraIds(input.scope)
   const storage = new LibSQLStore({
     id: `guildhall-memory-${scope.resourceId.replace(/[^A-Za-z0-9_-]+/g, '-')}`,
-    url: `file:${paths.dbPath}`,
+    url: persistentStorage ? `file:${paths.dbPath}` : 'file::memory:',
   })
   if (typeof storage.init === 'function') await storage.init()
   const warnings: string[] = []
@@ -84,7 +92,10 @@ export async function createMastraMemoryCoreAdapter(input: {
       warnings.push('Mastra observational memory processor unavailable: createOMProcessor missing')
     }
   }
-  if (typeof memory.createThread === 'function') {
+  // Read paths must be observational. Creating a thread here used to append
+  // one Mastra row on every summary/read, turning a cheap projection into an
+  // unbounded write workload (and eventually a multi-megabyte thread table).
+  if (!input.readOnly && typeof memory.createThread === 'function') {
     await memory.createThread({
       id: scope.threadId,
       resourceId: scope.resourceId,
@@ -93,11 +104,12 @@ export async function createMastraMemoryCoreAdapter(input: {
   }
   const health: MastraMemoryCoreHealth = {
     adapter: 'mastra',
-    storagePath: paths.dbPath,
+    storagePath: persistentStorage ? paths.dbPath : 'file::memory:',
     repoLocalWrites: [],
     features: [
       'libsql-storage',
       'thread-resource-scope',
+      persistentStorage ? 'persistent-storage' : 'ephemeral-storage',
       input.readOnly ? 'read-only-mode' : 'write-mode',
       semanticRecallEnabled
         ? 'semantic-recall-enabled'
@@ -120,7 +132,16 @@ export async function createMastraMemoryCoreAdapter(input: {
     observationalMemoryEnabled,
     observationalProcessorReady,
   }
-  return { health, memory, storage }
+  return {
+    health,
+    memory,
+    storage,
+    close: async () => {
+      if (typeof storage === 'object' && storage !== null && 'close' in storage && typeof storage.close === 'function') {
+        await storage.close()
+      }
+    },
+  }
 }
 
 function memoryEngineGatePassed(): boolean {

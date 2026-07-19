@@ -169,7 +169,9 @@ function installBrowserFakes() {
 function installFetchFakes(projectPayload: ProjectDetail = detail()) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost')
+    if (url.pathname === '/api/service') return json({ projects: [projectPayload] })
     if (url.pathname === '/api/project') return json(projectPayload)
+    if (url.pathname === '/api/project/spine') return json({ spine: projectPayload.orientationSpine ?? null })
     if (url.pathname === '/api/project/inbox') {
       return json({
         blockers: { bootstrap: false, workspaceImport: false },
@@ -278,7 +280,7 @@ function installFetchFakes(projectPayload: ProjectDetail = detail()) {
         learned: {},
       })
     }
-    if (url.pathname === '/api/project/release-readiness') {
+    if (url.pathname === '/api/project/release-readiness' || url.pathname === '/api/project/release-readiness/summary') {
       return json({
         openEscalations: [],
         unapprovedBriefs: [],
@@ -294,6 +296,20 @@ function installFetchFakes(projectPayload: ProjectDetail = detail()) {
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
+}
+
+function installFetchFakesWithPendingProject(projectPayload: ProjectDetail = detail()) {
+  const pendingProject = deferredResponse()
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), 'http://localhost')
+    if (url.pathname === '/api/project') return pendingProject.promise
+    if (url.pathname === '/api/project/spine') return json({ spine: projectPayload.orientationSpine ?? null })
+    if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+    if (url.pathname === '/api/project/events') return json({ events: [] })
+    return json({})
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return { fetchMock, pendingProject }
 }
 
 async function renderProjectView(
@@ -448,6 +464,45 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('button', { name: /notifications need you/i })).not.toBeInTheDocument()
   })
 
+  it('loads project detail before rendering a cold direct Release route', async () => {
+    await renderProjectViewWithoutInitialDetail('release')
+
+    expect(await screen.findByText('Current counts')).toBeInTheDocument()
+    expect(screen.queryByText('Loading project...')).not.toBeInTheDocument()
+  })
+
+  it('renders Release readiness when the broad project payload is still loading', async () => {
+    const pendingProject = deferredResponse()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return pendingProject.promise
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/release-readiness' || url.pathname === '/api/project/release-readiness/summary') {
+        return json({
+          openEscalations: [],
+          unapprovedBriefs: [],
+          unapprovedSpecs: [],
+          shelvedUnclaimed: [],
+          blockedByAgent: [],
+          designSystem: { drafted: true, approved: true, revision: 1 },
+          statusCounts: { done: 3 },
+          totals: { blockingCount: 0, tasks: 3, done: 3 },
+        })
+      }
+      if (url.pathname === '/api/project/spine') return json({ spine: null })
+      return json({})
+    }))
+    project.detail = null
+    project.error = null
+
+    render(ProjectView, { initialView: 'release', initialSub: null, projectId: 'looma-knit' })
+
+    expect(await screen.findByText('Current counts')).toBeInTheDocument()
+    expect(screen.getByText('Tasks done')).toBeInTheDocument()
+    expect(screen.getByText('3/3')).toBeInTheDocument()
+    pendingProject.resolve(json(detail()))
+  })
+
   it('does not foreground resolved git runtime errors in Overview', async () => {
     const projectPayload = detail({
       recentEvents: [
@@ -547,8 +602,12 @@ describe('ProjectView', () => {
       startReadiness: {
         canStart: false,
         code: 'no_unattended_progress',
-        message: '2 specs are waiting for review before starting.',
+        message: '2 specs are waiting for review before work can start. Start with "Spec A".',
         actionHref: '/thread',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Spec A',
+        focusKind: 'spec_review',
+        count: 2,
       },
       tasks: [
         task({ id: 'task-spec-a', title: 'Spec A', status: 'spec_review' }),
@@ -569,7 +628,7 @@ describe('ProjectView', () => {
     await renderProjectView('overview', null, 'looma-knit', projectPayload)
 
     const alerts = screen.getAllByRole('alert')
-    const specAlerts = alerts.filter(alert => within(alert).queryByText('2 specs are waiting for review before starting.'))
+    const specAlerts = alerts.filter(alert => within(alert).queryByText('2 specs are waiting for review before work can start. Start with "Spec A".'))
     const idleAlerts = alerts.filter(alert => within(alert).queryByText('Waiting on input: 2 awaiting approval.'))
 
     expect(specAlerts).toHaveLength(1)
@@ -778,13 +837,319 @@ describe('ProjectView', () => {
     await renderProjectView('thread', null, 'looma-knit', projectPayload)
 
     expect(screen.getByText('Stable')).toBeTruthy()
-    expect(screen.getByText('All tasks are already finished.')).toBeInTheDocument()
+    expect(screen.getAllByText('All tasks are already finished.').length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: 'No tasks to start: No tasks to start' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'No tasks to start' })).toBeNull()
     expect(screen.queryByRole('button', { name: /^start$/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /readiness checks need attention/i })).toBeNull()
     expect(screen.queryByText('Paused')).toBeNull()
     expect(screen.queryByText('Setup')).toBeNull()
+  })
+
+  it('does not show stale stop-requested chrome when the selected scope is complete', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+      },
+      actionModel: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: {
+          label: 'No runnable tasks',
+          startEnabled: false,
+          disabledReason: 'Stage 1: Fixture And Evaluation Harness is complete.',
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      run: {
+        status: 'stopped',
+        mode: 'continuous',
+        stopSummary: {
+          stopReason: 'stop_requested',
+          stopMessage: 'Stop requested after tick 4.',
+        },
+      },
+      recentEvents: [
+        {
+          at: now,
+          event: {
+            type: 'supervisor_stopped',
+            reason: 'stop_requested',
+            message: 'Stop requested after tick 4.',
+          },
+        },
+      ],
+      tasks: [
+        task({ id: 'task-stage-1', title: 'Stage 1 proof', status: 'done' }),
+        task({ id: 'task-later', title: 'Later release feature', status: 'ready' }),
+      ],
+      totals: { blockingCount: 0, tasks: 2, done: 1 },
+      statusCounts: { done: 1, ready: 1 },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('map', null, 'looma-knit', projectPayload)
+
+    expect(screen.getAllByText('Stage 1: Fixture And Evaluation Harness is complete.').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Stop requested after tick 4.')).toBeNull()
+  })
+
+  it('does not show complete shell chrome when all-terminal readiness hides orientation gaps', async () => {
+    const conflictMessage = 'Possible duplicate work is split across scopes.'
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1: Headless Drafting And Evaluation MVP is complete.',
+      },
+      orientationSpine: {
+        summary: {
+          headline: 'Stage 1 Headless Drafting And Evaluation MVP has source conflicts to review.',
+          purpose: 'Headless proof scope.',
+          selectedScopeLabel: 'Stage 1 Headless Drafting And Evaluation MVP',
+          selectedReleaseLabel: 'Stage 1 Headless Drafting And Evaluation MVP',
+          includedCount: 1,
+          includedWorkCount: 1,
+          deferredCount: 1,
+          deferredWorkCount: 1,
+          pinnedNow: [],
+          topBlocker: conflictMessage,
+          nextAction: 'Review source conflicts before treating the scope as settled.',
+          progress: { scopeId: 'stage-1', total: 2, done: 1, deferred: 1 },
+        },
+        gaps: [{ kind: 'source_conflict', label: conflictMessage, severity: 'warn', refs: ['docs:narrative-harness'] }],
+        sourceHealth: { inferred: 1, conflicts: 1, gaps: 1 },
+        scopeRows: [],
+        releases: [],
+        charter: { goal: 'Headless proof scope.', targetAudience: null, currentReleaseTarget: null, successDefinition: null, nonGoals: [], source: 'inferred' },
+        executionBoundary: { label: 'Headless proof', mode: 'headless', proofStyle: 'script_only', detail: 'Script proof.', source: { kind: 'inferred', refs: [], confidence: 'medium', freshness: 'fresh', inferred: true, refreshedAt: now } },
+        proofContracts: [],
+        roots: [],
+        nodes: {},
+        activePins: [],
+        release: { state: 'ready', blockers: [] },
+        projectId: 'looma-knit',
+        updatedAt: now,
+      } as any,
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('map', null, 'looma-knit', projectPayload)
+
+    expect(screen.queryByText('Stage 1: Headless Drafting And Evaluation MVP is complete.')).toBeNull()
+    expect(screen.getAllByText('Stage 1 Headless Drafting And Evaluation MVP has source conflicts to review.').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(conflictMessage).length).toBeGreaterThan(0)
+  })
+
+  it('does not surface stale proof gaps as a shell blocker after release readiness is complete', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1 is complete.',
+      },
+      releaseReadiness: {
+        ready: true,
+        releaseCounts: { total: 1, done: 1, unfinished: 0, proofBlocked: 0 },
+        releaseBlockers: [],
+      },
+      orientationSpine: {
+        summary: {
+          headline: 'Stage 1 is waiting on proof.',
+          purpose: 'Headless proof scope.',
+          selectedScopeLabel: 'Stage 1',
+          selectedReleaseLabel: 'Stage 1',
+          includedCount: 1,
+          includedWorkCount: 1,
+          deferredCount: 0,
+          deferredWorkCount: 0,
+          pinnedNow: [],
+          topBlocker: 'Proof needed: Stage 1.',
+          nextAction: 'Attach proof.',
+          progress: { scopeId: 'stage-1', total: 1, done: 1 },
+        },
+        gaps: [{ kind: 'proof_needed', label: 'Proof needed: Stage 1.', severity: 'warn', refs: ['task:task-stage-1'] }],
+        sourceHealth: { inferred: 1, conflicts: 0, gaps: 2 },
+        scopeRows: [],
+        releases: [],
+        charter: { goal: 'Headless proof scope.', targetAudience: null, currentReleaseTarget: null, successDefinition: null, nonGoals: [], source: 'inferred' },
+        executionBoundary: { label: 'Headless proof', mode: 'headless', proofStyle: 'script_only', detail: 'Script proof.', source: { kind: 'inferred', refs: [], confidence: 'medium', freshness: 'fresh', inferred: true, refreshedAt: now } },
+        proofContracts: [],
+        roots: [],
+        nodes: {},
+        activePins: [],
+        release: { state: 'ready', blockers: [] },
+        projectId: 'looma-knit',
+        updatedAt: now,
+      } as any,
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('map', null, 'looma-knit', projectPayload)
+
+    expect(screen.queryByRole('alert', { name: 'Review current scope' })).toBeNull()
+  })
+
+  it('does not let deferred blocked work override completed current-scope chrome', async () => {
+    const projectPayload = detail({
+      startReadiness: { canStart: true, message: 'Ready' },
+      actionModel: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: {
+          label: 'No runnable tasks',
+          startEnabled: false,
+          disabledReason: 'Stage 1 is complete.',
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      orientationSpine: {
+        summary: {
+          headline: 'Stage 1 is complete.',
+          purpose: 'Headless proof scope.',
+          selectedScopeLabel: 'Stage 1',
+          selectedReleaseLabel: 'Stage 1',
+          includedCount: 1,
+          includedWorkCount: 1,
+          deferredCount: 1,
+          deferredWorkCount: 1,
+          pinnedNow: [],
+          topBlocker: null,
+          nextAction: 'Review completed scope.',
+          progress: {
+            scopeId: 'stage-1',
+            total: 2,
+            briefed: 0,
+            specced: 1,
+            sliced: 0,
+            ready: 0,
+            active: 0,
+            proven: 1,
+            done: 1,
+            blocked: 0,
+            deferred: 1,
+          },
+        },
+        selectedRelease: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'ready', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: [] },
+        selectedTaskScope: { id: 'stage-1', label: 'Stage 1', kind: 'release', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later-blocked'] },
+        scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later-blocked'] },
+        scopeRows: [
+          { taskId: 'task-stage-1', nodeId: 'work:task-stage-1', title: 'Stage 1 proof', scope: 'included', eligibilityReason: 'included', hierarchyRole: 'root', status: 'done', handoffState: 'done', blocksStart: false, blocksRelease: false, humanBlocking: false, sourceRefs: ['task:task-stage-1'] },
+          { taskId: 'task-later-blocked', nodeId: 'work:task-later-blocked', title: 'Later blocked proof', scope: 'deferred', eligibilityReason: 'deferred', hierarchyRole: 'root', status: 'blocked', handoffState: 'deferred', blocksStart: false, blocksRelease: false, humanBlocking: false, sourceRefs: ['task:task-later-blocked'] },
+        ],
+        releases: [],
+        charter: { goal: 'Headless proof scope.', targetAudience: null, currentReleaseTarget: null, successDefinition: null, nonGoals: [], source: 'inferred' },
+        executionBoundary: { label: 'Headless proof', mode: 'headless', proofStyle: 'script_only', detail: 'Script proof.', source: { kind: 'inferred', refs: [], confidence: 'medium', freshness: 'fresh', inferred: true, refreshedAt: now } },
+        proofContracts: [],
+        roots: [],
+        nodes: {},
+        activePins: [],
+        gaps: [],
+        release: { state: 'ready', blockers: [] },
+        sourceHealth: { inferred: 0, conflicts: 0, gaps: 0 },
+        projectId: 'looma-knit',
+        updatedAt: now,
+      } as any,
+      tasks: [
+        task({ id: 'task-stage-1', title: 'Stage 1 proof', status: 'done' }),
+        task({
+          id: 'task-later-blocked',
+          title: 'Later blocked proof',
+          status: 'blocked',
+          blockReason: 'Deferred proof cleanup.',
+          escalations: [{ id: 'esc-later', summary: 'Deferred proof cleanup' }],
+        }),
+      ],
+      run: { status: 'stopped', mode: 'continuous' },
+      totals: { blockingCount: 1, tasks: 2, done: 1 },
+      statusCounts: { done: 1, blocked: 1 },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('map', null, 'looma-knit', projectPayload)
+
+    expect(screen.queryByText(/Blocked: 1 escalated/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Blocked\./i)).not.toBeInTheDocument()
+    expect(screen.getByText(/Run finished: 1 done\./i)).toBeInTheDocument()
+  })
+
+  it('uses one project request while the selected surface detail loads', async () => {
+    const projectPayload = detail({
+      startReadiness: { canStart: false, code: 'all_terminal', message: 'Stage 1 is complete.' },
+      orientationSpine: {
+        summary: {
+          headline: 'Stage 1 is complete.',
+          purpose: 'Headless proof scope.',
+          selectedScopeLabel: 'Stage 1',
+          selectedReleaseLabel: 'Stage 1',
+          includedCount: 1,
+          includedWorkCount: 1,
+          deferredCount: 1,
+          deferredWorkCount: 1,
+          pinnedNow: [],
+          topBlocker: null,
+          nextAction: 'Review completed scope.',
+          progress: {
+            scopeId: 'stage-1',
+            total: 2,
+            done: 1,
+            proven: 1,
+            blocked: 0,
+            deferred: 1,
+          },
+        },
+        selectedRelease: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'ready', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later'] },
+        selectedTaskScope: { id: 'stage-1', label: 'Stage 1', kind: 'release', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later'] },
+        scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later'] },
+        scopeRows: [
+          { taskId: 'task-stage-1', nodeId: 'work:task-stage-1', title: 'Stage 1 proof', scope: 'included', status: 'done', handoffState: 'done', sourceRefs: ['task:task-stage-1'] },
+          { taskId: 'task-later', nodeId: 'work:task-later', title: 'Later feature', scope: 'deferred', status: 'ready', handoffState: 'deferred', sourceRefs: ['task:task-later'] },
+        ],
+        releases: [{ id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'ready', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later'] }],
+        charter: { goal: 'Headless proof scope.', targetAudience: null, currentReleaseTarget: null, successDefinition: null, nonGoals: [], source: 'inferred' },
+        executionBoundary: { label: 'Headless proof', mode: 'headless', proofStyle: 'script_only', detail: 'Script proof.', source: { kind: 'inferred', refs: [], confidence: 'medium', freshness: 'fresh', inferred: true, refreshedAt: now } },
+        proofContracts: [],
+        roots: [],
+        nodes: {},
+        activePins: [],
+        gaps: [],
+        release: { state: 'ready', blockers: [] },
+        sourceHealth: { inferred: 1, gaps: 0 },
+      },
+    } as Partial<ProjectDetail>)
+    const { fetchMock: overviewFetch, pendingProject: pendingOverview } = installFetchFakesWithPendingProject(projectPayload)
+    project.detail = null
+    project.error = null
+
+    render(ProjectView, { initialView: 'overview', initialSub: null, projectId: 'looma-knit' })
+
+    expect(screen.getByText('Loading project...')).toBeInTheDocument()
+    expect(overviewFetch.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?projectId='))).toBe(false)
+    expect(overviewFetch).not.toHaveBeenCalledWith('/api/project/spine?surface=overview&projectId=looma-knit', { cache: 'no-store' })
+    pendingOverview.resolve(json(projectPayload))
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Project overview' })).toBeInTheDocument())
+
+    cleanup()
+    const { fetchMock: mapFetch, pendingProject: pendingMapProject } = installFetchFakesWithPendingProject(projectPayload)
+    project.detail = null
+    project.error = null
+
+    render(ProjectView, { initialView: 'map', initialSub: null, projectId: 'looma-knit' })
+
+    expect(screen.getByText('Loading project...')).toBeInTheDocument()
+    expect(mapFetch.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?projectId='))).toBe(false)
+    expect(mapFetch).not.toHaveBeenCalledWith('/api/project/spine?projectId=looma-knit', { cache: 'no-store' })
+    pendingMapProject.resolve(json(projectPayload))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument())
+    expect(mapFetch).toHaveBeenCalledWith('/api/project?surface=map&compact=true&inventoryLimit=24&inventoryOffset=0&projectId=looma-knit', { cache: 'no-store' })
+    expect(screen.getByRole('heading', { name: 'Release scope' })).toBeInTheDocument()
+    expect(screen.getAllByText('Stage 1').length).toBeGreaterThan(0)
+    expect(screen.getByText('1 assigned work item')).toBeInTheDocument()
+    expect(screen.queryByText('Loading project...')).toBeNull()
   })
 
   it('shows all-terminal supervisor stop detail in the project ticker footer', async () => {
@@ -961,8 +1326,12 @@ describe('ProjectView', () => {
       startReadiness: {
         canStart: false,
         code: 'no_unattended_progress',
-        message: '1 task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
-        actionHref: '/thread',
+        message: '"Set FLL overhead charge policy" needs a clearer brief before unattended work can run.',
+        actionHref: '/work?task=task-needs-brief',
+        focusTaskId: 'task-needs-brief',
+        focusTaskTitle: 'Set FLL overhead charge policy',
+        focusKind: 'brief_cleanup',
+        count: 1,
       },
       tasks: [
         task({

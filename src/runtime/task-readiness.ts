@@ -100,7 +100,7 @@ export function ifThenBlockerPlansForTask(task: Task): IfThenBlockerPlan[] {
   }
   if (kind === 'decision') {
     plans.push({
-      if: 'The choice changes product meaning, risk tolerance, release boundary, or business policy',
+      if: 'The choice changes product meaning, risk tolerance, active task scope, or business policy',
       then: 'Ask the owner for the decision with options and tradeoffs.',
       owner: 'owner',
       reason: 'Guildhall should not make product judgment invisible.',
@@ -195,7 +195,9 @@ function recommendationFor(
   const byId = new Map(dimensions.map(dimension => [dimension.id, dimension]))
   if (task.status === 'shelved') return 'shelve_defer'
   if (byId.get('uncertainty')?.status === 'blocked') return 'needs_research_spike'
-  if (byId.get('size')?.status === 'blocked' || byId.get('context_load')?.status === 'blocked' || !contextBudget.fitsInOneWorkerBrief) return 'split'
+  if (byId.get('size')?.status === 'blocked' || byId.get('context_load')?.status === 'blocked' || !contextBudget.fitsInOneWorkerBrief) {
+    return 'requires_child_work'
+  }
   if (byId.get('outcome_clarity')?.status === 'blocked') return 'needs_one_question'
   if (byId.get('proofability')?.status === 'blocked') return 'needs_one_question'
   return 'ready'
@@ -209,8 +211,8 @@ function summaryForRecommendation(recommendation: TaskReadinessRecommendation): 
       return 'Task needs one owner-facing answer or finishability detail before dispatch.'
     case 'needs_research_spike':
       return 'Task should run research or a spike before implementation.'
-    case 'split':
-      return 'Task should split into smaller finishable work items.'
+    case 'requires_child_work':
+      return 'Task must be planned as smaller child work before execution.'
     case 'shelve_defer':
       return 'Task should stay shelved or deferred until conditions change.'
   }
@@ -260,15 +262,64 @@ function hasClearOutcome(task: Task, definitionOfDone: DefinitionOfDone): boolea
 }
 
 function hasProof(task: Task, definitionOfDone: DefinitionOfDone): boolean {
+  if (task.requestIntake?.createdBy === 'workspace-importer') {
+    if ((task.proofPaths ?? []).some(path => path.source !== 'inferred')) return true
+    if ((task.acceptanceCriteria ?? []).some(ac => ac.source !== 'inferred' && Boolean(ac.verifiedBy))) return true
+    if (hasImportedExecutionBlueprint(task)) return true
+    return false
+  }
   if ((task.proofPaths?.length ?? 0) > 0) return true
   if ((task.acceptanceCriteria ?? []).some(ac => Boolean(ac.verifiedBy))) return true
   return definitionOfDone.evidenceRequired.length > 0 || /\b(test|typecheck|browser|proof|verify|screenshot|gate)\b/i.test(taskText(task))
 }
 
+export function hasImportedExecutionBlueprint(task: Task): boolean {
+  const spec = task.spec?.trim() ?? ''
+  if (!spec) return false
+  if (!/##\s*Verification\b/i.test(spec)) return false
+  if (!/##\s*Completion Boundary\b/i.test(spec)) return false
+  if (!/What counts as done:/i.test(spec)) return false
+  if (!/Owner-only setup:\s*None/i.test(spec)) return false
+  return (task.acceptanceCriteria ?? []).some(ac => Boolean(ac.verifiedBy)) &&
+    (task.proofPaths ?? []).some(path => {
+      const expectedEvidence = path && typeof path === 'object' && !Array.isArray(path)
+        ? (path as { expectedEvidence?: unknown }).expectedEvidence
+        : undefined
+      return path.source === 'inferred' && Array.isArray(expectedEvidence) && expectedEvidence.length > 0
+    })
+}
+
 function mixesResearchAndImplementation(task: Task): boolean {
+  if (hasSettledFixedSpecBoundary(task)) return false
   const text = taskText(task)
-  return /\b(research|investigate|compare|evaluate)\b/i.test(text) &&
+  // Evaluation is often the proof/output of an implementation (for example,
+  // generate and evaluate a synopsis). Only explicit discovery language should
+  // create a research/implementation split signal.
+  return /\b(research|investigate|compare)\b/i.test(text) &&
     /\b(implement|build|wire|add|change|migrate)\b/i.test(text)
+}
+
+export function hasSettledFixedSpecBoundary(task: Task): boolean {
+  if (task.sizePlan?.action !== 'proceed_with_warning') return false
+  if ((task.sizePlan.recommendedChildren?.length ?? 0) > 0) return false
+  return hasExplicitNoSplitBoundary(task.spec)
+}
+
+/**
+ * A completion boundary may name downstream work that belongs elsewhere
+ * without making the current task a split parent. Keep this interpretation
+ * content-neutral so project names and intake origins do not control readiness.
+ */
+export function hasExplicitNoSplitBoundary(spec: string | undefined): boolean {
+  const splitBoundary = spec?.match(/what must be split or blocked\s*:\s*([^\n]+)/i)?.[1] ?? ''
+  const normalizedBoundary = splitBoundary.trim()
+  if (!normalizedBoundary) return false
+  const explicitlyNoSplit = /^(none|nothing|not required|nothing to split)/i.test(normalizedBoundary)
+  const downstreamWorkSeparated =
+    /\bseparate tasks?\b/i.test(normalizedBoundary) &&
+    /\b(?:none|nothing)\b[\s\S]*\b(?:block\w*|split\w*|absorb\w*)\b/i.test(normalizedBoundary)
+  if (!explicitlyNoSplit && !downstreamWorkSeparated) return false
+  return !(/\b(?:must|needs? to|required to|requires?)\s+split\b|\bsplit required\b|\bblocked before execution\b/i.test(normalizedBoundary))
 }
 
 function uncertaintyWarning(text: string, kind: TaskKind): boolean {

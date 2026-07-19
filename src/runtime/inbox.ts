@@ -15,10 +15,20 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getProjectLocalHistoryDir, projectStatePathWithRoot } from '@guildhall/sessions'
 import { parse as parseYaml } from 'yaml'
-import type { Task } from '@guildhall/core'
+import type { Task, TaskQueue } from '@guildhall/core'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import type { BootstrapStatus } from './bootstrap-runner.js'
 import { readProjectDeliveryModelSync } from './delivery-spine.js'
+import { selectedReleaseScopeForQueue } from './orchestrator-picker.js'
+import {
+  taskEligibleForSelectedScope,
+  type OrientationScope,
+} from './project-orientation-spine.js'
+import {
+  deriveReleaseContainersFromTaskMembership,
+  type ProjectScope,
+} from './project-scope-projection.js'
+import { proofMissingDoneTasks } from './proof-health.js'
 import {
   buildSnapshot,
   buildTaskSnapshot,
@@ -29,6 +39,7 @@ import {
   progressForTask,
   emptyWizardsState,
 } from './wizards.js'
+import { taskShapingBlockers } from '@guildhall/shared'
 
 export type InboxSeverity = 'high' | 'medium' | 'low'
 
@@ -38,6 +49,7 @@ export type InboxItem =
   | { kind: 'bootstrap_missing'; severity: 'high'; title: string; detail: string; actionHref?: string }
   | { kind: 'setup_pending'; severity: 'medium'; stepId: string; title: string; detail: string; actionHref: string }
   | { kind: 'workspace_import_pending'; severity: 'medium'; title: string; detail: string; signals: string[]; actionHref: string; dismissEndpoint: string }
+  | { kind: 'proof_reconciliation'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string; count: number; signals: string[]; dismissEndpoint: string }
   | { kind: 'import_draft_queue'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'contract_result_review'; severity: 'medium'; resultId: string; contractId: string; title: string; detail: string; actionHref: string; changeCount: number; reviewBuckets: string[]; warningCount: number; source: { system: 'delivery-spine'; id: string } }
   | { kind: 'lever_questions'; severity: 'low'; title: string; detail: string; defaultCount: number; actionHref: string }
@@ -47,6 +59,10 @@ export interface BuildInboxOptions {
   projectPath: string
   projectStateDir?: string
   snapshotOptions?: Omit<BuildSnapshotOptions, 'projectPath'>
+  taskStateOverride?: unknown
+  /** Promoted projects must use persisted scope rows, never membership fallback. */
+  selectedScope?: OrientationScope | null
+  allowMembershipScopeFallback?: boolean
 }
 
 /**
@@ -70,6 +86,7 @@ export const ATTENTION_OWNED_INBOX_KINDS = [
   'bootstrap_missing',
   'setup_pending',
   'workspace_import_pending',
+  'proof_reconciliation',
   'import_draft_queue',
   'contract_result_review',
   'lever_questions',
@@ -95,10 +112,11 @@ const KIND_ORDER: Record<InboxItem['kind'], number> = {
   bootstrap_missing: 2,
   setup_pending: 3,
   workspace_import_pending: 4,
-  import_draft_queue: 5,
-  contract_result_review: 6,
-  lever_questions: 7,
-  spec_fill_pending: 8,
+  proof_reconciliation: 5,
+  import_draft_queue: 6,
+  contract_result_review: 7,
+  lever_questions: 8,
+  spec_fill_pending: 9,
 }
 
 const SEVERITY_ORDER: Record<InboxSeverity, number> = {
@@ -238,6 +256,90 @@ function tasksArray(raw: unknown): Task[] {
   return []
 }
 
+function selectedInboxScope(raw: unknown, tasks: Task[], options: Pick<BuildInboxOptions, 'selectedScope' | 'allowMembershipScopeFallback'> = {}): OrientationScope | null {
+  if (options.selectedScope !== undefined) return options.selectedScope
+  if (raw && typeof raw === 'object' && Array.isArray((raw as { releases?: unknown }).releases)) {
+    const queueScope = selectedReleaseScopeForQueue({
+      tasks,
+      releases: (raw as { releases: TaskQueue['releases'] }).releases,
+      ...(typeof (raw as { selectedReleaseId?: unknown }).selectedReleaseId === 'string'
+        ? { selectedReleaseId: (raw as { selectedReleaseId: string }).selectedReleaseId }
+        : {}),
+    })
+    if (queueScope) return queueScope as OrientationScope
+  }
+  if (options.allowMembershipScopeFallback === false) return null
+  const { releases, selectedReleaseId } = deriveReleaseContainersFromTaskMembership(tasks)
+  const release = releases.find(candidate => candidate.id === selectedReleaseId)
+  if (!release || !selectedReleaseId) return null
+  return {
+    id: selectedReleaseId,
+    label: release.label,
+    kind: release.kind === 'milestone' ? 'milestone' : release.kind === 'release' ? 'release' : 'proposed_feature_set',
+    source: release.source,
+    nodeIds: release.nodeIds,
+    deferredNodeIds: release.deferredNodeIds,
+  }
+}
+
+function scopeTasks(tasks: Task[], scope: OrientationScope | null): Task[] {
+  if (!scope) return tasks
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  return tasks.filter(task => taskEligibleForSelectedScope(task, scope as ProjectScope, { tasksById }).eligible)
+}
+
+function currentSummaryForTask(task: Task): {
+  brief?: {
+    present?: boolean
+    shaped?: boolean
+    userJob?: boolean
+    successMetric?: boolean
+    approvedAt?: string | null
+  }
+  acceptanceCriteriaCount?: number
+} | null {
+  const value = (task as Task & { currentSummary?: unknown }).currentSummary
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as {
+        brief?: {
+          present?: boolean
+          shaped?: boolean
+          userJob?: boolean
+          successMetric?: boolean
+          approvedAt?: string | null
+        }
+        acceptanceCriteriaCount?: number
+      }
+    : null
+}
+
+function taskForInboxWizard(task: Task): Task {
+  const current = currentSummaryForTask(task)
+  if (!current) return task
+  const brief = current.brief
+  return {
+    ...task,
+    ...(brief
+      ? {
+          productBrief: {
+            userJob: brief.userJob ? 'current brief' : '',
+            successMetric: brief.successMetric ? 'current success target' : '',
+            ...(brief.approvedAt ? { approvedAt: brief.approvedAt } : {}),
+          },
+        }
+      : {}),
+    ...(typeof current.acceptanceCriteriaCount === 'number'
+      ? { acceptanceCriteria: Array.from({ length: current.acceptanceCriteriaCount }, (_, index) => ({
+          id: `indexed-criterion-${index + 1}`,
+          description: 'Indexed acceptance criterion',
+          verifiedBy: 'review' as const,
+          source: 'inferred' as const,
+          met: false,
+        })) }
+      : {}),
+  }
+}
+
 function contractResultReviewItems(projectPath: string): InboxItem[] {
   const records = readProjectDeliveryModelSync(projectPath).validationEvidence
   return records
@@ -343,7 +445,12 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   const tasksPath = projectStatePathWithRoot(projectPath, 'TASKS.json', projectStateDir)
-  const tasks = tasksArray(readJsonSafe(tasksPath))
+  const rawTaskState = opts.taskStateOverride ?? readJsonSafe(tasksPath)
+  const tasks = tasksArray(rawTaskState)
+  const executionTasks = scopeTasks(tasks, selectedInboxScope(rawTaskState, tasks, {
+    selectedScope: opts.selectedScope,
+    allowMembershipScopeFallback: opts.allowMembershipScopeFallback,
+  }))
   const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
   const workspaceImportTaskStatus =
     workspaceImportTask && typeof workspaceImportTask.status === 'string'
@@ -392,8 +499,31 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     })
   }
 
+  const proofMissing = proofMissingDoneTasks(executionTasks)
+  if (proofMissing.length > 0) {
+    const first = proofMissing[0]!
+    const countLabel = proofMissing.length === 1
+      ? '1 completed task still has unmet proof'
+      : `${proofMissing.length} completed tasks still have unmet proof`
+    items.push({
+      kind: 'proof_reconciliation',
+      severity: 'medium',
+      taskId: first.id,
+      title: 'Review stale proof records',
+      detail: `${countLabel}. Start with "${first.title}" and reconcile the task evidence or reopen the work.`,
+      actionHref: '/task/' + encodeURIComponent(first.id) + '?tab=spec',
+      count: proofMissing.length,
+      signals: proofMissing.map(task => `task:${task.id}`),
+      dismissEndpoint: '/api/project/attention/dismiss?id=proof-reconciliation%3Adone-with-unmet-proof',
+    })
+  }
+
   // --- tasks: briefs / specs / escalations / spec-fill gaps ----------------
-  const importDrafts = tasks.filter(t => t && typeof t === 'object' && t.status === 'import_draft')
+  const importDrafts = executionTasks.filter(t =>
+    t &&
+    typeof t === 'object' &&
+    (t.status === 'import_draft' || taskShapingBlockers(t).length > 0),
+  )
   const setupStillOwnsNextAction = activeSetupStep != null && activeSetupStep.id !== 'workspaceImport'
   if (importDrafts.length > 0 && !setupStillOwnsNextAction) {
     const nextDraft = importDrafts[0]!
@@ -401,19 +531,28 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     const nextDraftTitle = typeof nextDraft.title === 'string' && nextDraft.title.trim()
       ? nextDraft.title.trim()
       : 'Imported draft'
+    const allRawDrafts = importDrafts.every(task => task.status === 'import_draft')
     if (nextDraftId) {
       const queuedDetail =
         importDrafts.length === 1
-          ? `Review the imported draft "${nextDraftTitle}" and decide whether to shape it now.`
-          : `Start with "${nextDraftTitle}". ${importDrafts.length - 1} more imported drafts are waiting behind it.`
+          ? allRawDrafts
+            ? `Review the imported draft "${nextDraftTitle}" and decide whether to shape it now.`
+            : `Shape "${nextDraftTitle}" before Guildhall can build unattended.`
+          : allRawDrafts
+            ? `Start with "${nextDraftTitle}". ${importDrafts.length - 1} more imported drafts are waiting behind it.`
+            : `Start with "${nextDraftTitle}". ${importDrafts.length - 1} more imported tasks need shaping behind it.`
       items.push({
         kind: 'import_draft_queue',
         severity: 'medium',
         taskId: nextDraftId,
         title:
-          importDrafts.length === 1
+          allRawDrafts && importDrafts.length === 1
             ? '1 imported draft needs a task brief'
-            : `${importDrafts.length} imported drafts need task briefs`,
+            : allRawDrafts
+              ? `${importDrafts.length} imported drafts need task briefs`
+              : importDrafts.length === 1
+                ? '1 imported task needs shaping'
+                : `${importDrafts.length} imported tasks need shaping`,
         detail: queuedDetail,
         actionHref: nextDraftId === 'task-workspace-import'
           ? '/workspace-import'
@@ -439,6 +578,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     const title = typeof t.title === 'string' ? t.title : id
     if (!id) continue
 
+    const currentSummary = currentSummaryForTask(t)
     const brief = t.productBrief as { approvedAt?: unknown } | undefined
 
     // spec-fill gap: only for tasks where the wizard is applicable and
@@ -447,7 +587,9 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     // We emit the LIVE missing-step list so DoThisNext can say "missing
     // acceptance criteria" rather than the vague "spec incomplete".
     const briefDraftPending =
-      brief && typeof brief === 'object' && !brief.approvedAt
+      currentSummary?.brief
+        ? currentSummary.brief.present === true && !currentSummary.brief.approvedAt
+        : brief && typeof brief === 'object' && !brief.approvedAt
     const specInReview = t.status === 'spec_review'
     if (
       id !== 'task-workspace-import' &&
@@ -457,7 +599,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     ) {
       const snap = buildTaskSnapshot({
         projectPath,
-        task: t as Parameters<typeof buildTaskSnapshot>[0]['task'],
+        task: taskForInboxWizard(t) as Parameters<typeof buildTaskSnapshot>[0]['task'],
         readWizardsState: () => emptyWizardsState(),
       })
       if (specFillWizard.applicable(snap)) {

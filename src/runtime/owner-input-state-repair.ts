@@ -1,20 +1,26 @@
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
+  appendTaskEvidence,
   atomicWriteText,
-  getProjectStateDir,
+  getProjectSystemStateDir,
   getProjectSystemStatePath,
   getProjectSystemStatePathFromMemoryDir,
+  readProjectStateDatabaseCurrentAuthority,
+  readProjectStateDatabaseTaskPoint,
 } from '@guildhall/sessions'
 import { applyBoundedChatTransition } from './bounded-chat-machine.js'
 import { OwnerInputRequest, type OwnerInputRequest as OwnerInputRequestRecord } from './owner-input.js'
 import { isInvalidOwnerQuestionPrompt } from './owner-question-normalizer.js'
+import { refreshOwnerInputProjection } from './owner-input-store.js'
+import * as projectStateBoundary from './project-state-boundary.js'
 
 export interface OwnerInputStateRepairInput {
   projectRoot: string
   apply: boolean
   now?: string
+  repairId?: string
 }
 
 export interface OwnerInputStateRepairResult {
@@ -45,36 +51,57 @@ interface RepairDecision {
 }
 
 const REPAIR_ID = '0.10.0/owner-input-state-repair'
-const REPAIR_AGENT_ID = `migration:${REPAIR_ID}`
 const TASKS_RELATIVE_PATH = 'TASKS.json'
 
 export async function repairOwnerInputState(
   input: OwnerInputStateRepairInput,
 ): Promise<OwnerInputStateRepairResult> {
   const now = input.now ?? new Date().toISOString()
-  const memoryDir = getProjectStateDir(input.projectRoot)
+  const repairId = input.repairId ?? REPAIR_ID
+  const repairAgentId = `migration:${repairId}`
+  const memoryDir = getProjectSystemStateDir(input.projectRoot)
   const requests = await readOwnerInputRequests(memoryDir)
   const decisions = planRepairs(requests)
 
   const cancelledInvalid = decisions.filter(decision => decision.action === 'cancel_invalid').map(decision => decision.request.id)
   const resolvedByAssumption = decisions.filter(decision => decision.action === 'resolve_by_assumption').map(decision => decision.request.id)
   const cancelledDuplicates = decisions.filter(decision => decision.action === 'cancel_duplicate').map(decision => decision.request.id)
+  const promoted = readProjectStateDatabaseCurrentAuthority(input.projectRoot) === 'database'
 
   const affectedPaths = decisions.length > 0
-    ? ['project-state/owner-input', 'project-state/bounded-chat', `project-state/${TASKS_RELATIVE_PATH}`]
+    ? [
+        'project-state/owner-input',
+        'project-state/bounded-chat',
+        promoted ? 'project-state/task-evidence' : `project-state/${TASKS_RELATIVE_PATH}`,
+      ]
     : []
 
   if (!input.apply || decisions.length === 0) {
     return { cancelledInvalid, resolvedByAssumption, cancelledDuplicates, affectedPaths }
   }
 
-  const queueFile = getProjectSystemStatePath(input.projectRoot, TASKS_RELATIVE_PATH)
-  const queue = await readQueue(queueFile)
-  for (const decision of decisions) {
-    await closeOwnerInput(memoryDir, decision, now)
-    appendRepairNote(queue, decision, now)
+  if (promoted) {
+    for (const decision of decisions) {
+      await closeOwnerInput(memoryDir, decision, now, repairId, repairAgentId)
+      await appendRepairNoteEvidence(input.projectRoot, decision, now, repairId, repairAgentId)
+    }
+  } else {
+    const queueFile = getProjectSystemStatePath(input.projectRoot, TASKS_RELATIVE_PATH)
+    // This branch is migration-only. Runtime readers intentionally refuse
+    // historical TASKS shapes, so import the legacy file explicitly here and
+    // immediately write the repaired queue through the migration export.
+    const queue = queueForRepair(JSON.parse(await readManagedTextFile(queueFile, 'utf8')))
+    for (const decision of decisions) {
+      await closeOwnerInput(memoryDir, decision, now, repairId, repairAgentId)
+      appendRepairNote(queue, decision, now, repairId, repairAgentId)
+    }
+    projectStateBoundary.writeProjectTaskQueueWithSummary(queueFile, { ...queue, lastUpdated: now }, {
+      projectId: path.basename(input.projectRoot),
+      projectRoot: input.projectRoot,
+      fullCompatibility: true,
+    })
   }
-  atomicWriteText(queueFile, `${JSON.stringify({ ...queue, lastUpdated: now }, null, 2)}\n`)
+  refreshOwnerInputProjection(input.projectRoot, now)
 
   return { cancelledInvalid, resolvedByAssumption, cancelledDuplicates, affectedPaths }
 }
@@ -160,7 +187,13 @@ function duplicateSignature(request: OwnerInputRequestRecord): string | null {
   return `${request.source.taskId}:${choices}`
 }
 
-async function closeOwnerInput(memoryDir: string, decision: RepairDecision, now: string): Promise<void> {
+async function closeOwnerInput(
+  memoryDir: string,
+  decision: RepairDecision,
+  now: string,
+  repairId: string,
+  repairAgentId: string,
+): Promise<void> {
   const nextRequest = OwnerInputRequest.parse({
     ...decision.request,
     status: 'cancelled',
@@ -170,12 +203,12 @@ async function closeOwnerInput(memoryDir: string, decision: RepairDecision, now:
       {
         machineId: 'owner-input',
         machineVersion: 1,
-        commandId: `${REPAIR_ID}:${decision.request.id}`,
+        commandId: `${repairId}:${decision.request.id}`,
         entityId: decision.request.id,
         from: decision.request.status,
         event: decision.action,
         to: 'cancelled',
-        actor: REPAIR_AGENT_ID,
+        actor: repairAgentId,
         evidenceRefs: [`bounded-chat:${decision.request.boundedChatSessionId}`],
         createdAt: now,
       },
@@ -198,9 +231,9 @@ async function closeOwnerInput(memoryDir: string, decision: RepairDecision, now:
       sessionId: session.id,
       currentStatus: session.status,
       event: 'cancel',
-      commandId: `${REPAIR_ID}:${decision.request.id}:cancel-session`,
+      commandId: `${repairId}:${decision.request.id}:cancel-session`,
       priorReceipts: Array.isArray(session.transitionReceipts) ? session.transitionReceipts as never : [],
-      actor: REPAIR_AGENT_ID,
+      actor: repairAgentId,
       evidenceRefs: [`owner-input:${decision.request.id}`],
       now,
       context: { activeSubObjectiveId: session.activeSubObjectiveId },
@@ -259,41 +292,71 @@ function boundedChatSessionPath(memoryDir: string, sessionId: string): string {
   return getProjectSystemStatePathFromMemoryDir(memoryDir, path.join('bounded-chat', `${sessionId}.json`))
 }
 
-async function readQueue(file: string): Promise<QueueShape> {
-  const raw = await readManagedTextFile(file, 'utf8').catch((err) => {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return '{"tasks":[]}'
-    throw err
-  })
-  const parsed = JSON.parse(raw) as unknown
+function queueForRepair(parsed: unknown): QueueShape {
   if (Array.isArray(parsed)) return { tasks: parsed as RawTask[] }
   if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { tasks?: unknown }).tasks)) {
     return parsed as QueueShape
   }
-  return { tasks: [] }
+  throw new Error('Cannot repair owner-input state because the authoritative task queue is malformed.')
 }
 
-function appendRepairNote(queue: QueueShape, decision: RepairDecision, now: string): void {
+function appendRepairNote(
+  queue: QueueShape,
+  decision: RepairDecision,
+  now: string,
+  repairId: string,
+  repairAgentId: string,
+): void {
   if (decision.request.source.kind !== 'task') return
   const taskId = decision.request.source.taskId
   const task = queue.tasks.find(item => item.id === taskId)
   if (!task) return
   const notes = Array.isArray(task.notes) ? [...task.notes] : []
-  const content = decision.assumption
-    ? `Repaired stale owner-input state during ${REPAIR_ID}.\n\nCancelled question: ${decision.request.prompt}\nAssumption: ${decision.assumption}\nReason: ${decision.reason}`
-    : `Repaired stale owner-input state during ${REPAIR_ID}.\n\nCancelled question: ${decision.request.prompt}\nReason: ${decision.reason}`
+  const note = repairNotePayload(decision, now, repairId, repairAgentId)
   if (!notes.some(note =>
     note && typeof note === 'object' &&
-    (note as { agentId?: unknown }).agentId === REPAIR_AGENT_ID &&
+    (note as { agentId?: unknown }).agentId === repairAgentId &&
     typeof (note as { content?: unknown }).content === 'string' &&
     (note as { content: string }).content.includes(decision.request.id))) {
-    notes.push({
-      agentId: REPAIR_AGENT_ID,
-      role: 'state-repair',
-      content: `${content}\nOwner-input request: ${decision.request.id}`,
-      timestamp: now,
-    })
+    notes.push(note)
   }
   task.notes = notes
+}
+
+async function appendRepairNoteEvidence(
+  projectRoot: string,
+  decision: RepairDecision,
+  now: string,
+  repairId: string,
+  repairAgentId: string,
+): Promise<void> {
+  if (decision.request.source.kind !== 'task') return
+  const taskId = decision.request.source.taskId
+  const tasksPath = getProjectSystemStatePath(projectRoot, TASKS_RELATIVE_PATH)
+  if (!readProjectStateDatabaseTaskPoint(tasksPath, taskId)) return
+  await appendTaskEvidence(projectRoot, taskId, {
+    id: `owner-input-repair-${repairId.replace(/[^0-9A-Za-z_.-]/g, '-')}-${decision.request.id}`,
+    kind: 'note',
+    recordedAt: now,
+    payload: repairNotePayload(decision, now, repairId, repairAgentId),
+  })
+}
+
+function repairNotePayload(
+  decision: RepairDecision,
+  now: string,
+  repairId: string,
+  repairAgentId: string,
+): { agentId: string; role: string; content: string; timestamp: string } {
+  const content = decision.assumption
+    ? `Repaired stale owner-input state during ${repairId}.\n\nCancelled question: ${decision.request.prompt}\nAssumption: ${decision.assumption}\nReason: ${decision.reason}`
+    : `Repaired stale owner-input state during ${repairId}.\n\nCancelled question: ${decision.request.prompt}\nReason: ${decision.reason}`
+  return {
+    agentId: repairAgentId,
+    role: 'state-repair',
+    content: `${content}\nOwner-input request: ${decision.request.id}`,
+    timestamp: now,
+  }
 }
 
 async function writeJson(file: string, value: unknown): Promise<void> {

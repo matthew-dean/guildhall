@@ -4,6 +4,15 @@ import os from 'node:os'
 import path from 'node:path'
 import type { HardGate } from '@guildhall/core'
 import { readTaskEvidence } from '@guildhall/sessions'
+import {
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  readProjectStateDatabaseTask,
+  readProjectStateDatabaseTaskEvidenceCurrent,
+  readProjectStateDatabaseTaskEvidenceHistory,
+  readProjectStateDatabaseQueueRevision,
+  writeProjectStateDatabaseSnapshot,
+} from '@guildhall/sessions'
 import { reconcileRequestedGatesWithAuthority, runGatesTool } from '../run-gates-tool.js'
 
 vi.mock('../gate-runner.js', () => ({
@@ -183,7 +192,7 @@ describe('runGatesTool scoped exceptions', () => {
     )
   })
 
-  it('persists current task gate results to evidence without rewriting TASKS.json gate history', async () => {
+  it('persists current task gate results to task state and evidence', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-gates-task-state-'))
     const guildhallDir = path.join(projectRoot, '.guildhall')
     const tasksPath = path.join(guildhallDir, 'TASKS.json')
@@ -204,6 +213,13 @@ describe('runGatesTool scoped exceptions', () => {
         acceptanceCriteria: [],
         notes: [],
         gateResults: [],
+        proofPaths: [{
+          kind: 'command',
+          command: 'pnpm test',
+          expectedEvidence: ['runner-smoke'],
+          status: 'planned',
+          verificationRecords: [],
+        }],
         reviewVerdicts: [],
         adjudications: [],
         escalations: [],
@@ -244,7 +260,19 @@ describe('runGatesTool scoped exceptions', () => {
       expect(result.is_error).toBe(false)
       expect((result.metadata as Record<string, unknown>).persistedTaskGateResults).toBe(true)
       const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-      expect(raw.tasks[0].gateResults).toEqual([])
+      expect(raw.tasks[0].gateResults).toEqual([
+        {
+          gateId: 'test',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-06-03T00:01:00.000Z',
+          output: 'ok',
+        },
+      ])
+      expect(raw.tasks[0].proofPaths[0]).toMatchObject({ id: 'command-proof-path', status: 'verified', updatedBy: 'run-gates' })
+      expect(raw.tasks[0].proofPaths[0].verificationRecords).toEqual([
+        expect.objectContaining({ evidenceId: 'command-proof-path-evidence-0', status: 'passed', command: 'pnpm test' }),
+      ])
       const evidence = await readTaskEvidence(projectRoot, 'task-001', { kind: 'gate_result' })
       expect(evidence.map((event) => event.payload)).toEqual([
         {
@@ -255,6 +283,69 @@ describe('runGatesTool scoped exceptions', () => {
           output: 'ok',
         },
       ])
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('stores promoted gate proof as current evidence without gateResults in task detail', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-gates-promoted-'))
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(tasksPath, '{}', 'utf8')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-06-03T00:00:00.000Z',
+        tasks: [{
+          id: 'task-001',
+          title: 'Run gates',
+          status: 'gate_check',
+          projectPath: projectRoot,
+          proofPaths: [{
+            kind: 'command',
+            command: 'pnpm test',
+            expectedEvidence: ['gate output'],
+            status: 'planned',
+            verificationRecords: [],
+          }],
+          createdAt: '2026-06-03T00:00:00.000Z',
+          updatedAt: '2026-06-03T00:00:00.000Z',
+        }],
+      },
+      summary: {
+        generatedAt: '2026-06-03T00:00:00.000Z',
+        freshness: 'current',
+        counts: { total: 1 },
+        releaseSummary: { release: null },
+      },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    vi.mocked(runGates).mockResolvedValue({
+      allPassed: true,
+      results: [{ gateId: 'test', type: 'hard', passed: true, checkedAt: '2026-06-03T00:01:00.000Z', output: 'ok' }],
+    } as any)
+
+    try {
+      const before = readProjectStateDatabaseQueueRevision(tasksPath)
+      const result = await runGatesTool.execute(
+        { cwd: projectRoot, gates: [{ id: 'test', label: 'Test', command: 'pnpm test' }] },
+        { cwd: projectRoot, metadata: { current_task_id: 'task-001', tasks_path: tasksPath } },
+      )
+
+      expect(result.is_error).toBe(false)
+      expect((result.metadata as Record<string, unknown>).persistedTaskGateResults).toBe(true)
+      expect(readProjectStateDatabaseQueueRevision(tasksPath)).toBeGreaterThan(before!)
+      expect(readProjectStateDatabaseTask(tasksPath, 'task-001')?.definition).toMatchObject({
+        proofPaths: [expect.objectContaining({ status: 'verified', updatedBy: 'run-gates' })],
+      })
+      expect(readProjectStateDatabaseTask(tasksPath, 'task-001')?.definition).not.toHaveProperty('gateResults')
+      expect(readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-001')).toMatchObject({
+        byKind: { gate_result: [expect.objectContaining({ payload: expect.objectContaining({ gateId: 'test', passed: true }) })] },
+      })
+      expect(readProjectStateDatabaseTaskEvidenceHistory(projectRoot, 'task-001', 'gate_result')).toHaveLength(1)
     } finally {
       await fs.rm(projectRoot, { recursive: true, force: true })
     }

@@ -1,2 +1,6 @@
 export * from './question-visibility.js'
+export * from './owner-input-label.js'
+export * from './current-proof.js'
+export * from './release-readiness.js'
 export * from './task-display-label.js'
+export * from './task-shaping-blockers.js'

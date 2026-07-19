@@ -1,6 +1,12 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText, getLegacyProjectStatePath } from '@guildhall/sessions'
+import { getLegacyProjectStatePath, getProjectMigrationSnapshotDir } from '@guildhall/sessions'
+import { writeMigrationSnapshot } from './migration-snapshot.js'
+import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
+import {
+  assertLegacyCurrentStateMigrationAccess,
+  legacyCurrentStateMigrationAvailable,
+} from './runtime-compatibility.js'
 
 export interface TaskHierarchyMigrationInput {
   projectRoot: string
@@ -11,6 +17,7 @@ export interface TaskHierarchyMigrationInput {
 export interface TaskHierarchyMigrationResult {
   changedTasks: string[]
   backupPath?: string
+  manifestPath?: string
   affectedPaths: string[]
 }
 
@@ -45,7 +52,11 @@ function tasksPath(projectRoot: string): string {
 }
 
 function backupPath(projectRoot: string): string {
-  return getLegacyProjectStatePath(projectRoot, 'TASKS.before-0.10.0-task-hierarchy-links.json')
+  return path.join(
+    getProjectMigrationSnapshotDir(projectRoot),
+    'task-hierarchy-links',
+    'TASKS.before-0.10.0-task-hierarchy-links.json',
+  )
 }
 
 function parseQueue(raw: string): QueueShape {
@@ -54,7 +65,7 @@ function parseQueue(raw: string): QueueShape {
   if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { tasks?: unknown }).tasks)) {
     return parsed as QueueShape
   }
-  return { tasks: [] }
+  throw new Error('Cannot migrate task hierarchy: legacy TASKS.json does not contain a task queue.')
 }
 
 function taskId(task: RawTask): string | null {
@@ -119,6 +130,10 @@ function ensureNoCycles(tasks: RawTask[]): void {
 export async function migrateTaskHierarchyState(
   input: TaskHierarchyMigrationInput,
 ): Promise<TaskHierarchyMigrationResult> {
+  if (!legacyCurrentStateMigrationAvailable(input.projectRoot)) {
+    if (input.apply) assertLegacyCurrentStateMigrationAccess(input.projectRoot, MIGRATION_ID)
+    return { changedTasks: [], affectedPaths: [] }
+  }
   const file = tasksPath(input.projectRoot)
   let raw: string
   try {
@@ -207,7 +222,7 @@ export async function migrateTaskHierarchyState(
       task.workKind = task.workKind ?? 'feature_spec'
       task.taskReadiness = {
         ...(task.taskReadiness ?? {}),
-        recommendation: 'split',
+        recommendation: 'requires_child_work',
       }
       task.completionBoundary = {
         summary: task.completionBoundary?.summary ?? 'Containing work is complete when required child work is done.',
@@ -234,22 +249,30 @@ export async function migrateTaskHierarchyState(
   const backup = backupPath(input.projectRoot)
 
   if (input.apply) {
-    await fs.mkdir(path.dirname(backup), { recursive: true })
-    try {
-      await fs.writeFile(backup, raw, { encoding: 'utf8', flag: 'wx' })
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
-    }
+    const snapshot = await writeMigrationSnapshot({
+      projectRoot: input.projectRoot,
+      migrationId: MIGRATION_ID,
+      sourcePath: file,
+      snapshotPath: backup,
+      sourceBytes: raw,
+      now: input.now,
+    })
     const rewritten = Array.isArray(JSON.parse(raw))
       ? tasks
       : { ...queue, lastUpdated: input.now ?? new Date().toISOString(), tasks }
-    atomicWriteText(file, `${JSON.stringify(rewritten, null, 2)}\n`)
+    writeProjectTaskQueueWithSummary(file, rewritten, { projectRoot: input.projectRoot, fullCompatibility: true })
     affectedPaths.push(path.relative(input.projectRoot, backup))
+    affectedPaths.push(path.relative(input.projectRoot, snapshot.manifestPath))
+    return {
+      changedTasks,
+      backupPath: backup,
+      manifestPath: snapshot.manifestPath,
+      affectedPaths,
+    }
   }
 
   return {
     changedTasks,
-    ...(input.apply ? { backupPath: backup } : {}),
     affectedPaths,
   }
 }

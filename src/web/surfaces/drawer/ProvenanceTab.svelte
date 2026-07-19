@@ -17,9 +17,10 @@
   interface Props {
     task: Task
     contextDebug?: ContextDebugRecord[]
+    gitStoryLoaded?: boolean
   }
 
-  let { task, contextDebug = [] }: Props = $props()
+  let { task, contextDebug = [], gitStoryLoaded = false }: Props = $props()
 
   const lines = $derived<Array<readonly [string, string | null]>>([
     ['Origination', task.origination ? labelForIdentifier('agent', task.origination).label : 'Human'],
@@ -102,7 +103,7 @@
   {/if}
 
   {#if task.gitStory && task.gitStory.state && task.gitStory.state !== 'clean'}
-    <Card title="Git story" tone={task.gitStory.state === 'conflict' || task.gitStory.state === 'unknown' ? 'danger' : task.gitStory.state === 'local_only' || task.gitStory.state === 'deferred' ? 'default' : 'warn'}>
+    <Card title="Repository state" tone={task.gitStory.state === 'conflict' || task.gitStory.state === 'unknown' ? 'danger' : task.gitStory.state === 'local_only' || task.gitStory.state === 'deferred' ? 'default' : 'warn'}>
       <Stack gap="3">
         <DefinitionList items={gitStoryLines} />
         {#if task.gitStory.samplePaths?.length}
@@ -116,6 +117,12 @@
           </div>
         {/if}
       </Stack>
+    </Card>
+  {/if}
+
+  {#if gitStoryLoaded && !task.gitStory}
+    <Card title="Repository state">
+      <p>No repository snapshot is recorded for this task.</p>
     </Card>
   {/if}
 

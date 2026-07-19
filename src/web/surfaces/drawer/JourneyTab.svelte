@@ -43,6 +43,7 @@
   const requestIntake = $derived(task.requestIntake ?? null)
   const doneSummary = $derived(task.doneSummaryBundle ?? null)
   const proofPaths = $derived(task.proofPaths ?? [])
+  const completionProof = $derived(task.completionProof ?? null)
   const completionHandoff = $derived(task.completionHandoff ?? null)
   const verdicts = $derived(task.reviewVerdicts ?? [])
   const gates = $derived(task.gateResults ?? [])
@@ -174,14 +175,31 @@
     return 'neutral'
   }
 
-  function evidenceChipLabel(evidence: ExpectedEvidence): string {
+  function evidenceChipLabel(evidence: ExpectedEvidence | string): string {
+    if (typeof evidence === 'string') return 'Expected proof'
     return `${friendlyToken(evidence.kind)} ${evidence.required === false ? 'Optional' : 'Required'}`
+  }
+
+  function evidenceDescription(evidence: ExpectedEvidence | string): string {
+    if (typeof evidence === 'string') return evidence
+    return evidence.description ?? evidence.sourceRef ?? 'Evidence expectation recorded.'
+  }
+
+  function evidenceKey(evidence: ExpectedEvidence | string, index: number): string {
+    if (typeof evidence === 'string') return `evidence-string-${index}-${evidence.slice(0, 32)}`
+    return `evidence-${evidence.id ?? index}`
   }
 
   function verificationTone(record: { status?: string }): 'ok' | 'danger' | 'warn' | 'neutral' {
     if (record.status === 'passed') return 'ok'
     if (record.status === 'failed') return 'danger'
     if (record.status === 'blocked') return 'warn'
+    return 'neutral'
+  }
+
+  function completionProofTone(state: string | undefined): 'ok' | 'warn' | 'neutral' {
+    if (state === 'verified') return 'ok'
+    if (state === 'missing') return 'warn'
     return 'neutral'
   }
 
@@ -345,10 +363,57 @@
           {:else}
             <p>{passedGateCount} check{passedGateCount === 1 ? '' : 's'} passed{#if failedGateCount > 0}; {failedGateCount} failed{/if}.</p>
             <div class="chips">
-              {#each gates.slice(0, 5) as gate, i (`gate-${gate.gateId ?? i}`)}
+              {#each gates.slice(0, 5) as gate, i (`gate-${gate.gateId ?? 'unknown'}-${gate.checkedAt ?? 'undated'}-${i}`)}
                 <Chip label={gate.gateId ?? 'gate'} tone={gate.passed ? 'ok' : 'danger'} />
               {/each}
             </div>
+          {/if}
+          {#if completionProof}
+            <section class="detail">
+              <h4>Completion proof</h4>
+              <div class="chips">
+                <Chip label={friendlyToken(completionProof.state)} tone={completionProofTone(completionProof.state)} />
+                <Chip label={`${completionProof.verifiedCount ?? 0} verified`} tone={(completionProof.verifiedCount ?? 0) > 0 ? 'ok' : 'neutral'} />
+                <Chip label={`${completionProof.expectedCount ?? 0} expected`} tone="neutral" />
+              </div>
+              {#if completionProof.verified?.length}
+                <ul class="proof-list">
+                  {#each completionProof.verified as proof, i (`completion-proof-${i}`)}
+                    <li>
+                      <Chip label="Proof" tone="ok" />
+                      <span>{proof}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+              {#if completionProof.historical?.length}
+                <section class="detail historical-proof">
+                  <h4>Historical claims</h4>
+                  <p class="muted">These were recorded before the current proof gap and do not count toward release readiness.</p>
+                  <ul class="proof-list">
+                    {#each completionProof.historical as proof, i (`historical-proof-${i}`)}
+                      <li>
+                        <Chip label="Historical" tone="neutral" />
+                        <span>{proof}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                  {#if (completionProof.historicalCount ?? 0) > completionProof.historical.length}
+                    <p class="muted">{(completionProof.historicalCount ?? 0) - completionProof.historical.length} more historical claims remain in the evidence trail.</p>
+                  {/if}
+                </section>
+              {/if}
+              {#if completionProof.missing?.length}
+                <ul class="proof-list">
+                  {#each completionProof.missing as missing, i (`missing-proof-${i}`)}
+                    <li>
+                      <Chip label="Missing" tone="warn" />
+                      <span>{missing}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
           {/if}
           {#if proofPaths.length > 0}
             <section class="detail">
@@ -381,11 +446,17 @@
                       </ul>
                     {/if}
                     {#if proofPath.expectedEvidence?.length}
-                      <div class="chips">
-                        {#each proofPath.expectedEvidence as evidence, evidenceIndex (`evidence-${evidence.id ?? evidenceIndex}`)}
-                          <Chip label={evidenceChipLabel(evidence)} tone={evidence.required === false ? 'neutral' : 'accent'} />
+                      <ul class="proof-list">
+                        {#each proofPath.expectedEvidence as evidence, evidenceIndex (evidenceKey(evidence, evidenceIndex))}
+                          <li>
+                            <Chip
+                              label={evidenceChipLabel(evidence)}
+                              tone={typeof evidence === 'object' && evidence.required === false ? 'neutral' : 'accent'}
+                            />
+                            <span>{evidenceDescription(evidence)}</span>
+                          </li>
                         {/each}
-                      </div>
+                      </ul>
                     {/if}
                     {#if proofPath.verificationRecords?.length}
                       <ul class="proof-list">

@@ -6,6 +6,7 @@ import {
   resolveEffectiveTaskBootstrapBlock,
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
+  findInvalidAutomatedAcceptanceCommands,
   resolveEffectiveTaskProjectPath,
   normalizeAutomatedAcceptanceCriterionCommands,
   reconcileAutomatedAcceptanceCommandsFromVerifiedWork,
@@ -42,9 +43,152 @@ describe('resolveEffectiveTaskProjectPath', () => {
       ),
     ).toBe('/repo/fair-labor-license/frontend')
   })
+
+  it('treats imported docs paths as source trail instead of execution roots', async () => {
+    const docsPath = path.join(tmpDir, 'docs', 'harness')
+    await fs.mkdir(docsPath, { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'package.json'), '{"scripts":{}}\n', 'utf8')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { projectPath: docsPath },
+        tmpDir,
+      ),
+    ).toBe(tmpDir)
+  })
+
+  it('keeps marked child project paths as execution roots', async () => {
+    const childPath = path.join(tmpDir, 'knit')
+    await fs.mkdir(childPath, { recursive: true })
+    await fs.writeFile(path.join(childPath, 'package.json'), '{"scripts":{}}\n', 'utf8')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { projectPath: childPath },
+        tmpDir,
+      ),
+    ).toBe(childPath)
+  })
+
+  it('uses the matching workspace child project for domain-scoped tasks', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    const knitPath = path.join(tmpDir, 'knit')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { domain: 'knit' },
+        tmpDir,
+        {
+          workspaceProjects: [
+            { id: 'looma', path: loomaPath } as any,
+            { id: 'knit', coordinator: 'knit', path: knitPath } as any,
+          ],
+        },
+      ),
+    ).toBe(knitPath)
+  })
+
+  it('routes container-scoped tasks to the child repo named in task text', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    const knitPath = path.join(tmpDir, 'knit')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        {
+          projectPath: tmpDir,
+          title: 'Integrate AlertDialog into Knit destructive confirmation flow',
+        },
+        tmpDir,
+        {
+          workspaceProjects: [
+            { id: 'looma', path: loomaPath } as any,
+            { id: 'knit', path: knitPath } as any,
+          ],
+        },
+      ),
+    ).toBe(knitPath)
+  })
+
+  it('routes broad domain labels to the named child repo', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    const knitPath = path.join(tmpDir, 'knit')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { domain: 'Knit destructive confirmation flow' },
+        tmpDir,
+        {
+          workspaceProjects: [
+            { id: 'looma', path: loomaPath } as any,
+            { id: 'knit', path: knitPath } as any,
+          ],
+        },
+      ),
+    ).toBe(knitPath)
+  })
+
+  it('does not guess a child repo when task text names multiple child repos', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    const knitPath = path.join(tmpDir, 'knit')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { title: 'Coordinate Looma and Knit release proof' },
+        tmpDir,
+        {
+          workspaceProjects: [
+            { id: 'looma', path: loomaPath } as any,
+            { id: 'knit', path: knitPath } as any,
+          ],
+        },
+      ),
+    ).toBe(tmpDir)
+  })
+
+  it('keeps docs as source trail while routing domain-scoped execution to the child repo', async () => {
+    const docsPath = path.join(tmpDir, 'docs', 'looma')
+    const loomaPath = path.join(tmpDir, 'looma')
+    await fs.mkdir(docsPath, { recursive: true })
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { domain: 'looma', projectPath: docsPath },
+        tmpDir,
+        {
+          workspaceProjects: [
+            { id: 'looma', coordinator: 'looma', path: loomaPath } as any,
+          ],
+        },
+      ),
+    ).toBe(loomaPath)
+  })
 })
 
 describe('normalizeAutomatedAcceptanceCriterionCommands', () => {
+  it('runs direct Node proof through the project PNPM boundary', () => {
+    const task = {
+      projectPath: tmpDir,
+      acceptanceCriteria: [
+        {
+          id: 'ac-node',
+          description: 'fixture validation reports the expected result',
+          verifiedBy: 'automated',
+          command: 'node scripts/validate-fixture.mjs fixtures/example',
+        },
+      ],
+    } as any
+
+    const changed = normalizeAutomatedAcceptanceCriterionCommands({
+      workspaceProjectPath: tmpDir,
+      task,
+    })
+
+    expect(changed).toBe(true)
+    expect(task.acceptanceCriteria[0].command).toBe(
+      'pnpm exec node scripts/validate-fixture.mjs fixtures/example',
+    )
+  })
+
   it('keeps explicit Python pytest commands instead of rewriting through pnpm', async () => {
     await fs.writeFile(path.join(tmpDir, 'pyproject.toml'), '[project]\nname = "demo"\n', 'utf8')
     await fs.mkdir(path.join(tmpDir, 'tests'), { recursive: true })
@@ -98,6 +242,31 @@ describe('normalizeAutomatedAcceptanceCriterionCommands', () => {
 
     expect(changed).toBe(false)
     expect(task.acceptanceCriteria[0].command).toBe('cargo test')
+  })
+
+  it('filters run-record proof commands to JSON artifacts', async () => {
+    const command = 'node -e "const r=require(\'./runs/\'+require(\'fs\').readdirSync(\'runs\').find(f=>f.startsWith(\'run-fixture-the-last-lighthouse\'))); console.log(JSON.stringify(r.reviewerFinding))"'
+    const task = {
+      projectPath: tmpDir,
+      acceptanceCriteria: [
+        {
+          id: 'ac-run-record',
+          description: 'reviewerFinding exists on the saved JSON run record',
+          verifiedBy: 'automated',
+          command,
+        },
+      ],
+    } as any
+
+    const changed = normalizeAutomatedAcceptanceCriterionCommands({
+      workspaceProjectPath: tmpDir,
+      task,
+    })
+
+    expect(changed).toBe(true)
+    expect(task.acceptanceCriteria[0].command).toBe(
+      'pnpm exec node -e "const r=require(\'./runs/\'+require(\'fs\').readdirSync(\'runs\').find(f=>f.startsWith(\'run-fixture-the-last-lighthouse\')&&f.endsWith(\'.json\'))); console.log(JSON.stringify(r.reviewerFinding))"',
+    )
   })
 })
 
@@ -367,10 +536,103 @@ describe('resolveEffectiveTaskSuccessGates', () => {
 
     expect(result).toEqual([
       'pnpm --dir web typecheck',
-      'pnpm build',
       'cd web && pnpm vitest --run tests/unit/pages/login-callback-index.flow.test.ts',
-      'pnpm lint',
     ])
+  })
+
+  it('does not inherit a workspace build for a script-only acceptance proof', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          build: 'docusaurus build',
+          'proof-broad-genre-drafting': 'node scripts/proof-broad-genre-drafting.mjs',
+        },
+      }),
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskVerificationCommands({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-proof',
+            description: 'the broad genre proof passes',
+            verifiedBy: 'automated',
+            command: 'pnpm proof-broad-genre-drafting',
+          },
+        ],
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: [],
+        successGates: ['pnpm build'],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+      } as any,
+    })
+
+    expect(result).toEqual(['pnpm proof-broad-genre-drafting'])
+  })
+
+  it('rejects self-referential Guildhall task scripts as automated proof commands', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          proof: 'npx guildhall run --task=task-import-9s8tkc-split-define-fixture',
+        },
+      }),
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskVerificationCommands({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'local proof command runs',
+            verifiedBy: 'automated',
+            command: 'pnpm proof',
+          },
+        ],
+      } as any,
+      workspaceProjectPath: tmpDir,
+    })
+
+    expect(result).toBeUndefined()
+  })
+
+  it('reports self-referential acceptance scripts before the gate runner can execute them', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          proof: 'pnpm exec guildhall run --task=task-import-9s8tkc-split-define-fixture',
+        },
+      }),
+      'utf8',
+    )
+
+    expect(findInvalidAutomatedAcceptanceCommands({
+      projectPath: tmpDir,
+      task: {
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'local proof command runs',
+          verifiedBy: 'automated',
+          command: 'pnpm proof',
+        }],
+      } as any,
+    })).toEqual([{
+      criterionId: 'ac-1',
+      command: 'pnpm proof',
+      reason: 'The command resolves to a package script that invokes Guildhall task orchestration instead of proving the project locally.',
+    }])
   })
 
   it('rewrites pnpm test -- <file> vitest commands into direct single-file runs', async () => {
@@ -424,10 +686,7 @@ describe('resolveEffectiveTaskSuccessGates', () => {
     })
 
     expect(result).toEqual([
-      'pnpm typecheck',
-      'pnpm build',
       'cd web && pnpm vitest --run tests/unit/shared/subdomain.test.ts',
-      'pnpm lint',
     ])
   })
 
@@ -487,10 +746,7 @@ describe('resolveEffectiveTaskSuccessGates', () => {
     })
 
     expect(result).toEqual([
-      'pnpm typecheck',
-      'pnpm build',
       'cd web && pnpm vitest --run tests/unit/composables/use-collections-auth.test.ts tests/unit/composables/use-collections.test.ts',
-      'pnpm lint',
     ])
   })
 
@@ -676,9 +932,7 @@ describe('resolveEffectiveTaskSuccessGates', () => {
 
     expect(result).toEqual([
       'pnpm --dir web typecheck',
-      'pnpm build',
       'pnpm --dir web exec playwright test tests/e2e/authoring-flow.spec.ts',
-      'pnpm lint',
     ])
   })
 })
@@ -808,7 +1062,6 @@ describe('resolveEffectiveTaskVerificationCommands', () => {
 
     expect(result).toEqual([
       'pnpm --dir frontend exec tsc --noEmit',
-      'pnpm --dir frontend build',
     ])
   })
 
@@ -968,9 +1221,7 @@ describe('resolveEffectiveTaskVerificationCommands', () => {
     })
 
     expect(result).toEqual([
-      'pnpm run build',
       'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
-      'pnpm run lint',
     ])
   })
 

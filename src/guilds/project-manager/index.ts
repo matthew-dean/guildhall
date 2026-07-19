@@ -51,6 +51,8 @@ const STAGE_FILES: Record<TaskStatus, string> = {
   done: 'stages/done.md',
   shelved: 'stages/shelved.md',
   blocked: 'stages/blocked.md',
+  archived: 'stages/done.md',
+  cancelled: 'stages/blocked.md',
 }
 
 const stageCache = new Map<TaskStatus, string>()

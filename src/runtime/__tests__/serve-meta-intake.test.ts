@@ -4,14 +4,14 @@ import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace, readWorkspaceConfig, slugify } from '@guildhall/config'
 import {
+  getProjectSystemStatePath,
   getProjectStateDir,
-  readProjectStateJsonFromMemoryDirAsync,
-  writeProjectStateJsonFromMemoryDirAsync,
 } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { createMetaIntakeTask, META_INTAKE_TASK_ID } from '../meta-intake.js'
 import type { TaskQueue } from '@guildhall/core'
-import { migrateTaskQuestionsToBoundedChat } from '../task-question-migration.js'
+import { applyProjectMigrations } from '../migrations.js'
+import { readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // Integration tests for the browser-driven meta-intake approval flow.
@@ -28,7 +28,7 @@ let memoryDir: string
 let projectId: string
 
 async function readQueue(): Promise<TaskQueue> {
-  return readProjectStateJsonFromMemoryDirAsync<TaskQueue>(memoryDir, 'TASKS.json')
+  return readProjectTaskQueueSync(getProjectSystemStatePath(tmpDir, 'TASKS.json')) as TaskQueue
 }
 
 async function writeDraftSpec(spec: string): Promise<void> {
@@ -36,7 +36,21 @@ async function writeDraftSpec(spec: string): Promise<void> {
   const task = queue.tasks.find(t => t.id === META_INTAKE_TASK_ID)
   if (!task) throw new Error('meta-intake task missing; call createMetaIntakeTask first')
   task.spec = spec
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+  const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  const current = readProjectTaskQueueForMutationSync(tasksPath)
+  await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
+    projectRoot: tmpDir,
+    expectedQueueRevision: current.expectedQueueRevision,
+  })
+}
+
+async function writeQueue(queue: TaskQueue): Promise<void> {
+  const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  const current = readProjectTaskQueueForMutationSync(tasksPath)
+  await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
+    projectRoot: tmpDir,
+    expectedQueueRevision: current.expectedQueueRevision,
+  })
 }
 
 beforeEach(async () => {
@@ -45,6 +59,17 @@ beforeEach(async () => {
   process.env.GUILDHALL_DATA_DIR = dataDir
   projectId = bootstrapWorkspace(tmpDir, { name: 'Meta Serve Test' }).id ?? path.basename(tmpDir)
   memoryDir = getProjectStateDir(tmpDir)
+  writeProjectTaskQueueWithSummary(getProjectSystemStatePath(tmpDir, 'TASKS.json'), {
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [],
+  }, { projectRoot: tmpDir })
+  const prerequisites = await applyProjectMigrations({ projectRoot: tmpDir, includePrompt: true })
+  if (prerequisites.failed.length > 0) throw new Error(`meta-intake prerequisite migration failed: ${JSON.stringify(prerequisites.failed)}`)
+  const finalize = await applyProjectMigrations({ projectRoot: tmpDir, only: ['0.13.0/project-state-finalize'] })
+  if (finalize.failed.length > 0) throw new Error(`meta-intake final migration failed: ${JSON.stringify(finalize.failed)}`)
+  const cleanup = await applyProjectMigrations({ projectRoot: tmpDir, only: ['0.13.0/project-state-legacy-live-file-cleanup'] })
+  if (cleanup.failed.length > 0) throw new Error(`meta-intake cleanup migration failed: ${JSON.stringify(cleanup.failed)}`)
 })
 
 afterEach(async () => {
@@ -135,7 +160,7 @@ describe('GET /api/project/meta-intake/draft', () => {
     if (!task) throw new Error('meta-intake task missing')
     task.status = 'blocked'
     task.blockReason = 'Spec agent kept researching after Guildhall asked for durable progress.'
-    await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+    await writeQueue(queue)
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/meta-intake/draft')))
@@ -275,7 +300,7 @@ describe('POST /api/project/meta-intake/synthesize', () => {
       choices: ['Keep researching', 'Draft setup from repo scan'],
       selectionMode: 'single',
     }]
-    await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+    await writeQueue(queue)
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const synthesize = await app.fetch(
@@ -325,19 +350,12 @@ describe('POST /api/project/meta-intake/synthesize', () => {
         answer: 'converter-core, extension-ui, docs',
       },
     ]
-    await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+    await writeQueue(queue)
     await fs.writeFile(
       path.join(tmpDir, 'package.json'),
       JSON.stringify({ scripts: { build: 'tsc -b', test: 'vitest' } }, null, 2),
       'utf-8',
     )
-    await migrateTaskQuestionsToBoundedChat({
-      projectRoot: tmpDir,
-      projectId,
-      apply: true,
-      now: '2026-01-01T00:02:00.000Z',
-    })
-
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request(projectUrl('/api/project/meta-intake/synthesize'), { method: 'POST' }),

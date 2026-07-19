@@ -49,6 +49,7 @@ export type TickOutcome =
       beforeStatus: TaskStatus
       afterStatus: TaskStatus
       transitioned: boolean
+      note?: string
       revisionCount: number
       waitingOnUser?: boolean
     }

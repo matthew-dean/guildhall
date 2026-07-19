@@ -4,6 +4,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import DoThisNext from '../DoThisNext.svelte'
 import { path } from '../../lib/nav.svelte.js'
+import { project } from '../../lib/project.svelte.js'
 
 function json(data: unknown): Response {
   return new Response(JSON.stringify(data), {
@@ -20,40 +21,41 @@ function installBrowserFakes() {
 describe('DoThisNext', () => {
   beforeEach(() => {
     installBrowserFakes()
+    project.detail = null
   })
 
   afterEach(() => {
+    project.detail = null
     vi.restoreAllMocks()
     cleanup()
   })
 
-  it('renders the shared project action model instead of recomputing from inbox', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        expect(String(input)).toBe('/api/project?projectId=looma-knit')
-        return json({
-          actionModel: {
-            primaryAction: {
-              source: 'task',
-              label: 'Clean up the Stripe checkout brief',
-              detail: 'Finish the active brief cleanup before reconciling stale discovery.',
-              buttonLabel: 'Open Work',
-              href: '/work',
-              tone: 'warn',
-            },
-            secondaryActions: [{
-              source: 'inbox',
-              label: 'Review project discovery update',
-              detail: 'Review the reconciliation later.',
-              buttonLabel: 'Review update',
-              href: '/workspace-import?mode=reconcile',
-              tone: 'warn',
-            }],
-          },
-        })
-      }),
-    )
+  it('renders the loaded project action model instead of refetching or recomputing from inbox', async () => {
+    const fetchMock = vi.fn(async () => json({ items: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    project.detail = {
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          label: 'Clean up the Stripe checkout brief',
+          detail: 'Finish the active brief cleanup before reconciling stale discovery.',
+          buttonLabel: 'Open Work',
+          href: '/work',
+          tone: 'warn',
+        },
+        secondaryActions: [{
+          source: 'inbox',
+          label: 'Review project discovery update',
+          detail: 'Review the reconciliation later.',
+          buttonLabel: 'Review update',
+          href: '/workspace-import?mode=reconcile',
+          tone: 'warn',
+        }],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    }
 
     render(DoThisNext)
 
@@ -62,13 +64,61 @@ describe('DoThisNext', () => {
     expect(screen.getByRole('button', { name: /open work/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /1 more in inbox/i })).toBeTruthy()
     expect(screen.queryByText('Review project discovery update')).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not resurrect stale Thread prompts after the selected scope is complete', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/project?surface=overview&compact=true&projectId=looma-knit') {
+        return json({
+          startReadiness: {
+            canStart: false,
+            code: 'all_terminal',
+            message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+          },
+          actionModel: {
+            primaryAction: null,
+            secondaryActions: [],
+            runControl: {
+              label: 'No runnable tasks',
+              startEnabled: false,
+              disabledReason: 'Stage 1: Fixture And Evaluation Harness is complete.',
+            },
+            ownerInput: { active: false },
+            setup: { state: 'ready', freshIntakeNeeded: false },
+          },
+        })
+      }
+      if (url === '/api/project/thread?projectId=looma-knit') {
+        return json({
+          activeTurnId: 'setup:project-check-in',
+          turns: [{
+            id: 'setup:project-check-in',
+            kind: 'setup_step',
+            status: 'active',
+            actionHref: '/thread',
+            question: { prompt: 'Stale setup prompt' },
+          }],
+        })
+      }
+      return json({ items: [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(DoThisNext)
+
+    await waitFor(() => {
+      expect(screen.queryByText('Do this next')).toBeNull()
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('prescribes the highest-priority non-current action and keeps project routing', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/project?projectId=looma-knit') return json({ startReadiness: { canStart: true } })
-      expect(url).toBe('/api/project/inbox?projectId=looma-knit')
+      if (url === '/api/project?surface=overview&compact=true&projectId=looma-knit') return json({ startReadiness: { canStart: true } })
+      expect(url).toBe('/api/project/inbox?includeHistory=false&projectId=looma-knit')
       return json({
         items: [
           {
@@ -155,7 +205,7 @@ describe('DoThisNext', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url === '/api/project/inbox?projectId=looma-knit') {
+        if (url === '/api/project/inbox?includeHistory=false&projectId=looma-knit') {
           return json({
             items: [{
               kind: 'lever_questions',
@@ -268,7 +318,7 @@ describe('DoThisNext', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url === '/api/project?projectId=looma-knit') return json({ startReadiness: { canStart: true } })
+        if (url === '/api/project?surface=overview&compact=true&projectId=looma-knit') return json({ startReadiness: { canStart: true } })
         return json({
           items: [
             {

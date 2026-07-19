@@ -11,6 +11,7 @@
 
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import type { Task } from '@guildhall/core'
 import type { ProjectLevers } from '@guildhall/levers'
@@ -122,7 +123,8 @@ export async function ensureWorktreeForDispatch(
   // until the task naturally exits.
   if (
     task.worktreePath &&
-    task.branchName === expectedBranch
+    task.branchName === expectedBranch &&
+    existsSync(resolveRuntimePath(task.worktreePath))
   ) {
     const existingWorktreePath = resolveRuntimePath(task.worktreePath)
     await pruneProjectRuntimeLinks({

@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { AcceptanceCriteria, Task, TaskQueue, TaskStatus } from '../task.js'
+import { AcceptanceCriteria, RequestIntake, Task, TaskQueue, TaskStatus } from '../task.js'
+import { parseAcceptanceCriteriaFromSpec } from '../spec-acceptance.js'
 
 describe('TaskStatus', () => {
   it('accepts all valid statuses', () => {
-    const statuses = ['import_draft', 'exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check', 'pending_pr', 'done', 'shelved', 'blocked']
+    const statuses = ['import_draft', 'exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check', 'pending_pr', 'done', 'shelved', 'blocked', 'archived', 'cancelled']
     for (const s of statuses) {
       expect(TaskStatus.parse(s)).toBe(s)
     }
@@ -15,6 +16,25 @@ describe('TaskStatus', () => {
 
   it('normalizes legacy pending status to ready', () => {
     expect(TaskStatus.parse('pending')).toBe('ready')
+  })
+})
+
+describe('acceptance proof expectations', () => {
+  it('preserves explicit non-zero exit and output requirements from a spec', () => {
+    const criteria = parseAcceptanceCriteriaFromSpec(`
+## Acceptance Criteria
+1. Scenario: An invalid fixture is rejected.
+   Expectation: The validator rejects the fixture.
+   Verification: automated
+   Command: pnpm exec node scripts/validate-fixture.mjs fixtures/invalid
+   Expected exit: non-zero
+   Expected output includes: invalid fixture
+`)
+
+    expect(criteria[0]).toMatchObject({
+      expectedExit: 'non_zero',
+      expectedOutputIncludes: ['invalid fixture'],
+    })
   })
 })
 
@@ -55,11 +75,18 @@ describe('Task', () => {
     expect(result.priority).toBe('normal')
   })
 
+  it('defaults missing legacy projectPath to the task root marker', () => {
+    const { projectPath, ...withoutProjectPath } = validTask
+    const result = Task.parse(withoutProjectPath)
+    expect(result.projectPath).toBe('.')
+  })
+
   it('applies default empty arrays', () => {
     const result = Task.parse(validTask)
     expect(result.notes).toEqual([])
     expect(result.gateResults).toEqual([])
     expect(result.acceptanceCriteria).toEqual([])
+    expect(result.references).toEqual([])
   })
 
   it('rejects task without required fields', () => {
@@ -106,6 +133,26 @@ describe('Task', () => {
     expect(result.shelveReason?.requeueCount).toBeUndefined()
   })
 
+  it('normalizes legacy policy shelves to the current proposal-policy shape', () => {
+    const result = Task.parse({
+      ...validTask,
+      status: 'archived',
+      shelveReason: {
+        code: 'duplicate',
+        detail: 'Superseded by newer scope shaping.',
+        source: 'policy',
+      },
+    })
+    expect(result.status).toBe('archived')
+    expect(result.shelveReason).toMatchObject({
+      code: 'duplicate',
+      detail: 'Superseded by newer scope shaping.',
+      source: 'proposal_policy',
+      rejectedBy: 'system:proposal-policy',
+      rejectedAt: '1970-01-01T00:00:00.000Z',
+    })
+  })
+
   it('defaults pressure-test summary on legacy request intake records', () => {
     const result = Task.parse({
       ...validTask,
@@ -124,6 +171,33 @@ describe('Task', () => {
       degree: 'automatic',
     })
     expect(result.requestIntake?.pressureTestSummary.checks.map(check => check.id)).toContain('verification')
+  })
+
+  it('accepts durable source references on tasks', () => {
+    const result = Task.parse({
+      ...validTask,
+      references: ['import:/repo/docs/specs/story-memory-schemas.md'],
+      sourceClaims: [{
+        source: 'planning-docs',
+        title: 'Generate story synopsis',
+        evidence: 'The MVP starts from author intent and produces a synopsis.',
+        references: ['/repo/docs/specs/story-memory-schemas.md'],
+        scopeHint: 'current',
+        releaseId: 'headless-mvp',
+        confidence: 'high',
+        linkedTaskHints: ['Generate story synopsis'],
+      }],
+    })
+
+    expect(result.references).toEqual(['import:/repo/docs/specs/story-memory-schemas.md'])
+    expect(result.sourceClaims[0]).toMatchObject({
+      source: 'planning-docs',
+      title: 'Generate story synopsis',
+      references: ['/repo/docs/specs/story-memory-schemas.md'],
+      scopeHint: 'current',
+      releaseId: 'headless-mvp',
+      confidence: 'high',
+    })
   })
 
   it('accepts a review-risk profile for calibrated review routing', () => {
@@ -245,6 +319,43 @@ describe('AcceptanceCriteria', () => {
     })
     expect(result.verifiedBy).toBe('review')
   })
+
+  it('normalizes legacy string acceptance criteria to review criteria', () => {
+    const result = AcceptanceCriteria.parse('Later work has its own release boundary.')
+
+    expect(result).toMatchObject({
+      id: 'legacy-later-work-has-its-own-release-boundary',
+      description: 'Later work has its own release boundary.',
+      scenario: 'Later work has its own release boundary.',
+      expectation: 'Later work has its own release boundary.',
+      verifiedBy: 'review',
+      met: false,
+    })
+  })
+
+  it('normalizes legacy text acceptance criteria to review criteria', () => {
+    const result = AcceptanceCriteria.parse({ text: 'Reviewed.', met: false })
+
+    expect(result).toMatchObject({
+      id: 'legacy-reviewed',
+      description: 'Reviewed.',
+      verifiedBy: 'review',
+      met: false,
+    })
+  })
+})
+
+describe('RequestIntake', () => {
+  it('normalizes partial legacy request intake records', () => {
+    const result = RequestIntake.parse({ createdBy: 'workspace-importer' })
+
+    expect(result).toMatchObject({
+      intent: 'implementation',
+      recommendedNextAction: 'proceed_to_implementation_spec',
+      createdBy: 'workspace-importer',
+      createdAt: '1970-01-01T00:00:00.000Z',
+    })
+  })
 })
 
 describe('TaskQueue', () => {
@@ -285,6 +396,80 @@ describe('TaskQueue', () => {
     })
 
     expect(result.scopeAuthorityRequests).toEqual([])
+  })
+
+  it('normalizes legacy null release descriptions to absent descriptions', () => {
+    const result = TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+      releases: [
+        {
+          id: 'release-1',
+          label: 'Release 1',
+          description: null,
+          nodeIds: [],
+          deferredNodeIds: [],
+        },
+      ],
+    })
+
+    expect(result.releases[0]?.description).toBeUndefined()
+  })
+
+  it('normalizes legacy string proof paths while parsing task queues', () => {
+    const result = TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [{
+        id: 'task-1',
+        title: 'Task',
+        description: 'Task.',
+        domain: 'core',
+        status: 'done',
+        priority: 'normal',
+        acceptanceCriteria: [],
+        outOfScope: [],
+        dependsOn: [],
+        notes: [],
+        gateResults: [],
+        reviewVerdicts: [],
+        adjudications: [],
+        escalations: [],
+        agentIssues: [],
+        revisionCount: 0,
+        remediationAttempts: 0,
+        proofPaths: ['artifacts/fixture-evaluator-proof.md'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+    })
+
+    expect(result.tasks[0]?.proofPaths?.[0]).toMatchObject({
+      id: 'artifacts-fixture-evaluator-proof-md',
+      title: 'artifacts/fixture-evaluator-proof.md',
+    })
+  })
+
+  it('normalizes skeletal legacy tasks while parsing task queues', () => {
+    const result = TaskQueue.parse({
+      version: 1,
+      tasks: [{
+        id: 'task-1',
+        title: 'Review proof packet',
+        status: 'spec_review',
+        hierarchy: { parentId: 'task-parent', relation: 'child' },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+    })
+
+    expect(result.lastUpdated).toBe('1970-01-01T00:00:00.000Z')
+    expect(result.tasks[0]).toMatchObject({
+      description: 'Task',
+      domain: 'general',
+      hierarchy: { parentId: 'task-parent', relation: 'decomposes' },
+    })
   })
 
   it('defaults work hierarchy relation to contains', () => {

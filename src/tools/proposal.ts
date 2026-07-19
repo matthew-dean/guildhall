@@ -1,5 +1,4 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync } from '@guildhall/persistence'
 /**
  * FR-21 agent-originated proposals + FR-22 worker pre-rejection.
  *
@@ -23,8 +22,18 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
-import { Task, TaskQueue, PreRejectionCode } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import path from 'node:path'
+import { Task, TaskQueue, PreRejectionCode, type Task as TaskModel } from '@guildhall/core'
+import {
+  readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+  upsertTaskRuntimeState,
+} from '@guildhall/sessions'
+import {
+  readProjectTaskQueueForMutationSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueueAtCurrentStateBoundary,
+  writeProjectTaskQueueWithSummary,
+} from '@guildhall/runtime/project-state-boundary'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -64,8 +73,8 @@ export interface ProposeTaskResult {
 export async function proposeTask(input: ProposeTaskInput): Promise<ProposeTaskResult> {
   try {
     const parsed = proposeTaskInputSchema.parse(input)
-    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(parsed.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
 
     if (queue.tasks.some((t) => t.id === parsed.proposal.id)) {
       return { success: false, error: `Task id ${parsed.proposal.id} already exists` }
@@ -93,7 +102,14 @@ export async function proposeTask(input: ProposeTaskInput): Promise<ProposeTaskR
 
     queue.tasks.push(proposed)
     queue.lastUpdated = now
-    writeManagedTextFileSync(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    await writeProjectTaskQueueAtCurrentStateBoundary(parsed.tasksPath, queue, {
+      projectRoot: path.isAbsolute(proposed.projectPath)
+        ? proposed.projectPath
+        : path.dirname(parsed.tasksPath),
+      ...(queueRead.expectedQueueRevision !== null
+        ? { expectedQueueRevision: queueRead.expectedQueueRevision }
+        : {}),
+    })
     return { success: true, taskId: proposed.id }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -174,8 +190,8 @@ export interface PreRejectTaskResult {
 export async function preRejectTask(input: PreRejectTaskInput): Promise<PreRejectTaskResult> {
   try {
     const parsed = preRejectTaskInputSchema.parse(input)
-    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(parsed.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const idx = queue.tasks.findIndex((t) => t.id === parsed.taskId)
     if (idx === -1) return { success: false, error: `Task ${parsed.taskId} not found` }
 
@@ -188,7 +204,7 @@ export async function preRejectTask(input: PreRejectTaskInput): Promise<PreRejec
     }
 
     const now = new Date().toISOString()
-    queue.tasks[idx] = {
+    const nextTask: TaskModel = {
       ...task,
       status: 'shelved',
       shelveReason: {
@@ -196,15 +212,42 @@ export async function preRejectTask(input: PreRejectTaskInput): Promise<PreRejec
         detail: parsed.detail,
         rejectedBy: parsed.rejectedBy,
         rejectedAt: now,
-        source: 'worker_pre_rejection',
+        source: 'worker_pre_rejection' as const,
         policyApplied: false,
         requeueCount: task.shelveReason?.requeueCount ?? 0,
       },
       updatedAt: now,
       completedAt: now,
     }
+    queue.tasks[idx] = nextTask as typeof queue.tasks[number]
     queue.lastUpdated = now
-    writeManagedTextFileSync(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    if (readProjectStateDatabaseCurrentAuthorityFromTasksPath(parsed.tasksPath) === 'database') {
+      const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : path.dirname(parsed.tasksPath)
+      const pointMutation = writePromotedTaskDetailMutation(parsed.tasksPath, task.id, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+        mutate: (current) => ({
+          ...current,
+          status: nextTask.status,
+          updatedAt: nextTask.updatedAt,
+          completedAt: nextTask.completedAt,
+        }),
+      })
+      if (!pointMutation) {
+        throw new Error(`Could not persist promoted pre-rejection for task ${task.id}`)
+      }
+      await upsertTaskRuntimeState(projectRoot, task.id, {
+        assignedTo: null,
+        shelveReason: nextTask.shelveReason,
+        updatedAt: now,
+      })
+    } else {
+      writeProjectTaskQueueWithSummary(parsed.tasksPath, queue, {
+        ...(queueRead.expectedQueueRevision !== null
+          ? { expectedQueueRevision: queueRead.expectedQueueRevision }
+          : {}),
+      })
+    }
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }

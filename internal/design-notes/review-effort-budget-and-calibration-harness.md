@@ -13,9 +13,9 @@ Draft feature design for a 0.9.x planning slice.
 ## Related sources
 
 - `internal/design-notes/ux-review-calibration-and-work-review-integration.md`
-- `internal/plans/2026-05-25-review-calibration-and-failure-corpus.md`
+- `internal/plans/archive/2026-05-25-review-calibration-and-failure-corpus.md`
 - `internal/research/2026-05-25-ux-review-calibration-source-notes.md`
-- `internal/design-notes/persistence-system-boundary.md`
+- `internal/design-notes/archive/persistence-system-boundary.md`
 - `docs/levers/reviewer-mode.md`
 - `docs/levers/reviewer-fanout-policy.md`
 - `internal/design-notes/disagreement-and-handoff.md`

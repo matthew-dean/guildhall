@@ -4,10 +4,11 @@
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
+  import { taskSourceSummary } from '../../lib/task-grounding.js'
   import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
-  import { taskDisplayLabel, taskSourceQuestion } from '@guildhall/shared'
+  import { taskDisplayLabel, taskSourceQuestion, taskShapingBlockerLabel, taskShapingBlockers } from '@guildhall/shared'
   import type { ProjectDetail, Task } from '../../lib/types.js'
 
   interface Props {
@@ -18,6 +19,7 @@
     onRunTask?: (taskId: string) => void | Promise<void>
     runBusyTaskId?: string | null
     runActiveTaskId?: string | null
+    proofMissingTaskIds?: readonly string[]
     runError?: string | null
   }
 
@@ -31,14 +33,17 @@
     onRunTask,
     runBusyTaskId = null,
     runActiveTaskId = null,
+    proofMissingTaskIds = [],
     runError = null,
   }: Props = $props()
 
+  const proofMissingSet = $derived(new Set(proofMissingTaskIds))
   const visibleTasks = $derived(tasks.filter(isVisibleLogicalTask))
   const hierarchy = $derived(buildWorkHierarchy(visibleTasks))
   const tasksById = $derived(new Map(visibleTasks.map(task => [task.id, task])))
   const selectedTask = $derived(selectedTaskId ? tasksById.get(selectedTaskId) ?? null : null)
   const containedWork = $derived(selectedTask ? childTasksFor(selectedTask) : [])
+  const selectedShapingBlockers = $derived(selectedTask ? taskShapingBlockers(selectedTask) : [])
 
   function childTasksFor(task: Task): Task[] {
     return (hierarchy.byId.get(task.id)?.childIds ?? [])
@@ -54,6 +59,10 @@
   function isVisibleLogicalTask(task: Task): boolean {
     const visibility = workProgress?.byTaskId?.[task.id]?.visibility ?? task.workVisibility
     return visibility?.kind !== 'internal_step' && visibility?.kind !== 'hidden'
+  }
+
+  function semanticUnitCount(task: Task): number {
+    return task.workUnitCount ?? task.workUnitAnalysis?.units?.length ?? 0
   }
 
   function deliveryStepsFor(task: Task): NonNullable<ProjectDetail['workProgress']>['byTaskId'][string]['deliverySteps'] {
@@ -99,6 +108,7 @@
   }
 
   function isActionableTask(task: Task): boolean {
+    if (proofMissingSet.has(task.id)) return true
     return isQueuedWorkTask(task) || task.status === 'blocked' || hasUnmetDependencies(task, tasks)
   }
 
@@ -108,6 +118,11 @@
   }
 
   function primaryText(task: Task): string {
+    const semanticUnits = semanticUnitCount(task)
+    const childCount = childTasksFor(task).length
+    if (childCount === 0 && semanticUnits > 0 && ['proposed', 'import_draft', 'exploring', 'spec_review', 'ready'].includes(task.status ?? '')) {
+      return `${semanticUnits} planned work ${semanticUnits === 1 ? 'unit is' : 'units are'} already shaped for this item.`
+    }
     const steps = deliveryStepsFor(task)
     if (steps.length > 0) {
       const required = steps.filter(step => step.required).length || steps.length
@@ -116,12 +131,14 @@
       return `${done} / ${required} delivery steps done${blocked ? ` · ${blocked} blocked` : ''}`
     }
     if (needsBreakdownReview(task)) {
-      const count = task.acceptanceCriteria?.length ?? 0
+      const count = task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0
       return `${count} requirements; no contained work or decomposition proposal yet.`
     }
     if (task.blockReason) return task.blockReason
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
-    if (task.acceptanceCriteria?.[0]?.description) return task.acceptanceCriteria[0].description
+    if (task.acceptanceCriteriaFirstDescription ?? task.acceptanceCriteria?.[0]?.description) {
+      return task.acceptanceCriteriaFirstDescription ?? task.acceptanceCriteria?.[0]?.description
+    }
     if (taskSourceQuestion(task)) return taskSourceQuestion(task)!
     return task.description ?? friendlyTaskId(task.id)
   }
@@ -138,7 +155,7 @@
     return task.status === 'ready'
       && childTasksFor(task).length === 0
       && !hasDecompositionProposal(task)
-      && (task.acceptanceCriteria?.length ?? 0) >= 6
+      && (task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0) >= 6
   }
 
   function hasDecompositionProposal(task: Task): boolean {
@@ -173,7 +190,9 @@
 
   function runButtonLabel(task: Task, busy: boolean, active: boolean): string {
     if (active) return 'Running...'
-    if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft and run'
+    if (proofMissingSet.has(task.id)) return busy ? 'Reopening...' : 'Run proof'
+    if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft task brief'
+    if (taskShapingBlockers(task).length > 0) return busy ? 'Shaping...' : 'Continue shaping brief'
     return busy ? 'Starting...' : 'Start work'
   }
 
@@ -188,6 +207,7 @@
     if (status === 'waived') return 'Waived'
     return 'Todo'
   }
+
 </script>
 
 <aside class="work-inspector" aria-label="Selected work inspector">
@@ -195,6 +215,8 @@
   {#if selectedTask}
     {@const rollup = rollupFor(selectedTask)}
     {@const deliverySteps = deliveryStepsFor(selectedTask)}
+    {@const plannedUnits = semanticUnitCount(selectedTask)}
+    {@const sourceSummary = taskSourceSummary(selectedTask, 3)}
     <div class="inspector-head">
       <div>
         <p class="details-context">{containedWork.length ? 'Containing work' : 'Selected work'}</p>
@@ -208,6 +230,10 @@
       <dd>{primaryText(selectedTask)}</dd>
       <dt>Proof</dt>
       <dd>{proofText(selectedTask)}</dd>
+      {#if sourceSummary}
+        <dt>Source</dt>
+        <dd>{sourceSummary}</dd>
+      {/if}
       <dt>Rollup</dt>
       <dd>{rollup.done} / {rollup.total} done · {rollup.blocked} blocked · {rollup.needsYou} needs you</dd>
     </dl>
@@ -226,6 +252,8 @@
             </button>
           {/each}
         </div>
+      {:else if plannedUnits > 0}
+        <p class="subtle">{plannedUnits} planned work unit{plannedUnits === 1 ? '' : 's'} are already shaped for this item.</p>
       {:else if deliverySteps.length > 0}
         <p class="subtle">This item has tracked delivery steps and no contained work.</p>
       {:else if needsBreakdownReview(selectedTask)}
@@ -246,6 +274,23 @@
             <li>
               <span>{step.title}</span>
               <Chip label={stepStatusLabel(step.status)} tone={step.status === 'blocked' ? 'warn' : step.status === 'done' ? 'ok' : step.status === 'active' ? 'running' : 'neutral'} size="compact" />
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+
+    {#if selectedShapingBlockers.length > 0}
+      <section class="inspector-section" aria-label="Runnable blockers">
+        <div class="section-head">
+          <strong>Not runnable yet</strong>
+          <span>{selectedShapingBlockers.length} blocker{selectedShapingBlockers.length === 1 ? '' : 's'}</span>
+        </div>
+        <ul class="delivery-step-list">
+          {#each selectedShapingBlockers as blocker (`shape-${blocker.code}`)}
+            <li>
+              <span>{blocker.summary}</span>
+              <Chip label={taskShapingBlockerLabel(blocker.code)} tone="warn" size="compact" />
             </li>
           {/each}
         </ul>

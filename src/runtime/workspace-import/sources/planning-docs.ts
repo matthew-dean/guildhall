@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { join, basename, isAbsolute, relative } from 'node:path'
+import path, { join, basename, isAbsolute, relative } from 'node:path'
 import type { TaskSource, WorkspaceSignal, TaskSourceContext } from '../types.js'
 
 type Exec = NonNullable<TaskSourceContext['exec']>
@@ -13,15 +13,88 @@ const DONE_HEADING_RE =
   /^(done|shipped|complete|completed|recent progress|milestone snapshot|verification snapshot)$/i
 
 const OPEN_HEADING_RE =
-  /^(next up|in progress|blockers?(?:\s*\/\s*open questions)?|parity gaps|v1 polish(?:\s*\+\s*hardening)?|v2 priorities|later|current focus|p0|p1|p2|open defects|next in phase 1|current next milestone)$/i
+  /^(next up|in progress|blockers?(?:\s*\/\s*open questions)?|parity gaps|v1 polish(?:\s*\+\s*hardening)?|v2 priorities(?:\b.*)?|later(?:\b.*)?|current focus|p0|p1|p2|open defects|next in phase 1|current next milestone)$/i
 
 const STAGE_HEADING_RE = /^stage\s+\d+\s*:/i
 const DELIVERABLE_LABEL_RE = /^deliverables:\s*$/i
+const SCOPE_LABEL_RE = /^(?:primary\s+)?scope:\s*$/i
 const SUCCESS_GATES_LABEL_RE = /^success gates:\s*$/i
+const DONE_GATE_LABEL_RE = /^done gate(?:\s+for\s+.+?)?:\s*$/i
 const DO_NOT_START_LABEL_RE = /^do not start yet:\s*$/i
 const GOAL_LABEL_RE = /^goal:\s*(.+?)\s*$/i
 const RECOMMENDED_TASK_TITLE_RE = /^-\s+\*\*recommended first task title:\*\*\s+(.+?)\s*$/i
 const RECOMMENDED_DOMAIN_RE = /^-\s+\*\*recommended domain:\*\*\s+(.+?)\s*$/i
+const CORE_LOOP_HEADING_RE = /^core loop$/i
+const SYSTEM_RECORDS_HEADING_RE = /^system records$/i
+const MARKDOWN_TABLE_ROW_RE = /^\|.+\|\s*$/
+
+function coreLoopRole(title: string): WorkspaceSignal['role'] {
+  const normalized = cleanHeading(title).toLowerCase()
+  if (
+    /^author defines\b/.test(normalized) ||
+    /^author builds a house\b/.test(normalized) ||
+    (/\bauthor\b/.test(normalized) &&
+      /\b(intent|genre|form|theme|themes|voice|audience|premise|world|cast|outline|chapter goals|review standards)\b/.test(normalized))
+  ) {
+    return 'brief_input'
+  }
+  return 'capability'
+}
+
+function recordRole(title: string): WorkspaceSignal['role'] {
+  const normalized = cleanHeading(title).toLowerCase()
+  if (
+    /^(book brief|author voice profile|project author notes|global author database|author profile)$/.test(normalized)
+  ) {
+    return 'brief_input'
+  }
+  return 'capability'
+}
+
+function normalizeKey(text: string): string {
+  return cleanHeading(text).toLowerCase()
+}
+
+function mergeCoreLoopStructuralContext(signals: WorkspaceSignal[]): WorkspaceSignal[] {
+  const next: WorkspaceSignal[] = []
+  const bookBriefRecordByRef = new Map<string, number>()
+
+  for (const signal of signals) {
+    if (
+      signal.kind === 'context' &&
+      signal.role === 'brief_input' &&
+      signal.structure === 'record' &&
+      normalizeKey(signal.title) === 'book brief'
+    ) {
+      const ref = signal.references?.[0]
+      if (ref) bookBriefRecordByRef.set(ref, next.length)
+    }
+    next.push(signal)
+  }
+
+  return next.filter((signal) => {
+    const ref = signal.references?.[0]
+    if (
+      signal.kind === 'context' &&
+      signal.role === 'brief_input' &&
+      !signal.structure &&
+      /^author defines book intent\b/i.test(signal.title) &&
+      ref &&
+      bookBriefRecordByRef.has(ref)
+    ) {
+      const recordIndex = bookBriefRecordByRef.get(ref)!
+      const record = next[recordIndex]
+      if (record) {
+        const supporting = cleanHeading(signal.title)
+        if (supporting && !record.evidence.includes(supporting)) {
+          record.evidence = `${record.evidence} Also described as: ${supporting}`.slice(0, 240)
+        }
+      }
+      return false
+    }
+    return true
+  })
+}
 
 function likelyRelevantFile(rel: string): boolean {
   return MARKDOWN_FILE_RE.test(rel) && !IGNORE_PATH_RE.test(rel)
@@ -57,6 +130,15 @@ function inferDomainHint(rel: string, enabledRoots: ReadonlySet<string>): string
   return enabledRoots.has(first) ? first : undefined
 }
 
+function primaryDomainHint(relPaths: readonly string[], roots: ReadonlySet<string>): string | null {
+  for (const rel of relPaths) {
+    if (!/(^|\/)docs\/release-plan\.md$/i.test(rel) && !/(^|\/)PROJECT_STATE\.md$/i.test(rel)) continue
+    const domain = inferDomainHint(rel, roots)
+    if (domain) return domain
+  }
+  return null
+}
+
 function detectMultiProjectRoots(relPaths: readonly string[]): Set<string> {
   const roots = new Set<string>()
   for (const rel of relPaths) {
@@ -88,18 +170,76 @@ function cleanSpecTitle(text: string): string {
   return cleanHeading(text).replace(/^spec:\s*/i, '').trim()
 }
 
+function markdownFilenameFromHeading(text: string | null): string | null {
+  if (!text) return null
+  const codeMatch = text.match(/`([^`]+\.md)`/i)
+  if (codeMatch?.[1]) return codeMatch[1]
+  const plainMatch = text.match(/([a-z0-9][a-z0-9-]*\.md)\b/i)
+  return plainMatch?.[1] ?? null
+}
+
+function relatedSpecReference(
+  projectPath: string,
+  sourceRel: string,
+  headingRaw: string | null,
+  availableFiles: ReadonlySet<string>,
+): string | null {
+  const fileName = markdownFilenameFromHeading(headingRaw)
+  if (!fileName) return null
+  const normalized = fileName.replaceAll('\\', '/')
+  const preferredCandidates = [
+    `docs/specs/${normalized}`,
+    `specs/${normalized}`,
+    path.join(path.dirname(sourceRel), normalized).replaceAll('\\', '/'),
+  ]
+  for (const candidate of preferredCandidates) {
+    if (availableFiles.has(candidate)) {
+      return join(projectPath, candidate)
+    }
+  }
+  const basenameMatches = [...availableFiles]
+    .filter(candidate => path.basename(candidate) === normalized)
+    .sort((left, right) => {
+      const leftScore = Number(left.includes('/specs/'))
+      const rightScore = Number(right.includes('/specs/'))
+      return rightScore - leftScore || left.localeCompare(right)
+    })
+  return basenameMatches[0] ? join(projectPath, basenameMatches[0]) : null
+}
+
+function isDecompositionInventoryFile(rel: string): boolean {
+  return /(^|\/)remaining-spec-decomposition-inventory\.md$/i.test(rel.replaceAll('\\', '/'))
+}
+
 function logicalMarkdownLines(raw: string): string[] {
   const physicalLines = raw.split('\n')
   const logicalLines: string[] = []
 
   for (let index = 0; index < physicalLines.length; index += 1) {
     let line = physicalLines[index] ?? ''
+    if (startsWrappedLabel(line)) {
+      while (index + 1 < physicalLines.length && isWrappedLabelContinuationLine(physicalLines[index + 1] ?? '')) {
+        line = `${line.trimEnd()} ${(physicalLines[index + 1] ?? '').trim()}`
+        index += 1
+      }
+      logicalLines.push(line)
+      continue
+    }
     if (!startsListItem(line)) {
       logicalLines.push(line)
       continue
     }
-    while (index + 1 < physicalLines.length && isListContinuationLine(physicalLines[index + 1] ?? '')) {
-      line = `${line.trimEnd()} ${(physicalLines[index + 1] ?? '').trim()}`
+    while (index + 1 < physicalLines.length) {
+      const nextLine = physicalLines[index + 1] ?? ''
+      if (isListCompletionAnnotation(nextLine.trim())) {
+        index += 1
+        while (index + 1 < physicalLines.length && isListMetadataContinuationLine(physicalLines[index + 1] ?? '')) {
+          index += 1
+        }
+        continue
+      }
+      if (!isListContinuationLine(nextLine)) break
+      line = `${line.trimEnd()} ${nextLine.trim()}`
       index += 1
     }
     logicalLines.push(line)
@@ -112,10 +252,31 @@ function startsListItem(line: string): boolean {
   return /^\s*(?:[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(line)
 }
 
+function startsWrappedLabel(line: string): boolean {
+  return /^\s*(?:goal|status|the next milestone is):\s+\S/i.test(line)
+}
+
+function isWrappedLabelContinuationLine(line: string): boolean {
+  if (!line.trim()) return false
+  const trimmed = line.trim()
+  return !/^(?:#{1,6}\s+|[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+|goal:\s+|status:\s+|(?:primary\s+)?scope:\s*$|deliverables:\s*$|success gates:\s*$|done gate(?:\s+for\s+.+?)?:\s*$|do not start yet:\s*$|the next milestone is:\s+)/i.test(trimmed)
+}
+
 function isListContinuationLine(line: string): boolean {
   if (!/^\s{2,}\S/.test(line)) return false
   const trimmed = line.trim()
+  if (isListCompletionAnnotation(trimmed)) return false
   return !/^(?:#{1,6}\s+|\|(?:.+)\||[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(trimmed)
+}
+
+function isListMetadataContinuationLine(line: string): boolean {
+  if (!/^\s{2,}\S/.test(line)) return false
+  const trimmed = line.trim()
+  return !/^(?:#{1,6}\s+|\|(?:.+)\||[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(trimmed)
+}
+
+function isListCompletionAnnotation(trimmed: string): boolean {
+  return /^(?:[✓✔✅]\s*)?(?:completed?|done|shipped|verified|proof|evidence)\b/i.test(trimmed)
 }
 
 function summarizeMarkdownAfterTitle(raw: string): string {
@@ -137,10 +298,82 @@ function summarizeMarkdownAfterTitle(raw: string): string {
   return cleanHeading(lines.join(' ')).slice(0, 240).trim()
 }
 
+function humanizeSpecStem(fileName: string): string {
+  return fileName
+    .replace(/\.md$/i, '')
+    .split('-')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function splitMarkdownTableRow(line: string): string[] | null {
+  if (!MARKDOWN_TABLE_ROW_RE.test(line.trim())) return null
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '')
+  const cells = trimmed.split('|').map(cell => cleanHeading(cell.trim()))
+  return cells.length > 0 ? cells : null
+}
+
+function isMarkdownTableDividerRow(cells: readonly string[]): boolean {
+  return cells.every(cell => /^:?-{3,}:?$/.test(cell))
+}
+
+function parseLinkedTaskHints(cell: string): string[] {
+  const normalized = cleanHeading(cell)
+  if (!normalized || /^\*?\(?none\b/i.test(normalized) || normalized === '—') return []
+  const codeMatches = [...cell.matchAll(/`([^`]+)`/g)].map(match => cleanHeading(match[1] ?? ''))
+  const raw = codeMatches.length > 0 ? codeMatches : normalized.split(/,\s*/)
+  return raw
+    .map(entry => cleanHeading(entry))
+    .filter(entry => entry.length > 0 && entry !== '—')
+}
+
+function specCoverageSignalsForFile(input: {
+  projectPath: string
+  sourceRel: string
+  sourceAbs: string
+  raw: string
+  availableFiles: ReadonlySet<string>
+  domainHint?: string
+}): WorkspaceSignal[] {
+  const signals: WorkspaceSignal[] = []
+  const seen = new Set<string>()
+  for (const line of input.raw.split('\n')) {
+    const cells = splitMarkdownTableRow(line)
+    if (!cells || cells.length < 2) continue
+    const specFile = markdownFilenameFromHeading(cells[0] ?? '')
+    if (!specFile || /^index\.md$/i.test(specFile)) continue
+    const linkedTaskHints = parseLinkedTaskHints(cells[1] ?? '')
+    if (linkedTaskHints.length === 0) continue
+    const specRef = relatedSpecReference(
+      input.projectPath,
+      input.sourceRel,
+      `\`${specFile}\``,
+      input.availableFiles,
+    )
+    if (!specRef) continue
+    const dedupeKey = `${specRef}::${linkedTaskHints.join('::')}`
+    if (seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+    signals.push({
+      source: 'planning-docs',
+      kind: 'context',
+      title: `Spec coverage: ${humanizeSpecStem(specFile)}`,
+      evidence: `${input.sourceRel}: ${cleanHeading(cells[1] ?? '')}`.slice(0, 240),
+      references: [specRef, input.sourceAbs],
+      role: 'reference',
+      linkedTaskHints,
+      ...(input.domainHint ? { domainHint: input.domainHint } : {}),
+      confidence: 'medium',
+    })
+  }
+  return signals
+}
+
 function fileLooksLikeTaskList(fileBase: string, rel: string): boolean {
   if (/^PROJECT_STATE\.md$/i.test(fileBase)) return true
   if (/\/specs\/[^/]+\.md$/i.test(rel)) return false
-  return /(roadmap|plan|milestone|inventory|bugs|todo)/i.test(fileBase)
+  return /(roadmap|plan|tracker|milestone|inventory|bugs|todo)/i.test(fileBase)
 }
 
 function isProjectStateCurrentFocus(fileBase: string, sectionHeading: string | null): boolean {
@@ -156,6 +389,11 @@ function groupingChildrenAreTaskCandidates(title: string): boolean {
     /^deepen\b.*\bhigh-frequency\b/.test(normalized) ||
     /^close\b.*\beditor parity gaps\b/.test(normalized)
   )
+}
+
+function isEvidenceStatusBullet(title: string): boolean {
+  const normalized = cleanHeading(title).toLowerCase().replace(/\s+/g, ' ').trim()
+  return /^(implementation|fixture|verification|status|files created|acceptance criteria|review lanes?)\b/.test(normalized)
 }
 
 function headingSignalKind(
@@ -174,6 +412,122 @@ function headingSignalKind(
   if (sectionHeading && DONE_HEADING_RE.test(sectionHeading)) return 'milestone'
   if (sectionHeading && OPEN_HEADING_RE.test(sectionHeading)) return 'open_work'
   return null
+}
+
+function parseStageOrdinal(label: string | null | undefined): number | null {
+  if (!label) return null
+  const match = /^stage\s+(\d+)(?:\b|\s*[:(].*)/i.exec(label.trim())
+  if (!match?.[1]) return null
+  const value = Number.parseInt(match[1], 10)
+  return Number.isFinite(value) ? value : null
+}
+
+function scopeHintForStage(
+  stageLabel: string | null | undefined,
+  currentMilestoneStage: string | null | undefined,
+  unknown: WorkspaceSignal['scopeHint'] = 'current',
+): WorkspaceSignal['scopeHint'] {
+  const stageNumber = parseStageOrdinal(stageLabel)
+  const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
+  if (stageNumber != null && currentStageNumber != null) {
+    return stageNumber <= currentStageNumber ? 'current' : 'later'
+  }
+  return unknown
+}
+
+function scopeHintForOpenWorkSection(
+  sectionHeading: string | null | undefined,
+): WorkspaceSignal['scopeHint'] | undefined {
+  if (!sectionHeading) return undefined
+  if (/^(later|v2 priorities)(?:\b.*)?$/i.test(sectionHeading.trim())) return 'later'
+  return undefined
+}
+
+function scopeHintForOpenWorkTitle(
+  title: string | null | undefined,
+): WorkspaceSignal['scopeHint'] | undefined {
+  if (!title) return undefined
+  if (/\b(deferred|post[-\s]?launch|later|v2)\b/i.test(title)) return 'later'
+  return undefined
+}
+
+function scopeHintForOpenWork(
+  sectionHeading: string | null | undefined,
+  title: string | null | undefined,
+): WorkspaceSignal['scopeHint'] | undefined {
+  return scopeHintForOpenWorkSection(sectionHeading) ?? scopeHintForOpenWorkTitle(title)
+}
+
+function explicitReleaseLabelForHeading(heading: string): string | null {
+  const cleaned = cleanHeading(heading).replace(/\s+/g, ' ').trim()
+  if (!cleaned) return null
+  const colonLabel =
+    /^(?:current\s+)?(?:release|bounded scope|scope)\s*:\s*(.+?)\s*$/i.exec(cleaned)?.[1]
+  if (colonLabel) return cleanReleaseLabel(colonLabel)
+  const suffixLabel = /^(.+?)\s+release$/i.exec(cleaned)?.[1]
+  return suffixLabel ? cleanReleaseLabel(suffixLabel) : null
+}
+
+function stageHeadingDeclaresRelease(rel: string, fileBase: string): boolean {
+  if (/milestones?\.md$/i.test(fileBase)) return false
+  return /(^|\/)release-plan\.md$/i.test(rel) || /(^|\/)implementation-roadmap\.md$/i.test(rel) || /\brelease\b/i.test(fileBase)
+}
+
+function cleanReleaseLabel(label: string): string | null {
+  const cleaned = cleanHeading(label).replace(/\s+/g, ' ').trim()
+  if (!cleaned || /^(plan|roadmap|notes?|tbd)$/i.test(cleaned)) return null
+  return cleaned
+}
+
+function releaseIdFromLabel(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function currentReleaseIdForScope(
+  releaseId: string | null,
+  scopeHint: WorkspaceSignal['scopeHint'] | undefined,
+): string | undefined {
+  void scopeHint
+  if (!releaseId) return undefined
+  return releaseId
+}
+
+function scopeHintInsideExplicitRelease(
+  releaseId: string | null,
+  scopeHint: WorkspaceSignal['scopeHint'] | undefined,
+): WorkspaceSignal['scopeHint'] | undefined {
+  if (scopeHint) return scopeHint
+  return releaseId ? 'current' : undefined
+}
+
+function isFutureStage(
+  stageLabel: string | null | undefined,
+  currentMilestoneStage: string | null | undefined,
+): boolean {
+  const stageNumber = parseStageOrdinal(stageLabel)
+  const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
+  return stageNumber != null && currentStageNumber != null && stageNumber > currentStageNumber
+}
+
+function stageDeliverableSignal(
+  currentSection: string,
+  currentMilestoneStage: string | null,
+  unknownStageScope: WorkspaceSignal['scopeHint'] = 'current',
+): { kind: WorkspaceSignal['kind']; scopeHint?: WorkspaceSignal['scopeHint']; role?: WorkspaceSignal['role'] } {
+  if (isFutureStage(currentSection, currentMilestoneStage)) {
+    return {
+      kind: 'open_work',
+      scopeHint: 'later',
+    }
+  }
+  return {
+    kind: 'context',
+    role: 'capability',
+    scopeHint: scopeHintForStage(currentSection, currentMilestoneStage, unknownStageScope),
+  }
 }
 
 export const planningDocsSource: TaskSource = {
@@ -195,6 +549,8 @@ export const planningDocsSource: TaskSource = {
           .filter((rel) => likelyRelevantFile(rel))
       : listMarkdownFiles(projectPath)
     const multiProjectRoots = detectMultiProjectRoots(relPaths)
+    const primaryDomain = primaryDomainHint(relPaths, multiProjectRoots)
+    const availableFiles = new Set(relPaths)
 
     const fileContents = new Map<string, string>()
     for (const rel of relPaths) {
@@ -204,7 +560,22 @@ export const planningDocsSource: TaskSource = {
       if (!raw.trim()) continue
       fileContents.set(rel, raw)
     }
-    const currentMilestoneStage = detectCurrentMilestoneStage(fileContents.values())
+    const contentsByDomain = new Map<string, string[]>()
+    for (const [rel, raw] of fileContents) {
+      const domain = inferDomainHint(rel, multiProjectRoots) ?? ''
+      const bucket = contentsByDomain.get(domain) ?? []
+      bucket.push(raw)
+      contentsByDomain.set(domain, bucket)
+    }
+    const currentMilestoneStageByDomain = new Map<string, string | null>()
+    for (const [domain, contents] of contentsByDomain) {
+      currentMilestoneStageByDomain.set(
+        domain,
+        multiProjectRoots.size > 1 && primaryDomain && domain && domain !== primaryDomain
+          ? detectExplicitCurrentMilestoneStage(contents)
+          : detectCurrentMilestoneStage(contents),
+      )
+    }
 
     const signals: WorkspaceSignal[] = []
     for (const rel of relPaths) {
@@ -214,33 +585,75 @@ export const planningDocsSource: TaskSource = {
       if (!raw.trim()) continue
       const fileBase = basename(rel)
       const domainHint = inferDomainHint(rel, multiProjectRoots)
+      const domainKey = domainHint ?? ''
+      const currentMilestoneStage = currentMilestoneStageByDomain.get(domainKey) ?? null
+      const unknownStageScope: WorkspaceSignal['scopeHint'] =
+        multiProjectRoots.size > 1 && primaryDomain && domainHint && domainHint !== primaryDomain ? 'later' : 'current'
+      const defaultOpenWorkScopeHint: WorkspaceSignal['scopeHint'] | undefined =
+        multiProjectRoots.size > 1 && primaryDomain && domainHint && domainHint !== primaryDomain ? 'later' : undefined
       let currentSection: string | null = null
-      let currentLabel: 'deliverables' | 'success_gates' | 'do_not_start' | null = null
+      let currentSectionRaw: string | null = null
+      let currentLabel: 'deliverables' | 'scope' | 'success_gates' | 'done_gate' | 'do_not_start' | null = null
       let pendingRecommendedTaskTitle: string | null = null
       let pendingRecommendedTaskSection: string | null = null
+      let pendingRecommendedTaskSectionRaw: string | null = null
       let currentRecommendedStageAlignment: string | null = null
       let currentRecommendedDomain: string | null = null
+      let currentReleaseId: string | null = null
+      let currentReleaseLabel: string | null = null
+      let currentReleaseDepth: number | null = null
       const bulletStack: Array<{ indent: number; title: string; grouping: boolean }> = []
+      let pendingTableHeaders: string[] | null = null
+      let activeTableHeaders: string[] | null = null
 
       const flushPendingRecommendedTask = () => {
         if (!pendingRecommendedTaskTitle) return
         const title = pendingRecommendedTaskTitle
-        const normalizedAlignment = normalizeStageLabel(currentRecommendedStageAlignment)
         if (!/^\(?none\b/i.test(title)) {
-          const scopeHint: WorkspaceSignal['scopeHint'] =
-            currentMilestoneStage && normalizedAlignment && normalizedAlignment !== currentMilestoneStage
-              ? 'later'
-              : 'current'
-          signals.push({
-            source: 'planning-docs',
-            kind: 'open_work',
-            title,
-            evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
-            references: [abs],
-            ...(currentRecommendedDomain ? { domainHint: currentRecommendedDomain } : domainHint ? { domainHint } : {}),
-            scopeHint,
-            confidence: 'high',
-          })
+          const references = [abs]
+          const relatedSpec = relatedSpecReference(
+            projectPath,
+            rel,
+            pendingRecommendedTaskSectionRaw,
+            availableFiles,
+          )
+          if (relatedSpec && !references.includes(relatedSpec)) {
+            references.push(relatedSpec)
+          }
+          const scopeHint = scopeHintInsideExplicitRelease(
+            currentReleaseId,
+            scopeHintForStage(currentRecommendedStageAlignment, currentMilestoneStage, unknownStageScope),
+          )
+          const domain = currentRecommendedDomain ?? domainHint
+          const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+          const releaseLabel = releaseId ? currentReleaseLabel : null
+          if (isDecompositionInventoryFile(rel) && scopeHint === 'later' && relatedSpec) {
+            signals.push({
+              source: 'planning-docs',
+              kind: 'context',
+              role: 'capability',
+              title: `Spec: ${humanizeSpecStem(path.basename(relatedSpec))}`,
+              evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
+              references: [relatedSpec, abs],
+              linkedTaskHints: [title],
+              ...(domain ? { domainHint: domain } : {}),
+              scopeHint,
+              confidence: 'high',
+            })
+          } else {
+            signals.push({
+              source: 'planning-docs',
+              kind: 'open_work',
+              title,
+              evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
+              references,
+              ...(domain ? { domainHint: domain } : {}),
+              scopeHint,
+              ...(releaseId ? { releaseId } : {}),
+              ...(releaseLabel ? { releaseLabel } : {}),
+              confidence: 'high',
+            })
+          }
         }
         pendingRecommendedTaskTitle = null
         pendingRecommendedTaskSection = null
@@ -260,19 +673,47 @@ export const planningDocsSource: TaskSource = {
             title: `Spec: ${specTitle}`,
             evidence: summarizeMarkdownAfterTitle(raw) || rel,
             references: [abs],
+            role: 'capability',
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',
           })
         }
       }
+      signals.push(...specCoverageSignalsForFile({
+        projectPath,
+        sourceRel: rel,
+        sourceAbs: abs,
+        raw,
+        availableFiles,
+        ...(domainHint ? { domainHint } : {}),
+      }))
 
       for (const line of logicalMarkdownLines(raw)) {
         const heading = /^(#{2,4})\s+(.+?)\s*$/.exec(line)
         if (heading) {
           flushPendingRecommendedTask()
+          const headingDepth = heading[1]!.length
+          if (currentReleaseDepth != null && headingDepth <= currentReleaseDepth) {
+            currentReleaseId = null
+            currentReleaseLabel = null
+            currentReleaseDepth = null
+          }
           currentSection = cleanHeading(heading[2]!)
+          currentSectionRaw = heading[2]!.trim()
+          const releaseLabel = explicitReleaseLabelForHeading(currentSection)
+          if (releaseLabel) {
+            currentReleaseId = releaseIdFromLabel(releaseLabel)
+            currentReleaseLabel = releaseLabel
+            currentReleaseDepth = headingDepth
+          } else if (STAGE_HEADING_RE.test(currentSection) && stageHeadingDeclaresRelease(rel, fileBase)) {
+            currentReleaseId = releaseIdFromLabel(currentSection)
+            currentReleaseLabel = currentSection
+            currentReleaseDepth = headingDepth
+          }
           currentLabel = null
           bulletStack.length = 0
+          pendingTableHeaders = null
+          activeTableHeaders = null
           const kind = headingSignalKind(fileBase, rel, currentSection, currentSection)
           if (kind && !DONE_HEADING_RE.test(currentSection) && !OPEN_HEADING_RE.test(currentSection)) {
             signals.push({
@@ -285,17 +726,41 @@ export const planningDocsSource: TaskSource = {
               confidence: kind === 'context' ? 'medium' : 'medium',
             })
           }
+          if (STAGE_HEADING_RE.test(currentSection)) {
+            const scopeHint = scopeHintForStage(currentSection, currentMilestoneStage, unknownStageScope)
+            const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+            const releaseLabel = releaseId ? currentReleaseLabel : null
+            signals.push({
+              source: 'planning-docs',
+              kind: 'context',
+              title: currentSection,
+              evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+              references: [abs],
+              scopeHint,
+              ...(releaseId ? { releaseId } : {}),
+              ...(releaseLabel ? { releaseLabel } : {}),
+              ...(domainHint ? { domainHint } : {}),
+              confidence: 'medium',
+            })
+          }
           continue
         }
 
         const goalLabel = GOAL_LABEL_RE.exec(line.trim())
         if (goalLabel && currentSection && STAGE_HEADING_RE.test(currentSection)) {
+          const scopeHint = scopeHintForStage(currentSection, currentMilestoneStage, unknownStageScope)
+          const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+          const releaseLabel = releaseId ? currentReleaseLabel : null
           signals.push({
             source: 'planning-docs',
-            kind: 'goal',
-            title: cleanHeading(goalLabel[1]!),
-            evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+            kind: 'context',
+            title: currentSection,
+            evidence: `${rel}: ${cleanHeading(goalLabel[1]!)}`.slice(0, 240),
             references: [abs],
+            role: 'capability',
+            scopeHint,
+            ...(releaseId ? { releaseId } : {}),
+            ...(releaseLabel ? { releaseLabel } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',
           })
@@ -303,14 +768,64 @@ export const planningDocsSource: TaskSource = {
         }
 
         const trimmedLine = line.trim()
+        const tableCells = splitMarkdownTableRow(line)
+        if (tableCells) {
+          if (isMarkdownTableDividerRow(tableCells)) {
+            if (pendingTableHeaders) {
+              activeTableHeaders = pendingTableHeaders
+              pendingTableHeaders = null
+            }
+            continue
+          }
+          if (!activeTableHeaders) {
+            pendingTableHeaders = tableCells
+            continue
+          }
+          if (
+            currentSection &&
+            SYSTEM_RECORDS_HEADING_RE.test(currentSection) &&
+            activeTableHeaders[0]?.toLowerCase() === 'record' &&
+            activeTableHeaders[1]?.toLowerCase() === 'purpose' &&
+            tableCells.length >= 2
+          ) {
+            const recordTitle = cleanHeading(tableCells[0] ?? '')
+            const recordPurpose = cleanHeading(tableCells[1] ?? '')
+            if (recordTitle && recordPurpose) {
+              signals.push({
+                source: 'planning-docs',
+                kind: 'context',
+                title: recordTitle,
+                evidence: `${rel}: ${recordPurpose}`.slice(0, 240),
+                references: [abs],
+                role: recordRole(recordTitle),
+                structure: 'record',
+                ...(domainHint ? { domainHint } : {}),
+                confidence: 'high',
+              })
+            }
+          }
+          continue
+        }
+        pendingTableHeaders = null
+        activeTableHeaders = null
         if (currentSection && STAGE_HEADING_RE.test(currentSection)) {
           if (DELIVERABLE_LABEL_RE.test(trimmedLine)) {
             currentLabel = 'deliverables'
             bulletStack.length = 0
             continue
           }
+          if (SCOPE_LABEL_RE.test(trimmedLine)) {
+            currentLabel = 'scope'
+            bulletStack.length = 0
+            continue
+          }
           if (SUCCESS_GATES_LABEL_RE.test(trimmedLine)) {
             currentLabel = 'success_gates'
+            bulletStack.length = 0
+            continue
+          }
+          if (DONE_GATE_LABEL_RE.test(trimmedLine)) {
+            currentLabel = 'done_gate'
             bulletStack.length = 0
             continue
           }
@@ -337,6 +852,7 @@ export const planningDocsSource: TaskSource = {
         if (recommendedTask && currentSection) {
           pendingRecommendedTaskTitle = cleanHeading(recommendedTask[1]!)
           pendingRecommendedTaskSection = currentSection
+          pendingRecommendedTaskSectionRaw = currentSectionRaw
           continue
         }
 
@@ -364,12 +880,21 @@ export const planningDocsSource: TaskSource = {
           (fileLooksLikeTaskList(fileBase, rel) || (currentSection && OPEN_HEADING_RE.test(currentSection)))
         ) {
           bulletStack.length = 0
+          const scopeHint = scopeHintInsideExplicitRelease(
+            currentReleaseId,
+            scopeHintForOpenWork(currentSection, unchecked[1]) ?? defaultOpenWorkScopeHint,
+          )
+          const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+          const releaseLabel = releaseId ? currentReleaseLabel : null
           signals.push({
             source: 'planning-docs',
             kind: 'open_work',
             title: cleanHeading(unchecked[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
+            ...(scopeHint ? { scopeHint } : {}),
+            ...(releaseId ? { releaseId } : {}),
+            ...(releaseLabel ? { releaseLabel } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'high',
           })
@@ -380,12 +905,17 @@ export const planningDocsSource: TaskSource = {
         if (bullet && currentSection && (OPEN_HEADING_RE.test(currentSection) || STAGE_HEADING_RE.test(currentSection))) {
           const indent = bullet[1]!.replace(/\t/g, '  ').length
           const title = cleanHeading(bullet[2]!)
-          const stageScopedKind = currentLabel === 'deliverables'
-            ? 'context'
+          const evidenceStatusBullet = isEvidenceStatusBullet(title)
+          const stageScopedSignal = currentLabel === 'deliverables'
+            ? stageDeliverableSignal(currentSection, currentMilestoneStage, unknownStageScope)
+            : currentLabel === 'scope'
+              ? stageDeliverableSignal(currentSection, currentMilestoneStage, unknownStageScope)
             : currentLabel === 'success_gates'
-              ? 'context'
+              ? { kind: 'context' as const }
+              : currentLabel === 'done_gate'
+              ? { kind: 'context' as const }
               : currentLabel === 'do_not_start'
-                ? 'context'
+              ? { kind: 'context' as const }
                 : null
           while (bulletStack.length > 0 && bulletStack[bulletStack.length - 1]!.indent >= indent) {
             bulletStack.pop()
@@ -393,29 +923,93 @@ export const planningDocsSource: TaskSource = {
           const parent = bulletStack[bulletStack.length - 1]
           const grouping = title.endsWith(':')
           const groupingChildrenAreTasks = grouping && groupingChildrenAreTaskCandidates(title)
-          if (grouping && !groupingChildrenAreTasks) {
+          if (evidenceStatusBullet) {
+            const scopeHint = scopeHintInsideExplicitRelease(
+              currentReleaseId,
+              scopeHintForOpenWork(currentSection, title) ?? defaultOpenWorkScopeHint,
+            )
+            const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+            const releaseLabel = releaseId ? currentReleaseLabel : null
             signals.push({
               source: 'planning-docs',
-              kind: isProjectStateCurrentFocus(fileBase, currentSection) ? 'context' : 'open_work',
+              kind: 'context',
               title: title.replace(/:$/, ''),
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
+              ...(scopeHint ? { scopeHint } : {}),
+              ...(releaseId ? { releaseId } : {}),
+              ...(releaseLabel ? { releaseLabel } : {}),
+              ...(domainHint ? { domainHint } : {}),
+              confidence: 'medium',
+            })
+          } else if (grouping && !groupingChildrenAreTasks) {
+            const scopeHint = scopeHintInsideExplicitRelease(
+              currentReleaseId,
+              scopeHintForOpenWork(currentSection, title) ?? defaultOpenWorkScopeHint,
+            )
+            const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+            const releaseLabel = releaseId ? currentReleaseLabel : null
+            signals.push({
+              source: 'planning-docs',
+              kind:
+                isProjectStateCurrentFocus(fileBase, currentSection)
+                  ? 'context'
+                  : 'open_work',
+              title: title.replace(/:$/, ''),
+              evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+              references: [abs],
+              ...(scopeHint ? { scopeHint } : {}),
+              ...(releaseId ? { releaseId } : {}),
+              ...(releaseLabel ? { releaseLabel } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
           } else if (!grouping) {
-            const kind: WorkspaceSignal['kind'] = stageScopedKind ?? (
+            if (currentLabel === 'deliverables' && stageScopedSignal?.kind === 'context') {
+              const releaseId = currentReleaseIdForScope(currentReleaseId, stageScopedSignal.scopeHint)
+              const releaseLabel = releaseId ? currentReleaseLabel : null
+              signals.push({
+                source: 'planning-docs',
+                kind: 'context',
+                role: 'capability',
+                title,
+                evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+                references: [abs],
+                ...(stageScopedSignal?.scopeHint ? { scopeHint: stageScopedSignal.scopeHint } : {}),
+                ...(releaseId ? { releaseId } : {}),
+                ...(releaseLabel ? { releaseLabel } : {}),
+                ...(domainHint ? { domainHint } : {}),
+                confidence: 'medium',
+              })
+              bulletStack.push({ indent, title, grouping: groupingChildrenAreTasks })
+              continue
+            }
+            const kind: WorkspaceSignal['kind'] = stageScopedSignal?.kind ?? (
               isProjectStateCurrentFocus(fileBase, currentSection) ||
               (parent && indent > parent.indent && !parent.grouping)
                 ? 'context'
                 : 'open_work'
             )
+            const scopeHint = scopeHintInsideExplicitRelease(
+              currentReleaseId,
+              stageScopedSignal?.scopeHint ?? scopeHintForOpenWork(currentSection, title) ?? defaultOpenWorkScopeHint,
+            )
+            const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+            const releaseLabel = releaseId ? currentReleaseLabel : null
             signals.push({
               source: 'planning-docs',
               kind,
               title,
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
+              ...(stageScopedSignal?.role
+                ? { role: stageScopedSignal.role }
+                : kind === 'context' && (currentLabel === 'deliverables' || currentLabel === 'scope')
+                  ? { role: 'capability' as const }
+                  : {}),
+              ...(scopeHint ? { scopeHint } : {}),
+              ...(releaseId ? { releaseId } : {}),
+              ...(releaseLabel ? { releaseLabel } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -425,16 +1019,40 @@ export const planningDocsSource: TaskSource = {
         }
 
         const numbered = /^\s*\d+\.\s+(.+?)\s*$/.exec(line)
+        if (numbered && currentSection && CORE_LOOP_HEADING_RE.test(currentSection)) {
+          signals.push({
+            source: 'planning-docs',
+            kind: 'context',
+            title: cleanHeading(numbered[1]!),
+            evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+            references: [abs],
+            role: coreLoopRole(numbered[1]!),
+            ...(domainHint ? { domainHint } : {}),
+            confidence: 'high',
+          })
+          continue
+        }
         if (numbered && currentSection && (OPEN_HEADING_RE.test(currentSection) || /^current next milestone$/i.test(currentSection))) {
           const kind: WorkspaceSignal['kind'] = isProjectStateCurrentFocus(fileBase, currentSection)
             ? 'context'
             : 'open_work'
+          const scopeHint = scopeHintInsideExplicitRelease(
+            currentReleaseId,
+            scopeHintForOpenWork(currentSection, numbered[1]) ?? defaultOpenWorkScopeHint,
+          )
+          const releaseId = kind === 'open_work'
+            ? currentReleaseIdForScope(currentReleaseId, scopeHint)
+            : undefined
+          const releaseLabel = releaseId ? currentReleaseLabel : null
           signals.push({
             source: 'planning-docs',
             kind,
             title: cleanHeading(numbered[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
+            ...(scopeHint ? { scopeHint } : {}),
+            ...(releaseId ? { releaseId } : {}),
+            ...(releaseLabel ? { releaseLabel } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',
           })
@@ -444,16 +1062,44 @@ export const planningDocsSource: TaskSource = {
       flushPendingRecommendedTask()
     }
 
-    return signals
+    return mergeCoreLoopStructuralContext(signals).map(signal =>
+      signal.kind === 'context' &&
+      !signal.role &&
+      signal.scopeHint &&
+      signal.releaseId &&
+      !STAGE_HEADING_RE.test(signal.title)
+        ? { ...signal, role: 'capability' as const }
+        : signal,
+    )
   },
 }
 
 function detectCurrentMilestoneStage(contents: Iterable<string>): string | null {
-  for (const raw of contents) {
-    const match = raw.match(/##\s+Current Next Milestone[\s\S]{0,400}?The next milestone is\s+(Stage\s+\d+)/i)
-    if (match?.[1]) {
-      return normalizeStageLabel(match[1])
+  const all = [...contents]
+  const explicit = detectExplicitCurrentMilestoneStage(all)
+  if (explicit) return explicit
+  let earliestStage: number | null = null
+  let earliestNonBaselineStage: number | null = null
+  for (const raw of all) {
+    for (const stageMatch of raw.matchAll(/^#{2,4}\s+Stage\s+(\d+)(?:\b|\s*[:(].*)/gim)) {
+      const stage = Number.parseInt(stageMatch[1] ?? '', 10)
+      if (!Number.isFinite(stage)) continue
+      earliestStage = earliestStage == null ? stage : Math.min(earliestStage, stage)
+      if (stage > 0) {
+        earliestNonBaselineStage = earliestNonBaselineStage == null
+          ? stage
+          : Math.min(earliestNonBaselineStage, stage)
+      }
     }
+  }
+  const fallbackStage = earliestNonBaselineStage ?? earliestStage
+  return fallbackStage == null ? null : normalizeStageLabel(`Stage ${fallbackStage}`)
+}
+
+function detectExplicitCurrentMilestoneStage(contents: Iterable<string>): string | null {
+  for (const raw of contents) {
+    const match = raw.match(/##\s+Current Next Milestone[\s\S]*?The next milestone is\s+(Stage\s+\d+)/i)
+    if (match?.[1]) return normalizeStageLabel(match[1])
   }
   return null
 }

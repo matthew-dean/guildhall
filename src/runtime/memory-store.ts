@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { z } from 'zod'
 import { guildhallHomeDir } from '@guildhall/config'
 import { projectSkillProposalsPath } from '@guildhall/skills'
-import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
+import { emitProjectSummaryInvalidation, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 export const MemoryStatus = z.enum(['observed', 'proposed', 'active', 'used', 'retired'])
 export type MemoryStatus = z.infer<typeof MemoryStatus>
@@ -98,6 +98,7 @@ export async function recordMemoryObservation(input: {
     record,
   ].sort(memorySort)
   await writeStore(input.memoryDir, { version: 1, records })
+  emitProjectSummaryInvalidation(inferProjectRootFromMemoryDir(input.memoryDir), 'memory-store-write', { domains: ['memory'] })
   return record
 }
 
@@ -117,6 +118,7 @@ export async function updateMemoryStatus(input: {
   })
   store.records[index] = next
   await writeStore(input.memoryDir, { version: 1, records: store.records.sort(memorySort) })
+  emitProjectSummaryInvalidation(inferProjectRootFromMemoryDir(input.memoryDir), 'memory-store-write', { domains: ['memory'] })
   return next
 }
 

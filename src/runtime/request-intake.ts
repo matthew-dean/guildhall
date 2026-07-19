@@ -27,7 +27,7 @@ const POLICY_WORDS = /\b(charge|fee|fees|pricing|overhead|maintenance|rate|billi
 const STACK_HINT_WORDS = /\b(system-wide|across|etc\.?|and|also|then|full|end-to-end)\b/i
 const UI_WORDS = /\b(ui|web app|app|screen|page|dashboard|form|component|button|filter|tab|segmented|toggle|card|modal|dialog|layout|palette|theme|color|typography|visual|design)\b/i
 const QUALITY_BAR = 'Apply enough pressure to make this task trustworthy without asking the owner to choose a process.'
-const OWNER_QUESTION_POLICY = 'Only ask when the answer could change product intent, quality bar, risk tolerance, release boundary, or a tradeoff the repo cannot decide on its own.'
+const OWNER_QUESTION_POLICY = 'Only ask when the answer could change product intent, quality bar, risk tolerance, the active task scope, or a tradeoff the repo cannot decide on its own.'
 
 export function analyzeRequestIntake(input: AnalyzeRequestIntakeInput): RequestIntakeAnalysis {
   const text = [input.title, input.ask].filter(Boolean).join('\n')

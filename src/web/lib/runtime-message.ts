@@ -20,7 +20,7 @@ export function friendlyRuntimeMessage(message: string): string {
     return 'Guildhall could not find git while inspecting this project.'
   }
   if (normalized.includes('fatal: not a git repository')) {
-    return 'Guildhall could not inspect git because this path is not a Git checkout.'
+    return 'Guildhall could not inspect git at that path. If this is a workspace folder, Guildhall should use its child repositories as the git boundaries.'
   }
   return message
 }

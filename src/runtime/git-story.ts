@@ -13,6 +13,7 @@ export const GitStoryClosureState = z.enum([
   'local_only',
   'deferred',
   'conflict',
+  'no_repository',
   'unknown',
 ])
 
@@ -21,6 +22,8 @@ export type GitStoryClosureState = z.infer<typeof GitStoryClosureState>
 export const GitStorySnapshot = z.object({
   state: GitStoryClosureState,
   repoRoot: z.string(),
+  repoId: z.string().optional(),
+  repoLabel: z.string().optional(),
   inspectedPath: z.string(),
   branch: z.string().optional(),
   upstream: z.string().optional(),
@@ -66,12 +69,13 @@ export function classifyGitStoryState(input: GitStoryClassificationInput): GitSt
   if (input.override === 'local_only') return 'local_only'
   if (input.override === 'deferred') return 'deferred'
   if (input.mergeRecordResult === 'conflict') return 'conflict'
+  if (input.mergeRecordResult === 'reconciled') return 'merged'
   if (input.mergeRecordResult === 'skipped') return 'unknown'
   if (input.mergeRecordResult === 'pending_pr') return 'pr_open'
-  if (input.mergeRecordResult === 'merged' || input.mergeRecordResult === 'pushed') return 'merged'
   if (input.changedCount > 0 || input.untrackedCount > 0) return 'dirty_uncommitted'
   if (!input.hasUpstream) return 'no_upstream'
   if (input.ahead > 0) return 'committed_local'
+  if (input.mergeRecordResult === 'merged' || input.mergeRecordResult === 'pushed') return 'merged'
   if (input.prState && input.prState.toUpperCase() === 'OPEN') return 'pr_open'
   if (input.upstream && ['main', 'master', 'trunk'].includes(input.branch ?? '')) return 'clean'
   if (input.upstream) return 'pushed'
@@ -90,6 +94,7 @@ export function gitStoryStateLabel(state: GitStoryClosureState): string {
     case 'local_only': return 'Local only'
     case 'deferred': return 'Deferred'
     case 'conflict': return 'Conflict'
+    case 'no_repository': return 'No repository'
     case 'unknown': return 'Unknown'
   }
 }
@@ -97,7 +102,7 @@ export function gitStoryStateLabel(state: GitStoryClosureState): string {
 export function nextActionForGitStory(state: GitStoryClosureState): string {
   switch (state) {
     case 'clean':
-      return 'No git closure action needed.'
+      return 'No repository follow-up needed.'
     case 'dirty_uncommitted':
       return 'Review the diff, then commit or mark the work local-only/deferred.'
     case 'committed_local':
@@ -105,17 +110,19 @@ export function nextActionForGitStory(state: GitStoryClosureState): string {
     case 'no_upstream':
       return 'Set an upstream branch or open a PR for this branch.'
     case 'pushed':
-      return 'Open a PR or mark this pushed branch as the intended closure.'
+      return 'Open a PR or mark this pushed branch as the intended repository state.'
     case 'pr_open':
       return 'Review and merge the open PR when it is ready.'
     case 'merged':
-      return 'No git closure action needed.'
+      return 'No repository follow-up needed.'
     case 'local_only':
       return 'No release blocker; work is intentionally local.'
     case 'deferred':
-      return 'No immediate action; git closure was intentionally deferred.'
+      return 'No immediate action; repository follow-up was intentionally deferred.'
     case 'conflict':
       return 'Resolve the git conflict before calling this work closed.'
+    case 'no_repository':
+      return 'No repository follow-up applies to this workspace scope.'
     case 'unknown':
       return 'Inspect git state manually; Guildhall could not read it.'
   }
@@ -126,6 +133,7 @@ export function reasonForGitStorySnapshot(input: {
   changedCount: number
   untrackedCount: number
   ahead: number
+  localCommits?: Array<{ sha: string; subject: string }>
   branch?: string
   upstream?: string
   pr?: PullRequestResult
@@ -134,9 +142,17 @@ export function reasonForGitStorySnapshot(input: {
 }): string {
   switch (input.state) {
     case 'dirty_uncommitted':
-      return `${input.changedCount + input.untrackedCount} changed file${input.changedCount + input.untrackedCount === 1 ? '' : 's'} are not committed.`
-    case 'committed_local':
-      return `${input.branch ?? 'Branch'} has ${input.ahead} local commit${input.ahead === 1 ? '' : 's'} not pushed to ${input.upstream ?? 'upstream'}.`
+      return `${input.changedCount + input.untrackedCount} changed file${input.changedCount + input.untrackedCount === 1 ? '' : 's'} ${input.changedCount + input.untrackedCount === 1 ? 'is' : 'are'} not committed.`
+    case 'committed_local': {
+      const base = `${input.branch ?? 'Branch'} has ${input.ahead} local commit${input.ahead === 1 ? '' : 's'} not pushed to ${input.upstream ?? 'upstream'}.`
+      const commits = input.localCommits ?? []
+      if (commits.length === 0) return base
+      const shown = commits.slice(0, 2)
+        .map(commit => `${commit.sha.slice(0, 8)} ${commit.subject}`.trim())
+        .join('; ')
+      const remaining = commits.length > shown.length ? `; +${commits.length - shown.length} more` : ''
+      return `${base.replace(/\.$/, '')}: ${shown}${remaining}.`
+    }
     case 'no_upstream':
       return `${input.branch ?? 'Branch'} has no upstream branch, so Guildhall cannot compare or publish this work yet.`
     case 'pr_open':
@@ -144,13 +160,18 @@ export function reasonForGitStorySnapshot(input: {
     case 'pushed':
       return `${input.branch ?? 'Branch'} is pushed to ${input.upstream ?? 'upstream'}.`
     case 'merged':
+      if (input.mergeRecordResult === 'reconciled') return 'Task worktree HEAD is already contained in the project repository history.'
       return input.mergeRecordResult ? `Task merge record reports ${input.mergeRecordResult}.` : 'Work is merged.'
     case 'local_only':
       return input.overrideReason ? `Marked local-only: ${input.overrideReason}` : 'Marked local-only.'
     case 'deferred':
-      return input.overrideReason ? `Deferred: ${input.overrideReason}` : 'Git closure deferred.'
+      return input.overrideReason ? `Deferred: ${input.overrideReason}` : 'Repository follow-up deferred.'
     case 'conflict':
       return 'A merge or landing conflict needs human attention.'
+    case 'no_repository':
+      return input.overrideReason
+        ? `No Git repository at this scope: ${input.overrideReason}`
+        : 'This workspace scope is not itself a Git repository; child repositories are inspected separately.'
     case 'unknown':
       return input.mergeRecordResult === 'skipped'
         ? 'Task completed without an automatic merge record; inspect branch state.'
@@ -162,6 +183,8 @@ export function reasonForGitStorySnapshot(input: {
 
 export interface InspectGitStoryInput {
   repoRoot: string
+  repoId?: string
+  repoLabel?: string
   inspectedPath?: string
   task?: {
     id?: string
@@ -187,6 +210,27 @@ export async function inspectGitStory(
   const inspectedAt = (input.now?.() ?? new Date()).toISOString()
   try {
     const status = await gitDriver.statusSummary(inspectedPath)
+    if (status.repository === false) {
+      const state: GitStoryClosureState = 'no_repository'
+      return GitStorySnapshot.parse({
+        state,
+        repoRoot: input.repoRoot,
+        repoId: input.repoId,
+        repoLabel: input.repoLabel,
+        inspectedPath,
+        taskId: input.task?.id,
+        taskTitle: input.task?.title,
+        worktreePath,
+        reason: reasonForGitStorySnapshot({
+          state,
+          changedCount: 0,
+          untrackedCount: 0,
+          ahead: 0,
+        }),
+        nextAction: nextActionForGitStory(state),
+        inspectedAt,
+      })
+    }
     const localCommits =
       status.upstream
         ? await gitDriver.localCommits(inspectedPath, status.upstream).catch(() => [])
@@ -214,6 +258,8 @@ export async function inspectGitStory(
     return GitStorySnapshot.parse({
       state,
       repoRoot: input.repoRoot,
+      repoId: input.repoId,
+      repoLabel: input.repoLabel,
       inspectedPath,
       branch: status.branch,
       upstream: status.upstream,
@@ -236,6 +282,7 @@ export async function inspectGitStory(
         ahead: status.ahead,
         branch: status.branch,
         upstream: status.upstream,
+        localCommits,
         pr,
         mergeRecordResult,
         overrideReason,
@@ -247,6 +294,8 @@ export async function inspectGitStory(
     return GitStorySnapshot.parse({
       state: 'unknown',
       repoRoot: input.repoRoot,
+      repoId: input.repoId,
+      repoLabel: input.repoLabel,
       inspectedPath,
       reason: err instanceof Error ? err.message : String(err),
       nextAction: nextActionForGitStory('unknown'),
@@ -261,6 +310,8 @@ export async function inspectGitStory(
 export interface GitStoryBlocker {
   id: string
   label: string
+  repoId?: string
+  repoLabel?: string
   state: GitStoryClosureState
   reason: string
   nextAction: string
@@ -283,6 +334,7 @@ const STATE_SEVERITY: Record<GitStoryClosureState, number> = {
   pr_open: 50,
   deferred: 40,
   local_only: 30,
+  no_repository: 0,
   pushed: 20,
   merged: 10,
   clean: 0,
@@ -293,17 +345,46 @@ const NON_BLOCKING_STATES = new Set<GitStoryClosureState>([
   'merged',
   'local_only',
   'deferred',
+  'no_repository',
 ])
+
+function gitStoryBlockerKey(snapshot: GitStorySnapshot): string {
+  return [
+    snapshot.state,
+    snapshot.repoId ?? '',
+    snapshot.repoRoot,
+    snapshot.inspectedPath,
+    snapshot.branch ?? '',
+    snapshot.reason,
+    snapshot.nextAction,
+  ].join('|')
+}
+
+function dedupeBlockingSnapshots(snapshots: GitStorySnapshot[]): GitStorySnapshot[] {
+  const byKey = new Map<string, GitStorySnapshot>()
+  for (const snapshot of snapshots) {
+    const key = gitStoryBlockerKey(snapshot)
+    const existing = byKey.get(key)
+    if (!existing || (existing.taskId && !snapshot.taskId)) byKey.set(key, snapshot)
+  }
+  return [...byKey.values()]
+}
 
 export function summarizeGitStories(snapshots: GitStorySnapshot[]): GitStorySummary {
   const state = snapshots
     .map((snapshot) => snapshot.state)
     .sort((a, b) => STATE_SEVERITY[b] - STATE_SEVERITY[a])[0] ?? 'clean'
-  const blockers = snapshots
+  const blockers = dedupeBlockingSnapshots(snapshots
     .filter((snapshot) => !NON_BLOCKING_STATES.has(snapshot.state))
+  )
     .map((snapshot, index) => ({
       id: snapshot.taskId ? `task:${snapshot.taskId}` : `repo:${index}`,
-      label: snapshot.taskTitle ?? snapshot.branch ?? snapshot.inspectedPath,
+      label: [
+        snapshot.repoLabel,
+        snapshot.taskTitle ?? snapshot.branch ?? snapshot.inspectedPath,
+      ].filter(Boolean).join(': '),
+      ...(snapshot.repoId ? { repoId: snapshot.repoId } : {}),
+      ...(snapshot.repoLabel ? { repoLabel: snapshot.repoLabel } : {}),
       state: snapshot.state,
       reason: snapshot.reason,
       nextAction: snapshot.nextAction,

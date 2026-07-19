@@ -5,16 +5,31 @@ import os from 'node:os'
 import {
   createExploringTask,
   approveSpec,
+  reframeTask,
   resumeExploring,
   createBugReportTask,
   parseStackTraceTopFile,
 } from '../intake.js'
 import { registerContractSurface } from '../contract-surfaces.js'
+import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
-import { getProjectStateDir, getProjectSystemStatePathFromMemoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import {
+  getProjectStateDir,
+  getProjectSystemStatePathFromMemoryDir,
+  getProjectTranscriptPath,
+  readTaskRuntimeStore,
+} from '@guildhall/sessions'
 import { listOwnerInputRequests } from '../owner-input-store.js'
 import { buildEffectiveTask } from '../effective-task.js'
+import { applyProjectMigrations } from '../migrations.js'
+import {
+  readProjectTaskQueueForMutationSync,
+  readProjectTaskQueueSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+  writeProjectTaskQueueWithSummary,
+} from '../project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // FR-12 exploratory task intake
@@ -33,12 +48,27 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-intake-'))
   dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
   process.env.GUILDHALL_DATA_DIR = dataDir
+  bootstrapWorkspace(tmpDir, { name: 'Intake Test' })
   memoryDir = getProjectStateDir(tmpDir)
-  await fs.mkdir(memoryDir, { recursive: true })
   tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
-  // Bootstrap seeds TASKS.json as a bare `[]`, so test that path directly too.
   await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-  await fs.writeFile(tasksPath, '[]', 'utf-8')
+  writeProjectTaskQueueWithSummary(tasksPath, {
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [],
+  }, { projectRoot: tmpDir })
+  const prerequisites = await applyProjectMigrations({ projectRoot: tmpDir, includePrompt: true })
+  expect(prerequisites.failed).toEqual([])
+  const finalize = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.13.0/project-state-finalize'],
+  })
+  expect(finalize.failed).toEqual([])
+  const cleanup = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.13.0/project-state-legacy-live-file-cleanup'],
+  })
+  expect(cleanup.failed).toEqual([])
 })
 
 afterEach(async () => {
@@ -48,15 +78,21 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(tasksPath, 'utf-8')
-  const queue = TaskQueue.parse(JSON.parse(raw))
+  const queue = TaskQueue.parse(readProjectTaskQueueSync(tasksPath))
   return {
     ...queue,
     tasks: await Promise.all(queue.tasks.map(async task => {
-      const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : tmpDir
-      return buildEffectiveTask(projectRoot, task) as unknown as typeof task
+      return buildEffectiveTask(tmpDir, task, { evidence: 'full' }) as unknown as typeof task
     })),
   }
+}
+
+async function writeQueue(queue: TaskQueue): Promise<void> {
+  const current = readProjectTaskQueueForMutationSync(tasksPath)
+  writeProjectTaskQueue(tasksPath, queue, {
+    projectRoot: tmpDir,
+    expectedQueueRevision: current.expectedQueueRevision,
+  })
 }
 
 function buildableSpec(extra = ''): string {
@@ -162,19 +198,17 @@ describe('createExploringTask', () => {
     expect(task.requestIntake?.evidenceRefs).toEqual(['request:title', 'request:ask'])
   })
 
-  it('handles a bare-array TASKS.json (bootstrap legacy format)', async () => {
-    // Already seeded as '[]' in beforeEach — createExploringTask should cope.
+  it('writes the canonical queue after intake', async () => {
     const result = await createExploringTask({
       memoryDir,
-      ask: 'legacy format',
+      ask: 'canonical format',
       domain: 'looma',
       projectPath: '/projects/looma',
     })
     expect(result.taskId).toBe('task-001')
-    // After first intake, the file should be a full queue object
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.version).toBe(1)
-    expect(raw.tasks).toHaveLength(1)
+    expect(readProjectTaskQueueSync(tasksPath)).toMatchObject({
+      tasks: [expect.objectContaining({ id: 'task-001' })],
+    })
   })
 
   it('generates sequential ids when called multiple times', async () => {
@@ -326,10 +360,58 @@ describe('createExploringTask', () => {
   })
 })
 
+describe('reframeTask', () => {
+  it('clears stale task classification and derived planning state', async () => {
+    const result = await createExploringTask({
+      memoryDir,
+      ask: 'Build the synopsis generation pipeline',
+      domain: 'docs',
+      projectPath: '/projects/narrative-harness',
+    })
+    const mutation = writePromotedTaskDetailMutation(tasksPath, result.taskId, {
+      projectRoot: tmpDir,
+      mutate: task => ({
+        ...task,
+        taskKind: 'research',
+      }),
+    })
+    expect(mutation).not.toBeNull()
+
+    const reframed = await reframeTask({
+      memoryDir,
+      taskId: result.taskId,
+      reason: 'The old imported classification is stale.',
+    })
+
+    expect(reframed.success).toBe(true)
+    const updated = await readQueue()
+    const reframedTask = updated.tasks.find(candidate => candidate.id === result.taskId)!
+    expect(reframedTask.status).toBe('exploring')
+    expect(reframedTask.taskKind).toBeUndefined()
+  })
+
+  it('keeps proof-specific recovery attached to a proof reframe', async () => {
+    const result = await createExploringTask({
+      memoryDir,
+      ask: 'Recover the selected release proof command',
+      domain: 'docs',
+      projectPath: '/projects/narrative-harness',
+    })
+
+    const reframed = await reframeTask({
+      memoryDir,
+      taskId: result.taskId,
+      reason: 'The selected release requires a concrete project-backed proof command.',
+    })
+
+    expect(reframed.success).toBe(true)
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks[result.taskId]?.proofRecovery?.reason).toContain('project-backed proof command')
+  })
+})
+
 describe('approveSpec', () => {
   beforeEach(async () => {
-    await fs.mkdir(memoryDir, { recursive: true })
-    await fs.writeFile(tasksPath, '[]', 'utf-8')
     // Create and then attach a spec
     await createExploringTask({
       memoryDir,
@@ -350,7 +432,7 @@ describe('approveSpec', () => {
     queue.tasks[0]!.acceptanceCriteria = [
       { id: 'AC-1', description: 'Ghost button renders.', verifiedBy: 'review', met: false },
     ]
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
   })
 
   it('transitions spec_review → ready', async () => {
@@ -361,10 +443,139 @@ describe('approveSpec', () => {
     expect(queue.tasks[0]!.status).toBe('ready')
   })
 
+  it('keeps the approved spec and materializes missing script proof as linked verification work', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.releaseIds = ['release-1']
+    queue.selectedReleaseId = 'release-1'
+    queue.releases = [{
+      id: 'release-1',
+      label: 'Stage 1',
+      kind: 'release',
+      state: 'active',
+      source: 'release_plan',
+      nodeIds: [],
+      deferredNodeIds: [],
+      proofStyle: 'script_only',
+    }]
+    task.acceptanceCriteria = [{
+      id: 'AC-1',
+      description: 'The focused proof passes.',
+      verifiedBy: 'automated',
+      command: 'pnpm proof',
+      met: false,
+    }]
+    const approvedSpec = task.spec
+    await writeQueue(queue)
+
+    const result = await approveSpec({ memoryDir, taskId: task.id })
+
+    expect(result).toEqual({ success: true, newStatus: 'ready' })
+    const updated = await readQueue()
+    const parent = updated.tasks.find(candidate => candidate.id === task.id)!
+    const proofSetup = updated.tasks.find(candidate => candidate.workKind === 'verification')
+    expect(parent.status).toBe('ready')
+    expect(parent.spec).toBe(approvedSpec)
+    expect(parent.acceptanceCriteria[0]?.command).toBeUndefined()
+    expect(parent.acceptanceCriteria[0]?.verificationState).toBe('stale')
+    expect(proofSetup).toMatchObject({
+      title: 'Establish concrete proof for Add ghost button',
+      status: 'exploring',
+      hierarchy: { parentId: task.id },
+      releaseIds: ['release-1'],
+      workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+    })
+    expect(parent.hierarchy?.childIds).toContain(proofSetup?.id)
+    expect(parent.notes.some(note => note.content.includes('Kept the approved product/spec boundary'))).toBe(true)
+    expect((await readTaskRuntimeStore(tmpDir)).tasks[task.id]?.proofRecovery).toBeUndefined()
+  })
+
+  it('derives the product brief from a complete completion boundary before approval', async () => {
+    const queue = await readQueue()
+    delete queue.tasks[0]!.productBrief
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      '',
+      'Run a deterministic backend harness script.',
+      '',
+      '## Completion Boundary',
+      '- Product outcome: A developer can run the fixture loop and inspect a saved run record.',
+      '- What Guildhall can complete in code: Add the script and local proof.',
+      '- External dependencies: None.',
+      '- Owner-only setup: None.',
+      '- Verification environment: Local Node.js command.',
+      '- What counts as done: The fixture loop exits 0 and saves reviewer and writer output.',
+      '- What must be split or blocked: Real LLM calls belong to a later stage.',
+      '',
+      '## Acceptance Criteria',
+      '1. The fixture loop exits 0.',
+    ].join('\n')
+    await writeQueue(queue)
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    const updated = await readQueue()
+    expect(updated.tasks[0]!.status).toBe('ready')
+    expect(updated.tasks[0]!.productBrief).toMatchObject({
+      userJob: 'A developer can run the fixture loop and inspect a saved run record.',
+      successMetric: 'The fixture loop exits 0 and saves reviewer and writer output.',
+      authoredBy: 'system:completion-boundary',
+    })
+  })
+
+  it('approves needs-research-spike specs when no child work is materialized', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.title = 'Define fixture, expected-record, prototype-run, and evaluation contracts'
+    queue.tasks[0]!.hierarchy = { parentId: 'task-parent', childIds: [] }
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      'Define the concrete fixture, expected-record, prototype-run, and evaluation contract surface for this Stage 1 harness work.',
+      '',
+      'Contract terms to account for:',
+      '- `FixtureManifest`',
+      '- `ExpectedRecordSet`',
+      '- `ExpectedSignal`',
+      '- `PrototypeRun`',
+      '- `RunEvaluation`',
+      '- `PacketQualityScore`',
+      '',
+      '## Acceptance Criteria',
+      '1. Given the current schema files and imported parent spec, when this task is implemented, then the repo defines or verifies each relevant contract term listed above without introducing a second parallel contract surface.',
+      '2. Given the Stage 1 fixture harness boundary, when fixture and expected-record contracts are reviewed, then they can express a tiny fiction fixture, author/profile permissions, expected records, and expected signals.',
+      '3. Given the prototype run and evaluation boundary, when run/evaluation contracts are reviewed, then they capture run output, signal evaluation, packet quality or field usage, and trace evidence needed for the first proof loop.',
+      '4. Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result against this task before the parent work is treated as satisfied.',
+      '',
+      '## Out of Scope',
+      '- Do not introduce Rust contracts for this TypeScript project.',
+      '- Do not add UI copy or API endpoints for this contract-only child task.',
+      '',
+      '## Completion Boundary',
+      '- Product outcome: Contract terms are represented by concrete TypeScript schema/record contracts and proof evidence.',
+      '- What Guildhall can complete in code: schema/type updates, fixture or evaluation record updates, exports, and local proof scripts/tests needed for this child work.',
+      '- External dependencies: None known.',
+      '- Owner-only setup: None known.',
+      '- Verification environment: the local checkout and repo-local package scripts.',
+      '- What counts as done: the contract terms above are defined or verified, acceptance criteria are checked, and the proof result is recorded.',
+      '- What must be split or blocked: any newly discovered product decision that changes which contracts belong in Stage 1 versus a later stage.',
+    ].join('\n')
+    queue.tasks[0]!.acceptanceCriteria = []
+    await writeQueue(queue)
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+    const updated = await readQueue()
+    expect(updated.tasks[0]!.status).toBe('ready')
+    expect(updated.tasks[0]!.sizePlan?.action).toBe('proceed_with_warning')
+    expect(updated.tasks[0]!.sizePlan?.recommendedChildren ?? []).toEqual([])
+  })
+
   it('persists task readiness and finishability artifacts when a spec is approved', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.proofPaths = [{ id: 'proof-ghost-button' }]
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -424,7 +635,7 @@ describe('approveSpec', () => {
         whatMustBeSplitOrBlocked: 'Nothing.',
       },
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: task.id })
 
@@ -448,7 +659,7 @@ describe('approveSpec', () => {
   it('approves specs where Completion Boundary is the final section', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.spec = buildableSpec()
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -472,7 +683,7 @@ describe('approveSpec', () => {
       '- **What counts as done**: The app renders in a browser.',
       '- **What must be split or blocked**: Nothing.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -496,7 +707,7 @@ describe('approveSpec', () => {
       '- **What counts as done:** The file contains the requested note and only the intended file changed.',
       '- **What must be split or blocked:** Nothing. The task is self-contained.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -522,7 +733,7 @@ describe('approveSpec', () => {
       '  2. The browser shows the expected page.',
       '- **What must be split or blocked**: Nothing — this is a single self-contained task.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -546,7 +757,7 @@ describe('approveSpec', () => {
       '- **What counts as done**: The app renders and passes browser inspection.',
       '- **What must be split or blocked**: Nothing.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -570,7 +781,7 @@ describe('approveSpec', () => {
       '- **What counts as done**: node scripts/test.js exits with code 0.',
       '- **What must be split or blocked**: Nothing.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -581,6 +792,10 @@ describe('approveSpec', () => {
   it('splits a split-required spec into containing work and child tasks when approved', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
+    parent.spec = parent.spec?.replace(
+      'Nothing to split.',
+      'The proposed UI and API work must be split into linked child tasks before execution.',
+    )
     parent.businessEnvelope = { goalId: 'goal-task-001' }
     parent.sizePlan = {
       taskId: 'task-001',
@@ -607,7 +822,7 @@ describe('approveSpec', () => {
       createdAt: '2026-05-25T12:00:00.000Z',
       createdBy: 'task-sizing',
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -666,7 +881,7 @@ describe('approveSpec', () => {
       createdAt: '2026-05-25T12:00:00.000Z',
       updatedAt: '2026-05-25T12:00:00.000Z',
     }
-    await fs.writeFile(tasksPath, JSON.stringify({
+    const queue: TaskQueue = {
       version: 1,
       lastUpdated: '2026-05-25T12:00:00.000Z',
       tasks: [
@@ -739,7 +954,8 @@ describe('approveSpec', () => {
           },
         },
       ],
-    }, null, 2), 'utf-8')
+    }
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'child-audit' })
 
@@ -756,7 +972,7 @@ describe('approveSpec', () => {
       'Implement the first independently verifiable replacement',
       'Verify and update the migration record',
     ])
-    expect(audit?.sizePlan?.reasons.at(-1)).toContain('already match existing sibling tasks')
+    expect(audit?.sizePlan?.reasons.at(-1)).toContain('already matches existing sibling tasks')
   })
 
   it('rewrites an approved parent that already has linked child tasks instead of keeping stale split-required copy', async () => {
@@ -804,7 +1020,7 @@ describe('approveSpec', () => {
     }
     base.taskReadiness = {
       taskKind: 'implementation',
-      recommendation: 'split',
+      recommendation: 'requires_child_work',
       summary: 'Task needs to be split again.',
       dimensions: [
         {
@@ -850,7 +1066,7 @@ describe('approveSpec', () => {
         taskReadiness: undefined,
       },
     )
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'parent' })
 
@@ -868,6 +1084,10 @@ describe('approveSpec', () => {
   it('splits a split-recommended spec into containing work and child tasks when approved', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
+    parent.spec = parent.spec?.replace(
+      'Nothing to split.',
+      'The implementation and visual-proof work should be split into linked child tasks before execution.',
+    )
     parent.sizePlan = {
       taskId: 'task-001',
       score: 5,
@@ -893,7 +1113,7 @@ describe('approveSpec', () => {
       createdAt: '2026-06-05T12:00:00.000Z',
       createdBy: 'task-sizing',
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -919,6 +1139,121 @@ describe('approveSpec', () => {
       proposedBy: 'task-sizing',
     })
     expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-component-implementation'])
+  })
+
+  it('materializes semantic work-unit children when a split-required spec is approved', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.title = 'Define Narrative Harness MVP drafting model and physical-world review lanes'
+    task.description = 'Shape the Narrative Harness MVP drafting model and physical-world review lanes.'
+    task.domain = 'harness'
+    task.spec = [
+      '## Summary',
+      'Define the Narrative Harness MVP drafting model and physical-world review lanes.',
+      '',
+      '## Acceptance Criteria',
+      '1. The DeepInfra drafting model proof is scoped.',
+      '2. The world-state continuity review lane is scoped.',
+      '3. The spatial/geographic continuity review lane is scoped.',
+      '',
+      '## Completion Boundary',
+      '- Product outcome: Narrative Harness has source-backed MVP work for the drafting model and physical-world review lanes.',
+      '- What Guildhall can complete in code: task shaping, proof scripts, tests, and recorded evidence.',
+      '- External dependencies: None known.',
+      '- Owner-only setup: None known.',
+      '- Verification environment: local project scripts.',
+      '- What counts as done: all scoped child units are linked and independently reviewable.',
+      '- What must be split or blocked: split the model proof, world-state review lane, and spatial/geographic review lane into child work.',
+    ].join('\n')
+    task.acceptanceCriteria = []
+    task.workUnitAnalysis = {
+      summary: '3 independently reviewable requirements were recovered from numbered owner scope.',
+      units: [
+        {
+          id: 'recovered-requirement-1',
+          title: 'Select and prove DeepInfra drafting model',
+          deliverable: 'Guildhall records source-backed current-scope MVP work and proof for DeepInfra drafting.',
+          rationale: 'Recovered from numbered owner requirement 1.',
+          dependsOn: [],
+          suggestedDomain: 'harness',
+        },
+        {
+          id: 'recovered-requirement-2',
+          title: 'Define world-state continuity review lane',
+          deliverable: 'Guildhall records source-backed current-scope MVP work and proof for world-state continuity.',
+          rationale: 'Recovered from numbered owner requirement 2.',
+          dependsOn: ['recovered-requirement-1'],
+          suggestedDomain: 'harness',
+        },
+        {
+          id: 'recovered-requirement-3',
+          title: 'Define spatial/geographic continuity review lane',
+          deliverable: 'Guildhall records source-backed current-scope MVP work and proof for spatial/geographic continuity.',
+          rationale: 'Recovered from numbered owner requirement 3.',
+          dependsOn: ['recovered-requirement-1'],
+          suggestedDomain: 'harness',
+        },
+      ],
+      proofOnlyItems: [],
+      createdAt: '2026-07-05T18:54:18.292Z',
+      createdBy: 'coordinator-recovery',
+    }
+    await writeQueue(queue)
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+    const updated = await readQueue()
+    const parent = updated.tasks.find(candidate => candidate.id === 'task-001')!
+    expect(parent.hierarchy?.childIds).toEqual([
+      'task-001-split-select-and-prove-deepinfra-drafting-model',
+      'task-001-split-define-world-state-continuity-review-lane',
+      'task-001-split-define-spatial-geographic-continuity-review-lane',
+    ])
+    expect(updated.tasks.map(candidate => candidate.title)).toContain('Select and prove DeepInfra drafting model')
+    expect(updated.tasks.find(candidate => candidate.title === 'Define world-state continuity review lane')?.dependsOn).toEqual([
+      'task-001-split-select-and-prove-deepinfra-drafting-model',
+    ])
+    expect(parent.taskReadiness?.recommendation).toBe('ready')
+    expect(parent.spec).toContain('Already split into linked child tasks')
+  })
+
+  it('does not report spec approval as successful when split-required work has no child units', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.title = 'Define a broad delivery program'
+    task.description = 'Implement model selection, review lanes, release coordination, telemetry, docs, and migration planning.'
+    task.spec = [
+      '## Summary',
+      'Define a broad delivery program.',
+      '',
+      '## Acceptance Criteria',
+      '1. Model selection is covered.',
+      '2. Review lanes are covered.',
+      '3. Release coordination is covered.',
+      '4. Telemetry is covered.',
+      '',
+      '## Completion Boundary',
+      '- Product outcome: broad program work is ready.',
+      '- What Guildhall can complete in code: implementation, tests, docs, telemetry, and release coordination.',
+      '- External dependencies: None known.',
+      '- Owner-only setup: None known.',
+      '- Verification environment: local project scripts.',
+      '- What counts as done: the whole program is shipped.',
+      '- What must be split or blocked: split before execution.',
+    ].join('\n')
+    task.acceptanceCriteria = []
+    delete task.workUnitAnalysis
+    await writeQueue(queue)
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('could not materialize any child tasks')
+    const updated = await readQueue()
+    expect(updated.tasks).toHaveLength(1)
+    expect(updated.tasks[0]!.status).toBe('spec_review')
   })
 
   it('backfills acceptance criteria from approved markdown specs before blueprint sanity', async () => {
@@ -950,7 +1285,7 @@ describe('approveSpec', () => {
       antiPatterns: [],
     }
     task.acceptanceCriteria = []
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const approved = await approveSpec({ memoryDir, taskId: task.id })
 
@@ -963,7 +1298,7 @@ describe('approveSpec', () => {
     ])
   })
 
-  it('keeps fixed Pantry Pulse specs runnable when a stale size plan suggests unrelated splits', async () => {
+  it('keeps explicitly bounded specs runnable when a stale size plan suggests unrelated splits', async () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!
     task.title = 'Pantry Pulse app spec'
@@ -1008,7 +1343,7 @@ describe('approveSpec', () => {
       createdAt: '2026-05-28T12:00:00.000Z',
       createdBy: 'task-sizing',
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const approved = await approveSpec({ memoryDir, taskId: task.id })
 
@@ -1018,9 +1353,73 @@ describe('approveSpec', () => {
     expect(updated.tasks).toHaveLength(1)
     expect(updated.tasks[0]?.status).toBe('ready')
     expect(updated.tasks[0]?.sizePlan?.action).toBe('proceed_with_warning')
+    expect(updated.tasks[0]?.taskReadiness?.recommendation).toBe('ready')
   })
 
-  it('splits broad deterministic recovery specs instead of approving them as one runnable task', async () => {
+  it('keeps a source-backed contract task runnable without project-specific labels', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.title = 'Define author intent and voice input'
+    task.description = 'Capture genre, form, audience, themes, constraints, representative voice, and provenance for synopsis and drafting.'
+    task.domain = 'docs'
+    task.projectPath = tmpDir
+    task.status = 'spec_review'
+    task.spec = [
+      '## Source Trail',
+      'docs/harness/headless-mvp-release-plan.md.',
+      '## Acceptance Criteria',
+      '1. The durable input boundary preserves source-backed intent and voice provenance.',
+      '## Completion Boundary',
+      'Product outcome: A source-backed author-intent-and-voice input boundary is available to synopsis and drafting.',
+      'What Guildhall can complete in code: Define, serialize, validate, and prove the bounded input record.',
+      'External dependencies: None.',
+      'Owner-only setup: The author supplies the representative voice input when the fixture is populated.',
+      'Verification environment: Local pnpm tests and saved release evidence.',
+      'What counts as done: The record, provenance rules, consumer mapping, and proof are visible on the task.',
+      'What must be split or blocked: Synopsis generation, drafting, reviewers, model selection, and UI are separate tasks; nothing is blocked for this input boundary.',
+    ].join('\n')
+    task.productBrief = {
+      userJob: 'Record project intent and representative author voice once for downstream generation.',
+      successMetric: 'The durable input boundary and its provenance are validated and visible in Guildhall.',
+      antiPatterns: [],
+    }
+    task.acceptanceCriteria = [{
+      id: 'AC-1',
+      description: 'The durable input boundary preserves source-backed intent and voice provenance.',
+      verifiedBy: 'review',
+      met: false,
+    }]
+    task.sizePlan = {
+      taskId: task.id,
+      score: 8,
+      band: 'epic',
+      action: 'split_required',
+      factors: [],
+      recommendedChildren: [{
+        title: 'Invent unrelated follow-up work',
+        reason: 'Unrelated stale split recommendation.',
+        suggestedDomain: 'docs',
+        dependsOn: [],
+      }],
+      reviewBudgetHint: 'release_critical',
+      reasons: ['Stale model split.'],
+      createdAt: '2026-05-28T12:00:00.000Z',
+      createdBy: 'task-sizing',
+    }
+    await writeQueue(queue)
+
+    const approved = await approveSpec({ memoryDir, taskId: task.id })
+
+    expect(approved.success).toBe(true)
+    expect(approved.newStatus).toBe('ready')
+    const updated = await readQueue()
+    expect(updated.tasks).toHaveLength(1)
+    expect(updated.tasks[0]?.status).toBe('ready')
+    expect(updated.tasks[0]?.sizePlan?.action).toBe('proceed_with_warning')
+    expect(updated.tasks[0]?.taskReadiness?.recommendation).toBe('ready')
+  })
+
+  it('does not invent generic child work for broad deterministic recovery specs without explicit work units', async () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!
     task.id = 'task-import-twwvys'
@@ -1055,32 +1454,21 @@ describe('approveSpec', () => {
       'Owner-only setup: None.',
       'Verification environment: Local repo checks and browser proof.',
       'What counts as done: Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu is implemented.',
-      'What must be split or blocked: Nothing to split.',
+      'What must be split or blocked: The remaining replacement wave must be split into concrete child tasks before execution.',
     ].join('\n')
     task.acceptanceCriteria = []
     delete task.sizePlan
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const approved = await approveSpec({ memoryDir, taskId: task.id })
 
-    expect(approved.success).toBe(true)
+    expect(approved.success).toBe(false)
+    expect(approved.error).toContain('still needs child work')
     const updated = await readQueue()
     const parent = updated.tasks.find(candidate => candidate.id === task.id)
-    expect(parent?.status).toBe('ready')
-    expect(parent?.taskReadiness?.recommendation).toBe('ready')
-    expect(parent?.taskReadiness?.summary).toContain('continue through the child tasks')
-    expect(parent?.sizePlan?.action).toBe('proceed_with_warning')
-    expect(parent?.hierarchy?.childIds).toEqual([
-      'task-import-twwvys-split-audit-the-remaining-replacement-scope',
-      'task-import-twwvys-split-implement-the-first-independently-verifiable-replacement',
-      'task-import-twwvys-split-verify-and-update-the-migration-record',
-    ])
-    expect(updated.tasks.map(candidate => candidate.title)).toEqual([
-      task.title,
-      'Audit the remaining replacement scope',
-      'Implement the first independently verifiable replacement',
-      'Verify and update the migration record',
-    ])
+    expect(parent?.status).toBe('spec_review')
+    expect(parent?.hierarchy?.childIds ?? []).toEqual([])
+    expect(updated.tasks).toHaveLength(1)
   })
 
   it('records an approval note on the task when provided', async () => {
@@ -1114,6 +1502,10 @@ describe('approveSpec', () => {
   it('describes split approval in plain language in the transcript', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
+    parent.spec = parent.spec?.replace(
+      'Nothing to split.',
+      'The policy work must be split into linked child tasks before execution.',
+    )
     parent.businessEnvelope = { goalId: 'goal-task-001' }
     parent.sizePlan = {
       taskId: 'task-001',
@@ -1134,7 +1526,7 @@ describe('approveSpec', () => {
       createdAt: '2026-05-25T12:00:00.000Z',
       createdBy: 'task-sizing',
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -1148,7 +1540,7 @@ describe('approveSpec', () => {
   it('refuses to approve a task that has no spec', async () => {
     const queue = await readQueue()
     delete queue.tasks[0]!.spec
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
     expect(result.success).toBe(false)
     expect(result.error).toContain('no spec')
@@ -1157,7 +1549,7 @@ describe('approveSpec', () => {
   it('refuses to approve a task not in spec_review status', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.status = 'in_progress'
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
     expect(result.success).toBe(false)
     expect(result.error).toContain("'in_progress'")
@@ -1299,7 +1691,7 @@ describe('resumeExploring', () => {
   it('moves a non-terminal task back to exploring when the user replies', async () => {
     let queue = await readQueue()
     queue.tasks[0]!.status = 'ready'
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
+    await writeQueue(queue)
 
     const result = await resumeExploring({
       memoryDir,
@@ -1315,7 +1707,7 @@ describe('resumeExploring', () => {
   it('can add a human steering note without reopening spec intake', async () => {
     let queue = await readQueue()
     queue.tasks[0]!.status = 'in_progress'
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
+    await writeQueue(queue)
 
     const result = await resumeExploring({
       memoryDir,
@@ -1339,7 +1731,7 @@ describe('resumeExploring', () => {
     let queue = await readQueue()
     queue.tasks[0]!.status = 'blocked'
     queue.tasks[0]!.blockReason = 'human_judgment_required: choose a retry path'
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
+    await writeQueue(queue)
 
     const result = await resumeExploring({
       memoryDir,
@@ -1380,8 +1772,7 @@ describe('resumeExploring', () => {
 
     queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('exploring')
-    expect(queue.tasks[0]!.escalations[0]!.resolvedAt).toBeDefined()
-    expect(queue.tasks[0]!.escalations[0]!.resolution).toBe('yes, mobile too')
+    expect(queue.tasks[0]!.escalations).toEqual([])
   })
 
   it('returns error for unknown task id', async () => {

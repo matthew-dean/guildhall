@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { dirname, resolve, join } from 'node:path'
-import { homedir } from 'node:os'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, resolve, join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { confirm } from '@inquirer/prompts'
 import type { RunOnceAutomationPolicy, RunOnceProofMode } from './run-once.js'
@@ -49,8 +49,20 @@ import {
 import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
 import { buildSemanticIndexPrompt, codebaseMapPath, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { censusProjectCache, getProjectStateDir } from '@guildhall/sessions'
 import type { ConsumerReturnPacket, DeliveryReceipt } from './project-graph.js'
+import { detectWorkspaceSignals, formWorkspaceHypothesis, type WorkspaceImportDraft, type WorkspaceSignal } from './workspace-import/index.js'
+import { buildWorkspaceImportReview, type WorkspaceImportReview } from './workspace-import/review.js'
+import { materializeWorkspaceImportDraft } from './workspace-importer.js'
+import { startProcessLogRetention } from './process-log-retention.js'
+import {
+  readProjectSavedReleaseState,
+  type ProjectSavedReleaseReadModel,
+} from './project-state-boundary.js'
+import type {
+  ProjectSummaryProjection,
+  ProjectSummaryReleaseSummary,
+} from './project-summary-projection.js'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -231,6 +243,26 @@ export function parseArgs(rawArgs: string[]): {
   return { getFlag, positionals }
 }
 
+export interface CliRunOptions {
+  maxTicks: number
+  stopAfterOneTask: boolean
+  domainFilter?: string
+  preferredTaskId?: string
+}
+
+export function parseRunOptions(rawArgs: string[]): CliRunOptions {
+  const { getFlag } = parseArgs(rawArgs)
+  const domain = getFlag('--domain')
+  const task = getFlag('--task')
+  const maxTicks = Number(getFlag('--max-ticks') ?? Infinity)
+  return {
+    maxTicks,
+    stopAfterOneTask: rawArgs.includes('--one-task'),
+    ...(domain ? { domainFilter: domain } : {}),
+    ...(task ? { preferredTaskId: task } : {}),
+  }
+}
+
 export function resolveServiceLifecycleIntent(
   commandName: string,
   rawArgs: string[],
@@ -287,6 +319,7 @@ export function resolveServiceLifecycleIntent(
 //   guildhall list                      — list all registered workspaces
 //   guildhall run [id|path]             — run the coordinator for a workspace
 //     --domain <id>                 — only process tasks for one coordinator domain
+//     --task <id>                   — run one named task and its bounded child closure
 //     --max-ticks <n>               — stop after N ticks (useful for testing)
 //     --one-task                    — stop after one task reaches a handoff point
 //   guildhall task run-once "<prompt>"  — create a request, run it through Guildhall, emit a report
@@ -303,6 +336,8 @@ export function resolveServiceLifecycleIntent(
 //   guildhall migrate status [id|path] — show generic migration status
 //   guildhall migrate plan [id|path]   — show pending generic migrations
 //   guildhall migrate apply [id|path]  — apply automatic generic migrations
+//   guildhall workspace-import draft [id|path] [--from-file <doc.md>] [--json]
+//                                      — print the read-only workspace-import decomposition draft
 //   guildhall review-calibration validate [path] [--cases <dir>]
 //                                      — validate and record review calibration corpus coverage
 //   guildhall review-calibration escaped-miss [path] --task <id> --lane <lane> --finding <text>
@@ -338,6 +373,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'register',
   'unregister',
   'list',
+  'status',
   'run',
   'task',
   'serve',
@@ -348,6 +384,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'corpus-map',
   'memory',
   'migrate',
+  'workspace-import',
   'review-calibration',
   'model-bakeoff',
   'benchmarks',
@@ -399,9 +436,12 @@ Usage:
   guildhall register <path>          Register an existing workspace (must contain guildhall.yaml)
   guildhall unregister <id|path> Remove a workspace from the registry
   guildhall list                     Show all registered workspaces
+  guildhall status [id|path]          Show one project's saved release and work state
+    --json                       Print the same bounded status as JSON
 
   guildhall run [id|path]            Run the coordinator for a workspace
     --domain <id>                Filter to tasks in one coordinator domain
+    --task <id>                  Run one named task and its bounded child closure
     --max-ticks <n>              Stop after N ticks (testing)
     --one-task                   Stop after one task reaches terminal/PR/block
 
@@ -437,6 +477,8 @@ Usage:
     --apply                      Write files. Without this, prints a dry run
     --delete-source              Remove migrated old memory/ files after copying
     --update-gitignore           Write/refresh Guildhall's managed .gitignore block
+  guildhall cache census          Read-only cache ownership census
+    --json                        Print the full census as JSON
   guildhall migrate status [id|path]
                                   Show pending, blocked, and applied project migrations
   guildhall migrate plan [id|path]
@@ -449,6 +491,10 @@ Usage:
   guildhall migrate task-state [id|path]
                                   Compatibility command for the 0.8.0 task-state migration
     --apply                      Write files. Without this, prints a dry run
+  guildhall workspace-import draft [id|path]
+                                  Print a read-only decomposition draft for project intake
+    --from-file <path>            Run one Markdown planning document in isolation
+    --json                        Print compact JSON for calibration and agent clients
   guildhall review-calibration validate [id|path]
                                   Validate and record calibration corpus coverage
     --cases <dir>                Corpus directory (default: internal/calibration/cases)
@@ -668,12 +714,123 @@ function cmdList() {
   console.log()
 }
 
+export interface CliProjectStatus {
+  id: string
+  name: string
+  path: string
+  authority: ProjectSavedReleaseReadModel['authority']
+  freshness: ProjectSummaryProjection['freshness'] | 'missing'
+  queueRevision: number | null
+  projectRevision: number | null
+  release: ProjectSummaryReleaseSummary | null
+  scope: {
+    id: string
+    label: string
+    kind: string
+    included: number
+    deferred: number
+  } | null
+  nextAction: ProjectSummaryProjection['nextAction'] | null
+  blockers: ProjectSummaryProjection['blockers']
+  recentWork: ProjectSummaryProjection['recentWork']
+}
+
+/**
+ * Format the bounded saved project projection for the CLI. This intentionally
+ * does not reopen the task queue or derive a second release summary: the CLI
+ * and web surfaces must read the same persisted state boundary.
+ */
+export function buildCliProjectStatus(input: {
+  id: string
+  name: string
+  path: string
+  state: ProjectSavedReleaseReadModel
+}): CliProjectStatus {
+  const summary = input.state.summary
+  return {
+    id: input.id,
+    name: input.name,
+    path: input.path,
+    authority: input.state.authority,
+    freshness: summary?.freshness ?? 'missing',
+    queueRevision: input.state.queueRevision,
+    projectRevision: input.state.projectRevision,
+    release: summary?.releaseSummary ?? null,
+    scope: input.state.scope
+      ? {
+          id: input.state.scope.id,
+          label: input.state.scope.label,
+          kind: input.state.scope.kind,
+          included: input.state.scope.nodeIds.length,
+          deferred: input.state.scope.deferredNodeIds.length,
+        }
+      : null,
+    nextAction: summary?.nextAction ?? null,
+    blockers: summary?.blockers ?? [],
+    recentWork: summary?.recentWork ?? [],
+  }
+}
+
+export function renderProjectStatus(status: CliProjectStatus): string {
+  const release = status.release
+  const counts = release?.counts
+  const releaseLabel = release?.release?.label ?? 'No named release selected'
+  const releaseState = release?.release?.state ?? release?.state ?? 'unknown'
+  const progress = counts
+    ? `${counts.done}/${counts.total} done / ${counts.deferred} deferred / ${counts.blocked} blocked`
+    : 'No saved release summary'
+  const next = status.nextAction?.message ?? 'No next action recorded.'
+  const blockers = status.blockers.length === 0
+    ? 'none'
+    : status.blockers.map(blocker => blocker.label).join('; ')
+  return [
+    status.name,
+    `  Release: ${releaseLabel} [${releaseState}]`,
+    `  Progress: ${progress}`,
+    `  Readiness: ${release?.state ?? 'unknown'}`,
+    `  Next: ${next}`,
+    `  Blockers: ${blockers}`,
+    `  State: ${status.freshness} via ${status.authority} (queue ${status.queueRevision ?? 'n/a'}, project ${status.projectRevision ?? 'n/a'})`,
+  ].join('\n')
+}
+
+async function cmdStatus() {
+  const pos = positionals()
+  const idOrPath = pos[0]
+  try {
+    const workspace = idOrPath
+      ? loadWorkspace(findWorkspace(idOrPath)?.path ?? resolve(expandPath(idOrPath)))
+      : resolveWorkspace()
+    const registryEntry = findWorkspace(idOrPath ?? workspace.root)
+    const workspaceConfig = readWorkspaceConfig(workspace.root)
+    const name = registryEntry?.name
+      ?? (typeof workspaceConfig.name === 'string' ? workspaceConfig.name : null)
+      ?? basename(workspace.root)
+    const id = registryEntry?.id
+      ?? (typeof workspaceConfig.id === 'string' ? workspaceConfig.id : null)
+      ?? slugify(name)
+    const state = readProjectSavedReleaseState(workspace.root)
+    const status = buildCliProjectStatus({
+      id,
+      name,
+      path: workspace.root,
+      state,
+    })
+    if (args.includes('--json')) {
+      console.log(JSON.stringify(status, null, 2))
+      return
+    }
+    console.log(renderProjectStatus(status))
+  } catch (err) {
+    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+}
+
 async function cmdRun() {
   const pos = positionals()
   const idOrPath = pos[0]
-  const domain = getFlag('--domain')
-  const maxTicks = Number(getFlag('--max-ticks') ?? Infinity)
-  const oneTask = args.includes('--one-task')
+  const runOptions = parseRunOptions(args)
 
   let workspace
   try {
@@ -713,9 +870,7 @@ async function cmdRun() {
 
   const { runOrchestrator } = await import('./orchestrator.js')
   await runOrchestrator(workspace.config, {
-    ...(domain ? { domainFilter: domain } : {}),
-    maxTicks,
-    ...(oneTask ? { stopAfterOneTask: true } : {}),
+    ...runOptions,
   })
 }
 
@@ -891,6 +1046,7 @@ async function cmdServeInternal() {
   const serviceState = getFlag('--service-state')
   void positionals
 
+  startProcessLogRetention()
   const { runServe } = await import('./serve.js')
   await runServe({
     ...(portArg ? { port: Number(portArg) } : {}),
@@ -943,6 +1099,31 @@ async function cmdCorpusMap() {
     console.log(`[guildhall] Semantic: ${result.map.semantic.corpusKind} via ${result.map.semantic.modelId}`)
   }
   console.log(`[guildhall] Written: ${codebaseMapPath(getProjectStateDir(projectPath))}`)
+}
+
+function cmdCache() {
+  const [subcommand = 'census'] = positionals()
+  if (subcommand !== 'census') {
+    console.error('[guildhall] Usage: guildhall cache census [--json]')
+    process.exit(1)
+  }
+  const census = censusProjectCache()
+  if (args.includes('--json')) {
+    console.log(JSON.stringify(census, null, 2))
+    return
+  }
+  const counts = new Map<string, number>()
+  for (const entry of census.entries) {
+    counts.set(entry.classification, (counts.get(entry.classification) ?? 0) + 1)
+  }
+  console.log('[guildhall] Project cache census (read-only)')
+  console.log(`[guildhall] Cache root: ${census.cacheRoot}`)
+  console.log(`[guildhall] Registry: ${census.registryAvailable ? census.registryPath : `unavailable (${census.registryError})`}`)
+  console.log(`[guildhall] Cache entries: ${census.entries.length}`)
+  for (const classification of ['durable-registered', 'ephemeral-active', 'ephemeral-stale', 'unregistered-unknown']) {
+    console.log(`[guildhall] ${classification}: ${counts.get(classification) ?? 0}`)
+  }
+  console.log('[guildhall] No entries were deleted or marked safe to delete.')
 }
 
 async function cmdMemory() {
@@ -1019,10 +1200,24 @@ async function cmdMemory() {
     console.log(`[guildhall] Active tasks sanitized: ${result.activeTasksSanitized}`)
     console.log(`[guildhall] Terminal tasks archived: ${result.archivedTasks}`)
     console.log(`[guildhall] Archived task files compacted: ${result.archivedTaskFilesCompacted}`)
+    console.log(`[guildhall] Archive evidence files compacted: ${result.archiveEvidenceFilesCompacted}`)
     console.log(`[guildhall] Forbidden task fields: ${result.forbiddenTaskFieldsBefore} -> ${result.forbiddenTaskFieldsAfter}`)
     console.log(`[guildhall] Removed evidence bytes: ${result.removedEvidenceBytes}`)
     console.log(`[guildhall] Codebase map compacted: ${result.codebaseMapCompacted ? 'yes' : 'no'}`)
     console.log(`[guildhall] Heartbeat blocks moved: ${result.progressHeartbeatsMoved}`)
+    console.log(`[guildhall] Heartbeat ring: ${result.progressHeartbeatBytesBefore} -> ${result.progressHeartbeatBytesAfter} bytes; ${result.progressHeartbeatRecordsCompacted} records compacted`)
+    console.log(`[guildhall] Essential history files: ${result.exploringHistoryFilesCompacted}/${result.exploringHistoryFilesSeen} compacted (${result.exploringHistoryBytesBefore} -> ${result.exploringHistoryBytesAfter} bytes)`)
+    console.log(`[guildhall] Completed session snapshots: ${result.sessionFilesCompacted}/${result.sessionFilesSeen} compacted (${result.sessionBytesBefore} -> ${result.sessionBytesAfter} bytes); ${result.sessionPendingFilesPreserved} pending recovery files preserved`)
+    console.log(`[guildhall] Context diagnostics: ${result.contextDebugLedgerRecordsCompacted} ledger records compacted (${result.contextDebugLedgerBytesBefore} -> ${result.contextDebugLedgerBytesAfter} bytes); ${result.contextDebugSnapshotFilesCompacted} snapshots compacted (${result.contextDebugSnapshotBytesBefore} -> ${result.contextDebugSnapshotBytesAfter} bytes)`)
+    console.log(`[guildhall] Duplicate context-debug events removed: ${result.contextDebugDuplicateEventFilesRemoved} files (${result.contextDebugDuplicateEventBytesBefore} -> ${result.contextDebugDuplicateEventBytesAfter} bytes)`)
+    console.log(`[guildhall] Durable task evidence: ${result.taskEvidenceRecordsCompacted} records compacted across ${result.taskEvidenceFilesCompacted}/${result.taskEvidenceFilesSeen} files (${result.taskEvidenceBytesBefore} -> ${result.taskEvidenceBytesAfter} bytes)`)
+    console.log(`[guildhall] SQLite evidence: ${result.taskProofRowsCompacted} latest-proof rows and ${result.currentEvidenceRowsCompacted} current rows compacted (${result.databaseEvidenceBytesBefore} -> ${result.databaseEvidenceBytesAfter} bytes)`)
+    console.log(`[guildhall] SQLite database: ${result.databaseBytesBefore} -> ${result.databaseBytesAfter} bytes${result.databaseVacuumed ? ' (vacuumed)' : ''}`)
+    console.log(`[guildhall] Recent reconnect events: ${result.recentEventRecordsCompacted} records compacted (${result.recentEventBytesBefore} -> ${result.recentEventBytesAfter} bytes)`)
+    console.log(`[guildhall] Memory event index: ${result.memoryEventRecordsSeen} records across ${result.memoryEventFilesSeen} files -> ${result.memoryEventRecordsRetained} records in one project stream (${result.memoryEventBytesBefore} -> ${result.memoryEventBytesAfter} bytes)`)
+    console.log(`[guildhall] Migration snapshots: ${result.migrationSnapshotFilesCompacted}/${result.migrationSnapshotFilesSeen} redundant copies compacted (${result.migrationSnapshotBytesBefore} -> ${result.migrationSnapshotBytesAfter} bytes); ${result.migrationSnapshotLegacyFilesArchived} legacy files archived (${result.migrationSnapshotLegacyBytesBefore} -> ${result.migrationSnapshotLegacyBytesAfter} bytes); ${result.migrationSnapshotUnknownFiles} unverified files (${result.migrationSnapshotUnknownBytes} bytes) left untouched; ${result.migrationSnapshotArtifactsRegistered} registry entries backfilled (${result.migrationSnapshotArtifactBytesRegistered} bytes)`)
+    console.log(`[guildhall] Review transport: ${result.reviewTransportArtifactsRegistered}/${result.reviewTransportFilesSeen} registry entries backfilled (${result.reviewTransportArtifactBytesRegistered} bytes)`)
+    console.log(`[guildhall] Evacuation history: ${result.evacuationArtifactsRegistered}/${result.evacuationFilesSeen} registry entries backfilled (${result.evacuationArtifactBytesRegistered} bytes)`)
     console.log(`[guildhall] Shared TASKS/PROGRESS bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
     if (result.forbiddenTaskFieldFindings.length > 0) {
       console.log('[guildhall] Forbidden field findings:')
@@ -1201,6 +1396,203 @@ function printMigrationStatus(
   if (pending.length === 0 && blocked.length === 0) {
     console.log('[guildhall] No pending migrations.')
   }
+}
+
+export interface WorkspaceImportDraftReportWarning {
+  code:
+    | 'read_only_report'
+    | 'no_task_candidates'
+    | 'no_current_scope'
+    | 'no_deferred_scope'
+    | 'generic_task_title'
+  message: string
+  taskIds?: string[]
+}
+
+export interface WorkspaceImportDraftReport {
+  projectPath: string
+  sourceDocument: string | null
+  inventory: {
+    inputSignals: number
+    ran: readonly string[]
+    failed: readonly { id: string; error: string }[]
+    bySource: Record<string, number>
+    signals: readonly WorkspaceSignal[]
+  }
+  draft: WorkspaceImportDraft
+  review: WorkspaceImportReview
+  warnings: WorkspaceImportDraftReportWarning[]
+}
+
+function remapSingleDocumentSignals(
+  signals: readonly WorkspaceSignal[],
+  inputFile: string,
+  tempFileName: string,
+): WorkspaceSignal[] {
+  return signals.map(signal => ({
+    ...signal,
+    evidence: signal.evidence.replaceAll(tempFileName, inputFile),
+    references: signal.references?.length ? [inputFile] : undefined,
+  }))
+}
+
+function workspaceImportDraftWarnings(
+  draft: WorkspaceImportDraft,
+): WorkspaceImportDraftReportWarning[] {
+  const warnings: WorkspaceImportDraftReportWarning[] = [{
+    code: 'read_only_report',
+    message: 'This command only reports the decomposition draft. It does not approve import, create tasks, or mutate project state.',
+  }]
+  if (draft.tasks.length === 0) {
+    warnings.push({
+      code: 'no_task_candidates',
+      message: 'No task candidates were derived from the selected source.',
+    })
+  }
+  if (!draft.tasks.some(task => task.scope !== 'later')) {
+    warnings.push({
+      code: 'no_current_scope',
+      message: 'No current-scope task candidates were derived.',
+    })
+  }
+  if (!draft.tasks.some(task => task.scope === 'later')) {
+    warnings.push({
+      code: 'no_deferred_scope',
+      message: 'No deferred/later-scope task candidates were derived.',
+    })
+  }
+  const genericTaskIds = draft.tasks
+    .filter(task => /^(research|implement|verify)(?:\s+(?:it|this|feature|task|work))?\.?$/i.test(task.title.trim()))
+    .map(task => task.suggestedId)
+  if (genericTaskIds.length > 0) {
+    warnings.push({
+      code: 'generic_task_title',
+      message: 'Some task candidates use generic fallback-style titles instead of source-specific work names.',
+      taskIds: genericTaskIds,
+    })
+  }
+  return warnings
+}
+
+export async function buildWorkspaceImportDraftReport(input: {
+  projectPath: string
+  fromFile?: string
+}): Promise<WorkspaceImportDraftReport> {
+  const projectPath = resolve(expandPath(input.projectPath))
+  const sourceDocument = input.fromFile ? resolve(expandPath(input.fromFile)) : null
+  let tempProject: string | null = null
+
+  try {
+    let inventory
+    if (sourceDocument) {
+      tempProject = mkdtempSync(join(tmpdir(), 'guildhall-workspace-import-draft-'))
+      const tempFileName = basename(sourceDocument) || 'workspace-import-input.md'
+      writeFileSync(
+        join(tempProject, tempFileName),
+        readFileSync(sourceDocument, 'utf8'),
+      )
+      const detected = await detectWorkspaceSignals({
+        projectPath: tempProject,
+        only: ['planning-docs'],
+      })
+      const signals = remapSingleDocumentSignals(detected.signals, sourceDocument, tempFileName)
+      inventory = {
+        ...detected,
+        signals,
+        bySource: Object.fromEntries(
+          Object.entries(detected.bySource).map(([source, sourceSignals]) => [
+            source,
+            remapSingleDocumentSignals(sourceSignals, sourceDocument, tempFileName),
+          ]),
+        ),
+      }
+    } else {
+      inventory = await detectWorkspaceSignals({ projectPath })
+    }
+
+    const draft = await materializeWorkspaceImportDraft({
+      memoryDir: getProjectStateDir(projectPath),
+      projectPath,
+      draft: formWorkspaceHypothesis(inventory),
+    })
+    const review = buildWorkspaceImportReview(draft, [], projectPath)
+    return {
+      projectPath,
+      sourceDocument,
+      inventory: {
+        inputSignals: inventory.signals.length,
+        ran: inventory.ran,
+        failed: inventory.failed,
+        bySource: Object.fromEntries(
+          Object.entries(inventory.bySource).map(([source, sourceSignals]) => [
+            source,
+            sourceSignals.length,
+          ]),
+        ),
+        signals: inventory.signals,
+      },
+      draft,
+      review,
+      warnings: workspaceImportDraftWarnings(draft),
+    }
+  } finally {
+    if (tempProject) rmSync(tempProject, { recursive: true, force: true })
+  }
+}
+
+function printWorkspaceImportDraftReport(report: WorkspaceImportDraftReport): void {
+  console.log(`[guildhall] Workspace import draft for ${report.projectPath}`)
+  if (report.sourceDocument) {
+    console.log(`[guildhall] Source document: ${report.sourceDocument}`)
+  }
+  console.log(`[guildhall] Signals: ${report.inventory.inputSignals}`)
+  console.log(`[guildhall] Goals: ${report.draft.goals.length}`)
+  console.log(`[guildhall] Tasks: ${report.draft.tasks.length} (${report.review.totalCurrentTaskCandidates} now, ${report.review.totalLaterTaskCandidates} later)`)
+  console.log(`[guildhall] Milestones: ${report.draft.milestones.length}`)
+  console.log(`[guildhall] Context notes: ${report.draft.context.length}`)
+  const nowTasks = report.draft.tasks.filter(task => task.scope !== 'later')
+  const laterTasks = report.draft.tasks.filter(task => task.scope === 'later')
+  if (nowTasks.length > 0) {
+    console.log(`[guildhall] Now (${nowTasks.length}):`)
+    for (const task of nowTasks) {
+      console.log(`[guildhall]   - ${task.title}`)
+    }
+  }
+  if (laterTasks.length > 0) {
+    console.log(`[guildhall] Later (${laterTasks.length}):`)
+    for (const task of laterTasks) {
+      console.log(`[guildhall]   - ${task.title}`)
+    }
+  }
+  if (report.warnings.length > 0) {
+    console.log('[guildhall] Warnings:')
+    for (const warning of report.warnings) {
+      console.log(`[guildhall]   - ${warning.code}: ${warning.message}`)
+    }
+  }
+}
+
+async function cmdWorkspaceImport() {
+  const [subcommand = 'help', idOrPath] = positionals()
+  if (subcommand !== 'draft') {
+    console.error('[guildhall] Usage: guildhall workspace-import draft [id|path] [--from-file <doc.md>] [--json]')
+    process.exit(1)
+  }
+  const explicitProject = getFlag('--project')
+  const workspace = idOrPath ? findWorkspace(idOrPath) : null
+  const projectPath = explicitProject
+    ? resolve(expandPath(explicitProject))
+    : workspace?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
+  const fromFile = getFlag('--from-file')
+  const report = await buildWorkspaceImportDraftReport({
+    projectPath,
+    ...(fromFile ? { fromFile } : {}),
+  })
+  if (args.includes('--json')) {
+    console.log(JSON.stringify(report, null, 2))
+    return
+  }
+  printWorkspaceImportDraftReport(report)
 }
 
 export async function validateReviewCalibrationCorpus(input: {
@@ -2102,6 +2494,7 @@ async function main() {
     case 'register': return cmdRegister()
     case 'unregister': return cmdUnregister()
     case 'list':    return cmdList()
+    case 'status':  return cmdStatus()
     case 'run':     return cmdRun()
     case 'task':    return cmdTask()
     case 'serve':   return cmdServe()
@@ -2111,8 +2504,10 @@ async function main() {
     case 'serve-internal': return cmdServeInternal()
     case 'config':  return cmdConfig()
     case 'corpus-map': return cmdCorpusMap()
+    case 'cache': return cmdCache()
     case 'memory': return cmdMemory()
     case 'migrate': return cmdMigrate()
+    case 'workspace-import': return cmdWorkspaceImport()
     case 'review-calibration': return cmdReviewCalibration()
     case 'model-bakeoff': return cmdModelBakeoff()
     case 'benchmarks': return cmdBenchmarks()
@@ -2132,7 +2527,18 @@ const modulePath = fileURLToPath(import.meta.url)
 
 if (invokedPath === modulePath) {
   main().catch(err => {
-    console.error('[guildhall] Fatal error:', err)
+    const detail = err instanceof Error
+      ? err.stack ?? err.message
+      : typeof err === 'string'
+        ? err
+        : (() => {
+            try {
+              return JSON.stringify(err)
+            } catch {
+              return String(err)
+            }
+          })()
+    console.error(`[guildhall] Fatal error: ${detail}`)
     process.exit(1)
   })
 }

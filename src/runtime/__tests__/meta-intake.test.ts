@@ -28,9 +28,14 @@ import {
 import {
   getProjectTranscriptPath,
   projectStatePathFromMemoryDir,
-  readProjectStateJsonFromMemoryDirAsync,
-  writeProjectStateJsonFromMemoryDirAsync,
 } from '@guildhall/sessions'
+import { applyProjectMigrations } from '../migrations.js'
+import {
+  readProjectTaskQueueForMutationSync,
+  readProjectTaskQueueSync,
+  writeProjectTaskQueue,
+  writeProjectTaskQueueWithSummary,
+} from '../project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // FR-14 coordinator bootstrapping via meta-intake
@@ -54,6 +59,24 @@ beforeEach(async () => {
   // entry point for meta-intake.
   bootstrapWorkspace(tmpDir, { name: 'Meta Intake Test' })
   memoryDir = path.join(tmpDir, '.guildhall')
+  const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  writeProjectTaskQueueWithSummary(tasksPath, {
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [],
+  }, { projectRoot: tmpDir })
+  const prerequisites = await applyProjectMigrations({ projectRoot: tmpDir, includePrompt: true })
+  expect(prerequisites.failed).toEqual([])
+  const finalize = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.13.0/project-state-finalize'],
+  })
+  expect(finalize.failed).toEqual([])
+  const cleanup = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.13.0/project-state-legacy-live-file-cleanup'],
+  })
+  expect(cleanup.failed).toEqual([])
 })
 
 afterEach(async () => {
@@ -63,15 +86,16 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
-  const parsed = await readProjectStateJsonFromMemoryDirAsync<unknown>(memoryDir, 'TASKS.json')
-  if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-  }
-  return TaskQueue.parse(parsed)
+  return TaskQueue.parse(readProjectTaskQueueSync(statePath('TASKS.json')))
 }
 
 async function writeQueue(queue: TaskQueue): Promise<void> {
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+  const tasksPath = statePath('TASKS.json')
+  const current = readProjectTaskQueueForMutationSync(tasksPath)
+  writeProjectTaskQueue(tasksPath, queue, {
+    projectRoot: tmpDir,
+    expectedQueueRevision: current.expectedQueueRevision,
+  })
 }
 
 function statePath(relativePath: string): string {

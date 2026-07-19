@@ -31,13 +31,25 @@ let previousHome: string | undefined
 
 function sampleReview(): WorkspaceImportReview {
   return {
+    summary: {
+      currentMilestoneLabel: null,
+      releaseScopeLabel: null,
+      headline: '4 candidate tasks',
+      currentScope: '4 current tasks',
+      deferredScope: null,
+      structuralScope: null,
+      briefInputCount: 0,
+      briefRecordCount: 0,
+      capabilityCount: 0,
+      capabilityRecordCount: 0,
+    },
     areaGroups: [
       {
         key: 'looma',
         label: 'Looma',
         taskCount: 2,
-        currentTaskCount: 1,
-        laterTaskCount: 1,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
         milestoneCount: 0,
         goalCount: 0,
         contextCount: 0,
@@ -67,8 +79,8 @@ function sampleReview(): WorkspaceImportReview {
         areaKey: 'looma',
         areaLabel: 'Looma',
         taskCount: 2,
-        currentTaskCount: 1,
-        laterTaskCount: 1,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
         milestoneCount: 0,
         goalCount: 0,
         contextCount: 0,
@@ -96,8 +108,8 @@ function sampleReview(): WorkspaceImportReview {
       },
     ],
     totalTaskCandidates: 4,
-    totalCurrentTaskCandidates: 3,
-    totalLaterTaskCandidates: 1,
+    totalCurrentTaskCandidates: 4,
+    totalLaterTaskCandidates: 0,
     totalMilestones: 0,
     totalGoals: 0,
   }
@@ -115,44 +127,44 @@ function sampleDraft(): WorkspaceImportDraft {
         title: 'Listbox',
         description: 'Build Listbox.',
         domain: 'looma',
-        scope: 'current',
         priority: 'high',
         source: 'planning-docs',
         references: ['/tmp/project/looma/docs/component-roadmap.md'],
         confidence: 'high',
+        scope: 'current',
       },
       {
         suggestedId: 'task-2',
         title: 'Combobox',
         description: 'Build Combobox.',
         domain: 'looma',
-        scope: 'later',
         priority: 'low',
         source: 'planning-docs',
         references: ['/tmp/project/looma/docs/component-roadmap.md'],
         confidence: 'low',
+        scope: 'current',
       },
       {
         suggestedId: 'task-3',
         title: 'Auth callback redirect',
         description: 'Fix redirect.',
         domain: 'knit',
-        scope: 'current',
         priority: 'normal',
         source: 'planning-docs',
         references: ['/tmp/project/knit/docs/feature-roadmap.md'],
         confidence: 'medium',
+        scope: 'current',
       },
       {
         suggestedId: 'task-4',
         title: 'Collections parity',
         description: 'Close parity gap.',
         domain: 'knit',
-        scope: 'current',
         priority: 'high',
         source: 'planning-docs',
         references: ['/tmp/project/knit/docs/feature-roadmap.md'],
         confidence: 'high',
+        scope: 'current',
       },
     ],
   }
@@ -190,9 +202,11 @@ describe('learning loop for workspace import', () => {
 
     expect(snapshot.project.workspaceImport.preferredAreaKeys).toEqual(['looma'])
     expect(snapshot.project.workspaceImport.preferredSourceKeys).toEqual(['component-roadmap'])
-    expect(snapshot.effective.defaults.selectedAreaKeys).toEqual(['looma'])
-    expect(snapshot.effective.defaults.selectedSourceKeys).toEqual(['component-roadmap'])
-    expect(snapshot.effective.defaults.note).toContain('approved last time')
+    expect(snapshot.project.workspaceImport.preferredTaskIds).toEqual([])
+    expect(snapshot.effective.defaults.selectedAreaKeys).toEqual(['looma', 'knit'])
+    expect(snapshot.effective.defaults.selectedSourceKeys).toEqual(['component-roadmap', 'feature-roadmap'])
+    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-2', 'task-3', 'task-4'])
+    expect(snapshot.effective.defaults.note).toContain('full current import')
   })
 
   it('switches to tighter task defaults when the user repeatedly trims broad imports', async () => {
@@ -220,9 +234,37 @@ describe('learning loop for workspace import', () => {
     })
 
     expect(snapshot.project.workspaceImport.taskSelectionMode).toBe('tight')
-    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-4'])
+    expect(snapshot.project.workspaceImport.preferredTaskIds).toEqual([])
+    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-2', 'task-3', 'task-4'])
     expect(snapshot.effective.coordinatorSuggestions[0]?.id).toBe('workspace-import-clarity-check')
     expect(snapshot.effective.productSuggestions[0]?.id).toBe('workspace-import-tighten-defaults')
+  })
+
+  it('does not reuse stale exact task ids as future default scope', async () => {
+    const learningPath = projectLearningPath(path.join(tmpDir, 'memory'))
+    await fs.mkdir(path.dirname(learningPath), { recursive: true })
+    await fs.writeFile(
+      learningPath,
+      JSON.stringify({
+        version: 1,
+        workspaceImport: {
+          preferredAreaKeys: ['looma'],
+          preferredSourceKeys: ['component-roadmap'],
+          preferredTaskIds: ['task-1'],
+          approvedRuns: 1,
+        },
+      }),
+      'utf8',
+    )
+
+    const snapshot = buildLearningSnapshot({
+      memoryDir: path.join(tmpDir, 'memory'),
+      review: sampleReview(),
+      draft: sampleDraft(),
+    })
+
+    expect(snapshot.effective.defaults.selectedSourceKeys).toEqual(['component-roadmap', 'feature-roadmap'])
+    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-2', 'task-3', 'task-4'])
   })
 
   it('tracks dismissals in both project and user learning', async () => {

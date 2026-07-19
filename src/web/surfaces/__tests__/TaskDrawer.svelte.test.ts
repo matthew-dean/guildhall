@@ -91,6 +91,7 @@ function drawerPayload(overrides: Partial<DrawerPayload> = {}): DrawerPayload {
 function installBrowserFakes() {
   window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor')
   path.value = '/projects/looma-knit/task/task-link-editor'
+  path.href = '/projects/looma-knit/task/task-link-editor'
   project.detail = projectDetail()
   project.error = null
   vi.stubGlobal('confirm', vi.fn(() => true))
@@ -99,6 +100,7 @@ function installBrowserFakes() {
 function openDrawerOn(tab: 'overview' | 'current' | 'spec') {
   window.history.replaceState({}, '', `/projects/looma-knit/task/task-link-editor?tab=${tab}`)
   path.value = `/projects/looma-knit/task/task-link-editor?tab=${tab}`
+  path.href = `/projects/looma-knit/task/task-link-editor?tab=${tab}`
 }
 
 describe('TaskDrawer', () => {
@@ -849,7 +851,7 @@ describe('TaskDrawer', () => {
           ],
           order: 0,
         },
-        taskReadiness: { recommendation: 'split' },
+        taskReadiness: { recommendation: 'requires_child_work' },
         sizePlan: {
           taskId: 'task-link-editor',
           score: 8,
@@ -1251,6 +1253,35 @@ describe('TaskDrawer', () => {
     expect(screen.getByText('Please build it.')).toBeInTheDocument()
   })
 
+  it('loads the transcript only after its tab is opened', async () => {
+    const { exploringTranscript: _transcript, contextDebug: _context, recentEvents: _events, ...detail } = drawerPayload()
+    const transcript = {
+      content: '# Exploring Transcript\n\n## user\n\nPlease build it.\n',
+      path: '/history/transcripts/exploring/task-link-editor.md',
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/project/task/task-link-editor/extras?include=transcript')) return json({ exploringTranscript: transcript })
+      if (url.includes('/api/project/task/task-link-editor/extras?include=context')) return json({ contextDebug: [] })
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(detail)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('tab', { name: 'Overview' })
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('extras?include=transcript'))).toBe(false)
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Transcript' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('extras?include=transcript'))).toBe(true))
+  })
+
   it('opens the Action tab when a question notification deep-links to the current surface', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=current')
     path.value = '/projects/looma-knit/task/task-link-editor'
@@ -1271,6 +1302,95 @@ describe('TaskDrawer', () => {
 
     await screen.findByText('Which controls belong in the link editor?')
     expect(screen.getByRole('tab', { name: 'Action' }).getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('opens the Journey tab when a proof link deep-links to the task journey', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=journey')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'done',
+        doneSummaryBundle: {
+          completedAt: '2026-06-16T12:30:00.000Z',
+          summary: 'Worker implemented toolbar controls, then UX and typecheck reviewed it.',
+          highlights: ['Implemented toolbar controls'],
+          proof: ['tests/link-editor.test.ts passed'],
+          nextSteps: [],
+          risks: [],
+        },
+        completionProof: {
+          state: 'verified',
+          expectedCount: 1,
+          verifiedCount: 1,
+          verified: ['Reviewer proof: tests/link-editor.test.ts passed.'],
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Completion proof')
+    expect(screen.getByRole('tab', { name: 'Journey' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByText('Reviewer proof: tests/link-editor.test.ts passed.')).toBeInTheDocument()
+  })
+
+  it('reuses the open drawer but still honors a later Journey tab deep link', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'done',
+        doneSummaryBundle: {
+          completedAt: '2026-06-16T12:30:00.000Z',
+          summary: 'Worker implemented toolbar controls, then UX and typecheck reviewed it.',
+          highlights: ['Implemented toolbar controls'],
+          proof: ['tests/link-editor.test.ts passed'],
+          nextSteps: [],
+          risks: [],
+        },
+        completionProof: {
+          state: 'verified',
+          expectedCount: 1,
+          verifiedCount: 1,
+          verified: ['Reviewer proof: tests/link-editor.test.ts passed.'],
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('tab', { name: 'Overview', selected: true })
+    window.history.pushState({}, '', '/projects/looma-knit/task/task-link-editor?tab=journey')
+    path.value = '/projects/looma-knit/task/task-link-editor?tab=journey'
+    path.href = '/projects/looma-knit/task/task-link-editor?tab=journey'
+
+    await screen.findByText('Completion proof')
+    expect(screen.getByRole('tab', { name: 'Journey' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByText('Reviewer proof: tests/link-editor.test.ts passed.')).toBeInTheDocument()
   })
 
   it('treats tab=action as the Action tab deep link', async () => {
@@ -1727,6 +1847,51 @@ describe('TaskDrawer', () => {
     })
   })
 
+  it('shows stale acceptance proof state on the Spec tab', async () => {
+    openDrawerOn('spec')
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        acceptanceCriteria: [
+          {
+            id: 'provider-proof',
+            description: 'Live provider proof records drafting telemetry.',
+            met: false,
+            persistedMet: true,
+            verificationState: 'stale',
+            staleReason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+            staleGateId: 'prove-deepinfra-drafting-model.live-provider',
+          },
+        ],
+        acceptanceCriteriaProofState: {
+          state: 'blocked',
+          reason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+          staleMetCount: 1,
+          gateId: 'prove-deepinfra-drafting-model.live-provider',
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Acceptance criteria')
+    expect(screen.getByText('Live provider proof records drafting telemetry.')).toBeInTheDocument()
+    expect(screen.getByText('provider_missing: DEEPINFRA_API_TOKEN is required.')).toBeInTheDocument()
+    expect(screen.getByText('Needs proof')).toBeInTheDocument()
+  })
+
   it('does not offer unqualified spec approval when the structured brief is incomplete', async () => {
     openDrawerOn('spec')
     const payload = drawerPayload()
@@ -1935,6 +2100,94 @@ describe('TaskDrawer', () => {
 
     await screen.findByText(/Next step: turn this note into a task brief with scope, evidence, and acceptance criteria/)
     await userEvent.click(screen.getByRole('button', { name: /draft task brief/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/shape-draft'))).toBe(true)
+      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/task/task-link-editor/start'))).toBe(true)
+    })
+  })
+
+  it('continues source-recovery shaping from the current card when project start is blocked by that task', async () => {
+    openDrawerOn('current')
+    const blockedProject = {
+      ...projectDetail(),
+      startReadiness: {
+        canStart: false,
+        code: 'imported_scope_shaping',
+        message: 'Current scoped work still needs source-backed shaping before Guildhall can build unattended. Start with "Recover source-backed contract surface".',
+        actionHref: '/task/task-link-editor',
+      },
+    }
+    project.detail = blockedProject
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'exploring',
+        taskReadiness: {
+          recommendation: 'needs_research_spike',
+          summary: 'Needs concrete source-backed contract names before worker handoff.',
+        },
+        notes: [
+          {
+            agentId: 'workspace-importer',
+            role: 'importer',
+            content: 'Imported from docs/specs/author-involvement-modes.md',
+            timestamp: now,
+          },
+        ],
+      },
+      threadTurns: [
+        {
+          id: 'turn-source-recovery',
+          kind: 'inflight',
+          at: now,
+          persona: 'spec',
+          status: 'active',
+          phase: 'spec',
+          taskId: 'task-link-editor',
+          taskTitle: 'Recover source-backed contract surface',
+          taskStatus: 'exploring',
+          summary: 'Source recovery is queued.',
+          shapingBlockers: [
+            {
+              code: 'source_recovery',
+              summary: 'Needs concrete source-backed contract names before worker handoff.',
+            },
+          ],
+        },
+      ],
+    })
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/shape-draft')) {
+        expect(url).toContain('projectId=looma-knit')
+        expect(init?.method).toBe('POST')
+        return json({ ok: true, status: 'exploring' })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor/start')) {
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          projectId: 'looma-knit',
+          mode: 'one_task',
+        })
+        return json({ ok: true })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(blockedProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText(/recover the source-backed task brief/i)
+    const button = screen.getByRole('button', { name: /continue shaping brief/i })
+    expect(button).toBeEnabled()
+    await userEvent.click(button)
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/shape-draft'))).toBe(true)

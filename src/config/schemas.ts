@@ -68,7 +68,9 @@ const ProjectSkillsConfig = z.object({
 }).default({})
 
 const MemoryConfig = z.object({
-  substrate: z.enum(['mastra', 'deterministic']).default('mastra'),
+  // Deterministic summaries are the ordinary project-state path. Mastra is an
+  // explicit experiment, not a database created by every read.
+  substrate: z.enum(['mastra', 'deterministic']).default('deterministic'),
   semanticRecall: z.boolean().default(false),
   observationalMemory: z.boolean().default(false),
 }).default({})

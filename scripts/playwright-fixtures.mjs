@@ -24,6 +24,45 @@ function projectLocalHistoryDir(projectPath) {
   return join(guildhallHome, 'data', 'projects', `${basename(resolved) || 'root'}-${digest}`)
 }
 
+function normalizeFixtureTask(task) {
+  return {
+    ...task,
+    createdAt: typeof task.createdAt === 'string' ? task.createdAt : now,
+    updatedAt: typeof task.updatedAt === 'string' ? task.updatedAt : now,
+  }
+}
+
+function normalizeTaskQueueTimestamps(queue) {
+  if (Array.isArray(queue)) return queue.map(normalizeFixtureTask)
+  return {
+    ...queue,
+    lastUpdated: typeof queue.lastUpdated === 'string' ? queue.lastUpdated : now,
+    tasks: Array.isArray(queue.tasks) ? queue.tasks.map(normalizeFixtureTask) : [],
+  }
+}
+
+async function markFixtureProjectStateMigrated(localHistoryDir) {
+  await mkdir(join(localHistoryDir, 'migrations'), { recursive: true })
+  await writeFile(
+    join(localHistoryDir, 'migrations', 'migrations.json'),
+    JSON.stringify({
+      version: 1,
+      records: [{
+        id: '0.10.0/project-state-storage-boundary',
+        introducedIn: '0.10.0',
+        scope: 'project',
+        safety: 'prompt',
+        status: 'applied',
+        appliedAt: now,
+        appliedByVersion: '0.10.0',
+        summary: 'Fixture is already seeded in managed project state.',
+        affectedPaths: ['memory/'],
+      }],
+    }, null, 2),
+    'utf8',
+  )
+}
+
 async function writeProject({
   id,
   name,
@@ -32,8 +71,11 @@ async function writeProject({
   files = [],
   initialized = true,
   tasks: explicitTasks,
+  taskQueue,
+  taskQueueMigrated = true,
   capabilityRequests = [],
   dirtyGuildhallFile = false,
+  extraTasks = [],
 }) {
   const projectPath = join(projectsRoot, id)
   const memoryDir = join(projectPath, 'memory')
@@ -125,13 +167,26 @@ async function writeProject({
         }
       : {}),
   }))
-  await writeFile(join(memoryDir, 'TASKS.json'), JSON.stringify(tasks, null, 2), 'utf8')
+  const persistedQueue = taskQueue
+    ? {
+        ...taskQueue,
+        tasks: [...(Array.isArray(taskQueue.tasks) ? taskQueue.tasks : []), ...extraTasks],
+      }
+    : [...tasks, ...extraTasks]
+  const persistedTasks = normalizeTaskQueueTimestamps(persistedQueue)
+  await writeFile(join(memoryDir, 'TASKS.json'), JSON.stringify(persistedTasks, null, 2), 'utf8')
+  if (initialized && taskQueueMigrated) {
+    const localHistoryDir = projectLocalHistoryDir(projectPath)
+    const managedStateDir = join(localHistoryDir, 'project-state')
+    await mkdir(managedStateDir, { recursive: true })
+    await writeFile(join(managedStateDir, 'TASKS.json'), JSON.stringify(persistedTasks, null, 2), 'utf8')
+    await markFixtureProjectStateMigrated(localHistoryDir)
+  }
   if (id === 'capability-boundary') {
     const localHistoryDir = projectLocalHistoryDir(projectPath)
     const managedStateDir = join(localHistoryDir, 'project-state')
     await mkdir(managedStateDir, { recursive: true })
-    await mkdir(join(localHistoryDir, 'migrations'), { recursive: true })
-    await writeFile(join(managedStateDir, 'TASKS.json'), JSON.stringify({ version: 1, lastUpdated: now, tasks }, null, 2), 'utf8')
+    await writeFile(join(managedStateDir, 'TASKS.json'), JSON.stringify(normalizeTaskQueueTimestamps({ version: 1, lastUpdated: now, tasks }), null, 2), 'utf8')
     await writeFile(join(managedStateDir, 'project-brief.md'), `${name} fixture covers owner approval for runtime capability requests.\n`, 'utf8')
     await writeFile(join(managedStateDir, 'workspace-goals.json'), JSON.stringify({ goals: [] }, null, 2), 'utf8')
     await writeFile(
@@ -147,20 +202,7 @@ async function writeProject({
       ].join('\n'),
       'utf8',
     )
-    await writeFile(
-      join(localHistoryDir, 'migrations', 'migrations.json'),
-      JSON.stringify({
-        version: 1,
-        records: [{
-          id: '0.8.0/project-state-layout',
-          status: 'applied',
-          appliedAt: now,
-          summary: 'Fixture is already seeded in managed project state.',
-          affectedPaths: ['memory/'],
-        }],
-      }, null, 2),
-      'utf8',
-    )
+    await markFixtureProjectStateMigrated(localHistoryDir)
   }
   if (capabilityRequests.length > 0) {
     await mkdir(join(memoryDir, 'capability-requests'), { recursive: true })
@@ -281,6 +323,277 @@ async function writeProject({
     await writeFile(join(projectStateDir, 'release-note.md'), 'unlanded Guildhall-owned fixture note\n', 'utf8')
   }
   return projectPath
+}
+
+function fixtureTask(projectPath, input) {
+  return {
+    id: input.id,
+    title: input.title,
+    description: input.description ?? 'Rendered UI fixture task.',
+    domain: input.domain ?? 'guildhall',
+    projectPath,
+    status: input.status,
+    priority: input.priority ?? 'normal',
+    spec: input.spec ?? 'Fixture spec for rendered UI coverage.',
+    acceptanceCriteria: input.acceptanceCriteria ?? [],
+    outOfScope: [],
+    dependsOn: input.dependsOn ?? [],
+    notes: [],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    escalations: [],
+    agentIssues: [],
+    origination: 'human',
+    ...(input.assignedTo ? { assignedTo: input.assignedTo } : {}),
+    ...(input.references ? { references: input.references } : {}),
+    ...(input.releaseIds ? { releaseIds: input.releaseIds } : {}),
+    ...(input.hierarchy ? { hierarchy: input.hierarchy } : {}),
+  }
+}
+
+function narrativeHarnessReleaseQueue() {
+  const projectPath = join(projectsRoot, 'narrative-harness')
+  const releaseId = 'stage-1-fixture-and-evaluation-harness'
+  const current = [
+    ['task-import-9s8tkc', 'Define fixture, expected-record, prototype-run, and evaluation schemas.', 'ready'],
+    ['task-import-dh34s5', 'Add the first tiny fiction fixture and human-authored expected records.', 'ready'],
+    ['task-import-14yqvl7', 'Implement a no-UI runner that builds a packet from fixture records.', 'ready'],
+    ['task-import-1isf6n0', 'Add deterministic evaluation output that reports missing, noisy, stale, and useful context.', 'ready'],
+    ['task-import-1nfemy6', 'Generate a developer-readable debug report for each run.', 'ready'],
+    ['task-import-1v2ehs', 'Use the first run to narrow the MVP story-memory schema.', 'ready'],
+  ].map(([id, title, status]) => fixtureTask(projectPath, {
+    id,
+    title,
+    status,
+    domain: 'harness',
+    releaseIds: [releaseId],
+    references: ['docs/harness/implementation-roadmap.md'],
+    acceptanceCriteria: ['The scoped headless proof work has a runnable verification path.'],
+    ...(id === 'task-import-9s8tkc'
+      ? { hierarchy: { childIds: ['task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth'], relation: 'contains' } }
+      : {}),
+  }))
+  const laterTitles = [
+    'manuscript import or simple editor shell',
+    'project brief and author-provenance capture',
+    'story-memory inspection views for traces, findings, and decisions',
+    'askable retrieval interface for character, scene, reader-state, and world questions',
+    'lightweight visualizations where they clarify the story state',
+    'production data model and migrations',
+    'sync/storage strategy',
+    'subscription tier definitions',
+    'provider usage accounting and quota controls',
+    'audit logs for consent, AI context inclusion, and safety decisions',
+    'export/import boundaries',
+    'reliability and observability plan',
+  ]
+  const deferred = laterTitles.map((title, index) => fixtureTask(projectPath, {
+    id: `task-import-later-${index + 1}`,
+    title,
+    status: 'shelved',
+    domain: 'harness',
+    spec: '',
+    references: ['docs/harness/implementation-roadmap.md'],
+  }))
+  const child = fixtureTask(projectPath, {
+    id: 'task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth',
+    title: 'Shape fixture and expected-record ground truth',
+    status: 'in_progress',
+    domain: 'harness',
+    spec: 'Shape the fiction fixture and expected-record ground truth used by the headless proof runner.',
+    acceptanceCriteria: ['Fixture records and expected records exist for the first proof run.'],
+    assignedTo: 'worker-agent',
+    hierarchy: { parentId: 'task-import-9s8tkc', relation: 'child' },
+  })
+  const outOfScopeStaleProof = fixtureTask(projectPath, {
+    id: 'task-out-of-scope-stale-proof',
+    title: 'Clean up archived author voice proof',
+    status: 'done',
+    domain: 'harness',
+    releaseIds: ['stage-2-agent-coordination'],
+    acceptanceCriteria: [{ id: 'proof', description: 'Archived proof is attached.', met: false }],
+  })
+
+  return {
+    version: 1,
+    selectedReleaseId: releaseId,
+    releases: [{
+      id: releaseId,
+      label: 'Stage 1: Fixture And Evaluation Harness',
+      kind: 'release',
+      state: 'active',
+      source: 'release_plan',
+      nodeIds: current.map(task => `work:${task.id}`),
+      deferredNodeIds: deferred.map(task => `work:${task.id}`),
+    }],
+    tasks: [...current, ...deferred, child, outOfScopeStaleProof],
+  }
+}
+
+function narrativeHarnessRoadmapDoc() {
+  return [
+    '# Implementation Roadmap',
+    '',
+    '## Stage 1: Fixture And Evaluation Harness',
+    '',
+    'Goal: build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+    '',
+    'Deliverables:',
+    '',
+    '- fixture directory shape for at least one small story fixture',
+    '- typed fixture and expected-record contracts',
+    '- prototype run record contract',
+    '',
+    '## Current Next Milestone',
+    '',
+    'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+    '',
+    'The first Guildhall starter tasks should be:',
+    '',
+    '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+    '2. Add the first tiny fiction fixture and human-authored expected records.',
+    '3. Implement a no-UI runner that builds a packet from fixture records.',
+    '4. Add deterministic evaluation output that reports missing, noisy, stale, and useful context.',
+    '5. Generate a developer-readable debug report for each run.',
+    '6. Use the first run to narrow the MVP story-memory schema.',
+    '',
+    'Stage 2 should wait until Stage 1 has enough fixture evidence to prove which records and packet fields are actually useful.',
+  ].join('\n')
+}
+
+function narrativeHarnessInventoryDoc() {
+  return [
+    '# Remaining Spec Decomposition Inventory',
+    '',
+    '## 1. Already-Decomposed Specs (Reference)',
+    '',
+    '| Spec File | Matching Task(s) | Notes |',
+    '|-----------|------------------|-------|',
+    '| `story-memory-schemas.md` | `coherence-reviewer-mvp`, `decision-trace-pipeline`, `author-voice-loop-mvp`, `context-packet-compaction-core`, `done`, `expansion-task-full-decomposition-split-verify-and-update-the-migration-record` | Historical task references, not schema contracts. |',
+    '',
+    '### 2.2 `dialogue-and-character-voice.md`',
+    '',
+    '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+    '- **Recommended domain:** coherence',
+    '- **Stage alignment:** Stage 2 (Agent Coordination)',
+    '',
+    '### 2.7 `scene-and-chapter-intelligence.md`',
+    '',
+    '- **Recommended first task title:** Implement scene-and-chapter-intelligence reviewer lane',
+    '- **Recommended domain:** coherence',
+    '- **Stage alignment:** Stage 2 (Agent Coordination)',
+  ].join('\n')
+}
+
+function narrativeHarnessSchemaContractDoc() {
+  return [
+    '# Schema Contract Roadmap',
+    '',
+    '## Fixture And Expected-Record Schema',
+    '',
+    'Needed contracts:',
+    '',
+    '- `FixtureManifest`',
+    '- `ExpectedRecordSet`',
+    '- `ExpectedSignal`',
+    '',
+    'Purpose:',
+    '',
+    '- compare generated traces to human-authored ground truth',
+    '- avoid using private real manuscripts in early evals',
+    '',
+    '## Prototype Run And Evaluation Schema',
+    '',
+    'Needed contracts:',
+    '',
+    '- `PrototypeRun`',
+    '- `RunEvaluation`',
+    '- `SchemaFieldUsage`',
+    '- `PacketQualityScore`',
+    '',
+    '## Provider Registry Schema',
+    '',
+    'Needed contracts:',
+    '',
+    '- `ProviderRegistryEntry`',
+    '- `ModelRegistryEntry`',
+    '',
+    'Purpose:',
+    '',
+    '- record provider privacy and retention claims',
+    '',
+    '## Schema Versioning And Migration',
+    '',
+    'Needed contracts:',
+    '',
+    '- `SchemaVersion`',
+    '- `RecordVersion`',
+    '',
+    'Purpose:',
+    '',
+    '- migrate fixture data as schemas narrow',
+    '',
+    '## Import Export Schema',
+    '',
+    'Needed contracts:',
+    '',
+    '- `ImportManifest`',
+    '- `ExportManifest`',
+  ].join('\n')
+}
+
+function loomaKnitReleaseQueue() {
+  const projectPath = join(projectsRoot, 'looma-knit')
+  const releaseId = 'stage-1-v1-release-hardening'
+  const current = [
+    ['task-knit-unit-tests', 'Unit tests: use-collections, use-presence, subdomain utils', 'spec_review'],
+    ['task-knit-e2e-smoke', 'E2E tests: login -> create page -> edit -> search flow', 'spec_review'],
+    ['task-knit-db-types', 'TypeScript: generate proper types from Supabase (pnpm db:types)', 'ready'],
+    ['task-knit-mobile-sanity', 'Mobile: test on real device (Safari iOS, Chrome Android)', 'spec_review'],
+    ['task-knit-invite-flow', 'Proper invite flow (Supabase Auth invite by email)', 'spec_review'],
+  ].map(([id, title, status]) => fixtureTask(projectPath, {
+    id,
+    title,
+    status,
+    domain: 'knit',
+    releaseIds: [releaseId],
+    references: ['knit/docs/release-plan.md', 'knit/PROJECT_STATE.md'],
+  }))
+  const later = [
+    ['task-knit-stage-2-looma-primitive-convergence', 'Looma Primitive Convergence', 'knit/docs/release-plan.md'],
+    ['task-knit-stage-3-looma-editor-integration', 'Looma Editor Integration', 'knit/docs/release-plan.md'],
+    ['task-knit-stage-4-launch-readiness', 'Launch Readiness And V2 Cut Line', 'knit/docs/release-plan.md'],
+    ['task-looma-listbox', 'Listbox', 'looma/docs/component-roadmap.md'],
+    ['task-looma-combobox', 'Combobox after select/listbox baseline is stable', 'looma/docs/component-roadmap.md'],
+    ['task-looma-block-menu', 'EditorBlockMenu / block side menu', 'looma/docs/component-roadmap.md'],
+    ['task-looma-floating-toolbar', 'EditorFloatingToolbar', 'looma/docs/component-roadmap.md'],
+    ['task-looma-link-editor', 'EditorLinkEditor / link popover', 'looma/docs/component-roadmap.md'],
+  ].map(([id, title, reference]) => fixtureTask(projectPath, {
+    id,
+    title,
+    status: 'shelved',
+    domain: id.startsWith('task-looma') ? 'looma' : 'knit',
+    spec: '',
+    references: [reference],
+  }))
+
+  return {
+    version: 1,
+    selectedReleaseId: releaseId,
+    releases: [{
+      id: releaseId,
+      label: 'Stage 1: V1 Release Hardening',
+      kind: 'release',
+      state: 'active',
+      source: 'release_plan',
+      nodeIds: current.map(task => `work:${task.id}`),
+      deferredNodeIds: later.map(task => `work:${task.id}`),
+    }],
+    tasks: [...current, ...later],
+  }
 }
 
 function projectRef(id, label, projectPath) {
@@ -434,11 +747,30 @@ const projects = [
     name: 'Looma + Knit',
     statuses: ['spec_review', 'exploring', 'in_progress', 'review', 'gate_check', 'done', 'done', 'shelved'],
     withQuestion: true,
+    taskQueue: loomaKnitReleaseQueue(),
+    taskQueueMigrated: true,
+    extraTasks: [fixtureTask(join(projectsRoot, 'looma-knit'), {
+      id: 'task-import-1l0mr2r',
+      title: 'Context menu',
+      status: 'spec_review',
+      spec: 'Fixture import task spec for the Context menu drawer replay.',
+    }), fixtureTask(join(projectsRoot, 'looma-knit'), {
+      id: 'task-workspace-import',
+      title: 'Review existing project work',
+      status: 'import_draft',
+      spec: 'Fixture workspace import task for the task drawer route.',
+    })],
   },
   {
     id: 'font-something',
     name: 'Font something',
     statuses: ['import_draft', 'import_draft', 'import_draft', 'done', 'shelved'],
+    extraTasks: [fixtureTask(join(projectsRoot, 'font-something'), {
+      id: 'import-api-serving-mvp',
+      title: 'Serve the import API MVP',
+      status: 'spec_review',
+      spec: 'Fixture import API serving MVP task spec.',
+    })],
   },
   {
     id: 'jess',
@@ -541,7 +873,44 @@ const projects = [
   {
     id: 'narrative-harness',
     name: 'Narrative Harness',
-    statuses: ['exploring', 'spec_review', 'review', 'done', 'shelved'],
+    taskQueue: narrativeHarnessReleaseQueue(),
+    extraTasks: [
+      fixtureTask(join(projectsRoot, 'narrative-harness'), {
+        id: 'coherence-reviewer-mvp',
+        title: 'Build first coherence reviewer MVP',
+        status: 'spec_review',
+        spec: 'Fixture coherence reviewer MVP spec.',
+      }),
+      fixtureTask(join(projectsRoot, 'narrative-harness'), {
+        id: 'decision-trace-pipeline',
+        title: 'Build the decision trace pipeline',
+        status: 'spec_review',
+        spec: 'Fixture decision trace pipeline spec.',
+      }),
+      fixtureTask(join(projectsRoot, 'narrative-harness'), {
+        id: 'task-009',
+        title: 'Run task 009 story replay',
+        status: 'spec_review',
+        spec: 'Fixture task 009 story replay spec.',
+      }),
+    ],
+    files: [
+      {
+        dir: 'docs/harness',
+        path: 'docs/harness/implementation-roadmap.md',
+        content: narrativeHarnessRoadmapDoc(),
+      },
+      {
+        dir: 'docs/harness',
+        path: 'docs/harness/remaining-spec-decomposition-inventory.md',
+        content: narrativeHarnessInventoryDoc(),
+      },
+      {
+        dir: 'docs/specs',
+        path: 'docs/specs/schema-contract-roadmap.md',
+        content: narrativeHarnessSchemaContractDoc(),
+      },
+    ],
   },
   {
     id: 'linecraft',
@@ -607,6 +976,76 @@ const projects = [
     name: 'Dirty Service',
     statuses: ['done'],
     dirtyGuildhallFile: true,
+  },
+  {
+    id: 'release-consumed',
+    name: 'Release Consumed',
+    taskQueue: {
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'headless-mvp',
+      releases: [
+        {
+          id: 'headless-mvp',
+          label: 'Headless MVP',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:current-done'],
+          deferredNodeIds: ['work:later-ready'],
+        },
+      ],
+      tasks: [
+        {
+          id: 'current-done',
+          title: 'Finish current release proof',
+          description: 'The selected release work is finished.',
+          domain: 'guildhall',
+          projectPath: join(projectsRoot, 'release-consumed'),
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          escalations: [],
+          agentIssues: [],
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'later-ready',
+          title: 'Start next release feature',
+          description: 'This is outside the selected release.',
+          domain: 'guildhall',
+          projectPath: join(projectsRoot, 'release-consumed'),
+          status: 'ready',
+          scope: 'later',
+          priority: 'critical',
+          acceptanceCriteria: ['Later work has its own release boundary.'],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          escalations: [],
+          agentIssues: [],
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    },
   },
   {
     id: 'consumer-app',
@@ -708,6 +1147,27 @@ await writeFile(
       '    tags: []',
       `    registeredAt: '${entry.registeredAt}'`,
     ]),
+    '',
+  ].join('\n'),
+  'utf8',
+)
+await writeFile(
+  join(guildhallHome, 'config.yaml'),
+  [
+    'version: 1',
+    'preferredProvider: anthropic-api',
+    '',
+  ].join('\n'),
+  'utf8',
+)
+await writeFile(
+  join(guildhallHome, 'providers.yaml'),
+  [
+    'version: 1',
+    'providers:',
+    '  anthropic-api:',
+    '    apiKey: sk-rendered-ui-fixture',
+    "    verifiedAt: '2026-05-18T00:00:00.000Z'",
     '',
   ].join('\n'),
   'utf8',

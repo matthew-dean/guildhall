@@ -13,6 +13,7 @@ import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
+import { writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
 
 let tmpDir: string
 let dataDir: string
@@ -73,6 +74,30 @@ describe('GET /api/project/wizards', () => {
     // Provider can be done on developer machines with OAuth credentials.
     const provider = onboard!.steps.find(s => s.id === 'provider')
     expect(['done', 'pending']).toContain(provider?.status)
+  })
+
+  it('reads the persisted summary shape without rebuilding project state', async () => {
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-07-17T00:00:00.000Z',
+      releases: [],
+      tasks: [{
+        id: 'task-summary-shape',
+        title: 'Persisted summary task',
+        status: 'ready',
+        createdAt: '2026-07-17T00:00:00.000Z',
+        updatedAt: '2026-07-17T00:00:00.000Z',
+      }],
+    }, { projectRoot: tmpDir })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/wizards')))
+    expect(res.status).toBe(200)
+    expect((await res.json()) as { wizards: unknown[] }).toMatchObject({
+      wizards: expect.any(Array),
+    })
   })
 })
 

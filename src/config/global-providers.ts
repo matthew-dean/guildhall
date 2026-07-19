@@ -282,6 +282,29 @@ export interface ResolvedProviderCredentials {
   llamaCppUrl?: string
 }
 
+export function providerCommandEnv(
+  providers: GlobalProviders = readGlobalProviders(),
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const credentials = resolveGlobalCredentials(providers, env)
+  const out: Record<string, string> = {}
+  if (credentials.anthropicApiKey) out.ANTHROPIC_API_KEY = credentials.anthropicApiKey
+  if (credentials.openaiApiKey) out.OPENAI_API_KEY = credentials.openaiApiKey
+  if (credentials.openaiBaseUrl) out.OPENAI_BASE_URL = credentials.openaiBaseUrl
+  if (credentials.llamaCppUrl) out.LLAMA_CPP_URL = credentials.llamaCppUrl
+
+  const deepinfraToken = (env.DEEPINFRA_API_TOKEN ?? '').trim()
+  if (deepinfraToken) out.DEEPINFRA_API_TOKEN = deepinfraToken
+  else if (
+    credentials.openaiApiKey &&
+    credentials.openaiBaseUrl &&
+    /deepinfra\.com/i.test(credentials.openaiBaseUrl)
+  ) {
+    out.DEEPINFRA_API_TOKEN = credentials.openaiApiKey
+  }
+  return out
+}
+
 /**
  * One-time migration: move provider credentials out of a project's local
  * config and into the global store. Idempotent — if the global store

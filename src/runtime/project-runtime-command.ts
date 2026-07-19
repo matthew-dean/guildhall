@@ -3,7 +3,12 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 
-import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath } from '@guildhall/sessions'
+import {
+  getProjectLocalHistoryDir,
+  getProjectRuntimeCommandEvidencePath,
+  markProjectSummaryStale,
+  readProjectStateDatabaseCurrentAuthority,
+} from '@guildhall/sessions'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import type { PersistencePlacement } from '@guildhall/persistence'
 
@@ -111,6 +116,7 @@ export async function appendRuntimeCommandEvidence(
   record: RuntimeCommandEvidenceRecord,
 ): Promise<RuntimeCommandEvidenceRecord> {
   await appendRuntimeCommandEvidenceEvent(projectRoot, record)
+  markProjectSummaryStale(projectRoot)
   return record
 }
 
@@ -139,6 +145,20 @@ async function appendRuntimeCommandEvidenceEvent(
 export async function readRuntimeCommandEvidence(projectRoot: string): Promise<RuntimeCommandEvidenceRecord[]> {
   const persisted = await readPersistedRuntimeCommandEvidence(projectRoot)
   if (persisted.length > 0) return persisted
+  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database') {
+    // Once project state is promoted, an old JSONL stream is migration input,
+    // never a second source of truth for ordinary runtime reads.
+    const legacyFile = getProjectRuntimeCommandEvidencePath(projectRoot)
+    try {
+      await fs.access(legacyFile)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+    throw new Error(
+      `Runtime command evidence migration required before ordinary reads; legacy history remains at ${legacyFile}`,
+    )
+  }
   return readLegacyRuntimeCommandEvidence(projectRoot)
 }
 

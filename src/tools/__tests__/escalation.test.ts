@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
 import {
   raiseEscalation,
   resolveEscalation,
@@ -14,8 +15,22 @@ import {
 } from '../escalation.js'
 import { readTasks } from '../task-queue.js'
 import { buildEffectiveTask } from '../../runtime/effective-task.js'
-import { readTaskRuntimeStore, upsertTaskRuntimeState } from '@guildhall/sessions'
+import {
+  appendTaskEvidence,
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  projectStateDatabasePath,
+  readProjectTaskQueueSync,
+  readTaskEvidence,
+  readTaskRuntimeStore,
+  upsertTaskRuntimeState,
+} from '@guildhall/sessions'
+import {
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+} from '../../runtime/project-state-boundary.js'
 import type { Task } from '@guildhall/core'
+import { setProvider } from '../../config/global-providers.js'
 
 // ---------------------------------------------------------------------------
 // FR-10 escalation protocol tests — these events are load-bearing for the
@@ -60,7 +75,8 @@ async function writeSeed(tasks: Task[]): Promise<void> {
     lastUpdated: new Date().toISOString(),
     tasks,
   }
-  await fs.writeFile(tasksPath, JSON.stringify(queue), 'utf-8')
+  writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+  promoteProjectStateDatabaseAuthority(tmpDir)
 }
 
 async function readEffectiveTask(): Promise<Task> {
@@ -71,14 +87,28 @@ async function readEffectiveTask(): Promise<Task> {
 }
 
 async function readRawQueue(): Promise<{ tasks: Array<Record<string, unknown>> }> {
-  return JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as { tasks: Array<Record<string, unknown>> }
+  return readProjectTaskQueueSync(tasksPath) as { tasks: Array<Record<string, unknown>> }
+}
+
+function readTaskDetailBytes(taskId: string): Buffer {
+  const database = new DatabaseSync(projectStateDatabasePath(tmpDir), { readOnly: true })
+  try {
+    const row = database.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get(taskId) as { payload_gzip: Uint8Array }
+    return Buffer.from(row.payload_gzip)
+  } finally {
+    database.close()
+  }
 }
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-esc-'))
-  tasksPath = path.join(tmpDir, 'TASKS.json')
+  tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
   progressPath = path.join(tmpDir, 'PROGRESS.md')
-  await writeSeed([seedTask()])
+  await writeSeed([
+    seedTask(),
+    seedTask({ id: 'task-002', title: 'Untouched task' }),
+  ])
 })
 
 afterEach(async () => {
@@ -210,13 +240,10 @@ describe('raiseEscalation', () => {
     })
     expect(first.success).toBe(true)
 
-    await writeSeed([
-      seedTask({
-        status: 'in_progress',
-        assignedTo: 'worker-agent',
-        blockReason: undefined,
-      }),
-    ])
+    writePromotedTaskDetailMutation(tasksPath, 'task-001', {
+      mutate: task => ({ ...task, status: 'in_progress', blockReason: undefined }),
+    })
+    await upsertTaskRuntimeState(tmpDir, 'task-001', { assignedTo: 'worker-agent' })
 
     const second = await raiseEscalation({
       tasksPath,
@@ -251,7 +278,7 @@ describe('raiseEscalation', () => {
 
     const raw = await readRawQueue()
     expect(raw.tasks[0]?.status).toBe('in_progress')
-    expect(raw.tasks[0]?.escalations).toEqual([])
+    expect(raw.tasks[0]).not.toHaveProperty('escalations')
   })
 
   it('writes a typed progress entry when progressPath is provided', async () => {
@@ -364,12 +391,6 @@ describe('resolveEscalation', () => {
       resolution: 'Clear setup blocker for retry-window test.',
       nextStatus: 'in_progress',
     })
-    await writeSeed([
-      seedTask({
-        revisionCount: 4,
-        escalations: [],
-      }),
-    ])
     await upsertTaskRuntimeState(tmpDir, 'task-001', {
       revisionCount: 4,
       updatedAt: '2026-05-01T00:00:00.000Z',
@@ -428,6 +449,49 @@ describe('resolveEscalation', () => {
     })
     const task = await readEffectiveTask()
     expect(task.escalations[0]?.resolvedBy).toBe('coordinator-looma')
+  })
+
+  it('clears canonical blocker fields when resolving a sidecar-only escalation', async () => {
+    const raisedAt = new Date().toISOString()
+    writePromotedTaskDetailMutation(tasksPath, 'task-001', {
+      mutate: task => ({
+        ...task,
+        status: 'blocked',
+        blockReason: 'decision_required: stale proof policy question',
+        openEscalations: [{
+          id: 'esc-task-001-stale',
+          summary: 'Stale compact escalation row',
+        }],
+      }),
+    })
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: 'esc-task-001-1',
+      kind: 'escalation',
+      recordedAt: raisedAt,
+      payload: {
+        id: 'esc-task-001-1',
+        taskId: 'task-001',
+        agentId: 'worker-agent',
+        reason: 'decision_required',
+        summary: 'Need proof policy decision',
+        raisedAt,
+      },
+    })
+
+    const result = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolution: 'Use the project-local proof command.',
+      nextStatus: 'in_progress',
+    })
+
+    expect(result.success).toBe(true)
+    const raw = await readRawQueue()
+    const task = raw.tasks.find(candidate => candidate.id === 'task-001')!
+    expect(task.status).toBe('in_progress')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.openEscalations).toBeUndefined()
   })
 
   it('keeps task blocked if other escalations remain open', async () => {
@@ -497,6 +561,78 @@ describe('resolveEscalation', () => {
     expect(progress).toContain('MILESTONE')
     expect(progress).toContain('esc-task-001-1')
     expect(progress).toContain('pick A')
+  })
+})
+
+describe('promoted escalation persistence', () => {
+  it('mutates only the target detail and keeps raise/resolve visible through evidence and effective task state', async () => {
+    tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+
+    const before = readTaskDetailBytes('task-002')
+    const raised = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'decision_required',
+      summary: 'Choose the supported provider.',
+    })
+
+    expect(raised.success).toBe(true)
+    expect(readTaskDetailBytes('task-002')).toEqual(before)
+    const raisedTask = await readEffectiveTask()
+    expect(raisedTask).toMatchObject({
+      status: 'blocked',
+      blockReason: 'decision_required: Choose the supported provider.',
+    })
+    expect(raisedTask.escalations).toEqual([
+      expect.objectContaining({ id: raised.escalationId }),
+    ])
+    expect(raisedTask.escalations[0]?.resolvedAt).toBeUndefined()
+    expect(await readTaskEvidence(tmpDir, 'task-001', { kind: 'escalation' })).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ id: raised.escalationId }),
+      }),
+    ])
+    expect((await readTaskRuntimeStore(tmpDir)).tasks['task-001']).toMatchObject({
+      assignedTo: null,
+      openEscalationIds: [raised.escalationId],
+    })
+
+    const resolved = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: raised.escalationId!,
+      resolution: 'Use the supported provider.',
+      nextStatus: 'in_progress',
+    })
+
+    expect(resolved.success).toBe(true)
+    expect(readTaskDetailBytes('task-002')).toEqual(before)
+    const resolvedQueue = (await readTasks({ tasksPath })).queue
+    const resolvedTask = await buildEffectiveTask(tmpDir, resolvedQueue!.tasks[0]!, { evidence: 'full' }) as unknown as Task
+    expect(resolvedTask).toMatchObject({
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      escalations: [expect.objectContaining({
+        id: raised.escalationId,
+        resolution: 'Use the supported provider.',
+        resolvedBy: 'human',
+      })],
+    })
+    expect(resolvedTask.blockReason).toBeUndefined()
+    expect((await readTaskRuntimeStore(tmpDir)).tasks['task-001']).toMatchObject({
+      assignedTo: 'worker-agent',
+      openEscalationIds: [],
+    })
+    expect(await readTaskEvidence(tmpDir, 'task-001', { kind: 'escalation' })).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          id: raised.escalationId,
+          resolution: 'Use the supported provider.',
+        }),
+      }),
+    ]))
   })
 })
 
@@ -630,6 +766,78 @@ describe('engine tool wrappers', () => {
     )
     expect(result.is_error).toBe(true)
     expect(result.output).toMatch(/routine verification evidence/i)
+  })
+
+  it('raiseEscalationTool rejects Guildhall task orchestration as owner proof policy work', async () => {
+    const result = await raiseEscalationTool.execute(
+      {
+        tasksPath,
+        taskId: 'task-001',
+        agentId: 'worker-agent',
+        reason: 'decision_required',
+        summary:
+          'AC4 cannot be satisfied by running `npx guildhall run --task=task-001` because Guildhall blocks that command as delegating back to orchestration.',
+        details:
+          'The project-level proof `npm run proof:ground-truth` has already passed, but reviewer feedback still asks whether the blocked command counts as proof.',
+      },
+      ctx,
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/does not/i)
+
+    const { queue } = await readTasks({ tasksPath })
+    expect(queue?.tasks[0]?.status).toBe('in_progress')
+  })
+
+  it('raiseEscalationTool rejects configured provider credential proof as owner setup work', async () => {
+    const previousHome = process.env.GUILDHALL_CONFIG_DIR
+    const previousOpenAiKey = process.env.OPENAI_API_KEY
+    const previousOpenAiBaseUrl = process.env.OPENAI_BASE_URL
+    const previousDeepinfraToken = process.env.DEEPINFRA_API_TOKEN
+    const providerHome = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-escalation-provider-'))
+    process.env.GUILDHALL_CONFIG_DIR = providerHome
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_BASE_URL
+    delete process.env.DEEPINFRA_API_TOKEN
+    try {
+      setProvider('openai-api', {
+        apiKey: 'fake-deepinfra-key',
+        baseUrl: 'https://api.deepinfra.com/v1/openai',
+      })
+      const result = await raiseEscalationTool.execute(
+        {
+          tasksPath,
+          taskId: 'task-001',
+          agentId: 'worker-agent',
+          reason: 'human_judgment_required',
+          summary: 'Provider API token required to complete proof execution',
+          details:
+            'The proof script `scripts/prove-deepinfra-drafting-model.mjs` requires a valid DEEPINFRA_API_TOKEN to execute.',
+          externalChecklist: [
+            {
+              id: 'configure-api-token',
+              title: 'Configure DEEPINFRA_API_TOKEN environment variable',
+              detail: 'Set the DEEPINFRA_API_TOKEN environment variable with a valid API token from DeepInfra',
+            },
+          ],
+        },
+        ctx,
+      )
+
+      expect(result.is_error).toBe(true)
+      expect(result.output).toMatch(/provider.*configured/i)
+      const { queue } = await readTasks({ tasksPath })
+      expect(queue?.tasks[0]?.status).toBe('in_progress')
+    } finally {
+      if (previousHome === undefined) delete process.env.GUILDHALL_CONFIG_DIR
+      else process.env.GUILDHALL_CONFIG_DIR = previousHome
+      if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = previousOpenAiKey
+      if (previousOpenAiBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
+      else process.env.OPENAI_BASE_URL = previousOpenAiBaseUrl
+      if (previousDeepinfraToken === undefined) delete process.env.DEEPINFRA_API_TOKEN
+      else process.env.DEEPINFRA_API_TOKEN = previousDeepinfraToken
+    }
   })
 
   it('raiseEscalationTool marks unknown task as error', async () => {

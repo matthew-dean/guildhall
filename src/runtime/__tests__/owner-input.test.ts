@@ -4,6 +4,8 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { listBoundedChatSessions } from '../bounded-chat.js'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
+import { readProjectSummaryProjection, writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 
 const now = '2026-06-01T12:00:00.000Z'
 
@@ -74,6 +76,45 @@ describe('owner input requests', () => {
           to: 'waiting_for_owner',
         }),
       ],
+    })
+  })
+
+  it('updates the compact summary with the open owner-input count', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'guildhall-owner-input-summary-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 'demo',
+      queue: { version: 1, lastUpdated: now, tasks: [] },
+    })
+
+    const result = await createOwnerInputRequest({
+      projectRoot: root,
+      projectId: 'demo',
+      commandId: 'task-question:task-1:q1',
+      now,
+      actor: 'migration',
+      source: { kind: 'task', taskId: 'task-1', questionId: 'q1' },
+      target: { kind: 'thread' },
+      question: { prompt: 'Which proof should run?' },
+      objective: {
+        kind: 'task_shaping',
+        label: 'Choose proof',
+        successCriteria: ['Owner chooses the proof.'],
+      },
+    })
+
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
+      // Owner-input rows are current project state, so the compact summary
+      // remains current while its owner-input count is updated.
+      freshness: 'current',
+      ownerInput: {
+        openCount: 1,
+        next: {
+          id: result.request.id,
+          prompt: 'Which proof should run?',
+          taskId: 'task-1',
+        },
+      },
     })
   })
 

@@ -27,7 +27,6 @@
 
   let service = $state<ServiceDetail | null>(null)
   let loading = $state(true)
-  let statusHydrating = $state(false)
   let error = $state<string | null>(null)
   let busyId = $state<string | null>(null)
   let selectedProjectId = $state<string | null>(null)
@@ -64,6 +63,14 @@
     return typeof document !== 'undefined' && document.visibilityState === 'hidden'
   }
 
+  function updateService(incoming: ServiceDetail): void {
+    const merged = mergeServiceProjectSummaries(service, incoming)
+    if (merged !== service) {
+      service = merged
+      setCachedService(merged)
+    }
+  }
+
   async function refresh(background = false): Promise<void> {
     if (background && pageIsHidden()) return
     if (refreshInFlight) {
@@ -73,13 +80,9 @@
     refreshInFlight = true
     if (!background || service == null) loading = true
     try {
-      const response = await fetch('/api/service', { cache: 'no-store' })
-      const payload = (await response.json()) as ServiceDetail
-      const merged = mergeServiceProjectSummaries(service, payload)
-      if (merged !== service) {
-        service = merged
-        setCachedService(merged)
-      }
+      const response = await fetch('/api/service/projects', { cache: 'no-store' })
+      if (!response.ok) throw new Error(`Project list request failed (${response.status})`)
+      updateService(await response.json() as ServiceDetail)
       error = null
       lastRefreshAt = Date.now()
     } catch (err) {
@@ -94,24 +97,6 @@
     }
   }
 
-  async function loadProjectShell(): Promise<boolean> {
-    try {
-      const response = await fetch('/api/service/projects', { cache: 'no-store' })
-      const payload = (await response.json()) as ServiceDetail
-      const merged = mergeServiceProjectSummaries(service, payload)
-      if (merged !== service) {
-        service = merged
-      }
-      error = null
-      loading = false
-      return true
-    } catch (err) {
-      error = requestErrorMessage(err)
-      loading = false
-      return false
-    }
-  }
-
   async function initialLoad(): Promise<void> {
     const cached = getCachedService()
     if (cached) {
@@ -120,10 +105,7 @@
       void refresh(true)
       return
     }
-    statusHydrating = true
-    await loadProjectShell()
-    await refresh(true)
-    statusHydrating = false
+    await refresh()
   }
 
   function scheduleRefresh(): void {
@@ -267,7 +249,7 @@
     defaultProviderWarning?.message ??
       'Open model settings.',
   )
-  const showingPartialProjectStatus = $derived(statusHydrating || cards.some(card => card.statusLoading))
+  const showingPartialProjectStatus = $derived(cards.some(card => card.statusLoading))
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
     return `${count} ${count === 1 ? singular : plural}`

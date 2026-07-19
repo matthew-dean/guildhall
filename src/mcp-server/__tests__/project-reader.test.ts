@@ -1,8 +1,16 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { writeProjectStateJson, writeProjectStateText } from '@guildhall/sessions'
+import {
+  getProjectSystemStatePath,
+  projectStateDatabasePath,
+  promoteProjectStateDatabaseAuthority,
+  writeProjectStateDatabaseSnapshot,
+  writeProjectStateJson,
+  writeProjectStateText,
+} from '@guildhall/sessions'
 import { saveCodebaseMap } from '@guildhall/corpus-map'
 import { recordMemoryEvent } from '@guildhall/memory-core'
 import {
@@ -19,6 +27,7 @@ import {
   buildGuildhallResourceIndex,
   parseGuildhallUri,
   projectUri,
+  readTasks,
   readGuildhallResource,
   taskUri,
   type GuildhallMcpContext,
@@ -77,6 +86,84 @@ describe('Guildhall MCP URI helpers', () => {
 })
 
 describe('Guildhall MCP project reader', () => {
+  it('reads database-authoritative tasks instead of requiring TASKS.json', async () => {
+    const root = mkdtempRoot('guildhall-mcp-db-reader-')
+    try {
+      mkdirSync(join(root, '.guildhall'), { recursive: true })
+      const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+      writeProjectStateDatabaseSnapshot(tasksPath, {
+        queue: {
+          version: 1,
+          lastUpdated: '2026-07-15T00:00:00.000Z',
+          tasks: [{
+            id: 'task-db-only',
+            title: 'Read from the compact task store',
+            description: 'The database is the current-state authority.',
+            status: 'ready',
+            domain: 'runtime',
+            dependsOn: [],
+            releaseIds: [],
+            sourceRefs: [],
+          }],
+          releases: [],
+        },
+        summary: {
+          projectId: 'db-reader',
+          generatedAt: '2026-07-15T00:00:00.000Z',
+        },
+      })
+
+      const tasks = await readTasks(join(root, '.guildhall'))
+      expect(tasks).toEqual([expect.objectContaining({
+        id: 'task-db-only',
+        title: 'Read from the compact task store',
+      })])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the pre-promotion TASKS.json bootstrap read', async () => {
+    const root = mkdtempRoot('guildhall-mcp-bootstrap-reader-')
+    try {
+      writeProjectStateJson(root, 'TASKS.json', {
+        tasks: [{ id: 'task-bootstrap', title: 'Bootstrap task', status: 'ready' }],
+      })
+
+      await expect(readTasks(join(root, '.guildhall'))).resolves.toEqual([
+        expect.objectContaining({ id: 'task-bootstrap', title: 'Bootstrap task' }),
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('fails with a migration-required error instead of reopening TASKS.json after promoted SQLite failure', async () => {
+    const root = mkdtempRoot('guildhall-mcp-promoted-reader-failure-')
+    try {
+      const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+      writeProjectStateDatabaseSnapshot(tasksPath, {
+        queue: {
+          tasks: [{ id: 'task-database', title: 'Database task', status: 'ready' }],
+          releases: [],
+        },
+        summary: { generatedAt: '2026-07-15T00:00:00.000Z', freshness: 'current' },
+      })
+      promoteProjectStateDatabaseAuthority(root)
+      writeProjectStateJson(root, 'TASKS.json', {
+        tasks: [{ id: 'task-legacy', title: 'Legacy task', status: 'ready' }],
+      })
+
+      const database = new DatabaseSync(projectStateDatabasePath(root))
+      database.exec('DELETE FROM work_item_detail; DELETE FROM queue_detail WHERE id = 1')
+      database.close()
+
+      await expect(readTasks(join(root, '.guildhall'))).rejects.toThrow(/project-state migration required/i)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('lists project, task, artifact, decision, memory, and capability resources', async () => {
     const root = mkdtempRoot('guildhall-mcp-reader-')
     try {
@@ -384,7 +471,9 @@ describe('Guildhall MCP project reader', () => {
       expect(project).toContain('Active: 2')
       expect(project).toContain('## Codebase Knowledge')
       expect(project).toContain('1 files, 1 areas')
-      expect(project).toContain('Latest: 2026-05-28T00:00:00.000Z for task-001')
+      expect(project).not.toContain('Latest: 2026-05-28T00:00:00.000Z for task-001')
+      const contextResource = await readGuildhallResource(ctx, 'guildhall://project/context')
+      expect(contextResource).toContain('2026-05-28T00:00:00.000Z')
 
       const artifact = await readGuildhallResource(ctx, 'guildhall://project/artifacts/flow-audit')
       expect(artifact).toContain('# Audit')

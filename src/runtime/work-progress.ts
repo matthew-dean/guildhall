@@ -1,3 +1,6 @@
+import { taskDoneButProofMissing } from './proof-health.js'
+import { recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
+
 export type WorkVisibilityKind = 'primary' | 'supporting' | 'internal_step' | 'hidden'
 
 export interface WorkVisibility {
@@ -47,23 +50,27 @@ export interface TaskWorkProgress {
   id: string
   title?: string
   status?: string
+  blocksSelectedScope?: boolean
   visibility: WorkVisibility
   deliverySteps: DeliveryStep[]
   rollup: WorkProgressRollup
 }
 
+export interface ProjectWorkProgressCounts {
+  visibleTotal: number
+  visibleActive: number
+  visibleBlocked: number
+  visibleDone: number
+  visibleShelved: number
+  deliveryTotal: number
+  deliveryRequired: number
+  deliveryDone: number
+  deliveryBlocked: number
+}
+
 export interface ProjectWorkProgress {
-  counts: {
-    visibleTotal: number
-    visibleActive: number
-    visibleBlocked: number
-    visibleDone: number
-    visibleShelved: number
-    deliveryTotal: number
-    deliveryRequired: number
-    deliveryDone: number
-    deliveryBlocked: number
-  }
+  counts: ProjectWorkProgressCounts
+  selectedCounts?: ProjectWorkProgressCounts
   byTaskId: Record<string, TaskWorkProgress>
 }
 
@@ -73,6 +80,7 @@ const INTERNAL_STEP_WORK_KINDS = new Set(['test', 'verification'])
 const TASK_DONE_STATUSES = new Set(['done'])
 const TASK_BLOCKED_STATUSES = new Set(['blocked'])
 const TASK_SHELVED_STATUSES = new Set(['shelved'])
+const TASK_HIDDEN_STATUSES = new Set(['archived', 'cancelled'])
 const TASK_ACTIVE_STATUSES = new Set([
   'ready',
   'in_progress',
@@ -83,15 +91,27 @@ const TASK_ACTIVE_STATUSES = new Set([
   'proposed',
 ])
 
-export function deriveProjectWorkProgress(tasks: TaskRecord[]): ProjectWorkProgress {
+function isProjectSetupTask(task: TaskRecord): boolean {
+  const id = stringValue(task.id)
+  return id === 'task-meta-intake' || id === 'task-workspace-import'
+}
+
+export function deriveProjectWorkProgress(
+  tasks: TaskRecord[],
+  options: {
+    selectedTaskIds?: Iterable<string>
+    blockerTaskIds?: Iterable<string>
+  } = {},
+): ProjectWorkProgress {
   const byId = new Map<string, TaskRecord>()
   for (const task of tasks) {
     const id = stringValue(task.id)
     if (id) byId.set(id, task)
   }
+  const blockerTaskIds = options.blockerTaskIds ? new Set(options.blockerTaskIds) : new Set<string>()
 
   const taskProgressEntries = tasks
-    .map(task => deriveTaskWorkProgress(task, byId))
+    .map(task => deriveTaskWorkProgress(task, byId, blockerTaskIds))
     .filter((progress): progress is TaskWorkProgress => progress !== null)
 
   const byTaskId: Record<string, TaskWorkProgress> = {}
@@ -99,7 +119,24 @@ export function deriveProjectWorkProgress(tasks: TaskRecord[]): ProjectWorkProgr
     byTaskId[progress.id] = progress
   }
 
-  const counts: ProjectWorkProgress['counts'] = {
+  const counts = emptyProgressCounts()
+  const selectedTaskIds = options.selectedTaskIds ? new Set(options.selectedTaskIds) : null
+  const selectedCounts = selectedTaskIds ? emptyProgressCounts() : null
+
+  for (const progress of taskProgressEntries) {
+    addProgressCounts(counts, progress)
+    if (selectedTaskIds?.has(progress.id)) addProgressCounts(selectedCounts!, progress)
+  }
+
+  return {
+    counts,
+    ...(selectedCounts ? { selectedCounts } : {}),
+    byTaskId,
+  }
+}
+
+function emptyProgressCounts(): ProjectWorkProgressCounts {
+  return {
     visibleTotal: 0,
     visibleActive: 0,
     visibleBlocked: 0,
@@ -110,40 +147,48 @@ export function deriveProjectWorkProgress(tasks: TaskRecord[]): ProjectWorkProgr
     deliveryDone: 0,
     deliveryBlocked: 0,
   }
-
-  for (const progress of taskProgressEntries) {
-    if (progress.visibility.countInProjectTotals) {
-      counts.visibleTotal += 1
-      const status = progress.status ?? ''
-      if (TASK_DONE_STATUSES.has(status)) counts.visibleDone += 1
-      else if (TASK_BLOCKED_STATUSES.has(status)) counts.visibleBlocked += 1
-      else if (TASK_SHELVED_STATUSES.has(status)) counts.visibleShelved += 1
-      else if (TASK_ACTIVE_STATUSES.has(status) || status) counts.visibleActive += 1
-    }
-
-    for (const step of progress.deliverySteps) {
-      counts.deliveryTotal += 1
-      if (step.required) counts.deliveryRequired += 1
-      if (step.status === 'done') counts.deliveryDone += 1
-      if (step.status === 'blocked') counts.deliveryBlocked += 1
-    }
-  }
-
-  return { counts, byTaskId }
 }
 
-function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>): TaskWorkProgress | null {
+function addProgressCounts(counts: ProjectWorkProgressCounts, progress: TaskWorkProgress): void {
+  if (progress.visibility.countInProjectTotals) {
+    counts.visibleTotal += 1
+    const status = progress.status ?? ''
+    if (TASK_DONE_STATUSES.has(status)) counts.visibleDone += 1
+    else if (progress.blocksSelectedScope || TASK_BLOCKED_STATUSES.has(status)) counts.visibleBlocked += 1
+    else if (TASK_SHELVED_STATUSES.has(status)) counts.visibleShelved += 1
+    else if (TASK_ACTIVE_STATUSES.has(status) || status) counts.visibleActive += 1
+  }
+
+  for (const step of progress.deliverySteps) {
+    counts.deliveryTotal += 1
+    if (step.required) counts.deliveryRequired += 1
+    if (step.status === 'done') counts.deliveryDone += 1
+    if (step.status === 'blocked') counts.deliveryBlocked += 1
+  }
+}
+
+function deriveTaskWorkProgress(
+  task: TaskRecord,
+  byId: Map<string, TaskRecord>,
+  blockerTaskIds: ReadonlySet<string>,
+): TaskWorkProgress | null {
   const id = stringValue(task.id)
   if (!id) return null
+  const status = stringValue(task.status)
+  if (status && TASK_HIDDEN_STATUSES.has(status)) return null
   const childTasks = directChildTasks(task, byId)
-  const visibility = deriveWorkVisibility(task)
-  const internalChildTasks = childTasks.filter(child => deriveWorkVisibility(child).kind === 'internal_step')
+  const visibility = deriveWorkVisibility(task, byId)
+  const internalChildTasks = childTasks.filter(child => deriveWorkVisibility(child, byId).kind === 'internal_step')
   const visibleChildProgress = childTasks
-    .map(child => deriveTaskWorkProgress(child, byId))
+    .map(child => deriveTaskWorkProgress(child, byId, blockerTaskIds))
     .filter((progress): progress is TaskWorkProgress => Boolean(progress && progress.visibility.countInProjectTotals))
+  const hasMaterializedChildWork = childTasks.some((child) => {
+    const childVisibility = deriveWorkVisibility(child, byId)
+    return childVisibility.countInProjectTotals || childVisibility.kind === 'internal_step'
+  })
   const deliverySteps = [
     ...explicitDeliverySteps(task),
-    ...proofPathDeliverySteps(task),
+    ...proofPathDeliverySteps(task, { hasMaterializedChildWork }),
     ...internalChildTasks.map(internalStepFromTask).filter((step): step is DeliveryStep => step !== null),
   ]
   const rollup = deriveRollup(task, visibleChildProgress, deliverySteps, internalChildTasks.length)
@@ -152,33 +197,33 @@ function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>)
     id,
     title: stringValue(task.title),
     status: stringValue(task.status),
+    ...(blockerTaskIds.has(id) ? { blocksSelectedScope: true } : {}),
     visibility,
     deliverySteps,
     rollup,
   }
 }
 
-function deriveWorkVisibility(task: TaskRecord): WorkVisibility {
-  const explicit = objectValue(task.workVisibility)
-  const explicitKind = stringValue(explicit?.kind)
-  if (explicitKind === 'primary' || explicitKind === 'supporting' || explicitKind === 'internal_step' || explicitKind === 'hidden') {
-    const explicitCount = explicit?.countInProjectTotals
-    return {
-      kind: explicitKind,
-      label: stringValue(explicit?.label),
-      countInProjectTotals: typeof explicitCount === 'boolean'
-        ? explicitCount
-        : explicitKind === 'primary' || explicitKind === 'supporting',
-    }
+function deriveWorkVisibility(task: TaskRecord, byId: Map<string, TaskRecord>): WorkVisibility {
+  if (isProjectSetupTask(task)) {
+    return { kind: 'hidden', countInProjectTotals: false }
   }
-
+  const status = stringValue(task.status)
+  if (status && TASK_HIDDEN_STATUSES.has(status)) {
+    return { kind: 'hidden', countInProjectTotals: false }
+  }
   const parentId = stringValue(objectValue(task.hierarchy)?.parentId)
-  const workKind = stringValue(task.workKind)
-  if (parentId && workKind && INTERNAL_STEP_WORK_KINDS.has(workKind)) {
-    return { kind: 'internal_step', countInProjectTotals: false }
+  const parent = parentId ? byId.get(parentId) ?? null : null
+  // This module intentionally accepts compact JSON records. The shared
+  // visibility adapter is the one normalization boundary for that shape.
+  const visibility = deriveTaskWorkVisibility(
+    task as unknown as Parameters<typeof deriveTaskWorkVisibility>[0],
+    parent as unknown as Parameters<typeof deriveTaskWorkVisibility>[1],
+  )
+  return {
+    ...visibility,
+    label: stringValue(objectValue(task.workVisibility)?.label),
   }
-
-  return { kind: 'primary', countInProjectTotals: true }
 }
 
 function directChildTasks(task: TaskRecord, byId: Map<string, TaskRecord>): TaskRecord[] {
@@ -220,19 +265,29 @@ function normalizeDeliveryStep(raw: unknown, fallbackId: string): DeliveryStep |
   return step
 }
 
-function proofPathDeliverySteps(task: TaskRecord): DeliveryStep[] {
+function proofPathDeliverySteps(
+  task: TaskRecord,
+  { hasMaterializedChildWork }: { hasMaterializedChildWork: boolean },
+): DeliveryStep[] {
+  if (hasMaterializedChildWork) return []
+  const proofSettled = taskHasRecordedCompletionProof(task) && !taskDoneButProofMissing(task)
+  const recordedProofTitle = firstUsefulRecordedProofTitle(task)
   return arrayValue(task.proofPaths)
     .map((raw, index): DeliveryStep | null => {
       const proof = objectValue(raw)
       if (!proof) return null
       const id = stringValue(proof.id) ?? `${index + 1}`
       const proofKind = stringValue(proof.kind)
-      const title = stringValue(proof.title) ?? stringValue(proof.label) ?? `Proof ${index + 1}`
+      const title = stringValue(proof.title) ??
+        stringValue(proof.label) ??
+        expectedEvidenceTitle(proof) ??
+        recordedProofTitle ??
+        proofPathFallbackTitle(proof, index)
       const step: DeliveryStep = {
         id: `proof:${id}`,
         title,
         kind: 'verify',
-        status: semanticStepStatus(stringValue(proof.status)),
+        status: proofSettled ? 'done' : semanticStepStatus(stringValue(proof.status)),
         required: true,
         blocksCompletion: true,
       }
@@ -244,6 +299,47 @@ function proofPathDeliverySteps(task: TaskRecord): DeliveryStep[] {
       return step
     })
     .filter((step): step is DeliveryStep => step !== null)
+}
+
+function expectedEvidenceTitle(proof: TaskRecord): string | undefined {
+  const first = arrayValue(proof.expectedEvidence)
+    .map(expectedEvidenceLabel)
+    .find((label): label is string => Boolean(label))
+  return first ? `Expected proof: ${first}` : undefined
+}
+
+function expectedEvidenceLabel(value: unknown): string | undefined {
+  if (typeof value === 'string') return usefulExpectedEvidenceLabel(value)
+  const record = objectValue(value)
+  if (!record) return undefined
+  return usefulExpectedEvidenceLabel(record.description) ??
+    usefulExpectedEvidenceLabel(record.summary) ??
+    usefulExpectedEvidenceLabel(record.title) ??
+    usefulExpectedEvidenceLabel(record.id)
+}
+
+function usefulExpectedEvidenceLabel(value: unknown): string | undefined {
+  const label = stringValue(value)
+  if (!label || importedProofEvidenceLooksGeneric(label)) return undefined
+  return label
+}
+
+function importedProofEvidenceLooksGeneric(value: string): boolean {
+  return /^\[[ x]\]\s+/i.test(value.trim()) ||
+    /\bhas a bounded proof plan for harness\b/i.test(value) ||
+    /\breuses Stage \d+\b/i.test(value)
+}
+
+function proofPathFallbackTitle(proof: TaskRecord, index: number): string {
+  return stringValue(proof.source) === 'inferred' ? 'Proof needs shaping' : `Proof ${index + 1}`
+}
+
+function firstUsefulRecordedProofTitle(task: TaskRecord): string | undefined {
+  return recordedCompletionProofForTask(task).verified.find(isUsefulRecordedProofTitle)
+}
+
+function isUsefulRecordedProofTitle(value: string): boolean {
+  return !/\bcontent\.no-truncated-data\b/i.test(value)
 }
 
 function internalStepFromTask(task: TaskRecord): DeliveryStep | null {
@@ -378,3 +474,4 @@ function stringValue(value: unknown): string | undefined {
 function booleanValue(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
 }
+import { deriveTaskWorkVisibility } from './work-visibility.js'

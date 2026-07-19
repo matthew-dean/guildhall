@@ -120,6 +120,7 @@ export interface AcceptanceCriterion {
 
 export interface GateResult {
   gateId?: string
+  command?: string
   type?: string
   passed?: boolean
   checkedAt?: string
@@ -349,6 +350,7 @@ export type GitStoryClosureState =
   | 'local_only'
   | 'deferred'
   | 'conflict'
+  | 'no_repository'
   | 'unknown'
 
 export interface GitStorySnapshot {
@@ -390,11 +392,125 @@ export interface GitStorySummary {
   snapshots?: GitStorySnapshot[]
 }
 
+export interface ProjectOrientationRelease {
+  id?: string
+  label?: string
+  kind?: string
+  state?: string
+  source?: ProjectOrientationSource | 'owner_approved' | 'spec' | 'release_plan' | 'inferred' | string
+  description?: string | null
+  nodeIds?: string[]
+  deferredNodeIds?: string[]
+  proofStyle?: string
+  blockers?: Array<{ id?: string; label?: string; nextAction?: string; severity?: string; owner?: string; sourceRef?: string }>
+}
+
+export interface ProjectReleaseReadiness {
+  initializationNeeded?: boolean
+  completeness?: 'scope' | 'full' | string
+  checksLoaded?: boolean
+  release?: ProjectOrientationRelease | null
+  scope?: ProjectOrientationRelease | null
+  ready?: boolean
+  notReadyReason?: string
+  completion?: {
+    state?: 'empty' | 'incomplete' | 'work_complete' | 'complete' | string
+    label?: string
+    tone?: 'ok' | 'warn' | 'neutral' | string
+    detail?: string
+  }
+  verdict?: {
+    state?: 'empty' | 'work_remaining' | 'blocked' | 'ready' | string
+    label?: string
+    tone?: 'ok' | 'warn' | 'neutral' | string
+    detail?: string
+  }
+  releaseCounts?: {
+    total?: number
+    done?: number
+    unfinished?: number
+    ready?: number
+    active?: number
+    blocked?: number
+    deferred?: number
+    ownerBlocked?: number
+    proofBlocked?: number
+  }
+  statusCounts?: Record<string, number>
+  proofMissingDoneTasks?: Array<{ id?: string; title?: string }>
+  releaseBlockers?: Array<{ id?: string; title?: string; label?: string; nextAction?: string }>
+  gitStory?: GitStorySummary
+  totals?: {
+    tasks?: number
+    blockingCount?: number
+    humanBlockingCount?: number
+    incompleteBriefBlockingCount?: number
+    proofEvidenceBlockingCount?: number
+    unfinishedCount?: number
+    designSystemBlockingCount?: number
+    dirtyCheckoutBlockingCount?: number
+    gitStoryBlockingCount?: number
+    done?: number
+  }
+}
+
+export interface ProjectSummaryRelease {
+  scopeMode?: 'named_release' | 'unreleased' | 'unavailable' | string
+  release?: {
+    id?: string
+    label?: string
+    kind?: string
+    state?: string
+    source?: string
+  } | null
+  state?: string
+  counts?: {
+    total?: number
+    done?: number
+    unfinished?: number
+    ready?: number
+    active?: number
+    blocked?: number
+    deferred?: number
+    ownerBlocked?: number
+    proofBlocked?: number
+  }
+  /** Mutually partitioned task states; readiness dimensions are separate. */
+  taskStatusCounts?: Record<string, number>
+  blockers?: Array<{ id?: string; label?: string; owningTaskId?: string }>
+  updatedAt?: string
+}
+
+export interface ProjectSummaryApprovedPlan {
+  source?: 'workspace_import' | string
+  recordedAt?: string
+  goalCount?: number
+  taskCount?: number
+  milestoneCount?: number
+  currentTaskCount?: number
+  laterTaskCount?: number
+  currentTaskIds?: string[]
+  laterTaskIds?: string[]
+  currentReleaseId?: string | null
+  releases?: Array<{
+    id?: string
+    label?: string
+    kind?: string
+    state?: string
+    source?: string
+    currentTaskIds?: string[]
+    laterTaskIds?: string[]
+  }>
+}
+
 export interface Task {
   id: string
   displayKey?: string
   title?: string
   description?: string
+  sourceRefs?: string[]
+  references?: string[]
+  orientationSummary?: string
   status?: string
   dependsOn?: string[]
   domain?: string
@@ -416,6 +532,15 @@ export interface Task {
   structuredSpec?: StructuredSpec
   contractSurfaceReviewPackets?: ContractSurfaceReviewPacket[]
   acceptanceCriteria?: AcceptanceCriterion[]
+  acceptanceCriteriaCount?: number
+  acceptanceCriteriaFirstDescription?: string
+  acceptanceCriteriaProofState?: {
+    state?: 'blocked' | 'clear' | string
+    reason?: string
+    staleMetCount?: number
+    gateId?: string
+    checkedAt?: string
+  }
   gateResults?: GateResult[]
   reviewVerdicts?: ReviewVerdict[]
   reviewPlan?: ReviewPlan
@@ -428,6 +553,16 @@ export interface Task {
   requestIntake?: RequestIntake
   doneSummaryBundle?: DoneTaskSummaryBundle
   proofPaths?: ProofPath[]
+  completionProof?: {
+    state?: 'verified' | 'planned' | 'missing' | string
+    expectedCount?: number
+    verifiedCount?: number
+    verified?: string[]
+    historicalCount?: number
+    historical?: string[]
+    missing?: string[]
+    latestAt?: string
+  }
   completionHandoff?: CompletionHandoff
   latestCheckpoint?: {
     step?: number
@@ -520,6 +655,21 @@ export interface Task {
   definitionOfDone?: { items?: string[]; evidenceRequired?: string[]; updatedAt?: string; createdBy?: string }
   blockerPlans?: Array<{ if?: string; then?: string; owner?: string; reason?: string }>
   contextBudget?: { estimatedTokens?: number; risk?: string; fitsInOneWorkerBrief?: boolean; reasons?: string[] }
+  workUnitAnalysis?: {
+    summary?: string
+    units?: Array<{
+      id?: string
+      title?: string
+      deliverable?: string
+      rationale?: string
+      suggestedDomain?: string
+      dependsOn?: string[]
+    }>
+    proofOnlyItems?: string[]
+    createdAt?: string
+    createdBy?: string
+  }
+  workUnitCount?: number
   decomposition?: Record<string, unknown>
   coordinatorReflections?: Array<Record<string, unknown>>
   createdAt?: string
@@ -579,6 +729,7 @@ export interface TaskContextPacket {
     directBlockers?: Array<{ id?: string; title?: string; status?: string }>
     recursiveBlockers?: Array<{ id?: string; title?: string; status?: string }>
     blocks?: Array<{ id?: string; title?: string; status?: string }>
+    shapingBlockers?: Array<{ code?: string; summary?: string }>
   }
   primitiveContext?: {
     direct?: PrimitiveSummary[]
@@ -729,6 +880,7 @@ export interface ProjectOrientationSpine {
     missing?: string[]
     refs?: string[]
   }>
+  release?: ProjectOrientationRelease | null
   selectedRelease?: {
     id?: string
     label?: string
@@ -739,6 +891,25 @@ export interface ProjectOrientationSpine {
     nodeIds?: string[]
     deferredNodeIds?: string[]
     proofStyle?: string
+  } | null
+  releases?: Array<{
+    id?: string
+    label?: string
+    kind?: string
+    state?: string
+    source?: ProjectOrientationSource | 'owner_approved' | 'spec' | 'release_plan' | 'inferred' | string
+    description?: string | null
+    nodeIds?: string[]
+    deferredNodeIds?: string[]
+    proofStyle?: string
+  }>
+  selectedTaskScope?: {
+    id?: string
+    label?: string
+    kind?: string
+    source?: ProjectOrientationSource
+    nodeIds?: string[]
+    deferredNodeIds?: string[]
   } | null
   scope?: {
     id?: string
@@ -781,13 +952,35 @@ export interface ProjectOrientationSpine {
   roots?: ProjectOrientationNode[]
   nodes?: Record<string, ProjectOrientationNode>
   activePins?: Array<{ id?: string; nodeId?: string; label?: string; kind?: string; href?: string }>
+  scopeRows?: Array<{
+    taskId?: string
+    nodeId?: string
+    title?: string
+    scope?: 'included' | 'deferred' | string
+    eligibilityReason?: string
+    hierarchyRole?: string
+    status?: string
+    handoffState?: string
+    blocksStart?: boolean
+    blocksRelease?: boolean
+    humanBlocking?: boolean
+    sourceRefs?: string[]
+  }>
   gaps?: Array<{ kind?: string; label?: string; detail?: string; severity?: string; nodeId?: string; refs?: string[] }>
   sourceHealth?: {
     status?: string
     inferred?: number
+    documented?: number
+    deferred?: number
     gaps?: number
     conflicts?: number | Array<{ label?: string; detail?: string; refs?: string[] }>
   }
+  sourceTrail?: Array<{
+    label?: string
+    value?: string
+    detail?: string
+    tone?: 'ok' | 'warn' | 'neutral' | 'accent' | string
+  }>
 }
 
 export interface ContractSurfaceReviewPacket {
@@ -841,6 +1034,7 @@ export interface ContextDebugRecord {
   promptChars?: number
   contextChars?: number
   promptPreview?: string
+  promptHash?: string
   snapshotPath?: string
   sections?: ContextSectionStat[]
   health?: ContextHealthWarning[]
@@ -853,6 +1047,8 @@ export interface ContextDebugRecord {
   memoryPacket?: {
     included?: Array<{ id?: string; type?: string; scope?: string }>
     withheld?: Array<{ id?: string; reason?: string }>
+    includedCount?: number
+    withheldCount?: number
     evidenceRefs?: number
     memoryCore?: {
       adapter?: 'mastra' | 'deterministic'
@@ -989,6 +1185,8 @@ export interface TaskThreadInFlightTurn extends TaskThreadTurnBase {
   taskStatus?: string
   summary: string
   importedDraft?: boolean
+  shapingBlockers?: Array<{ code?: string; summary?: string }>
+  taskReadiness?: Record<string, unknown>
   liveAgent?: TaskTurnLiveAgent
   activity?: TaskTurnLiveActivity[]
   checklist?: TaskTurnChecklist
@@ -1213,6 +1411,19 @@ export interface StartReadiness {
   code?: string
   message?: string
   actionHref?: string
+  focusTaskId?: string
+  focusTaskTitle?: string
+  focusKind?: string
+  proofTaskIds?: string[]
+  count?: number
+  executionScope?: {
+    id: string
+    label: string
+    kind: string
+    source?: string
+    taskCount?: number
+    deferredTaskCount?: number
+  }
 }
 
 export interface ProjectAvailability {
@@ -1368,22 +1579,58 @@ export interface ProjectDetail {
   id?: string
   path?: string
   name?: string
+  summary?: string | null
+  projectStatusLoading?: boolean
+  projectStatusError?: string
+  summaryFreshness?: 'current' | 'stale' | 'error' | 'missing'
   tags?: string[]
+  /** Compact project surfaces receive this shell fact, not workspace config. */
+  coordinatorCount?: number
   config?: {
     coordinators?: CoordinatorConfig[]
     [k: string]: unknown
   }
+  selectedTaskId?: string | null
   tasks?: Task[]
+  taskPayload?: {
+    surface?: 'overview' | 'work' | 'map' | string
+    kind?: string
+    offset?: number
+    limit?: number | null
+    count?: number
+    totalEffectiveCount?: number
+    hasMore?: boolean
+    nextOffset?: number
+    selectedScopeCount?: number | null
+    selectedScopeAndDeferredCount?: number | null
+  }
   workProgress?: ServiceProjectSummary['workProgress']
+  releaseSummary?: ProjectSummaryRelease | null
+  approvedPlan?: ProjectSummaryApprovedPlan | null
   inbox?: ProjectInbox
   run?: ProjectRun | null
+  execution?: {
+    status?: string
+    mode?: string
+    startedAt?: string | null
+    stoppedAt?: string | null
+    stopRequestedAt?: string | null
+    error?: string | null
+    updatedAt?: string
+  }
   availability?: ProjectAvailability | null
   providerStatus?: ProviderStatus | null
   runtime?: ProjectRuntimeSummary | null
+  ownerInput?: {
+    openCount?: number
+    next?: { id?: string; prompt?: string; taskId?: string; href?: string } | null
+    updatedAt?: string
+  }
   memoryHealth?: ProjectMemoryHealth | null
   structuralMapReview?: StructuralMapReviewSummary | null
   taskRoutingContexts?: Record<string, TaskRoutingContext>
   gitStory?: GitStorySummary | null
+  releaseReadiness?: ProjectReleaseReadiness | null
   startReadiness?: StartReadiness | null
   actionModel?: ProjectActionModel | null
   deliverySpine?: DeliverySpine | null
@@ -1421,6 +1668,8 @@ export interface ServiceProjectSummary {
   name: string
   initializationNeeded?: boolean
   projectStatusLoading?: boolean
+  projectStatusError?: string
+  summaryFreshness?: 'current' | 'stale' | 'error' | 'missing'
   tags?: string[]
   summary?: string | null
   taskCounts?: {
@@ -1443,8 +1692,21 @@ export interface ServiceProjectSummary {
       deliveryDone: number
       deliveryBlocked: number
     }
+    selectedCounts?: {
+      visibleTotal: number
+      visibleActive: number
+      visibleBlocked: number
+      visibleDone: number
+      visibleShelved: number
+      deliveryTotal: number
+      deliveryRequired: number
+      deliveryDone: number
+      deliveryBlocked: number
+    }
     byTaskId: Record<string, unknown>
   }
+  releaseSummary?: ProjectSummaryRelease | null
+  approvedPlan?: ProjectSummaryApprovedPlan | null
   highlights?: {
     activeTaskTitle?: string | null
     blockedTaskTitle?: string | null
@@ -1459,6 +1721,21 @@ export interface ServiceProjectSummary {
     }>
   }
   run?: ProjectRun | null
+  execution?: {
+    status?: string
+    mode?: string
+    startedAt?: string | null
+    stoppedAt?: string | null
+    stopRequestedAt?: string | null
+    error?: string | null
+    updatedAt?: string
+  }
+  runtime?: ProjectRuntimeSummary | null
+  ownerInput?: {
+    openCount?: number
+    next?: { id?: string; prompt?: string; taskId?: string; href?: string } | null
+    updatedAt?: string
+  }
   availability?: ProjectAvailability | null
   providerStatus?: ProviderStatus | null
   gitStory?: GitStorySummary | null
@@ -1478,6 +1755,7 @@ export interface ServiceProjectSummary {
 
 export interface ServiceDetail {
   pid?: number
+  partial?: boolean
   defaultProviderStatus?: ProviderStatus | null
   projects?: ServiceProjectSummary[]
 }
@@ -1501,6 +1779,19 @@ export interface EventEnvelope {
   event?: EventInner
   type?: string
   [k: string]: unknown
+}
+
+export interface ProjectActivityHistoryPage {
+  events: EventEnvelope[]
+  cursor: number
+  limit: number
+  total: number
+  hasMore: boolean
+  nextCursor?: number
+  retention?: {
+    maxBytes?: number
+    maxRecords?: number
+  }
 }
 
 export type ProjectView =

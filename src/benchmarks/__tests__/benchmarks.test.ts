@@ -60,7 +60,7 @@ describe('benchmark schemas and reports', () => {
 
     expect(markdown).toContain('Guildhall lifecycle benchmark')
     expect(markdown).toContain('False successes')
-    expect(markdown).toContain('Tokens in/out')
+    expect(markdown).toContain('Tokens in/out/cache')
     expect(markdown).toContain('Cost USD')
     expect(markdown).toContain('Commands')
     expect(markdown).toContain('Ticks')
@@ -187,6 +187,14 @@ describe('benchmark runners', () => {
     expect(fromDistStyle).toBe(path.join(process.cwd(), 'internal', 'benchmarks', 'fixtures'))
   })
 
+  it('resolves fixtures bundled beside the installed dist artifact', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-bundled-fixtures-'))
+    const bundled = path.join(root, 'app', 'dist', 'benchmarks', 'fixtures')
+    await fs.mkdir(bundled, { recursive: true })
+
+    expect(resolveBenchmarkFixtureRoot(path.join(root, 'app', 'dist', 'chunks'))).toBe(bundled)
+  })
+
   it('runs lifecycle smoke fixtures with scorecard metrics and auto-resolution records', async () => {
     const report = await runLifecycleBenchmark('smoke', {
       projectRoot: process.cwd(),
@@ -265,7 +273,8 @@ describe('benchmark runners', () => {
     expect(report.results[0]?.result).toBe('pass')
     expect(report.results[0]?.orchestratorTicks).toBe(6)
     expect(report.results[0]?.turns).toBe(6)
-    expect(report.results[0]?.tokenUse).toEqual({ input: 123, output: 45 })
+    expect(report.results[0]?.tokenUse).toEqual({ input: 123, output: 45, cachedInput: 100 })
+    expect(report.results[0]?.costUsd).toBe(0.000255)
     expect(report.results[0]?.autoResolutionCount).toBe(2)
     expect(report.results[0]?.automationResolutionKinds).toEqual({
       repair_product_brief: 1,

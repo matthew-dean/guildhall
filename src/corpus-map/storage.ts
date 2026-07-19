@@ -1,4 +1,4 @@
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
@@ -19,6 +19,16 @@ export const CODEBASE_MAP_FILENAME = 'codebase-map.yaml'
 export const CODEBASE_MAP_HISTORY_FILENAME = 'codebase-map.history.jsonl'
 export const CODEBASE_MAP_STALE_FILENAME = 'codebase-map.stale.json'
 export const CODEBASE_MAP_OVERRIDES_FILENAME = 'codebase-map.overrides.yaml'
+export const CODEBASE_MAP_HISTORY_MAX_BYTES = 256 * 1024
+export const CODEBASE_MAP_HISTORY_MAX_EVENTS = 128
+
+export interface CodebaseMapHistoryCompactionResult {
+  bytesBefore: number
+  bytesAfter: number
+  recordsBefore: number
+  recordsAfter: number
+  compacted: boolean
+}
 
 function activeProjectStatePath(memoryDir: string, filename: string): string {
   const base = path.basename(memoryDir)
@@ -92,8 +102,58 @@ export async function appendCodebaseMapHistory(
   memoryDir: string,
   event: CodebaseMapHistoryEvent,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(codebaseMapHistoryPath(memoryDir)), { recursive: true })
-  await appendManagedTextFile(codebaseMapHistoryPath(memoryDir), `${JSON.stringify(event)}\n`, 'utf-8')
+  const file = codebaseMapHistoryPath(memoryDir)
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  let existing = ''
+  try {
+    existing = await readManagedTextFile(file, 'utf-8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
+  const lines = existing.split(/\r?\n/).filter(Boolean)
+  lines.push(JSON.stringify(event))
+  const bounded = boundedHistoryLines(lines)
+  await writeManagedTextFile(file, bounded.length > 0 ? `${bounded.join('\n')}\n` : '', 'utf-8')
+}
+
+function boundedHistoryLines(lines: string[]): string[] {
+  const kept = lines.slice(-CODEBASE_MAP_HISTORY_MAX_EVENTS)
+  while (kept.length > 1 && Buffer.byteLength(`${kept.join('\n')}\n`, 'utf8') > CODEBASE_MAP_HISTORY_MAX_BYTES) {
+    kept.shift()
+  }
+  return kept
+}
+
+/**
+ * Code-map history is a rebuildable diagnostic cache, not project memory.
+ * Keep a small recent ring so refreshes cannot grow the project forever.
+ */
+export async function compactCodebaseMapHistory(
+  memoryDir: string,
+  options: { dryRun?: boolean } = {},
+): Promise<CodebaseMapHistoryCompactionResult> {
+  const file = codebaseMapHistoryPath(memoryDir)
+  let raw = ''
+  try {
+    raw = await readManagedTextFile(file, 'utf-8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { bytesBefore: 0, bytesAfter: 0, recordsBefore: 0, recordsAfter: 0, compacted: false }
+    }
+    throw err
+  }
+  const lines = raw.split(/\r?\n/).filter(Boolean)
+  const bounded = boundedHistoryLines(lines)
+  const next = bounded.length > 0 ? `${bounded.join('\n')}\n` : ''
+  const result = {
+    bytesBefore: Buffer.byteLength(raw, 'utf8'),
+    bytesAfter: Buffer.byteLength(next, 'utf8'),
+    recordsBefore: lines.length,
+    recordsAfter: bounded.length,
+    compacted: next !== raw,
+  }
+  if (result.compacted && options.dryRun !== true) await writeManagedTextFile(file, next, 'utf-8')
+  return result
 }
 
 export async function loadCodebaseMapStaleState(memoryDir: string): Promise<CodebaseMapStaleState | null> {

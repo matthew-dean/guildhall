@@ -2,7 +2,10 @@ import path from 'node:path'
 
 export interface ScopedGateResultLike {
   gateId: string
+  type?: 'hard' | 'soft'
+  command?: string
   passed: boolean
+  checkedAt?: string
   output?: string | undefined
 }
 

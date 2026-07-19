@@ -9,20 +9,22 @@ import { CompletionHandoff, ProofPath } from './task-proof.js'
 // import_draft ┼→ exploring → spec_review → ready → in_progress → review → gate_check → done
 //              │                                                   ↘ blocked
 //              └─────────────────────────→ shelved (worker pre-rejection, FR-22)
+//              └─────────────────────────→ archived / cancelled (retained or retired without execution)
 //
 // Origination:
 //   - `exploring` — human-initiated via the Spec Agent intake (FR-12)
 //   - `proposed`  — agent-initiated (FR-21); promotion path governed by lever
 //                   `task_origination`
 //
-// Terminal states: `done`, `shelved`, `blocked`.
+// Terminal / non-actionable states: `pending_pr`, `done`, `shelved`,
+// `blocked`, `archived`, `cancelled`.
 // ---------------------------------------------------------------------------
 
 const TaskStatusValue = z.enum([
   'proposed',      // FR-21: agent-originated; awaiting promotion per lever `task_origination`
   'import_draft',  // Workspace-imported draft that still needs shaping before normal intake begins
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
-  'spec_review',   // Spec drafted; awaiting human or coordinator approval
+  'spec_review',   // Spec drafted; awaiting owner approval before worker handoff
   'ready',         // Spec approved, ready for a worker to pick up
   'in_progress',   // Assigned to a worker agent
   'review',        // Worker done, awaiting reviewer agent
@@ -31,6 +33,8 @@ const TaskStatusValue = z.enum([
   'done',          // All gates passed — terminal
   'shelved',       // FR-22: worker pre-rejected (no_op/not_viable/low_value/duplicate/spec_wrong) — terminal
   'blocked',       // Cannot proceed — escalation required — terminal
+  'archived',      // Retained for audit/history but removed from active work
+  'cancelled',     // Explicitly retired or superseded without execution
 ])
 
 export const TaskStatus: z.ZodType<z.infer<typeof TaskStatusValue>, z.ZodTypeDef, unknown> = z.preprocess(
@@ -39,7 +43,7 @@ export const TaskStatus: z.ZodType<z.infer<typeof TaskStatusValue>, z.ZodTypeDef
 )
 export type TaskStatus = z.infer<typeof TaskStatus>
 
-export const TERMINAL_TASK_STATUSES = ['done', 'shelved', 'blocked'] as const
+export const TERMINAL_TASK_STATUSES = ['pending_pr', 'done', 'shelved', 'blocked', 'archived', 'cancelled'] as const
 
 // FR-21: origination tracks who/what put the task on the board. Affects
 // promotion routing (see lever `task_origination`) and audit trail.
@@ -138,6 +142,8 @@ export type TaskPermissionMode = z.infer<typeof TaskPermissionMode>
 
 export const GateResult = z.object({
   gateId: z.string(),
+  /** The exact command when this gate was command-backed. */
+  command: z.string().optional(),
   type: z.enum(['hard', 'soft']),
   passed: z.boolean(),
   output: z.string().optional(),
@@ -510,6 +516,8 @@ export const Checkpoint = z.object({
 export type Checkpoint = z.infer<typeof Checkpoint>
 
 const ACCEPTANCE_VERIFIERS = ['automated', 'review', 'human'] as const
+const ACCEPTANCE_SOURCES = ['documented', 'inferred'] as const
+const LEGACY_SCHEMA_TIMESTAMP = '1970-01-01T00:00:00.000Z'
 
 function parseScenarioExpectationFromDescription(description: string): { scenario: string; expectation: string } {
   const normalized = description.trim().replace(/\s+/g, ' ')
@@ -524,10 +532,26 @@ function parseScenarioExpectationFromDescription(description: string): { scenari
 }
 
 function normalizeAcceptanceCriteria(input: unknown): unknown {
+  if (typeof input === 'string') {
+    const description = input.trim()
+    if (!description) return input
+    const normalizedScenarioExpectation = parseScenarioExpectationFromDescription(description)
+    return {
+      id: `legacy-${slugForLegacyAcceptanceCriterion(description)}`,
+      description,
+      scenario: normalizedScenarioExpectation.scenario,
+      expectation: normalizedScenarioExpectation.expectation,
+      verifiedBy: 'review',
+    }
+  }
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input
   const criterion = input as Record<string, unknown>
   const verifiedBy = criterion.verifiedBy
-  const rawDescription = typeof criterion.description === 'string' ? criterion.description.trim() : ''
+  const rawDescription = typeof criterion.description === 'string'
+    ? criterion.description.trim()
+    : typeof criterion.text === 'string'
+      ? criterion.text.trim()
+      : ''
   const rawScenario = typeof criterion.scenario === 'string' ? criterion.scenario.trim() : ''
   const rawExpectation = typeof criterion.expectation === 'string' ? criterion.expectation.trim() : ''
   const normalizedDescription = rawDescription || (
@@ -541,9 +565,15 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
 
   const baseCriterion = {
     ...criterion,
+    id: typeof criterion.id === 'string' && criterion.id.trim()
+      ? criterion.id.trim()
+      : normalizedDescription
+        ? `legacy-${slugForLegacyAcceptanceCriterion(normalizedDescription)}`
+        : criterion.id,
     ...(normalizedDescription ? { description: normalizedDescription } : {}),
     ...(rawScenario ? { scenario: rawScenario } : normalizedScenarioExpectation.scenario ? { scenario: normalizedScenarioExpectation.scenario } : {}),
     ...(rawExpectation ? { expectation: rawExpectation } : normalizedScenarioExpectation.expectation ? { expectation: normalizedScenarioExpectation.expectation } : {}),
+    verifiedBy: verifiedBy ?? 'review',
   }
 
   if (verifiedBy === undefined && typeof criterion.command === 'string' && criterion.command.trim()) {
@@ -561,6 +591,15 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
   }
 }
 
+function slugForLegacyAcceptanceCriterion(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+  return slug || 'acceptance-criterion'
+}
+
 export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.object({
   id: z.string(),
   description: z.string(),
@@ -568,12 +607,34 @@ export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.ob
   expectation: z.string().optional(),
   // How to verify: 'automated' = shell command, 'review' = reviewer agent judgment
   verifiedBy: z.enum(ACCEPTANCE_VERIFIERS),
+  source: z.enum(ACCEPTANCE_SOURCES).default('documented'),
   command: z.string().optional(), // for automated criteria
+  // Command-backed proofs default to a zero exit. Negative fixtures must say
+  // explicitly that a non-zero exit is the expected result.
+  expectedExit: z.enum(['zero', 'non_zero']).optional(),
+  expectedOutputIncludes: z.array(z.string()).optional(),
   evidenceHint: z.string().optional(),
   negativeCase: z.string().optional(),
   met: z.boolean().default(false),
+  // Runtime proof projection fields. They remain on the parsed contract so a
+  // bounded effective-task read can carry a stale/settled proof state without
+  // losing the persisted acceptance claim during a point mutation.
+  persistedMet: z.boolean().optional(),
+  verificationState: z.enum(['verified', 'stale']).optional(),
+  verificationSource: z.string().optional(),
+  staleReason: z.string().optional(),
+  staleGateId: z.string().optional(),
 }))
 export type AcceptanceCriteria = z.infer<typeof AcceptanceCriteria>
+
+export const AcceptanceCriteriaProofState = z.object({
+  state: z.string(),
+  reason: z.string().optional(),
+  staleMetCount: z.number().int().nonnegative().optional(),
+  gateId: z.string().optional(),
+  checkedAt: z.string().optional(),
+})
+export type AcceptanceCriteriaProofState = z.infer<typeof AcceptanceCriteriaProofState>
 
 export const TaskRequestKind = z.enum([
   'task_spec',
@@ -674,14 +735,23 @@ export const WorkHierarchyRelation = z.enum([
 ])
 export type WorkHierarchyRelation = z.infer<typeof WorkHierarchyRelation>
 
-export const WorkHierarchy = z.object({
+function normalizeWorkHierarchy(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  const record = input as Record<string, unknown>
+  return {
+    ...record,
+    relation: record.relation === 'child' ? 'decomposes' : record.relation,
+  }
+}
+
+export const WorkHierarchy = z.preprocess(normalizeWorkHierarchy, z.object({
   parentId: z.string().optional(),
   childIds: z.array(z.string()).default([]),
   order: z.number().default(0),
   depth: z.number().int().nonnegative().optional(),
   path: z.array(z.string()).optional(),
   relation: WorkHierarchyRelation.default('contains'),
-})
+}))
 export type WorkHierarchy = Omit<z.infer<typeof WorkHierarchy>, 'relation'> & {
   relation?: WorkHierarchyRelation
 }
@@ -792,13 +862,21 @@ export const TaskReadinessDimensionId = z.enum([
 ])
 export type TaskReadinessDimensionId = z.infer<typeof TaskReadinessDimensionId>
 
-export const TaskReadinessRecommendation = z.enum([
+const TaskReadinessRecommendationValue = z.enum([
   'ready',
   'needs_one_question',
   'needs_research_spike',
-  'split',
+  'requires_child_work',
   'shelve_defer',
 ])
+export const TaskReadinessRecommendation: z.ZodType<
+  z.infer<typeof TaskReadinessRecommendationValue>,
+  z.ZodTypeDef,
+  unknown
+> = z.preprocess(
+  (value) => value === 'split' ? 'requires_child_work' : value,
+  TaskReadinessRecommendationValue,
+)
 export type TaskReadinessRecommendation = z.infer<typeof TaskReadinessRecommendation>
 
 export const DefinitionOfDone = z.object({
@@ -966,7 +1044,21 @@ const DEFAULT_PRESSURE_TEST_SUMMARY: PressureTestSummary = {
   ],
 }
 
-export const RequestIntake = z.object({
+function normalizeRequestIntake(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  const record = input as Record<string, unknown>
+  return {
+    ...record,
+    intent: typeof record.intent === 'string' ? record.intent : 'implementation',
+    recommendedNextAction: typeof record.recommendedNextAction === 'string'
+      ? record.recommendedNextAction
+      : 'proceed_to_implementation_spec',
+    createdAt: typeof record.createdAt === 'string' ? record.createdAt : LEGACY_SCHEMA_TIMESTAMP,
+    createdBy: typeof record.createdBy === 'string' ? record.createdBy : 'legacy-import',
+  }
+}
+
+export const RequestIntake = z.preprocess(normalizeRequestIntake, z.object({
   intent: z.enum([
     'spec_only',
     'implementation',
@@ -994,8 +1086,23 @@ export const RequestIntake = z.object({
   clarifyingQuestions: z.array(z.string()).default([]),
   createdAt: z.string(),
   createdBy: z.string(),
-})
+}))
 export type RequestIntake = z.infer<typeof RequestIntake>
+
+export const TaskSourceClaim = z.object({
+  source: z.string(),
+  title: z.string(),
+  evidence: z.string(),
+  references: z.array(z.string()).default([]),
+  role: z.enum(['capability', 'reference', 'brief_input']).optional(),
+  structure: z.enum(['record', 'note']).optional(),
+  scopeHint: z.enum(['current', 'later']).optional(),
+  releaseId: z.string().optional(),
+  releaseLabel: z.string().optional(),
+  confidence: z.enum(['high', 'medium', 'low']).default('medium'),
+  linkedTaskHints: z.array(z.string()).default([]),
+})
+export type TaskSourceClaim = z.infer<typeof TaskSourceClaim>
 
 export const ProjectReleaseKind = z.enum(['release', 'milestone', 'marker', 'current_work'])
 export type ProjectReleaseKind = z.infer<typeof ProjectReleaseKind>
@@ -1015,7 +1122,7 @@ export const ProjectRelease = z.object({
   kind: ProjectReleaseKind.default('release'),
   state: ProjectReleaseState.default('active'),
   source: ProjectReleaseSource.default('inferred'),
-  description: z.string().optional(),
+  description: z.preprocess(value => value === null ? undefined : value, z.string().optional()),
   nodeIds: z.array(z.string()).default([]),
   deferredNodeIds: z.array(z.string()).default([]),
   proofStyle: ProjectReleaseProofStyle.default('unspecified'),
@@ -1028,18 +1135,23 @@ export const Task = z.object({
   id: z.string(),
   displayKey: z.string().optional(),
   title: z.string(),
-  description: z.string(),
+  description: z.string().default('Task'),
 
   // Which coordinator domain owns this task
-  domain: z.string(),
+  domain: z.string().default('general'),
 
   // Which project directory this task operates on (absolute path)
-  projectPath: z.string(),
+  projectPath: z.preprocess(
+    (value) => typeof value === 'string' && value.trim().length > 0 ? value : '.',
+    z.string(),
+  ),
 
   // The user-facing New request that produced this task, when it came through
   // request routing instead of direct legacy intake.
   request: TaskRequest.optional(),
   requestIntake: RequestIntake.optional(),
+  references: z.array(z.string()).default([]),
+  sourceClaims: z.array(TaskSourceClaim).default([]),
 
   status: TaskStatus,
   priority: TaskPriority.default('normal'),
@@ -1049,6 +1161,7 @@ export const Task = z.object({
   structuredSpec: StructuredSpec.optional(),
   contractSurfaceReviewPackets: z.array(ContractSurfaceReviewPacket).optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).default([]),
+  acceptanceCriteriaProofState: AcceptanceCriteriaProofState.optional(),
 
   // Product brief: the *why* layer of a task — user job, success metric,
   // anti-patterns, rollout plan. Authored by the Spec Agent alongside the
@@ -1174,6 +1287,8 @@ export const Task = z.object({
       taskId: z.string(),
       status: z.string(),
       completedAt: z.string().optional(),
+      reopenedAt: z.string().optional(),
+      reopenReason: z.string().optional(),
       summary: z.object({
         journey: z.string(),
         decision: z.string(),
@@ -1226,7 +1341,30 @@ export const Task = z.object({
   // requeued; the `rejection_dampening` lever reads it to decide when
   // `requeue_with_dampening` should stop requeuing and let the task stay
   // shelved as "suppressed."
-  shelveReason: z
+  shelveReason: z.preprocess((value) => {
+    if (!value || typeof value !== 'object') return value
+    const sourceRecord = value as Record<string, unknown>
+    const normalizedSource =
+      sourceRecord.source === 'policy' ? 'proposal_policy' : sourceRecord.source
+    return {
+      ...sourceRecord,
+      source: normalizedSource,
+      detail:
+        typeof sourceRecord.detail === 'string' && sourceRecord.detail.trim().length > 0
+          ? sourceRecord.detail
+          : 'Legacy shelve record preserved for compatibility.',
+      rejectedBy:
+        typeof sourceRecord.rejectedBy === 'string' && sourceRecord.rejectedBy.trim().length > 0
+          ? sourceRecord.rejectedBy
+          : normalizedSource === 'proposal_policy'
+            ? 'system:proposal-policy'
+            : 'system:legacy-shelve',
+      rejectedAt:
+        typeof sourceRecord.rejectedAt === 'string' && sourceRecord.rejectedAt.trim().length > 0
+          ? sourceRecord.rejectedAt
+          : '1970-01-01T00:00:00.000Z',
+    }
+  }, z
     .object({
       code: PreRejectionCode,
       detail: z.string(),
@@ -1237,7 +1375,7 @@ export const Task = z.object({
         .optional(),
       policyApplied: z.boolean().optional(),
       requeueCount: z.number().int().nonnegative().optional(),
-    })
+    }))
     .optional(),
 
   // FR-24: set when `worktree_isolation != none` on dispatch. Persisted so
@@ -1291,9 +1429,25 @@ export const Task = z.object({
   completedAt: z.string().optional(),
 })
 type ParsedTask = z.infer<typeof Task>
-export type Task = Omit<ParsedTask, 'hierarchy' | 'releaseIds'> & {
-  hierarchy?: WorkHierarchy
+/**
+ * Task definitions may arrive as raw authoring fixtures before the parser has
+ * filled defaults. The persisted/read Task schema still emits `source` on
+ * every acceptance criterion; keeping it optional here describes the input
+ * boundary without weakening that runtime normalization.
+ */
+type TaskAcceptanceCriterion = Omit<ParsedTask['acceptanceCriteria'][number], 'source' | 'verifiedBy' | 'met'> & {
+  source?: 'documented' | 'inferred'
+  verifiedBy?: 'automated' | 'human' | 'review'
+  met?: boolean
+}
+type TaskHierarchy = Omit<WorkHierarchy, 'order'> & { order?: number }
+export type Task = Omit<ParsedTask, 'hierarchy' | 'releaseIds' | 'references' | 'sourceClaims' | 'acceptanceCriteria'> & {
+  hierarchy?: TaskHierarchy
   releaseIds?: string[]
+  acceptanceCriteria: TaskAcceptanceCriterion[]
+  /** Defaulted at the parse boundary; legacy fixtures may omit these fields. */
+  references?: string[]
+  sourceClaims?: TaskSourceClaim[]
   /**
    * @deprecated Legacy pre-0.10 raw field. The normal Task schema no longer
    * accepts or writes task-local owner questions; use OwnerInputRequest records
@@ -1304,7 +1458,7 @@ export type Task = Omit<ParsedTask, 'hierarchy' | 'releaseIds'> & {
 
 export const TaskQueue = z.object({
   version: z.number().default(1),
-  lastUpdated: z.string(),
+  lastUpdated: z.string().default(LEGACY_SCHEMA_TIMESTAMP),
   tasks: z.array(Task),
   executionPlanActions: z.array(ExecutionPlanAction).default([]),
   scopeAuthorityRequests: z.array(ScopeAuthorityRequest).default([]),

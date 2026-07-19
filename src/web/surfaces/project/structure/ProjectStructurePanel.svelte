@@ -10,7 +10,7 @@
   let spine = $state<ProjectOrientationSpine | null>(null)
 
   $effect(() => {
-    projectFetch('/api/project/spine', { cache: 'no-store' })
+    projectFetch('/api/project/spine?compact=true', { cache: 'no-store' })
       .then(r => r.json())
       .then(j => {
         spine = (j?.spine ?? null) as ProjectOrientationSpine | null
@@ -37,7 +37,7 @@
   {#if spine?.summary?.headline}
     <section class="structure-orientation" aria-label="Project orientation">
       <div class="structure-orientation-copy">
-        <span>{spine.summary.selectedReleaseLabel ?? spine.summary.selectedScopeLabel ?? spine.scope?.label ?? 'Current work'}</span>
+        <span>{spine.summary.selectedScopeLabel ?? spine.selectedTaskScope?.label ?? spine.scope?.label ?? spine.summary.selectedReleaseLabel ?? 'Current task scope'}</span>
         <h2>{spine.summary.headline}</h2>
         <p>{spine.summary.purpose ?? spine.charter?.goal ?? 'Project purpose has not been pinned yet.'}</p>
       </div>

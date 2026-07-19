@@ -48,7 +48,7 @@ That is the little heartbeat you want before asking for more ambitious work.
 
 ## Install
 
-Guildhall 0.11's local app is release-supported on macOS. Your project can be
+Guildhall 0.12's local app is release-supported on macOS. Your project can be
 anything Guildhall can work on; this compatibility note is about the machine
 running Guildhall itself.
 
@@ -66,7 +66,7 @@ The installer downloads the latest macOS package from GitHub Releases and
 checks `guildhall-macos.tar.gz.sha256` before installing. To pin a release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.11.0 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.12.0 sh
 ```
 
 The package installer does not install Podman, create a VM, pull the runtime

@@ -1279,7 +1279,9 @@ describe('ThreadTab', () => {
       ))).toBe(true)
     })
     expect(calls.filter(call => call.url.startsWith('/api/project/thread')).length).toBeGreaterThan(1)
-    expect(calls.some(call => call.url.startsWith('/api/project?projectId=looma-knit'))).toBe(true)
+    expect(calls.some(call => (
+      call.url.startsWith('/api/project?') && call.url.includes('projectId=looma-knit')
+    ))).toBe(true)
     await waitFor(() => expect((answer as HTMLTextAreaElement).value).toBe(''))
   })
 
@@ -1923,6 +1925,34 @@ describe('ThreadTab', () => {
       expect(calls.some(call => call.url.includes('/api/project/project-check-in'))).toBe(true)
     })
     expect(path.value).toBe('/projects/looma-knit/thread')
+  })
+
+  it('labels active skippable project check-in as optional instead of now', async () => {
+    installFetchFakes(
+      [
+        setupTurn({
+          id: 'setup:project-check-in',
+          stepId: 'projectCheckIn',
+          title: 'Run project check-in',
+          why: 'The first project questions have not been generated yet.',
+          status: 'active',
+          skippable: true,
+          affordance: 'inline-button',
+          actionLabel: 'Start project check-in',
+          submitEndpoint: '/api/project/project-check-in',
+        }),
+      ],
+      'setup:project-check-in',
+    )
+
+    markProjectPaused()
+    render(ThreadTab)
+
+    await screen.findByRole('button', { name: /Run project check-in/i })
+    const detail = selectedThread()
+    expect(detail.getAllByText('optional').length).toBeGreaterThan(0)
+    expect(detail.queryByText('now')).toBeNull()
+    expect(document.querySelector('[data-turn-id="setup:project-check-in"] .tone-warn')).toBeNull()
   })
 
   it('explains bootstrap failures with the first useful command output line', async () => {
@@ -3053,42 +3083,25 @@ describe('ThreadTab', () => {
     expect(path.value).toContain('/thread')
   })
 
-  it('renders normal spec_review component work as queued spec work instead of owner approval', async () => {
+  it('renders normal spec_review component work as owner approval', async () => {
     const { calls } = installFetchFakes([
-      {
-        kind: 'inflight',
-        id: 'inflight-task-combobox',
-        at: now,
-        persona: 'spec',
-        status: 'active',
-        phase: 'spec',
-        taskId: 'task-combobox',
-        taskTitle: 'Combobox',
-        constructionMode: 'blueprint',
-        taskStatus: 'spec_review',
-        importedDraft: false,
-        checklist: undefined,
-        summary: 'Your answers and a spec draft are saved. Coordinator review is next.',
-      },
-    ], 'inflight-task-combobox', {
+      specReviewTurn('task-combobox', { taskTitle: 'Combobox' }),
+    ], 'spec-task-combobox', {
       projectRunStatus: 'stopped',
       projectAvailability: { status: 'paused', pausedAt: now, resumedAt: null },
     })
 
     render(ThreadTab)
 
-    await screen.findByRole('button', { name: /combobox/i })
-    expect(screen.queryByText(/awaiting approval/i)).toBeNull()
-    expect(screen.getAllByText('Paused').length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Coordinator review is next/i).length).toBeGreaterThan(0)
-    await userEvent.click(screen.getByRole('button', { name: /resume spec work/i }))
+    await screen.findByRole('button', { name: /view spec/i })
+    expect(screen.getAllByText(/Needs you/i).length).toBeGreaterThan(0)
+    expect(screen.getByText(/Review the spec draft before it moves forward/i)).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /approve spec/i }))
 
     await waitFor(() => {
-      const startCall = calls.find(call => call.url.includes('/api/project/task/task-combobox/start'))
-      expect(startCall?.body).toMatchObject({
-        mode: 'one_task',
-        scope: 'work_item',
-      })
+      expect(calls.some(call => call.url.includes('/api/project/task/task-combobox/approve-spec'))).toBe(true)
     })
     expect(calls.some(call => call.url.includes('/api/project/start'))).toBe(false)
   })

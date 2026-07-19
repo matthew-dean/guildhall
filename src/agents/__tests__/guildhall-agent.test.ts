@@ -4,7 +4,7 @@ import type {
   ApiStreamEvent,
   SupportsStreamingMessages,
 } from '@guildhall/engine'
-import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
+import { messageText, type ConversationMessage, type UsageSnapshot } from '@guildhall/protocol'
 import { GuildhallAgent, clampPermissionMode, composeSystemPromptWithSkills } from '../guildhall-agent.js'
 import { PermissionMode, defineTool } from '@guildhall/engine'
 import { z } from 'zod'
@@ -376,6 +376,16 @@ describe('agent factories', () => {
     expect(a.name).toBe('spec-agent')
   })
 
+  it('spec guidance forbids guessed executable proof commands', () => {
+    const agent = createSpecAgent(llm)
+    const prompt = (agent as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Never invent an executable command')
+    expect(prompt).toContain('Proof-setup tasks are discovery work')
+    expect(prompt).toContain('Do not create or propose a new script')
+    expect(prompt).toContain('leave')
+    expect(prompt).toContain('command')
+  })
+
   it('createSpecAgent tells imported-draft shaping to draft from evidence instead of authoring research-process briefs', () => {
     const a = createSpecAgent(llm)
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
@@ -459,8 +469,11 @@ describe('agent factories', () => {
     expect(specPrompt).toContain('Do not create executable')
     expect(workerPrompt).toContain('Proof path updates')
     expect(workerPrompt).toContain('separate automated proof from manual/provider proof')
+    expect(workerPrompt).toContain('Reviewer feedback cannot invent a proof command')
+    expect(workerPrompt).toContain('delegates back to')
     expect(reviewerPrompt).toContain('task-scoped proof path is missing')
     expect(reviewerPrompt).toContain('manual/provider proof')
+    expect(reviewerPrompt).toContain('Do not invent a proof command')
     expect(gatePrompt).toContain('update only the automated verification')
     expect(gatePrompt).toContain('Do not mark manual, provider')
   })
@@ -937,6 +950,33 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     expect(reloader.messages[0]?.role).toBe('user')
     expect(reloader.messages[1]?.role).toBe('assistant')
     expect(reloader.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3, cached_input_tokens: 0 })
+  })
+
+  it('stores essential session history instead of a completed raw conversation', async () => {
+    const raw = 'raw agent conversation '.repeat(700)
+    const client = new ScriptedApiClient([
+      { message: assistantMsg(raw), usage: { input_tokens: 5, output_tokens: 3 } },
+    ])
+    const agent = new GuildhallAgent({
+      name: 'compact-persisting',
+      llm: { apiClient: client, modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+      transcriptSummarizer: async () => '- Durable decision: retain the bounded plan.',
+      sessionPersistence: { cwd: projectCwd, sessionId: 'compact-session' },
+    })
+    await agent.generate(raw)
+
+    const reloader = new GuildhallAgent({
+      name: 'reload-compact',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'compact-session' })).toBe(true)
+    expect(reloader.messages).toHaveLength(1)
+    expect(messageText(reloader.messages[0]!)).toContain('Durable decision')
+    expect(messageText(reloader.messages[0]!)).not.toContain('raw agent conversation')
   })
 
   it('can ignore completed snapshots when only pending continuation should resume', async () => {

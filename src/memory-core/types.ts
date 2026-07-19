@@ -64,7 +64,19 @@ export interface RecordMemoryEventInput {
   }
 }
 
-export interface MemoryEvent extends RecordMemoryEventInput {
+/**
+ * Durable memory is intentionally smaller than the write-time event input.
+ * Raw text/json belongs to the live operation or an explicitly retained
+ * evidence artifact, not to the ordinary memory stream.
+ */
+export interface MemoryEvent {
+  schemaVersion: 2
+  scope: GuildhallMemoryScope
+  source: RecordMemoryEventInput['source']
+  content: {
+    summary: string
+  }
+  metadata: RecordMemoryEventInput['metadata']
   id: string
   recordedAt: string
   sourceRefs: MemorySourceRef[]
@@ -144,6 +156,7 @@ export interface MastraMemoryCoreAdapter {
   health: MastraMemoryCoreHealth
   memory: unknown
   storage: unknown
+  close: () => Promise<void>
 }
 
 export interface MemoryAuditReport {

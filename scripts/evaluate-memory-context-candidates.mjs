@@ -191,7 +191,7 @@ export const candidateProfiles = [
     control: true,
     role: 'Control: strict writer boundary plus deterministic rollups and context packets.',
     sourceRefs: [
-      'internal/plans/2026-06-04-project-state-storage-governance-and-cleanup.md',
+      'internal/plans/2026-07-14-project-state-architecture-pivot.md',
     ],
     scores: {
       contextAssembly: 3,

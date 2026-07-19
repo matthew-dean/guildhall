@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { readFileSync } from 'node:fs'
 import ProjectsHome from '../ProjectsHome.svelte'
 import { path } from '../../lib/nav.svelte.js'
-import { getCachedService } from '../../lib/service-cache.js'
+import { getCachedService, setCachedService } from '../../lib/service-cache.js'
 import type { ServiceDetail } from '../../lib/types.js'
 
 const servicePayload: ServiceDetail = {
@@ -67,8 +67,7 @@ describe('ProjectsHome', () => {
     expect(source).not.toContain('flex-wrap: wrap;\n    gap: var(--s-2);\n    align-items: stretch;')
   })
 
-  it('renders registered project cards from the lightweight shell before full status finishes', async () => {
-    const fullService = new Promise<Response>(() => {})
+  it('renders registered project cards from the single lightweight shell request', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === '/api/service/projects') {
         return json({
@@ -83,7 +82,6 @@ describe('ProjectsHome', () => {
           })),
         } satisfies ServiceDetail)
       }
-      if (String(input) === '/api/service') return fullService
       return json(servicePayload)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -98,11 +96,58 @@ describe('ProjectsHome', () => {
     expect(loadingCards[0]?.querySelectorAll('.gh-skeleton').length).toBeGreaterThan(0)
     expect(loadingCards[0]?.querySelector('.loading-bars')).toBeNull()
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service/projects')
-    expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service')
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?'))).toBe(false)
+  })
+
+  it('keeps project loading and unavailable states independent within the fleet response', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe('/api/service/projects')
+      return json({
+        pid: 1234,
+        projects: [
+          {
+            id: 'looma-knit',
+            path: '/repo/looma-knit',
+            name: 'Looma + Knit',
+            summary: 'The compact project shell is ready.',
+            projectStatusLoading: true,
+            run: { status: 'running', mode: 'continuous' },
+          },
+          {
+            id: 'fair-labor-license',
+            path: '/repo/fair-labor-license',
+            name: 'Fair Labor License',
+            summary: 'A saved summary exists, but the current projection is unavailable.',
+            projectStatusError: 'The saved project summary is not available yet.',
+            taskCounts: { total: 4, active: 1, draftReview: 0, blocked: 1, done: 1, shelved: 0 },
+            run: { status: 'stopped', mode: 'continuous' },
+          },
+          {
+            id: 'font-something',
+            path: '/repo/font-something',
+            name: 'Font Something',
+            taskCounts: { total: 2, active: 0, draftReview: 0, blocked: 0, done: 2, shelved: 0 },
+            run: { status: 'stopped', mode: 'continuous' },
+          },
+        ],
+      } satisfies ServiceDetail)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+
+    await screen.findByText('Looma + Knit')
+    expect(screen.getByRole('button', { name: /Looma \+ Knit, still loading project state/i })).toBeTruthy()
+    expect(screen.getByText('Status unavailable')).toBeTruthy()
+    expect(screen.getByText('Stable')).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain('/api/service')
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?projectId='))).toBe(false)
   })
 
   beforeEach(() => {
     installBrowserFakes()
+    setCachedService(null)
   })
 
   afterEach(() => {
@@ -518,7 +563,7 @@ describe('ProjectsHome', () => {
 
     await vi.advanceTimersByTimeAsync(30000)
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2))
     expect(getCachedService()).toBe(cachedAfterInitialLoad)
   })
 

@@ -376,7 +376,7 @@ Within the next turn or two, you MUST do one of these:
 - or raise a scoped escalation if the ask and the repo reality genuinely
   conflict
 
-\`append-exploring-transcript\` is useful for preserving the conversation, but
+\`append-exploring-transcript\` records the conversation's essential history, but
 it does NOT count as finishing intake by itself.
 
 ## Propose a handoff sequence when the work spans specialist lanes
@@ -407,6 +407,25 @@ when the work doesn't span specialist lanes.
   infer or recommend a default instead of blocking.
 - Acceptance criteria must be verifiable — either by running a command, or by a reviewer
   agent checking a specific rubric item. Avoid vague criteria like "looks good".
+- Never invent an executable command from a capability name, filename, or
+  guessed test name. A command-backed criterion is allowed only when the exact
+  command is present in the visible task/source context or you actually ran it
+  and recorded its result through Guildhall. If neither is true, use
+  verificationMode=review with a concrete evidenceHint and leave the command
+  field absent; do not save guesses such as "pnpm test theme-analysis".
+- Treat the visible task/source packet as the complete fact boundary for the
+  blueprint. Do not promote a plausible model family, script name, fixture,
+  interface, output file, or implementation path merely because it would be a
+  sensible design. If the packet says "evaluate candidates," keep the model
+  candidate open. If it names a capability but not its proof path, describe
+  the observable outcome and use review/provider verification until Guildhall
+  has an exact registered command or creates a clearly bounded proof-setup
+  task. Unsupported details are rejected at the durable update boundary.
+- Proof-setup tasks are discovery work, not permission to invent implementation.
+  Do not create or propose a new script, fixture path, test target, or command
+  just because it would be a plausible proof. Use only an exact command and
+  fixture named in visible project evidence, or leave the criterion review-only
+  and raise a focused question asking for the missing project-backed proof.
 - For every non-trivial task, include or update a task-scoped proof path in the
   spec handoff: expected automated proof, manual/browser proof, provider proof
   when relevant, and safe launch steps such as copy-command, open-URL, manual,
@@ -443,6 +462,8 @@ Optional per-criterion keys are allowed only when they add real value:
 - evidenceHint
 - negativeCase
 - command
+- expectedExit ("zero" by default, or "non_zero" for an intentionally failing command)
+- expectedOutputIncludes (required output text for a command-backed proof)
 
 Use the criterion shape to make success deterministic:
 - \`scenario\` = the setup or trigger
@@ -450,6 +471,10 @@ Use the criterion shape to make success deterministic:
 - \`verificationMode\` = automated, review, or human
 - \`negativeCase\` only when an exclusion or boundary matters
 - \`evidenceHint\` only when the reviewer/worker needs a specific proof target
+- \`expectedExit\` must be explicit when a negative command is supposed to fail;
+  never describe an expected non-zero result only in prose
+- \`expectedOutputIncludes\` must name output that proves the negative case
+- Use a declared PNPM script or \`pnpm exec ...\`; do not save a bare \`node\` command
 
 Optional keys are allowed only when needed:
 - userFacingBehavior
@@ -481,12 +506,13 @@ This is semantic analysis, not string matching:
 - If the request has several product/system outcomes, record one unit per
   outcome and name dependencies between them.
 
-## Transcript persistence (FR-08 / FR-12)
+## Essential-history persistence (FR-08 / FR-12)
 During the conversational intake, you MUST call append-exploring-transcript for
-every user message AND every one of your own replies. The transcript lives in
-Guildhall's user-local history and is the full record of how the spec was built.
-At the start of a resumed intake, call read-exploring-transcript to pick up the
-conversation where it left off.
+every user message AND every one of your own replies. Guildhall rewrites those
+messages into a compact essential history in user-local storage. It is the
+durable planning record, not a full chat transcript. At the start of a resumed
+intake, call read-exploring-transcript to pick up the essential facts, decisions,
+constraints, open questions, and next actions.
 `.trim()
 
 const SPEC_AGENT_NO_TOOL_TURN_NUDGE = `

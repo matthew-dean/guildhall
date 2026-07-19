@@ -4,20 +4,31 @@ import path from 'node:path'
 import { TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
 import {
   atomicWriteText,
+  appendTaskEvidence,
+  inferProjectRootFromMemoryDir,
   projectStatePathFromMemoryDir,
-  readProjectStateTextFromMemoryDirAsync,
-  writeProjectStateJsonFromMemoryDirAsync,
+  readProjectStateDatabaseQueueRevision,
+  upsertTaskRuntimeState,
+  upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
+  replaceExploringTranscript,
   isMaterializableSplitAction,
   materializeSplitChildren,
   resolveEscalation,
   resolveSupersededEscalations,
   settleAlreadyRepresentedSplitRecommendations,
   settleMaterializedSplitReadiness,
+  materializeProofSetupTask,
+  isProofSetupTask,
 } from '@guildhall/tools'
-import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
+import {
+  continueImportedSourceRecovery,
+  importedTaskNeedsSourceRecovery,
+  normalizeImportedDraftTask,
+  promoteImportDraftToExploring,
+} from './import-drafts.js'
 import {
   createPressureTestIntake,
   inspectPressureTestEvidence,
@@ -27,13 +38,27 @@ import { analyzeRequestIntake, type RequestIntakeOwnerInput } from './request-in
 import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
 import {
   extractAcceptanceCriteriaFromSpec,
+  productBriefFromSpecCompletionBoundary,
+  validateProductBriefGrounding,
   validateSpecCompletionBoundary,
 } from './spec-quality.js'
+import { taskShapingBlockers } from '@guildhall/shared'
 import { applyTaskShaping } from './task-decomposition.js'
 import { transitionTaskStatus } from './task-transition.js'
-import { createOwnerInputRequest } from './owner-input-store.js'
-import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
+import { cancelOwnerInputRequestsForTask, createOwnerInputRequest } from './owner-input-store.js'
 import { buildSurfaceReviewPacketsForStructuredSpec } from './contract-surfaces.js'
+import { buildEffectiveTask } from './effective-task.js'
+import { assessTaskReadiness, hasExplicitNoSplitBoundary } from './task-readiness.js'
+import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
+import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
+import {
+  sanitizeTaskQueueForProjectWrite,
+  readProjectStateAuthorityAtBoundary,
+  writeProjectTaskQueueAtCurrentStateBoundary,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueueWithSummary,
+  readProjectTaskQueueForRichMutation,
+} from './project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -55,7 +80,8 @@ function progressPathFor(memoryDir: string): string {
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await readProjectStateTextFromMemoryDirAsync(memoryDir, 'TASKS.json').catch((err: unknown) => {
+  const tasksPath = tasksPathFor(memoryDir)
+  const raw = await readProjectTaskQueueForRichMutation(inferProjectRootFromMemoryDir(memoryDir)).catch((err: unknown) => {
     if (
       err &&
       typeof err === 'object' &&
@@ -73,10 +99,10 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
       tasks: [],
     })
   }
-  // The bootstrap seeds TASKS.json as a bare `[]` for legacy reasons, so be
-  // permissive on intake: if we see a bare array, promote it to a full queue.
+  // A bare array is the only supported bootstrap shorthand. Once persisted,
+  // all task state crosses the SQLite current-state boundary.
   const now = new Date().toISOString()
-  const parsed = normalizeLegacyTaskQueueShape(JSON.parse(raw), now)
+  const parsed = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw
   const queue = TaskQueue.parse(Array.isArray(parsed)
     ? { version: 1, lastUpdated: now, tasks: parsed }
     : parsed)
@@ -85,7 +111,27 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+  const tasksPath = tasksPathFor(memoryDir)
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const expectedQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+  await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
+    projectId: path.basename(projectRoot),
+    projectRoot,
+    ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
+  })
+}
+
+function hasDurableImplementationProgress(task: Task): boolean {
+  const record = task as Task & {
+    artifactIds?: unknown
+    latestCheckpoint?: unknown
+    terminalSummary?: unknown
+  }
+  if (record.latestCheckpoint) return true
+  if (record.terminalSummary) return true
+  if (typeof task.handoffStep === 'number') return true
+  if (Array.isArray(record.artifactIds) && record.artifactIds.length > 0) return true
+  return false
 }
 
 function nextTaskId(queue: TaskQueue): string {
@@ -148,6 +194,8 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     description: input.ask,
     domain: input.domain,
     projectPath: input.projectPath,
+    references: [],
+    sourceClaims: [],
     status: 'exploring',
     priority: 'normal',
     dependsOn: [],
@@ -367,12 +415,80 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     }
   }
   backfillAcceptanceCriteriaFromSpec(task)
+  if (!task.productBrief?.userJob?.trim() || !task.productBrief?.successMetric?.trim()) {
+    const derivedBrief = productBriefFromSpecCompletionBoundary(task.spec)
+    if (derivedBrief) {
+      const candidateBrief = {
+        ...derivedBrief,
+        authoredAt: new Date().toISOString(),
+      }
+      const grounding = validateProductBriefGrounding(task, candidateBrief)
+      if (!grounding.ok) {
+        return {
+          success: false,
+          error: `Product brief is not grounded in the visible task/source context: ${grounding.errors.join(' ')}`,
+        }
+      }
+      task.productBrief = candidateBrief
+    }
+  }
   const specQuality = validateSpecCompletionBoundary(task)
   if (!specQuality.ok) {
     return {
       success: false,
       error: `Spec is not ready for approval: ${specQuality.errors.join(' ')}`,
     }
+  }
+
+  const selectedRelease = (task.releaseIds ?? [])
+    .map(releaseId => queue.releases?.find(release => release.id === releaseId))
+    .find(release => release?.id === queue.selectedReleaseId)
+  const requiresScriptProof = selectedRelease?.proofStyle === 'script_only' && !isProofSetupTask(task)
+  let proofSetupTaskId: string | null = null
+  const hasConcreteScriptProof = (task.proofPaths ?? []).some(path => (
+    path &&
+    typeof path === 'object' &&
+    !Array.isArray(path) &&
+    typeof (path as { command?: unknown }).command === 'string' &&
+    isConcreteProjectProofCommand(String((path as { command: string }).command))
+  )) || task.acceptanceCriteria.some(criterion => (
+    typeof criterion.command === 'string' &&
+    isConcreteProjectProofCommand(criterion.command)
+  ))
+  if (requiresScriptProof && !hasConcreteScriptProof) {
+    const now = new Date().toISOString()
+    const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+    const proofSetup = materializeProofSetupTask(queue, task, now)
+    proofSetupTaskId = proofSetup.childTaskId
+    task.proofPaths = replaceGenericProjectProofPathsWithSetup(task)
+    task.acceptanceCriteria = task.acceptanceCriteria.map((criterion) => {
+      if (
+        typeof criterion.command !== 'string' ||
+        isConcreteProjectProofCommand(criterion.command)
+      ) return criterion
+      const { command: _command, ...withoutCommand } = criterion
+      return {
+        ...withoutCommand,
+        met: false,
+        source: 'inferred' as const,
+        verificationState: 'stale' as const,
+        verificationSource: 'proof-recovery',
+        staleReason: 'The saved workspace convention was not a task-specific proof command; linked proof-setup work must establish the current command.',
+      }
+    })
+    task.notes.push({
+      agentId: 'proof-recovery',
+      role: 'coordinator',
+      content: `Kept the approved product/spec boundary and linked verification work ${proofSetup.childTaskId} because the selected script-only release needs a concrete project proof command.`,
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await writeQueue(input.memoryDir, queue)
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      assignedTo: null,
+      proofRecovery: undefined,
+      updatedAt: now,
+    })
   }
 
   const now = new Date().toISOString()
@@ -396,19 +512,24 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     : null
   const duplicateSiblingSplit = splitRecommendationsDuplicateExistingSiblings(queue, task)
   let splitMaterialized = false
+  let attemptedSplitMaterialization = false
   if (
     isMaterializableSplitAction(task.sizePlan?.action) &&
     !shouldKeepFixedSpecRunnable(task) &&
     !representedParentSplit &&
     !duplicateSiblingSplit
   ) {
+    attemptedSplitMaterialization = true
     splitMaterialized = materializeSplitChildren(queue, task, now).status === 'materialized'
   } else {
     if (representedParentSplit) {
       // `settleMaterializedSplitReadiness` has already rewritten stale parent split metadata.
     } else if (duplicateSiblingSplit) {
       settleAlreadyRepresentedSplitRecommendations(queue, task, now)
-    } else if (task.sizePlan?.action === 'split_required' && shouldKeepFixedSpecRunnable(task)) {
+    } else if (
+      (task.sizePlan?.action === 'split_required' || task.sizePlan?.action === 'decompose_before_execution') &&
+      shouldKeepFixedSpecRunnable(task)
+    ) {
       task.sizePlan = {
         ...task.sizePlan,
         action: 'proceed_with_warning',
@@ -418,6 +539,17 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
           'Kept as runnable fixed-spec work because the accepted completion boundary says nothing must be split or blocked.',
         ],
       }
+      if (task.decomposition?.action === 'split') {
+        task.decomposition = {
+          ...task.decomposition,
+          action: 'keep',
+          reasons: task.decomposition.reasons.filter(reason => reason.code !== 'too_broad'),
+        }
+      }
+      // Sizing and readiness are one state transition. Reassess after settling
+      // the explicit bounded-work decision so the release summary cannot say
+      // "ready" while task detail still says "requires child work".
+      task.taskReadiness = assessTaskReadiness(task, { now })
     }
     transitionTaskStatus({
       task,
@@ -427,6 +559,50 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       now,
     })
   }
+  if (
+    attemptedSplitMaterialization &&
+    !splitMaterialized &&
+    task.status === 'spec_review' &&
+    (task.taskReadiness?.recommendation === 'ready' || task.taskReadiness?.recommendation === 'needs_research_spike')
+  ) {
+    settleBoundedChildContractWorkWithoutMaterializedChildren(task)
+    transitionTaskStatus({
+      task,
+      event: 'mark_ready',
+      actor: 'human',
+      evidenceRefs: ['task:approve-spec'],
+      now,
+    })
+  }
+  if (task.status === 'spec_review' && task.taskReadiness?.recommendation === 'needs_research_spike') {
+    settleBoundedChildContractWorkWithoutMaterializedChildren(task)
+    transitionTaskStatus({
+      task,
+      event: 'mark_ready',
+      actor: 'human',
+      evidenceRefs: ['task:approve-spec:research-spike'],
+      now,
+    })
+  }
+  if (task.status === 'spec_review' && isBoundedChildContractWorkWithoutMaterializedChildren(task)) {
+    settleBoundedChildContractWorkWithoutMaterializedChildren(task)
+    transitionTaskStatus({
+      task,
+      event: 'mark_ready',
+      actor: 'human',
+      evidenceRefs: ['task:approve-spec:bounded-child-contract'],
+      now,
+    })
+  }
+  if (task.status === 'spec_review') {
+    return {
+      success: false,
+      error: attemptedSplitMaterialization
+        ? `Spec approval did not create runnable work for ${task.id}: Guildhall still needs child work but could not materialize any child tasks.`
+        : `Spec approval did not advance ${task.id}; the task is still waiting for spec review.`,
+    }
+  }
+  approveReintakeBriefWithSpec(task, now)
   task.updatedAt = now
   resolveSupersededEscalations(task, {
     now,
@@ -446,6 +622,11 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   }
 
   await writeQueue(input.memoryDir, queue)
+  await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(input.memoryDir), task.id, {
+    assignedTo: null,
+    proofRecovery: undefined,
+    updatedAt: now,
+  })
 
   await appendExploringTranscript({
     memoryDir: input.memoryDir,
@@ -453,6 +634,8 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     role: 'system',
     content: input.approvalNote
       ? `Spec approved by human. Note: ${input.approvalNote}`
+      : proofSetupTaskId
+        ? `Spec approved. Guildhall kept the product boundary and created linked verification work ${proofSetupTaskId} to establish the selected release's concrete proof command.`
       : splitMaterialized
         ? 'Spec approved. Guildhall created the nested work and kept this item as the containing work.'
         : representedParentSplit
@@ -490,17 +673,60 @@ function backfillAcceptanceCriteriaFromSpec(task: Task): void {
 }
 
 function shouldKeepFixedSpecRunnable(task: Task): boolean {
-  const text = [
-    task.title,
-    task.description,
-    task.spec,
-    task.productBrief?.userJob,
-    task.productBrief?.successMetric,
-  ].filter(Boolean).join('\n')
-  if (!/\bPantry Pulse\b/i.test(text)) return false
-  if (!/\bfixed(?:-| )spec\b|\bcompletion boundary\b/i.test(text)) return false
-  const splitBoundary = task.spec?.match(/what must be split or blocked\s*:\s*([^\n]+)/i)?.[1] ?? ''
-  return /^(none|nothing|not required|nothing to split)/i.test(splitBoundary.trim())
+  if (!hasExplicitNoSplitBoundary(task.spec)) return false
+  return task.acceptanceCriteria.length > 0
+}
+
+function isBoundedChildContractWorkWithoutMaterializedChildren(task: Task): boolean {
+  if (!isMaterializableSplitAction(task.sizePlan?.action)) return false
+  if ((task.sizePlan?.recommendedChildren?.length ?? 0) > 0) return false
+  const hasContainingWork = Boolean(task.hierarchy?.parentId) || (task.delivery?.supports?.length ?? 0) > 0
+  if (!hasContainingWork) return false
+  const text = [task.title, task.description, task.spec].filter(Boolean).join('\n')
+  return /\b(contract|schema|fixture|expected-record|prototype-run|evaluation)\b/i.test(text)
+}
+
+function settleBoundedChildContractWorkWithoutMaterializedChildren(task: Task): boolean {
+  if (!isBoundedChildContractWorkWithoutMaterializedChildren(task) || !task.sizePlan) return false
+  task.sizePlan = {
+    ...task.sizePlan,
+    action: 'proceed_with_warning',
+    recommendedChildren: [],
+    reasons: [
+      ...task.sizePlan.reasons,
+      'Kept as runnable bounded child contract work because no materializable split children were planned.',
+    ],
+  }
+  if (task.taskReadiness?.recommendation === 'requires_child_work') {
+    task.taskReadiness = {
+      ...task.taskReadiness,
+      recommendation: 'ready',
+      summary: 'Task is ready for a focused worker pass.',
+    }
+  }
+  if (task.decomposition?.action === 'split') {
+    task.decomposition = {
+      ...task.decomposition,
+      action: 'keep',
+      reasons: task.decomposition.reasons.filter(reason => reason.code !== 'too_broad'),
+    }
+  }
+  return true
+}
+
+function approveReintakeBriefWithSpec(task: Task, now: string): void {
+  const brief = task.productBrief
+  if (!brief || brief.authoredBy !== 'project-reintake') return
+  if (typeof brief.approvedAt === 'string' && brief.approvedAt.trim().length > 0) return
+  brief.approvedBy = 'human'
+  brief.approvedAt = now
+  brief.nonGoals = removeDraftApprovalWarnings(brief.nonGoals)
+  brief.antiPatterns = removeDraftApprovalWarnings(brief.antiPatterns)
+}
+
+function removeDraftApprovalWarnings(items: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(items)) return items
+  return items.filter(item => !/treat this draft as approved until/i.test(item))
 }
 
 function splitRecommendationsDuplicateExistingSiblings(queue: TaskQueue, task: Task): boolean {
@@ -588,6 +814,8 @@ export async function createBugReportTask(input: BugReportInput): Promise<BugRep
     description,
     domain: input.domain,
     projectPath: input.projectPath,
+    references: [],
+    sourceClaims: [],
     status: 'proposed',
     priority: input.priority ?? 'high',
     dependsOn: [],
@@ -639,6 +867,10 @@ export interface RerunTaskStageInput {
   memoryDir: string
   taskId: string
   stage: 'spec' | 'review' | 'gate'
+  /** Reopen a stale current plan for a source-backed spec re-intake. */
+  recoveryReason?: string
+  /** Only proof recovery writes the proof-specific runtime marker. */
+  recoveryKind?: 'proof' | 'blueprint'
 }
 
 export interface RerunTaskStageResult {
@@ -707,7 +939,11 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     if (!task) return { success: false, error: `Task ${input.taskId} not found after escalation resolution` }
   }
 
-  if (input.message) {
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const tasksPath = tasksPathFor(input.memoryDir)
+  const promotedAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+
+  if (input.message && !promotedAuthority) {
     task.notes.push({
       agentId: 'human',
       role: 'human',
@@ -732,7 +968,30 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     })
   }
 
-  if (input.message && !input.preserveStatus && task.status !== 'blocked') {
+  if (input.message && promotedAuthority) {
+    const now = new Date().toISOString()
+    const promoted = writePromotedTaskDetailMutation(tasksPath, task.id, {
+      projectId: path.basename(projectRoot),
+      projectRoot,
+      mutate: current => {
+        if (!input.preserveStatus && current.status !== 'blocked') current.status = 'exploring'
+        current.updatedAt = now
+        return current
+      },
+    })
+    if (!promoted) return { success: false, error: `Task ${input.taskId} could not be updated in the current-state database` }
+    await appendTaskEvidence(projectRoot, task.id, {
+      id: `note-${task.id}-${now.replace(/[^0-9A-Za-z]/g, '')}-resume`,
+      kind: 'note',
+      recordedAt: now,
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: input.message,
+        timestamp: now,
+      },
+    })
+  } else if (input.message && !input.preserveStatus && task.status !== 'blocked') {
     task.status = 'exploring'
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = task.updatedAt
@@ -750,10 +1009,21 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   const queue = await readQueue(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
+  // Promoted reads keep resolved escalation history in the evidence detail
+  // store rather than on the compact task definition. Reframe must resolve
+  // that canonical history, not silently operate on an overlay-free row.
+  if (Array.isArray(effectiveTask.escalations)) {
+    task.escalations = [...effectiveTask.escalations]
+  }
   if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
   }
-  if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+  if (
+    (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') &&
+    hasDurableImplementationProgress(effectiveTask)
+  ) {
     return {
       success: false,
       error: `Task ${input.taskId} already started implementation; pause or finish the current work before reframing so work traces stay connected.`,
@@ -785,6 +1055,20 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   ].join('\n')
 
   const notes = Array.isArray(task.notes) ? [...task.notes] : []
+  await cancelOwnerInputRequestsForTask({
+    projectRoot,
+    taskId: task.id,
+    now,
+    ...(reason ? { reason } : {}),
+  })
+  if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+    notes.push({
+      agentId: 'system',
+      role: 'system',
+      content: 'Cleared an active agent claim with no durable worker checkpoint, artifact, handoff, or terminal output so this task can be reframed before implementation continues.',
+      timestamp: now,
+    })
+  }
   notes.push({
     agentId: 'human',
     role: 'human',
@@ -813,11 +1097,30 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   task.productBrief = undefined
   task.spec = undefined
   task.acceptanceCriteria = []
+  // Reframing is a new planning pass. Do not let readiness, sizing, review,
+  // or decomposition decisions from the discarded frame make the fresh
+  // exploring task look runnable before the spec lane has rebuilt it.
+  task.structuredSpec = undefined
+  task.contractSurfaceReviewPackets = undefined
+  task.acceptanceCriteriaProofState = undefined
+  task.taskReadiness = undefined
+  task.reviewRisk = undefined
+  task.definitionOfDone = undefined
+  task.blockerPlans = undefined
+  task.contextBudget = undefined
+  task.decomposition = undefined
+  task.coordinatorReflections = undefined
+  task.workUnitAnalysis = undefined
+  task.sizePlan = undefined
+  task.taskKind = undefined
   task.notes = notes
   task.updatedAt = now
   queue.lastUpdated = now
 
-  await appendExploringTranscript({
+  const proofRecoveryReason = reason && /(?:script proof|proof command|project-backed|release proof)/i.test(reason)
+    ? reason
+    : undefined
+  await replaceExploringTranscript({
     memoryDir: input.memoryDir,
     taskId: task.id,
     role: 'user',
@@ -833,6 +1136,22 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   })
   await writeQueue(input.memoryDir, queue)
 
+  // The promoted queue writer rebuilds runtime overlays from the task it
+  // receives. Attach the recovery contract after the final definition write
+  // so this reframe cannot immediately erase its own proof marker.
+  await upsertTaskRuntimeState(projectRoot, task.id, {
+    assignedTo: 'spec-agent',
+    ...(proofRecoveryReason
+      ? {
+          proofRecovery: {
+            reopenedAt: now,
+            reason: proofRecoveryReason,
+          },
+        }
+      : {}),
+    updatedAt: now,
+  })
+
   return { success: true, newStatus: 'exploring' }
 }
 
@@ -840,6 +1159,9 @@ export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskRes
   const queue = await readQueue(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
+  if (Array.isArray(effectiveTask.escalations)) task.escalations = [...effectiveTask.escalations]
   if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
   }
@@ -927,7 +1249,8 @@ export async function shapeImportDraft(
   if (task.status === 'done' || task.status === 'shelved' || task.status === 'blocked') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
   }
-  if (task.status !== 'import_draft') {
+  const hasShapingBlocker = taskShapingBlockers(task).length > 0 || importedTaskNeedsSourceRecovery(task)
+  if (task.status !== 'import_draft' && !(task.status === 'exploring' && hasShapingBlocker)) {
     return {
       success: false,
       error: `Task ${input.taskId} is in status '${task.status}', expected 'import_draft'`,
@@ -957,7 +1280,11 @@ export async function shapeImportDraft(
     return { success: true, newStatus: 'shelved' }
   }
 
-  await promoteImportDraftToExploring(task, input.memoryDir)
+  if (task.status === 'exploring') {
+    await continueImportedSourceRecovery(task, input.memoryDir)
+  } else {
+    await promoteImportDraftToExploring(task, input.memoryDir)
+  }
   queue.lastUpdated = task.updatedAt ?? new Date().toISOString()
   await writeQueue(input.memoryDir, queue)
   return { success: true, newStatus: 'exploring' }
@@ -1037,6 +1364,7 @@ export async function rerunTaskStage(
   input: RerunTaskStageInput,
 ): Promise<RerunTaskStageResult> {
   const queue = await readQueue(input.memoryDir)
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
   if (task.status === 'shelved' || task.status === 'blocked') {
@@ -1055,8 +1383,37 @@ export async function rerunTaskStage(
         error: 'Reserved setup tasks have their own rerun controls.',
       }
     }
+    // A completion summary is historical evidence, not a second authority for
+    // the task's current lifecycle. Record that the summary was superseded so
+    // the coordinator cannot re-close this task before the fresh spec pass.
+    if (task.doneSummaryBundle?.status === 'done') {
+      task.doneSummaryBundle = {
+        ...task.doneSummaryBundle,
+        status: 'reopened',
+        reopenedAt: now,
+        reopenReason: 'A fresh spec pass was requested from current project reality.',
+        createdAt: now,
+        createdBy: 'rerun-stage',
+      }
+    }
+    // A fresh spec pass always starts a new current lifecycle. Clear any
+    // stale terminal index value even when an earlier reopen already changed
+    // the summary to `reopened`; the old completion remains in evidence.
+    task.completedAt = undefined
     task.status = 'exploring'
     task.assignedTo = null
+    // "Rerun spec" is a new shaping boundary, not a worker retry. Remove the
+    // old executable contract even when the caller did not provide a special
+    // recovery reason; otherwise the coordinator can keep reusing a blueprint
+    // that the user explicitly asked it to replace.
+    resetCurrentPlanForProofRecovery(task, {
+      reason:
+        input.recoveryReason?.trim() ||
+        'The current plan was cleared for a fresh spec pass from current project reality.',
+      now,
+      agentId: 'system',
+      role: input.recoveryKind === 'proof' ? 'proof-recovery' : 'spec-recovery',
+    })
     detachStaleShelvedReverseChildren(queue, task, now)
     task.updatedAt = now
     queue.lastUpdated = now
@@ -1074,6 +1431,18 @@ export async function rerunTaskStage(
       content:
         'Human requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
     })
+    if (input.recoveryKind === 'proof') {
+      await upsertTaskRuntimeState(projectRoot, task.id, {
+        assignedTo: null,
+        proofRecovery: {
+          reopenedAt: now,
+          reason:
+            input.recoveryReason?.trim() ||
+            'The current proof plan was cleared for a fresh source-backed spec pass.',
+        },
+        updatedAt: now,
+      })
+    }
     return { success: true, newStatus: 'exploring' }
   }
 

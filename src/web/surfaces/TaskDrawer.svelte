@@ -52,23 +52,45 @@
     browserProof: { ok: boolean; status: number | null; error: string | null } | null
   }
 
+  interface TaskHistoryEvent {
+    kind?: string
+    recordedAt?: string
+    payload?: Record<string, unknown>
+  }
+
+  interface TaskExtrasState extends Pick<DrawerPayload, 'contextDebug' | 'exploringTranscript' | 'recentEvents' | 'threadTurns'> {
+    historyEvents?: TaskHistoryEvent[]
+    reviewVerdicts?: TaskHistoryEvent[]
+    reviewAdjudications?: TaskHistoryEvent[]
+  }
+
   interface Props {
     taskId: string
     projectId?: string | null
+    routeHref?: string
     onClose: () => void
   }
 
-  let { taskId, projectId = null, onClose }: Props = $props()
+  let { taskId, projectId = null, routeHref = '', onClose }: Props = $props()
 
   let payload = $state<DrawerPayload | null>(null)
+  let taskExtras = $state<TaskExtrasState>({})
+  let loadedExtras = $state<Set<string>>(new Set())
+  let loadingExtras = $state<Set<string>>(new Set())
   let error = $state<string | null>(null)
   let busy = $state(false)
   let runBusy = $state(false)
   let runError = $state<string | null>(null)
   let devServers = $state<RuntimeDevServer[]>([])
   let devServerBusyId = $state<string | null>(null)
-  let activeTab = $state<DrawerTab>('overview')
+  function currentBrowserHref(): string {
+    if (typeof window === 'undefined') return ''
+    return `${window.location.pathname}${window.location.search}${window.location.hash}`
+  }
+
+  let activeTab = $state<DrawerTab>(requestedInitialTab(currentBrowserHref()) ?? 'overview')
   let initializedTabForTaskId = $state<string | null>(null)
+  let initializedTabForHref = $state<string | null>(null)
   let pollHandle: ReturnType<typeof setInterval> | null = null
 
   // Modal state
@@ -159,9 +181,13 @@
     }
   }
 
-  function requestedInitialTab(): DrawerTab | null {
-    if (typeof window === 'undefined') return null
-    const raw = new URLSearchParams(window.location.search).get('tab')
+  function requestedInitialTab(href: string): DrawerTab | null {
+    const queryStart = href.indexOf('?')
+    const hashStart = href.indexOf('#', queryStart)
+    const search = queryStart >= 0
+      ? href.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart)
+      : (typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, ''))
+    const raw = new URLSearchParams(search).get('tab')
     if (raw === 'action') return 'current'
     if (
       raw === 'current' ||
@@ -196,7 +222,12 @@
         error = body.error ?? `HTTP ${res.status}`
         return
       }
-      payload = (await res.json()) as DrawerPayload
+      const nextPayload = (await res.json()) as DrawerPayload
+      payload = nextPayload
+      // Accept the legacy detail payload during rolling installed-app updates.
+      taskExtras = nextPayload.threadTurns ? { threadTurns: nextPayload.threadTurns } : {}
+      loadedExtras = new Set()
+      loadingExtras = new Set()
       await loadDevServers()
       error = null
     } catch (err) {
@@ -213,6 +244,97 @@
     } catch {
       devServers = []
     }
+  }
+
+  async function loadTaskExtras(include: 'context' | 'transcript' | 'events' | 'thread'): Promise<void> {
+    if (loadedExtras.has(include) || loadingExtras.has(include)) return
+    const requestedTaskId = taskId
+    loadingExtras = new Set([...loadingExtras, include])
+    try {
+      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(requestedTaskId)}/extras?include=${include}`)
+      if (!res.ok) return
+      const extras = await res.json() as Pick<DrawerPayload, 'contextDebug' | 'exploringTranscript' | 'recentEvents' | 'threadTurns'>
+      if (requestedTaskId !== taskId) return
+      taskExtras = { ...taskExtras, ...extras }
+    } catch {
+      // The selected tab can render its normal empty/error state when optional
+      // diagnostics are unavailable.
+    } finally {
+      if (requestedTaskId === taskId) {
+        // Do not refetch an unavailable optional diagnostic on every render.
+        loadedExtras = new Set([...loadedExtras, include])
+      }
+      loadingExtras = new Set([...loadingExtras].filter(value => value !== include))
+    }
+  }
+
+  async function loadTaskHistory(): Promise<void> {
+    if (loadedExtras.has('history') || loadingExtras.has('history')) return
+    loadingExtras = new Set([...loadingExtras, 'history'])
+    try {
+      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(taskId)}/history`)
+      if (!res.ok) return
+      const body = await res.json() as { events?: TaskHistoryEvent[] }
+      taskExtras = { ...taskExtras, historyEvents: Array.isArray(body.events) ? body.events : [] }
+    } catch {
+      taskExtras = { ...taskExtras, historyEvents: [] }
+    } finally {
+      loadedExtras = new Set([...loadedExtras, 'history'])
+      loadingExtras = new Set([...loadingExtras].filter(value => value !== 'history'))
+    }
+  }
+
+  async function loadTaskReview(): Promise<void> {
+    if (loadedExtras.has('review') || loadingExtras.has('review')) return
+    loadingExtras = new Set([...loadingExtras, 'review'])
+    try {
+      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(taskId)}/review`)
+      if (!res.ok) return
+      const body = await res.json() as { verdicts?: TaskHistoryEvent[]; adjudications?: TaskHistoryEvent[] }
+      taskExtras = {
+        ...taskExtras,
+        reviewVerdicts: Array.isArray(body.verdicts) ? body.verdicts : [],
+        reviewAdjudications: Array.isArray(body.adjudications) ? body.adjudications : [],
+      }
+    } catch {
+      taskExtras = { ...taskExtras, reviewVerdicts: [], reviewAdjudications: [] }
+    } finally {
+      loadedExtras = new Set([...loadedExtras, 'review'])
+      loadingExtras = new Set([...loadingExtras].filter(value => value !== 'review'))
+    }
+  }
+
+  async function loadTaskGitStory(): Promise<void> {
+    if (loadedExtras.has('git-story') || loadingExtras.has('git-story')) return
+    const requestedTaskId = taskId
+    loadingExtras = new Set([...loadingExtras, 'git-story'])
+    try {
+      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(requestedTaskId)}/git-story`)
+      if (!res.ok) return
+      const body = await res.json() as { gitStory?: Task['gitStory'] }
+      if (requestedTaskId !== taskId || !payload) return
+      payload = {
+        ...payload,
+        task: {
+          ...payload.task,
+          ...(body.gitStory ? { gitStory: body.gitStory } : {}),
+        },
+      }
+    } catch {
+      // The Origin tab still shows the durable task provenance when Git is
+      // unavailable; a live repository snapshot is an optional detail.
+    } finally {
+      if (requestedTaskId === taskId) {
+        loadedExtras = new Set([...loadedExtras, 'git-story'])
+      }
+      loadingExtras = new Set([...loadingExtras].filter(value => value !== 'git-story'))
+    }
+  }
+
+  function eventPayload(event: TaskHistoryEvent): Record<string, unknown> {
+    const payload = event.payload && typeof event.payload === 'object' ? { ...event.payload } : {}
+    if (!payload.timestamp && event.recordedAt) payload.timestamp = event.recordedAt
+    return payload
   }
 
   async function stopDevServer(id: string): Promise<void> {
@@ -383,6 +505,10 @@
     await post('add-acceptance', { description })
   }
 
+  async function handleSetAcceptanceCommand(criterionId: string, command: string) {
+    await post('set-acceptance-command', { criterionId, command })
+  }
+
   function handleOpenReframe() {
     moreActionsOpen = false
     reframeNote = ''
@@ -489,7 +615,26 @@
     return window.confirm(`${action} task ${taskId}?`)
   }
 
-  const task = $derived(payload?.task)
+  const task = $derived.by(() => {
+    const base = payload?.task
+    if (!base) return undefined
+    const next = { ...base } as Task
+    if (taskExtras.historyEvents) {
+      const history = taskExtras.historyEvents
+      next.notes = history.filter(event => event.kind === 'note').map(event => eventPayload(event) as Task['notes'][number])
+      const gates = history.filter(event => event.kind === 'gate_result').map(event => eventPayload(event) as Task['gateResults'][number])
+      const escalations = history.filter(event => event.kind === 'escalation').map(event => eventPayload(event) as Task['escalations'][number])
+      if (gates.length > 0) next.gateResults = gates
+      if (escalations.length > 0) next.escalations = escalations
+    }
+    if (taskExtras.reviewVerdicts) {
+      next.reviewVerdicts = taskExtras.reviewVerdicts.map(event => eventPayload(event) as Task['reviewVerdicts'][number])
+    }
+    if (taskExtras.reviewAdjudications) {
+      next.adjudications = taskExtras.reviewAdjudications.map(event => eventPayload(event) as Task['adjudications'][number])
+    }
+    return next
+  })
   const currentWorkProgress = $derived(task ? payload?.workProgress?.byTaskId?.[task.id] ?? null : null)
   const currentDeliveryBadge = $derived(deliveryProgressBadge(currentWorkProgress))
   const allTaskContext = $derived.by(() => {
@@ -523,12 +668,8 @@
   })
   const runStatus = $derived(payload?.runStatus ?? project.detail?.run?.status ?? 'stopped')
   const availabilityStatus = $derived(payload?.availability?.status ?? project.detail?.availability?.status ?? 'active')
-  const hasCurrentTurns = $derived((payload?.threadTurns?.length ?? 0) > 0)
-  const tabs = $derived(
-    hasCurrentTurns
-      ? ([BASE_TABS[0], { id: 'current', label: 'Action' }, ...BASE_TABS.slice(1)] as const)
-      : BASE_TABS,
-  )
+  const hasCurrentTurns = $derived((taskExtras.threadTurns?.length ?? payload?.threadTurns?.length ?? 0) > 0)
+  const tabs = $derived([BASE_TABS[0], { id: 'current', label: 'Action' }, ...BASE_TABS.slice(1)] as const)
   function isTerminalRunStatus(status: string | undefined): boolean {
     return status === 'done' || status === 'shelved' || status === 'pending_pr'
   }
@@ -541,7 +682,7 @@
 
   const isContainingWorkTask = $derived(Boolean(
     (task?.hierarchy?.childIds?.length ?? 0) > 0 ||
-    readinessRecommendation(task) === 'split',
+    readinessRecommendation(task) === 'requires_child_work',
   ))
   const canReframeTask = $derived(Boolean(
     task &&
@@ -716,22 +857,42 @@
 
   $effect(() => {
     void load()
-    void project.refresh()
   })
 
   $effect(() => {
+    const href = routeHref || navPath.href || currentBrowserHref()
     if (!payload) return
-    if (initializedTabForTaskId === taskId) return
-    const requested = requestedInitialTab()
-    activeTab = requested && (requested !== 'current' || hasCurrentTurns)
-      ? requested
-      : 'overview'
+    const taskChanged = initializedTabForTaskId !== taskId
+    const hrefChanged = initializedTabForHref !== href
+    const requested = requestedInitialTab(href)
+    if (!taskChanged && (!hrefChanged || !requested)) return
+    if (requested && (requested !== 'current' || hasCurrentTurns)) {
+      activeTab = requested
+    } else if (taskChanged) {
+      activeTab = 'overview'
+    }
     initializedTabForTaskId = taskId
+    initializedTabForHref = href
   })
 
   $effect(() => {
     if (activeTab === 'current' && !hasCurrentTurns) {
       activeTab = 'overview'
+    }
+  })
+
+  $effect(() => {
+    if (!payload) return
+    if (activeTab === 'transcript') void loadTaskExtras('transcript')
+    if (activeTab === 'transcript' || activeTab === 'spec' || activeTab === 'history') void loadTaskHistory()
+    if (activeTab === 'journey' || activeTab === 'history') void loadTaskReview()
+    if (activeTab === 'current') {
+      void loadTaskExtras('thread')
+      void loadTaskExtras('context')
+    }
+    if (activeTab === 'provenance') {
+      void loadTaskExtras('context')
+      void loadTaskGitStory()
     }
   })
 
@@ -974,15 +1135,15 @@
       {/if}
       {#if activeTab === 'current'}
         <CurrentTab
-          task={payload.task}
-          turns={payload.threadTurns ?? []}
+          {task}
+          turns={taskExtras.threadTurns ?? payload.threadTurns ?? []}
           {busy}
           {runBusy}
           {runError}
           {runStatus}
           {availabilityStatus}
           {projectStartBlockerMessage}
-          contextDebug={payload.contextDebug ?? []}
+          contextDebug={taskExtras.contextDebug ?? []}
           workProgress={currentWorkProgress}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
@@ -995,7 +1156,7 @@
         />
       {:else if activeTab === 'overview'}
         <OverviewTab
-          task={payload.task}
+          {task}
           tasks={taskLinkContext}
           projectId={scopedProjectId()}
           deliverySpine={payload.deliverySpine}
@@ -1006,7 +1167,7 @@
         />
       {:else if activeTab === 'spec'}
         <SpecTab
-          task={payload.task}
+          {task}
           {busy}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
@@ -1017,17 +1178,30 @@
           onRunEscalationAction={handleRunEscalationAction}
           onSendFollowUp={handleSendFollowUp}
           onAddAcceptance={handleAddAcceptance}
+          onSetAcceptanceCommand={handleSetAcceptanceCommand}
         />
       {:else if activeTab === 'journey'}
-        <JourneyTab task={payload.task} projectId={scopedProjectId()} workProgress={currentWorkProgress} />
+        <JourneyTab {task} projectId={scopedProjectId()} workProgress={currentWorkProgress} />
       {:else if activeTab === 'transcript'}
-        <TranscriptTab task={payload.task} exploringTranscript={payload.exploringTranscript} />
+        {#if loadingExtras.has('transcript')}
+          <p class="loading">Loading transcript...</p>
+        {:else}
+          <TranscriptTab {task} exploringTranscript={taskExtras.exploringTranscript} />
+        {/if}
       {:else if activeTab === 'experts'}
         <ExpertsTab taskId={taskId} />
       {:else if activeTab === 'history'}
-        <HistoryTab task={payload.task} />
+        <HistoryTab {task} />
       {:else if activeTab === 'provenance'}
-        <ProvenanceTab task={payload.task} contextDebug={payload.contextDebug ?? []} />
+        {#if loadingExtras.has('context') || loadingExtras.has('git-story')}
+          <p class="loading">Loading provenance...</p>
+        {:else}
+          <ProvenanceTab
+            {task}
+            contextDebug={taskExtras.contextDebug ?? []}
+            gitStoryLoaded={loadedExtras.has('git-story')}
+          />
+        {/if}
       {/if}
     {/if}
   </div>

@@ -11,6 +11,7 @@ import type { ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
 import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 import { buildEffectiveTask } from '../effective-task.js'
+import { readProjectCanonicalCurrentState } from '../project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // Sequential agent handoff within one task. See
@@ -116,10 +117,14 @@ async function writeTask(task: Task): Promise<void> {
 }
 
 async function readQueue(): Promise<TaskQueue> {
-  const queue = JSON.parse(await fs.readFile(tasksPath, 'utf8')) as TaskQueue
+  const current = await readProjectCanonicalCurrentState(tmpDir)
   return {
-    ...queue,
-    tasks: await Promise.all(queue.tasks.map(async task => buildEffectiveTask(tmpDir, task))) as unknown as Task[],
+    version: 1,
+    ...current.rawQueue,
+    lastUpdated: current.rawQueue.lastUpdated ?? new Date().toISOString(),
+    tasks: await Promise.all(current.rawQueue.tasks.map(task =>
+      buildEffectiveTask(tmpDir, task as Task, { evidence: 'full' }),
+    )) as unknown as Task[],
   }
 }
 

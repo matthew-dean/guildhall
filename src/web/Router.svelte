@@ -58,7 +58,7 @@
 {:else if route.kind === 'project'}
   {#if ProjectView}<ProjectView initialView={route.view} initialSub={route.sub} projectId={route.projectId} />{/if}
   {#if route.drawerTaskId && TaskDrawer}
-    <TaskDrawer taskId={route.drawerTaskId} projectId={route.projectId} onClose={closeDrawer} />
+    <TaskDrawer taskId={route.drawerTaskId} projectId={route.projectId} routeHref={path.href} onClose={closeDrawer} />
   {/if}
 {:else if route.kind === 'setup'}
   <div class="route-document-scroll">

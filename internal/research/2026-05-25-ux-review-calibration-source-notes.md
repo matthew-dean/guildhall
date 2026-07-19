@@ -8,7 +8,7 @@ Date: 2026-05-25
 
 These notes support
 `internal/design-notes/ux-review-calibration-and-work-review-integration.md`
-and `internal/plans/2026-05-25-review-calibration-and-failure-corpus.md`.
+and `internal/plans/archive/2026-05-25-review-calibration-and-failure-corpus.md`.
 
 The goal is not to import someone else's UX methodology wholesale. The goal is
 to ground Guildhall's review-calibration corpus in failure modes that show up
@@ -281,4 +281,3 @@ These are suggested seed cases to build first:
 10. **Confirmation without trust evidence**
     A flow says "done" but does not show what changed, what was saved, or where
     the user can verify it.
-

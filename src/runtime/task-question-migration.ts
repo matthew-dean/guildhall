@@ -1,8 +1,13 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText, getLegacyProjectStatePath } from '@guildhall/sessions'
+import { getLegacyProjectStatePath } from '@guildhall/sessions'
 import { createOwnerInputRequest } from './owner-input-store.js'
 import { normalizeLegacyOwnerQuestion } from './owner-question-normalizer.js'
+import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
+import {
+  assertLegacyCurrentStateMigrationAccess,
+  legacyCurrentStateMigrationAvailable,
+} from './runtime-compatibility.js'
 
 export interface TaskQuestionMigrationInput {
   projectRoot: string
@@ -53,6 +58,10 @@ export async function migrateTaskQuestionsToBoundedChat(
   input: TaskQuestionMigrationInput,
 ): Promise<TaskQuestionMigrationResult> {
   const now = input.now ?? new Date().toISOString()
+  if (!legacyCurrentStateMigrationAvailable(input.projectRoot)) {
+    if (input.apply) assertLegacyCurrentStateMigrationAccess(input.projectRoot, MIGRATION_ID)
+    return { changedTasks: [], createdOwnerInputRequests: [], createdSessions: [], affectedPaths: [] }
+  }
   const file = getLegacyProjectStatePath(input.projectRoot, 'TASKS.json')
   let raw: string
   try {
@@ -140,7 +149,7 @@ export async function migrateTaskQuestionsToBoundedChat(
     const rewritten = Array.isArray(parsed)
       ? tasks
       : { ...queue, lastUpdated: now, tasks }
-    atomicWriteText(file, `${JSON.stringify(rewritten, null, 2)}\n`)
+    writeProjectTaskQueueWithSummary(file, rewritten, { projectRoot: input.projectRoot, fullCompatibility: true })
   }
 
   return {
@@ -193,7 +202,7 @@ function parseQueue(parsed: unknown): QueueShape {
   if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { tasks?: unknown }).tasks)) {
     return parsed as QueueShape
   }
-  return { tasks: [] }
+  throw new Error('Cannot migrate task questions: legacy TASKS.json does not contain a task queue.')
 }
 
 function isQuestion(value: unknown): value is RawQuestion {

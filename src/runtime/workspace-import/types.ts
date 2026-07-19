@@ -31,6 +31,24 @@ export interface WorkspaceSignal {
   /** File paths / commit shas / URLs backing this signal. */
   references?: string[]
   /**
+   * Optional structural role for context-like signals. `capability` means
+   * "show this in the project map as part of the product skeleton" rather than
+   * "turn this into runnable queue work."
+   */
+  role?: 'capability' | 'reference' | 'brief_input'
+  /**
+   * Optional shape hint for structural context. `record` means the signal
+   * names a durable project record (for example "Book brief") rather than a
+   * loose prose note about that record.
+   */
+  structure?: 'record' | 'note'
+  /**
+   * Optional explicit task ids/titles documented as owning this signal's
+   * reference. This lets durable planning docs state "spec X is covered by
+   * task Y" without forcing downstream consumers to guess from title overlap.
+   */
+  linkedTaskHints?: string[]
+  /**
    * Optional project-area hint inferred from the evidence path, such as
    * `knit` or `looma`. This lets the hypothesis former keep nested repo
    * structure instead of flattening everything into a generic core bucket.
@@ -41,6 +59,14 @@ export interface WorkspaceSignal {
    * bounded scope or should stay visible as later/deferred scope.
    */
   scopeHint?: 'current' | 'later'
+  /**
+   * Optional explicit release/scope container documented by the source. This
+   * must come from owner-visible project material, not from generic current vs
+   * later inference.
+   */
+  releaseId?: string
+  /** Owner-visible label for `releaseId`, when the source names one. */
+  releaseLabel?: string
   /** How confident the source is that this signal means what it claims. */
   confidence: 'high' | 'medium' | 'low'
 }

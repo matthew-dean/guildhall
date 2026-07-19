@@ -15,6 +15,7 @@ describe('personaReviewerSystemPrompt', () => {
     expect(prompt).toContain('Expertise includes restraint.')
     expect(prompt).toContain('You are a contributor to the decision, not the sole decision maker.')
     expect(prompt).toContain('Do not write in decree language like "what must change"')
+    expect(prompt).toContain('Do not invent proof commands.')
     expect(prompt).toContain('**If revise, recommended task-local revisions:**')
     expect(prompt).toContain('**Risk if accepted as-is:**')
     expect(prompt).toContain('**Advisory scoring (from your perspective):**')

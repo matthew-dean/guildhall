@@ -60,7 +60,7 @@ Sources used for this audit:
   `Pin Settings and contain settings sections`, and `Prepare Guildhall 0.8.0 release flow`.
 - `internal/audits/flow-audit.md`, especially the current principle and
   follow-up checklist.
-- `internal/plans/2026-05-24-zero-context-flow-user-testing.md`.
+- `internal/plans/archive/2026-05-24-zero-context-flow-user-testing.md`.
 - Current guild principles and rubrics for the Project Manager, Copywriter,
   Frontend Engineer, Visual Designer, Accessibility Specialist, and Test Engineer.
 - Current deterministic/runtime code around `post-user-question`,
@@ -447,7 +447,7 @@ This is the missing agent-review loop.
 
 ### Slice 5: Flow-audit harness
 
-- Turn `internal/plans/2026-05-24-zero-context-flow-user-testing.md` into a
+- Turn `internal/plans/archive/2026-05-24-zero-context-flow-user-testing.md` into a
   runnable Guildhall audit command or project task template.
 - Run it over the canonical flows before 0.8/0.9 release readiness.
 - Persist results back to `artifact:flow-audit`.

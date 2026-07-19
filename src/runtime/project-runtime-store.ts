@@ -2,7 +2,8 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 
-import { getProjectRuntimeContainerHomeDir, getProjectRuntimeStatePath } from '@guildhall/sessions'
+import { getProjectRuntimeContainerHomeDir, getProjectRuntimeStatePath, getProjectSystemStatePath } from '@guildhall/sessions'
+import { updateProjectSummaryProjection } from './project-summary-projection.js'
 
 export type ProjectRuntimeBackendName = 'docker' | 'podman' | 'none'
 export type ProjectRuntimeStatus = 'stopped' | 'creating' | 'running' | 'failed'
@@ -108,7 +109,7 @@ export function defaultProjectRuntimeState(projectRoot: string): ProjectRuntimeS
     status: 'stopped',
     image: {
       repository: 'ghcr.io/matthew-dean/guildhall-runtime-debian',
-      tag: '0.10.0-trixie-node22-python313-playwright',
+      tag: '0.11.0-trixie-node22-python313-playwright',
       digest: null,
     },
     runtimeApiVersion: '1',
@@ -148,7 +149,7 @@ export function defaultProjectRuntimeState(projectRoot: string): ProjectRuntimeS
       runtimeApiVersion: '1',
       image: {
         repository: 'ghcr.io/matthew-dean/guildhall-runtime-debian',
-        tag: '0.10.0-trixie-node22-python313-playwright',
+        tag: '0.11.0-trixie-node22-python313-playwright',
         digest: null,
       },
       mountLayout: {
@@ -211,6 +212,17 @@ export async function writeProjectRuntimeState(
 ): Promise<ProjectRuntimeState> {
   const path = getProjectRuntimeStatePath(projectRoot)
   const next = normalizeProjectRuntimeState(projectRoot, state)
+  // The compact operational projection is authoritative for status reads.
+  // Publish it before the verbose runtime detail file so a crash cannot leave
+  // the status authority behind an older runtime state.
+  updateProjectSummaryProjection(getProjectSystemStatePath(projectRoot, 'TASKS.json'), {
+    runtime: {
+      status: next.status,
+      health: next.health.status,
+      lastActivityAt: next.lastActivityAt,
+      updatedAt: new Date().toISOString(),
+    },
+  })
   await mkdir(dirname(path), { recursive: true })
   await writeManagedTextFile(path, `${JSON.stringify(next, null, 2)}\n`)
   return next

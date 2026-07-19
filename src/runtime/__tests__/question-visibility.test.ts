@@ -66,4 +66,23 @@ describe('visibleOpenQuestions', () => {
 
     expect(visibleOpenQuestions(task)).toEqual([])
   })
+
+  it('filters evidence-summary choice prompts that are not owner decisions', () => {
+    const task = taskWithQuestions([
+      {
+        id: 'q-files',
+        kind: 'choice',
+        prompt: 'The existing schemas already have:',
+        choices: [
+          '`src/schemas/fixture.ts` - `FixtureManifest`, `ExpectedRecordSet`',
+          '`src/schemas/evaluation.ts` - `PrototypeRun`, `RunEvaluation`',
+        ],
+        selectionMode: 'single',
+        askedAt: new Date().toISOString(),
+        askedBy: 'spec-agent',
+      },
+    ])
+
+    expect(visibleOpenQuestions(task)).toEqual([])
+  })
 })

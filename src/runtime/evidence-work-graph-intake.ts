@@ -8,6 +8,7 @@ export type EvidenceSource = {
 export type EvidenceWorkGraphInput = {
   sources: EvidenceSource[]
   existingTasks?: Array<Record<string, unknown>>
+  refreshStructuredExisting?: boolean
 }
 
 export type EvidenceUnit = {
@@ -22,6 +23,9 @@ export type EvidenceUnit = {
   sharedFoundations: string[]
   consumerSurfaces: string[]
   sourceRefs: Array<{ path: string; snippet: string }>
+  sequenceGroup?: string
+  sequenceIndex?: number
+  stageAlignment?: string
 }
 
 export type EvidenceTask = {
@@ -36,9 +40,11 @@ export type EvidenceTask = {
   dependsOn: string[]
   relatedTasks: Array<{ taskId: string; relationship: 'blocks' | 'related'; reason: string }>
   consumerSurface?: string
+  sourceRefs: Array<{ path: string; snippet: string }>
   acceptanceCriteria: Array<{ id: string; description: string; verifiedBy?: string }>
-  proofPaths: Array<{ kind: 'command' | 'review' | 'browser'; command?: string; expectedEvidence?: string[] }>
+  proofPaths: Array<{ kind: 'command' | 'review' | 'browser'; command?: string; expectedEvidence?: string[]; source?: 'documented' | 'inferred' }>
   status?: string
+  stageAlignment?: string
   supersedesVagueIntake?: boolean
 }
 
@@ -46,6 +52,7 @@ export type EvidenceWorkGraphPlan = {
   units: EvidenceUnit[]
   tasks: EvidenceTask[]
   reconciliations: Array<{ existingTaskId: string; action: 'reframed_existing_task'; reason: string }>
+  suppressedTaskTitles: string[]
 }
 
 type UnitSeed = {
@@ -57,6 +64,9 @@ type UnitSeed = {
   row: string
   titleMode?: 'deliverable' | 'verbatim'
   explicitTargetArea?: string
+  sequenceGroup?: string
+  sequenceIndex?: number
+  stageAlignment?: string
 }
 
 type ExistingTaskMatch = {
@@ -67,12 +77,21 @@ type ExistingTaskMatch = {
 }
 
 const DONEISH_STATUSES = new Set(['done', 'review', 'gate_check'])
+const NON_BLOCKING_DEPENDENCY_STATUSES = new Set(['archived', 'shelved'])
+const STRUCTURED_PLAN_STATUSES = new Set(['ready', 'spec_review'])
 const workGraphDomainAdapter = genericWorkGraphDomainAdapter
 
 export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWorkGraphPlan {
   const currentMilestoneStage = detectCurrentMilestoneStage(input.sources)
-  const units = input.sources.flatMap(source => extractUnits(source, currentMilestoneStage))
+  const suppressRoadmapStageDeliverables = true
+  const suppressedTaskTitles = suppressRoadmapStageDeliverables
+    ? input.sources.flatMap(source => extractRoadmapStageDeliverableSeeds(source).map(seed => seed.deliverable))
+    : []
+  const units = input.sources.flatMap(source =>
+    extractUnits(source, currentMilestoneStage, { suppressRoadmapStageDeliverables }),
+  )
   const existingTasks = input.existingTasks ?? []
+  const refreshStructuredExisting = input.refreshStructuredExisting === true
   const tasks: EvidenceTask[] = []
   const reconciliations: EvidenceWorkGraphPlan['reconciliations'] = []
   const implementationByDeliverable = new Map<string, EvidenceTask>()
@@ -81,11 +100,11 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
     const existingMatch = findExistingTaskForUnit(unit, existingTasks)
     const isAlreadyShipped = unit.statusHint === 'shipped' || isExistingDone(existingMatch)
 
-    if (isAlreadyShipped && !existingMatch) {
+    if (isAlreadyShipped && (!existingMatch || isExistingNonBlockingDependency(existingMatch))) {
       continue
     }
 
-    if (isAlreadyShipped && existingMatch?.structuredEnough) {
+    if (existingMatch?.structuredEnough && !refreshStructuredExisting) {
       continue
     }
 
@@ -108,7 +127,7 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
       continue
     }
 
-    const dependencies = dependenciesFor(unit, existingTasks, implementationByDeliverable)
+    const dependencies = dependenciesFor(unit, existingTasks, implementationByDeliverable, units)
     task.dependsOn = dependencies.taskIds
     task.relatedTasks = dependencies.relatedTasks
   }
@@ -122,11 +141,15 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
     tasks.push(integrationTask)
   }
 
-  return { units, tasks, reconciliations }
+  return { units, tasks, reconciliations, suppressedTaskTitles }
 }
 
-function extractUnits(source: EvidenceSource, currentMilestoneStage: string | null): EvidenceUnit[] {
-  return extractSeeds(source, currentMilestoneStage).map(seed => {
+function extractUnits(
+  source: EvidenceSource,
+  currentMilestoneStage: string | null,
+  options: { suppressRoadmapStageDeliverables: boolean },
+): EvidenceUnit[] {
+  return extractSeeds(source, currentMilestoneStage, options).map(seed => {
     const statusHint = inferStatusHint(seed.need)
     const workShape = inferWorkShape(seed)
     const targetArea = inferTargetArea(seed)
@@ -146,15 +169,23 @@ function extractUnits(source: EvidenceSource, currentMilestoneStage: string | nu
       sharedFoundations,
       consumerSurfaces: parseConsumers(seed.consumer),
       sourceRefs: [{ path: seed.path, snippet: seed.row }],
+      ...(seed.sequenceGroup ? { sequenceGroup: seed.sequenceGroup } : {}),
+      ...(typeof seed.sequenceIndex === 'number' ? { sequenceIndex: seed.sequenceIndex } : {}),
+      ...(seed.stageAlignment ? { stageAlignment: seed.stageAlignment } : {}),
     }
   })
 }
 
-function extractSeeds(source: EvidenceSource, currentMilestoneStage: string | null): UnitSeed[] {
+function extractSeeds(
+  source: EvidenceSource,
+  currentMilestoneStage: string | null,
+  options: { suppressRoadmapStageDeliverables: boolean },
+): UnitSeed[] {
   return [
     ...extractTableSeeds(source),
     ...extractRoadmapMilestoneSeeds(source),
-    ...extractRecommendedTaskSeeds(source, currentMilestoneStage),
+    ...(options.suppressRoadmapStageDeliverables ? [] : extractRoadmapStageDeliverableSeeds(source)),
+    ...extractRecommendedTaskSeeds(source),
   ]
 }
 
@@ -203,12 +234,14 @@ function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
   const seeds: UnitSeed[] = []
   const currentMilestoneStage = detectCurrentMilestoneStage([{ path: source.path, content: source.content }])
   let inCurrentMilestone = false
+  let currentMilestoneTaskIndex = 0
 
   for (const line of lines) {
     const heading = /^##\s+(.+?)\s*$/.exec(line)
     if (heading) {
       const currentHeading = heading[1]!.trim()
       inCurrentMilestone = /^current next milestone$/i.test(currentHeading)
+      if (inCurrentMilestone) currentMilestoneTaskIndex = 0
       continue
     }
 
@@ -223,6 +256,7 @@ function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
 
     const title = stripInlineCode(numbered[1]!.trim())
     if (!title) continue
+    currentMilestoneTaskIndex += 1
     seeds.push({
       path: source.path,
       deliverable: title,
@@ -232,13 +266,85 @@ function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
       row: line.trim(),
       titleMode: 'verbatim',
       explicitTargetArea: inferRoadmapTargetArea(source.path),
+      sequenceGroup: `${source.path}#current-next-milestone`,
+      sequenceIndex: currentMilestoneTaskIndex,
     })
   }
 
   return seeds
 }
 
-function extractRecommendedTaskSeeds(source: EvidenceSource, currentMilestoneStage: string | null): UnitSeed[] {
+function extractRoadmapStageDeliverableSeeds(source: EvidenceSource): UnitSeed[] {
+  const lines = logicalMarkdownLines(source.content)
+  const seeds: UnitSeed[] = []
+  let currentStageHeading = ''
+  let currentStageGoal = ''
+  let currentStageIndex: number | null = null
+  let inDeliverables = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const heading = /^##\s+(.+?)\s*$/.exec(line)
+    if (heading) {
+      currentStageHeading = heading[1]!.trim()
+      const stageNumber = /^Stage\s+(\d+)\b/i.exec(currentStageHeading)?.[1]
+      currentStageIndex = stageNumber ? Number(stageNumber) : null
+      currentStageGoal = ''
+      inDeliverables = false
+      continue
+    }
+
+    if (!currentStageHeading || /^current next milestone$/i.test(currentStageHeading)) {
+      continue
+    }
+
+    const goal = /^Goal:\s+(.+?)\s*$/i.exec(trimmed)
+    if (goal) {
+      currentStageGoal = stripInlineCode(goal[1]!.trim())
+      continue
+    }
+
+    if (/^Deliverables:\s*$/i.test(trimmed)) {
+      inDeliverables = true
+      continue
+    }
+
+    if (!inDeliverables) {
+      continue
+    }
+
+    const bullet = /^\s*[-*]\s+(.+?)\s*$/.exec(line)
+    if (!bullet) {
+      if (trimmed.length === 0) continue
+      inDeliverables = false
+      continue
+    }
+
+    if (currentStageIndex !== null && currentStageIndex <= 1) {
+      continue
+    }
+
+    const deliverable = stripInlineCode(bullet[1]!.trim())
+    if (!deliverable) continue
+
+    seeds.push({
+      path: source.path,
+      deliverable,
+      need: currentStageGoal
+        ? `${currentStageHeading}. ${currentStageGoal}`
+        : `${currentStageHeading} deliverable.`,
+      foundation: currentStageHeading,
+      consumer: '',
+      row: trimmed,
+      titleMode: 'verbatim',
+      explicitTargetArea: inferRoadmapTargetArea(source.path),
+    })
+  }
+
+  return seeds
+}
+
+function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
   const lines = logicalMarkdownLines(source.content)
   const seeds: UnitSeed[] = []
   let currentEntry = ''
@@ -248,12 +354,11 @@ function extractRecommendedTaskSeeds(source: EvidenceSource, currentMilestoneSta
 
   const flush = () => {
     const title = stripInlineCode(currentRecommendedTitle.trim())
-    if (!title || /^\(?none\b/i.test(title)) {
-      currentRecommendedTitle = ''
-      return
-    }
-    const normalizedAlignment = normalizeStageLabel(currentStageAlignment)
-    if (currentMilestoneStage && normalizedAlignment && normalizedAlignment !== currentMilestoneStage) {
+    const normalizedTitle = title
+      .toLowerCase()
+      .replace(/[`*_~]/g, '')
+      .trim()
+    if (!normalizedTitle || /^\(?none\b/i.test(normalizedTitle) || isResolvedRecommendedTaskTitle(currentRecommendedTitle)) {
       currentRecommendedTitle = ''
       return
     }
@@ -268,6 +373,7 @@ function extractRecommendedTaskSeeds(source: EvidenceSource, currentMilestoneSta
       row: `Recommended first task title: ${title}`,
       titleMode: 'verbatim',
       explicitTargetArea: currentDomain && !/^\*?\(none/i.test(currentDomain) ? currentDomain : undefined,
+      ...(currentStageAlignment ? { stageAlignment: normalizeStageLabel(currentStageAlignment) } : {}),
     })
     currentRecommendedTitle = ''
   }
@@ -306,6 +412,13 @@ function extractRecommendedTaskSeeds(source: EvidenceSource, currentMilestoneSta
   return seeds
 }
 
+function isResolvedRecommendedTaskTitle(value: string): boolean {
+  return (
+    /~~.+?~~/.test(value) &&
+    /\b(done|resolved|complete|completed|shipped|recovered)\b/i.test(value)
+  )
+}
+
 function detectCurrentMilestoneStage(sources: readonly EvidenceSource[]): string | null {
   for (const source of sources) {
     const match = source.content.match(/##\s+Current Next Milestone[\s\S]{0,400}?The next milestone is\s+(Stage\s+\d+)/i)
@@ -320,6 +433,11 @@ function normalizeStageLabel(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+function stageNumber(value: string): number | null {
+  const match = /^stage\s+(\d+)\b/i.exec(value.trim())
+  return match?.[1] ? Number(match[1]) : null
+}
+
 function logicalMarkdownLines(raw: string): string[] {
   const physicalLines = raw.split(/\r?\n/)
   const logicalLines: string[] = []
@@ -330,8 +448,17 @@ function logicalMarkdownLines(raw: string): string[] {
       logicalLines.push(line)
       continue
     }
-    while (index + 1 < physicalLines.length && isListContinuationLine(physicalLines[index + 1] ?? '')) {
-      line = `${line.trimEnd()} ${(physicalLines[index + 1] ?? '').trim()}`
+    while (index + 1 < physicalLines.length) {
+      const nextLine = physicalLines[index + 1] ?? ''
+      if (isListCompletionAnnotation(nextLine.trim())) {
+        index += 1
+        while (index + 1 < physicalLines.length && isListMetadataContinuationLine(physicalLines[index + 1] ?? '')) {
+          index += 1
+        }
+        continue
+      }
+      if (!isListContinuationLine(nextLine)) break
+      line = `${line.trimEnd()} ${nextLine.trim()}`
       index += 1
     }
     logicalLines.push(line)
@@ -347,7 +474,18 @@ function startsListItem(line: string): boolean {
 function isListContinuationLine(line: string): boolean {
   if (!/^\s{2,}\S/.test(line)) return false
   const trimmed = line.trim()
+  if (isListCompletionAnnotation(trimmed)) return false
   return !/^(?:#{1,6}\s+|\|(?:.+)\||[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(trimmed)
+}
+
+function isListMetadataContinuationLine(line: string): boolean {
+  if (!/^\s{2,}\S/.test(line)) return false
+  const trimmed = line.trim()
+  return !/^(?:#{1,6}\s+|\|(?:.+)\||[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(trimmed)
+}
+
+function isListCompletionAnnotation(trimmed: string): boolean {
+  return /^(?:[✓✔✅]\s*)?(?:completed?|done|shipped|verified|proof|evidence)\b/i.test(trimmed)
 }
 
 function buildImplementationTask(unit: EvidenceUnit, existingMatch?: ExistingTaskMatch): EvidenceTask {
@@ -365,9 +503,11 @@ function buildImplementationTask(unit: EvidenceUnit, existingMatch?: ExistingTas
     sharedFoundations: unit.sharedFoundations,
     dependsOn: [],
     relatedTasks: [],
+    sourceRefs: unit.sourceRefs,
     acceptanceCriteria: implementationAcceptanceCriteria(unit),
     proofPaths: implementationProofPaths(unit),
     status: supersedesVagueIntake ? 'spec_review' : undefined,
+    ...(unit.stageAlignment ? { stageAlignment: unit.stageAlignment } : {}),
     supersedesVagueIntake,
   }
 }
@@ -393,7 +533,7 @@ function buildIntegrationTask(
     }
 
     const existingDependency = findExistingTaskByDeliverable(foundation, existingTasks)
-    if (existingDependency && !isExistingDone(existingDependency)) {
+    if (existingDependency && !isExistingDone(existingDependency) && !isExistingNonBlockingDependency(existingDependency)) {
       dependsOn.add(existingDependency.id)
     }
   }
@@ -409,6 +549,7 @@ function buildIntegrationTask(
     dependsOn: Array.from(dependsOn),
     relatedTasks: [],
     consumerSurface,
+    sourceRefs: unit.sourceRefs,
     acceptanceCriteria: integrationAcceptanceCriteria(),
     proofPaths: integrationProofPaths(unit),
   }
@@ -418,9 +559,11 @@ function dependenciesFor(
   unit: EvidenceUnit,
   existingTasks: Array<Record<string, unknown>>,
   implementationByDeliverable: Map<string, EvidenceTask>,
+  units: EvidenceUnit[],
 ): Pick<EvidenceTask, 'dependsOn' | 'relatedTasks'> & { taskIds: string[] } {
   const taskIds: string[] = []
   const relatedTasks: EvidenceTask['relatedTasks'] = []
+  const currentTaskId = implementationByDeliverable.get(unit.name)?.id
 
   for (const foundation of unit.buildsOn) {
     const normalizedFoundation = normalizeDeliverableName(foundation)
@@ -436,7 +579,8 @@ function dependenciesFor(
     }
 
     const existingTask = findExistingTaskByDeliverable(foundation, existingTasks)
-    if (existingTask && !isExistingDone(existingTask)) {
+    if (existingTask?.id === currentTaskId) continue
+    if (existingTask && !isExistingDone(existingTask) && !isExistingNonBlockingDependency(existingTask)) {
       taskIds.push(existingTask.id)
       relatedTasks.push({
         taskId: existingTask.id,
@@ -446,7 +590,71 @@ function dependenciesFor(
     }
   }
 
+  if (unit.sequenceGroup && typeof unit.sequenceIndex === 'number' && unit.sequenceIndex > 1) {
+    const previousUnit = units.find(candidate =>
+      candidate.sequenceGroup === unit.sequenceGroup &&
+      candidate.sequenceIndex === unit.sequenceIndex! - 1,
+    )
+    if (previousUnit) {
+      const previousTask = implementationByDeliverable.get(previousUnit.name)
+      if (previousTask && !taskIds.includes(previousTask.id)) {
+        taskIds.push(previousTask.id)
+        relatedTasks.push({
+          taskId: previousTask.id,
+          relationship: 'blocks',
+          reason: `${unit.name} comes after ${previousUnit.name} in the roadmap starter sequence.`,
+        })
+      }
+    }
+  }
+
+  const currentMilestoneDependency = dependencyForLaterStageUnit(unit, units, implementationByDeliverable)
+  if (currentMilestoneDependency && !taskIds.includes(currentMilestoneDependency.taskId)) {
+    taskIds.push(currentMilestoneDependency.taskId)
+    relatedTasks.push({
+      taskId: currentMilestoneDependency.taskId,
+      relationship: 'blocks',
+      reason: currentMilestoneDependency.reason,
+    })
+  }
+
   return { taskIds: unique(taskIds), dependsOn: unique(taskIds), relatedTasks }
+}
+
+function dependencyForLaterStageUnit(
+  unit: EvidenceUnit,
+  units: EvidenceUnit[],
+  implementationByDeliverable: Map<string, EvidenceTask>,
+): { taskId: string; reason: string } | null {
+  if (!unit.stageAlignment) return null
+  const alignedStageNumber = stageNumber(unit.stageAlignment)
+  if (alignedStageNumber === null) return null
+
+  const milestoneUnits = units
+    .filter(candidate => candidate.sequenceGroup?.includes('#current-next-milestone') && typeof candidate.sequenceIndex === 'number')
+    .sort((left, right) => (left.sequenceIndex ?? 0) - (right.sequenceIndex ?? 0))
+  if (milestoneUnits.length === 0) return null
+
+  const milestoneStageLabels = unique(
+    milestoneUnits
+      .flatMap(candidate => candidate.buildsOn)
+      .map(label => normalizeStageLabel(label))
+      .filter(label => stageNumber(label) !== null),
+  )
+  const activeMilestoneStage = milestoneStageLabels[0] ?? null
+  const activeMilestoneStageNumber = activeMilestoneStage ? stageNumber(activeMilestoneStage) : null
+  if (activeMilestoneStageNumber === null || alignedStageNumber <= activeMilestoneStageNumber) {
+    return null
+  }
+
+  const terminalMilestoneUnit = milestoneUnits[milestoneUnits.length - 1]
+  if (!terminalMilestoneUnit) return null
+  const terminalTask = implementationByDeliverable.get(terminalMilestoneUnit.name)
+  if (!terminalTask) return null
+  return {
+    taskId: terminalTask.id,
+    reason: `${unit.name} is stage-aligned after the current milestone and should wait for ${terminalMilestoneUnit.name}.`,
+  }
 }
 
 function implementationAcceptanceCriteria(unit: EvidenceUnit): EvidenceTask['acceptanceCriteria'] {
@@ -551,21 +759,34 @@ function inferStatusHint(need: string): EvidenceUnit['statusHint'] {
 
 function inferTargetArea(seed: UnitSeed): string {
   if (seed.explicitTargetArea?.trim()) {
-    return normalizeDeliverableName(seed.explicitTargetArea.trim())
+    return normalizeTargetArea(seed.explicitTargetArea.trim())
   }
   const { path, deliverable } = seed
   const releaseFixture = path.match(/(?:^|\/)release-proof-matrix\/([^/]+)/)
   if (releaseFixture?.[1]) {
     return releaseFixture[1]
   }
-  const firstPathSegment = path.split('/').find(Boolean)
+  const pathSegments = path.split('/').filter(Boolean)
+  const firstPathSegment = pathSegments[0]
   if (firstPathSegment && !['docs', 'internal'].includes(firstPathSegment)) {
     return firstPathSegment
+  }
+  const documentArea = pathSegments[1]
+  if (documentArea && !['docs', 'internal'].includes(documentArea)) {
+    return documentArea
   }
   if (/dashboard integration/i.test(deliverable)) {
     return 'Admin settings page'
   }
-  return firstPathSegment ?? 'project'
+  return documentArea ?? firstPathSegment ?? 'project'
+}
+
+function normalizeTargetArea(value: string): string {
+  const trimmed = value.trim()
+  if (/^[a-z0-9-]+$/.test(trimmed)) {
+    return trimmed
+  }
+  return normalizeDeliverableName(trimmed)
 }
 
 function inferRoadmapTargetArea(path: string): string {
@@ -671,12 +892,14 @@ function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array
 
     const matches = exactFields.some(value => normalizeForMatch(value) === normalized)
       || textFields.some(value => deliverablePattern.test(value.toLowerCase()))
-    if (!matches) {
+    if (!matches && !similarSourceTitleMatch(deliverable, textFields)) {
       continue
     }
 
     const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : []
     const dependsOn = Array.isArray(task.dependsOn) ? task.dependsOn : []
+    const references = Array.isArray(task.references) ? task.references : []
+    const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
     const productBrief = task.productBrief && typeof task.productBrief === 'object' && !Array.isArray(task.productBrief)
       ? task.productBrief as Record<string, unknown>
       : null
@@ -685,13 +908,24 @@ function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array
       && typeof productBrief?.successMetric === 'string' && productBrief.successMetric.trim().length > 0
     const spec = typeof task.spec === 'string' ? task.spec : ''
     const hasStructuredSpec = Boolean(task.structuredSpec && typeof task.structuredSpec === 'object' && !Array.isArray(task.structuredSpec))
+    const status = typeof task.status === 'string' ? task.status : undefined
+    const hasSourceBackedPlanShape = Boolean(
+      status &&
+      STRUCTURED_PLAN_STATUSES.has(status) &&
+      hasBriefShape &&
+      spec.trim().length > 0 &&
+      references.length > 0 &&
+      acceptanceCriteria.length > 0 &&
+      proofPaths.length > 0,
+    )
     const structuredEnough = hasStructuredSpec
       || (markdownLooksLikeModernSpec(spec) && hasBriefShape && acceptanceCriteria.length > 0)
       || (hasBriefShape && acceptanceCriteria.length > 0 && dependsOn.length > 0)
+      || hasSourceBackedPlanShape
 
     return {
       id,
-      status: typeof task.status === 'string' ? task.status : undefined,
+      status,
       producedArtifact: typeof task.producedArtifact === 'string' ? task.producedArtifact : undefined,
       structuredEnough,
     }
@@ -700,8 +934,30 @@ function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array
   return undefined
 }
 
+function similarSourceTitleMatch(deliverable: string, textFields: string[]): boolean {
+  const sourceTokens = meaningfulTitleTokens(deliverable)
+  if (sourceTokens.length < 4) return false
+  return textFields.some((value) => {
+    const candidateTokens = meaningfulTitleTokens(value)
+    if (candidateTokens.length < sourceTokens.length) return false
+    if (candidateTokens.length > Math.ceil(sourceTokens.length * 1.6)) return false
+    return sourceTokens.every(token => candidateTokens.includes(token))
+  })
+}
+
+function meaningfulTitleTokens(value: string): string[] {
+  const stopWords = new Set(['add', 'build', 'create', 'define', 'implement', 'the', 'a', 'an', 'and', 'for', 'from', 'into', 'one'])
+  return [...new Set(slugify(value)
+    .split('-')
+    .filter(token => token.length >= 4 && !stopWords.has(token)))]
+}
+
 function isExistingDone(task: ExistingTaskMatch | undefined): boolean {
   return task?.status ? DONEISH_STATUSES.has(task.status) : false
+}
+
+function isExistingNonBlockingDependency(task: ExistingTaskMatch | undefined): boolean {
+  return task?.status ? NON_BLOCKING_DEPENDENCY_STATUSES.has(task.status) : false
 }
 
 function normalizeDeliverableName(value: string): string {

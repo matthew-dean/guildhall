@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { getProjectRuntimeCommandEvidencePath } from '@guildhall/sessions'
+import { getProjectRuntimeCommandEvidencePath, promoteProjectStateDatabaseAuthority } from '@guildhall/sessions'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
+import { setProvider } from '../../config/global-providers.js'
 import {
   ProjectRuntimeSupervisor,
 } from '../project-runtime-supervisor.js'
@@ -180,6 +181,17 @@ describe('project runtime command execution', () => {
     ])
   })
 
+  it('does not reopen legacy command evidence after project-state promotion', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'guildhall-runtime-command-promoted-'))
+    const legacyFile = getProjectRuntimeCommandEvidencePath(projectRoot)
+    await mkdir(dirname(legacyFile), { recursive: true })
+    await writeFile(legacyFile, `${JSON.stringify({ id: 'cmd-stale' })}\n`, 'utf8')
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    await expect(readRuntimeCommandEvidence(projectRoot))
+      .rejects.toThrow(/migration required before ordinary reads/i)
+  })
+
   it('migrates legacy command evidence JSONL to persistence and removes the legacy file', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'guildhall-runtime-command-migrate-'))
     const legacyFile = getProjectRuntimeCommandEvidencePath(projectRoot)
@@ -255,5 +267,55 @@ describe('project runtime command execution', () => {
       status: 'timed_out',
       error: 'Command timed out after 1ms.',
     })
+  })
+
+  it('passes configured provider credentials to commands without persisting secrets in evidence', async () => {
+    const previousHome = process.env.GUILDHALL_CONFIG_DIR
+    const previousOpenAiKey = process.env.OPENAI_API_KEY
+    const previousOpenAiBaseUrl = process.env.OPENAI_BASE_URL
+    const previousDeepinfraToken = process.env.DEEPINFRA_API_TOKEN
+    const home = await mkdtemp(join(tmpdir(), 'guildhall-runtime-provider-home-'))
+    process.env.GUILDHALL_CONFIG_DIR = home
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_BASE_URL
+    delete process.env.DEEPINFRA_API_TOKEN
+    try {
+      setProvider('openai-api', {
+        apiKey: 'fake-deepinfra-key',
+        baseUrl: 'https://api.deepinfra.com/v1/openai',
+      })
+      const projectRoot = await mkdtemp(join(tmpdir(), 'guildhall-runtime-provider-'))
+      const backend = new CommandBackend()
+      const supervisor = new ProjectRuntimeSupervisor({ backend })
+
+      const result = await supervisor.runCommand(projectRoot, {
+        projectId: 'demo',
+        cwd: '/workspace/demo',
+        argv: ['pnpm', 'prove:deepinfra-drafting-model'],
+        env: {},
+        timeoutMs: 5_000,
+        expectedPorts: [],
+        taskId: 'task-provider-proof',
+      })
+
+      expect(result.exitCode).toBe(0)
+      expect(backend.requests[0]?.env).toMatchObject({
+        OPENAI_API_KEY: 'fake-deepinfra-key',
+        OPENAI_BASE_URL: 'https://api.deepinfra.com/v1/openai',
+        DEEPINFRA_API_TOKEN: 'fake-deepinfra-key',
+      })
+      expect(result.request.env).toEqual({})
+      const records = await readRuntimeCommandEvidence(projectRoot)
+      expect(records[0]?.request.env).toEqual({})
+    } finally {
+      if (previousHome === undefined) delete process.env.GUILDHALL_CONFIG_DIR
+      else process.env.GUILDHALL_CONFIG_DIR = previousHome
+      if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = previousOpenAiKey
+      if (previousOpenAiBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
+      else process.env.OPENAI_BASE_URL = previousOpenAiBaseUrl
+      if (previousDeepinfraToken === undefined) delete process.env.DEEPINFRA_API_TOKEN
+      else process.env.DEEPINFRA_API_TOKEN = previousDeepinfraToken
+    }
   })
 })

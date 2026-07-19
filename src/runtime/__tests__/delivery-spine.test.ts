@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectStateDir, subscribeProjectSummaryInvalidations } from '@guildhall/sessions'
 
 import {
   applyContractChangeSet,
@@ -119,6 +119,22 @@ describe('project-local delivery spine', () => {
     await expect(fs.stat(path.join(getProjectStateDir(projectRoot), 'delivery-spine.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     })
+  })
+
+  it('emits a delivery-scoped invalidation without requesting a full detail rebuild', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-delivery-spine-invalidation-'))
+    const events: Array<{ domains: readonly string[] }> = []
+    const unsubscribe = subscribeProjectSummaryInvalidations(event => {
+      if (event.projectRoot === projectRoot) events.push({ domains: event.domains })
+    })
+    try {
+      await writeProjectDeliveryModel(projectRoot, model)
+      await Promise.resolve()
+      expect(events).toEqual([{ domains: ['delivery', 'attention'] }])
+    } finally {
+      unsubscribe()
+      await fs.rm(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('records the schema migration decision for persisted primitive and delivery state', () => {
@@ -353,7 +369,65 @@ describe('project-local delivery spine', () => {
     ]))
   })
 
-  it('plans decomposition children without persisted split recommendations', () => {
+  it('plans decomposition children from explicit work-unit analysis without persisted split recommendations', () => {
+    const parent = task({
+      id: 'task-context-menu',
+      title: 'ContextMenu package',
+      description: 'Build ContextMenu implementation and Storybook proof for the menu primitive.',
+      status: 'spec_review',
+      delivery: { driver: 'knit', provider: 'looma', usesPrimitives: ['menu'] },
+      workUnitAnalysis: {
+        summary: 'Two independently deliverable units.',
+        units: [
+          {
+            id: 'implementation',
+            title: 'ContextMenu component implementation',
+            deliverable: 'ContextMenu works against the menu primitive.',
+            rationale: 'Implementation lands before proof.',
+            dependsOn: [],
+          },
+          {
+            id: 'proof',
+            title: 'ContextMenu Storybook proof',
+            deliverable: 'Storybook demonstrates the component states.',
+            rationale: 'Proof is a separate deliverable from the component implementation.',
+            dependsOn: ['implementation'],
+          },
+        ],
+        proofOnlyItems: [],
+        createdAt: now,
+        createdBy: 'test',
+      },
+      sizePlan: {
+        taskId: 'task-context-menu',
+        score: 5,
+        band: 'large',
+        action: 'decompose_before_execution',
+        factors: [],
+        recommendedChildren: [],
+        createdAt: now,
+        createdBy: 'task-sizing',
+      },
+    })
+
+    const plan = planTaskSplit({ model, tasks: [parent], taskId: parent.id })
+
+    expect(plan.errors).toEqual([])
+    expect(plan.action).toBe('decompose_before_execution')
+    expect(plan.children).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: 'ContextMenu component implementation',
+        dependsOn: [],
+      }),
+      expect.objectContaining({
+        title: 'ContextMenu Storybook proof',
+        dependsOn: ['task-context-menu-split-contextmenu-component-implementation'],
+      }),
+    ]))
+    expect(plan.children.every(child => child.plannedTaskId.startsWith('task-context-menu-split-'))).toBe(true)
+  })
+
+  it('requires explicit work-unit analysis before planning decomposition children', () => {
     const parent = task({
       id: 'task-context-menu',
       title: 'ContextMenu package',
@@ -374,10 +448,13 @@ describe('project-local delivery spine', () => {
 
     const plan = planTaskSplit({ model, tasks: [parent], taskId: parent.id })
 
-    expect(plan.errors).toEqual([])
-    expect(plan.action).toBe('decompose_before_execution')
-    expect(plan.children.length).toBeGreaterThanOrEqual(2)
-    expect(plan.children.every(child => child.plannedTaskId.startsWith('task-context-menu-split-'))).toBe(true)
+    expect(plan.children).toEqual([])
+    expect(plan.errors).toEqual([
+      expect.objectContaining({
+        code: 'missing_split_plan',
+        path: 'tasks.task-context-menu.workUnitAnalysis',
+      }),
+    ])
   })
 
   it('adds primitive-proof split children for unready primitives without existing proving work', () => {
@@ -463,6 +540,62 @@ describe('project-local delivery spine', () => {
       expect.objectContaining({ field: 'delivery.usesPrimitives' }),
       expect.objectContaining({ field: 'delivery.driver' }),
     ]))
+  })
+
+  it('reuses precomputed relationships without changing the context packet', () => {
+    const tasks = [
+      task({
+        id: 'task-component',
+        title: 'Component implementation',
+        workKind: 'component',
+        delivery: { driver: 'knit', provider: 'looma', supports: ['task-context-menu'], usesPrimitives: ['menu', 'menu-item'] },
+      }),
+    ]
+    const relationships = deriveTaskRelationships({ model, tasks, taskId: 'task-component' })
+    const expected = buildTaskContextPacket({ model, tasks, taskId: 'task-component', now })
+    const actual = buildTaskContextPacket({
+      model,
+      tasks: [],
+      taskId: 'task-component',
+      now,
+      relationships,
+    })
+
+    expect(actual).toEqual(expected)
+  })
+
+  it('does not mark imported source-recovery tasks runnable before the brief is repaired', () => {
+    const tasks = [
+      task({
+        id: 'task-imported-contract',
+        title: 'Recover source-backed contract surface',
+        status: 'import_draft',
+        notes: [{
+          agentId: 'workspace-importer',
+          role: 'importer',
+          content: 'Imported from docs/specs/editor-writer-feedback-chain.md',
+        }],
+        taskReadiness: {
+          recommendation: 'needs_research_spike',
+          summary: 'Needs concrete contract names before worker handoff.',
+        },
+      }),
+    ]
+
+    const packet = buildTaskContextPacket({ model, tasks, taskId: 'task-imported-contract' })
+
+    expect(packet.executionOrder.runnableNow).toBe(false)
+    expect(packet.executionOrder.shapingBlockers).toEqual([
+      expect.objectContaining({
+        code: 'imported_brief_shaping',
+        summary: 'Imported current work needs a real brief before Guildhall can build unattended.',
+      }),
+      expect.objectContaining({
+        code: 'source_recovery',
+        summary: 'Needs concrete contract names before worker handoff.',
+      }),
+    ])
+    expect(packet.whyThisNow).toContain('after Guildhall repairs the source-backed brief')
   })
 
   it('selects deterministic personas for component, primitive, proof, security, data, and runtime contexts', () => {

@@ -1,6 +1,12 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText, getProjectSystemStatePath } from '@guildhall/sessions'
+import { getProjectMigrationSnapshotDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
+import { writeMigrationSnapshot } from './migration-snapshot.js'
+import {
+  assertLegacyCurrentStateMigrationAccess,
+  legacyCurrentStateMigrationAvailable,
+} from './runtime-compatibility.js'
 
 export interface WorkDecompositionMigrationInput {
   projectRoot: string
@@ -13,6 +19,7 @@ export interface WorkDecompositionMigrationResult {
   createdActions: string[]
   affectedPaths: string[]
   backupPath?: string
+  manifestPath?: string
 }
 
 interface RawExecutionPlanAction {
@@ -57,7 +64,11 @@ function tasksPath(projectRoot: string): string {
 }
 
 function backupPath(projectRoot: string): string {
-  return getProjectSystemStatePath(projectRoot, 'TASKS.before-0.11.0-execution-planning-decomposition.json')
+  return path.join(
+    getProjectMigrationSnapshotDir(projectRoot),
+    'execution-planning-decomposition',
+    'TASKS.before-0.11.0-execution-planning-decomposition.json',
+  )
 }
 
 function parseQueue(raw: string): QueueShape {
@@ -66,7 +77,7 @@ function parseQueue(raw: string): QueueShape {
   if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { tasks?: unknown }).tasks)) {
     return parsed as QueueShape
   }
-  return { tasks: [] }
+  throw new Error('Cannot migrate work decomposition: legacy TASKS.json does not contain a task queue.')
 }
 
 function taskId(task: RawTask): string | null {
@@ -135,6 +146,10 @@ function markChildRelations(childIds: string[], tasksById: Map<string, RawTask>)
 export async function migrateWorkDecompositionState(
   input: WorkDecompositionMigrationInput,
 ): Promise<WorkDecompositionMigrationResult> {
+  if (!legacyCurrentStateMigrationAvailable(input.projectRoot)) {
+    if (input.apply) assertLegacyCurrentStateMigrationAccess(input.projectRoot, MIGRATION_ID)
+    return { changedTasks: [], createdActions: [], affectedPaths: [] }
+  }
   const file = tasksPath(input.projectRoot)
   let raw: string
   try {
@@ -224,21 +239,27 @@ export async function migrateWorkDecompositionState(
   }
 
   const backup = backupPath(input.projectRoot)
-  await fs.mkdir(path.dirname(backup), { recursive: true })
-  try {
-    await fs.access(backup)
-  } catch {
-    await atomicWriteText(backup, raw)
-  }
-  await atomicWriteText(file, `${JSON.stringify({
+  const snapshot = await writeMigrationSnapshot({
+    projectRoot: input.projectRoot,
+    migrationId: MIGRATION_ID,
+    sourcePath: file,
+    snapshotPath: backup,
+    sourceBytes: raw,
+    now,
+  })
+  writeProjectTaskQueueWithSummary(file, {
     ...queue,
     tasks: queue.tasks,
     executionPlanActions: queue.executionPlanActions,
-  }, null, 2)}\n`)
+  }, {
+    projectId: path.basename(input.projectRoot),
+    fullCompatibility: true,
+  })
   return {
     changedTasks: uniqueChangedTasks,
     createdActions,
-    affectedPaths: [TASKS_RELATIVE_PATH, backup],
+    affectedPaths: [TASKS_RELATIVE_PATH, backup, snapshot.manifestPath],
     backupPath: backup,
+    manifestPath: snapshot.manifestPath,
   }
 }

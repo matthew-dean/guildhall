@@ -96,6 +96,439 @@ describe('formWorkspaceHypothesis', () => {
     })
   })
 
+  it('carries explicit release scope from current work signals into draft tasks', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Build fixture-driven author voice shaping',
+          evidence: 'docs/release-plan.md: - Build fixture-driven author voice shaping',
+          scopeHint: 'current',
+          releaseId: 'headless-mvp',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Add browser drafting workspace',
+          evidence: 'docs/release-plan.md: - Add browser drafting workspace',
+          scopeHint: 'later',
+          releaseId: 'headless-mvp',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: 'Build fixture-driven author voice shaping',
+        scope: 'current',
+        releaseIds: ['headless-mvp'],
+      }),
+      expect.objectContaining({
+        title: 'Add browser drafting workspace',
+        scope: 'later',
+        releaseIds: ['headless-mvp'],
+      }),
+    ]))
+  })
+
+  it('preserves every merged source claim on a draft task', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Add world state reviewer',
+          evidence: 'docs/harness/mvp.md: Review object state changes over elapsed time.',
+          references: ['docs/harness/mvp.md'],
+          scopeHint: 'current',
+          releaseId: 'headless-mvp',
+          releaseLabel: 'Headless MVP',
+          confidence: 'high',
+          linkedTaskHints: ['World state reviewer'],
+        },
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Add world state reviewer',
+          evidence: 'docs/roadmap.md: Prove wet hair dries according to climate and time passage.',
+          references: ['docs/roadmap.md'],
+          scopeHint: 'current',
+          releaseId: 'headless-mvp',
+          releaseLabel: 'Headless MVP',
+          confidence: 'medium',
+          linkedTaskHints: ['World state reviewer'],
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]?.sourceClaims).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'planning-docs',
+        evidence: expect.stringContaining('object state changes'),
+        references: ['docs/harness/mvp.md'],
+        releaseId: 'headless-mvp',
+      }),
+      expect.objectContaining({
+        source: 'roadmap',
+        evidence: expect.stringContaining('wet hair dries'),
+        references: ['docs/roadmap.md'],
+        releaseId: 'headless-mvp',
+      }),
+    ]))
+  })
+
+  it('records explicit release containers with owner-visible labels', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Prove package migration dry run',
+          evidence: 'docs/release-plan.md: - Prove package migration dry run',
+          scopeHint: 'current',
+          releaseId: '2-0-alpha',
+          releaseLabel: '2.0 alpha',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.releases).toEqual([
+      expect.objectContaining({
+        id: '2-0-alpha',
+        label: '2.0 alpha',
+        source: 'planning-docs',
+      }),
+    ])
+    expect(draft.tasks[0]?.releaseIds).toEqual(['2-0-alpha'])
+  })
+
+  it('keeps owner-visible release containers for deferred future scopes', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Build specialist reviewer lanes',
+          evidence: 'docs/roadmap.md: - Build specialist reviewer lanes',
+          scopeHint: 'later',
+          releaseId: 'stage-2-agent-prototype',
+          releaseLabel: 'Stage 2: Agent Prototype',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-2-agent-prototype',
+        label: 'Stage 2: Agent Prototype',
+      }),
+    ])
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Build specialist reviewer lanes',
+      scope: 'later',
+      releaseIds: ['stage-2-agent-prototype'],
+    })
+  })
+
+  it('keeps owner-visible release containers on scoped capability context', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          role: 'capability',
+          title: 'Mastra workflow for the prototype iteration loop',
+          evidence: 'docs/harness/implementation-roadmap.md: - Mastra workflow for the prototype iteration loop',
+          references: ['docs/harness/implementation-roadmap.md'],
+          scopeHint: 'later',
+          releaseId: 'stage-2-mastra-agent-prototype',
+          releaseLabel: 'Stage 2: Mastra Agent Prototype',
+          confidence: 'medium',
+        },
+      ]),
+    )
+
+    expect(draft.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-2-mastra-agent-prototype',
+        label: 'Stage 2: Mastra Agent Prototype',
+      }),
+    ])
+    expect(draft.tasks).toEqual([])
+    expect(draft.context[0]).toMatchObject({
+      label: 'Mastra workflow for the prototype iteration loop',
+      role: 'capability',
+      scopeHint: 'later',
+      releaseIds: ['stage-2-mastra-agent-prototype'],
+    })
+  })
+
+  it('marks release containers current only when they have current draft tasks', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Define fixture schemas',
+          evidence: 'docs/harness/implementation-roadmap.md: Stage 1 task.',
+          references: ['docs/harness/implementation-roadmap.md'],
+          scopeHint: 'current',
+          releaseId: 'stage-1-fixture-and-evaluation-harness',
+          releaseLabel: 'Stage 1: Fixture And Evaluation Harness',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          role: 'capability',
+          title: 'Mastra workflow for the prototype iteration loop',
+          evidence: 'docs/harness/implementation-roadmap.md: Stage 2 capability.',
+          references: ['docs/harness/implementation-roadmap.md'],
+          scopeHint: 'later',
+          releaseId: 'stage-2-mastra-agent-prototype',
+          releaseLabel: 'Stage 2: Mastra Agent Prototype',
+          confidence: 'medium',
+        },
+      ]),
+    )
+
+    expect(draft.releases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'stage-1-fixture-and-evaluation-harness',
+        scope: 'current',
+      }),
+      expect.objectContaining({
+        id: 'stage-2-mastra-agent-prototype',
+        scope: 'later',
+      }),
+    ]))
+  })
+
+  it('assigns untagged current work to the matching documented current release scope', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Stage 1: V1 Release Hardening',
+          evidence: 'docs/release-plan.md: ## Stage 1: V1 Release Hardening',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'current',
+          releaseId: 'stage-1-v1-release-hardening',
+          releaseLabel: 'Stage 1: V1 Release Hardening',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Harden editor link controls',
+          evidence: 'docs/release-plan.md: - Harden editor link controls',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'current',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Finish later visual polish',
+          evidence: 'docs/release-plan.md: - Finish later visual polish',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-v1-release-hardening',
+        label: 'Stage 1: V1 Release Hardening',
+      }),
+    ])
+    expect(draft.tasks.find(task => task.title === 'Harden editor link controls')?.releaseIds).toEqual([
+      'stage-1-v1-release-hardening',
+    ])
+    expect(draft.tasks.find(task => task.title === 'Finish later visual polish')?.releaseIds).toBeUndefined()
+  })
+
+  it('assigns untagged later work to the matching documented later release scope', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Stage 1: V1 Release Hardening',
+          evidence: 'docs/release-plan.md: ## Stage 1: V1 Release Hardening',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'current',
+          releaseId: 'stage-1-v1-release-hardening',
+          releaseLabel: 'Stage 1: V1 Release Hardening',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Stage 2: Primitive Convergence',
+          evidence: 'docs/release-plan.md: ## Stage 2: Primitive Convergence',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'later',
+          releaseId: 'stage-2-primitive-convergence',
+          releaseLabel: 'Stage 2: Primitive Convergence',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Finish remaining high-use primitive replacement',
+          evidence: 'docs/release-plan.md: - Finish remaining high-use primitive replacement',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks.find(task => task.title === 'Finish remaining high-use primitive replacement')?.releaseIds).toEqual([
+      'stage-2-primitive-convergence',
+    ])
+  })
+
+  it('lets explicit later scope win when duplicate planning signals disagree', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Version diff view',
+          evidence: 'PROJECT_STATE.md: Version diff view',
+          references: ['/repo/PROJECT_STATE.md'],
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Version diff view (deferred)',
+          evidence: 'PROJECT_STATE.md: - [ ] Version diff view (deferred)',
+          references: ['/repo/PROJECT_STATE.md'],
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Version diff view (deferred)',
+      scope: 'later',
+    })
+  })
+
+  it('does not collapse distinct planning-doc reviewer lanes just because they share generic wording', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement dialogue-and-character-voice reviewer lane',
+          evidence: 'inventory recommendation',
+          domainHint: 'coherence',
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement reader-knowledge-and-revelation reviewer lane',
+          evidence: 'inventory recommendation',
+          domainHint: 'coherence',
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks.map(task => task.title)).toEqual([
+      'Implement dialogue-and-character-voice reviewer lane',
+      'Implement reader-knowledge-and-revelation reviewer lane',
+    ])
+  })
+
+  it('does not collapse distinct reviewer lanes that are recommended from the same planning doc', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement dialogue-and-character-voice reviewer lane',
+          evidence: 'remaining inventory recommendation',
+          references: ['/repo/docs/harness/remaining-spec-decomposition-inventory.md'],
+          domainHint: 'coherence',
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement reader-knowledge-and-revelation reviewer lane',
+          evidence: 'remaining inventory recommendation',
+          references: ['/repo/docs/harness/remaining-spec-decomposition-inventory.md'],
+          domainHint: 'coherence',
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks.map(task => task.title)).toEqual([
+      'Implement dialogue-and-character-voice reviewer lane',
+      'Implement reader-knowledge-and-revelation reviewer lane',
+    ])
+  })
+
+  it('does not collapse distinct same-file checklist siblings into one task', () => {
+    const sharedReference = ['/repo/docs/roadmap.md']
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Detector task one',
+          evidence: '- [ ] Detector task one',
+          references: sharedReference,
+          confidence: 'high',
+        },
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Detector task two',
+          evidence: '- [ ] Detector task two',
+          references: sharedReference,
+          confidence: 'high',
+        },
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Detector task three',
+          evidence: '- [ ] Detector task three',
+          references: sharedReference,
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks.map(task => task.title)).toEqual([
+      'Detector task one',
+      'Detector task two',
+      'Detector task three',
+    ])
+  })
+
   it('does not copy identical evidence into goal rationale or task description', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
@@ -206,6 +639,30 @@ describe('formWorkspaceHypothesis', () => {
       ]),
     )
     expect(draft.tasks.map((task) => task.title)).toEqual(['Fix import review affordance'])
+  })
+
+  it('filters umbrella placeholders that say child specs own the real work', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: '*(none — umbrella doc, covered by child specs)*',
+          evidence: 'recommended first task title',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement packet-builder implementation for the first writer/editor packet types',
+          evidence: 'real backlog item',
+          confidence: 'high',
+        },
+      ]),
+    )
+    expect(draft.tasks.map((task) => task.title)).toEqual([
+      'Implement packet-builder implementation for the first writer/editor packet types',
+    ])
   })
 
   it('filters colon-ended grouping headers from task backlog', () => {
@@ -415,6 +872,185 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks).toHaveLength(1)
   })
 
+  it('dedupes roadmap starter work with matching schema-spec implementation work', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          evidence: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+          domainHint: 'harness',
+          confidence: 'high',
+          scopeHint: 'current',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+          evidence: 'docs/specs/schema-contract-roadmap.md: Recommended next spec for the current fixture harness.',
+          references: ['/repo/docs/specs/schema-contract-roadmap.md'],
+          domainHint: 'harness',
+          confidence: 'medium',
+          scopeHint: 'current',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      scope: 'current',
+      domain: 'harness',
+    })
+    expect(new Set(draft.tasks[0]!.references)).toEqual(
+      new Set([
+        '/repo/docs/harness/implementation-roadmap.md',
+        '/repo/docs/specs/schema-contract-roadmap.md',
+      ]),
+    )
+  })
+
+  it('dedupes current roadmap starter work with remaining-spec inventory recommendations for the same slice', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          evidence: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+          domainHint: 'harness',
+          confidence: 'high',
+          scopeHint: 'current',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+          evidence: 'Recommended first task title: Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+          references: [
+            '/repo/docs/harness/remaining-spec-decomposition-inventory.md',
+            '/repo/docs/specs/schema-contract-roadmap.md',
+            '/repo/docs/harness/implementation-roadmap.md',
+          ],
+          domainHint: 'harness',
+          confidence: 'high',
+          scopeHint: 'current',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      scope: 'current',
+      domain: 'harness',
+    })
+    expect(new Set(draft.tasks[0]!.references)).toEqual(
+      new Set([
+        '/repo/docs/harness/implementation-roadmap.md',
+        '/repo/docs/harness/remaining-spec-decomposition-inventory.md',
+        '/repo/docs/specs/schema-contract-roadmap.md',
+      ]),
+    )
+  })
+
+  it('dedupes current roadmap starter work with section-indexed decomposition recommendations from real inventory prose', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          evidence: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+          domainHint: 'harness',
+          confidence: 'medium',
+          scopeHint: 'current',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+          evidence: 'docs/harness/remaining-spec-decomposition-inventory.md: 2.10 schema-contract-roadmap.md',
+          references: [
+            '/repo/docs/harness/remaining-spec-decomposition-inventory.md',
+            '/repo/docs/specs/schema-contract-roadmap.md',
+          ],
+          domainHint: 'harness',
+          confidence: 'high',
+          scopeHint: 'current',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      scope: 'current',
+      domain: 'harness',
+    })
+    expect(new Set(draft.tasks[0]!.references)).toEqual(
+      new Set([
+        '/repo/docs/harness/implementation-roadmap.md',
+        '/repo/docs/harness/remaining-spec-decomposition-inventory.md',
+        '/repo/docs/specs/schema-contract-roadmap.md',
+      ]),
+    )
+  })
+
+  it('enriches current roadmap tasks with related spec and harness references', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          evidence: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          confidence: 'high',
+          scopeHint: 'current',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Spec: Story Memory Schemas',
+          evidence: 'These schemas turn the story-intelligence specs into buildable contracts.',
+          confidence: 'high',
+          references: ['/repo/docs/specs/story-memory-schemas.md'],
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Spec: Schema Contract Roadmap',
+          evidence: 'Immediate schema work covers fixture, expected-record, prototype run, and evaluation contracts.',
+          confidence: 'high',
+          references: ['/repo/docs/specs/schema-contract-roadmap.md'],
+        },
+        {
+          source: 'text-corpus',
+          kind: 'context',
+          title: 'Text document (docs/harness/prototype-iteration-workflow.md): Prototype Iteration Workflow',
+          evidence: 'The first usable proof should be a harness that can test story-memory model, packet builder, editor agents, and writer agents.',
+          confidence: 'high',
+          references: ['/repo/docs/harness/prototype-iteration-workflow.md'],
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(new Set(draft.tasks[0]!.references)).toEqual(
+      new Set([
+        '/repo/docs/harness/implementation-roadmap.md',
+        '/repo/docs/specs/story-memory-schemas.md',
+        '/repo/docs/specs/schema-contract-roadmap.md',
+        '/repo/docs/harness/prototype-iteration-workflow.md',
+      ]),
+    )
+  })
+
   it('upgrades confidence when a later signal is stronger', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
@@ -501,6 +1137,73 @@ describe('formWorkspaceHypothesis', () => {
       ]),
     )
     expect(draft.context).toHaveLength(2)
+  })
+
+  it('merges duplicate structural records across sources into one brief record context', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Book brief',
+          evidence: 'author voice, premise, genre, themes, constraints',
+          confidence: 'high',
+          references: ['/repo/docs/harness/architecture-notes.md'],
+          role: 'brief_input',
+          structure: 'record',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Book brief',
+          evidence: 'premise, genre/form, intended audience, age bracket, target reader experience, themes, constraints',
+          confidence: 'high',
+          references: ['/repo/docs/specs/agent-context-packets-and-compaction.md'],
+          role: 'brief_input',
+          structure: 'record',
+        },
+      ]),
+    )
+
+    expect(draft.context).toHaveLength(1)
+    expect(draft.context[0]).toMatchObject({
+      label: 'Book brief',
+      role: 'brief_input',
+      structure: 'record',
+    })
+    expect(new Set(draft.context[0]!.references)).toEqual(new Set([
+      '/repo/docs/harness/architecture-notes.md',
+      '/repo/docs/specs/agent-context-packets-and-compaction.md',
+    ]))
+    expect(draft.context[0]!.excerpt).toContain('intended audience')
+  })
+
+  it('keeps multiple context entries when they come from the same file but describe different structure', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Stage 0: Spec Baseline',
+          evidence: 'roadmap stage heading',
+          confidence: 'medium',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Stage 1: Fixture And Evaluation Harness',
+          evidence: 'roadmap stage heading',
+          confidence: 'medium',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+        },
+      ]),
+    )
+
+    expect(draft.context.map((entry) => entry.label)).toEqual([
+      'Stage 0: Spec Baseline',
+      'Stage 1: Fixture And Evaluation Harness',
+    ])
   })
 
   it('ignores signals with empty titles', () => {

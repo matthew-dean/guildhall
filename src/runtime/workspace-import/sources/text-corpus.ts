@@ -98,6 +98,18 @@ function isDoneSection(heading: string | null): boolean {
   return !!heading && /^(done|shipped|complete|completed|recent progress|milestones?)$/i.test(heading)
 }
 
+function shouldPromoteChecklistWork(rel: string): boolean {
+  const normalized = rel.replaceAll('\\', '/').toLowerCase()
+  const base = normalized.split('/').pop() ?? ''
+  if (normalized.includes('/specs/') || normalized.startsWith('specs/')) return false
+  if (base === 'features.md') return false
+  if (base === 'spec.md') return false
+  if (base.includes('guide')) return false
+  if (base === '_template.md' || base === 'template.md') return false
+  if (base.includes('feature-catalog')) return false
+  return true
+}
+
 export const textCorpusSource: TaskSource = {
   id: 'text-corpus',
   label: 'Text corpus map',
@@ -135,6 +147,7 @@ export const textCorpusSource: TaskSource = {
         }
         const checklist = /^\s*[-*]\s+\[([ xX])\]\s+(.+?)\s*$/.exec(line)
         if (!checklist) continue
+        if (!shouldPromoteChecklistWork(rel)) continue
 
         const checked = checklist[1]!.toLowerCase() === 'x'
         if (checked || isDoneSection(currentHeading)) continue

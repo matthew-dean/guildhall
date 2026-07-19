@@ -1,10 +1,17 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { TaskQueue, type ProductBrief } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import {
+  readProjectTaskQueueForMutationSync,
+  readProjectStateAuthorityAtBoundary,
+  readProjectTaskQueueSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueueWithSummary,
+} from '@guildhall/runtime/project-state-boundary'
+import { currentPlanProcessLeakage, validateProductBriefGrounding } from '@guildhall/runtime/spec-quality'
 
 // ---------------------------------------------------------------------------
 // update-product-brief: the Spec Agent's authoring surface for the product
@@ -112,15 +119,35 @@ function fallbackNonGoals(taskTitle: string): string[] {
 }
 
 function normalizeAntiPatternsValue(raw: unknown): string[] | undefined {
+  const normalizeItem = (item: unknown): string[] => {
+    if (typeof item !== 'string') return []
+    const trimmed = item.trim()
+    if (!trimmed) return []
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        if (Array.isArray(parsed)) return parsed.flatMap(normalizeItem)
+      } catch {
+        // Keep malformed user text as one boundary item rather than dropping it.
+      }
+    }
+    return [trimmed]
+  }
   if (Array.isArray(raw)) {
-    const values = raw
-      .filter((item): item is string => typeof item === 'string')
-      .map((item) => item.trim())
-      .filter(Boolean)
+    const values = raw.flatMap(normalizeItem)
     return values.length > 0 ? values : undefined
   }
   if (typeof raw === 'string') {
-    const values = raw
+    const trimmed = raw.trim()
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        if (Array.isArray(parsed)) return normalizeAntiPatternsValue(parsed)
+      } catch {
+        // Fall through to newline parsing for ordinary text beginning with '['.
+      }
+    }
+    const values = trimmed
       .split('\n')
       .map((line) => line.trim())
       .map((line) => line.replace(/^[*-]\s*/, '').trim())
@@ -199,6 +226,20 @@ function inferBriefContentFromAssistantText(
 }
 
 function validateBriefContent(content: ResolvedBriefContent): string | null {
+  const currentPlanFields = [
+    content.userJob,
+    content.whyItMattersNow,
+    content.successMetric,
+    ...content.nonGoals,
+    ...(content.audience ? [content.audience] : []),
+    ...(content.usageContext ? [content.usageContext] : []),
+    ...content.antiPatterns,
+    ...(content.rolloutPlan ? [content.rolloutPlan] : []),
+    ...(content.brandInteractionNotes ? [content.brandInteractionNotes] : []),
+  ]
+  if (currentPlanFields.some((field) => currentPlanProcessLeakage(field))) {
+    return 'Product briefs may only describe the product outcome and boundary. Keep recovery attempts, revision history, and worktree diagnostics in task notes or evidence.'
+  }
   const normalizedUserJob = content.userJob.toLowerCase()
   const normalizedWhy = content.whyItMattersNow.toLowerCase()
   const normalizedSuccessMetric = content.successMetric.toLowerCase()
@@ -348,8 +389,8 @@ export async function updateProductBrief(
   if (!input.taskId?.trim()) return { success: false, error: 'Missing taskId' }
   if (!input.authoredBy?.trim()) return { success: false, error: 'Missing authoredBy' }
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
     if (!input.userJob?.trim()) return { success: false, error: 'Missing userJob' }
@@ -394,11 +435,35 @@ export async function updateProductBrief(
         ? { approvedBy: existing.approvedBy, approvedAt: existing.approvedAt }
         : {}),
     }
+    const grounding = validateProductBriefGrounding(task, brief)
+    if (!grounding.ok) {
+      return { success: false, error: grounding.errors.join(' ') }
+    }
     task.productBrief = brief
     task.updatedAt = now
     queue.lastUpdated = now
 
-    writeManagedTextFileSync(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    if (readProjectStateAuthorityAtBoundary(input.tasksPath).authority === 'database') {
+      const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : path.dirname(input.tasksPath)
+      const pointMutation = writePromotedTaskDetailMutation(input.tasksPath, task.id, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+        mutate: (current) => ({
+          ...current,
+          productBrief: brief,
+          updatedAt: now,
+        }),
+      })
+      if (!pointMutation) {
+        throw new Error(`Could not persist promoted product brief for task ${task.id}`)
+      }
+    } else {
+      writeProjectTaskQueueWithSummary(input.tasksPath, queue, {
+        ...(queueRead.expectedQueueRevision !== null
+          ? { expectedQueueRevision: queueRead.expectedQueueRevision }
+          : {}),
+      })
+    }
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -423,8 +488,7 @@ export const updateProductBriefTool = defineTool({
     }
     let taskTitle = target.taskId
     try {
-      const raw = await readManagedTextFile(target.tasksPath, 'utf-8')
-      const queue = TaskQueue.parse(JSON.parse(raw))
+      const queue = TaskQueue.parse(readProjectTaskQueueSync(target.tasksPath))
       const task = queue.tasks.find((t) => t.id === target.taskId)
       if (task?.title?.trim()) taskTitle = task.title
     } catch {

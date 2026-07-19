@@ -1,5 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { buildProjectActionModel } from '../project-action-model.js'
+import { applyRunStatusToStartReadiness, buildProjectActionModel } from '../project-action-model.js'
+
+describe('applyRunStatusToStartReadiness', () => {
+  it('does not leave a saved paused action visible while a run is active', () => {
+    const readiness = applyRunStatusToStartReadiness({
+      canStart: true,
+      code: 'paused_live_work',
+      message: 'The task is paused.',
+      focusTaskId: 'task-1',
+      focusTaskTitle: 'Build Synopsis generation pipeline',
+    }, 'running')
+
+    expect(readiness).toMatchObject({
+      canStart: true,
+      code: 'running',
+      message: 'Guildhall is running "Build Synopsis generation pipeline".',
+    })
+  })
+})
 
 describe('buildProjectActionModel', () => {
   it('normalizes risky start blockers into terse shared actions', () => {
@@ -27,12 +45,140 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
     })
 
+    const importedScopeShaping = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'imported_scope_shaping',
+        message: '12 imported current-scope tasks still need real briefs before Guildhall can build unattended. Start with "Define fixture schemas".',
+        actionHref: '/task/task-import-1',
+      },
+      tasks: [{ id: 'task-import-1', title: 'Define fixture schemas', status: 'import_draft' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(importedScopeShaping.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Imported scope needs shaping',
+      detail: '12 imported current-scope tasks still need real briefs before Guildhall can build unattended. Start with "Define fixture schemas".',
+      buttonLabel: 'Shape first task',
+      href: '/task/task-import-1',
+      tone: 'warn',
+    })
+    expect(importedScopeShaping.runControl).toMatchObject({
+      label: 'Needs shaping',
+      startEnabled: false,
+    })
+
+    const workspaceImportRefresh = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message: "Guildhall's saved import is under-scoped for the current project docs. Refresh the import before treating this project as complete.",
+        actionHref: '/workspace-import',
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(workspaceImportRefresh.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Workspace import needs refresh',
+      detail: "Guildhall's saved import is under-scoped for the current project docs. Refresh the import before treating this project as complete.",
+      buttonLabel: 'Refresh import',
+      href: '/workspace-import',
+      tone: 'warn',
+    })
+    expect(workspaceImportRefresh.runControl).toMatchObject({
+      label: 'Refresh import',
+      startEnabled: false,
+    })
+
+    const proofRecovery = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'proof_evidence_missing',
+        message: 'Headless MVP is waiting on proof evidence for "Run fixture evaluator proof".',
+        actionHref: '/work?task=current-done',
+        focusTaskId: 'current-done',
+        focusTaskTitle: 'Run fixture evaluator proof',
+        focusKind: 'proof',
+      },
+      tasks: [{ id: 'current-done', title: 'Run fixture evaluator proof', status: 'done' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(proofRecovery.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      buttonLabel: 'Attach proof',
+      href: '/work?task=current-done',
+      tone: 'warn',
+    })
+    expect(proofRecovery.runControl).toMatchObject({
+      label: 'Resume',
+      startEnabled: true,
+    })
+
+    const repositoryFollowup = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'repository_followup_required',
+        message: 'Stage 1 has no runnable task work left, but repository follow-up is still needed: main has 1 local commit not pushed to origin/main.',
+        actionHref: '/release',
+        focusKind: 'repository_followup',
+        count: 1,
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(repositoryFollowup.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Repository follow-up required',
+      detail: 'Stage 1 has no runnable task work left, but repository follow-up is still needed: main has 1 local commit not pushed to origin/main.',
+      buttonLabel: 'Open release',
+      href: '/release',
+      tone: 'warn',
+    })
+    expect(repositoryFollowup.runControl).toMatchObject({
+      label: 'Repo follow-up',
+      startEnabled: false,
+    })
+
+    const sourceConflict = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'scope_source_conflict',
+        message: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+        actionHref: '/map',
+        focusKind: 'source_conflict',
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(sourceConflict.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Source conflict requires review',
+      detail: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+      buttonLabel: 'Open map',
+      href: '/map',
+      tone: 'warn',
+    })
+    expect(sourceConflict.runControl).toMatchObject({
+      label: 'Review conflict',
+      startEnabled: false,
+    })
+
     const briefCleanup = buildProjectActionModel({
       startReadiness: {
         canStart: false,
         code: 'no_unattended_progress',
-        message: 'One task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
-        actionHref: '/work',
+        message: '"Clean up the brief" needs a clearer brief before unattended work can run.',
+        actionHref: '/work?task=task-brief',
+        focusTaskId: 'task-brief',
+        focusTaskTitle: 'Clean up the brief',
+        focusKind: 'brief_cleanup',
+        count: 1,
       },
       tasks: [{
         id: 'task-brief',
@@ -47,10 +193,10 @@ describe('buildProjectActionModel', () => {
     })
     expect(briefCleanup.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Needs brief cleanup',
-      detail: 'One task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
+      label: 'Clean up the brief',
+      detail: '"Clean up the brief" needs a clearer brief before unattended work can run.',
       buttonLabel: 'Review brief',
-      href: '/work',
+      href: '/work?task=task-brief',
       tone: 'warn',
     })
     expect(briefCleanup.secondaryActions[0]).toMatchObject({
@@ -64,8 +210,12 @@ describe('buildProjectActionModel', () => {
       startReadiness: {
         canStart: false,
         code: 'no_unattended_progress',
-        message: '2 specs are waiting for review before starting.',
+        message: '2 specs are waiting for review before work can start. Start with "Continue drafted spec work".',
         actionHref: '/thread?thread=task%3Atask-spec-a',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Continue drafted spec work',
+        focusKind: 'spec_review',
+        count: 2,
       },
       tasks: [],
       thread: { turns: [], activeTurnId: null },
@@ -73,11 +223,36 @@ describe('buildProjectActionModel', () => {
     })
     expect(specReview.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Review waiting specs',
-      detail: '2 specs are waiting for review before starting.',
+      label: 'Continue drafted spec work',
+      detail: '2 specs are waiting for review before work can start. Start with "Continue drafted spec work".',
       buttonLabel: 'Review next spec',
       href: '/thread?thread=task%3Atask-spec-a',
       tone: 'warn',
+    })
+    expect(specReview.runControl).toMatchObject({
+      label: 'Review needed',
+      startEnabled: false,
+    })
+
+    const pausedSpecReview = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '"Continue drafted spec work" is waiting for review before work can start.',
+        actionHref: '/thread?thread=task%3Atask-spec-a',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Continue drafted spec work',
+        focusKind: 'spec_review',
+        count: 1,
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+      availability: { status: 'paused' },
+    })
+    expect(pausedSpecReview.runControl).toMatchObject({
+      label: 'Review needed',
+      startEnabled: false,
     })
 
     const provider = buildProjectActionModel({
@@ -142,6 +317,49 @@ describe('buildProjectActionModel', () => {
     })
   })
 
+  it('does not surface a decomposed containing parent as the primary task action', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [
+        {
+          id: 'task-150',
+          title: 'Define MVP drafting model and physical-world review lanes',
+          description: 'Containing parent for three execution children.',
+          status: 'ready',
+          updatedAt: '2026-07-06T03:00:00.000Z',
+        },
+        {
+          id: 'task-150-split-model',
+          title: 'Select and prove DeepInfra drafting model',
+          status: 'done',
+          hierarchy: { parentId: 'task-150', childIds: [], relation: 'decomposes' },
+          updatedAt: '2026-07-06T03:01:00.000Z',
+        },
+        {
+          id: 'task-150-split-world',
+          title: 'Define world-state continuity review lane',
+          status: 'done',
+          hierarchy: { parentId: 'task-150', childIds: [], relation: 'decomposes' },
+          updatedAt: '2026-07-06T03:02:00.000Z',
+        },
+        {
+          id: 'task-next',
+          title: 'Continue the remaining current-scope proof work',
+          status: 'ready',
+          updatedAt: '2026-07-06T03:03:00.000Z',
+        },
+      ],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      taskId: 'task-next',
+      label: 'Continue the remaining current-scope proof work',
+    })
+  })
+
   it('keeps active brief cleanup ahead of project discovery reconciliation', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },
@@ -172,6 +390,41 @@ describe('buildProjectActionModel', () => {
       href: '/work?task=task-stripe-brief',
     })
     expect(model.secondaryActions.map(action => action.source)).toContain('inbox')
+  })
+
+  it('surfaces a blocked current-scope task before unrelated ready work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [
+        {
+          id: 'runner-proof',
+          title: 'Implement a no-UI runner that builds a packet from fixture records.',
+          description: 'Build the script runner proof.',
+          status: 'blocked',
+          blockReason: "decision_required: Cannot transition task to 'review' -- guard keeps blocking despite self-critique note being persisted",
+          updatedAt: '2026-07-04T10:00:00.000Z',
+        },
+        {
+          id: 'schema-narrowing',
+          title: 'Use the first run to narrow the MVP story-memory schema.',
+          description: 'Follow-on ready task.',
+          status: 'ready',
+          updatedAt: '2026-07-04T10:05:00.000Z',
+        },
+      ],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Implement a no-UI runner that builds a packet from fixture records.',
+      detail: "decision_required: Cannot transition task to 'review' -- guard keeps blocking despite self-critique note being persisted",
+      buttonLabel: 'Open Work',
+      href: '/work?task=runner-proof',
+      tone: 'warn',
+      taskId: 'runner-proof',
+    })
   })
 
   it('uses owner-input start readiness as the single primary action over competing queues', () => {
@@ -327,6 +580,41 @@ describe('buildProjectActionModel', () => {
       label: 'Pause',
       startEnabled: true,
     })
+
+    const stopping = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [{ id: 'task-ready', title: 'Ready task', status: 'ready' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopping',
+    })
+    expect(stopping.runControl).toMatchObject({
+      label: 'Stopping',
+      startEnabled: false,
+      disabledReason: 'Pause requested. Guildhall is waiting for active work to stop.',
+    })
+  })
+
+  it('surfaces active work with a block reason as warning state', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [{
+        id: 'task-stage-2',
+        title: 'Implement Stage 2 reviewer',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        blockReason: 'Stage sequencing violation: Stage 1 is not complete.',
+      }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'running',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Implement Stage 2 reviewer',
+      detail: 'Stage sequencing violation: Stage 1 is not complete.',
+      tone: 'warn',
+      taskId: 'task-stage-2',
+    })
   })
 
   it('does not show stale Answer in Thread when no live owner-input turn exists', () => {
@@ -359,6 +647,141 @@ describe('buildProjectActionModel', () => {
       buttonLabel: 'Open Work',
     })
     expect(model.primaryAction?.label).not.toMatch(/answer/i)
+  })
+
+  it('chooses the first dependency-unblocked ready task over newer blocked ready work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [
+        {
+          id: 'task-define-schemas',
+          title: 'Define fixture schemas',
+          status: 'ready',
+          updatedAt: '2026-07-04T07:58:36.633Z',
+        },
+        {
+          id: 'task-build-fixture',
+          title: 'Add the first tiny fiction fixture',
+          status: 'ready',
+          dependsOn: ['task-define-schemas'],
+          updatedAt: '2026-07-04T07:58:36.937Z',
+        },
+      ],
+      thread: { activeTurnId: null, turns: [] },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Define fixture schemas',
+      href: '/work?task=task-define-schemas',
+    })
+  })
+
+  it('keeps dependency-blocked shaping siblings behind their runnable prerequisite', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [
+        {
+          id: 'writer-packet',
+          title: 'Build the bounded writer packet instead of rereading the manuscript',
+          status: 'ready',
+          updatedAt: '2026-07-05T02:37:52.658Z',
+          spec: '## Spec\nBuild the writer packet.',
+          acceptanceCriteria: [{ description: 'The packet is built.' }],
+        },
+        {
+          id: 'reviewer-loop',
+          title: 'Run the bounded reviewer and writer loop headlessly',
+          status: 'exploring',
+          dependsOn: ['writer-packet'],
+          updatedAt: '2026-07-04T18:39:44.927Z',
+        },
+      ],
+      thread: { activeTurnId: null, turns: [] },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Build the bounded writer packet instead of rereading the manuscript',
+      href: '/work?task=writer-packet',
+      tone: 'accent',
+      taskId: 'writer-packet',
+    })
+    expect(model.primaryAction?.detail ?? '').not.toContain('Needs brief')
+  })
+
+  it('does not treat an inflight execution turn as an owner-answer action', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [{
+        id: 'task-import-9s8tkc',
+        title: 'Define fixture schemas',
+        status: 'spec_review',
+        description: 'Review the seeded implementation blueprint.',
+        updatedAt: '2026-06-18T10:26:34.811Z',
+      }],
+      thread: {
+        activeTurnId: 'inflight:task-import-9s8tkc',
+        turns: [{
+          id: 'inflight:task-import-9s8tkc',
+          kind: 'inflight',
+          status: 'active',
+          actionHref: '/thread?thread=task%3Atask-import-9s8tkc',
+          title: 'Define fixture schemas',
+        }],
+      },
+      runStatus: 'running',
+    })
+
+    expect(model.ownerInput.active).toBe(false)
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      buttonLabel: 'Review in Thread',
+      href: '/thread?thread=task%3Atask-import-9s8tkc',
+    })
+    expect(model.secondaryActions.some(action => /answer in thread/i.test(action.label))).toBe(false)
+  })
+
+  it('pins child shaping work ahead of parent cleanup while the project is running', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [
+        {
+          id: 'task-import-9s8tkc',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          status: 'ready',
+          updatedAt: '2026-07-04T10:00:00.000Z',
+          productBrief: { approvedAt: '2026-07-04T09:00:00.000Z', userJob: '' },
+          spec: '',
+          acceptanceCriteria: [],
+        },
+        {
+          id: 'task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+          status: 'exploring',
+          description: 'Spec agent is defining the fixture, expected-record, prototype-run, and evaluation contracts.',
+          updatedAt: '2026-07-04T10:05:00.000Z',
+        },
+      ],
+      thread: { activeTurnId: null, turns: [] },
+      runStatus: 'running',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+      detail: 'Spec agent is defining the fixture, expected-record, prototype-run, and evaluation contracts.',
+      buttonLabel: 'Open Work',
+      href: '/work?task=task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat',
+      tone: 'running',
+      taskId: 'task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat',
+    })
   })
 
   it('blocks Resume for active setup questions even when raw readiness is permissive and the project has zero tasks', () => {
@@ -504,6 +927,121 @@ describe('buildProjectActionModel', () => {
       buttonLabel: 'Open Work',
       href: '/work?task=task-smoke-test',
       taskId: 'task-smoke-test',
+    })
+  })
+
+  it('keeps paused live work resumable and pinned to the active task', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        message: '"Define fixture contracts" is paused in live work. Resume continues from that pinned task.',
+        actionHref: '/work?task=contract-task',
+        focusTaskId: 'contract-task',
+        focusTaskTitle: 'Define fixture contracts',
+        focusKind: 'paused_work',
+        count: 1,
+      },
+      tasks: [
+        {
+          id: 'contract-task',
+          title: 'Define fixture contracts',
+          description: 'Imported contract work should materialize the named schema and record surfaces.',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          updatedAt: '2026-07-04T15:30:00.000Z',
+        },
+      ],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Define fixture contracts',
+      buttonLabel: 'Open Work',
+      href: '/work?task=contract-task',
+      tone: 'accent',
+      taskId: 'contract-task',
+    })
+    expect(model.runControl).toMatchObject({
+      label: 'Resume',
+      startEnabled: true,
+      href: '/work?task=contract-task',
+    })
+  })
+
+  it('pins the primary action to the requested task during a one-task run', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        focusTaskId: 'task-broad-genre',
+        focusTaskTitle: 'Build Broad-genre drafting model proof',
+      },
+      tasks: [
+        {
+          id: 'task-synopsis',
+          title: 'Build Synopsis expansion into story records',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          updatedAt: '2026-07-18T14:25:00.000Z',
+        },
+        {
+          id: 'task-broad-genre',
+          title: 'Build Broad-genre drafting model proof',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          updatedAt: '2026-07-18T14:20:00.000Z',
+        },
+      ],
+      runStatus: 'running',
+      runMode: 'one_task',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      taskId: 'task-broad-genre',
+      label: 'Build Broad-genre drafting model proof',
+      href: '/work?task=task-broad-genre',
+      tone: 'running',
+    })
+  })
+
+  it('labels blocked live work as recovery even when the reason mentions specs', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '"Implement Stage 2 reviewer" is blocked before unattended work can run: spec is a placeholder.',
+        actionHref: '/work?task=stage-2-reviewer',
+        focusTaskId: 'stage-2-reviewer',
+        focusTaskTitle: 'Implement Stage 2 reviewer',
+        focusKind: 'blocked_work',
+        count: 1,
+      },
+      tasks: [
+        {
+          id: 'stage-2-reviewer',
+          title: 'Implement Stage 2 reviewer',
+          description: 'Stage 2 reviewer implementation.',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          blockReason: 'spec is a placeholder.',
+        },
+      ],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Implement Stage 2 reviewer',
+      buttonLabel: 'Open Work',
+      tone: 'warn',
+    })
+    expect(model.runControl).toMatchObject({
+      label: 'Needs recovery',
+      startEnabled: false,
     })
   })
 })

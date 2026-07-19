@@ -2,11 +2,13 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import type { Task } from '@guildhall/core'
 import { describe, expect, it } from 'vitest'
 import { AGENT_SETTINGS_FILENAME, loadLeverSettings } from '@guildhall/levers'
-import { getProjectSystemStatePath } from '@guildhall/sessions'
+import { getProjectSystemStatePath, promoteProjectStateDatabaseAuthority, readTaskEvidence } from '@guildhall/sessions'
 
 import { buildEffectiveTask } from '../effective-task.js'
+import * as projectStateBoundary from '../project-state-boundary.js'
 import { runGuildhallTaskOnce } from '../run-once.js'
 
 describe('runGuildhallTaskOnce', () => {
@@ -14,7 +16,6 @@ describe('runGuildhallTaskOnce', () => {
     const projectRoot = await seedProject()
     const outputPath = path.join(projectRoot, 'run-once-report.json')
     const seen: Array<{ preferredTaskId?: string; maxTicks?: number }> = []
-
     const report = await runGuildhallTaskOnce({
       projectRoot,
       prompt: 'Create a tiny app that says hello.',
@@ -49,7 +50,7 @@ describe('runGuildhallTaskOnce', () => {
     })
     expect(settings.project.run_automation.position).toBe('fully_automated')
 
-    const queue = JSON.parse(await fs.readFile(getProjectSystemStatePath(projectRoot, 'TASKS.json'), 'utf8'))
+    const queue = projectStateBoundary.readProjectTaskQueueSync(getProjectSystemStatePath(projectRoot, 'TASKS.json')) as { tasks: any[] }
     queue.tasks = await Promise.all(queue.tasks.map((task: any) => buildEffectiveTask(projectRoot, task)))
     expect(queue.tasks[0]).toMatchObject({
       id: 'task-001',
@@ -68,6 +69,40 @@ describe('runGuildhallTaskOnce', () => {
     expect(written.orchestrator.stopReason).toBe('max_ticks')
   })
 
+  it('keeps the run-once note in promoted task evidence without a second queue write', async () => {
+    const projectRoot = await seedProject()
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    projectStateBoundary.writeProjectTaskQueueWithSummary(tasksPath, projectStateBoundary.readProjectTaskQueueSync(tasksPath), {
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const report = await runGuildhallTaskOnce({
+      projectRoot,
+      prompt: 'Create a promoted project task.',
+      runOrchestratorImpl: async () => ({
+        ticks: 0,
+        processedTaskIds: [],
+        stopReason: 'awaiting_human',
+        stopMessage: 'Waiting for promoted task input.',
+      }),
+      now: () => '2026-05-29T10:00:00.000Z',
+    })
+
+    expect(await readTaskEvidence(projectRoot, report.taskId, { kind: 'note' })).toEqual([
+      expect.objectContaining({
+        kind: 'note',
+        payload: expect.objectContaining({
+          content: expect.stringContaining('Run-once automation policy: ask_when_necessary'),
+        }),
+      }),
+    ])
+
+    const queue = projectStateBoundary.readProjectTaskQueueForMutationSync(tasksPath).queue as { tasks: Task[] }
+    const effective = await buildEffectiveTask(projectRoot, queue.tasks[0]!)
+    const notes = effective.notes as Array<{ content?: string }>
+    expect(notes.at(-1)?.content).toContain('Requested proof mode: auto')
+  })
+
   it('does not let long run-once prompts degrade the stored task title to New request', async () => {
     const projectRoot = await seedProject()
     const prompt = 'Build a dependency-free single-page Pantry Pulse web app in this project root. Use plain HTML, CSS, and JavaScript only.'
@@ -84,7 +119,7 @@ describe('runGuildhallTaskOnce', () => {
       now: () => '2026-05-29T10:00:00.000Z',
     })
 
-    const queue = JSON.parse(await fs.readFile(getProjectSystemStatePath(projectRoot, 'TASKS.json'), 'utf8'))
+    const queue = projectStateBoundary.readProjectTaskQueueSync(getProjectSystemStatePath(projectRoot, 'TASKS.json')) as { tasks: any[] }
     expect(report.title).not.toBe('New request')
     expect(queue.tasks[0].title).toBe(report.title)
     expect(queue.tasks[0].title).not.toBe('New request')
@@ -126,10 +161,11 @@ async function seedProject(): Promise<string> {
     '    mandate: Build the app.',
     '',
   ].join('\n'), 'utf8')
-  await fs.writeFile(getProjectSystemStatePath(projectRoot, 'TASKS.json'), JSON.stringify({
+  projectStateBoundary.writeProjectTaskQueueWithSummary(getProjectSystemStatePath(projectRoot, 'TASKS.json'), {
     version: 1,
     lastUpdated: '2026-05-29T09:00:00.000Z',
     tasks: [],
-  }, null, 2), 'utf8')
+  }, { projectRoot })
+  promoteProjectStateDatabaseAuthority(projectRoot)
   return projectRoot
 }

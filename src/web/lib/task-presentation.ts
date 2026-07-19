@@ -107,12 +107,10 @@ export function taskStagePresentation(
 ): TaskPresentation {
   const status = taskStatus(input)
   const agentName = assignedAgentName(input)
+  const waitingOnDependency = hasUnmetDependencies({ id: taskId(input), status, dependsOn: input.dependsOn }, options.tasks)
 
   if (input.status === 'done' || status === 'done') return { key: 'done', label: 'Done', tone: 'ok' }
   if (needsRecovery({ ...input, taskStatus: status })) return { key: 'needs_recovery', label: 'Needs recovery', tone: 'warn' }
-  if (hasUnmetDependencies({ id: taskId(input), status, dependsOn: input.dependsOn }, options.tasks)) {
-    return { key: 'dependency_blocked', label: 'Blocked', tone: 'danger' }
-  }
   if (agentName === 'spec-agent') {
     return { key: 'working', label: 'Working', tone: 'running' }
   }
@@ -155,6 +153,7 @@ export function taskStagePresentation(
       if (needsWorkerHandoffSpecCleanup({ ...input, taskStatus: status })) {
         return { key: 'needs_brief', label: 'Needs brief', tone: 'warn' }
       }
+      if (waitingOnDependency) return { key: 'waiting_dependency', label: 'Waiting', tone: 'warn' }
       return runIsActive(options)
         ? { key: 'queued', label: 'Queued', tone: 'running' }
         : { key: 'ready', label: 'Ready', tone: 'ok' }

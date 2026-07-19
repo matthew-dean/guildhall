@@ -23,6 +23,7 @@ import { resolveRuntimePath } from './path-utils.js'
 const execFileP = promisify(execFile)
 const GIT_BIN = process.env['GUILDHALL_GIT_BIN']?.trim() || '/usr/bin/git'
 const GH_BIN = process.env['GUILDHALL_GH_BIN']?.trim() || 'gh'
+const STALE_GIT_INDEX_LOCK_MS = 5_000
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
@@ -44,9 +45,42 @@ async function execGh(args: readonly string[], opts: { cwd: string; maxBuffer?: 
   return await execFileP(GH_BIN, [...args], opts)
 }
 
+function errorDetail(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+export async function pruneStaleGitIndexLockFromError(
+  detail: string,
+  opts: { now?: number; staleAfterMs?: number } = {},
+): Promise<boolean> {
+  if (!detail.includes('index.lock')) return false
+  const match = /Unable to create '([^']*index\.lock)'/.exec(detail)
+  const lockPath = match?.[1]
+  if (!lockPath || !path.isAbsolute(lockPath)) return false
+  const normalized = path.normalize(lockPath)
+  if (!normalized.endsWith(`${path.sep}index.lock`) || !normalized.includes(`${path.sep}.git${path.sep}`)) {
+    return false
+  }
+
+  let stat: fsSync.Stats
+  try {
+    stat = await fs.stat(normalized)
+  } catch {
+    return false
+  }
+  const now = opts.now ?? Date.now()
+  const staleAfterMs = opts.staleAfterMs ?? STALE_GIT_INDEX_LOCK_MS
+  if (now - stat.mtimeMs < staleAfterMs) return false
+  await fs.rm(normalized, { force: true })
+  return true
+}
+
 function isIgnorableGuildhallStatePath(file: string): boolean {
   return (
     file === 'guildhall.yaml' ||
+    // AGENTS.md is the managed Codex bridge file installed by Guildhall. Its
+    // presence is agent configuration, not release work in the repository.
+    file === 'AGENTS.md' ||
     file === 'memory' ||
     file.startsWith('memory/') ||
     file === '.guildhall' ||
@@ -67,6 +101,11 @@ async function resolveGitTopLevel(repoRoot: string): Promise<string> {
     cwd,
   })
   return stdout.trim() || repoRoot
+}
+
+function isNotGitRepositoryError(err: unknown): boolean {
+  const detail = errorDetail(err)
+  return /not a git repository|cannot find git repository/i.test(detail)
 }
 
 export interface CreateWorktreeOptions {
@@ -114,6 +153,8 @@ export interface CheckpointResult {
 }
 
 export interface GitStatusSummary {
+  /** False when the path is a workspace/document scope rather than a Git repo. */
+  repository?: boolean
   branch?: string
   upstream?: string
   ahead: number
@@ -133,6 +174,10 @@ export interface GitDriver {
   statusSummary(repoRoot: string): Promise<GitStatusSummary>
   /** Read local commits ahead of upstream. */
   localCommits(repoRoot: string, upstream: string): Promise<Array<{ sha: string; subject: string }>>
+  /** Read HEAD for a repo or worktree. */
+  headSha(repoRoot: string): Promise<string>
+  /** True when `ancestorSha` is already contained by `descendantRef`. */
+  isAncestor(repoRoot: string, ancestorSha: string, descendantRef: string): Promise<boolean>
   /** Read PR metadata for a branch, if the GitHub CLI can resolve one. */
   pullRequestForBranch(repoRoot: string, branch: string): Promise<PullRequestResult>
   /** Commit the current branch's dirty work without changing branches. */
@@ -186,7 +231,21 @@ export class NodeGitDriver implements GitDriver {
   }
 
   async statusSummary(repoRoot: string): Promise<GitStatusSummary> {
-    const gitRoot = await resolveGitTopLevel(repoRoot)
+    let gitRoot: string
+    try {
+      gitRoot = await resolveGitTopLevel(repoRoot)
+    } catch (err) {
+      if (!isNotGitRepositoryError(err)) throw err
+      return {
+        repository: false,
+        ahead: 0,
+        behind: 0,
+        changedCount: 0,
+        untrackedCount: 0,
+        samplePaths: [],
+        clean: true,
+      }
+    }
     const { stdout } = await execGit(['status', '--porcelain=v1', '-b'], {
       cwd: gitRoot,
     })
@@ -202,6 +261,7 @@ export class NodeGitDriver implements GitDriver {
       return !isIgnorableGuildhallStatePath(file.replace(/\/$/, ''))
     })
     return {
+      repository: true,
       branch: parsedHeader.branch,
       upstream: parsedHeader.upstream,
       ahead: parsedHeader.ahead,
@@ -229,6 +289,22 @@ export class NodeGitDriver implements GitDriver {
       .filter((commit) => commit.sha.length > 0)
   }
 
+  async headSha(repoRoot: string): Promise<string> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
+    const { stdout } = await execGit(['rev-parse', 'HEAD'], { cwd: gitRoot })
+    return stdout.trim()
+  }
+
+  async isAncestor(repoRoot: string, ancestorSha: string, descendantRef: string): Promise<boolean> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
+    try {
+      await execGit(['merge-base', '--is-ancestor', ancestorSha, descendantRef], { cwd: gitRoot })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async pullRequestForBranch(repoRoot: string, branch: string): Promise<PullRequestResult> {
     try {
       const gitRoot = await resolveGitTopLevel(repoRoot)
@@ -252,7 +328,7 @@ export class NodeGitDriver implements GitDriver {
 
   async commitAll(repoRoot: string, message: string): Promise<CheckpointResult> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
-    try {
+    const runCommit = async (): Promise<CheckpointResult> => {
       await execGit(['add', '-A'], { cwd: gitRoot })
       await execGit(['reset', '--quiet', 'HEAD', '--', '.guildhall', 'memory', 'guildhall.yaml'],
         { cwd: gitRoot },
@@ -268,8 +344,25 @@ export class NodeGitDriver implements GitDriver {
       await execGit(['commit', '--no-verify', '-m', message], { cwd: gitRoot })
       const { stdout } = await execGit(['rev-parse', 'HEAD'], { cwd: gitRoot })
       return { ok: true, commitSha: stdout.trim() }
+    }
+    try {
+      return await runCommit()
     } catch (err) {
-      return { ok: false, detail: err instanceof Error ? err.message : String(err) }
+      const detail = errorDetail(err)
+      if (await pruneStaleGitIndexLockFromError(detail)) {
+        try {
+          const retry = await runCommit()
+          return {
+            ...retry,
+            detail: retry.detail
+              ? `${retry.detail}\nRecovered from stale git index lock and retried commit.`
+              : 'Recovered from stale git index lock and retried commit.',
+          }
+        } catch (retryErr) {
+          return { ok: false, detail: errorDetail(retryErr) }
+        }
+      }
+      return { ok: false, detail }
     }
   }
 
@@ -542,6 +635,8 @@ export interface InMemoryGitDriverState {
   currentBranch: string
   statuses: Record<string, GitStatusSummary>
   localCommits: Record<string, Array<{ sha: string; subject: string }>>
+  headShas: Record<string, string>
+  ancestors: Record<string, boolean>
   pullRequests: Record<string, PullRequestResult>
   commits: Array<{ repoRoot: string; message: string; result: CheckpointResult }>
   createdWorktrees: CreateWorktreeOptions[]
@@ -577,6 +672,8 @@ export class InMemoryGitDriver implements GitDriver {
       currentBranch: opts.currentBranch ?? 'main',
       statuses: {},
       localCommits: {},
+      headShas: {},
+      ancestors: {},
       pullRequests: {},
       commits: [],
       createdWorktrees: [],
@@ -609,6 +706,7 @@ export class InMemoryGitDriver implements GitDriver {
   }
   setStatusSummary(repoRoot: string, summary: Partial<GitStatusSummary>): void {
     this.state.statuses[repoRoot] = {
+      ...(summary.repository === false ? { repository: false } : { repository: true }),
       branch: summary.branch ?? this.state.currentBranch,
       upstream: summary.upstream,
       ahead: summary.ahead ?? 0,
@@ -621,6 +719,12 @@ export class InMemoryGitDriver implements GitDriver {
   }
   setLocalCommits(repoRoot: string, commits: Array<{ sha: string; subject: string }>): void {
     this.state.localCommits[repoRoot] = commits
+  }
+  setHeadSha(repoRoot: string, sha: string): void {
+    this.state.headShas[repoRoot] = sha
+  }
+  setAncestor(repoRoot: string, ancestorSha: string, descendantRef: string, value: boolean): void {
+    this.state.ancestors[`${repoRoot}\0${ancestorSha}\0${descendantRef}`] = value
   }
   setPullRequest(repoRoot: string, result: PullRequestResult): void {
     this.state.pullRequests[repoRoot] = result
@@ -636,6 +740,7 @@ export class InMemoryGitDriver implements GitDriver {
 
   async statusSummary(repoRoot: string): Promise<GitStatusSummary> {
     return this.state.statuses[repoRoot] ?? {
+      repository: true,
       branch: this.state.currentBranch,
       upstream: 'origin/main',
       ahead: 0,
@@ -649,6 +754,14 @@ export class InMemoryGitDriver implements GitDriver {
 
   async localCommits(repoRoot: string, _upstream: string): Promise<Array<{ sha: string; subject: string }>> {
     return this.state.localCommits[repoRoot] ?? []
+  }
+
+  async headSha(repoRoot: string): Promise<string> {
+    return this.state.headShas[repoRoot] ?? 'HEAD'
+  }
+
+  async isAncestor(repoRoot: string, ancestorSha: string, descendantRef: string): Promise<boolean> {
+    return this.state.ancestors[`${repoRoot}\0${ancestorSha}\0${descendantRef}`] ?? false
   }
 
   async pullRequestForBranch(repoRoot: string, _branch: string): Promise<PullRequestResult> {

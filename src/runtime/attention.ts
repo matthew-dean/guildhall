@@ -1,6 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { getProjectLocalHistoryDir } from '@guildhall/sessions'
+import {
+  hasProjectWorkspaceGoals,
+  readProjectStateDatabaseAttentionRecords,
+  readProjectStateDatabaseReconciliations,
+  replaceProjectStateDatabaseAttentionRecords,
+  upsertProjectStateDatabaseReconciliations,
+} from '@guildhall/sessions'
 import { compareInboxItems, type InboxItem } from './inbox.js'
 import { getProjectMigrationStatus } from './migrations.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
@@ -42,30 +46,17 @@ const PROJECT_UNDERSTANDING_CAPABILITIES = [
   'intake.schema-surface.v1',
 ] as const
 
-function attentionPath(projectPath: string): string {
-  return join(getProjectLocalHistoryDir(projectPath), 'project-state', 'attention.json')
-}
-
-function reconciliationsPath(projectPath: string): string {
-  return join(getProjectLocalHistoryDir(projectPath), 'project-state', 'reconciliations.json')
-}
-
 function readStore(projectPath: string): AttentionStore {
-  try {
-    const parsed = JSON.parse(readFileSync(attentionPath(projectPath), 'utf8')) as Partial<AttentionStore>
-    return {
-      version: 1,
-      records: Array.isArray(parsed.records) ? parsed.records as AttentionRecord[] : [],
-    }
-  } catch {
-    return { version: 1, records: [] }
-  }
+  const records = readProjectStateDatabaseAttentionRecords<AttentionRecord>(projectPath)
+  return { version: 1, records: records?.map(record => record.payload).filter(record => typeof record.id === 'string') ?? [] }
+}
+
+export function readAttentionRecords(projectPath: string): AttentionRecord[] {
+  return [...readStore(projectPath).records]
 }
 
 function writeStore(projectPath: string, store: AttentionStore): void {
-  const file = attentionPath(projectPath)
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `${JSON.stringify({ version: 1, records: store.records }, null, 2)}\n`, 'utf8')
+  replaceProjectStateDatabaseAttentionRecords(projectPath, store.records)
   recordGuildhallRuntimeWrite(projectPath, ['attention-records.v1'])
 }
 
@@ -81,6 +72,7 @@ export function attentionIdForInboxItem(item: InboxItem): string {
   if (item.kind === 'required_migration') return `migration:${item.migrationId}`
   if (item.kind === 'project_understanding') return 'project-understanding:intake-reconcile'
   if (item.kind === 'workspace_import_pending') return 'workspace-import:review'
+  if (item.kind === 'proof_reconciliation') return 'proof-reconciliation:done-with-unmet-proof'
   if (item.kind === 'bootstrap_missing') return 'bootstrap:readiness'
   const taskId = 'taskId' in item ? item.taskId : undefined
   if (taskId) return `${item.kind}:${taskId}`
@@ -137,23 +129,15 @@ function toOpenRecord(item: InboxItem, existing: AttentionRecord | undefined, no
 }
 
 function hasWorkspaceImportOutcome(projectPath: string): boolean {
-  return existsSync(join(getProjectLocalHistoryDir(projectPath), 'project-state', 'workspace-goals.json'))
+  return hasProjectWorkspaceGoals(projectPath)
 }
 
 function readResolvedReconciliationCapabilities(projectPath: string): Set<string> {
-  try {
-    const parsed = JSON.parse(readFileSync(reconciliationsPath(projectPath), 'utf8')) as {
-      records?: Array<{ capabilityId?: unknown; status?: unknown }>
-    }
-    return new Set(
-      (Array.isArray(parsed.records) ? parsed.records : [])
-        .filter(record => record.status === 'resolved')
-        .map(record => typeof record.capabilityId === 'string' ? record.capabilityId : '')
-        .filter(Boolean),
-    )
-  } catch {
-    return new Set()
-  }
+  return new Set(
+    (readProjectStateDatabaseReconciliations(projectPath) ?? [])
+      .filter(record => record.status === 'resolved')
+      .map(record => record.capabilityId),
+  )
 }
 
 export function buildProjectUnderstandingAdvisories(projectPath: string): InboxItem[] {
@@ -172,15 +156,15 @@ export function buildProjectUnderstandingAdvisories(projectPath: string): InboxI
   }]
 }
 
-export function reconcileAttentionRecords(input: {
-  projectPath: string
+export function projectAttentionRecords(input: {
+  existingRecords: readonly AttentionRecord[]
   openItems: readonly InboxItem[]
+  now?: string
 }): { openItems: AttentionRecord[]; history: AttentionRecord[] } {
-  const now = new Date().toISOString()
-  const store = readStore(input.projectPath)
-  const byId = new Map(store.records.map(record => [record.id, record]))
+  const now = input.now ?? new Date().toISOString()
+  const byId = new Map(input.existingRecords.map(record => [record.id, record]))
   const openIds = new Set<string>()
-  const nextRecords = [...store.records]
+  const nextRecords = [...input.existingRecords]
 
   for (const item of input.openItems) {
     const id = attentionIdForInboxItem(item)
@@ -213,9 +197,6 @@ export function reconcileAttentionRecords(input: {
   const normalized = nextRecords
     .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt))
     .slice(0, 250)
-  const nextStore = { version: 1 as const, records: normalized }
-  writeStore(input.projectPath, nextStore)
-
   const history = normalized
   return {
     openItems: history
@@ -223,6 +204,18 @@ export function reconcileAttentionRecords(input: {
       .sort((a, b) => compareInboxItems(a, b) || (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt)),
     history,
   }
+}
+
+export function reconcileAttentionRecords(input: {
+  projectPath: string
+  openItems: readonly InboxItem[]
+}): { openItems: AttentionRecord[]; history: AttentionRecord[] } {
+  const result = projectAttentionRecords({
+    existingRecords: readStore(input.projectPath).records,
+    openItems: input.openItems,
+  })
+  writeStore(input.projectPath, { version: 1, records: result.history })
+  return result
 }
 
 export async function buildProjectMigrationAdvisories(projectPath: string): Promise<InboxItem[]> {
@@ -262,24 +255,13 @@ export function markAttentionDismissed(projectPath: string, id: string, detail =
 }
 
 export function recordReconciliationResolved(projectPath: string, capabilityIds = PROJECT_UNDERSTANDING_CAPABILITIES): void {
-  const file = reconciliationsPath(projectPath)
-  let records: Array<{ capabilityId: string; status: 'resolved'; resolvedAt: string; resolution: 'reconciled' }> = []
-  try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { records?: typeof records }
-    records = Array.isArray(parsed.records) ? parsed.records : []
-  } catch {
-    records = []
-  }
   const now = new Date().toISOString()
-  const byId = new Map(records.map(record => [record.capabilityId, record]))
-  for (const capabilityId of capabilityIds) {
-    byId.set(capabilityId, {
+  upsertProjectStateDatabaseReconciliations(projectPath, capabilityIds.map(capabilityId => (
+    {
       capabilityId,
       status: 'resolved',
       resolvedAt: now,
       resolution: 'reconciled',
-    })
-  }
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `${JSON.stringify({ version: 1, records: [...byId.values()] }, null, 2)}\n`, 'utf8')
+    }
+  )))
 }

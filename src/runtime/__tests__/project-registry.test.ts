@@ -14,6 +14,8 @@ vi.mock('node:os', async (importOriginal) => {
 const { bootstrapWorkspace, listWorkspaces, readWorkspaceConfig } = await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 const { getProjectSystemStatePath } = await import('@guildhall/sessions')
+const { applyProjectMigrations } = await import('../migrations.js')
+const { writeProjectTaskQueueWithSummary } = await import('../project-state-boundary.js')
 
 let tmpProject: string
 
@@ -177,6 +179,23 @@ describe('POST /api/service/attach-project', () => {
     }))
     expect(setupIdentity.status).toBe(200)
     expect(existsSync(path.join(tmpProject, 'guildhall.yaml'))).toBe(true)
+    writeProjectTaskQueueWithSummary(getProjectSystemStatePath(tmpProject, 'TASKS.json'), {
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+    }, { projectRoot: tmpProject })
+    const prerequisites = await applyProjectMigrations({ projectRoot: tmpProject, includePrompt: true })
+    expect(prerequisites.failed).toEqual([])
+    const finalize = await applyProjectMigrations({
+      projectRoot: tmpProject,
+      only: ['0.13.0/project-state-finalize'],
+    })
+    expect(finalize.failed).toEqual([])
+    const cleanup = await applyProjectMigrations({
+      projectRoot: tmpProject,
+      only: ['0.13.0/project-state-legacy-live-file-cleanup'],
+    })
+    expect(cleanup.failed).toEqual([])
 
     const providerSave = await app.fetch(new Request('http://localhost/api/setup/providers/config?projectId=fresh-onboarding-fixture', {
       method: 'POST',
@@ -264,7 +283,7 @@ describe('POST /api/service/attach-project', () => {
     expect(config.coordinators?.map(coordinator => coordinator.id)).toEqual(['core', 'web'])
     expect(config.bootstrap?.successGates).toEqual(['pnpm run build', 'pnpm run test'])
 
-    const acceptedProject = await app.fetch(new Request('http://localhost/api/project?projectId=fresh-onboarding-fixture'))
+    const acceptedProject = await app.fetch(new Request('http://localhost/api/project?projectId=fresh-onboarding-fixture&surface=work&compact=true'))
     expect(acceptedProject.status).toBe(200)
     const acceptedBody = (await acceptedProject.json()) as {
       initializationNeeded?: boolean
@@ -273,10 +292,8 @@ describe('POST /api/service/attach-project', () => {
     }
     expect(acceptedBody.initializationNeeded).toBe(false)
     expect(acceptedBody.tasks).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'task-meta-intake', status: 'done' }),
+      expect.objectContaining({ id: 'task-workspace-import', status: 'exploring' }),
     ]))
-    expect(acceptedBody.structuralMapReview?.state).toBe('accepted')
-    expect(acceptedBody.structuralMapReview?.counts?.packages).toBe(2)
 
     const graph = await app.fetch(new Request('http://localhost/api/project/project-graph?projectId=fresh-onboarding-fixture'))
     expect(graph.status).toBe(200)

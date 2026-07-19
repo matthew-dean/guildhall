@@ -52,6 +52,8 @@ export function personaReviewerSystemPrompt(guild: GuildDefinition): string {
     '',
     'If you notice a broader improvement that would be nice but is not required to accept this task, record it as a non-blocking follow-up idea instead of using it to force revision.',
     '',
+    'Do not invent proof commands. If the task/spec names an exact command, review that exact command. If it only asks for a local proof command, evaluate the command actually recorded in the worker proof packet or gate results; do not substitute a different command from habit.',
+    '',
     'For small local tasks (types, tests, narrow composable edits, small UI tweaks, one-line cleanups), default to approving correct work. Do NOT demand broad architecture, telemetry, performance-measurement, API versioning, service extraction, observability, transactions, or boundary-validation rewrites unless the diff directly changed that surface or introduced a concrete bug there.',
     '',
     'Expertise includes restraint. Good design and standard practices matter, but they are only blocking when they are important for this task, this change, and this product reality. Do not explode complexity without a clear task-local benefit.',
