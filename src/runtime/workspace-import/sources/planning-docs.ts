@@ -285,17 +285,6 @@ export const planningDocsSource: TaskSource = {
               confidence: kind === 'context' ? 'medium' : 'medium',
             })
           }
-          if (STAGE_HEADING_RE.test(currentSection)) {
-            signals.push({
-              source: 'planning-docs',
-              kind: 'context',
-              title: currentSection,
-              evidence: `${rel}: ${line.trim()}`.slice(0, 240),
-              references: [abs],
-              ...(domainHint ? { domainHint } : {}),
-              confidence: 'medium',
-            })
-          }
           continue
         }
 

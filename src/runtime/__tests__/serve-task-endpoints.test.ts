@@ -32,6 +32,7 @@ import {
   legacyRuntimeFromTask,
   legacyWorkspaceFromTask,
 } from '../effective-task.js'
+import { applyProjectMigrations } from '../migrations.js'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
@@ -97,6 +98,15 @@ async function applyStorageBoundaryMigration(app: ReturnType<typeof buildServeAp
     }),
   )
   expect(migration.status).toBe(200)
+}
+
+async function applyExecutionPlanningMigration(): Promise<void> {
+  const result = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.11.0/execution-planning-decomposition'],
+    appVersion: 'serve-task-endpoints-test',
+  })
+  expect(result.failed).toEqual([])
 }
 
 async function seedTask(id: string, overrides: Record<string, any> = {}): Promise<void> {
@@ -1765,6 +1775,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
         createdBy: 'task-sizing',
       },
     })
+    await applyExecutionPlanningMigration()
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(
@@ -1831,6 +1842,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
         createdBy: 'task-sizing',
       },
     })
+    await applyExecutionPlanningMigration()
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(
@@ -1998,6 +2010,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
         createdBy: 'task-sizing',
       },
     })
+    await applyExecutionPlanningMigration()
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(

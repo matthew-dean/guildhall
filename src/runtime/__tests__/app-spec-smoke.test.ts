@@ -243,7 +243,22 @@ describe('Pantry Pulse app-spec smoke fixture', () => {
 
     const approved = await approveSpec({ memoryDir, taskId: intake.taskId })
     expect(approved.success).toBe(true)
-    await mutateTask(memoryDir, intake.taskId, { status: 'in_progress' })
+    const shapedTask = await taskById(memoryDir, intake.taskId)
+    // This fixture proves the execution loop for one already-bounded work item.
+    // Keep the decomposition rule intact in production, but make the fixture's
+    // explicit scope decision durable before dispatching it.
+    await mutateTask(memoryDir, intake.taskId, {
+      status: 'in_progress',
+      taskReadiness: shapedTask.taskReadiness
+        ? { ...shapedTask.taskReadiness, recommendation: 'ready' }
+        : shapedTask.taskReadiness,
+      sizePlan: shapedTask.sizePlan
+        ? { ...shapedTask.sizePlan, action: 'proceed_with_warning' }
+        : shapedTask.sizePlan,
+      decomposition: shapedTask.decomposition
+        ? { ...shapedTask.decomposition, action: 'keep' }
+        : shapedTask.decomposition,
+    })
     await upsertTaskRuntimeState(projectPath, intake.taskId, {
       assignedTo: 'worker-agent',
       updatedAt: new Date().toISOString(),

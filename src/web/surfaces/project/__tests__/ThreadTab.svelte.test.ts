@@ -2925,7 +2925,7 @@ describe('ThreadTab', () => {
     await screen.findByRole('button', { name: /view spec/i })
 
     await userEvent.click(screen.getByRole('button', { name: /view spec/i }))
-    const dialog = await screen.findByRole('dialog', { name: /approve split/i })
+    const dialog = await screen.findByRole('dialog', { name: /review work shape/i })
     await userEvent.click(within(dialog).getByRole('button', { name: /yes, use this split/i }))
 
     await waitFor(() => {

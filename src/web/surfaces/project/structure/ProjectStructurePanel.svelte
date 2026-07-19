@@ -62,9 +62,9 @@
   .structure-orientation {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(220px, max-content);
-    gap: var(--s-4);
+    gap: var(--gh-space-4);
     align-items: start;
-    padding: var(--s-4);
+    padding: var(--gh-space-4);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-raised);
@@ -74,7 +74,7 @@
   .structure-orientation-copy,
   .structure-orientation-side {
     display: grid;
-    gap: var(--s-1);
+    gap: var(--gh-space-1);
     min-width: 0;
   }
 

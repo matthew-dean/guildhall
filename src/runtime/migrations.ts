@@ -403,7 +403,7 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     scope: 'project',
     safety: 'prompt',
     requirement: 'required',
-    summary: 'Turns represented legacy split recommendations into execution action audit records and routes unmaterialized recommendations to coordinator recovery.',
+    summary: 'Moves represented legacy split recommendations into execution action audit records and routes unmaterialized recommendations to coordinator recovery.',
     async detect(projectRoot) {
       const result = await migrateWorkDecompositionState({ projectRoot, apply: false })
       return {
@@ -608,6 +608,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.10.0/owner-input-state-repair': 'migrations.test.ts: owner-input state repair is idempotent',
   '0.10.0/project-state-storage-boundary': 'migrations.test.ts: storage-boundary migration is idempotent',
   '0.10.0/restore-evacuated-task-state': 'migrations.test.ts: restores stranded evacuated task state into the system-local queue and readable task files',
+  '0.11.0/execution-planning-decomposition': 'migrations.test.ts: execution-planning decomposition migration is idempotent',
 }
 
 const REPO_LOCAL_STATE_MIGRATIONS = new Set([
