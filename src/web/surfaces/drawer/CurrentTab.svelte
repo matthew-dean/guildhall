@@ -22,6 +22,7 @@
     isQueuedSpecRevision,
     needsWorkerHandoffSpecCleanup,
     needsRecovery,
+    needsSourceRecoveryShaping,
   } from '../../lib/task-state.js'
   import type {
     Task,
@@ -163,6 +164,9 @@
       return 'Imported from your project notes, but not ready for a worker yet. Next step: turn this note into a task brief with scope, evidence, and acceptance criteria.'
     }
     if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
+      if (needsSourceRecoveryShaping(turn)) {
+        return 'Guildhall needs to recover the source-backed task brief before a worker can use it. Continue shaping from the cited project evidence.'
+      }
       if (!isProjectRunActive()) {
         return isQueuedSpecRevision(turn)
           ? 'The draft spec and your latest answers are saved. Coordinator review is paused until the run resumes.'
@@ -205,7 +209,7 @@
   }
 
   function canRunTask(turn: TaskThreadInFlightTurn): boolean {
-    if (projectStartBlockerMessage) return false
+    if (actionBlockedByProject(turn)) return false
     if (needsWorkerHandoffSpecCleanup(turn)) return false
     if (isProjectRunActive() && turn.taskStatus !== 'import_draft') return false
     return !turn.liveAgent && (
@@ -244,9 +248,14 @@
     return runStatus === 'running' || runStatus === 'stopping'
   }
 
+  function actionBlockedByProject(turn: TaskThreadInFlightTurn): boolean {
+    return Boolean(projectStartBlockerMessage) && !needsSourceRecoveryShaping(turn)
+  }
+
   function showsTaskAction(turn: TaskThreadInFlightTurn): boolean {
     if (projectStartBlockerMessage) {
       return !turn.liveAgent && (
+        needsSourceRecoveryShaping(turn) ||
         turn.taskStatus === 'ready' ||
         turn.taskStatus === 'exploring' ||
         turn.taskStatus === 'in_progress' ||
@@ -260,12 +269,13 @@
   }
 
   function runLabel(turn: TaskThreadInFlightTurn): string {
-    if (projectStartBlockerMessage) return 'Project blocked'
+    if (actionBlockedByProject(turn)) return 'Project blocked'
     if (briefShapingTimedOut(turn) || briefShapingPaused(turn)) return 'Try shaping brief again'
     switch (turn.taskStatus) {
       case 'ready': return needsWorkerHandoffSpecCleanup(turn) ? briefFixButtonLabel(turn) : 'Resume only this work item'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
+        if (needsSourceRecoveryShaping(turn)) return 'Continue shaping brief'
         if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue shaping brief'
         return isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
       case 'review': return 'Resume review'
@@ -646,9 +656,9 @@
             {#if showsTaskAction(turn)}
               <Row justify="end" gap="2">
                 {#if needsWorkerHandoffSpecCleanup(turn)}
-                  <Button variant="agent" disabled={runBusy || Boolean(projectStartBlockerMessage)} onclick={onRunTask}>
+                  <Button variant="agent" disabled={runBusy || actionBlockedByProject(turn)} onclick={onRunTask}>
                     <Icon name="sparkles" size={14} />
-                    {projectStartBlockerMessage ? 'Project blocked' : briefFixButtonLabel(turn)}
+                    {actionBlockedByProject(turn) ? 'Project blocked' : briefFixButtonLabel(turn)}
                   </Button>
                 {:else if turn.taskStatus !== 'import_draft' && isProjectRunActive()}
                   <Button variant="secondary" disabled>
@@ -657,8 +667,8 @@
                 {:else if turn.importedDraft && !turn.liveAgent}
                   <Button
                     variant="agent"
-                    disabled={runBusy || Boolean(projectStartBlockerMessage)}
-                    onclick={turn.taskStatus === 'import_draft' ? onShapeDraft : onRunTask}
+                    disabled={runBusy || actionBlockedByProject(turn)}
+                    onclick={turn.taskStatus === 'import_draft' || needsSourceRecoveryShaping(turn) ? onShapeDraft : onRunTask}
                   >
                     <Icon name="sparkles" size={14} />
                     {runLabel(turn)}
@@ -666,7 +676,7 @@
                 {:else if isQueuedSpecRevision(turn)}
                   <Button
                     variant="agent"
-                    disabled={runBusy || Boolean(projectStartBlockerMessage)}
+                    disabled={runBusy || actionBlockedByProject(turn)}
                     onclick={onRunTask}
                   >
                     <Icon name="sparkles" size={14} />
@@ -675,8 +685,8 @@
                 {:else}
                   <Button
                     variant="agent"
-                    disabled={runBusy || Boolean(projectStartBlockerMessage)}
-                    onclick={turn.taskStatus === 'import_draft' ? onShapeDraft : onRunTask}
+                    disabled={runBusy || actionBlockedByProject(turn)}
+                    onclick={turn.taskStatus === 'import_draft' || needsSourceRecoveryShaping(turn) ? onShapeDraft : onRunTask}
                   >
                     <Icon name="sparkles" size={14} />
                     {runLabel(turn)}

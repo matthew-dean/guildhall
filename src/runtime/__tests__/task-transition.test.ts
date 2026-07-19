@@ -27,13 +27,13 @@ describe('task transitions', () => {
     })
   })
 
-  it('rejects worker start for containing work that still needs split children', () => {
+  it('rejects worker start for containing work that still needs child work planned', () => {
     const result = applyTaskTransition({
       task: {
         id: 'feature',
         status: 'ready',
         hierarchy: { childIds: ['child-a'] },
-        taskReadiness: { recommendation: 'split' },
+        taskReadiness: { recommendation: 'requires_child_work' },
       },
       event: 'start_worker',
       actor: 'orchestrator',
@@ -149,6 +149,18 @@ describe('task transitions', () => {
       receipt: { from: 'blocked', to: 'review', event: 'recover_to_review' },
     })
     expect(ready).toMatchObject({ kind: 'applied', nextState: 'ready' })
+  })
+
+  it('can return active work to shaping when its proof contract is invalid', () => {
+    for (const status of ['ready', 'in_progress', 'review', 'gate_check'] as const) {
+      expect(applyTaskTransition({
+        task: { id: `task-${status}`, status },
+        event: 'recover_to_exploring',
+        actor: 'acceptance-command-recovery',
+        now,
+        evidenceRefs: ['criterion:ac-1'],
+      })).toMatchObject({ kind: 'applied', nextState: 'exploring' })
+    }
   })
 
   it('normalizes imported drafts through explicit intake events', () => {

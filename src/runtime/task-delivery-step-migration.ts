@@ -1,6 +1,12 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText, getProjectSystemStatePath } from '@guildhall/sessions'
+import { getProjectMigrationSnapshotDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
+import { writeMigrationSnapshot } from './migration-snapshot.js'
+import {
+  assertLegacyCurrentStateMigrationAccess,
+  legacyCurrentStateMigrationAvailable,
+} from './runtime-compatibility.js'
 
 export interface TaskDeliveryStepMigrationInput {
   projectRoot: string
@@ -11,6 +17,7 @@ export interface TaskDeliveryStepMigrationResult {
   changedTasks: string[]
   affectedPaths: string[]
   backupPath?: string
+  manifestPath?: string
 }
 
 interface RawTask {
@@ -45,7 +52,11 @@ function tasksPath(projectRoot: string): string {
 }
 
 function backupPath(projectRoot: string): string {
-  return path.join(path.dirname(tasksPath(projectRoot)), 'TASKS.before-0.10.0-task-delivery-steps.json')
+  return path.join(
+    getProjectMigrationSnapshotDir(projectRoot),
+    'task-delivery-steps',
+    'TASKS.before-0.10.0-task-delivery-steps.json',
+  )
 }
 
 function parseQueue(raw: string): QueueShape {
@@ -54,7 +65,7 @@ function parseQueue(raw: string): QueueShape {
   if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { tasks?: unknown }).tasks)) {
     return parsed as QueueShape
   }
-  return { tasks: [] }
+  throw new Error('Cannot migrate task delivery steps: legacy TASKS.json does not contain a task queue.')
 }
 
 function taskId(task: RawTask): string | null {
@@ -106,6 +117,10 @@ function cloneTask(task: RawTask): RawTask {
 export async function migrateTaskDeliveryStepState(
   input: TaskDeliveryStepMigrationInput,
 ): Promise<TaskDeliveryStepMigrationResult> {
+  if (!legacyCurrentStateMigrationAvailable(input.projectRoot)) {
+    if (input.apply) assertLegacyCurrentStateMigrationAccess(input.projectRoot, '0.10.0/task-delivery-steps')
+    return { changedTasks: [], affectedPaths: [] }
+  }
   const file = tasksPath(input.projectRoot)
   let raw: string
   try {
@@ -167,15 +182,27 @@ export async function migrateTaskDeliveryStepState(
   if (changedTasks.length === 0) return { changedTasks: [], affectedPaths: [] }
 
   const backup = backupPath(input.projectRoot)
+  let manifestPath: string | undefined
   if (input.apply) {
-    await fs.mkdir(path.dirname(file), { recursive: true })
-    await fs.writeFile(backup, raw, 'utf8').catch(() => undefined)
-    await atomicWriteText(file, `${JSON.stringify({ ...queue, tasks }, null, 2)}\n`)
+    const snapshot = await writeMigrationSnapshot({
+      projectRoot: input.projectRoot,
+      migrationId: '0.10.0/task-delivery-steps',
+      sourcePath: file,
+      snapshotPath: backup,
+      sourceBytes: raw,
+    })
+    manifestPath = snapshot.manifestPath
+    writeProjectTaskQueueWithSummary(file, { ...queue, tasks }, {
+      projectId: path.basename(input.projectRoot),
+      fullCompatibility: true,
+    })
   }
 
   return {
     changedTasks,
-    affectedPaths: [TASKS_RELATIVE_PATH, backup],
-    backupPath: backup,
+    affectedPaths: input.apply
+      ? [TASKS_RELATIVE_PATH, backup, manifestPath as string]
+      : [TASKS_RELATIVE_PATH],
+    ...(input.apply ? { backupPath: backup, manifestPath } : {}),
   }
 }

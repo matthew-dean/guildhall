@@ -8,6 +8,8 @@ import {
   atomicWriteText,
   listProjectStateDirFromMemoryDir,
   listProjectStateDirFromMemoryDirAsync,
+  emitProjectSummaryInvalidation,
+  projectRootFromMemoryDir,
   projectStatePathFromMemoryDir,
 } from '@guildhall/sessions'
 import { readCachedJson } from './file-read-cache.js'
@@ -354,6 +356,7 @@ export async function saveBoundedChatSession(memoryDir: string, session: Bounded
   const filePath = boundedChatPath(memoryDir, parsed.id)
   await fsp.mkdir(path.dirname(filePath), { recursive: true })
   atomicWriteText(filePath, JSON.stringify(parsed, null, 2) + '\n')
+  emitProjectSummaryInvalidation(projectRootFromMemoryDir(memoryDir), 'bounded-chat-write', { domains: ['thread'] })
 }
 
 export async function getNextBoundedChatPrompt(rawInput: z.input<typeof GetNextPromptInput>): Promise<BoundedChatPromptResult> {

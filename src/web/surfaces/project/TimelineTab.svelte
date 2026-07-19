@@ -7,7 +7,7 @@
   import { onEvent, summarizeEvent, eventTaskId, eventCssClass } from '../../lib/events.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
-  import type { ProjectDetail, EventEnvelope } from '../../lib/types.js'
+  import type { ProjectActivityHistoryPage, ProjectDetail, EventEnvelope } from '../../lib/types.js'
 
   interface Props {
     detail: ProjectDetail
@@ -16,10 +16,60 @@
   let { detail }: Props = $props()
 
   let events = $state<EventEnvelope[]>([])
+  let historyLoading = $state(false)
+  let historyLoadingMore = $state(false)
+  let historyError = $state<string | null>(null)
+  let historyPage = $state<ProjectActivityHistoryPage | null>(null)
 
   $effect(() => {
-    events = (detail.recentEvents ?? []).slice().reverse()
+    if ('recentEvents' in detail) {
+      events = (detail.recentEvents ?? []).slice().reverse()
+      historyPage = null
+      return
+    }
+    let cancelled = false
+    historyLoading = true
+    historyError = null
+    fetch(`/api/project/activity/history?projectId=${encodeURIComponent(detail.id ?? '')}&limit=100`, { cache: 'no-store' })
+      .then(async response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return await response.json() as ProjectActivityHistoryPage
+      })
+      .then(page => {
+        if (cancelled) return
+        historyPage = page
+        events = dedupeEvents([...events, ...page.events])
+      })
+      .catch(error => {
+        if (cancelled) return
+        historyError = error instanceof Error ? error.message : String(error)
+      })
+      .finally(() => {
+        if (!cancelled) historyLoading = false
+      })
+    return () => { cancelled = true }
   })
+
+  async function loadOlderActivity() {
+    const cursor = historyPage?.nextCursor
+    if (cursor === undefined || historyLoadingMore) return
+    historyLoadingMore = true
+    historyError = null
+    try {
+      const response = await fetch(
+        `/api/project/activity/history?projectId=${encodeURIComponent(detail.id ?? '')}&limit=100&cursor=${cursor}`,
+        { cache: 'no-store' },
+      )
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const page = await response.json() as ProjectActivityHistoryPage
+      events = dedupeEvents([...events, ...page.events])
+      historyPage = page
+    } catch (error) {
+      historyError = error instanceof Error ? error.message : String(error)
+    } finally {
+      historyLoadingMore = false
+    }
+  }
 
   $effect(() => {
     const off = onEvent(ev => {
@@ -91,7 +141,11 @@
 </script>
 
 <Card title="Coordinator timeline">
-  {#if events.length === 0}
+  {#if historyLoading && events.length === 0}
+    <p class="muted">Loading retained activity...</p>
+  {:else if historyError && events.length === 0}
+    <p class="muted">Activity history is unavailable right now: {historyError}</p>
+  {:else if events.length === 0}
     <p class="muted">No events recorded yet. Start the coordinator to populate the timeline.</p>
   {:else if operatorEvents.length === 0}
     <p class="muted">
@@ -129,6 +183,11 @@
           {/each}
         </div>
       </details>
+    {/if}
+    {#if historyPage?.hasMore}
+      <button type="button" class="history-more" onclick={loadOlderActivity} disabled={historyLoadingMore}>
+        {historyLoadingMore ? 'Loading older activity...' : 'Load older activity'}
+      </button>
     {/if}
     <div class="feed">
       {#each operatorEvents as ev, i (i)}
@@ -232,6 +291,24 @@
   }
   .ev-link:hover {
     text-decoration: underline;
+  }
+  .history-more {
+    display: block;
+    margin: var(--s-3) auto 0;
+    padding: var(--s-1) var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
+  }
+  .history-more:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--accent) 10%, transparent);
+  }
+  .history-more:disabled {
+    cursor: wait;
+    opacity: 0.7;
   }
   .ev-transition { color: var(--accent-2); }
   .ev-escalation { color: var(--warn); }

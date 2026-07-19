@@ -9,11 +9,12 @@ import {
   getProjectTranscriptPath,
   inferProjectRootFromMemoryDir,
   projectStatePathFromMemoryDir,
-  readProjectStateTextFromMemoryDirAsync,
-  writeProjectStateJsonFromMemoryDirAsync,
+  readProjectStateDatabaseQueueRevision,
 } from '@guildhall/sessions'
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
-import { appendExploringTranscript } from '@guildhall/tools'
+import { appendExploringTranscript, replaceExploringTranscript } from '@guildhall/tools'
+import { readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
+import { META_INTAKE_TASK_ID } from './project-reserved-task-ids.js'
 import {
   AGENT_SETTINGS_FILENAME,
   loadLeverSettings,
@@ -48,15 +49,16 @@ import {
 // owns the reserved task, the draft-format parser, and the config merge.
 // ---------------------------------------------------------------------------
 
-export const META_INTAKE_TASK_ID = 'task-meta-intake'
 export const META_INTAKE_DOMAIN = '_meta'
+
+export { META_INTAKE_TASK_ID } from './project-reserved-task-ids.js'
 
 function agentSettingsPathFor(memoryDir: string): string {
   return projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME)
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await readProjectStateTextFromMemoryDirAsync(memoryDir, 'TASKS.json').catch((err: unknown) => {
+  const raw = await readProjectTaskQueueForRichMutation(inferProjectRootFromMemoryDir(memoryDir)).catch((err: unknown) => {
     if (
       err &&
       typeof err === 'object' &&
@@ -74,7 +76,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
       tasks: [],
     })
   }
-  const parsed = JSON.parse(raw)
+  const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
   }
@@ -82,7 +84,13 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+  const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  const expectedQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+  await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
+    projectId: path.basename(inferProjectRootFromMemoryDir(memoryDir)),
+    projectRoot: inferProjectRootFromMemoryDir(memoryDir),
+    ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
+  })
 }
 
 const META_INTAKE_SEED = `You are bootstrapping a new Guildhall workspace. Your job in this conversation is to infer the internal routing slices the single local coordinator should use for this codebase, then infer initial lever positions from the user's project-guidance answers.
@@ -231,11 +239,14 @@ async function writeMetaIntakeTranscript(
   memoryDir: string,
   seedMessage?: string,
 ): Promise<string> {
-  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
-  const transcriptPath = getProjectTranscriptPath(projectRoot, 'exploring', META_INTAKE_TASK_ID)
-  await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
-  await writeManagedTextFile(transcriptPath, `${seedMessage ?? META_INTAKE_SEED}\n`, 'utf-8')
-  return transcriptPath
+  const result = await replaceExploringTranscript({
+    memoryDir,
+    taskId: META_INTAKE_TASK_ID,
+    role: 'system',
+    content: seedMessage ?? META_INTAKE_SEED,
+  })
+  if (!result.success || !result.path) throw new Error(`Failed to write meta-intake history: ${result.error ?? 'unknown'}`)
+  return result.path
 }
 
 /**
@@ -267,6 +278,8 @@ export async function createMetaIntakeTask(
       'Inspect the codebase, infer the project structure, and draft the first starter tasks. Ask only if confidence is low and being wrong would matter.',
     domain: META_INTAKE_DOMAIN,
     projectPath: input.projectPath,
+    references: [],
+    sourceClaims: [],
     status: 'exploring',
     priority: 'critical',
     dependsOn: [],
@@ -318,6 +331,8 @@ export async function rerunMetaIntakeTask(
       'Inspect the codebase, infer the project structure, and draft the first starter tasks. Ask only if confidence is low and being wrong would matter.',
     domain: META_INTAKE_DOMAIN,
     projectPath: input.projectPath,
+    references: [],
+    sourceClaims: [],
     status: 'exploring',
     priority: 'critical',
     dependsOn: [],

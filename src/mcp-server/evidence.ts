@@ -4,6 +4,7 @@ import path from 'node:path'
 import {
   appendTaskEvidence as appendStoredTaskEvidence,
   getProjectSystemStatePathFromMemoryDir,
+  readProjectStateDatabaseCurrentAuthority,
 } from '@guildhall/sessions'
 import {
   createCapabilityRequest,
@@ -24,19 +25,21 @@ export async function appendTaskEvidence(
   input: AppendTaskEvidenceInput,
 ): Promise<string> {
   const now = new Date().toISOString()
-  const progressPath = getProjectSystemStatePathFromMemoryDir(ctx.projectStateDir, 'PROGRESS.md')
-  const existing = await readOptional(progressPath, '# Progress\n')
-  const entry = [
-    '',
-    `## ${now} MCP evidence for ${input.taskId}`,
-    '',
-    input.summary.trim(),
-    '',
-    `source: ${input.source.trim()}`,
-    '',
-  ].join('\n')
-  await fsp.mkdir(path.dirname(progressPath), { recursive: true })
-  writeManagedTextFileSync(progressPath, existing.trimEnd() + entry)
+  if (readProjectStateDatabaseCurrentAuthority(ctx.projectRoot) !== 'database') {
+    const progressPath = getProjectSystemStatePathFromMemoryDir(ctx.projectStateDir, 'PROGRESS.md')
+    const existing = await readOptional(progressPath, '# Progress\n')
+    const entry = [
+      '',
+      `## ${now} MCP evidence for ${input.taskId}`,
+      '',
+      input.summary.trim(),
+      '',
+      `source: ${input.source.trim()}`,
+      '',
+    ].join('\n')
+    await fsp.mkdir(path.dirname(progressPath), { recursive: true })
+    writeManagedTextFileSync(progressPath, existing.trimEnd() + entry)
+  }
   await appendStoredTaskEvidence(ctx.projectRoot, input.taskId, {
     id: `${input.taskId}-mcp-evidence-${now.replace(/[^0-9A-Za-z]/g, '')}`,
     kind: 'note',

@@ -17,6 +17,7 @@ import {
 } from '@guildhall/levers'
 import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 import { buildEffectiveTask } from '../effective-task.js'
+import { readProjectCanonicalCurrentState } from '../project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // End-to-end: when reviewer_fanout_policy = coordinator_adjudicates_on_conflict
@@ -96,10 +97,14 @@ async function writeTask(task: Task): Promise<void> {
 }
 
 async function readQueue(): Promise<TaskQueue> {
-  const queue = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+  const current = await readProjectCanonicalCurrentState(tmpDir)
   return {
-    ...queue,
-    tasks: await Promise.all(queue.tasks.map(async task => buildEffectiveTask(task.projectPath, task))) as unknown as Task[],
+    version: 1,
+    ...current.rawQueue,
+    lastUpdated: current.rawQueue.lastUpdated ?? new Date().toISOString(),
+    tasks: await Promise.all(current.rawQueue.tasks.map(task =>
+      buildEffectiveTask(tmpDir, task as Task, { evidence: 'full' }),
+    )) as unknown as Task[],
   }
 }
 
@@ -191,6 +196,50 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
       failingSignals: [],
     })
     expect(after.reviewVerdicts.at(-1)?.reason).toContain('procedural-only dissent')
+  })
+
+  it('does not bounce completed work for Guildhall checkpoint or audit bookkeeping requests', async () => {
+    await writeTask(mkTask())
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) => {
+      return personas.map(
+        (persona, i): PersonaVerdict =>
+          i === 0
+            ? {
+                guildSlug: persona.slug,
+                guildName: persona.name,
+                verdict: 'revise',
+                reasoning:
+                  'All acceptance criteria are satisfied. However, the absence of recorded checkpoints and a persisted audit trail violates the crash-recoverability and traceability requirements.',
+                revisionItems: [
+                  'Add a checkpoint marker to the README documenting the verification command.',
+                  'Insert an audit entry in a product file documenting the verification command.',
+                ],
+                rawOutput: '**Verdict:** revise',
+              }
+            : {
+                guildSlug: persona.slug,
+                guildName: persona.name,
+                verdict: 'approve',
+                reasoning: `${persona.name} approved.`,
+                revisionItems: [],
+                rawOutput: '**Verdict:** approve',
+              },
+      )
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+    })
+    await orch.tick()
+
+    const after = (await readQueue()).tasks[0]!
+    expect(after.status).toBe('gate_check')
+    expect(after.revisionCount).toBe(0)
+    expect(after.notes.at(-1)?.content).toContain('procedural-only')
+    expect(after.notes.at(-1)?.content).toContain('persisted audit trail')
   })
 
   it('bounces normally on first round of dissent even under the adjudication policy', async () => {
@@ -321,6 +370,96 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     )
     expect(decisions).toContain('Reviewer fan-out adjudication')
     expect(decisions).toContain('security-engineer')
+  })
+
+  it('advances when the latest worker proof satisfies the adjudicated concrete artifact request', async () => {
+    await setFanoutPolicy('coordinator_adjudicates_on_conflict')
+    const priorTs = '2026-04-23T10:00:00.000Z'
+    await writeTask(
+      mkTask({
+        reviewVerdicts: [
+          {
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'The Backend Engineer requested revision',
+            reasoning:
+              'Add `scripts/prove-spatial-geographic-continuity.mjs` and `fixtures/spatial-geographic-continuity/impossible-walk.json`.',
+            failingSignals: ['backend-engineer'],
+            recordedAt: priorTs,
+          },
+          {
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'The Accessibility Specialist approved',
+            reasoning: 'Shape is good.',
+            failingSignals: [],
+            recordedAt: priorTs,
+          },
+        ],
+        notes: [
+          {
+            agentId: 'coordinator-product-direction',
+            role: 'coordinator',
+            content:
+              '**Coordinator adjudication (round 3):**\n\nScoped instructions:\n- Implement `scripts/prove-spatial-geographic-continuity.mjs` against `fixtures/spatial-geographic-continuity/impossible-walk.json`.',
+            timestamp: '2026-04-23T10:05:00.000Z',
+          },
+          {
+            agentId: 'worker-agent',
+            role: 'worker',
+            content:
+              '**Self-critique:** ac-1 met. `scripts/prove-spatial-geographic-continuity.mjs` processes `fixtures/spatial-geographic-continuity/impossible-walk.json`. Verification passed: `npm run prove:spatial-geographic-continuity` emitted ok: true; `npm run build` passed.',
+            timestamp: '2026-04-23T10:10:00.000Z',
+          },
+        ],
+        revisionCount: 2,
+      }),
+    )
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) => {
+      return personas.map(
+        (persona): PersonaVerdict => {
+          if (persona.slug === 'backend-engineer') {
+            return {
+              guildSlug: persona.slug,
+              guildName: persona.name,
+              verdict: 'revise',
+              reasoning:
+                'Still missing `scripts/prove-spatial-geographic-continuity.mjs` and `fixtures/spatial-geographic-continuity/impossible-walk.json`.',
+              revisionItems: [
+                'Add `scripts/prove-spatial-geographic-continuity.mjs` and `fixtures/spatial-geographic-continuity/impossible-walk.json`.',
+              ],
+              rawOutput: '',
+            }
+          }
+          return {
+            guildSlug: persona.slug,
+            guildName: persona.name,
+            verdict: 'approve',
+            reasoning: `${persona.name} approved.`,
+            revisionItems: [],
+            rawOutput: '',
+          }
+        },
+      )
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+    })
+    await orch.tick()
+
+    const after = (await readQueue()).tasks[0]!
+    expect(after.status).toBe('gate_check')
+    expect(after.reviewVerdicts.at(-1)).toMatchObject({
+      verdict: 'approve',
+      reviewerPath: 'deterministic',
+      failingSignals: [],
+    })
+    expect(after.reviewVerdicts.at(-1)?.reason).toContain('Coordinator adjudication scope satisfied')
+    expect(after.notes.at(-1)?.content).toContain('latest worker proof satisfies')
   })
 
   it('routes repeated same-persona dissent through coordinator inspection under strict policy', async () => {

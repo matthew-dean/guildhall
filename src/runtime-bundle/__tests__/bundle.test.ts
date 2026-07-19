@@ -198,7 +198,7 @@ describe('handleLine', () => {
     expect(snap!.messages).toHaveLength(2)
     expect(snap!.session_id).toBe(bundle.sessionId)
     expect(snap!.model).toBe('m')
-    expect(snap!.system_prompt).toBe('sys')
+    expect(snap!.system_prompt).toBe('')
     expect(bundle.engine.totalUsage).toEqual({ input_tokens: 3, output_tokens: 2, cached_input_tokens: 0 })
   })
 

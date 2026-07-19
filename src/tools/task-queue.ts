@@ -25,8 +25,24 @@ import {
   parseAcceptanceCriteriaFromSpec,
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
-import { appendTaskEvidence, atomicWriteText, inferProjectRootFromMemoryDir, upsertTaskRuntimeState } from '@guildhall/sessions'
-import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
+import {
+  appendTaskEvidence,
+  atomicWriteText,
+  inferProjectRootFromMemoryDir,
+  readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+  upsertTaskRuntimeState,
+  withProjectStateWriteLock,
+} from '@guildhall/sessions'
+import {
+  FORBIDDEN_PROJECT_TASK_FIELDS,
+  readProjectTaskQueueForMutationSync,
+  readProjectTaskQueueSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+} from '@guildhall/runtime/project-state-boundary'
+import { buildEffectiveTask } from '@guildhall/runtime/effective-task'
+import { currentPlanProcessLeakage, validateSpecGrounding } from '@guildhall/runtime/spec-quality'
+import { isConcreteProjectProofCommand } from '@guildhall/runtime/proof-paths'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -39,8 +55,7 @@ export interface ReadTasksResult {
 
 export async function readTasks(input: ReadTasksInput): Promise<ReadTasksResult> {
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    return { queue: TaskQueue.parse(JSON.parse(raw)) }
+    return { queue: TaskQueue.parse(readProjectTaskQueueSync(input.tasksPath)) }
   } catch (err) {
     return { queue: null, error: String(err) }
   }
@@ -74,6 +89,14 @@ export const readTasksTool = defineTool({
   },
 })
 
+const structuredUpdateTaskNoteSchema = z.object({
+  agentId: z.string(),
+  role: z.string(),
+  content: z.string(),
+})
+
+type StructuredUpdateTaskNote = z.infer<typeof structuredUpdateTaskNoteSchema>
+
 const updateTaskNoteSchema = z.preprocess((value) => {
   if (typeof value !== 'string') return value
   const trimmed = value.trim()
@@ -81,13 +104,53 @@ const updateTaskNoteSchema = z.preprocess((value) => {
   try {
     return JSON.parse(trimmed)
   } catch {
-    return value
+    return parseJsonShapedNoteString(trimmed) ?? value
   }
-}, z.object({
-  agentId: z.string(),
-  role: z.string(),
-  content: z.string(),
-}))
+}, z.union([structuredUpdateTaskNoteSchema, z.string().min(1)]))
+
+function parseJsonShapedNoteString(value: string): { agentId: string; role: string; content: string } | null {
+  const agentId = /"agentId"\s*:\s*"([^"]+)"/.exec(value)?.[1]
+  const role = /"role"\s*:\s*"([^"]+)"/.exec(value)?.[1]
+  const content = (
+    /"content"\s*:\s*"([\s\S]*)"\s*}\s*$/.exec(value) ??
+    /"content"\s*:\s*"([\s\S]*)$/.exec(value)
+  )?.[1]
+  if (!agentId || !role || content === undefined) return null
+  return {
+    agentId,
+    role,
+    content: content
+      .replace(/"\s*}\s*$/, '')
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\\\/g, '\\'),
+  }
+}
+
+function normalizeUpdateTaskNote(
+  note: z.infer<typeof updateTaskNoteSchema> | undefined,
+  metadata: Record<string, unknown>,
+): StructuredUpdateTaskNote | undefined {
+  if (note === undefined) return undefined
+  if (typeof note !== 'string') {
+    const parsedContent = parseJsonShapedNoteString(note.content)
+    return parsedContent ? { ...note, content: parsedContent.content } : note
+  }
+  const content = note.trim()
+  if (!content) return undefined
+  const agentId = typeof metadata['current_agent_id'] === 'string' && metadata['current_agent_id'].trim()
+    ? metadata['current_agent_id'].trim()
+    : 'agent'
+  const role = agentId === 'worker-agent'
+    ? 'self-critique'
+    : agentId === 'reviewer-agent'
+      ? 'reviewer'
+      : agentId === 'gate-checker-agent'
+        ? 'gate-checker'
+        : 'note'
+  return { agentId, role, content }
+}
 
 const updateTaskInputSchema = z.object({
   tasksPath: TASKS_PATH_SCHEMA,
@@ -127,10 +190,29 @@ export async function updateTask(
   rawInput: UpdateTaskInput,
   metadata: Record<string, unknown> = {},
 ): Promise<UpdateTaskResult> {
+  let tasksPath: string | null = null
+  try {
+    tasksPath = updateTaskInputSchema.parse(rawInput).tasksPath
+  } catch {
+    // Preserve the existing validation error shape in the normal path.
+  }
+  if (tasksPath) {
+    return withProjectStateWriteLock(tasksPath, () => updateTaskUnlocked(rawInput, metadata))
+  }
+  return updateTaskUnlocked(rawInput, metadata)
+}
+
+async function updateTaskUnlocked(
+  rawInput: UpdateTaskInput,
+  metadata: Record<string, unknown> = {},
+): Promise<UpdateTaskResult> {
   try {
     const input = updateTaskInputSchema.parse(rawInput)
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
+    const originalTaskIds = new Set(queue.tasks.map(candidate => candidate.id))
+    const originalReleases = JSON.stringify(queue.releases ?? [])
+    const originalSelectedReleaseId = queue.selectedReleaseId
     const taskId = input.taskId ?? inferMetadataTaskId(metadata) ?? inferSingleActiveTaskId(queue)
     if (!taskId) {
       return {
@@ -140,6 +222,7 @@ export async function updateTask(
     }
     const task = queue.tasks.find((t) => t.id === taskId)
     if (!task) return { success: false, taskId, error: `Task ${taskId} not found` }
+    const originalTask = structuredClone(task)
 
     if (!hasTaskMutation(input)) {
       return {
@@ -160,6 +243,7 @@ export async function updateTask(
     const currentAgentId = typeof metadata['current_agent_id'] === 'string'
       ? metadata['current_agent_id'].trim()
       : ''
+    const normalizedNote = normalizeUpdateTaskNote(input.note, metadata)
     if (
       currentAgentId === 'worker-agent' &&
       input.gateResults?.some((result) => result.type === 'hard')
@@ -201,10 +285,49 @@ export async function updateTask(
     const renderedStructuredSpec = normalizedStructuredSpec
       ? normalizeSpecForTaskProjectPath(renderStructuredSpecMarkdown(normalizedStructuredSpec), task.projectPath)
       : undefined
+    const nextSpec = renderedStructuredSpec ?? normalizedSpec
+    const planLeakage = nextSpec ? currentPlanProcessLeakage(nextSpec) : null
+    if (planLeakage) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Current task specs may only contain the product boundary. Keep recovery attempts, revision history, and worktree diagnostics in task notes or evidence, then save a clean spec.',
+      }
+    }
+    if (nextSpec) {
+      const grounding = validateSpecGrounding({ ...task, spec: nextSpec })
+      if (!grounding.ok) {
+        return {
+          success: false,
+          taskId,
+          error:
+            `Spec is not grounded in the visible task/source context. ${grounding.errors.join(' ')}` +
+            ' Remove unsupported implementation details or preserve the missing fact as a review/open-question boundary before saving the spec.',
+        }
+      }
+    }
     const normalizedAcceptanceCriteria = input.acceptanceCriteria !== undefined
       ? z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
         .map((criterion) => normalizeAcceptanceCriterionForTaskProjectPath(criterion, task.projectPath))
       : undefined
+    const selectedRelease = queue.selectedReleaseId
+      ? queue.releases?.find((release) => release.id === queue.selectedReleaseId)
+      : undefined
+    const taskIsInSelectedScriptOnlyRelease = selectedRelease?.proofStyle === 'script_only' &&
+      task.releaseIds?.includes(selectedRelease.id) === true
+    const hasBareScriptProofCriterion = taskIsInSelectedScriptOnlyRelease &&
+      normalizedAcceptanceCriteria?.some((criterion) =>
+        typeof criterion.command === 'string' && !isConcreteProjectProofCommand(criterion.command),
+      ) === true
+    if (hasBareScriptProofCriterion) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Script-only release criteria must name a task-specific proof command or omit the command until Guildhall creates proof-setup work. Bare workspace test/build commands cannot become current proof contracts.',
+      }
+    }
     if (
       currentAgentId === 'worker-agent' &&
       normalizedAcceptanceCriteria?.some((criterion) =>
@@ -222,6 +345,20 @@ export async function updateTask(
     }
 
     const explicitStatus = nextStatus
+    if (
+      currentAgentId === 'spec-agent' &&
+      explicitStatus === 'spec_review' &&
+      !task.spec?.trim() &&
+      !(input.spec?.trim()) &&
+      input.structuredSpec === undefined
+    ) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'A task cannot enter spec_review without a durable spec. Save the product brief and spec first, then move it to spec_review.',
+      }
+    }
     const statusTransition = explicitStatus && explicitStatus !== task.status
       ? applyTaskTransition({
         task,
@@ -251,7 +388,6 @@ export async function updateTask(
     }
     if (input.blockReason !== undefined && input.blockReason.trim() !== '') task.blockReason = input.blockReason
     if (input.humanJudgment !== undefined && input.humanJudgment.trim() !== '') task.humanJudgment = input.humanJudgment
-    const nextSpec = renderedStructuredSpec ?? normalizedSpec
     if (normalizedStructuredSpec !== undefined) {
       task.structuredSpec = normalizedStructuredSpec
     } else if (normalizedSpec !== undefined) {
@@ -260,7 +396,12 @@ export async function updateTask(
     if (nextSpec !== undefined && nextSpec.trim() !== '') {
       task.spec = nextSpec
       if (input.title === undefined) {
-        const derivedTitle = deriveImportedTaskTitle(task)
+        const effectiveTask = await buildEffectiveTask(
+          projectRootForTaskState(input.tasksPath, task, metadata),
+          task,
+          { evidence: 'current' },
+        )
+        const derivedTitle = deriveImportedTaskTitle(effectiveTask as unknown as TaskRecord)
         if (derivedTitle) task.title = derivedTitle
       }
       if (normalizedStructuredSpec && normalizedAcceptanceCriteria === undefined) {
@@ -297,8 +438,8 @@ export async function updateTask(
       ? z.array(GateResult).parse(input.gateResults)
       : []
     if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
-    const noteEvidence = input.note
-      ? { ...input.note, timestamp: new Date().toISOString() }
+    const noteEvidence = normalizedNote
+      ? { ...normalizedNote, timestamp: new Date().toISOString() }
       : null
     const shouldRefreshSizePlan =
       (nextSpec !== undefined && nextSpec.trim() !== '') ||
@@ -320,8 +461,34 @@ export async function updateTask(
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
 
+    const taskProjectRoot = projectRootForTaskState(input.tasksPath, task, metadata)
+    const taskIdsUnchanged = queue.tasks.length === originalTaskIds.size &&
+      queue.tasks.every(candidate => originalTaskIds.has(candidate.id))
+    const queueEnvelopeUnchanged = JSON.stringify(queue.releases ?? []) === originalReleases &&
+      queue.selectedReleaseId === originalSelectedReleaseId
+    const databaseAuthority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(input.tasksPath) === 'database'
+    const isPointMutation = taskIdsUnchanged && queueEnvelopeUnchanged
+    if (databaseAuthority && isPointMutation) {
+      const promotedMutation = writePromotedTaskDetailMutation(input.tasksPath, taskId, {
+        projectId: path.basename(taskProjectRoot),
+        projectRoot: taskProjectRoot,
+        mutate: (current) => applyDefinitionDelta(
+          current,
+          originalTask as unknown as Record<string, unknown>,
+          task as unknown as Record<string, unknown>,
+        ),
+      })
+      if (!promotedMutation) {
+        throw new Error(`Could not persist promoted task definition for task ${taskId}`)
+      }
+    } else if (!databaseAuthority || !isPointMutation) {
+      writeProjectTaskQueue(input.tasksPath, queue, {
+        ...(queueRead.expectedQueueRevision !== null
+          ? { expectedQueueRevision: queueRead.expectedQueueRevision }
+        : {}),
+      })
+    }
     await persistUpdateTaskRuntimeState(input.tasksPath, task, metadata)
-    writeProjectTaskQueue(input.tasksPath, queue)
     await appendUpdateTaskEvidence({
       tasksPath: input.tasksPath,
       task,
@@ -336,11 +503,41 @@ export async function updateTask(
   }
 }
 
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function applyDefinitionDelta(
+  currentTask: Record<string, unknown>,
+  baselineTask: Record<string, unknown>,
+  nextTask: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const changedKeys = new Set([
+    ...Object.keys(baselineTask),
+    ...Object.keys(nextTask),
+  ].filter((key) => !FORBIDDEN_PROJECT_TASK_FIELDS.includes(key as typeof FORBIDDEN_PROJECT_TASK_FIELDS[number])))
+  const next = { ...currentTask }
+  for (const key of changedKeys) {
+    const baselineValue = baselineTask[key]
+    const nextValue = nextTask[key]
+    if (sameJson(baselineValue, nextValue)) continue
+    if (!sameJson(currentTask[key], baselineValue)) return null
+    if (nextValue === undefined) delete next[key]
+    else next[key] = nextValue
+  }
+  next.id = String(nextTask.id ?? currentTask.id)
+  return next
+}
+
 function projectRootForTaskState(
   tasksPath: string,
   task: z.infer<typeof Task>,
   metadata: Record<string, unknown> = {},
 ): string {
+  const workspaceProjectPath = typeof metadata['current_task_workspace_project_path'] === 'string'
+    ? metadata['current_task_workspace_project_path'].trim()
+    : ''
+  if (workspaceProjectPath && path.isAbsolute(workspaceProjectPath)) return workspaceProjectPath
   const metadataProjectPath = typeof metadata['current_task_project_path'] === 'string'
     ? metadata['current_task_project_path'].trim()
     : ''
@@ -357,11 +554,13 @@ async function persistUpdateTaskRuntimeState(
   task: z.infer<typeof Task>,
   metadata: Record<string, unknown> = {},
 ): Promise<void> {
+  // Promoted task definitions intentionally omit runtime-owned fields. A
+  // schema default such as revisionCount=0 must not overwrite the existing
+  // runtime overlay when update-task only changes definition/evidence state.
+  // Status ownership is the one runtime field this mutation is allowed to
+  // update; the orchestrator owns revision/recovery counters.
   await upsertTaskRuntimeState(projectRootForTaskState(tasksPath, task, metadata), task.id, {
     assignedTo: Object.prototype.hasOwnProperty.call(task, 'assignedTo') ? task.assignedTo ?? null : null,
-    ...(typeof task.revisionCount === 'number' ? { revisionCount: task.revisionCount } : {}),
-    ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
-    ...(typeof task.remediationAttempts === 'number' ? { remediationAttempts: task.remediationAttempts } : {}),
     updatedAt: task.updatedAt,
   })
 }
@@ -405,16 +604,16 @@ export function materializeSplitChildren(
 ): { status: 'noop' | 'materialized' | 'already_represented'; childTaskIds: string[] } {
   const sizePlan = parent.sizePlan
   if (!sizePlan || !isMaterializableSplitAction(sizePlan.action)) return { status: 'noop', childTaskIds: [] }
-  const legacyRecommendations = sizePlan.recommendedChildren ?? []
-  const recommendations = legacyRecommendations.length > 0
-    ? legacyRecommendations
+  const savedChildPlans = sizePlan.recommendedChildren ?? []
+  const plannedChildren = savedChildPlans.length > 0
+    ? savedChildPlans
     : buildDecompositionChildDrafts({ task: parent })
-  if (recommendations.length === 0) return { status: 'noop', childTaskIds: [] }
-  const usesLegacyRecommendations = legacyRecommendations.length > 0
+  if (plannedChildren.length === 0) return { status: 'noop', childTaskIds: [] }
+  const usesSavedChildPlans = savedChildPlans.length > 0
   const splitLabel = legacySplitLabel(sizePlan.action)
   const splitNote = legacySplitNote(sizePlan.action)
 
-  const representedSplit = legacyRecommendations.length > 0
+  const representedSplit = savedChildPlans.length > 0
     ? settleAlreadyRepresentedSplitRecommendations(queue, parent, timestamp)
     : null
   if (representedSplit) {
@@ -422,26 +621,33 @@ export function materializeSplitChildren(
   }
 
   const existingChildIds = new Set(parent.hierarchy?.childIds ?? [])
-  const planned = recommendations.map((recommendation, index) => {
-    const existingById = recommendation.createdTaskId
-      ? queue.tasks.find((task) => task.id === recommendation.createdTaskId)
+  const planned = plannedChildren.map((childPlan, index) => {
+    const existingById = childPlan.createdTaskId
+      ? queue.tasks.find((task) => task.id === childPlan.createdTaskId)
       : undefined
     const existingByTitle = queue.tasks.find((task) =>
       task.id !== parent.id &&
-      task.hierarchy?.parentId === parent.id &&
-      normalizeTaskTitle(task.title) === normalizeTaskTitle(recommendation.title),
+      task.status !== 'archived' &&
+      task.status !== 'cancelled' &&
+      (
+        task.hierarchy?.parentId === parent.id ||
+        task.id.startsWith(`${parent.id}-split-`)
+      ) &&
+      normalizeTaskTitle(task.title) === normalizeTaskTitle(childPlan.title),
     )
     const task = existingById ?? existingByTitle ?? createSplitChildTask({
       parent,
-      title: recommendation.title,
-      reason: recommendation.reason,
-      suggestedDomain: recommendation.suggestedDomain,
+      title: childPlan.title,
+      reason: childPlan.reason,
+      suggestedDomain: childPlan.suggestedDomain,
       index,
       queue,
       timestamp,
     })
     if (!queue.tasks.some((candidate) => candidate.id === task.id)) queue.tasks.push(task)
-    if (usesLegacyRecommendations) recommendation.createdTaskId = task.id
+    if (usesSavedChildPlans) childPlan.createdTaskId = task.id
+    if ((task.releaseIds ?? []).length === 0 && (parent.releaseIds ?? []).length > 0) task.releaseIds = [...(parent.releaseIds ?? [])]
+    if ((task.references ?? []).length === 0 && (parent.references ?? []).length > 0) task.references = [...(parent.references ?? [])]
     task.hierarchy = {
       ...(task.hierarchy ?? {}),
       parentId: parent.id,
@@ -451,24 +657,24 @@ export function materializeSplitChildren(
     }
     attachInternalDeliveryStep(parent, task)
     existingChildIds.add(task.id)
-    return { recommendation, task }
+    return { childPlan, task }
   })
 
-  const titleToId = new Map(planned.map(({ recommendation, task }) => [
-    normalizeTaskTitle(recommendation.title),
+  const titleToId = new Map(planned.map(({ childPlan, task }) => [
+    normalizeTaskTitle(childPlan.title),
     task.id,
   ]))
   const workUnitIdToId = new Map<string, string>()
   const workUnits = parent.workUnitAnalysis?.units ?? []
-  planned.forEach(({ recommendation, task }, index) => {
+  planned.forEach(({ childPlan, task }, index) => {
     const matchingUnit =
-      workUnits[index]?.title === recommendation.title
+      workUnits[index]?.title === childPlan.title
         ? workUnits[index]
-        : workUnits.find((unit) => normalizeTaskTitle(unit.title) === normalizeTaskTitle(recommendation.title))
+        : workUnits.find((unit) => normalizeTaskTitle(unit.title) === normalizeTaskTitle(childPlan.title))
     if (matchingUnit?.id) workUnitIdToId.set(matchingUnit.id, task.id)
   })
-  for (const { recommendation, task } of planned) {
-    task.dependsOn = (recommendation.dependsOn ?? [])
+  for (const { childPlan, task } of planned) {
+    task.dependsOn = (childPlan.dependsOn ?? [])
       .map((dependency) => workUnitIdToId.get(dependency) ?? titleToId.get(normalizeTaskTitle(dependency)) ?? dependency)
       .filter((dependency, index, all) => dependency !== task.id && all.indexOf(dependency) === index)
     task.updatedAt = timestamp
@@ -485,7 +691,7 @@ export function materializeSplitChildren(
     childTaskIds: planned.map(({ task }) => task.id),
     timestamp,
     actor: 'task-sizing',
-    rationale: 'Legacy split sizing was materialized into linked child work.',
+    rationale: 'Planned decomposition was materialized into linked child work.',
   })
   settleMaterializedSplitParent({
     parent,
@@ -523,6 +729,118 @@ export function materializeSplitChildren(
 
 export const materializeRequiredSplitChildren = materializeSplitChildren
 
+export const PROOF_SETUP_RATIONALE = 'proof-recovery: establish a concrete project-backed proof command for the containing task'
+
+export function isProofSetupTask(
+  task: Pick<TaskRecord, 'workKind' | 'proposalRationale'>,
+): boolean {
+  return task.workKind === 'verification' && task.proposalRationale === PROOF_SETUP_RATIONALE
+}
+
+/**
+ * A script-only release still needs executable proof when the source-backed
+ * spec does not name a command. Keep the accepted task contract intact and
+ * materialize the missing verification work as an internal child. This is a
+ * real work item in the same hierarchy, not a read-time blocker or a second
+ * proof model.
+ */
+export function materializeProofSetupTask(
+  queue: TaskQueueRecord,
+  parent: TaskRecord,
+  timestamp: string,
+): { status: 'materialized' | 'already_represented'; childTaskId: string } {
+  const existing = queue.tasks.find((candidate) =>
+    candidate.hierarchy?.parentId === parent.id &&
+    isProofSetupTask(candidate) &&
+    !['archived', 'cancelled'].includes(candidate.status),
+  )
+  if (existing) {
+    return { status: 'already_represented', childTaskId: existing.id }
+  }
+
+  const baseId = `${parent.id}-proof-setup`
+  let id = baseId
+  let suffix = 2
+  while (queue.tasks.some((task) => task.id === id)) {
+    id = `${baseId}-${suffix}`
+    suffix += 1
+  }
+
+  const child = Task.parse({
+    id,
+    title: `Establish concrete proof for ${parent.title}`,
+    description: [
+      `Establish the exact project-backed command that proves ${parent.title}.`,
+      'Use registered project evidence and the selected release proof contract.',
+      'Do not use a bare workspace convention such as pnpm test or pnpm build.',
+      `This verification work supports containing task ${parent.id}.`,
+    ].join('\n'),
+    domain: parent.domain,
+    projectPath: parent.projectPath,
+    status: 'exploring',
+    priority: parent.priority,
+    dependsOn: [],
+    outOfScope: [],
+    acceptanceCriteria: [{
+      id: 'proof-command-recorded',
+      description: `A concrete project-backed command is attached to ${parent.title}, and a passing result is recorded for the selected release.`,
+      verifiedBy: 'review',
+      source: 'inferred',
+    }],
+    notes: [{
+      agentId: 'proof-recovery',
+      role: 'coordinator',
+      content: `Created because ${parent.id} was approved without a concrete project-backed proof command.`,
+      timestamp,
+    }],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    revisionCount: 0,
+    origination: 'system',
+    proposedBy: 'proof-recovery',
+    proposalRationale: PROOF_SETUP_RATIONALE,
+    workKind: 'verification',
+    workVisibility: {
+      kind: 'internal_step',
+      countInProjectTotals: false,
+    },
+    releaseIds: [...(parent.releaseIds ?? [])],
+    references: [...(parent.references ?? [])],
+    delivery: {
+      ...(parent.delivery ?? {}),
+      supports: [parent.id, ...(parent.delivery?.supports ?? [])]
+        .filter((supportId, index, all) => all.indexOf(supportId) === index),
+    },
+    hierarchy: {
+      parentId: parent.id,
+      order: parent.hierarchy?.childIds?.length ?? 0,
+      childIds: [],
+      relation: 'decomposes',
+    },
+    businessEnvelope: parent.businessEnvelope,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  })
+
+  queue.tasks.push(child)
+  parent.hierarchy = {
+    ...(parent.hierarchy ?? {}),
+    order: parent.hierarchy?.order ?? 0,
+    childIds: [...new Set([...(parent.hierarchy?.childIds ?? []), child.id])],
+    relation: parent.hierarchy?.relation ?? 'contains',
+  }
+  attachInternalDeliveryStep(parent, child)
+  parent.notes.push({
+    agentId: 'proof-recovery',
+    role: 'coordinator',
+    content: `Added linked verification work ${child.id} to establish the missing concrete project proof command.`,
+    timestamp,
+  })
+  return { status: 'materialized', childTaskId: child.id }
+}
+
 export function isMaterializableSplitAction(action: string | undefined): boolean {
   return action === 'split_required' || action === 'split_recommended' || action === 'decompose_before_execution'
 }
@@ -548,16 +866,16 @@ export function settleAlreadyRepresentedSplitRecommendations(
   parent: TaskRecord,
   timestamp: string,
 ): { childTaskIds: string[] } | null {
-  const recommendations = parent.sizePlan?.recommendedChildren ?? []
-  const existingSiblingIds = splitRecommendationsAlreadyRepresentedBySiblings(queue, parent, recommendations)
+  const plannedChildren = parent.sizePlan?.recommendedChildren ?? []
+  const existingSiblingIds = splitRecommendationsAlreadyRepresentedBySiblings(queue, parent, plannedChildren)
   if (!existingSiblingIds) return null
-  removeDuplicateNestedSplitChildIds(queue, parent, recommendations)
+  removeDuplicateNestedSplitChildIds(queue, parent, plannedChildren)
   settleMaterializedSplitParent({
     parent,
     timestamp,
     recommendation: 'ready',
     summary: 'This task is ready; sibling tasks already cover the split work.',
-    reason: 'Split recommendations already match existing sibling tasks under the same parent; do not split this task again unless the child structure changes.',
+    reason: 'Planned child work already matches existing sibling tasks under the same parent; do not split this task again unless the child structure changes.',
     childTaskIds: existingSiblingIds,
   })
   return { childTaskIds: existingSiblingIds }
@@ -568,32 +886,32 @@ export function settleMaterializedSplitReadiness(
   parent: TaskRecord,
   timestamp: string,
 ): { childTaskIds: string[] } | null {
-  const recommendations = parent.sizePlan?.recommendedChildren ?? []
-  const representedIds = recommendations.map(recommendation => {
-    if (recommendation.createdTaskId && queue.tasks.some(task => task.id === recommendation.createdTaskId)) {
-      return recommendation.createdTaskId
+  const plannedChildren = parent.sizePlan?.recommendedChildren ?? []
+  const representedIds = plannedChildren.map(childPlan => {
+    if (childPlan.createdTaskId && queue.tasks.some(task => task.id === childPlan.createdTaskId)) {
+      return childPlan.createdTaskId
     }
     return queue.tasks.find(task =>
       task.hierarchy?.parentId === parent.id &&
-      normalizeTaskTitle(task.title) === normalizeTaskTitle(recommendation.title),
+      normalizeTaskTitle(task.title) === normalizeTaskTitle(childPlan.title),
     )?.id
   })
   const linkedChildIds = linkedChildTaskIds(queue, parent)
-  const hasExactRecommendationCoverage = recommendations.length > 0 && representedIds.every(Boolean)
+  const hasExactRecommendationCoverage = plannedChildren.length > 0 && representedIds.every(Boolean)
   const representedChildIds = hasExactRecommendationCoverage
     ? representedIds.filter((id): id is string => Boolean(id))
     : linkedChildIds
   if (representedChildIds.length === 0) return null
   if (hasExactRecommendationCoverage) {
-    recommendations.forEach((recommendation, index) => {
-      recommendation.createdTaskId = representedChildIds[index]
+    plannedChildren.forEach((childPlan, index) => {
+      childPlan.createdTaskId = representedChildIds[index]
     })
   } else if (parent.sizePlan && isLegacySplitAction(parent.sizePlan.action)) {
     parent.sizePlan.recommendedChildren = representedChildIds.map((childTaskId) => {
       const child = queue.tasks.find(task => task.id === childTaskId)
       return {
         title: child?.title ?? childTaskId,
-        reason: 'Existing linked child task represents the parent split boundary.',
+        reason: 'Existing linked child task represents the parent decomposition boundary.',
         dependsOn: child?.dependsOn ?? [],
         suggestedDomain: child?.domain,
         createdTaskId: childTaskId,
@@ -602,7 +920,7 @@ export function settleMaterializedSplitReadiness(
   }
   const reason = hasExactRecommendationCoverage
     ? 'Split has already been materialized into linked child tasks; do not split this parent again unless the child structure changes.'
-    : 'Linked child tasks already represent this parent split; reconcile child scope instead of splitting this parent again.'
+    : 'Linked child tasks already represent this parent decomposition boundary; reconcile child scope instead of splitting this parent again.'
   settleMaterializedSplitParent({
     parent,
     timestamp,
@@ -691,12 +1009,12 @@ function removeDuplicateNestedSplitChildIds(
 function settleMaterializedSplitParent(input: {
   parent: TaskRecord
   timestamp: string
-  recommendation?: 'ready' | 'split'
+  recommendation?: 'ready' | 'requires_child_work'
   summary: string
   reason: string
   childTaskIds?: string[]
 }): void {
-  const { parent, timestamp, recommendation = 'split', summary, reason, childTaskIds = [] } = input
+  const { parent, timestamp, recommendation = 'requires_child_work', summary, reason, childTaskIds = [] } = input
   const splitBoundary = settledSplitBoundaryText(childTaskIds)
   if (parent.sizePlan && isMaterializableSplitAction(parent.sizePlan.action)) {
     parent.sizePlan = {
@@ -827,7 +1145,7 @@ function settledSplitReadinessDimensions(
       summary: 'Size is handled by linked child tasks.',
       evidence: [
         ...dimension.evidence.filter(evidence => !/too (large|broad)|split/i.test(evidence)),
-        'Split recommendations have already been materialized into linked child tasks.',
+        'Required child work has already been materialized into linked child tasks.',
       ],
     }
   })
@@ -838,7 +1156,7 @@ function settledSplitReadinessDimensions(
       id: 'size',
       status: 'ok' as const,
       summary: 'Size is handled by linked child tasks.',
-      evidence: ['Split recommendations have already been materialized into linked child tasks.'],
+      evidence: ['Required child work has already been materialized into linked child tasks.'],
     },
   ]
 }
@@ -933,6 +1251,8 @@ function createSplitChildTask(input: {
     proposedBy: 'task-sizing',
     proposalRationale: input.reason,
     workKind,
+    releaseIds: [...(input.parent.releaseIds ?? [])],
+    references: [...(input.parent.references ?? [])],
     delivery: {
       ...(input.parent.delivery ?? {}),
       supports: [
@@ -1050,6 +1370,9 @@ function eventForExplicitStatus(from: z.infer<typeof TaskStatus>, to: z.infer<ty
       return 'shelve'
     case 'proposed':
       return 'recover_to_exploring'
+    case 'archived':
+    case 'cancelled':
+      throw new Error(`Task status ${to} is terminal and has no lifecycle transition event.`)
   }
 }
 
@@ -1163,7 +1486,7 @@ function stripDuplicatedPathPrefix(value: string, prefix: string): string {
   return value.replace(new RegExp(`\\b${escaped}/`, 'g'), '')
 }
 
-function deriveImportedTaskTitle(task: z.infer<typeof Task>): string | null {
+function deriveImportedTaskTitle(task: TaskRecord): string | null {
   const currentTitle = typeof task.title === 'string' ? task.title.trim() : ''
   if (!looksLikeImportedFragmentTitle(currentTitle)) return null
   const area = importedAreaLabel(task)
@@ -1177,7 +1500,7 @@ function looksLikeImportedFragmentTitle(title: string): boolean {
   return /\(deferred\)/i.test(title) || /^version diff view$/i.test(title.trim())
 }
 
-function importedAreaLabel(task: z.infer<typeof Task>): string | null {
+function importedAreaLabel(task: TaskRecord): string | null {
   const notes = Array.isArray(task.notes) ? task.notes : []
   const importerNote = notes.find((note) =>
     note?.role === 'importer' &&
@@ -1262,6 +1585,8 @@ export const updateTaskTool = defineTool({
             expectation: { type: 'string' },
             verifiedBy: { type: 'string', enum: ['automated', 'review', 'human'] },
             command: { type: 'string' },
+            expectedExit: { type: 'string', enum: ['zero', 'non_zero'] },
+            expectedOutputIncludes: { type: 'array', items: { type: 'string' } },
             evidenceHint: { type: 'string' },
             negativeCase: { type: 'string' },
             met: { type: 'boolean' },
@@ -1346,8 +1671,8 @@ export interface AddTaskResult {
 
 export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const newTask = Task.parse({
       ...input.task,
       notes: [],
@@ -1356,7 +1681,11 @@ export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
     })
     queue.tasks.push(newTask)
     queue.lastUpdated = new Date().toISOString()
-    writeProjectTaskQueue(input.tasksPath, queue)
+    writeProjectTaskQueue(input.tasksPath, queue, {
+      ...(queueRead.expectedQueueRevision !== null
+        ? { expectedQueueRevision: queueRead.expectedQueueRevision }
+        : {}),
+    })
     return { success: true, taskId: newTask.id }
   } catch (err) {
     return { success: false, error: String(err) }

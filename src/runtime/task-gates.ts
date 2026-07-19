@@ -5,9 +5,11 @@ import { resolveRuntimePath } from './path-utils.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import { detectGateCommands, detectPackageManager, type PackageManager } from './bootstrap.js'
 import { detectBootstrapHypothesis } from './detect-bootstrap.js'
+import { workspaceProjectNamedInText } from './workspace-project-match.js'
 
 type BootstrapBlock = NonNullable<ResolvedConfig['bootstrap']>
 type WorkspaceProjectBlock = NonNullable<ResolvedConfig['projects']>[number]
+type TaskProjectPathInput = Partial<Pick<Task, 'projectPath' | 'domain' | 'title' | 'description'>>
 
 function hasBootstrapSignal(bootstrap: BootstrapBlock | undefined): boolean {
   if (!bootstrap) return false
@@ -84,10 +86,110 @@ function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, ' ')
 }
 
+export function normalizeRunRecordJsonSelectionCommand(command: string): string {
+  const normalized = normalizeCommand(command)
+  if (
+    !/require\(['"]\.\/runs\/['"]\s*\+/.test(normalized) ||
+    !/readdirSync\(['"]runs['"]\)/.test(normalized) ||
+    !/\.find\(\s*(\w+)\s*=>/.test(normalized)
+  ) {
+    return normalized
+  }
+  return normalized.replace(
+    /\.find\(\s*(\w+)\s*=>\s*\1\.startsWith\(([^)]*)\)\s*\)/g,
+    (match, name: string, prefix: string) =>
+      match.includes('.endsWith(')
+        ? match
+        : `.find(${name}=>${name}.startsWith(${prefix})&&${name}.endsWith('.json'))`,
+  )
+}
+
+function isSelfReferentialGuildhallTaskCommand(command: string): boolean {
+  const normalized = normalizeCommand(command)
+  return /\b(?:npx\s+)?guildhall\s+run\b/i.test(normalized) && /\s--task(?:=|\s)/i.test(normalized)
+}
+
+function packageScriptBodyForCommand(command: string, projectPath: string): string | null {
+  const normalized = normalizeCommand(command)
+  const dirMatch = /^pnpm\s+--dir\s+(\S+)\s+(.+)$/i.exec(normalized)
+  const targetPath = dirMatch ? path.resolve(projectPath, dirMatch[1]!) : projectPath
+  const scriptCommand = dirMatch?.[2] ?? normalized.replace(/^pnpm\s+/i, '')
+  const scriptMatch = /^(?:run\s+)?([a-z0-9:_-]+)(?:\s|$)/i.exec(scriptCommand)
+  if (!scriptMatch) return null
+  const script = scriptMatch[1]!
+  if (['exec', 'install', 'add', 'remove', 'update', 'dlx'].includes(script.toLowerCase())) return null
+  return readPackageScripts(targetPath)?.scriptBodies[script]?.trim() ?? null
+}
+
+export type InvalidAutomatedAcceptanceCommand = {
+  criterionId: string
+  command: string
+  reason: string
+}
+
+/** Keep acceptance gates on the project side of the Guildhall boundary. */
+export function findInvalidAutomatedAcceptanceCommands(input: {
+  task: Pick<Task, 'acceptanceCriteria'>
+  projectPath: string
+}): readonly InvalidAutomatedAcceptanceCommand[] {
+  const invalid: InvalidAutomatedAcceptanceCommand[] = []
+  for (const criterion of input.task.acceptanceCriteria ?? []) {
+    if (criterion.verifiedBy !== 'automated') continue
+    const command = typeof criterion.command === 'string' ? normalizeCommand(criterion.command) : ''
+    if (!command) continue
+    if (isSelfReferentialGuildhallTaskCommand(command)) {
+      invalid.push({
+        criterionId: criterion.id,
+        command,
+        reason: 'The command invokes Guildhall task orchestration instead of proving the project locally.',
+      })
+      continue
+    }
+    const scriptBody = packageScriptBodyForCommand(command, input.projectPath)
+    if (scriptBody && isSelfReferentialGuildhallTaskCommand(scriptBody)) {
+      invalid.push({
+        criterionId: criterion.id,
+        command,
+        reason: 'The command resolves to a package script that invokes Guildhall task orchestration instead of proving the project locally.',
+      })
+    }
+  }
+  return invalid
+}
+
+function isValidPackageScriptProofCommand(
+  parsed: { scriptBodies: Record<string, string> } | null | undefined,
+  script: string,
+): boolean {
+  const body = parsed?.scriptBodies[script]?.trim() ?? ''
+  return body.length === 0 || !isSelfReferentialGuildhallTaskCommand(body)
+}
+
 function isWithin(parent: string, child: string): boolean {
   const normalizedParent = path.resolve(parent)
   const normalizedChild = path.resolve(child)
   return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${path.sep}`)
+}
+
+function hasExecutionProjectMarker(projectPath: string): boolean {
+  return [
+    '.git',
+    'guildhall.yaml',
+    'package.json',
+    'pnpm-workspace.yaml',
+    'pyproject.toml',
+    'Cargo.toml',
+    'go.mod',
+    'deno.json',
+    'deno.jsonc',
+  ].some(file => fs.existsSync(path.join(projectPath, file)))
+}
+
+function isDocumentationSourcePath(taskProjectPath: string, workspaceProjectPath: string): boolean {
+  if (!isWithin(workspaceProjectPath, taskProjectPath)) return false
+  const relativePath = path.relative(workspaceProjectPath, taskProjectPath)
+  if (!relativePath || relativePath.startsWith('..')) return false
+  return relativePath.split(path.sep).some(segment => ['doc', 'docs', 'documentation'].includes(segment.toLowerCase()))
 }
 
 function rewriteWorkspaceScopedCommandForTask(
@@ -630,6 +732,13 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
   const rootScripts = rootPackage?.scripts ?? new Set<string>()
   const packages = readWorkspacePackages(projectPath)
 
+  // A project proof may use Node directly, but the project package manager is
+  // still the execution boundary. Keep the command reproducible through the
+  // workspace's PNPM environment instead of persisting a bare `node` call.
+  if (/^node(?:\s|$)/i.test(normalized)) {
+    return normalizeCommand(`pnpm exec ${normalized}`)
+  }
+
   const cdCommand = /^cd\s+(\S+)\s*&&\s*(.+)$/i.exec(normalized)
   if (cdCommand) {
     const [, relDir, rest] = cdCommand
@@ -643,7 +752,7 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
     const [, relDir, script, rest = ''] = dirCommand
     const targetDir = path.resolve(projectPath, relDir!)
     const parsed = readPackageScripts(targetDir)
-    if (script && parsed?.scripts.has(script)) {
+    if (script && parsed?.scripts.has(script) && isValidPackageScriptProofCommand(parsed, script)) {
       const pkg: WorkspacePackage | null =
         typeof parsed.name === 'string'
           ? {
@@ -674,13 +783,15 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
     const selectorMatches = packages.find(
       (pkg) => pkg.name === selector || path.basename(pkg.relativeDir) === selector,
     )
-    if (selectorMatches?.scripts.has(script)) {
+    if (selectorMatches?.scripts.has(script) && isValidPackageScriptProofCommand(selectorMatches, script)) {
       const rewritten = maybeRewritePnpmVitestCommand(selectorMatches, script, rest)
       if (rewritten) return rewritten
       return reordered
     }
 
-    const scriptOwners = script ? packages.filter((pkg) => pkg.scripts.has(script)) : []
+    const scriptOwners = script
+      ? packages.filter((pkg) => pkg.scripts.has(script) && isValidPackageScriptProofCommand(pkg, script))
+      : []
     if (scriptOwners.length === 1) {
       const owner = scriptOwners[0]!
       const rewritten = maybeRewritePnpmVitestCommand(owner, script!, rest)
@@ -708,7 +819,7 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
   const rootScriptCommand = /^pnpm\s+([a-z0-9:_-]+)(.*)$/i.exec(normalized)
   if (rootScriptCommand) {
     const [, script, rest = ''] = rootScriptCommand
-    if (script && rootScripts.has(script)) {
+    if (script && rootScripts.has(script) && isValidPackageScriptProofCommand(rootPackage, script)) {
       const pkg: WorkspacePackage | null =
         typeof rootPackage?.name === 'string'
           ? {
@@ -723,7 +834,9 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
       if (rewritten) return rewritten
       return normalizeCommand(`pnpm ${script}${rest}`)
     }
-    const scriptOwners = script ? packages.filter((pkg) => pkg.scripts.has(script)) : []
+    const scriptOwners = script
+      ? packages.filter((pkg) => pkg.scripts.has(script) && isValidPackageScriptProofCommand(pkg, script))
+      : []
     if (scriptOwners.length === 1) {
       const owner = scriptOwners[0]!
       const rewritten = maybeRewritePnpmVitestCommand(owner, script!, rest)
@@ -810,16 +923,18 @@ function normalizeCriterionCommand(
   projectPath: string,
 ): string | null {
   if (typeof command !== 'string' || command.trim().length === 0) return null
-  return validateOrNormalizePnpmCommand(command, projectPath)
+  return validateOrNormalizePnpmCommand(normalizeRunRecordJsonSelectionCommand(command), projectPath)
 }
 
 export function normalizeAutomatedAcceptanceCriterionCommands(input: {
-  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  task: Pick<Task, 'projectPath' | 'domain' | 'acceptanceCriteria'>
   workspaceProjectPath: string
+  workspaceProjects?: readonly WorkspaceProjectBlock[]
 }): boolean {
   const taskProjectPath = resolveEffectiveTaskProjectPath(
     input.task,
     input.workspaceProjectPath,
+    { workspaceProjects: input.workspaceProjects },
   )
   let changed = false
   for (const criterion of input.task.acceptanceCriteria ?? []) {
@@ -833,13 +948,15 @@ export function normalizeAutomatedAcceptanceCriterionCommands(input: {
 }
 
 export function reconcileAutomatedAcceptanceCommandsFromVerifiedWork(input: {
-  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  task: Pick<Task, 'projectPath' | 'domain' | 'acceptanceCriteria'>
   workspaceProjectPath: string
+  workspaceProjects?: readonly WorkspaceProjectBlock[]
   recentVerifiedWork: readonly string[] | undefined
 }): boolean {
   const taskProjectPath = resolveEffectiveTaskProjectPath(
     input.task,
     input.workspaceProjectPath,
+    { workspaceProjects: input.workspaceProjects },
   )
   const passedCommands = (input.recentVerifiedWork ?? [])
     .map(commandEvidenceFromRecentVerifiedWork)
@@ -879,46 +996,6 @@ export function reconcileAutomatedAcceptanceCommandsFromVerifiedWork(input: {
   }
 
   return changed
-}
-
-function mergeAcceptanceAndProjectGates(
-  acceptanceBuckets: Map<GateCommandKind, string[]>,
-  projectCommands: readonly string[] | undefined,
-): readonly string[] | undefined {
-  if (acceptanceBuckets.size === 0) return projectCommands
-
-  const merged: string[] = []
-  const seen = new Set<string>()
-  const pushAll = (commands: readonly string[]) => {
-    for (const command of commands) {
-      const normalized = normalizeCommand(command)
-      if (normalized.length === 0 || seen.has(normalized)) continue
-      seen.add(normalized)
-      merged.push(command.trim())
-    }
-  }
-
-  for (const kind of ['typecheck', 'build', 'test', 'lint'] as const) {
-    const acceptance = acceptanceBuckets.get(kind)
-    if (acceptance && acceptance.length > 0) {
-      pushAll(acceptance)
-      continue
-    }
-    const fallback = (projectCommands ?? []).filter((command) => classifyGateCommand(command) === kind)
-    pushAll(fallback)
-  }
-
-  for (const [kind, commands] of acceptanceBuckets) {
-    if (kind === 'typecheck' || kind === 'build' || kind === 'test' || kind === 'lint') continue
-    pushAll(commands)
-  }
-
-  if (projectCommands) {
-    const remaining = projectCommands.filter((command) => classifyGateCommand(command) === 'other')
-    pushAll(remaining)
-  }
-
-  return merged
 }
 
 function deriveFocusedVerificationBuckets(
@@ -963,14 +1040,6 @@ function mergeVerificationCommands(
   projectCommands: readonly string[] | undefined,
   narrowTaskHint: boolean,
 ): readonly string[] | undefined {
-  if (
-    acceptanceBuckets.size === 0 &&
-    focusedBuckets.size === 0 &&
-    !narrowTaskHint
-  ) {
-    return projectCommands
-  }
-
   const merged: string[] = []
   const seen = new Set<string>()
   const pushAll = (commands: readonly string[]) => {
@@ -981,6 +1050,33 @@ function mergeVerificationCommands(
       merged.push(command.trim())
     }
   }
+
+  // Explicit automated acceptance commands are the task's proof contract.
+  // They already express the scope the planner approved, so adding missing
+  // categories from workspace bootstrap would turn an intentionally narrow
+  // task into an unrelated project-wide gate (for example, adding `pnpm
+  // build` to a script-only proof). When a task has a broad test command but
+  // Guildhall can derive a focused target from its changed files, the focused
+  // command is the more concrete form of that same proof. Bootstrap commands
+  // remain the inference path only when the task has no concrete automated
+  // proof of its own.
+  if (acceptanceBuckets.size > 0) {
+    for (const kind of ['typecheck', 'build', 'test', 'lint'] as const) {
+      const focused = focusedBuckets.get(kind)
+      if (kind === 'test' && focused && focused.length > 0) {
+        pushAll(focused)
+        continue
+      }
+      pushAll(acceptanceBuckets.get(kind) ?? [])
+    }
+    for (const [kind, commands] of acceptanceBuckets) {
+      if (kind === 'typecheck' || kind === 'build' || kind === 'test' || kind === 'lint') continue
+      pushAll(commands)
+    }
+    return merged.length > 0 ? merged : undefined
+  }
+
+  if (focusedBuckets.size === 0 && !narrowTaskHint) return projectCommands
 
   for (const kind of ['typecheck', 'build', 'test', 'lint'] as const) {
     const acceptance = acceptanceBuckets.get(kind)
@@ -1023,26 +1119,77 @@ function mergeVerificationCommands(
   return merged
 }
 
+function workspaceProjectForTask(
+  task: TaskProjectPathInput,
+  workspaceProjects: readonly WorkspaceProjectBlock[] | undefined,
+): WorkspaceProjectBlock | undefined {
+  if (!workspaceProjects || workspaceProjects.length === 0) return undefined
+  const taskDomain = typeof task.domain === 'string' ? task.domain.trim() : ''
+  if (taskDomain) {
+    const domainMatch = workspaceProjects.find(project =>
+      project.id === taskDomain || project.coordinator === taskDomain,
+    )
+    if (domainMatch) return domainMatch
+  }
+  const textMatch = workspaceProjectNamedInTask(task, workspaceProjects)
+  if (textMatch) return textMatch
+  const taskProjectPath = typeof task.projectPath === 'string' ? task.projectPath.trim() : ''
+  if (!taskProjectPath) return undefined
+  const resolvedTaskProjectPath = resolveRuntimePath(taskProjectPath)
+  return workspaceProjects.find(project => path.resolve(project.path) === resolvedTaskProjectPath)
+}
+
 export function resolveEffectiveTaskProjectPath(
-  task: Pick<Task, 'projectPath'>,
+  task: TaskProjectPathInput,
   workspaceProjectPath: string,
+  options: { workspaceProjects?: readonly WorkspaceProjectBlock[] } = {},
 ): string {
+  const workspaceProject = workspaceProjectForTask(task, options.workspaceProjects)
   if (typeof task.projectPath === 'string' && task.projectPath.trim().length > 0) {
     const taskProjectPath = task.projectPath.trim()
-    return path.isAbsolute(taskProjectPath)
+    const resolvedTaskProjectPath = path.isAbsolute(taskProjectPath)
       ? resolveRuntimePath(taskProjectPath)
       : resolveRuntimePath(path.join(workspaceProjectPath, taskProjectPath))
+    const resolvedWorkspaceProjectPath = resolveRuntimePath(workspaceProjectPath)
+    if (
+      workspaceProject &&
+      path.resolve(resolvedTaskProjectPath) === path.resolve(resolvedWorkspaceProjectPath)
+    ) {
+      return resolveRuntimePath(workspaceProject.path)
+    }
+    if (
+      isDocumentationSourcePath(resolvedTaskProjectPath, resolvedWorkspaceProjectPath) &&
+      !hasExecutionProjectMarker(resolvedTaskProjectPath)
+    ) {
+      if (workspaceProject) return resolveRuntimePath(workspaceProject.path)
+      return resolvedWorkspaceProjectPath
+    }
+    return resolvedTaskProjectPath
   }
+  if (workspaceProject) return resolveRuntimePath(workspaceProject.path)
   return resolveRuntimePath(workspaceProjectPath)
 }
 
+function workspaceProjectNamedInTask(
+  task: TaskProjectPathInput,
+  workspaceProjects: readonly WorkspaceProjectBlock[],
+): WorkspaceProjectBlock | undefined {
+  return workspaceProjectNamedInText(workspaceProjects, [
+    task.domain,
+    task.title,
+    task.description,
+  ])
+}
+
 export function resolveEffectiveTaskBootstrapBlock(input: {
-  task: Pick<Task, 'projectPath'>
+  task: Pick<Task, 'projectPath' | 'domain'>
   workspaceProjectPath: string
   workspaceBootstrap?: BootstrapBlock
   workspaceProjects?: readonly WorkspaceProjectBlock[]
 }): { commands: readonly string[]; successGates: readonly string[]; timeoutMs: number } | null {
-  const taskProjectPath = resolveEffectiveTaskProjectPath(input.task, input.workspaceProjectPath)
+  const taskProjectPath = resolveEffectiveTaskProjectPath(input.task, input.workspaceProjectPath, {
+    workspaceProjects: input.workspaceProjects,
+  })
   const projectBootstrap = input.workspaceProjects
     ?.find((project) => path.resolve(project.path) === path.resolve(taskProjectPath))
     ?.bootstrap
@@ -1067,14 +1214,16 @@ export function resolveEffectiveTaskBootstrapBlock(input: {
 }
 
 export function resolveEffectiveTaskSuccessGates(input: {
-  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  task: Pick<Task, 'projectPath' | 'domain' | 'acceptanceCriteria'>
   workspaceProjectPath: string
   workspaceBootstrap?: BootstrapBlock
   likelyTargetFiles?: readonly string[]
+  workspaceProjects?: readonly WorkspaceProjectBlock[]
 }): readonly string[] | undefined {
   const taskProjectPath = resolveEffectiveTaskProjectPath(
     input.task,
     input.workspaceProjectPath,
+    { workspaceProjects: input.workspaceProjects },
   )
   const workspaceProjectPath = path.resolve(input.workspaceProjectPath)
   const acceptanceBuckets = deriveAutomatedAcceptanceCommands(input.task, taskProjectPath)
@@ -1123,14 +1272,16 @@ export function resolveEffectiveTaskSuccessGates(input: {
 }
 
 export function resolveEffectiveTaskVerificationCommands(input: {
-  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  task: Pick<Task, 'projectPath' | 'domain' | 'acceptanceCriteria'>
   workspaceProjectPath: string
   workspaceBootstrap?: BootstrapBlock
   likelyTargetFiles?: readonly string[]
+  workspaceProjects?: readonly WorkspaceProjectBlock[]
 }): readonly string[] | undefined {
   const taskProjectPath = resolveEffectiveTaskProjectPath(
     input.task,
     input.workspaceProjectPath,
+    { workspaceProjects: input.workspaceProjects },
   )
   const workspaceProjectPath = path.resolve(input.workspaceProjectPath)
   const acceptanceBuckets = deriveAutomatedAcceptanceCommands(input.task, taskProjectPath)

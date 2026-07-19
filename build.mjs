@@ -50,6 +50,11 @@ const copyAssetsPlugin = {
           filter: (path) => !path.endsWith('.ts') && !path.includes('__tests__'),
         })
       }
+      const benchmarkFixturesSrc = resolve(ROOT, 'internal/benchmarks/fixtures')
+      const benchmarkFixturesDst = join(OUT_DIR, 'benchmarks/fixtures')
+      if (existsSync(benchmarkFixturesSrc)) {
+        cpSync(benchmarkFixturesSrc, benchmarkFixturesDst, { recursive: true })
+      }
     })
   },
 }
@@ -154,7 +159,8 @@ function extractHelpTopics() {
 }
 
 function buildWebApp() {
-  const result = spawnSync('pnpm', ['exec', 'vite', 'build'], {
+  const viteBin = resolve(ROOT, 'node_modules/.bin/vite')
+  const result = spawnSync(viteBin, ['build'], {
     cwd: ROOT,
     stdio: 'inherit',
   })

@@ -2,10 +2,13 @@ import type { Task, TaskTurnLiveActivity } from './types.js'
 
 interface TaskStateLike {
   taskStatus?: string
+  status?: string
   importedDraft?: boolean
   liveAgent?: unknown
   activity?: TaskTurnLiveActivity[]
   checklist?: unknown
+  shapingBlockers?: Array<{ code?: string; summary?: string }>
+  taskReadiness?: { recommendation?: unknown }
   workerHandoff?: {
     ready?: unknown
     cleanupNeeded?: unknown
@@ -18,7 +21,9 @@ interface ChecklistLike {
   totalSteps?: unknown
 }
 
-type TaskSpecLike = Pick<Task, 'spec' | 'acceptanceCriteria' | 'productBrief'>
+type TaskSpecLike = Pick<Task, 'spec' | 'acceptanceCriteria' | 'productBrief'> & {
+  acceptanceCriteriaCount?: number
+}
 
 export function hasFailureActivity(turn: Pick<TaskStateLike, 'activity'>): boolean {
   return (turn.activity ?? []).some(item =>
@@ -47,7 +52,15 @@ export function isImportedDraftShaping(turn: TaskStateLike): boolean {
   return !turn.liveAgent && Boolean(turn.importedDraft) && turn.taskStatus === 'exploring'
 }
 
+export function needsSourceRecoveryShaping(turn: TaskStateLike): boolean {
+  const status = turn.taskStatus ?? turn.status
+  if (turn.liveAgent || status !== 'exploring') return false
+  if ((turn.shapingBlockers ?? []).some(blocker => blocker.code === 'source_recovery')) return true
+  return turn.taskReadiness?.recommendation === 'needs_research_spike'
+}
+
 export function isQueuedSpecRevision(turn: TaskStateLike): boolean {
+  if (needsSourceRecoveryShaping(turn)) return false
   return (
     (turn.taskStatus === 'exploring' || turn.taskStatus === 'spec_review') &&
     !turn.importedDraft &&
@@ -102,12 +115,13 @@ function hasCompleteProductBrief(task: Pick<TaskSpecLike, 'productBrief'>): bool
   )
 }
 
-export function hasSpecDraftContent(task: Pick<TaskSpecLike, 'spec' | 'acceptanceCriteria'>): boolean {
+export function hasSpecDraftContent(task: Pick<TaskSpecLike, 'spec' | 'acceptanceCriteria' | 'acceptanceCriteriaCount'>): boolean {
   return (
     typeof task.spec === 'string' &&
     task.spec.trim().length > 0 &&
-    Array.isArray(task.acceptanceCriteria) &&
-    task.acceptanceCriteria.length > 0
+    (Array.isArray(task.acceptanceCriteria)
+      ? task.acceptanceCriteria.length > 0
+      : Number(task.acceptanceCriteriaCount ?? 0) > 0)
   )
 }
 

@@ -1,5 +1,5 @@
 import type { ProjectRun, ProviderStatus, ServiceDetail, ServiceProjectSummary } from './types.js'
-import { buildProjectCardTicker, type ProjectActivityLine } from './project-activity.js'
+import { buildProjectCardTicker, type ProjectActivityLine, visibleProjectCounts } from './project-activity.js'
 import { formatUserPath } from './display-path.js'
 import { humanizeProjectName } from './project-name.js'
 
@@ -96,7 +96,7 @@ function readinessStage(project: ServiceProjectSummary): string | null {
     case 'provider_unavailable': return 'Needs provider'
     case 'invalid_lever_combo': return 'Settings blocked'
     case 'runtime_too_old': return 'Update Guildhall'
-    case 'all_terminal': return 'Complete'
+    case 'all_terminal': return 'Scope done'
     default: return 'Blocked'
   }
 }
@@ -106,7 +106,7 @@ function actionModelStage(project: ServiceProjectSummary): string | null {
   if (!actionModel) return null
   if (actionModel.ownerInput?.active) return 'Needs you'
   const code = actionModel.primaryAction?.code ?? project.startReadiness?.code
-  if (code === 'all_terminal') return 'Complete'
+  if (code === 'all_terminal') return 'Scope done'
   if (code === 'required_migration_pending') return 'Needs migration'
   if (code === 'no_provider' || code === 'no_loaded_model' || code === 'model_unavailable' || code === 'provider_unavailable') {
     return 'Needs provider'
@@ -159,6 +159,7 @@ function statusLabel(project: ServiceProjectSummary, counts: ProjectCardSummary[
 }
 
 function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
+  if (project.projectStatusError) return project.projectStatusError
   if (project.initializationNeeded) return 'Needs first-time Guildhall setup.'
   if (project.startReadiness?.canStart === false && project.startReadiness.message) {
     return project.startReadiness.message
@@ -219,6 +220,7 @@ function completedLabel(project: ServiceProjectSummary, counts: ProjectCardSumma
 }
 
 function nextLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string | null {
+  if (project.projectStatusError) return 'Open the project for a fresh status check'
   const primary = project.actionModel?.primaryAction
   if (primary) {
     return primary.detail ?? primary.label
@@ -339,9 +341,9 @@ function gitStoryTitle(state: string, reason: string | undefined): string {
     return 'This checkout has uncommitted work. Review the diff, then commit it or mark it local-only/deferred.'
   }
   if (text.includes('fatal: not a git repository') || text.includes('spawn git enoent')) {
-    return 'This checkout could not be inspected with git.'
+    return 'Guildhall could not inspect the configured repository boundary with git.'
   }
-  return reason ?? 'Git story needs closure.'
+  return reason ?? 'Repository follow-up.'
 }
 
 export function summarizeProjectCard(
@@ -349,15 +351,7 @@ export function summarizeProjectCard(
   defaultProviderStatus?: ProviderStatus | null,
 ): ProjectCardSummary {
   const projectStatusLoading = Boolean(project.projectStatusLoading)
-  const visibleWorkCounts = project.workProgress?.counts
-  const counts = {
-    total: visibleWorkCounts?.visibleTotal ?? project.taskCounts?.total ?? 0,
-    active: visibleWorkCounts?.visibleActive ?? project.taskCounts?.active ?? 0,
-    draftReview: project.taskCounts?.draftReview ?? 0,
-    blocked: visibleWorkCounts?.visibleBlocked ?? project.taskCounts?.blocked ?? 0,
-    done: visibleWorkCounts?.visibleDone ?? project.taskCounts?.done ?? 0,
-    shelved: visibleWorkCounts?.visibleShelved ?? project.taskCounts?.shelved ?? 0,
-  }
+  const counts = visibleProjectCounts(project)
   const running = project.run?.status === 'running'
   const initializationNeeded = Boolean(project.initializationNeeded)
   const maturityState = maturity(project, counts)
@@ -426,7 +420,7 @@ export function summarizeProjectCard(
     id: project.id,
     name: humanizeProjectName(project.name?.trim() || project.id),
     path: formatUserPath(project.path),
-    statusLabel: statusLabel(project, counts),
+    statusLabel: project.projectStatusError ? 'Status unavailable' : statusLabel(project, counts),
     tone:
       projectCheckIn?.needed || initializationNeeded || startBlocked || project.run?.status === 'error'
         ? 'warn'
@@ -439,13 +433,14 @@ export function summarizeProjectCard(
             : counts.done > 0 && counts.active === 0 && counts.blocked === 0
               ? 'success'
               : statusFromRun(project.run),
-    stageLabel: stageLabel(project, counts),
+    stageLabel: project.projectStatusError ? 'Status unavailable' : stageLabel(project, counts),
     activityLabel: activityLabel(project, counts),
     recentLabel: recentLabel(project, counts),
     completedLabel: completedLabel(project, counts),
     nextLabel: nextLabel(project, counts),
-    maturityLabel: maturityState.maturityLabel,
-    maturityDescription: maturityState.maturityDescription,
+    maturityLabel: project.projectStatusError ? 'Open project' : maturityState.maturityLabel,
+    maturityDescription: project.projectStatusError
+      ?? maturityState.maturityDescription,
     ...(projectCheckIn ? { projectCheckIn } : {}),
     ...(provider ? { provider } : {}),
     blurb: project.summary ?? null,
@@ -504,7 +499,8 @@ function projectSummarySignature(
     providerStatus: project.providerStatus,
     gitStory: project.gitStory,
     projectCheckIn: project.projectCheckIn,
-    projectStatusLoading: project.projectStatusLoading,
+      projectStatusLoading: project.projectStatusLoading,
+    projectStatusError: project.projectStatusError,
   })
 }
 
@@ -527,6 +523,27 @@ export function mergeServiceProjectSummaries(
   const previousProjects = previous.projects ?? []
   const incomingProjects = incoming.projects ?? []
   const previousByProjectId = new Map(previousProjects.map(project => [project.id, project]))
+  const isPartial = Boolean(incoming.partial) || (
+    previousProjects.length > incomingProjects.length &&
+    incomingProjects.length > 0 &&
+    incomingProjects.every(project => previousByProjectId.has(project.id))
+  )
+  if (isPartial) {
+    let changed = false
+    const incomingByProjectId = new Map(incomingProjects.map(project => [project.id, project]))
+    const projects = previousProjects.map(project => {
+      const next = incomingByProjectId.get(project.id)
+      if (!next) return project
+      if (projectSummarySignature(project, incoming.defaultProviderStatus) === projectSummarySignature(next, incoming.defaultProviderStatus)) {
+        return project
+      }
+      changed = true
+      return next
+    })
+    return changed
+      ? { ...previous, ...incoming, partial: undefined, projects }
+      : previous
+  }
   let changed = previousProjects.length !== incomingProjects.length
 
   const projects = incomingProjects.map((project, index) => {
@@ -590,7 +607,7 @@ function gitStoryLabel(state: string): string {
     case 'deferred': return 'Deferred'
     case 'conflict': return 'Git conflict'
     case 'unknown': return 'Git unknown'
-    default: return 'Git story'
+    default: return 'Repository'
   }
 }
 

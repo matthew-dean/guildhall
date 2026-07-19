@@ -3,7 +3,15 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { TaskQueue, type Task } from '@guildhall/core'
+import {
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  readProjectStateDatabaseAuthorityFromTasksPath,
+  readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseTask,
+} from '@guildhall/sessions'
 import { updateProductBrief, updateProductBriefTool } from '../product-brief.js'
+import { writeProjectTaskQueue } from '../../runtime/project-state-boundary.js'
 
 let tmpDir: string
 let tasksPath: string
@@ -48,6 +56,53 @@ afterEach(async () => {
 })
 
 describe('updateProductBrief', () => {
+  it('writes through a bootstrap projection without treating its revision as a CAS token', async () => {
+    const queue = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+
+    expect(readProjectStateDatabaseAuthorityFromTasksPath(tasksPath)).toBe('legacy')
+    expect(readProjectStateDatabaseQueueRevision(tasksPath)).not.toBeNull()
+
+    const result = await updateProductBrief({
+      tasksPath,
+      taskId: 'task-1',
+      userJob: 'As a new user I want to set up the project quickly',
+      successMetric: '90% of new users reach first task in <5 minutes',
+      antiPatterns: ['no jargon in first three screens'],
+      authoredBy: 'agent:spec-agent',
+    })
+
+    expect(result.success).toBe(true)
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-1')?.definition).toMatchObject({
+      productBrief: { userJob: expect.stringMatching(/new user/) },
+    })
+  })
+
+  it('uses the promoted point writer for a brief update', async () => {
+    const queue = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    const promotedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(promotedTasksPath), { recursive: true })
+    await fs.writeFile(promotedTasksPath, '{}', 'utf-8')
+    writeProjectTaskQueue(promotedTasksPath, queue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const before = readProjectStateDatabaseQueueRevision(promotedTasksPath)
+
+    const result = await updateProductBrief({
+      tasksPath: promotedTasksPath,
+      taskId: 'task-1',
+      userJob: 'As a new user I want to set up the project quickly',
+      successMetric: '90% of new users reach first task in <5 minutes',
+      antiPatterns: ['no jargon in first three screens'],
+      authoredBy: 'agent:spec-agent',
+    })
+
+    expect(result.success).toBe(true)
+    expect(readProjectStateDatabaseQueueRevision(promotedTasksPath)).toBeGreaterThan(before!)
+    expect(readProjectStateDatabaseTask(promotedTasksPath, 'task-1')?.definition).toMatchObject({
+      productBrief: { userJob: 'As a new user I want to set up the project quickly' },
+    })
+  })
+
   it('authors a new brief on a task that has none', async () => {
     const result = await updateProductBrief({
       tasksPath,
@@ -223,6 +278,31 @@ describe('updateProductBrief', () => {
     })
   })
 
+  it('decodes JSON-encoded list values instead of persisting nested strings', async () => {
+    const result = await updateProductBriefTool.execute(
+      {
+        userJob: 'You want a bounded narrative review contract.',
+        successMetric: 'The review contract is stored with readable boundaries.',
+        nonGoals: '["Do not add a UI.", "Do not widen the release."]',
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief?.nonGoals).toEqual([
+      'Do not add a UI.',
+      'Do not widen the release.',
+    ])
+  })
+
   it('rejects product briefs that describe the agent research process instead of the task outcome', async () => {
     const result = await updateProductBriefTool.execute(
       {
@@ -242,6 +322,29 @@ describe('updateProductBrief', () => {
     expect(result.is_error).toBe(true)
     expect(result.output).toMatch(/product outcome/i)
 
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toBeUndefined()
+  })
+
+  it('rejects recovery and worktree diagnostics inside the current brief boundary', async () => {
+    const result = await updateProductBriefTool.execute(
+      {
+        userJob: 'I want the current story record slice implemented.',
+        successMetric: 'The local proof passes.',
+        nonGoals: ['Target directory structure does not match expected paths.'],
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/product outcome and boundary/i)
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
     expect(q.tasks[0]?.productBrief).toBeUndefined()
   })

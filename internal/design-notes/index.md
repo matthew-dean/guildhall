@@ -10,14 +10,10 @@ evidence, not promises about what ships next.
 
 - [Disagreement & handoff](./disagreement-and-handoff) — how reviewer conflicts resolve, and how mid-task handoff works.
 - [Symphony comparison](./symphony-comparison) — feature and UX matrix against OpenAI's Symphony orchestration spec.
-- [Beads and one-task pivot](./beads-and-one-task-pivot) — what Guildhall borrows from Beads/Ralph loops and the first one-task finisher slice.
 - [Provider abstraction and throughput](./provider-abstraction-and-throughput) — protocol-first provider taxonomy, shared client pooling, bounded lane scheduling, and the path from one-task autonomy to queue throughput.
 - [UX review calibration and work-review integration](./ux-review-calibration-and-work-review-integration) — product-agnostic failure corpora, reviewer recipe calibration, and how calibrated UX review plugs into task review/fanout/gates.
 - [Review effort, review budget, and calibration harness](./review-effort-budget-and-calibration-harness) — how Guildhall chooses review depth across all reviewer lanes, tests quality/cost tradeoffs, and explains review effort in public docs.
-- [Persistence system boundary](./persistence-system-boundary) — the architectural rule that runtime state, evidence, logs, memory, artifacts, and archives all write through one persistence system.
-- [Project construction manifesto](./project-construction-manifesto) — the internal guild/construction model for planning, framing, building, inspecting, changing, and shipping software work.
-- Guildhall 0.7.0 project construction planning — internal target spec at `docs/superpowers/specs/2026-05-20-guildhall-0-7-project-construction-planning.md` for turning ambitious product goals into a durable Build Map, active tranche, slices, tasks, and change orders.
 - [Agent policy, learning, and model bakeoff](./agent-policy-and-model-bakeoff) — the split between 0.5.x decision-point unblockers and the 0.6.0 policy, bounded-improvisation, learning, and model-evaluation work.
-- [UI structural audit](./ui-audit) — the original 2026-05-11 audit snapshot.
-- [UI structural audit 2026-05-22 refresh](./ui-audit-2026-05-22-refresh) — refreshed against the 0.7.0 project-shell screenshots.
-- [Node vs Deno packaging for Guildhall 0.5.0](./deno-vs-node-packaging) — why the current release keeps the packaged Node path.
+Historical UI snapshots, packaging decisions, and architecture notes live under
+[`archive/`](./archive/README.md). The active project-state architecture is defined only by
+`internal/plans/2026-07-14-project-state-architecture-pivot.md`.

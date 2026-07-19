@@ -46,6 +46,8 @@ export const ExpectedEvidence = z.object({
   description: z.string(),
   required: z.boolean().default(true),
   sourceRef: z.string().optional(),
+  expectedExit: z.enum(['zero', 'non_zero']).optional(),
+  expectedOutputIncludes: z.array(z.string()).optional(),
 })
 export type ExpectedEvidence = z.infer<typeof ExpectedEvidence>
 
@@ -70,6 +72,25 @@ export const ProofPathScope = z.object({
 export type ProofPathScope = z.infer<typeof ProofPathScope>
 
 export const ProofPath = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    const path = value.trim()
+    if (!path) return value
+    const id = path
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'legacy-proof-path'
+    return {
+      id,
+      scope: { type: 'task', id },
+      title: path,
+      summary: `Legacy proof path: ${path}`,
+      source: 'documented',
+      createdAt: LEGACY_TIMESTAMP,
+      updatedAt: LEGACY_TIMESTAMP,
+      createdBy: 'legacy-import',
+    }
+  }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
   const record = value as Record<string, unknown>
   const id = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : 'legacy-proof-path'
@@ -82,6 +103,7 @@ export const ProofPath = z.preprocess((value) => {
       typeof record.summary === 'string' && record.summary.trim()
         ? record.summary.trim()
         : 'Legacy proof path carried forward until it is reshaped.',
+    source: record.source === 'inferred' ? 'inferred' : 'documented',
     createdAt: typeof record.createdAt === 'string' ? record.createdAt : LEGACY_TIMESTAMP,
     updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : LEGACY_TIMESTAMP,
     createdBy: typeof record.createdBy === 'string' && record.createdBy.trim() ? record.createdBy.trim() : 'legacy-import',
@@ -91,6 +113,11 @@ export const ProofPath = z.preprocess((value) => {
   scope: ProofPathScope,
   title: z.string(),
   summary: z.string(),
+  // Legacy/imported task paths use a compact command/review/browser shape;
+  // preserve it alongside the richer launch-step representation.
+  kind: z.enum(['command', 'review', 'browser']).optional(),
+  command: z.string().optional(),
+  source: z.enum(['documented', 'inferred']).default('documented'),
   status: z.enum(['planned', 'in_progress', 'verified', 'blocked', 'stale']).default('planned'),
   launchSteps: z.array(LaunchStep).default([]),
   expectedEvidence: z.array(ExpectedEvidence).default([]),

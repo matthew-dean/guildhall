@@ -1,4 +1,5 @@
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { createHash } from 'node:crypto'
+import { appendManagedTextFile, readManagedTextFile, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
@@ -6,9 +7,11 @@ import type { BuiltContext } from './context-builder.js'
 import {
   getProjectContextDebugLedgerPath,
   getProjectContextDebugSnapshotDir,
+  getProjectLocalHistoryDir,
+  emitProjectSummaryInvalidation,
   inferProjectRootFromMemoryDir,
+  registerProjectHistoricalArtifactIfCurrent,
 } from '@guildhall/sessions'
-import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 
 export interface ContextSectionStat {
   key: string
@@ -40,6 +43,7 @@ export interface ContextDebugRecord {
   promptChars: number
   contextChars: number
   promptPreview: string
+  promptHash?: string
   snapshotPath: string
   sections: ContextSectionStat[]
   corpusMap?: {
@@ -57,11 +61,14 @@ export interface ContextDebugRecord {
   memoryPacket?: {
     included: Array<{ id: string; type: string; scope: string }>
     withheld: Array<{ id: string; reason: string }>
+    includedCount?: number
+    withheldCount?: number
     evidenceRefs: number
     memoryCore?: {
       adapter: 'mastra' | 'deterministic'
       fallbackUsed: boolean
       warnings: string[]
+      candidateCount?: number
       candidates: Array<{
         id: string
         kind: string
@@ -83,18 +90,53 @@ export interface ContextDebugRecord {
 }
 
 const DEBUG_LOG_NAME = 'context-debug.jsonl'
-const MAX_PROMPT_PREVIEW_CHARS = 1200
-const MAX_SNAPSHOT_CONTEXT_CHARS = 16_000
-const MAX_SNAPSHOT_PROMPT_CHARS = 16_000
-const SNAPSHOT_RETENTION_PER_TASK = 12
+const SNAPSHOT_RETENTION_PER_TASK = 3
+const LEDGER_MAX_BYTES = 512 * 1024
+const LEDGER_COMPACTION_THRESHOLD_BYTES = LEDGER_MAX_BYTES
+const LEDGER_RETENTION_PER_TASK = 6
+const MEMORY_PACKET_SAMPLE_LIMIT = 12
+const MEMORY_SUMMARY_MAX_CHARS = 240
+const CONTEXT_DEBUG_RECORD_MAX_BYTES = 32 * 1024
+const CONTEXT_DEBUG_TEXT_MAX_CHARS = 1200
+const CONTEXT_DEBUG_LIST_LIMIT = 32
+
+function boundedContextDebugReadLimit(limit: number): number {
+  if (!Number.isFinite(limit)) return LEDGER_RETENTION_PER_TASK
+  return Math.max(0, Math.min(LEDGER_RETENTION_PER_TASK, Math.floor(limit)))
+}
 
 function sanitize(text: string): string {
   return text.replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
 }
 
-function preview(text: string, max = 1000): string {
-  const compact = text.trim().replace(/\s+/g, ' ')
-  return compact.length <= max ? compact : `${compact.slice(0, max)}...`
+function hashText(text: string): string {
+  return createHash('sha256').update(text).digest('hex')
+}
+
+async function registerContextDebugArtifact(input: {
+  projectRoot: string
+  filePath: string
+  artifactId: string
+  content?: string
+}): Promise<void> {
+  try {
+    const bytes = input.content === undefined
+      ? (await fs.stat(input.filePath)).size
+      : Buffer.byteLength(input.content, 'utf8')
+    registerProjectHistoricalArtifactIfCurrent(input.projectRoot, {
+      artifactId: input.artifactId,
+      kind: 'context_debug',
+      owner: 'context-observability',
+      logicalRef: path.relative(input.projectRoot, input.filePath).replaceAll(path.sep, '/'),
+      bytes,
+      ...(input.content !== undefined ? { sha256: hashText(input.content) } : {}),
+      retentionClass: 'diagnostic',
+      state: 'active',
+      lastVerifiedAt: new Date().toISOString(),
+    })
+  } catch {
+    // Diagnostics remain best-effort; a registry outage must not interrupt work.
+  }
 }
 
 function sectionStats(ctx: BuiltContext): ContextSectionStat[] {
@@ -151,6 +193,195 @@ function structuralMapEvidence(ctx: BuiltContext): ContextDebugRecord['structura
       retrievalHint: `Resolve ${item.handle} through the structural map before reading deferred context.`,
     })),
   }
+}
+
+function boundedMemorySummary(summary: string): string {
+  const compact = summary.trim().replace(/\s+/g, ' ')
+  return compact.length <= MEMORY_SUMMARY_MAX_CHARS
+    ? compact
+    : `${compact.slice(0, MEMORY_SUMMARY_MAX_CHARS)}...`
+}
+
+function boundedDiagnosticText(value: unknown, max = CONTEXT_DEBUG_TEXT_MAX_CHARS): string {
+  if (typeof value !== 'string') return ''
+  const compact = value.trim().replace(/\s+/g, ' ')
+  return compact.length <= max ? compact : `${compact.slice(0, max).trimEnd()}...`
+}
+
+function boundedDiagnosticStrings(value: unknown, limit = CONTEXT_DEBUG_LIST_LIMIT): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map(item => boundedDiagnosticText(item, 240)))]
+    .slice(0, limit)
+}
+
+function boundedSections(value: unknown): ContextSectionStat[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => item !== null && typeof item === 'object' && !Array.isArray(item))
+    .slice(0, CONTEXT_DEBUG_LIST_LIMIT)
+    .map(item => ({
+      key: boundedDiagnosticText(item.key, 120),
+      label: boundedDiagnosticText(item.label, 240),
+      chars: typeof item.chars === 'number' && Number.isFinite(item.chars) ? Math.max(0, item.chars) : 0,
+      included: item.included === true,
+    }))
+}
+
+function compactMemoryPacket(
+  packet: NonNullable<ContextDebugRecord['memoryPacket']>,
+): NonNullable<ContextDebugRecord['memoryPacket']> {
+  const memoryCore = packet.memoryCore
+    ? {
+        adapter: packet.memoryCore.adapter,
+        fallbackUsed: packet.memoryCore.fallbackUsed === true,
+        warnings: boundedDiagnosticStrings(packet.memoryCore.warnings, 16),
+        candidates: packet.memoryCore.candidates.slice(0, MEMORY_PACKET_SAMPLE_LIMIT).map(candidate => ({
+          id: boundedDiagnosticText(candidate.id, 240),
+          kind: boundedDiagnosticText(candidate.kind, 120),
+          summary: boundedMemorySummary(candidate.summary),
+          sourceRefs: candidate.sourceRefs.slice(0, MEMORY_PACKET_SAMPLE_LIMIT).map(ref => ({
+            uri: boundedDiagnosticText(ref.uri, 500),
+            ...(ref.path ? { path: boundedDiagnosticText(ref.path, 500) } : {}),
+            sourceKind: boundedDiagnosticText(ref.sourceKind, 120),
+          })),
+        })),
+        candidateCount: packet.memoryCore.candidateCount ?? packet.memoryCore.candidates.length,
+      }
+    : undefined
+  return {
+    included: [],
+    withheld: [],
+    includedCount: packet.includedCount ?? packet.included.length,
+    withheldCount: packet.withheldCount ?? packet.withheld.length,
+    evidenceRefs: typeof packet.evidenceRefs === 'number' && Number.isFinite(packet.evidenceRefs)
+      ? Math.max(0, packet.evidenceRefs)
+      : 0,
+    ...(memoryCore ? { memoryCore } : {}),
+  }
+}
+
+/**
+ * Context diagnostics are a manifest, not a second copy of the request.
+ * Keep enough information to explain selection and health without retaining
+ * prompt/context bodies or unbounded repeated memory identifiers.
+ */
+export function compactContextDebugRecord(record: ContextDebugRecord): ContextDebugRecord {
+  const compacted: ContextDebugRecord = {
+    id: boundedDiagnosticText(record.id, 240),
+    at: boundedDiagnosticText(record.at, 80),
+    taskId: boundedDiagnosticText(record.taskId, 240),
+    taskTitle: boundedDiagnosticText(record.taskTitle),
+    taskStatus: boundedDiagnosticText(record.taskStatus, 120),
+    domain: boundedDiagnosticText(record.domain, 240),
+    agentName: boundedDiagnosticText(record.agentName, 240),
+    agentRole: boundedDiagnosticText(record.agentRole, 120),
+    modelId: boundedDiagnosticText(record.modelId, 240),
+    ...(record.temperature !== undefined ? { temperature: record.temperature } : {}),
+    workspacePath: boundedDiagnosticText(record.workspacePath),
+    taskProjectPath: boundedDiagnosticText(record.taskProjectPath),
+    ...(record.activeWorktreePath ? { activeWorktreePath: boundedDiagnosticText(record.activeWorktreePath) } : {}),
+    promptChars: typeof record.promptChars === 'number' && Number.isFinite(record.promptChars) ? Math.max(0, record.promptChars) : 0,
+    contextChars: typeof record.contextChars === 'number' && Number.isFinite(record.contextChars) ? Math.max(0, record.contextChars) : 0,
+    promptPreview: '',
+    ...(record.promptHash ? { promptHash: boundedDiagnosticText(record.promptHash, 128) } : {}),
+    snapshotPath: boundedDiagnosticText(record.snapshotPath),
+    sections: boundedSections(record.sections),
+    ...(record.corpusMap ? {
+      corpusMap: {
+        included: record.corpusMap.included === true,
+        chars: typeof record.corpusMap.chars === 'number' && Number.isFinite(record.corpusMap.chars) ? Math.max(0, record.corpusMap.chars) : 0,
+        readNext: boundedDiagnosticStrings(record.corpusMap.readNext, 16),
+      },
+    } : {}),
+    health: Array.isArray(record.health)
+      ? record.health.slice(0, CONTEXT_DEBUG_LIST_LIMIT).map(warning => ({
+          code: boundedDiagnosticText(warning.code, 160),
+          severity: warning.severity,
+          message: boundedDiagnosticText(warning.message),
+        }))
+      : [],
+    reasons: boundedDiagnosticStrings(record.reasons, CONTEXT_DEBUG_LIST_LIMIT),
+    applicableGuildSlugs: boundedDiagnosticStrings(record.applicableGuildSlugs),
+    reviewerSlugs: boundedDiagnosticStrings(record.reviewerSlugs),
+    primaryEngineerSlug: record.primaryEngineerSlug ? boundedDiagnosticText(record.primaryEngineerSlug, 240) : null,
+    openQuestionCount: typeof record.openQuestionCount === 'number' && Number.isFinite(record.openQuestionCount) ? Math.max(0, record.openQuestionCount) : 0,
+    acceptanceCriteriaCount: typeof record.acceptanceCriteriaCount === 'number' && Number.isFinite(record.acceptanceCriteriaCount) ? Math.max(0, record.acceptanceCriteriaCount) : 0,
+    ...(record.memoryPacket ? { memoryPacket: compactMemoryPacket(record.memoryPacket) } : {}),
+    ...(record.structuralMap ? {
+      structuralMap: {
+        included: record.structuralMap.included === true,
+        chars: typeof record.structuralMap.chars === 'number' && Number.isFinite(record.structuralMap.chars) ? Math.max(0, record.structuralMap.chars) : 0,
+        omitted: record.structuralMap.omitted.slice(0, CONTEXT_DEBUG_LIST_LIMIT).map(item => ({
+          handle: boundedDiagnosticText(item.handle, 500),
+          reason: boundedDiagnosticText(item.reason, 240),
+          confidence: boundedDiagnosticText(item.confidence, 120),
+          retrievalHint: boundedDiagnosticText(item.retrievalHint),
+        })),
+      },
+    } : {}),
+  }
+
+  if (Buffer.byteLength(JSON.stringify(compacted), 'utf8') <= CONTEXT_DEBUG_RECORD_MAX_BYTES) return compacted
+
+  // Keep the invariant at the write boundary even if a future diagnostic field
+  // grows unexpectedly. Low-value retrieval samples are the first things to
+  // discard; counts, sizes, health, and identity remain available.
+  return {
+    ...compacted,
+    reasons: compacted.reasons.slice(-8),
+    health: compacted.health.slice(-8),
+    applicableGuildSlugs: compacted.applicableGuildSlugs.slice(0, 8),
+    reviewerSlugs: compacted.reviewerSlugs.slice(0, 8),
+    ...(compacted.corpusMap ? { corpusMap: { ...compacted.corpusMap, readNext: [] } } : {}),
+    ...(compacted.structuralMap ? { structuralMap: { ...compacted.structuralMap, omitted: [] } } : {}),
+    ...(compacted.memoryPacket ? {
+      memoryPacket: {
+        ...compacted.memoryPacket,
+        memoryCore: compacted.memoryPacket.memoryCore
+          ? { ...compacted.memoryPacket.memoryCore, candidates: [] }
+          : undefined,
+      },
+    } : {}),
+  }
+}
+
+function renderDiagnosticSnapshot(record: ContextDebugRecord): string {
+  return [
+    '# Context Diagnostic',
+    '',
+    `- At: ${record.at}`,
+    `- Task: ${record.taskId} — ${record.taskTitle}`,
+    `- Status: ${record.taskStatus}`,
+    `- Agent: ${record.agentName} (${record.agentRole})`,
+    `- Model: ${record.modelId}`,
+    record.temperature !== undefined ? `- Temperature: ${record.temperature}` : '',
+    `- Workspace: ${record.workspacePath}`,
+    `- Task project path: ${record.taskProjectPath}`,
+    record.activeWorktreePath ? `- Active worktree: ${record.activeWorktreePath}` : '',
+    `- Context chars: ${record.contextChars}`,
+    `- Prompt chars: ${record.promptChars}`,
+    record.promptHash ? `- Prompt hash: ${record.promptHash}` : '',
+    record.health.length > 0 ? `- Health: ${record.health.map((h) => `${h.severity}:${h.code}`).join(', ')}` : '- Health: clean',
+    '',
+    '## Why this context',
+    ...record.reasons.map((reason) => `- ${reason}`),
+    '',
+    '## Section sizes',
+    ...record.sections.map((section) => `- ${section.label}: ${section.chars} chars${section.included ? '' : ' (empty)'}`),
+    record.structuralMap?.omitted.length
+      ? [
+          '',
+          '## Structural Omitted Context',
+          ...record.structuralMap.omitted.map(item => `- ${item.handle}: ${item.reason}; ${item.retrievalHint}`),
+        ].join('\n')
+      : '',
+    '',
+    '## Retention',
+    '- Prompt and formatted context bodies are intentionally not persisted.',
+    '- Use the live request path when a full payload is needed for an active run.',
+  ].filter(Boolean).join('\n')
 }
 
 function isTaskScopedWorktree(activeWorktreePath: string | undefined, task: Task): boolean {
@@ -349,56 +580,8 @@ export async function writeContextDebugRecord(input: {
   await fs.mkdir(debugDir, { recursive: true })
   await pruneSnapshots(debugDir)
   const snapshotPath = path.join(debugDir, `${id}.md`)
-  const boundedPrompt =
-    input.prompt.length <= MAX_SNAPSHOT_PROMPT_CHARS
-      ? input.prompt
-      : `${input.prompt.slice(0, MAX_SNAPSHOT_PROMPT_CHARS)}\n\n[truncated ${input.prompt.length - MAX_SNAPSHOT_PROMPT_CHARS} chars]`
-  const boundedContext =
-    input.ctx.formatted.length <= MAX_SNAPSHOT_CONTEXT_CHARS
-      ? input.ctx.formatted
-      : `${input.ctx.formatted.slice(0, MAX_SNAPSHOT_CONTEXT_CHARS)}\n\n[truncated ${input.ctx.formatted.length - MAX_SNAPSHOT_CONTEXT_CHARS} chars]`
-  const snapshot = [
-    `# Context Snapshot`,
-    ``,
-    `- At: ${at}`,
-    `- Task: ${input.task.id} — ${input.task.title}`,
-    `- Status: ${input.task.status}`,
-    `- Agent: ${input.agentName} (${agentRole})`,
-    `- Model: ${input.modelId}`,
-    input.temperature !== undefined ? `- Temperature: ${input.temperature}` : '',
-    `- Workspace: ${input.workspacePath}`,
-    `- Task project path: ${taskProjectPath}`,
-    input.activeWorktreePath ? `- Active worktree: ${input.activeWorktreePath}` : '',
-    `- Context chars: ${contextChars}`,
-    `- Prompt chars: ${promptChars}`,
-    health.length > 0 ? `- Health: ${health.map((h) => `${h.severity}:${h.code}`).join(', ')}` : '- Health: clean',
-    ``,
-    `## Why this context`,
-    ...reasons.map((reason) => `- ${reason}`),
-    ``,
-    `## Section sizes`,
-    ...sections.map((section) => `- ${section.label}: ${section.chars} chars${section.included ? '' : ' (empty)'}`),
-    structuralMap?.omitted.length
-      ? [
-          ``,
-          `## Structural Omitted Context`,
-          ...structuralMap.omitted.map(item => `- ${item.handle}: ${item.reason}; ${item.retrievalHint}`),
-        ].join('\n')
-      : '',
-    ``,
-    `## Formatted Context`,
-    '```md',
-    boundedContext,
-    '```',
-    ``,
-    `## Full Prompt`,
-    '```md',
-    boundedPrompt,
-    '```',
-  ].filter(Boolean).join('\n')
-  await writeManagedTextFile(snapshotPath, snapshot, 'utf8')
 
-  const record: ContextDebugRecord = {
+  const record = compactContextDebugRecord({
     id,
     at,
     taskId: input.task.id,
@@ -414,7 +597,8 @@ export async function writeContextDebugRecord(input: {
     ...(input.activeWorktreePath ? { activeWorktreePath: input.activeWorktreePath } : {}),
     promptChars,
     contextChars,
-    promptPreview: preview(input.prompt, MAX_PROMPT_PREVIEW_CHARS),
+    promptPreview: '',
+    promptHash: hashText(input.prompt),
     snapshotPath,
     sections,
     ...(corpusMap ? { corpusMap } : {}),
@@ -438,6 +622,8 @@ export async function writeContextDebugRecord(input: {
               id: record.id,
               reason: record.reason,
             })),
+            includedCount: input.ctx.effectiveMemoryPacket.included.length,
+            withheldCount: input.ctx.effectiveMemoryPacket.withheld.length,
             evidenceRefs: input.ctx.effectiveMemoryPacket.evidenceRefs.length,
             ...(input.ctx.effectiveMemoryPacket.memoryCorePacket
               ? {
@@ -461,29 +647,32 @@ export async function writeContextDebugRecord(input: {
           },
         }
       : {}),
-  }
+  })
+
+  const renderedSnapshot = renderDiagnosticSnapshot(record)
+  await writeManagedTextFile(snapshotPath, renderedSnapshot, 'utf8')
+  await registerContextDebugArtifact({
+    projectRoot,
+    filePath: snapshotPath,
+    artifactId: `context-debug:${input.task.id}:${id}`,
+    content: renderedSnapshot,
+  })
 
   const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
-  const persistence = new FileBackedGuildhallPersistence()
-  await persistence.appendEvent({
-    projectRoot,
-    placement: {
-      scope: 'local_history',
-      retention: 'debug',
-      visibility: 'internal_audit',
-      commitPolicy: 'ignored',
-    },
-    collection: 'context-debug',
-    streamId: input.task.id,
-    eventId: id,
-    schemaName: 'context-debug-record',
-    schemaVersion: 1,
-    createdBy: 'context-observability',
-    sourceRefs: [`task:${input.task.id}`],
-    payload: record,
-    now: () => new Date(at),
-  })
   await appendManagedTextFile(ledgerPath, `${JSON.stringify(record)}\n`, 'utf8')
+  await registerContextDebugArtifact({
+    projectRoot,
+    filePath: ledgerPath,
+    artifactId: 'context-debug:ledger',
+  })
+  emitProjectSummaryInvalidation(projectRoot, 'context-debug-write', { domains: ['memory'] })
+  try {
+    if ((await fs.stat(ledgerPath)).size > LEDGER_COMPACTION_THRESHOLD_BYTES) {
+      await compactProjectContextDebug(projectRoot, { dryRun: false })
+    }
+  } catch {
+    // Diagnostic retention must never interrupt the agent run.
+  }
   return record
 }
 
@@ -506,27 +695,251 @@ async function pruneSnapshots(debugDir: string): Promise<void> {
   }
 }
 
-export async function readContextDebugForTask(
+export interface ContextDebugCompactionResult {
+  ledgerBytesBefore: number
+  ledgerBytesAfter: number
+  ledgerRecordsSeen: number
+  ledgerRecordsCompacted: number
+  snapshotFilesSeen: number
+  snapshotFilesCompacted: number
+  snapshotBytesBefore: number
+  snapshotBytesAfter: number
+  duplicateEventFilesRemoved: number
+  duplicateEventBytesBefore: number
+  duplicateEventBytesAfter: number
+}
+
+async function listFiles(dir: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true })
+    const files: string[] = []
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) files.push(...await listFiles(full))
+      else if (entry.isFile()) files.push(full)
+    }
+    return files
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+}
+
+function compactSnapshotMarkdown(raw: string): string {
+  const marker = raw.search(/\n## (?:Formatted Context|Full Prompt)\b/)
+  const head = marker >= 0 ? raw.slice(0, marker) : raw
+  if (head.includes('## Retention')) return `${head.trimEnd()}\n`
+  return `${head.trimEnd()}\n\n## Retention\n- Prompt and formatted context bodies were removed during project-state compaction.\n- Context diagnostics retain sizes, health, reasons, and retrieval handles only.\n`
+}
+
+function compactLedger(raw: string, activeTaskIds?: ReadonlySet<string>): {
+  content: string
+  recordsSeen: number
+  recordsCompacted: number
+  recordsDropped: number
+} {
+  const lines = raw.split('\n').filter(line => line.trim().length > 0)
+  const parsed: Array<{ index: number; taskId: string; line: string }> = []
+  const opaque: Array<{ index: number; line: string }> = []
+  let recordsCompacted = 0
+
+  for (const [index, line] of lines.entries()) {
+    try {
+      const record = JSON.parse(line) as ContextDebugRecord
+      const compacted = compactContextDebugRecord(record)
+      if (JSON.stringify(compacted) !== JSON.stringify(record)) recordsCompacted += 1
+      if (activeTaskIds && !activeTaskIds.has(record.taskId)) continue
+      parsed.push({ index, taskId: record.taskId, line: JSON.stringify(compacted) })
+    } catch {
+      opaque.push({ index, line })
+    }
+  }
+
+  const keep = new Set<number>()
+  const byTask = new Map<string, number[]>()
+  for (const record of parsed) {
+    const indexes = byTask.get(record.taskId) ?? []
+    indexes.push(record.index)
+    byTask.set(record.taskId, indexes)
+  }
+  for (const indexes of byTask.values()) {
+    for (const index of indexes.slice(-LEDGER_RETENTION_PER_TASK)) keep.add(index)
+  }
+  for (const record of opaque) keep.add(record.index)
+
+  const retainedLines = [...parsed, ...opaque]
+    .filter(record => keep.has(record.index))
+    .sort((a, b) => a.index - b.index)
+    .map(record => record.line)
+  const compactedLines: string[] = []
+  let retainedBytes = 0
+  for (let index = retainedLines.length - 1; index >= 0; index -= 1) {
+    const line = retainedLines[index]
+    if (line === undefined) continue
+    const lineBytes = Buffer.byteLength(line, 'utf8') + 1
+    if (lineBytes > LEDGER_MAX_BYTES) {
+      recordsCompacted += 1
+      continue
+    }
+    if (retainedBytes + lineBytes > LEDGER_MAX_BYTES) break
+    compactedLines.unshift(line)
+    retainedBytes += lineBytes
+  }
+  return {
+    content: compactedLines.length > 0 ? `${compactedLines.join('\n')}\n` : '',
+    recordsSeen: lines.length,
+    recordsCompacted,
+    recordsDropped: lines.length - compactedLines.length,
+  }
+}
+
+/**
+ * Compact old context diagnostics in place. The local ledger is the single
+ * durable source; the old persistence event mirror is deleted because it was
+ * byte-for-byte duplicate debug history with no reader of its own.
+ */
+export async function compactProjectContextDebug(
+  projectRoot: string,
+  options: { dryRun?: boolean; activeTaskIds?: ReadonlySet<string> } = {},
+): Promise<ContextDebugCompactionResult> {
+  const dryRun = options.dryRun ?? true
+  const resolvedRoot = path.resolve(projectRoot)
+  const ledgerPath = getProjectContextDebugLedgerPath(resolvedRoot)
+  let ledgerRaw = ''
+  try {
+    ledgerRaw = await readManagedTextFile(ledgerPath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+
+  const compactedLedgerResult = compactLedger(ledgerRaw, options.activeTaskIds)
+  const compactedLedger = compactedLedgerResult.content
+  if (!dryRun && ledgerRaw.length > 0 && compactedLedger !== ledgerRaw) {
+    await writeManagedTextFile(ledgerPath, compactedLedger, 'utf8')
+  }
+
+  const snapshotFiles = (await listFiles(path.join(getProjectLocalHistoryDir(resolvedRoot), 'context-debug', 'snapshots')))
+    .filter(file => file.endsWith('.md'))
+  const snapshotsByTask = new Map<string, string[]>()
+  for (const file of snapshotFiles) {
+    const taskDir = path.dirname(file)
+    const files = snapshotsByTask.get(taskDir) ?? []
+    files.push(file)
+    snapshotsByTask.set(taskDir, files)
+  }
+  const keptSnapshots = new Set<string>()
+  for (const files of snapshotsByTask.values()) {
+    const taskId = path.basename(path.dirname(files[0] ?? ''))
+    if (options.activeTaskIds && !options.activeTaskIds.has(taskId)) continue
+    for (const file of files.sort().slice(-SNAPSHOT_RETENTION_PER_TASK)) keptSnapshots.add(file)
+  }
+
+  let snapshotBytesBefore = 0
+  let snapshotBytesAfter = 0
+  let snapshotFilesCompacted = 0
+  for (const file of snapshotFiles) {
+    const raw = await fs.readFile(file, 'utf8')
+    snapshotBytesBefore += Buffer.byteLength(raw, 'utf8')
+    if (!keptSnapshots.has(file)) {
+      snapshotFilesCompacted += 1
+      if (!dryRun) await fs.rm(file, { force: true })
+      continue
+    }
+    const compacted = compactSnapshotMarkdown(raw)
+    snapshotBytesAfter += Buffer.byteLength(compacted, 'utf8')
+    if (compacted !== raw) {
+      snapshotFilesCompacted += 1
+      if (!dryRun) await writeManagedTextFile(file, compacted, 'utf8')
+    }
+  }
+
+  const duplicateEventDir = path.join(
+    getProjectLocalHistoryDir(resolvedRoot),
+    'persistence',
+    'events',
+    'context-debug',
+  )
+  const duplicateEventFiles = await listFiles(duplicateEventDir)
+  let duplicateEventBytesBefore = 0
+  for (const file of duplicateEventFiles) {
+    duplicateEventBytesBefore += (await fs.stat(file)).size
+  }
+  if (!dryRun && duplicateEventFiles.length > 0 && compactedLedgerResult.recordsSeen > 0) {
+    await fs.rm(duplicateEventDir, { recursive: true, force: true })
+  }
+
+  return {
+    ledgerBytesBefore: Buffer.byteLength(ledgerRaw, 'utf8'),
+    ledgerBytesAfter: Buffer.byteLength(compactedLedger, 'utf8'),
+    ledgerRecordsSeen: compactedLedgerResult.recordsSeen,
+    ledgerRecordsCompacted: compactedLedgerResult.recordsCompacted + compactedLedgerResult.recordsDropped,
+    snapshotFilesSeen: snapshotFiles.length,
+    snapshotFilesCompacted,
+    snapshotBytesBefore,
+    snapshotBytesAfter,
+    duplicateEventFilesRemoved: duplicateEventFiles.length,
+    duplicateEventBytesBefore,
+    duplicateEventBytesAfter: dryRun ? duplicateEventBytesBefore : 0,
+  }
+}
+
+/**
+ * Read the bounded diagnostic ledger once and index only the requested tasks.
+ * The index stores compact records, never prompt/context bodies or unknown
+ * legacy fields, and retains the same per-task limit as ledger compaction.
+ */
+export async function readContextDebugIndex(
   memoryDir: string,
-  taskId: string,
-  limit = 6,
-): Promise<ContextDebugRecord[]> {
+  taskIds?: Iterable<string>,
+  limit = LEDGER_RETENTION_PER_TASK,
+): Promise<Map<string, ContextDebugRecord[]>> {
+  const requestedTaskIds = taskIds === undefined
+    ? undefined
+    : new Set([...taskIds].filter(taskId => typeof taskId === 'string' && taskId.length > 0))
+  const readLimit = boundedContextDebugReadLimit(limit)
+  const index = new Map<string, ContextDebugRecord[]>()
+  if (requestedTaskIds) {
+    for (const taskId of requestedTaskIds) index.set(taskId, [])
+  }
+  if (readLimit === 0 || requestedTaskIds?.size === 0) return index
+
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
   const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
   try {
     const raw = await readManagedTextFile(ledgerPath, 'utf8')
-    const matches: ContextDebugRecord[] = []
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue
       try {
         const record = JSON.parse(line) as ContextDebugRecord
-        if (record.taskId === taskId) matches.push(record)
+        if (typeof record.taskId !== 'string' || requestedTaskIds && !requestedTaskIds.has(record.taskId)) continue
+        const records = index.get(record.taskId) ?? []
+        records.push(compactContextDebugRecord(record))
+        if (records.length > readLimit) records.splice(0, records.length - readLimit)
+        index.set(record.taskId, records)
       } catch {
         // ignore malformed lines
       }
     }
-    return matches.slice(-limit).reverse()
   } catch {
-    return []
+    return index
   }
+
+  for (const records of index.values()) records.reverse()
+  return index
+}
+
+export async function readContextDebugForTasks(
+  memoryDir: string,
+  taskIds: Iterable<string>,
+  limit = LEDGER_RETENTION_PER_TASK,
+): Promise<Map<string, ContextDebugRecord[]>> {
+  return readContextDebugIndex(memoryDir, taskIds, limit)
+}
+
+export async function readContextDebugForTask(
+  memoryDir: string,
+  taskId: string,
+  limit = LEDGER_RETENTION_PER_TASK,
+): Promise<ContextDebugRecord[]> {
+  return (await readContextDebugIndex(memoryDir, [taskId], limit)).get(taskId) ?? []
 }

@@ -146,6 +146,7 @@ describe('buildInbox', () => {
       'bootstrap_missing',
       'setup_pending',
       'workspace_import_pending',
+      'proof_reconciliation',
       'import_draft_queue',
       'contract_result_review',
       'lever_questions',
@@ -410,6 +411,278 @@ describe('buildInbox', () => {
     expect(hit.detail).not.toMatch(/\d+ signals?/i)
   })
 
+  it('proof_reconciliation: emitted when completed work still has unmet acceptance criteria', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-stale-proof',
+          title: 'Draft chapter in author voice',
+          status: 'done',
+          acceptanceCriteria: [
+            { id: 'voice', description: 'Reviewer confirms the chapter is complete.', met: false },
+            { id: 'outline', description: 'Outline was generated.', met: true },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'proof_reconciliation')
+    if (!hit || hit.kind !== 'proof_reconciliation') throw new Error('unreachable')
+
+    expect(hit).toMatchObject({
+      severity: 'medium',
+      taskId: 'task-stale-proof',
+      title: 'Review stale proof records',
+      actionHref: '/task/task-stale-proof?tab=spec',
+      count: 1,
+    })
+    expect(hit.detail).toContain('Draft chapter in author voice')
+    expect(hit.detail).toContain('reconcile the task evidence or reopen the work')
+  })
+
+  it('proof_reconciliation: includes every proof-missing task signal', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      tasks: Array.from({ length: 10 }, (_, index) => ({
+        id: `task-proof-${index + 1}`,
+        title: `Proof task ${index + 1}`,
+        status: 'done',
+        acceptanceCriteria: [
+          { id: 'proof', description: 'Proof is attached.', met: false },
+        ],
+      })),
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'proof_reconciliation')
+    if (!hit || hit.kind !== 'proof_reconciliation') throw new Error('unreachable')
+
+    expect(hit.count).toBe(10)
+    expect(hit.signals).toHaveLength(10)
+    expect(hit.signals).toEqual(Array.from({ length: 10 }, (_, index) => `task:task-proof-${index + 1}`))
+  })
+
+  it('proof_reconciliation: ignores stale unmet criteria already settled by approving review proof', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-stale-proof',
+          title: 'Draft chapter in author voice',
+          status: 'done',
+          acceptanceCriteria: [
+            { id: 'voice', description: 'Author voice proof is attached.', met: false },
+          ],
+          evidence: [{
+            id: 'review-task-stale-proof',
+            taskId: 'task-stale-proof',
+            kind: 'review_verdict',
+            recordedAt: '2026-07-04T10:07:21.557Z',
+            payload: {
+              verdict: 'approve',
+              reviewerPath: 'llm',
+              reason: 'Reviewer approved.',
+              reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+              failingSignals: [],
+              recordedAt: '2026-07-04T10:07:21.557Z',
+            },
+          }],
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+
+    expect(items.some(i => i.kind === 'proof_reconciliation')).toBe(false)
+  })
+
+  it('proof_reconciliation: ignores unmet proof outside the selected release scope', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      selectedReleaseId: 'current-scope',
+      releases: [{
+        id: 'current-scope',
+        label: 'Current scope',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: ['work:task-later'],
+      }],
+      tasks: [
+        {
+          id: 'task-current',
+          title: 'Ship current proof',
+          status: 'done',
+          releaseIds: ['current-scope'],
+          acceptanceCriteria: [
+            { id: 'proof', description: 'Current proof is attached.', met: true },
+          ],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-06T00:00:00.000Z',
+            summary: {
+              journey: 'Current proof shipped.',
+              decision: 'Task finished as done.',
+              evidence: 'current proof attached.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-06T00:00:00.000Z',
+            createdBy: 'test',
+          },
+        },
+        {
+          id: 'task-later',
+          title: 'Clean up later proof',
+          status: 'done',
+          releaseIds: ['later-scope'],
+          acceptanceCriteria: [
+            { id: 'proof', description: 'Later proof is attached.', met: false },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+
+    expect(items.some(i => i.kind === 'proof_reconciliation')).toBe(false)
+  })
+
+  it('uses compact current task facts without requiring a full task definition', async () => {
+    await writeCompleteBootstrap()
+    await writeYaml('guildhall.yaml', {
+      name: 'Inbox Test',
+      id: 'inbox-test',
+      coordinators: [{ id: 'coordinator' }],
+      bootstrap: { verifiedAt: '2026-07-14T00:00:00.000Z', install: ['pnpm install'], gates: ['pnpm typecheck'] },
+    })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeFile('.guildhall/project-brief.md', 'This project has a direction long enough for the onboarding wizard to continue.')
+    await writeJson('.guildhall/TASKS.json', { version: 1, tasks: [{ id: 'task-compact-import', status: 'exploring' }] })
+
+    const items = buildInbox({
+      projectPath: tmpDir,
+      projectStateDir,
+      taskStateOverride: {
+        version: 1,
+        tasks: [{
+          id: 'task-compact-import',
+          title: 'Imported work',
+          description: 'Current task summary only.',
+          status: 'exploring',
+          currentSummary: {
+            imported: true,
+            brief: { present: false, shaped: false, userJob: false, successMetric: false, approvedAt: null },
+            acceptanceCriteriaCount: 0,
+          },
+        }],
+      },
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
+
+    expect(items.find(item => item.kind === 'import_draft_queue')).toMatchObject({
+      taskId: 'task-compact-import',
+      title: '1 imported task needs shaping',
+    })
+  })
+
+  it('proof_reconciliation: uses effective task state override instead of stale raw task proof', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    const staleQueue = {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      selectedReleaseId: 'current-scope',
+      releases: [{
+        id: 'current-scope',
+        label: 'Current scope',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        id: 'task-current',
+        title: 'Draft chapter in author voice',
+        status: 'done',
+        releaseIds: ['current-scope'],
+        acceptanceCriteria: [
+          { id: 'voice', description: 'Author voice proof is attached.', met: false },
+        ],
+      }],
+    }
+    await writeJson('.guildhall/TASKS.json', staleQueue)
+
+    const rawItems = buildInboxWithProviderSetup()
+    expect(rawItems.some(i => i.kind === 'proof_reconciliation')).toBe(true)
+
+    const effectiveItems = buildInbox({
+      projectPath: tmpDir,
+      projectStateDir,
+      taskStateOverride: {
+        ...staleQueue,
+        tasks: [{
+          ...staleQueue.tasks[0],
+          acceptanceCriteria: [
+            { id: 'voice', description: 'Author voice proof is attached.', met: true },
+          ],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-06T00:00:00.000Z',
+            summary: {
+              journey: 'Worker completed the proof.',
+              decision: 'Task finished as done.',
+              evidence: 'Author voice proof is attached.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-06T00:00:00.000Z',
+            createdBy: 'test',
+          },
+        }],
+      },
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
+
+    expect(effectiveItems.some(i => i.kind === 'proof_reconciliation')).toBe(false)
+  })
+
   it('does not expose project check-ins or pressure-test questions through project inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', {
@@ -537,6 +810,106 @@ describe('buildInbox', () => {
     expect(hit.title).toBe('2 imported drafts need task briefs')
     expect(hit.detail).toMatch(/Inspect the repo and draft starter tasks/)
     expect(hit.actionHref).toBe('/task/task-import-a')
+  })
+
+  it('import_draft_queue: includes imported source-recovery work that is not runnable yet', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'Inbox Test',
+      id: 'inbox-test',
+      coordinators: [{ id: 'frontend', name: 'Frontend' }],
+      bootstrap: {
+        verifiedAt: '2026-05-11T00:00:00.000Z',
+        install: ['pnpm install'],
+        gates: ['pnpm typecheck'],
+      },
+    })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeFile('.guildhall/project-brief.md', 'Project brief exists so setup no longer owns the next action.')
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-import-a',
+          title: 'Recover source-backed contract surface',
+          status: 'exploring',
+          notes: [{ agentId: 'workspace-importer', role: 'importer', content: 'Imported from docs.' }],
+          productBrief: {
+            userJob: 'Recover the contract surface.',
+            whyItMattersNow: 'Workers need concrete contracts before implementation.',
+            successMetric: 'The relevant contract names are recovered from source.',
+            nonGoals: ['Do not invent contracts.'],
+          },
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Contract surfaces are named.', verifiedBy: 'review', met: false }],
+          taskReadiness: {
+            recommendation: 'needs_research_spike',
+            summary: 'This imported task still needs concrete contract names before Guildhall can hand it to a worker.',
+          },
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'import_draft_queue')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'import_draft_queue') throw new Error('unreachable')
+    expect(hit.taskId).toBe('task-import-a')
+    expect(hit.title).toBe('1 imported task needs shaping')
+    expect(hit.detail).toContain('Recover source-backed contract surface')
+    expect(hit.actionHref).toBe('/task/task-import-a')
+  })
+
+  it('import_draft_queue: counts only the selected release shaping work', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'Inbox Test',
+      id: 'inbox-test',
+      coordinators: [{ id: 'frontend', name: 'Frontend' }],
+      bootstrap: {
+        verifiedAt: '2026-05-11T00:00:00.000Z',
+        install: ['pnpm install'],
+        gates: ['pnpm typecheck'],
+      },
+    })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeFile('.guildhall/project-brief.md', 'Project brief exists so setup no longer owns the next action.')
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      selectedReleaseId: 'current-release',
+      lastUpdated: '',
+      releases: [
+        {
+          id: 'current-release',
+          label: 'Current Release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-import-current'],
+          deferredNodeIds: ['work:task-import-later'],
+        },
+      ],
+      tasks: [
+        {
+          id: 'task-import-current',
+          title: 'Shape current release work',
+          status: 'import_draft',
+          releaseIds: ['current-release'],
+        },
+        {
+          id: 'task-import-later',
+          title: 'Shape later release work',
+          status: 'import_draft',
+          scope: 'later',
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'import_draft_queue')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'import_draft_queue') throw new Error('unreachable')
+    expect(hit.taskId).toBe('task-import-current')
+    expect(hit.title).toBe('1 imported draft needs a task brief')
+    expect(hit.detail).not.toContain('later')
   })
 
   it('suppresses import_draft_queue while a later setup step still owns the next user action', async () => {

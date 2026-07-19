@@ -506,7 +506,7 @@ describe('summarizeProjects', () => {
       },
       {
         id: 'finished',
-        statusLabel: 'Complete',
+        statusLabel: 'Scope done',
         nextLabel: 'All tasks are already finished.',
         canStart: false,
         needsAttention: false,

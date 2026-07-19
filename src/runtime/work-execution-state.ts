@@ -1,6 +1,8 @@
 import type { Task } from '@guildhall/core'
 import { buildWorkHierarchy, needsOwnerAction, workSubtreeIds } from './work-hierarchy.js'
 import { deriveProjectWorkProgress } from './work-progress.js'
+import { deriveTaskWorkVisibility } from './work-visibility.js'
+import { taskDoneButProofMissing } from './proof-health.js'
 
 export type WorkExecutionSummaryState =
   | 'ready'
@@ -56,6 +58,10 @@ const DONE_STATUSES = new Set(['done', 'pending_pr'])
 const DEFERRED_STATUSES = new Set(['shelved'])
 const DECOMPOSE_ACTIONS = new Set(['split_required', 'split_recommended', 'decompose_before_execution'])
 
+function hasBlockReason(task: Task): boolean {
+  return typeof task.blockReason === 'string' && task.blockReason.trim().length > 0
+}
+
 export function deriveProjectWorkExecutionState(tasks: Task[]): ProjectWorkExecutionState {
   const progress = deriveProjectWorkProgress(tasks)
   const byTaskId: Record<string, WorkExecutionState> = {}
@@ -70,7 +76,7 @@ export function deriveProjectWorkExecutionState(tasks: Task[]): ProjectWorkExecu
   for (const task of tasks) {
     const state = deriveWorkExecutionState(tasks, task.id)
     byTaskId[task.id] = state
-    const visibility = progress.byTaskId[task.id]?.visibility ?? visibilityForTask(task)
+    const visibility = progress.byTaskId[task.id]?.visibility ?? visibilityForTask(task, tasks)
     if (visibility.countInProjectTotals) counts.visibleTotal += 1
     if (visibility.kind === 'internal_step' || visibility.kind === 'hidden') counts.internalTotal += 1
     if (state.isRunnable) counts.runnableTotal += 1
@@ -94,26 +100,26 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
     .map(id => model.byId.get(id)?.task ?? tasks.find(task => task.id === id))
     .filter((candidate): candidate is Task => Boolean(candidate))
   const visibleChildIds = descendants
-    .filter(child => visibilityForTask(child).countInProjectTotals)
+    .filter(child => visibilityForTask(child, tasks).countInProjectTotals)
     .map(child => child.id)
   const internalChildIds = descendants
     .filter(child => {
-      const visibility = visibilityForTask(child)
+      const visibility = visibilityForTask(child, tasks)
       return visibility.kind === 'internal_step' || visibility.kind === 'hidden' || !visibility.countInProjectTotals
     })
     .map(child => child.id)
   const blockedChildIds = descendants
-    .filter(child => BLOCKED_STATUSES.has(child.status))
+    .filter(child => BLOCKED_STATUSES.has(child.status) || hasBlockReason(child))
     .map(child => child.id)
   const activeChildIds = descendants
-    .filter(child => ACTIVE_STATUSES.has(child.status) && !TERMINAL_STATUSES.has(child.status))
+    .filter(child => ACTIVE_STATUSES.has(child.status) && !TERMINAL_STATUSES.has(child.status) && !hasBlockReason(child))
     .map(child => child.id)
   const terminalChildIds = descendants
     .filter(child => TERMINAL_STATUSES.has(child.status))
     .map(child => child.id)
   const legacyRecommendationCount = task.sizePlan?.recommendedChildren?.length ?? 0
   const isContaining = descendantIds.length > 0
-  const needsDecomposition = !isContaining && DECOMPOSE_ACTIONS.has(task.sizePlan?.action ?? '')
+  const needsDecomposition = !isContaining && decompositionBlocksDispatch(task)
   const scopeRequestIds = scopeAuthorityRequestIds(task)
   const needsOwnerDecision = needsOwnerAction(task) || scopeRequestIds.length > 0
   const childStates = descendants.map(child => deriveLeafRunnableState(tasks, child.id))
@@ -124,8 +130,8 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
   const requiredDelivery = deliverySteps.filter(step => step.required !== false && step.blocksCompletion !== false)
   const requiredDeliveryDone = requiredDelivery.filter(step => step.status === 'done' || step.status === 'waived').length
   const blockedInternalProofCount = descendants.filter(child =>
-    BLOCKED_STATUSES.has(child.status) &&
-    (visibilityForTask(child).kind === 'internal_step' || child.workKind === 'verification' || child.workKind === 'test'),
+    (BLOCKED_STATUSES.has(child.status) || hasBlockReason(child)) &&
+    (visibilityForTask(child, tasks).kind === 'internal_step' || child.workKind === 'verification' || child.workKind === 'test'),
   ).length
   const missingProofCount = blockedInternalProofCount + requiredDelivery.filter(step => step.status === 'blocked').length
   const isRunnable = deriveLeafRunnableState(tasks, task.id)
@@ -167,31 +173,45 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
 function deriveLeafRunnableState(tasks: Task[], workId: string): boolean {
   const task = tasks.find(candidate => candidate.id === workId)
   if (!task) return false
-  if (descendantsFor(tasks, workId).length > 0) return false
-  if (DECOMPOSE_ACTIONS.has(task.sizePlan?.action ?? '')) return false
-  const visibility = visibilityForTask(task)
-  if (!visibility.countInProjectTotals || visibility.kind === 'internal_step' || visibility.kind === 'hidden') return false
+  const hasDescendants = descendantsFor(tasks, workId).length > 0
+  const reopenedForOwnProof = task.status === 'in_progress' && taskDoneButProofMissing(task)
+  if (hasDescendants && !reopenedForOwnProof) return false
+  if (hasBlockReason(task)) return false
+  if (decompositionBlocksDispatch(task)) return false
+  const visibility = visibilityForTask(task, tasks)
+  if (visibility.kind === 'hidden') return false
+  if (visibility.kind === 'internal_step' && !task.hierarchy?.parentId) return false
+  if (!visibility.countInProjectTotals && visibility.kind !== 'internal_step') return false
   return ACTIVE_STATUSES.has(task.status) && !BLOCKED_STATUSES.has(task.status) && !TERMINAL_STATUSES.has(task.status)
+}
+
+function decompositionBlocksDispatch(task: Task): boolean {
+  const action = task.sizePlan?.action ?? ''
+  if (!DECOMPOSE_ACTIONS.has(action)) return false
+  if (isRunnableEmptyBoundedChildContract(task)) return false
+  return true
+}
+
+function isRunnableEmptyBoundedChildContract(task: Task): boolean {
+  if (task.sizePlan?.action !== 'decompose_before_execution') return false
+  if ((task.sizePlan.recommendedChildren?.length ?? 0) > 0) return false
+  if (task.taskReadiness?.recommendation !== 'ready' && task.taskReadiness?.recommendation !== 'needs_research_spike') {
+    return false
+  }
+  const hasContainingWork = Boolean(task.hierarchy?.parentId) || (task.delivery?.supports?.length ?? 0) > 0
+  if (!hasContainingWork) return false
+  const text = [task.title, task.description, task.spec].filter(Boolean).join('\n')
+  return /\b(contract|schema|fixture|expected-record|prototype-run|evaluation)\b/i.test(text)
 }
 
 function descendantsFor(tasks: Task[], workId: string): string[] {
   return workSubtreeIds(tasks, workId).filter(id => id !== workId)
 }
 
-function visibilityForTask(task: Task): { kind: 'primary' | 'supporting' | 'internal_step' | 'hidden'; countInProjectTotals: boolean } {
-  const kind = task.workVisibility?.kind
-  if (kind === 'primary' || kind === 'supporting' || kind === 'internal_step' || kind === 'hidden') {
-    return {
-      kind,
-      countInProjectTotals: typeof task.workVisibility?.countInProjectTotals === 'boolean'
-        ? task.workVisibility.countInProjectTotals
-        : kind === 'primary' || kind === 'supporting',
-    }
-  }
-  if (task.hierarchy?.parentId && (task.workKind === 'verification' || task.workKind === 'test')) {
-    return { kind: 'internal_step', countInProjectTotals: false }
-  }
-  return { kind: 'primary', countInProjectTotals: true }
+function visibilityForTask(task: Task, tasks: Task[]): { kind: 'primary' | 'supporting' | 'internal_step' | 'hidden'; countInProjectTotals: boolean } {
+  const parentId = task.hierarchy?.parentId?.trim() || null
+  const parent = parentId ? tasks.find(candidate => candidate.id === parentId) ?? null : null
+  return deriveTaskWorkVisibility(task, parent)
 }
 
 function scopeAuthorityRequestIds(task: Task): string[] {
@@ -213,7 +233,7 @@ function summaryStateFor(input: {
 }): WorkExecutionSummaryState {
   if (input.needsOwnerDecision) return 'waiting_on_scope_authority'
   if (input.needsDecomposition) return 'needs_decomposition'
-  if (BLOCKED_STATUSES.has(input.task.status) || input.blockedChildIds.length > 0) return 'blocked'
+  if (BLOCKED_STATUSES.has(input.task.status) || hasBlockReason(input.task) || input.blockedChildIds.length > 0) return 'blocked'
   if (RUNNING_STATUSES.has(input.task.status) || input.activeChildIds.some(id => {
     const child = input.descendants.find(task => task.id === id)
     return child ? RUNNING_STATUSES.has(child.status) : false

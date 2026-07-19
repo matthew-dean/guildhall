@@ -6,8 +6,10 @@ import os from 'node:os'
 
 import { bootstrapWorkspace, writeWorkspaceConfig } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
-import { writeProjectStateJsonAsync } from '@guildhall/sessions'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 import { buildServeApp, dashboardHtml } from '../serve.js'
+import { writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
+import { applyProjectMigrations } from '../migrations.js'
 
 const tempDirs: string[] = []
 
@@ -43,14 +45,25 @@ function makeTask(projectPath: string, overrides: Partial<Task>): Task {
   }
 }
 
-async function seedTasks(projectPath: string, tasks: Task[]): Promise<void> {
-  const queue: TaskQueue = { version: 1, lastUpdated: new Date().toISOString(), tasks }
-  await writeProjectStateJsonAsync(projectPath, 'TASKS.json', queue)
+async function seedTasks(projectPath: string, tasks: Task[], envelope: Partial<TaskQueue> = {}): Promise<void> {
+  const queue: TaskQueue = { version: 1, lastUpdated: new Date().toISOString(), ...envelope, tasks }
+  writeProjectTaskQueueWithSummary(getProjectSystemStatePath(projectPath, 'TASKS.json'), queue, {
+    projectRoot: projectPath,
+  })
+  const prerequisites = await applyProjectMigrations({ projectRoot: projectPath, includePrompt: true })
+  if (prerequisites.failed.length > 0) throw new Error(`dashboard prerequisite migration failed: ${JSON.stringify(prerequisites.failed)}`)
+  const finalize = await applyProjectMigrations({ projectRoot: projectPath, only: ['0.13.0/project-state-finalize'] })
+  if (finalize.failed.length > 0) throw new Error(`dashboard final migration failed: ${JSON.stringify(finalize.failed)}`)
+  const cleanup = await applyProjectMigrations({ projectRoot: projectPath, only: ['0.13.0/project-state-legacy-live-file-cleanup'] })
+  if (cleanup.failed.length > 0) throw new Error(`dashboard cleanup migration failed: ${JSON.stringify(cleanup.failed)}`)
 }
 
 function projectUrl(projectId: string, route: string): string {
   const url = new URL(`http://localhost${route}`)
   url.searchParams.set('projectId', projectId)
+  if (url.pathname === '/api/project' && !url.searchParams.has('compact') && !url.searchParams.has('detail')) {
+    url.searchParams.set('detail', 'true')
+  }
   return url.toString()
 }
 
@@ -112,6 +125,7 @@ describe('GET /api/project/spine', () => {
         description: 'Prevent repeated scene shapes and voice flattening.',
         status: 'ready',
         workKind: 'feature_spec',
+        references: ['docs/harness/implementation-roadmap.md'],
         spec: 'Define repeated-scene and voice-flattening safeguards.',
         productBrief: { approvedAt: '2026-06-10T00:00:00.000Z' } as Task['productBrief'],
       }),
@@ -128,17 +142,26 @@ describe('GET /api/project/spine', () => {
         summary?: { headline?: string; selectedScopeLabel?: string | null }
         roots?: Array<{ id?: string; title?: string; maturity?: string }>
         gaps?: Array<{ kind?: string }>
+        sourceTrail?: Array<{ label?: string; value?: string; detail?: string; tone?: string }>
       }
     }
     expect(body.spine?.projectId).toBe(projectId)
-    expect(body.spine?.scope?.label).toBe('Current work')
-    expect(body.spine?.summary?.selectedScopeLabel).toBe('Current work')
+    expect(body.spine?.scope?.label).toBe('Current task scope')
+    expect(body.spine?.summary?.selectedScopeLabel).toBe('Current task scope')
     expect(body.spine?.roots?.find(node => node.id === 'work:task-anti-sameness')).toMatchObject({
       id: 'work:task-anti-sameness',
       title: 'Anti-sameness safeguards',
       maturity: 'needs_breakdown',
     })
     expect(body.spine?.gaps?.map(gap => gap.kind)).toContain('missing_charter')
+    expect(body.spine?.sourceTrail).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: 'Source docs',
+        value: '1 source document',
+        detail: 'implementation-roadmap.md',
+        tone: 'ok',
+      }),
+    ]))
   })
 
   it('includes the orientation spine in the main project detail payload', async () => {
@@ -164,9 +187,178 @@ describe('GET /api/project/spine', () => {
         summary?: { selectedScopeLabel?: string | null; includedWorkCount?: number }
       }
     }
-    expect(body.orientationSpine?.scope?.label).toBe('Current work')
-    expect(body.orientationSpine?.summary?.selectedScopeLabel).toBe('Current work')
+    expect(body.orientationSpine?.scope?.label).toBe('Current task scope')
+    expect(body.orientationSpine?.summary?.selectedScopeLabel).toBe('Current task scope')
     expect(body.orientationSpine?.summary?.includedWorkCount).toBe(1)
+  })
+
+  it('keeps release blockers consistent across project, spine, and thread payloads', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-spine-release-blockers-'))
+    tempDirs.push(tmpDir)
+    const projectId = bootstrapWorkspace(tmpDir, { name: `Spine Blockers ${path.basename(tmpDir)}` }).id ?? path.basename(tmpDir)
+    await seedTasks(tmpDir, [
+      makeTask(tmpDir, {
+        id: 'task-spec-review',
+        title: 'Define the packet proof contract',
+        status: 'spec_review',
+        workKind: 'feature_spec',
+        spec: 'Draft packet proof contract.',
+      }),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const [projectRes, spineRes, threadRes] = await Promise.all([
+      app.fetch(new Request(projectUrl(projectId, '/api/project'))),
+      app.fetch(new Request(projectUrl(projectId, '/api/project/spine'))),
+      app.fetch(new Request(projectUrl(projectId, '/api/project/thread'))),
+    ])
+
+    expect(projectRes.status).toBe(200)
+    expect(spineRes.status).toBe(200)
+    expect(threadRes.status).toBe(200)
+
+    const projectBody = await projectRes.json() as {
+      orientationSpine?: { release?: { state?: string; blockers?: Array<{ id?: string; label?: string }> } }
+    }
+    const spineBody = await spineRes.json() as {
+      spine?: { release?: { state?: string; blockers?: Array<{ id?: string; label?: string }> } }
+    }
+    const threadBody = await threadRes.json() as {
+      orientationSpine?: { release?: { state?: string; blockers?: Array<{ id?: string; label?: string }> } }
+    }
+
+    const blockerPayloads = [
+      ['project', projectBody.orientationSpine],
+      ['spine', spineBody.spine],
+      ['thread', threadBody.orientationSpine],
+    ] as const
+    for (const [name, payload] of blockerPayloads) {
+      expect(payload?.release?.state).toBe('blocked')
+      expect(payload?.release?.blockers).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'task-spec-review',
+          label: 'Define the packet proof contract: waiting for review before work can start.',
+        }),
+      ]))
+    }
+  })
+
+  it('does not report a selected release complete when release node tasks still block start', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-spine-node-release-blockers-'))
+    tempDirs.push(tmpDir)
+    const projectId = bootstrapWorkspace(tmpDir, { name: `Spine Node Blockers ${path.basename(tmpDir)}` }).id ?? path.basename(tmpDir)
+    const workspaceGoalsPath = path.join(tmpDir, '.guildhall', 'workspace-goals.json')
+    await fs.mkdir(path.dirname(workspaceGoalsPath), { recursive: true })
+    await fs.writeFile(workspaceGoalsPath, JSON.stringify({
+      version: 3,
+      recordedAt: new Date().toISOString(),
+      goals: [],
+      tasks: [
+        {
+          id: 'task-done',
+          title: 'Completed release task',
+          description: 'Done work.',
+          domain: 'core',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1'],
+          references: [],
+        },
+        {
+          id: 'task-blocked',
+          title: 'Blocked release task',
+          description: 'Blocked work.',
+          domain: 'core',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1'],
+          references: [],
+        },
+        {
+          id: 'task-spec-review',
+          title: 'Review release spec',
+          description: 'Spec work.',
+          domain: 'core',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1'],
+          references: [],
+        },
+      ],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 3,
+        milestoneCount: 0,
+        currentTaskCount: 3,
+        laterTaskCount: 0,
+        taskIds: ['task-done', 'task-blocked', 'task-spec-review'],
+        currentTaskIds: ['task-done', 'task-blocked', 'task-spec-review'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    }, null, 2))
+    await seedTasks(tmpDir, [
+      makeTask(tmpDir, {
+        id: 'task-done',
+        title: 'Completed release task',
+        status: 'done',
+        releaseIds: ['stage-1'],
+      }),
+      makeTask(tmpDir, {
+        id: 'task-blocked',
+        title: 'Blocked release task',
+        status: 'blocked',
+        releaseIds: ['stage-1'],
+        blockReason: 'Needs recovery.',
+      }),
+      makeTask(tmpDir, {
+        id: 'task-spec-review',
+        title: 'Review release spec',
+        status: 'spec_review',
+        releaseIds: ['stage-1'],
+        spec: 'Review the release spec.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Spec is reviewed.', verifiedBy: 'review', met: false }],
+      }),
+    ], {
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-done', 'work:task-blocked', 'work:task-spec-review'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl(projectId, '/api/project')))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { code?: string; message?: string; focusTaskId?: string; focusKind?: string }
+      actionModel?: { runControl?: { label?: string; startEnabled?: boolean; disabledReason?: string } }
+      orientationSpine?: { release?: { state?: string; blockers?: Array<{ id?: string }> } }
+    }
+    expect(body.orientationSpine?.release?.state).toBe('blocked')
+    expect(body.orientationSpine?.release?.blockers?.map(blocker => blocker.id)).toEqual(expect.arrayContaining([
+      'task-blocked',
+      'task-spec-review',
+    ]))
+    expect(body.startReadiness).toMatchObject({
+      code: 'no_unattended_progress',
+      focusTaskId: 'task-blocked',
+      focusKind: 'blocked_work',
+    })
+    expect(body.startReadiness?.message).not.toContain('Stage 1 is complete')
+    expect(body.actionModel?.runControl).toMatchObject({
+      label: 'Needs recovery',
+      startEnabled: false,
+    })
   })
 
   it('infers a charter from existing project docs without requiring new intake', async () => {

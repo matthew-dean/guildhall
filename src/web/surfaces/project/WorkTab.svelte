@@ -20,13 +20,16 @@
   import { nav, path } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
+  import { sourceRefsSummary } from '../../lib/source-refs.js'
+  import { taskGroundingDetail } from '../../lib/task-grounding.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
   import { hasUnmetDependencies, unmetDependencyIds } from '../../lib/task-dependencies.js'
-  import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { isCompleteForWorkerHandoff, needsSourceRecoveryShaping, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
-  import { deliveryProgressBadge } from '../../lib/work-progress-display.js'
+  import { deliveryProgressBadge, type DeliveryProgressBadge } from '../../lib/work-progress-display.js'
+  import { orientationPathByWorkId } from '../../lib/orientation-paths.js'
   import { taskDisplayLabel, taskSourceQuestion } from '@guildhall/shared'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
@@ -40,7 +43,7 @@
   type SortKey = 'title' | 'status' | 'area' | 'priority' | 'updated' | 'revisions'
   type SortDir = 'asc' | 'desc'
   type WorkView = 'list' | 'board'
-  type WorkFilter = 'queued' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-you'
+  type WorkFilter = 'queued' | 'scope' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'needs-you'
 
   const STATUS_SORT_ORDER: Record<string, number> = {
     proposed: 0,
@@ -98,6 +101,7 @@
   let runWorkBusyId = $state<string | null>(null)
   let runWorkActiveId = $state<string | null>(null)
   let runWorkError = $state<string | null>(null)
+  let inventoryLoadBusy = $state(false)
   let pendingRouteScrollTaskId = $state<string | null>(null)
   const workRowEls = new Map<string, HTMLElement>()
 
@@ -108,10 +112,12 @@
 
   const workFilterOptions = [
     { value: 'queued', label: 'Ready to run' },
+    { value: 'scope', label: 'Current scope' },
     { value: 'planning', label: 'Planning' },
     { value: 'open', label: 'Open' },
     { value: 'all', label: 'All' },
     { value: 'blocked', label: 'Blocked' },
+    { value: 'needs-proof', label: 'Needs proof' },
     { value: 'needs-you', label: 'Needs you' },
   ]
 
@@ -119,20 +125,131 @@
   const activeWorkView = $derived<WorkView>(routeWorkView)
   const hierarchy = $derived(buildWorkHierarchy(tasks))
   const deliveryQueue = $derived(detail.deliverySpine?.queue ?? null)
+  const orientationPaths = $derived(orientationPathByWorkId(detail.orientationSpine))
   const deliveryFirstRunnable = $derived(deliveryQueue?.firstRunnable ?? null)
   const projectRunning = $derived(detail.run?.status === 'running')
   const projectRunActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
   const deliveryReadyCount = $derived(deliveryQueue?.runnable?.length ?? 0)
+  const scopeSourceSummary = $derived.by(() => {
+    const rows = detail.orientationSpine?.scopeRows ?? []
+    const refs = rows
+      .filter(row => row.scope !== 'deferred')
+      .flatMap(row => row.sourceRefs ?? [])
+    return sourceRefsSummary(refs)
+  })
+  const scopeProofSummary = $derived.by(() => {
+    const contracts = detail.orientationSpine?.proofContracts ?? []
+    if (contracts.length === 0) return null
+    const proven = contracts.filter(contract => contract.state === 'proven').length
+    const missing = contracts.reduce((sum, contract) => sum + (contract.missing?.length ?? 0), 0)
+    if (proven === 0 && missing === 0) return null
+    return missing > 0
+      ? `${countLabel(proven, 'proven item')} · ${countLabel(missing, 'missing proof', 'missing proof')}`
+      : `${countLabel(proven, 'proven item')} · 0 missing proof`
+  })
+  const orientationScopeCounts = $derived.by(() => {
+    const spine = detail.orientationSpine
+    const summary = spine?.summary
+    if (!summary) return null
+    const includedRows = spine?.scopeRows?.filter(row => row.scope === 'included') ?? []
+    const deferredRows = spine?.scopeRows?.filter(row => row.scope === 'deferred') ?? []
+    const current = summary.includedWorkCount ?? summary.includedCount ?? includedRows.length
+    const deferred = summary.deferredWorkCount ?? summary.deferredCount ?? deferredRows.length
+    const blocked = summary.progress?.blocked ?? includedRows.filter(row => row.blocksRelease || row.blocksStart).length
+    const title = summary.headline ?? summary.selectedScopeLabel ?? spine?.scope?.label ?? 'Current task scope'
+    const nextAction = typeof summary.nextAction === 'string'
+      ? summary.nextAction
+      : summary.nextAction?.label
+    return {
+      current,
+      blocked,
+      deferred,
+      title,
+      detail: nextAction ?? 'Open the current scoped work to inspect its current and deferred items.',
+    }
+  })
+  const proofMissingTaskIds = $derived.by(() => {
+    const ids = detail.startReadiness?.proofTaskIds ?? []
+    if (ids.length > 0) return new Set(ids.filter(Boolean))
+    if (detail.startReadiness?.code === 'proof_evidence_missing' && detail.startReadiness.focusTaskId) {
+      return new Set([detail.startReadiness.focusTaskId])
+    }
+    return new Set<string>()
+  })
+  const scopeTaskIds = $derived.by(() => {
+    const ids = (detail.orientationSpine?.scopeRows ?? [])
+      .map(row => row.taskId)
+      .filter((id): id is string => Boolean(id))
+    return new Set(ids)
+  })
+  const scopeByTaskId = $derived.by(() => {
+    const entries = (detail.orientationSpine?.scopeRows ?? [])
+      .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
+      .map(row => [row.taskId, row.scope] as const)
+    return new Map(entries)
+  })
+  const scopeRowByTaskId = $derived.by(() => {
+    const entries = (detail.orientationSpine?.scopeRows ?? [])
+      .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
+      .map(row => [row.taskId, row] as const)
+    return new Map(entries)
+  })
+  const releaseBlockerTaskIds = $derived.by(() => {
+    const taskIds = new Set((detail.tasks ?? []).map(task => task.id))
+    return new Set((detail.releaseReadiness?.releaseBlockers ?? [])
+      .map(blocker => blocker.id)
+      .filter((id): id is string => Boolean(id && taskIds.has(id))))
+  })
+  const releaseBlockerRankByTaskId = $derived.by(() => {
+    const taskIds = new Set((detail.tasks ?? []).map(task => task.id))
+    const entries = (detail.releaseReadiness?.releaseBlockers ?? [])
+      .map((blocker, index) => ({ id: blocker.id, index }))
+      .filter((entry): entry is { id: string; index: number } => Boolean(entry.id && taskIds.has(entry.id)))
+      .map(entry => [entry.id, entry.index] as const)
+    return new Map(entries)
+  })
+  const proofMissingCount = $derived(proofMissingTaskIds.size || (detail.startReadiness?.code === 'proof_evidence_missing' ? detail.startReadiness.count ?? 0 : 0))
   const deliveryPrimitiveBlockers = $derived.by(() => {
     return deliveryQueue?.blocked
       ?.flatMap(candidate => candidate.structuralBlockers ?? [])
       .filter((primitive, index, all) => primitive.id && all.findIndex(item => item.id === primitive.id) === index)
       .slice(0, 5) ?? []
   })
+  const scopeQueueFallback = $derived.by(() => {
+    if (deliveryFirstRunnable) return null
+    const orientationCounts = orientationScopeCounts
+    const scopeLabel = detail.orientationSpine?.summary?.selectedScopeLabel ?? detail.orientationSpine?.scope?.label
+    if (!scopeLabel) return null
+    const primaryAction = detail.actionModel?.primaryAction
+    if (orientationCounts) {
+      if (orientationCounts.current + orientationCounts.blocked + orientationCounts.deferred + proofMissingCount <= 0) return null
+      return {
+        label: scopeLabel,
+        title: primaryAction?.label ?? orientationCounts.title,
+        detail: primaryAction?.detail ?? orientationCounts.detail,
+        current: orientationCounts.current,
+        blocked: orientationCounts.blocked,
+        proofMissing: proofMissingCount,
+        deferred: orientationCounts.deferred,
+      }
+    }
+    const counts = detail.workProgress?.counts
+    if (!counts) return null
+    if (counts.visibleActive + counts.visibleBlocked + counts.visibleShelved <= 0) return null
+    return {
+      label: scopeLabel,
+      title: primaryAction?.label ?? scopeLabel,
+      detail: primaryAction?.detail ?? detail.orientationSpine?.summary?.nextAction ?? 'Open the current scoped work to continue shaping it.',
+      current: counts.visibleActive,
+      blocked: counts.visibleBlocked,
+      proofMissing: proofMissingCount,
+      deferred: counts.visibleShelved,
+    }
+  })
   const allWorkItems = $derived([...tasks, ...importDrafts])
   const workAreasByTaskId = $derived(viewModel.workAreasByTaskId)
   const workAreaOptions = $derived(viewModel.workAreaOptions)
-  const showsPlanningArtifacts = $derived(['planning', 'open', 'all'].includes(workFilter))
+  const showsPlanningArtifacts = $derived(['scope', 'planning', 'open', 'all'].includes(workFilter))
   const filterableTasks = $derived(showsPlanningArtifacts ? allWorkItems : tasks)
   const visibleTasks = $derived(filterableTasks.filter(matchesWorkFilter))
   const partFilterOptions = $derived.by(() => {
@@ -146,6 +263,7 @@
   const visibleImportDraftCount = $derived(showsPlanningArtifacts ? visibleImportDrafts.length : 0)
   const nextImportDraft = $derived(visibleImportDrafts[0] ?? null)
   const selectedWork = $derived(selectedWorkId ? allWorkItems.find(task => task.id === selectedWorkId) ?? null : null)
+  const inventoryPage = $derived(detail.taskPayload?.surface === 'work' ? detail.taskPayload : null)
   const effectiveRunActiveId = $derived(runWorkActiveId ?? (
     projectRunActive && selectedWork && isActiveWorkTask(selectedWork) ? selectedWork.id : null
   ))
@@ -177,6 +295,24 @@
       done: all.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
     }
   })
+  const scopeVisibleCounts = $derived.by(() => {
+    return visibleTasks.reduce(
+      (counts, task) => {
+        if (scopeByTaskId.get(task.id) === 'deferred') counts.deferred += 1
+        else counts.current += 1
+        return counts
+      },
+      { current: 0, deferred: 0 },
+    )
+  })
+  const workListCountLabel = $derived.by(() => {
+    if (workFilter !== 'scope') return `${visibleTasks.length} shown · ${taskCounts.total} total`
+    const pieces = [
+      countLabel(scopeVisibleCounts.current, 'current item'),
+      countLabel(scopeVisibleCounts.deferred, 'deferred item'),
+    ]
+    return `${pieces.join(' · ')} · ${taskCounts.total} total`
+  })
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
     return `${count} ${count === 1 ? singular : plural}`
@@ -184,7 +320,13 @@
 
   const sortedTasks = $derived.by(() => {
     const list = [...visibleTasks]
-    list.sort((left, right) => compareTasks(left, right, sortKey, sortDir))
+    list.sort((left, right) => {
+      if (workFilter === 'scope') {
+        const scopeDelta = compareScopedTasks(left, right)
+        if (scopeDelta !== 0) return scopeDelta
+      }
+      return compareTasks(left, right, sortKey, sortDir)
+    })
     return list
   })
   const selectedWorkVisible = $derived(Boolean(selectedWorkId && allWorkItems.some(task => task.id === selectedWorkId)))
@@ -221,6 +363,24 @@
     return delta * direction
   }
 
+  function compareScopedTasks(left: Task, right: Task): number {
+    const delta = scopeTaskRank(left) - scopeTaskRank(right)
+    if (delta !== 0) return delta
+    return 0
+  }
+
+  function scopeTaskRank(task: Task): number {
+    const row = scopeRowByTaskId.get(task.id)
+    if (!row) return 50
+    if (row.scope === 'deferred') return 40
+    if (detail.startReadiness?.focusTaskId === task.id) return 0
+    const releaseBlockerRank = releaseBlockerRankByTaskId.get(task.id)
+    if (typeof releaseBlockerRank === 'number') return 1 + releaseBlockerRank
+    if (releaseBlockerTaskIds.has(task.id) || row.blocksStart || row.blocksRelease || row.humanBlocking) return 10
+    if (!['done', 'pending_pr'].includes(task.status ?? '')) return 10
+    return 20
+  }
+
   function toggleSort(next: SortKey): void {
     if (sortKey === next) {
       sortDir = sortDir === 'asc' ? 'desc' : 'asc'
@@ -252,11 +412,22 @@
     runWorkError = null
     try {
       const task = allWorkItems.find(item => item.id === taskId)
-      if (task?.status === 'import_draft') {
+      if (task?.status === 'import_draft' || (task && needsSourceRecoveryShaping(task))) {
         const shapeRes = await postTaskAction(taskId, 'shape-draft', { projectId: detail.id })
         if (!shapeRes.ok) {
           const body = await shapeRes.json().catch(() => ({})) as { error?: string }
           runWorkError = body.error ?? `Draft failed (HTTP ${shapeRes.status})`
+          return
+        }
+      }
+      if (task && isProofMissingTask(task)) {
+        const retryRes = await postTaskAction(taskId, 'retry-work', {
+          projectId: detail.id,
+          instruction: 'Recover the missing release proof for this completed work item. Do not treat the task as complete again until the expected proof evidence is recorded.',
+        })
+        if (!retryRes.ok) {
+          const body = await retryRes.json().catch(() => ({})) as { error?: string }
+          runWorkError = body.error ?? `Proof recovery failed (HTTP ${retryRes.status})`
           return
         }
       }
@@ -287,6 +458,18 @@
     }
   }
 
+  async function loadMoreWork(): Promise<void> {
+    const projectId = detail.id
+    const nextOffset = inventoryPage?.nextOffset
+    if (!projectId || !inventoryPage?.hasMore || typeof nextOffset !== 'number' || inventoryLoadBusy) return
+    inventoryLoadBusy = true
+    try {
+      await project.refresh(projectId, 'work', selectedWorkId, { inventoryOffset: nextOffset })
+    } finally {
+      inventoryLoadBusy = false
+    }
+  }
+
   function setWorkRowElement(taskId: string, node: HTMLElement | null): void {
     if (node) {
       workRowEls.set(taskId, node)
@@ -301,7 +484,8 @@
   }
 
   function workFilterForTask(task: Task): WorkFilter {
-    if (task.status === 'blocked' || hasUnmetDependencies(task, tasks)) return 'blocked'
+    if (isProofMissingTask(task)) return 'needs-proof'
+    if (task.status === 'blocked') return 'blocked'
     if (hasOpenQuestion(task)) return 'needs-you'
     if (isQueuedWorkTask(task)) return 'queued'
     if (isPlanningTask(task)) return 'planning'
@@ -313,7 +497,25 @@
     return id ? detail.workProgress?.byTaskId?.[id] : null
   }
 
-  function taskDeliveryBadge(task: Task) {
+  function semanticUnitCount(task: Task): number {
+    return task.workUnitCount ?? task.workUnitAnalysis?.units?.length ?? 0
+  }
+
+  function dependencyLabel(taskId: string): string {
+    const dependency = tasks.find(candidate => candidate.id === taskId)
+    return dependency ? taskDisplayLabel(dependency) : friendlyTaskId(taskId)
+  }
+
+  function taskDeliveryBadge(task: Task): DeliveryProgressBadge | null {
+    const childCount = hierarchy.byId.get(task.id)?.childIds.length ?? 0
+    const semanticUnits = semanticUnitCount(task)
+    if (childCount === 0 && semanticUnits > 0 && isPlanningTask(task)) {
+      return {
+        label: `${semanticUnits} planned ${semanticUnits === 1 ? 'unit' : 'units'}`,
+        title: `${semanticUnits} semantic work ${semanticUnits === 1 ? 'unit is' : 'units are'} already shaped for this task before proof steps begin.`,
+        tone: 'neutral',
+      }
+    }
     return deliveryProgressBadge(taskProgress(task))
   }
 
@@ -353,16 +555,20 @@
 
   function emptyFilterTitle(): string {
     if (workFilter === 'queued') return 'No work is ready to run yet.'
+    if (workFilter === 'scope') return 'No current-scope work is visible yet.'
     if (workFilter === 'planning') return 'No planning work.'
     if (workFilter === 'blocked') return 'No blocked work.'
+    if (workFilter === 'needs-proof') return 'No proof gaps.'
     if (workFilter === 'needs-you') return 'Nothing needs you.'
     return 'No matching work.'
   }
 
   function emptyFilterDetail(): string {
     if (workFilter === 'queued') return 'Planning and review work is still waiting. Use Planning to inspect intake and spec work.'
+    if (workFilter === 'scope') return 'Current and deferred scope rows will appear here once Guildhall maps them to work records.'
     if (workFilter === 'planning') return 'Planning, intake, and spec items will appear here while they are being shaped.'
     if (workFilter === 'blocked') return 'Blocked work will appear here once a task cannot continue.'
+    if (workFilter === 'needs-proof') return 'Completed work with missing release proof will appear here.'
     if (workFilter === 'needs-you') return 'Questions and owner-held work will appear here when input is needed.'
     return 'Adjust the filter to inspect a different slice of the project.'
   }
@@ -376,19 +582,28 @@
   function matchesWorkFilter(task: Task): boolean {
     if (partFilter !== 'all' && workAreaForTask(task).id !== partFilter) return false
     if (workFilter === 'all') return true
+    if (workFilter === 'scope') return scopeTaskIds.has(task.id)
     if (workFilter === 'queued') return isQueuedWorkTask(task)
     if (workFilter === 'planning') return isPlanningTask(task)
     if (workFilter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
-    if (workFilter === 'blocked') return task.status === 'blocked' || hasUnmetDependencies(task, tasks)
+    if (workFilter === 'blocked') return task.status === 'blocked'
+    if (workFilter === 'needs-proof') return isProofMissingTask(task)
     if (workFilter === 'needs-you') return hasOpenQuestion(task)
     return false
   }
 
   function defaultWorkFilterForTasks(): WorkFilter {
+    if (scopeTaskIds.size > 0) return 'scope'
     if (tasks.some(isQueuedWorkTask)) return 'queued'
     if (tasks.some(isPlanningTask)) return 'planning'
     if (tasks.some(task => task.status === 'blocked')) return 'blocked'
+    if (tasks.some(isProofMissingTask)) return 'needs-proof'
+    if (tasks.length > 0) return 'all'
     return 'queued'
+  }
+
+  function isProofMissingTask(task: Task): boolean {
+    return proofMissingTaskIds.has(task.id)
   }
 
   function workAreaForTask(task: Task) {
@@ -459,15 +674,24 @@
     const childCount = node?.childIds.length ?? 0
     if (childCount > 0) return nestedWorkCountLabel(childCount)
     if (needsBreakdownReview(task)) {
-      const count = task.acceptanceCriteria?.length ?? 0
+      const count = task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0
       return `${count} requirements; no contained work or decomposition proposal yet.`
     }
     const blockers = unmetDependencyIds(task, tasks)
-    if (blockers.length > 0) return `Blocked by ${blockers.map(friendlyTaskId).join(', ')}`
+    if (blockers.length > 0) {
+      const prefix = task.status === 'blocked' ? 'Blocked by' : 'Waiting on'
+      return `${prefix} ${blockers.map(dependencyLabel).join(', ')}`
+    }
+    const semanticUnits = semanticUnitCount(task)
+    if (childCount === 0 && semanticUnits > 0 && isPlanningTask(task)) {
+      return `${semanticUnits} planned work ${semanticUnits === 1 ? 'unit' : 'units'} already shaped.`
+    }
     if (task.workKind) return workKindLabel(task.workKind)
     if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
     if (task.terminalSummary?.headline) return task.terminalSummary.headline
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
+    const grounding = taskGroundingDetail(task)
+    if (grounding) return grounding
     if (taskSourceQuestion(task)) return taskSourceQuestion(task)!
     if (task.description) return task.description
     return friendlyTaskId(task.id)
@@ -478,37 +702,7 @@
   }
 
   function orientationPathForTask(task: Task): string {
-    const targetId = `work:${task.id}`
-    const direct = detail.orientationSpine?.nodes?.[targetId]
-    if (direct) {
-      const path = orientationPathFromNodeId(targetId)
-      if (path) return path
-    }
-    const path = findOrientationPath(detail.orientationSpine?.roots ?? [], targetId)
-    return path?.join(' / ') ?? ''
-  }
-
-  function orientationPathFromNodeId(nodeId: string): string {
-    const nodes = detail.orientationSpine?.nodes ?? {}
-    const titles: string[] = []
-    let current = nodes[nodeId]
-    const seen = new Set<string>()
-    while (current?.id && !seen.has(current.id)) {
-      seen.add(current.id)
-      titles.unshift(current.title ?? current.id)
-      current = current.parentId ? nodes[current.parentId] : undefined
-    }
-    return titles.join(' / ')
-  }
-
-  function findOrientationPath(nodes: NonNullable<ProjectDetail['orientationSpine']>['roots'], targetId: string, parents: string[] = []): string[] | null {
-    for (const node of nodes ?? []) {
-      const path = [...parents, node.title ?? node.id ?? 'Work']
-      if (node.id === targetId) return path
-      const childPath = findOrientationPath(node.children ?? [], targetId, path)
-      if (childPath) return childPath
-    }
-    return null
+    return orientationPaths.get(task.id) ?? ''
   }
 
   function hierarchyBreadcrumb(task: Task): string {
@@ -525,7 +719,7 @@
     return task.status === 'ready' &&
       childCount === 0 &&
       !hasDecompositionProposal(task) &&
-      (task.acceptanceCriteria?.length ?? 0) >= 6
+      (task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0) >= 6
   }
 
   function hasDecompositionProposal(task: Task): boolean {
@@ -646,21 +840,42 @@
     <PlannerTab detail={boardDetail} />
   {:else}
     {#if deliveryQueue}
-      <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
+      <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : scopeQueueFallback ? 'warn' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
         <div class="queue-copy">
-          <p class="queue-label">Delivery queue</p>
+          <p class="queue-label">{scopeQueueFallback?.label ?? 'Delivery queue'}</p>
           <div class="queue-main">
-            <strong>{deliveryFirstRunnable?.task ? taskDisplayLabel(deliveryFirstRunnable.task, deliveryFirstRunnable.task.id) : 'No runnable task'}</strong>
+            <strong>{deliveryFirstRunnable?.task ? taskDisplayLabel(deliveryFirstRunnable.task, deliveryFirstRunnable.task.id) : scopeQueueFallback?.title ?? 'No runnable task'}</strong>
             {#if deliveryFirstRunnable?.why}
               <span>{projectRunning ? deliveryFirstRunnable.why : 'Ready when resumed.'}</span>
+            {:else if scopeQueueFallback?.detail}
+              <span>{scopeQueueFallback.detail}</span>
             {/if}
           </div>
+          {#if scopeSourceSummary}
+            <p class="queue-sources">Sources: {scopeSourceSummary}</p>
+          {/if}
+          {#if scopeProofSummary}
+            <p class="queue-sources">Proof: {scopeProofSummary}</p>
+          {/if}
           <div class="queue-chips">
-            <Chip label={projectRunning ? `${deliveryReadyCount} runnable` : `${deliveryReadyCount} ready to resume`} tone={deliveryFirstRunnable ? 'ok' : 'neutral'} />
-            <Chip label={`${deliveryQueue.blocked?.length ?? 0} blocked`} tone={deliveryQueue.blocked?.length ? 'warn' : 'neutral'} />
-            {#each deliveryPrimitiveBlockers as primitive (`primitive-${primitive.id}`)}
-              <Chip label={primitiveLabel(primitive)} tone="warn" />
-            {/each}
+            {#if scopeQueueFallback}
+              {#if scopeQueueFallback.current > 0 || scopeQueueFallback.proofMissing === 0}
+                <Chip label={countLabel(scopeQueueFallback.current, 'current task')} tone="accent" />
+              {/if}
+              {#if scopeQueueFallback.blocked > 0 || scopeQueueFallback.proofMissing === 0}
+                <Chip label={`${scopeQueueFallback.blocked} blocked`} tone={scopeQueueFallback.blocked ? 'warn' : 'neutral'} />
+              {/if}
+              {#if scopeQueueFallback.proofMissing > 0}
+                <Chip label={countLabel(scopeQueueFallback.proofMissing, 'need proof', 'need proof')} tone="warn" />
+              {/if}
+              <Chip label={countLabel(scopeQueueFallback.deferred, 'deferred', 'deferred')} tone="neutral" />
+            {:else}
+              <Chip label={projectRunning ? `${deliveryReadyCount} runnable` : `${deliveryReadyCount} ready to resume`} tone={deliveryFirstRunnable ? 'ok' : 'neutral'} />
+              <Chip label={`${deliveryQueue.blocked?.length ?? 0} waiting on dependencies`} tone={deliveryQueue.blocked?.length ? 'warn' : 'neutral'} />
+              {#each deliveryPrimitiveBlockers as primitive (`primitive-${primitive.id}`)}
+                <Chip label={primitiveLabel(primitive)} tone="warn" />
+              {/each}
+            {/if}
           </div>
         </div>
       </UtilityPanel>
@@ -669,7 +884,7 @@
       <Card title="Work list" titleTag="h2">
 
         <div class="work-list-overview">
-          <div class="work-list-count">{visibleTasks.length} shown · {taskCounts.total} total</div>
+          <div class="work-list-count">{workListCountLabel}</div>
           <div class="work-summary">
             {#if taskCounts.agentActive > 0}
               <Chip label={countLabel(taskCounts.agentActive, 'Working', 'Working')} tone="running" />
@@ -809,6 +1024,14 @@
               {/each}
             </CardList>
           </div>
+          {#if inventoryPage?.hasMore}
+            <div class="inventory-more">
+              <Button variant="secondary" size="sm" disabled={inventoryLoadBusy} onclick={() => void loadMoreWork()}>
+                {inventoryLoadBusy ? 'Loading more work' : 'Load more work'}
+              </Button>
+              <span class="muted">Showing {allWorkItems.length} of {inventoryPage.totalEffectiveCount ?? allWorkItems.length} work items.</span>
+            </div>
+          {/if}
         {/if}
       </Card>
 
@@ -821,6 +1044,7 @@
           onRunTask={runWorkItem}
           runBusyTaskId={runWorkBusyId}
           runActiveTaskId={effectiveRunActiveId}
+          proofMissingTaskIds={[...proofMissingTaskIds]}
           runError={runWorkError}
         />
       {/if}
@@ -930,6 +1154,11 @@
     letter-spacing: 0.05em;
     text-transform: uppercase;
   }
+  .queue-sources {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+  }
   .queue-chips {
     display: flex;
     flex-wrap: wrap;
@@ -989,6 +1218,14 @@
   .work-list-scroll:focus-visible {
     outline: var(--gh-layout-focus-ring-width) solid var(--gh-color-border-focus);
     outline-offset: var(--gh-space-1);
+  }
+
+  .inventory-more {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    margin-top: var(--gh-space-3);
   }
   :global(.work-list-stack) {
     --work-list-columns:
@@ -1168,6 +1405,7 @@
       padding-block-end: 0;
     }
     :global(.work-list-stack) {
+      --work-list-columns: minmax(0, 1fr);
       inline-size: 100%;
     }
     :global(.work-list-row) {

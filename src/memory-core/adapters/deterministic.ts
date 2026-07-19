@@ -41,7 +41,8 @@ export async function buildDeterministicCandidatePacket(input: {
     omitted,
     health: {
       adapter: 'deterministic',
-      fallbackUsed: true,
+      // Deterministic is the selected source index, not a degraded fallback.
+      fallbackUsed: false,
       warnings: [],
     },
   }

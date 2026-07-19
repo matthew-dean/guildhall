@@ -52,9 +52,11 @@ function isPureAgentNarration(value: string): boolean {
   const normalized = normalizeWhitespace(value).toLowerCase()
   return (
     /^i have enough\b/.test(normalized) ||
+    /^from what i(?:'|’)ve seen\s*:?\s*$/.test(normalized) ||
     /^let me (?:write|draft|piece|synthesize|summarize|recap)\b/.test(normalized) ||
     /^here'?s what i (?:found|know|learned|asked)\b/.test(normalized) ||
     /^what i (?:found|know|learned)\b/.test(normalized) ||
+    /^the existing .+\b(?:has|have|includes?|contains?)\s*:?$/.test(normalized) ||
     /\blet me write the product brief first,?\s*then ask\b/.test(normalized) ||
     /\bthe key question i need to ask\b/.test(normalized)
   )
@@ -122,5 +124,6 @@ export function normalizeLegacyOwnerQuestion(
 export function isInvalidOwnerQuestionPrompt(value: string | undefined | null): boolean {
   const prompt = (value ?? '').trim()
   if (!prompt) return true
+  if (/^what(?:'|’)s the remaining delta\??$/i.test(prompt)) return true
   return normalizeStructuredOwnerQuestion({ prompt }) === null
 }

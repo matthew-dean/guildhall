@@ -65,15 +65,15 @@ export function renderBenchmarkMarkdown(report: BenchmarkReportData): string {
     '',
     '## Results',
     '',
-    '| Task | Result | Failure class | Quality | Tokens in/out | Cost USD | Ticks | Automation | Commands | Latency ms | Touched files | Evidence |',
+    '| Task | Result | Failure class | Quality | Tokens in/out/cache | Cost USD | Ticks | Automation | Commands | Latency ms | Touched files | Evidence |',
     '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     ...report.results.map(result => [
       result.taskId,
       result.result,
       result.failureClass,
       result.qualityScore,
-      `${result.tokenUse.input}/${result.tokenUse.output}`,
-      result.costUsd.toFixed(6),
+      `${result.tokenUse.input}/${result.tokenUse.output}/${result.tokenUse.cachedInput}`,
+      result.costUsd === null ? 'n/a' : result.costUsd.toFixed(6),
       result.orchestratorTicks || result.turns,
       [
         result.autoResolutionCount > 0 ? `${result.autoResolutionCount} repair(s)` : '0',

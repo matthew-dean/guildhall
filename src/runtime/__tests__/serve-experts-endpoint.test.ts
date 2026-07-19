@@ -7,6 +7,7 @@ import { bootstrapWorkspace } from '@guildhall/config'
 import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { designSystemPath } from '../design-system-store.js'
+import { writeProjectTaskQueueAtCurrentStateBoundary } from '../project-state-boundary.js'
 
 // GET /api/project/task/:id/experts — surface applicable personas, their
 // verdicts, and their namespaced gate results for the drawer's Experts tab.
@@ -50,8 +51,7 @@ async function seedTask(
       },
     ],
   }
-  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+  await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, { projectRoot: tmpDir })
 }
 
 async function seedDesignSystem(): Promise<void> {

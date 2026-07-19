@@ -52,6 +52,8 @@ Run the orchestrator. Blocks until Ctrl-C or no work remains.
 Flags:
 
 - `--domain <id>` — only tick this one coordinator domain.
+- `--task <id>` — run the named task and its bounded child closure instead of
+  selecting unrelated work.
 - `--max-ticks <n>` — stop after N ticks. For testing.
 - `--one-task` — stop after one task reaches a terminal, PR, or blocked handoff.
 

@@ -31,7 +31,11 @@ export function taskKindFor(task: Task): TaskKind {
   }
 
   const text = taskText(task)
-  if (/\b(research|investigate|compare|survey|evaluate|explore)\b/i.test(text)) return 'research'
+  // "Evaluate" is an output/review verb in many implementation tasks (for
+  // example, generate and evaluate a synopsis). It is not enough evidence to
+  // route work into a research lane; keep research classification tied to an
+  // explicit discovery/comparison request.
+  if (/\b(research|investigate|compare|survey|explore)\b/i.test(text)) return 'research'
   if (/\b(decide|decision|choose|policy|tradeoffs?|approve|judgment)\b/i.test(task.title ?? '')) return 'decision'
   if (/\b(implement|build|create|add|wire|change|migrate|ship)\b/i.test(text)) return 'implementation'
   if (/\b(decide|decision|choose|policy|tradeoffs?|approve|judgment)\b/i.test(text)) return 'decision'

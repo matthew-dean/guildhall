@@ -101,8 +101,9 @@ export const BenchmarkRunResult = z.object({
   tokenUse: z.object({
     input: z.number().int().nonnegative().default(0),
     output: z.number().int().nonnegative().default(0),
-  }).default({ input: 0, output: 0 }),
-  costUsd: z.number().nonnegative().default(0),
+    cachedInput: z.number().int().nonnegative().default(0),
+  }).default({ input: 0, output: 0, cachedInput: 0 }),
+  costUsd: z.number().nonnegative().nullable().default(null),
   turns: z.number().int().nonnegative(),
   orchestratorTicks: z.number().int().nonnegative().default(0),
   orchestratorStopReason: z.string().default(''),

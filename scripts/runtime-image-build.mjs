@@ -2,8 +2,8 @@
 import { spawn, spawnSync } from 'node:child_process'
 
 const image = 'ghcr.io/matthew-dean/guildhall-runtime-debian'
-const immutableTag = '0.10.0-trixie-node22-python313-playwright'
-const minorTag = '0.10-trixie-node22-python313-playwright'
+const immutableTag = '0.11.0-trixie-node22-python313-playwright'
+const minorTag = '0.11-trixie-node22-python313-playwright'
 const timeoutMs = Number(process.env.GUILDHALL_CONTAINER_BUILD_TIMEOUT_MS ?? 20 * 60 * 1000)
 
 function available(command, args) {

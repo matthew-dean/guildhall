@@ -1,7 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import {
+  getProjectLocalHistoryDir,
+  getProjectSystemStatePath,
+  readProjectStateDatabaseCurrentAuthority,
+} from '@guildhall/sessions'
 
 export interface ProjectRuntimeManifest {
   version: 1
@@ -17,6 +21,25 @@ export interface ProjectRuntimeBlocker {
   code: 'runtime_too_old'
   message: string
   actionHref: string
+}
+
+/**
+ * Legacy queue migrations are allowed to read a file only before SQLite owns
+ * the project's current state. A promoted project must be inspected through
+ * its canonical database projections, never by replaying an old queue file.
+ */
+export function legacyCurrentStateMigrationAvailable(projectRoot: string): boolean {
+  return readProjectStateDatabaseCurrentAuthority(projectRoot) !== 'database'
+}
+
+export function assertLegacyCurrentStateMigrationAccess(
+  projectRoot: string,
+  migrationId: string,
+): void {
+  if (legacyCurrentStateMigrationAvailable(projectRoot)) return
+  throw new Error(
+    `Cannot apply ${migrationId}: SQLite already owns current project state. Read and mutate the canonical project projections instead of legacy current-state files.`,
+  )
 }
 
 const CURRENT_RUNTIME_FEATURES = new Set([
@@ -39,6 +62,36 @@ function parseVersion(version: string): number[] | null {
   const main = version.trim().replace(/^v/i, '').split(/[+-]/)[0] ?? ''
   if (!/^\d+(?:\.\d+){0,2}$/.test(main)) return null
   return main.split('.').map(part => Number(part))
+}
+
+function readManifestFile(file: string): ProjectRuntimeManifest | null {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<ProjectRuntimeManifest>
+    if (parsed.version !== 1) return null
+    return {
+      version: 1,
+      ...(typeof parsed.writtenByGuildhall === 'string' ? { writtenByGuildhall: parsed.writtenByGuildhall } : {}),
+      ...(typeof parsed.minGuildhallVersion === 'string' ? { minGuildhallVersion: parsed.minGuildhallVersion } : {}),
+      ...(typeof parsed.stateSchema === 'string' ? { stateSchema: parsed.stateSchema } : {}),
+      ...(Array.isArray(parsed.requiredFeatures)
+        ? { requiredFeatures: parsed.requiredFeatures.filter((feature): feature is string => typeof feature === 'string') }
+        : {}),
+      ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The old marker remains readable only by the compatibility gate. It is not a
+ * current project-state source and must never be returned as the canonical
+ * runtime manifest.
+ */
+function readLegacyRuntimeManifestForCompatibility(projectRoot: string): ProjectRuntimeManifest | null {
+  const file = legacyManifestPath(projectRoot)
+  if (!existsSync(file)) return null
+  return readManifestFile(file)
 }
 
 export function compareVersions(left: string, right: string): number | null {
@@ -76,40 +129,30 @@ export function readRuntimePackageVersion(): string {
 }
 
 export function readProjectRuntimeManifest(projectRoot: string): ProjectRuntimeManifest | null {
-  try {
-    const file = existsSync(manifestPath(projectRoot)) ? manifestPath(projectRoot) : legacyManifestPath(projectRoot)
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<ProjectRuntimeManifest>
-    if (parsed.version !== 1) return null
-    return {
-      version: 1,
-      ...(typeof parsed.writtenByGuildhall === 'string' ? { writtenByGuildhall: parsed.writtenByGuildhall } : {}),
-      ...(typeof parsed.minGuildhallVersion === 'string' ? { minGuildhallVersion: parsed.minGuildhallVersion } : {}),
-      ...(typeof parsed.stateSchema === 'string' ? { stateSchema: parsed.stateSchema } : {}),
-      ...(Array.isArray(parsed.requiredFeatures)
-        ? { requiredFeatures: parsed.requiredFeatures.filter((feature): feature is string => typeof feature === 'string') }
-        : {}),
-      ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
-    }
-  } catch {
-    return null
-  }
+  const file = manifestPath(projectRoot)
+  return existsSync(file) ? readManifestFile(file) : null
 }
 
 export function projectRuntimeCompatibilityBlocker(input: {
   projectRoot: string
   currentVersion?: string
 }): ProjectRuntimeBlocker | null {
-  const manifest = readProjectRuntimeManifest(input.projectRoot)
+  const manifest = readProjectRuntimeManifest(input.projectRoot) ??
+    readLegacyRuntimeManifestForCompatibility(input.projectRoot)
   if (!manifest) return null
   const currentVersion = input.currentVersion ?? readRuntimePackageVersion()
-  const minimum = manifest.minGuildhallVersion
-  if (minimum) {
-    const comparison = compareVersions(currentVersion, minimum)
+  // Older installed bundles could not resolve their own package metadata and
+  // wrote the literal sentinel `unknown`. That is not a version requirement;
+  // treating it as one bricks otherwise compatible project migrations.
+  const minimum = manifest.minGuildhallVersion?.trim()
+  const usableMinimum = minimum && minimum !== 'unknown' ? minimum : undefined
+  if (usableMinimum) {
+    const comparison = compareVersions(currentVersion, usableMinimum)
     if (comparison === null || comparison < 0) {
       return {
         canStart: false,
         code: 'runtime_too_old',
-        message: `This project requires Guildhall ${minimum} or newer. You are running ${currentVersion}. Upgrade Guildhall before changing this project.`,
+        message: `This project requires Guildhall ${usableMinimum} or newer. You are running ${currentVersion}. Upgrade Guildhall before changing this project.`,
         actionHref: '/settings/about',
       }
     }

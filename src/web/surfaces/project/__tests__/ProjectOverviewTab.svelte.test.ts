@@ -124,13 +124,545 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
     expect(screen.getByText('Open map')).toBeInTheDocument()
     expect(screen.getByText(/3 work items in view/)).toBeInTheDocument()
-    expect(screen.getByText(/1 verified/)).toBeInTheDocument()
-    expect(screen.getByText(/1 blocked/)).toBeInTheDocument()
-    expect(screen.getByText(/1 missing verification/)).toBeInTheDocument()
+    expect(screen.getAllByText(/1 verified/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/1 blocked/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/1 missing verification/).length).toBeGreaterThan(0)
     expect(screen.getByText(/2 deferred/)).toBeInTheDocument()
     expect(screen.getByText(/Current focus: Anti-sameness safeguards/)).toBeInTheDocument()
     expect(screen.getByText(/Anti-sameness proof missing/)).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Do this next' })).toBeInTheDocument()
+  })
+
+  it('uses task source grounding when a live task has no stronger status detail', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/overview')
+
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        run: { status: 'stopped', mode: 'continuous' },
+        availability: { status: 'active', pausedAt: null, resumedAt: null },
+        tasks: [
+          {
+            id: 'task-source',
+            title: 'Define safe smoke-test commands',
+            status: 'in_progress',
+            sourceRefs: ['docs/harness/smoke-test-commands.md'],
+          },
+        ],
+        orientationSpine: {
+          scope: { label: 'Current scope' },
+          summary: {
+            headline: 'Current scope is in motion.',
+            selectedScopeLabel: 'Current scope',
+            includedWorkCount: 1,
+            deferredWorkCount: 0,
+            progress: { total: 1, active: 1 },
+          },
+          roots: [],
+          nodes: {},
+          sourceHealth: { status: 'ok' },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Running',
+        actorLabel: 'Guildhall',
+        message: 'Advancing one task.',
+        tone: 'active',
+        pulse: true,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect((await screen.findAllByText('Source: smoke-test-commands.md')).length).toBeGreaterThan(0)
+  })
+
+  it('routes source-conflict orientation next actions to the project map', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/overview')
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        orientationSpine: {
+          scope: { label: 'Stage 1 Headless Drafting And Evaluation MVP' },
+          summary: {
+            headline: 'Stage 1 Headless Drafting And Evaluation MVP has source conflicts to review.',
+            purpose: 'Build the first headless Narrative Harness proofs.',
+            selectedScopeLabel: 'Stage 1 Headless Drafting And Evaluation MVP',
+            includedWorkCount: 11,
+            deferredWorkCount: 31,
+            progress: {
+              scopedNodeCount: 11,
+              speccedCount: 8,
+              provenCount: 11,
+              blockedCount: 0,
+              deferredCount: 31,
+            },
+            topBlocker: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+            nextAction: 'Review source conflicts on the Project Map.',
+          },
+          gaps: [{
+            kind: 'source_conflict',
+            label: 'Possible duplicate work is split across scopes.',
+            severity: 'high',
+            refs: ['task:task-a', 'task:task-b'],
+          }],
+          roots: [],
+          nodes: {},
+          sourceHealth: { status: 'warn', gaps: 1 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for source conflict review.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Do this next' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Review source conflicts on the Project Map.' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open map' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open Work' })).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Open map' }))
+
+    expect(window.location.pathname).toBe('/projects/narrative-harness/map')
+  })
+
+  it('uses completed spine previews as scope status instead of a next-action prompt', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        orientationSpine: {
+          scope: { label: 'Stage 1 Headless Drafting And Evaluation MVP' },
+          release: { state: 'ready', blockers: [] },
+          summary: {
+            headline: 'Stage 1 Headless Drafting And Evaluation MVP is complete.',
+            purpose: 'Build the first headless Narrative Harness proofs.',
+            selectedScopeLabel: 'Stage 1 Headless Drafting And Evaluation MVP',
+            includedWorkCount: 11,
+            deferredWorkCount: 31,
+            progress: {
+              scopedNodeCount: 11,
+              speccedCount: 8,
+              provenCount: 11,
+              doneCount: 11,
+              blockedCount: 0,
+              deferredCount: 31,
+            },
+            topBlocker: null,
+            nextAction: 'Review completed scope.',
+          },
+          gaps: [],
+          roots: [],
+          nodes: {},
+          sourceHealth: { status: 'ok', gaps: 0 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is complete.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Scope status' })).toBeInTheDocument()
+    expect(screen.getAllByText('Stage 1 Headless Drafting And Evaluation MVP is complete.').length).toBeGreaterThan(0)
+    expect(screen.getByText('Closed scope')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Do this next' })).not.toBeInTheDocument()
+  })
+
+  it('shows current release readiness from child repo git state', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        tasks: [],
+        releaseReadiness: {
+          release: { id: 'stage-1', label: 'Stage 1: V1 Release Hardening', kind: 'release', state: 'active', source: 'release_plan' },
+          scope: { id: 'stage-1', label: 'Stage 1: V1 Release Hardening', kind: 'release', state: 'active', source: 'release_plan' },
+          ready: false,
+          totals: {
+            tasks: 9,
+            done: 0,
+            unfinishedCount: 9,
+            humanBlockingCount: 1,
+            gitStoryBlockingCount: 2,
+            dirtyCheckoutBlockingCount: 1,
+          },
+          gitStory: {
+            ready: false,
+            state: 'dirty_uncommitted',
+            blockers: [
+              {
+                id: 'repo:looma',
+                label: 'Looma: codex/component-audit-roadmap',
+                state: 'pushed',
+                reason: 'codex/component-audit-roadmap is pushed.',
+                nextAction: 'Open a PR or mark this pushed branch as the intended repository state.',
+              },
+              {
+                id: 'repo:knit',
+                label: 'Knit: main',
+                state: 'dirty_uncommitted',
+                reason: '28 changed files are not committed.',
+                nextAction: 'Review the diff, then commit or mark the work local-only/deferred.',
+              },
+            ],
+            snapshots: [
+              { repoId: 'looma', repoLabel: 'Looma', state: 'pushed' },
+              { repoId: 'knit', repoLabel: 'Knit', state: 'dirty_uncommitted' },
+            ],
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Current release' })).toBeInTheDocument()
+    expect(screen.getByText('Not complete')).toBeInTheDocument()
+    expect(screen.queryByText('Not ready')).toBeNull()
+    expect(screen.getByText('Stage 1: V1 Release Hardening')).toBeInTheDocument()
+    expect(screen.getByText(/0 \/ 9 done/)).toBeInTheDocument()
+    expect(screen.getByText(/9 unfinished/)).toBeInTheDocument()
+    expect(screen.getByText(/Looma: codex\/component-audit-roadmap/)).toBeInTheDocument()
+    expect(screen.getByText(/Knit: main/)).toBeInTheDocument()
+  })
+
+  it('separates completed release work from repository follow-up blockers', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        releaseReadiness: {
+          release: { id: 'near-term-proof-scope', label: 'Near-term proof scope', kind: 'scope', state: 'active', source: 'current_scope' },
+          scope: { id: 'near-term-proof-scope', label: 'Near-term proof scope', kind: 'scope', state: 'active', source: 'current_scope' },
+          ready: false,
+          notReadyReason: 'Repository follow-up required.',
+          totals: {
+            tasks: 14,
+            done: 14,
+            unfinishedCount: 0,
+            humanBlockingCount: 0,
+            gitStoryBlockingCount: 1,
+            dirtyCheckoutBlockingCount: 0,
+          },
+          gitStory: {
+            ready: false,
+            state: 'ahead_unpushed',
+            blockers: [{
+              id: 'repo:narrative-harness',
+              label: 'main',
+              state: 'ahead_unpushed',
+              reason: 'main has 6 local commits not pushed to origin/main.',
+              nextAction: 'Push the local commits or mark them intentionally local.',
+            }],
+            snapshots: [{ repoId: 'narrative-harness', repoLabel: 'Narrative Harness', state: 'ahead_unpushed' }],
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByText('Work complete')).toBeInTheDocument()
+    expect(screen.queryByText('Not complete')).not.toBeInTheDocument()
+    expect(screen.getByText('Near-term proof scope')).toBeInTheDocument()
+    expect(screen.getByText(/14 \/ 14 done/)).toBeInTheDocument()
+    expect(screen.getAllByText(/main has 6 local commits not pushed to origin\/main/).length).toBeGreaterThan(0)
+    expect(document.querySelector('.signal-row--wide')).toBeInTheDocument()
+    expect(document.querySelectorAll('.signal-row.is-dense').length).toBe(document.querySelectorAll('.signal-row').length)
+  })
+
+  it('keeps Overview signals scoped to release git state when project-wide git work is unrelated', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        gitStory: {
+          ready: false,
+          state: 'no_upstream',
+          blockers: [{
+            id: 'task:later-work',
+            label: 'Later work',
+            state: 'no_upstream',
+            reason: 'guildhall/task-later-work has no upstream branch.',
+            nextAction: 'Set an upstream branch or open a PR for this branch.',
+          }],
+          snapshots: [],
+        },
+        releaseReadiness: {
+          release: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'active', source: 'release_plan' },
+          scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'active', source: 'release_plan' },
+          ready: true,
+          totals: {
+            tasks: 11,
+            done: 11,
+            unfinishedCount: 0,
+            humanBlockingCount: 0,
+            gitStoryBlockingCount: 0,
+            dirtyCheckoutBlockingCount: 0,
+          },
+          gitStory: {
+            ready: true,
+            state: 'clean',
+            blockers: [],
+            snapshots: [{ repoId: 'narrative-harness', repoLabel: 'Narrative Harness', state: 'clean' }],
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Run finished',
+        actorLabel: 'Guildhall',
+        message: 'No actionable tasks remain.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByText('Complete')).toBeInTheDocument()
+    expect(screen.getByText('Repository clear')).toBeInTheDocument()
+    expect(screen.queryByText((content) => content.includes('guildhall/task-later-work has no upstream branch'))).not.toBeInTheDocument()
+  })
+
+  it('keeps the verification signal focused on the selected release scope', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [
+          {
+            id: 'task-current-proof',
+            title: 'Current release proof',
+            status: 'done',
+            proofPaths: [{ status: 'verified', kind: 'review' }],
+          },
+          {
+            id: 'task-later-proof',
+            title: 'Later proof',
+            status: 'shelved',
+            proofPaths: [{ title: 'Later blocked proof', status: 'blocked', kind: 'review' }],
+          },
+        ],
+        releaseReadiness: {
+          release: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'ready', source: 'release_plan', nodeIds: ['work:task-current-proof'] },
+          scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'ready', source: 'release_plan', nodeIds: ['work:task-current-proof'] },
+          ready: true,
+          totals: { tasks: 1, done: 1, unfinishedCount: 0, humanBlockingCount: 0 },
+          proofMissingDoneTasks: [],
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Stage 1 is complete.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByRole('button', { name: /Verification Current release proof Verified/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Later blocked proof/i })).not.toBeInTheDocument()
+  })
+
+  it('keeps blocked work and next-run rows focused on selected release blockers', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        startReadiness: {
+          canStart: false,
+          code: 'imported_scope_shaping',
+          message: '5 current-scope tasks still need source-backed shaping before Guildhall can build unattended.',
+          actionHref: '/task/task-current-import',
+        },
+        actionModel: {
+          primaryAction: {
+            label: 'Imported scope needs shaping',
+            detail: '5 current-scope tasks still need source-backed shaping before Guildhall can build unattended.',
+            buttonLabel: 'Shape first task',
+            href: '/task/task-current-import',
+            tone: 'warn',
+          },
+        },
+        tasks: [
+          {
+            id: 'task-current-import',
+            title: 'Unit tests: use-collections, use-presence, subdomain utils',
+            status: 'import_draft',
+          },
+          {
+            id: 'task-old-blocker',
+            title: 'Floating toolbar',
+            status: 'blocked',
+            blockReason: 'Old unrelated blocked work.',
+          },
+        ],
+        releaseReadiness: {
+          release: { id: 'stage-1', label: 'Stage 1: V1 Release Hardening', kind: 'release', state: 'active', source: 'release_plan', nodeIds: ['work:task-current-import'] },
+          scope: { id: 'stage-1', label: 'Stage 1: V1 Release Hardening', kind: 'release', state: 'active', source: 'release_plan', nodeIds: ['work:task-current-import'] },
+          ready: false,
+          totals: { tasks: 1, done: 0, unfinishedCount: 1, humanBlockingCount: 1, blockingCount: 1 },
+          releaseBlockers: [{
+            id: 'task-current-import',
+            title: 'Unit tests: use-collections, use-presence, subdomain utils',
+            label: 'Unit tests: use-collections, use-presence, subdomain utils needs a clearer brief before unattended work can run.',
+          }],
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Current scope needs shaping.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getAllByText('Unit tests: use-collections, use-presence, subdomain utils').length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: /Needs shaping Unit tests: use-collections, use-presence, subdomain utils.*clearer brief/i }).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /Floating toolbar/i })).not.toBeInTheDocument()
+    expect(screen.queryByText('Old unrelated blocked work.')).not.toBeInTheDocument()
+  })
+
+  it('does not call a release-less current scope a release in overview actions', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'scope-only',
+        name: 'Scope Only',
+        path: '/tmp/scope-only',
+        tasks: [],
+        releaseReadiness: {
+          scope: { id: 'current-work', label: 'Current task scope', kind: 'proposed_feature_set', source: 'inferred', nodeIds: [] },
+          ready: false,
+          totals: { tasks: 2, done: 1, unfinishedCount: 1, humanBlockingCount: 0, blockingCount: 0 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Current scope has work remaining.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'scope-only',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Current scope' })).toBeInTheDocument()
+    expect(screen.getByText('Open scope')).toBeInTheDocument()
+    expect(screen.queryByText('Open release')).not.toBeInTheDocument()
+  })
+
+  it('labels proof waits as waiting instead of blocking when scoped blocked count is zero', () => {
+    const { container } = render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        orientationSpine: {
+          scope: { label: 'Current task scope' },
+          charter: {
+            goal: 'Build a headless fiction harness.',
+            targetAudience: 'Authors and agent builders.',
+          },
+          summary: {
+            headline: 'Current task scope is waiting on proof.',
+            purpose: 'Build a headless fiction harness.',
+            selectedScopeLabel: 'Current task scope',
+            includedWorkCount: 6,
+            deferredWorkCount: 12,
+            progress: {
+              total: 18,
+              specced: 6,
+              blocked: 0,
+              deferred: 12,
+            },
+            pinnedNow: ['Implement a no-UI runner that builds a packet from fixture records.'],
+            topBlocker: 'Define fixture, expected-record, prototype-run, and evaluation schemas is waiting for spec review.',
+            nextAction: 'Review waiting work: Define fixture, expected-record, prototype-run, and evaluation schemas is waiting for spec review.',
+          },
+          gaps: [{
+            kind: 'proof_needed',
+            label: 'Proof needed: Implement a no-UI runner that builds a packet from fixture records.',
+            severity: 'warn',
+            refs: ['task-import-14yqvl7'],
+          }],
+          roots: [],
+          nodes: {},
+          sourceHealth: { inferred: 4, gaps: 1 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for proof.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    const orientation = container.querySelector('.overview-orientation')
+    expect(orientation).toBeTruthy()
+    expect(orientation?.textContent).toContain('0 blocked')
+    expect(orientation?.textContent).toContain('Waiting on: Define fixture, expected-record, prototype-run, and evaluation schemas is waiting for spec review.')
+    expect(orientation?.textContent).not.toContain('Blocking: Define fixture')
   })
 
   it('presents all-terminal scoped work as calm finished state instead of attention needed', () => {
@@ -184,9 +716,30 @@ describe('ProjectOverviewTab', () => {
             nextAction: null,
           },
           gaps: [],
+          scopeRows: [
+            {
+              taskId: 'done-1',
+              nodeId: 'work:done-1',
+              title: 'Done one',
+              scope: 'included',
+              sourceRefs: [
+                '/Users/matthew/git/oss/narrative-harness/docs/harness/implementation-roadmap.md',
+                '/Users/matthew/git/oss/narrative-harness/docs/product/deepinfra-drafting-model-selection.md',
+              ],
+            },
+          ],
+          proofContracts: Array.from({ length: 11 }, (_, index) => ({
+            nodeId: `work:proof-${index + 1}`,
+            title: `Proof ${index + 1}`,
+            state: 'proven',
+            missing: [],
+          })),
           roots: [],
           nodes: {},
           sourceHealth: { status: 'ok', gaps: 0, inferred: 0 },
+          sourceTrail: [
+            { label: 'Scope', value: 'Release Plan', detail: 'Stage 1 contains 11 assigned work items.', tone: 'ok' },
+          ],
         },
       },
       inboxLoaded: true,
@@ -209,7 +762,14 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByRole('heading', { name: 'No runnable work' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
     expect(screen.getByText(/3 deferred/)).toBeInTheDocument()
-    expect(screen.getByText(/0 missing verification/)).toBeInTheDocument()
+    expect(screen.getAllByText(/0 missing verification/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/Proof: 11 proven items · 0 missing proof/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Verification 11 verified items · 0 missing verification/i })).toBeInTheDocument()
+    expect(screen.queryByText('No verification checks linked yet.')).not.toBeInTheDocument()
+    expect(screen.getByText(/Sources: Release Plan · implementation-roadmap.md, deepinfra-drafting-model-selection.md/)).toBeInTheDocument()
+    expect(screen.getByText('The selected scope is complete. Choose another release or open Work to inspect completed and deferred items.')).toBeInTheDocument()
+    expect(screen.queryByText('The next run is blocked until the project blocker is resolved.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Blocked/ })).not.toBeInTheDocument()
   })
 
   it('renders the shared primary project action instead of choosing a local inbox winner', () => {
@@ -436,6 +996,129 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByRole('heading', { name: 'Review project discovery update' })).not.toBeInTheDocument()
   })
 
+  it('communicates scoped orientation instead of stale draft backlog when a migration blocks execution', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        tasks: [
+          { id: 'task-import-a', title: 'Version diff view (deferred)', status: 'import_draft' },
+          { id: 'task-current', title: 'Lock overlay positioning vocabulary before more overlay APIs ship', status: 'ready' },
+        ],
+        workProgress: {
+          counts: {
+            visibleTotal: 294,
+            visibleActive: 290,
+            visibleBlocked: 0,
+            visibleDone: 1,
+            visibleShelved: 3,
+            deliveryTotal: 4,
+            deliveryRequired: 4,
+            deliveryDone: 4,
+            deliveryBlocked: 0,
+          },
+          byTaskId: {},
+        },
+        startReadiness: {
+          canStart: false,
+          code: 'required_migration_pending',
+          message: 'Run required Guildhall migration 0.11.0/execution-planning-decomposition before starting this project.',
+          actionHref: '/migrations',
+        },
+        actionModel: {
+          primaryAction: {
+            source: 'start_readiness',
+            label: 'Required migration',
+            detail: 'Run required Guildhall migration 0.11.0/execution-planning-decomposition before starting this project.',
+            buttonLabel: 'Migrate project',
+            href: '/migrations',
+            tone: 'danger',
+            code: 'required_migration_pending',
+          },
+          secondaryActions: [],
+          runControl: {
+            label: 'Migrate',
+            startEnabled: false,
+            disabledReason: 'Run required Guildhall migration 0.11.0/execution-planning-decomposition before starting this project.',
+            href: '/migrations',
+          },
+          ownerInput: { active: false },
+          setup: { state: 'blocked', freshIntakeNeeded: false },
+        },
+        orientationSpine: {
+          scope: { label: 'Current task scope' },
+          charter: {
+            goal: 'Keep Looma generic while letting Knit product needs drive Looma primitive priority.',
+            targetAudience: 'Looma and Knit maintainers',
+          },
+          summary: {
+            headline: 'Stage 1: V1 Release Hardening is the current scoped milestone.',
+            purpose: 'Keep Looma generic while letting Knit product needs drive Looma primitive priority.',
+            selectedScopeLabel: 'Current task scope',
+            includedWorkCount: 48,
+            deferredWorkCount: 25,
+            progress: {
+              total: 73,
+              specced: 1,
+              proven: 0,
+              blocked: 0,
+              deferred: 25,
+            },
+            pinnedNow: ['Lock overlay positioning vocabulary before more overlay APIs ship'],
+            topBlocker: 'Run required Guildhall migration 0.11.0/execution-planning-decomposition before starting this project.',
+            nextAction: 'Resolve the current start blocker.',
+          },
+          gaps: [],
+          roots: [],
+          nodes: {},
+          sourceHealth: { status: 'ok', inferred: 50, gaps: 1 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [
+        {
+          kind: 'required_migration',
+          severity: 'high',
+          migrationId: '0.11.0/execution-planning-decomposition',
+          title: 'Required migration: Convert legacy split recommendations into execution-planning records',
+          detail: 'Run this migration before the project can update.',
+          actionHref: '/migrations',
+          blocking: true,
+          dismissible: false,
+          source: { system: 'migrations', id: '0.11.0/execution-planning-decomposition' },
+        },
+        {
+          kind: 'import_draft_queue',
+          severity: 'medium',
+          taskId: 'task-import-a',
+          title: '250 imported drafts need task briefs',
+          detail: 'Start with "Version diff view (deferred)". 249 more imported drafts are waiting behind it.',
+          actionHref: '/task/task-import-a',
+        },
+      ],
+      projectTicker: {
+        label: 'Needs migration',
+        actorLabel: 'Guildhall',
+        message: 'Required migration blocks project execution.',
+        tone: 'warn',
+        pulse: false,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Required migration' })).toBeInTheDocument()
+    expect(screen.getByText(/48 work items in view/)).toBeInTheDocument()
+    expect(screen.getByText(/25 deferred/)).toBeInTheDocument()
+    expect(screen.getByText('48 Current scope')).toBeInTheDocument()
+    expect(screen.getByText('25 Deferred')).toBeInTheDocument()
+    expect(screen.queryByText(/250 imported drafts need task briefs/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/294 total work items/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/255 Being shaped/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Execution blocked' })).toBeInTheDocument()
+  })
+
   it('treats ready tasks with incomplete worker handoffs as brief cleanup on the dashboard', () => {
     render(ProjectOverviewTab, {
       detail: {
@@ -445,8 +1128,12 @@ describe('ProjectOverviewTab', () => {
         startReadiness: {
           canStart: false,
           code: 'no_unattended_progress',
-          message: 'One task needs a clearer brief and acceptance criteria before unattended work can run.',
-          actionHref: '/thread',
+          message: '"Set FLL overhead charge policy" needs a clearer brief before unattended work can run.',
+          actionHref: '/work?task=task-006',
+          focusTaskId: 'task-006',
+          focusTaskTitle: 'Set FLL overhead charge policy',
+          focusKind: 'brief_cleanup',
+          count: 1,
         },
         tasks: [
           {
@@ -1184,6 +1871,45 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText('1 total work item')).toBeInTheDocument()
     expect(screen.getByText('1 active or shaping · 0 completed · 0 blocked.')).toBeInTheDocument()
     expect(screen.getByText('1 / 2 delivery steps done · 1 blocked.')).toBeInTheDocument()
+    expect(screen.getByLabelText('Work mix: 1 tasks')).toBeInTheDocument()
     expect(screen.queryByText('2 total tasks')).not.toBeInTheDocument()
+  })
+
+  it('does not leak archived generated tasks into overview signals', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [
+          {
+            id: 'live-contract-work',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+            status: 'ready',
+            proofPaths: [{ title: 'Fixture contract proof', status: 'pending' }],
+          },
+          {
+            id: 'archived-generated-child',
+            title: 'Define the cited contracts for Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+            status: 'archived',
+            proofPaths: [{ title: 'Define the cited contracts for Implement fixture-and-expected-record schemas (from schema-contract-roadmap)', status: 'blocked' }],
+          },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getAllByText('Define fixture, expected-record, prototype-run, and evaluation contracts').length).toBeGreaterThan(0)
+    expect(screen.queryAllByText('Define the cited contracts for Implement fixture-and-expected-record schemas (from schema-contract-roadmap)')).toHaveLength(0)
+    expect(screen.getByLabelText('Work mix: 1 tasks')).toBeInTheDocument()
   })
 })

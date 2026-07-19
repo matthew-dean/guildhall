@@ -28,7 +28,22 @@
     title: string
     description: string
     domain: string
+    scope?: 'current' | 'later'
     priority: 'critical' | 'high' | 'normal' | 'low'
+    releaseIds?: readonly string[]
+    source: string
+    references?: readonly string[]
+    proofPaths?: readonly {
+      kind?: string
+      command?: string
+      expectedEvidence?: readonly string[]
+      source?: string
+    }[]
+    confidence: 'high' | 'medium' | 'low'
+  }
+  interface DetectedRelease {
+    id: string
+    label: string
     source: string
     references?: readonly string[]
     confidence: 'high' | 'medium' | 'low'
@@ -44,6 +59,8 @@
     excerpt: string
     source: string
     references?: readonly string[]
+    role?: 'capability' | 'reference' | 'brief_input'
+    structure?: 'record' | 'note'
   }
   interface SourceGroup {
     key: string
@@ -52,6 +69,8 @@
     areaKey: string
     areaLabel: string
     taskCount: number
+    currentTaskCount: number
+    laterTaskCount: number
     milestoneCount: number
     goalCount: number
     contextCount: number
@@ -64,6 +83,8 @@
     key: string
     label: string
     taskCount: number
+    currentTaskCount: number
+    laterTaskCount: number
     milestoneCount: number
     goalCount: number
     contextCount: number
@@ -73,14 +94,29 @@
   }
   interface DetectedDraft {
     goals: DetectedGoal[]
+    releases?: DetectedRelease[]
     tasks: DetectedTask[]
     milestones: DetectedMilestone[]
     context: DetectedContext[]
     stats: { inputSignals: number; drafted: number; deduped: number }
     review?: {
+      summary?: {
+        currentMilestoneLabel: string | null
+        releaseScopeLabel: string | null
+        headline: string
+        currentScope: string
+        deferredScope: string | null
+        structuralScope: string | null
+        briefInputCount: number
+        briefRecordCount: number
+        capabilityCount: number
+        capabilityRecordCount: number
+      }
       areaGroups: AreaGroup[]
       sourceGroups: SourceGroup[]
       totalTaskCandidates: number
+      totalCurrentTaskCandidates: number
+      totalLaterTaskCandidates: number
       totalMilestones: number
       totalGoals: number
     }
@@ -115,6 +151,7 @@
       domain: string
       priority: 'critical' | 'high' | 'normal' | 'low'
       references?: readonly string[]
+      scope?: 'current' | 'later'
     }>
     milestones: Array<{ title: string; evidence: string }>
   }
@@ -193,27 +230,13 @@
         selectedSourceKeys = (review.sourceGroups ?? []).map(group => group.key)
         selectedTaskIds = []
       } else if (defaults) {
-        selectedAreaKeys = [...defaults.selectedAreaKeys]
-        selectedSourceKeys = [...defaults.selectedSourceKeys]
-        selectedTaskIds = [...defaults.selectedTaskIds]
+        selectedAreaKeys = (review.areaGroups ?? []).map(area => area.key)
+        selectedSourceKeys = (review.sourceGroups ?? []).map(group => group.key)
+        selectedTaskIds = (j.detected?.tasks ?? []).map(task => task.suggestedId)
       } else {
-        const defaultAreas = (j.detected?.review?.areaGroups ?? []).filter(
-          area => area.taskCount > 0,
-        )
-        const fallbackReferenceAreas = (j.detected?.review?.totalTaskCandidates ?? 0) === 0
-          ? (j.detected?.review?.areaGroups ?? [])
-          : []
-        const selectedDefaults = defaultAreas.length > 0 ? defaultAreas : fallbackReferenceAreas
-        selectedAreaKeys = selectedDefaults.map(area => area.key)
-        const defaultSources = (j.detected?.review?.sourceGroups ?? []).filter(
-          group =>
-            selectedDefaults.some(area => area.key === group.areaKey) &&
-            (defaultAreas.length > 0 ? group.taskCount > 0 : true),
-        )
-        selectedSourceKeys = defaultSources.map(group => group.key)
-        selectedTaskIds = (j.detected?.tasks ?? [])
-          .filter(task => defaultSources.some(group => group.taskIds.includes(task.suggestedId)))
-          .map(task => task.suggestedId)
+        selectedAreaKeys = (j.detected?.review?.areaGroups ?? []).map(area => area.key)
+        selectedSourceKeys = (j.detected?.review?.sourceGroups ?? []).map(group => group.key)
+        selectedTaskIds = (j.detected?.tasks ?? []).map(task => task.suggestedId)
       }
       step = 'found'
       currentAreaIndex = 0
@@ -234,7 +257,10 @@
   const areaGroups = $derived(data?.detected?.review?.areaGroups ?? [])
   const groups = $derived(data?.detected?.review?.sourceGroups ?? [])
   const totalTaskCandidates = $derived(data?.detected?.review?.totalTaskCandidates ?? 0)
+  const totalCurrentTaskCandidates = $derived(data?.detected?.review?.totalCurrentTaskCandidates ?? 0)
+  const totalLaterTaskCandidates = $derived(data?.detected?.review?.totalLaterTaskCandidates ?? 0)
   const totalGoals = $derived(data?.detected?.review?.totalGoals ?? 0)
+  const importSummary = $derived(data?.detected?.review?.summary ?? null)
   const primaryAreas = $derived(areaGroups.filter(area => area.taskCount > 0))
   const secondaryAreas = $derived(areaGroups.filter(area => area.taskCount === 0))
   const selectedAreas = $derived(areaGroups.filter(area => selectedAreaKeys.includes(area.key)))
@@ -326,6 +352,12 @@
   )
   const completedTaskImport = $derived(data?.taskStatus === 'done' && !completedImport)
   const completedParsedTaskCount = $derived(data?.parsed?.tasks?.length ?? 0)
+  const completedApprovedCurrentTaskCount = $derived(
+    data?.parsed?.tasks?.filter(task => task.scope !== 'later').length ?? 0,
+  )
+  const completedApprovedLaterTaskCount = $derived(
+    data?.parsed?.tasks?.filter(task => task.scope === 'later').length ?? 0,
+  )
   const completedMissingParsedTasks = $derived.by(() => {
     const parsedTasks = data?.parsed?.tasks ?? []
     const currentTasks = project.detail?.tasks ?? []
@@ -337,6 +369,25 @@
   const completedParsedSourceCount = $derived(data?.detected?.review?.sourceGroups?.length ?? 0)
   const completedParsedGoalCount = $derived(data?.parsed?.goals?.length ?? data?.detected?.review?.totalGoals ?? 0)
   const completedParsedMilestoneCount = $derived(data?.parsed?.milestones?.length ?? data?.detected?.review?.totalMilestones ?? 0)
+  const completedCurrentTaskCount = $derived(data?.detected?.review?.totalCurrentTaskCandidates ?? 0)
+  const completedLaterTaskCount = $derived(data?.detected?.review?.totalLaterTaskCandidates ?? 0)
+  const completedDetectedTaskCount = $derived(data?.detected?.review?.totalTaskCandidates ?? 0)
+  const completedImportDrift = $derived(
+    completedTaskImport &&
+    completedMissingTaskCount === 0 &&
+    completedDetectedTaskCount > 0 &&
+    (
+      completedParsedTaskCount !== completedDetectedTaskCount ||
+      completedApprovedCurrentTaskCount !== completedCurrentTaskCount ||
+      completedApprovedLaterTaskCount !== completedLaterTaskCount
+    ),
+  )
+  const completedImportDriftSummary = $derived(
+    `Saved import: ${completedParsedTaskCount} task${completedParsedTaskCount === 1 ? '' : 's'} ` +
+    `(${completedApprovedCurrentTaskCount} now, ${completedApprovedLaterTaskCount} later). ` +
+    `Current notes: ${completedDetectedTaskCount} task${completedDetectedTaskCount === 1 ? '' : 's'} ` +
+    `(${completedCurrentTaskCount} now, ${completedLaterTaskCount} later).`,
+  )
 
   function selectArea(key: string) {
     const area = areaGroups.find(item => item.key === key)
@@ -474,6 +525,16 @@
     return parts.join(' · ')
   }
 
+  function scopeTaskSummary(item: Pick<AreaGroup | SourceGroup, 'taskCount' | 'currentTaskCount' | 'laterTaskCount'>): string {
+    if (item.taskCount === 0) return '0 tasks'
+    if (item.currentTaskCount > 0 && item.laterTaskCount > 0) {
+      return `${item.currentTaskCount} now · ${item.laterTaskCount} later`
+    }
+    if (item.currentTaskCount > 0) return `${item.currentTaskCount} now`
+    if (item.laterTaskCount > 0) return `${item.laterTaskCount} later`
+    return `${item.taskCount} task${item.taskCount === 1 ? '' : 's'}`
+  }
+
   function sourceSummary(group: SourceGroup): string {
     const parts: string[] = []
     if (group.taskCount > 0) {
@@ -526,6 +587,18 @@
 
   function tasksForFocusedSource(group: SourceGroup): DetectedTask[] {
     return tasksForGroup(group).slice(0, 8)
+  }
+
+  function proofExpectationsForTask(task: DetectedTask): string[] {
+    return [...new Set(
+      (task.proofPaths ?? [])
+        .flatMap(proofPath => [
+          ...(proofPath.command ? [`Run \`${proofPath.command}\`.`] : []),
+          ...(proofPath.expectedEvidence ?? []),
+        ])
+        .map(item => item.trim())
+        .filter(Boolean),
+    )]
   }
 
   function sourceMatches(value: string | undefined, group: SourceGroup): boolean {
@@ -750,11 +823,15 @@
         goalsRecorded: j.goalsRecorded ?? completedParsedGoalCount,
         milestonesLogged: j.milestonesLogged ?? completedParsedMilestoneCount,
       }
-      toast.success(
-        (j.tasksAdded ?? 0) > 0
-          ? `Restored ${j.tasksAdded} draft task${j.tasksAdded === 1 ? '' : 's'} from the completed import.`
-          : 'Import is already landed.',
-      )
+      if (completedImportDrift) {
+        toast.success('Refreshed the import from the current project notes.')
+      } else {
+        toast.success(
+          (j.tasksAdded ?? 0) > 0
+            ? `Restored ${j.tasksAdded} draft task${j.tasksAdded === 1 ? '' : 's'} from the completed import.`
+            : 'Import is already landed.',
+        )
+      }
       await project.refresh()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e))
@@ -904,7 +981,19 @@
           </p>
           <div class="metric-row" aria-label="Completed import summary">
             {#if completedParsedTaskCount > 0}
-              <Chip label={`${completedParsedTaskCount} proposed task${completedParsedTaskCount === 1 ? '' : 's'}`} tone="ok" />
+              <Chip
+                label={`${completedParsedTaskCount} saved task${completedParsedTaskCount === 1 ? '' : 's'}`}
+                tone={completedImportDrift ? 'warn' : 'ok'}
+              />
+            {/if}
+            {#if completedImportDrift}
+              <Chip label={`${completedDetectedTaskCount} current-note task${completedDetectedTaskCount === 1 ? '' : 's'}`} tone="ok" />
+            {/if}
+            {#if completedCurrentTaskCount > 0}
+              <Chip label={`${completedCurrentTaskCount} now`} tone="ok" />
+            {/if}
+            {#if completedLaterTaskCount > 0}
+              <Chip label={`${completedLaterTaskCount} later`} tone="neutral" />
             {/if}
             {#if completedParsedGoalCount > 0}
               <Chip label={`${completedParsedGoalCount} goal${completedParsedGoalCount === 1 ? '' : 's'}`} tone="neutral" />
@@ -917,9 +1006,40 @@
             {/if}
           </div>
         </div>
+        {#if importSummary}
+          <div class="scope-summary" aria-label="Completed import scope summary">
+            {#if importSummary.releaseScopeLabel}
+              <div class="scope-fact" aria-label="Completed release scope">
+                <span class="summary-label">Release scope</span>
+                <strong>{importSummary.releaseScopeLabel}</strong>
+              </div>
+            {/if}
+            <div class="scope-summary-header">
+              <strong>{importSummary.headline}</strong>
+            </div>
+            <p>{importSummary.currentScope}</p>
+            {#if importSummary.deferredScope}
+              <p>{importSummary.deferredScope}</p>
+            {/if}
+            {#if importSummary.structuralScope}
+              <p>{importSummary.structuralScope}</p>
+            {/if}
+          </div>
+        {/if}
+        {#if completedImportDrift}
+          <div class="repair-guidance" aria-label="Import refresh needed">
+            <p>
+              The saved import no longer matches the project notes Guildhall reads now.
+            </p>
+            <p>{completedImportDriftSummary}</p>
+            <p>
+              Refreshing replaces stale imported drafts with the current detected scope, including the current/later split.
+            </p>
+          </div>
+        {/if}
         {#if completedMissingTaskCount > 0}
           <p class="learned-note">
-            {completedMissingTaskCount} proposed task{completedMissingTaskCount === 1 ? '' : 's'} from this import
+            {completedMissingTaskCount} saved task{completedMissingTaskCount === 1 ? '' : 's'} from this import
             {completedMissingTaskCount === 1 ? ' is' : ' are'} missing from Work.
           </p>
           <div class="repair-guidance" aria-label="Import repair guidance">
@@ -932,7 +1052,7 @@
           </div>
         {:else if completedParsedTaskCount > 0}
           <p class="learned-note">
-            All proposed tasks from this completed import already exist in Work.
+            All saved tasks from this completed import already exist in Work.
           </p>
         {/if}
         <Row justify="end" gap="3" wrap>
@@ -943,7 +1063,11 @@
           <Button variant="secondary" onclick={() => nav(projectActionHref('/work'))}>
             Open Work
           </Button>
-          {#if completedMissingTaskCount > 0}
+          {#if completedImportDrift}
+            <Button variant="primary" onclick={restoreCompletedImportDrafts} disabled={busy !== null}>
+              {busy === 'approve' ? 'Refreshing...' : 'Refresh import from current notes'}
+            </Button>
+          {:else if completedMissingTaskCount > 0}
             <Button variant="primary" onclick={restoreCompletedImportDrafts} disabled={busy !== null}>
               {busy === 'approve' ? 'Restoring...' : `Restore ${completedMissingTaskCount} missing draft${completedMissingTaskCount === 1 ? '' : 's'}`}
             </Button>
@@ -984,7 +1108,10 @@
             <div class="metric-row" aria-label="Import summary">
               <Chip label={`${areaGroups.length} parts`} tone="accent" />
               {#if hasTaskCandidates}
-                <Chip label={`${totalTaskCandidates} possible tasks`} tone="ok" />
+                <Chip label={`${totalCurrentTaskCandidates} now`} tone="ok" />
+                {#if totalLaterTaskCandidates > 0}
+                  <Chip label={`${totalLaterTaskCandidates} later`} tone="neutral" />
+                {/if}
               {:else if totalGoals > 0}
                 <Chip label={`${totalGoals} goals`} tone="neutral" />
               {:else}
@@ -993,6 +1120,26 @@
               <Chip label={`${groups.length} sources`} tone="neutral" />
             </div>
           </div>
+          {#if importSummary}
+            <div class="scope-summary" aria-label="Current import scope summary">
+              {#if importSummary.releaseScopeLabel}
+                <div class="scope-fact" aria-label="Current release scope">
+                  <span class="summary-label">Release scope</span>
+                  <strong>{importSummary.releaseScopeLabel}</strong>
+                </div>
+              {/if}
+              <div class="scope-summary-header">
+                <strong>{importSummary.headline}</strong>
+              </div>
+              <p>{importSummary.currentScope}</p>
+              {#if importSummary.deferredScope}
+                <p>{importSummary.deferredScope}</p>
+              {/if}
+              {#if importSummary.structuralScope}
+                <p>{importSummary.structuralScope}</p>
+              {/if}
+            </div>
+          {/if}
           {#if data.detected?.learning?.defaults?.note}
             <p class="learned-note">{data.detected.learning.defaults.note}</p>
           {/if}
@@ -1006,7 +1153,7 @@
                         <strong>{area.label}</strong>
                       </div>
                       <div class="metric-row">
-                        <Chip label={`${area.taskCount} tasks`} tone="ok" />
+                        <Chip label={scopeTaskSummary(area)} tone="ok" />
                         <Chip label={`${area.sourceCount} sources`} tone="neutral" />
                       </div>
                     </div>
@@ -1098,7 +1245,7 @@
                       </span>
                     </div>
                     <div class="metric-row">
-                      <Chip label={`${area.taskCount} tasks`} tone="ok" />
+                      <Chip label={scopeTaskSummary(area)} tone="ok" />
                       <Chip label={`${area.sourceCount} sources`} tone="neutral" />
                     </div>
                     <div class="source-path">{sourcePreview(area)}</div>
@@ -1234,7 +1381,7 @@
                       </div>
                       <div class="metric-row">
                         {#if group.taskCount > 0}
-                          <Chip label={`${group.taskCount} tasks`} tone="ok" />
+                          <Chip label={scopeTaskSummary(group)} tone="ok" />
                         {/if}
                         {#if group.milestoneCount > 0}
                           <Chip label={`${group.milestoneCount} milestones`} tone="warn" />
@@ -1626,6 +1773,17 @@
               </ul>
             </div>
           {/if}
+          {@const proofExpectations = proofExpectationsForTask(focusedTask)}
+          {#if proofExpectations.length}
+            <div class="detail-block">
+              <div class="detail-label">Proof needed</div>
+              <ul class="detail-list">
+                {#each proofExpectations.slice(0, 5) as expectation}
+                  <li>{expectation}</li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
         </Stack>
       {/if}
     {/snippet}
@@ -1798,6 +1956,17 @@
     gap: var(--gh-space-2);
     flex-wrap: wrap;
     align-items: center;
+  }
+  .scope-fact {
+    display: flex;
+    align-items: baseline;
+    gap: var(--gh-space-3);
+    flex-wrap: wrap;
+  }
+  .scope-fact strong {
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .learned-note {
     margin: var(--gh-space-2) 0 0;

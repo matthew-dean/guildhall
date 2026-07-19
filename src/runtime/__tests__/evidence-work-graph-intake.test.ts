@@ -80,6 +80,20 @@ const narrativeRemainingInventoryEvidence = [
   '- **Stage alignment:** Stage 2 (Agent Coordination)',
 ].join('\n')
 
+const narrativeRoadmapStageTwoEvidence = [
+  '# Implementation Roadmap',
+  '',
+  '## Stage 2: Agent Coordination',
+  '',
+  'Goal: connect the prototype runner to actual writer and editor flows with deterministic review contracts.',
+  '',
+  'Deliverables:',
+  '- Mastra workflow for the prototype iteration loop',
+  '- packet-builder implementation for the first writer/editor packet types',
+  '- deterministic retrieval tools over structured story records',
+  '- specialist editor agent calls for the first review lanes',
+].join('\n')
+
 describe('evidence-to-work-graph intake', () => {
   it('extracts deliverable units from source evidence instead of flattening them into one vague task', () => {
     const plan = planEvidenceWorkGraph({
@@ -124,6 +138,49 @@ describe('evidence-to-work-graph intake', () => {
         }),
       ],
     })
+  })
+
+  it('does not turn archived or shelved history into a live prerequisite', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaComponentEvidence }],
+      existingTasks: [
+        {
+          id: 'task-dialog-foundation',
+          title: 'Build Dialog primitive',
+          status: 'archived',
+          deliverableName: 'Dialog',
+          producedArtifact: 'ui-dialog',
+        },
+      ],
+    })
+
+    const alertDialog = plan.tasks.find(task => task.deliverableName === 'AlertDialog' && task.kind === 'implementation')
+    expect(alertDialog?.dependsOn).toEqual([])
+  })
+
+  it('never creates a self-dependency when foundation wording matches the current task', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{
+        path: 'docs/harness/synopsis-expansion.md',
+        content: [
+          '# Story records',
+          '',
+          '| Deliverable | Need | Foundation | Consumer |',
+          '| --- | --- | --- | --- |',
+          '| Synopsis expansion into story records | missing | Synopsis expansion into story records | headless runner |',
+        ].join('\n'),
+      }],
+      existingTasks: [{
+        id: 'task-synopsis-expansion',
+        title: 'Expand synopsis into story records',
+        description: 'Synopsis expansion into story records.',
+        status: 'import_draft',
+      }],
+    })
+
+    const task = plan.tasks.find(candidate => candidate.id === 'task-synopsis-expansion')
+    expect(task?.dependsOn).toEqual([])
+    expect(task?.relatedTasks).toEqual([])
   })
 
   it('splits reusable deliverables from consuming-product integration work', () => {
@@ -317,8 +374,48 @@ describe('evidence-to-work-graph intake', () => {
       'Use the first run to narrow the MVP story-memory schema.',
     ])
     const firstTask = plan.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    const secondTask = plan.tasks.find(task => task.title === 'Add the first tiny fiction fixture and human-authored expected records.')
+    const thirdTask = plan.tasks.find(task => task.title === 'Implement a no-UI runner that builds a packet from fixture records.')
+    const sixthTask = plan.tasks.find(task => task.title === 'Use the first run to narrow the MVP story-memory schema.')
     expect(firstTask?.buildsOn).toEqual(['Stage 1'])
+    expect(firstTask?.dependsOn).toEqual([])
+    expect(secondTask?.dependsOn).toEqual([firstTask?.id])
+    expect(thirdTask?.dependsOn).toEqual([secondTask?.id])
+    expect(sixthTask?.dependsOn).toHaveLength(1)
+    expect(sixthTask?.relatedTasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        relationship: 'blocks',
+        reason: expect.stringContaining('comes after'),
+      }),
+    ]))
     expect(plan.tasks.every(task => task.kind === 'implementation')).toBe(true)
+  })
+
+  it('does not fold indented completion annotations into current milestone task titles', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{
+        path: 'docs/harness/implementation-roadmap.md',
+        content: [
+          '# Implementation Roadmap',
+          '',
+          '## Stage 1: Fixture And Evaluation Harness',
+          '',
+          '## Current Next Milestone',
+          '',
+          'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+          '',
+          '1. Use the first run to narrow the MVP story-memory schema.',
+          '   ✓ Completed — see [mvp-story-memory-schema-narrowing.md](../specs/mvp-story-memory-schema-narrowing.md)',
+          '     and the updated [schema-contract-roadmap.md](../specs/schema-contract-roadmap.md#mvp-contract-boundary).',
+        ].join('\n'),
+      }],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.filter(task => task.kind === 'implementation').map(task => task.title)).toEqual([
+      'Use the first run to narrow the MVP story-memory schema.',
+    ])
+    expect(JSON.stringify(plan.tasks)).not.toContain('Completed')
   })
 
   it('extracts recommended implementation tasks from decomposition inventories instead of treating spec docs as inert context', () => {
@@ -331,17 +428,129 @@ describe('evidence-to-work-graph intake', () => {
       expect.arrayContaining([
         expect.objectContaining({
           title: 'Implement dialogue-and-character-voice reviewer lane',
-          targetArea: 'Coherence',
+          targetArea: 'coherence',
         }),
         expect.objectContaining({
           title: 'Implement scene-and-chapter-intelligence reviewer lane',
-          targetArea: 'Coherence',
+          targetArea: 'coherence',
         }),
       ]),
     )
   })
 
-  it('keeps later-stage inventory recommendations out of the current task graph when a roadmap names the active milestone stage', () => {
+  it('does not turn roadmap-stage deliverables into implementation work without an explicit starter-task or recommendation layer', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapStageTwoEvidence }],
+      existingTasks: [],
+    })
+
+    expect(plan.units).toEqual([])
+    expect(plan.tasks).toEqual([])
+    expect(plan.suppressedTaskTitles).toEqual([
+      'Mastra workflow for the prototype iteration loop',
+      'packet-builder implementation for the first writer/editor packet types',
+      'deterministic retrieval tools over structured story records',
+      'specialist editor agent calls for the first review lanes',
+    ])
+  })
+
+  it('ignores markdown-decorated none placeholders in recommended first task titles', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{
+        path: 'docs/harness/remaining-spec-decomposition-inventory.md',
+        content: [
+          '# Remaining Spec Decomposition Inventory',
+          '',
+          '### 2.8 `story-intelligence-overview.md`',
+          '',
+          '- **Recommended first task title:** *(none — umbrella doc, covered by child specs)*',
+          '- **Recommended domain:** *(none)*',
+          '- **Stage alignment:** Stage 2 (Agent Coordination)',
+          '',
+          '### 2.9 `dialogue-and-character-voice.md`',
+          '',
+          '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+          '- **Recommended domain:** coherence',
+          '- **Stage alignment:** Stage 2 (Agent Coordination)',
+        ].join('\n'),
+      }],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.map(task => task.title)).toContain('Implement dialogue-and-character-voice reviewer lane')
+    expect(plan.tasks.map(task => task.title)).not.toContain('*(none — umbrella doc, covered by child specs)*')
+  })
+
+  it('does not recreate resolved inventory recommendations as current work', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{
+        path: 'docs/harness/remaining-spec-decomposition-inventory.md',
+        content: [
+          '# Remaining Spec Decomposition Inventory',
+          '',
+          '### 2.3 `editor-writer-feedback-chain.md`',
+          '',
+          '- **Why not decomposed yet:** ~~Requires feedback-weight types first.~~ **RESOLVED** — Source-backed contract surface implemented at `src/harness/editor-writer-feedback-chain.ts`.',
+          '- **Recommended first task title:** ~~Implement editor-writer feedback chain contract and weighted-feedback pipeline~~ **DONE** — contract surface recovered as `src/harness/editor-writer-feedback-chain.ts`',
+          '- **Recommended domain:** harness',
+          '- **Stage alignment:** Stage 2 (Agent Coordination)',
+          '',
+          '### 2.7 `scene-and-chapter-intelligence.md`',
+          '',
+          '- **Recommended first task title:** Implement scene-and-chapter-intelligence reviewer lane',
+          '- **Recommended domain:** coherence',
+          '- **Stage alignment:** Stage 2 (Agent Coordination)',
+        ].join('\n'),
+      }],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.map(task => task.title)).toContain('Implement scene-and-chapter-intelligence reviewer lane')
+    expect(plan.tasks.map(task => task.title)).not.toContain('Implement editor-writer feedback chain contract and weighted-feedback pipeline')
+    expect(JSON.stringify(plan.tasks)).not.toContain('contract surface recovered')
+  })
+
+  it('does not recreate ready source-backed tasks as missing evidence work', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence }],
+      existingTasks: [{
+        id: 'task-import-lho60m',
+        title: 'Implement dialogue-and-character-voice reviewer lane',
+        status: 'ready',
+        description: 'Implement the source-backed reviewer lane.',
+        references: ['docs/harness/remaining-spec-decomposition-inventory.md', 'docs/specs/dialogue-and-character-voice.md'],
+        acceptanceCriteria: [{ id: 'source-implementation', description: 'The lane is implemented.', verifiedBy: 'review' }],
+        productBrief: {
+          userJob: 'Prove the dialogue reviewer lane from docs.',
+          whyItMattersNow: 'The current scope needs source-backed reviewer proof.',
+          successMetric: 'The reviewer lane follows the cited spec.',
+        },
+        spec: '## What this is\nA source-backed implementation spec.',
+        proofPaths: [{ kind: 'review', expectedEvidence: ['Spec evidence is attached.'] }],
+      }],
+    })
+
+    expect(plan.tasks.map(task => task.title)).not.toContain('Implement dialogue-and-character-voice reviewer lane')
+    expect(plan.reconciliations).toEqual([])
+    expect(plan.tasks.map(task => task.title)).toContain('Implement scene-and-chapter-intelligence reviewer lane')
+  })
+
+  it('generates proof evidence expectations about completed work, not proof-planning meta-work', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence }],
+      existingTasks: [],
+    })
+
+    const evidenceText = plan.tasks
+      .flatMap(task => task.proofPaths.flatMap(path => path.expectedEvidence ?? []))
+      .join('\n')
+
+    expect(evidenceText).not.toMatch(/\bproof plan\b/i)
+    expect(evidenceText).not.toMatch(/\breuses\b/i)
+    expect(evidenceText).toContain('records focused implementation, verification, or reviewer evidence')
+  })
+
+  it('keeps later-stage inventory recommendations inside the same MVP task graph when a roadmap names the active milestone stage', () => {
     const plan = planEvidenceWorkGraph({
       sources: [
         { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapEvidence },
@@ -350,11 +559,37 @@ describe('evidence-to-work-graph intake', () => {
       existingTasks: [],
     })
 
-    expect(plan.tasks.map(task => task.title)).not.toEqual(
+    expect(plan.tasks.map(task => task.title)).toEqual(
       expect.arrayContaining([
         'Implement dialogue-and-character-voice reviewer lane',
         'Implement scene-and-chapter-intelligence reviewer lane',
       ]),
     )
+    const milestoneTerminal = plan.tasks.find(task => task.title === 'Use the first run to narrow the MVP story-memory schema.')
+    const dialogue = plan.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
+    expect(dialogue?.dependsOn).toContain(milestoneTerminal?.id)
+  })
+
+  it('suppresses coarse later-stage roadmap deliverable bullets when a current milestone already has decomposed spec tasks', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [
+        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapEvidence },
+        { path: 'docs/harness/stage-two-roadmap.md', content: narrativeRoadmapStageTwoEvidence },
+        { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence },
+      ],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
+      'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Implement dialogue-and-character-voice reviewer lane',
+      'Implement scene-and-chapter-intelligence reviewer lane',
+    ]))
+    expect(plan.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
+      'Mastra workflow for the prototype iteration loop',
+      'packet-builder implementation for the first writer/editor packet types',
+      'deterministic retrieval tools over structured story records',
+      'specialist editor agent calls for the first review lanes',
+    ]))
   })
 })

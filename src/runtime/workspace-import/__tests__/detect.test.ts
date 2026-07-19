@@ -25,10 +25,11 @@ function fakeExec(
   handler: (
     cmd: string,
     args: readonly string[],
+    opts?: { cwd?: string; timeoutMs?: number },
   ) => { stdout: string; stderr?: string; code?: number },
 ): Exec {
-  return async (cmd, args) => {
-    const res = handler(cmd, args)
+  return async (cmd, args, opts) => {
+    const res = handler(cmd, args, opts)
     return { stdout: res.stdout, stderr: res.stderr ?? '', code: res.code ?? 0 }
   }
 }
@@ -132,6 +133,63 @@ describe('textCorpusSource', () => {
       'Migration plan and architecture for moving from WordPress to a modern licensing platform.',
     )
     expect(sigs.some((s) => s.references?.[0]?.endsWith('src/app.ts'))).toBe(false)
+  })
+
+  it('keeps specs and feature catalogs as context instead of current work', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    mkdirSync(join(dir, 'specs'), { recursive: true })
+    mkdirSync(join(dir, 'supabase'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'features.md'),
+      [
+        '# Feature Catalog',
+        '',
+        '- [ ] Inline comments',
+        '- [ ] AI writing assistant',
+      ].join('\n'),
+    )
+    writeFileSync(
+      join(dir, 'specs', 'v1-editor.md'),
+      [
+        '# V1 Editor',
+        '',
+        '## Acceptance Criteria',
+        '- [ ] AC1: User can write rich text.',
+        '- [ ] AC2: User can insert tables.',
+      ].join('\n'),
+    )
+    writeFileSync(
+      join(dir, 'supabase', 'MIGRATION_GUIDE.md'),
+      [
+        '# Migration Guide',
+        '',
+        '- [ ] All CREATE statements use IF NOT EXISTS',
+      ].join('\n'),
+    )
+
+    const sigs = await textCorpusSource.detect({ projectPath: dir })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Text document (docs/features.md): Feature Catalog',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Text document (specs/v1-editor.md): V1 Editor',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Text document (supabase/MIGRATION_GUIDE.md): Migration Guide',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'open_work', title: 'Inline comments' }),
+      expect.objectContaining({ kind: 'open_work', title: 'AI writing assistant' }),
+      expect.objectContaining({ kind: 'open_work', title: 'AC1: User can write rich text.' }),
+      expect.objectContaining({ kind: 'open_work', title: 'AC2: User can insert tables.' }),
+      expect.objectContaining({ kind: 'open_work', title: 'All CREATE statements use IF NOT EXISTS' }),
+    ]))
   })
 })
 
@@ -274,6 +332,36 @@ describe('planningDocsSource', () => {
     expect(sigs.find((s) => s.title === 'Add editor tests')?.domainHint).toBe('knit')
   })
 
+  it('treats implementation tracker checklists as planning work signals', async () => {
+    writeFileSync(
+      join(dir, '2026-05-27-guildhall-0-9-implementation-tracker.md'),
+      `# Implementation Tracker
+
+## Milestone 1: Runtime Image Contract
+
+- [x] Add a committed Containerfile.
+- [ ] Add runtime smoke command.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['2026-05-27-guildhall-0-9-implementation-tracker.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'milestone',
+      title: 'Add a committed Containerfile.',
+    }))
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Add runtime smoke command.',
+    }))
+  })
+
   it('treats nested specs as context signals', async () => {
     mkdirSync(join(dir, 'knit', 'specs'), { recursive: true })
     writeFileSync(
@@ -294,6 +382,7 @@ describe('planningDocsSource', () => {
         source: 'planning-docs',
         kind: 'context',
         title: 'Spec: V1 Editor',
+        role: 'capability',
       }),
     )
   })
@@ -410,7 +499,962 @@ describe('planningDocsSource', () => {
       })),
     })
 
-    expect(sigs).toEqual([])
+    expect(sigs.filter((signal) => signal.kind === 'open_work' || signal.kind === 'milestone')).toEqual([])
+  })
+
+  it('keeps current roadmap deliverables as context and future roadmap deliverables as deferred release work', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 1: Fixture And Evaluation Harness
+
+Deliverables:
+
+- fixture directory shape for at least one small story fixture
+- typed fixture and expected-record contracts
+
+## Stage 2: Mastra Agent Prototype
+
+Deliverables:
+
+- Mastra workflow for the prototype iteration loop
+- specialist editor agent calls for the first review lanes
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'fixture directory shape for at least one small story fixture',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'typed fixture and expected-record contracts',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Mastra workflow for the prototype iteration loop',
+        scopeHint: 'later',
+        releaseId: 'stage-2-mastra-agent-prototype',
+        releaseLabel: 'Stage 2: Mastra Agent Prototype',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'specialist editor agent calls for the first review lanes',
+        scopeHint: 'later',
+        releaseId: 'stage-2-mastra-agent-prototype',
+        releaseLabel: 'Stage 2: Mastra Agent Prototype',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'fixture directory shape for at least one small story fixture',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'typed fixture and expected-record contracts',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'fixture directory shape for at least one small story fixture',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'typed fixture and expected-record contracts',
+      }),
+    ]))
+  })
+
+  it('marks obvious future-section planning bullets as later scope', async () => {
+    writeFileSync(
+      join(dir, 'PROJECT_STATE.md'),
+      `# Project State
+
+## Next Up
+
+### V1 polish + hardening
+- [ ] Add smoke coverage.
+
+### V2 priorities (post V1 launch)
+- Inline comments
+- Connections / backlinks graph
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['PROJECT_STATE.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Add smoke coverage.',
+    }))
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Inline comments',
+      scopeHint: 'later',
+    }))
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Connections / backlinks graph',
+      scopeHint: 'later',
+    }))
+  })
+
+  it('uses the first numbered stage as current when a release plan has no explicit current milestone', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'release-plan.md'),
+      `# Release Plan
+
+## Stage 1: Release Hardening
+
+Scope:
+
+- Fill the most important unit and E2E gaps.
+
+Done gate:
+
+- \`pnpm test\`: pass
+
+## Stage 2: Primitive Convergence
+
+Scope:
+
+- Finish remaining high-use primitive replacement.
+
+Done gate:
+
+- Replacement-wave items are complete or deferred.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/release-plan.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'Fill the most important unit and E2E gaps.',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Finish remaining high-use primitive replacement.',
+        scopeHint: 'later',
+        releaseId: 'stage-2-primitive-convergence',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'pnpm test: pass',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Replacement-wave items are complete or deferred.',
+      }),
+    ]))
+  })
+
+  it('does not treat every nested project Stage 1 as current in a multi-project workspace', async () => {
+    mkdirSync(join(dir, 'knit/docs'), { recursive: true })
+    mkdirSync(join(dir, 'looma/docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'knit/docs/release-plan.md'),
+      `# Knit Release Plan
+
+## Stage 1: V1 Release Hardening
+
+Scope:
+
+- Fill unit and E2E gaps.
+`,
+    )
+    writeFileSync(
+      join(dir, 'looma/docs/milestones.md'),
+      `# Looma Milestones
+
+## Stage 1: Finish Knit Primitive Replacement Wave
+
+Scope:
+
+- Finish remaining primitive replacement.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'knit/docs/release-plan.md',
+          'looma/docs/milestones.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'context',
+      title: 'Fill unit and E2E gaps.',
+      scopeHint: 'current',
+      releaseId: 'stage-1-v1-release-hardening',
+      domainHint: 'knit',
+    }))
+    expect(sigs).toContainEqual(expect.objectContaining({
+      title: 'Finish remaining primitive replacement.',
+      scopeHint: 'later',
+      domainHint: 'looma',
+    }))
+    expect(sigs).not.toContainEqual(expect.objectContaining({
+      title: 'Finish remaining primitive replacement.',
+      releaseId: 'stage-1-finish-knit-primitive-replacement-wave',
+    }))
+  })
+
+  it('keeps fresh nested roadmap work current when no primary release scope is defined', async () => {
+    mkdirSync(join(dir, 'knit/docs'), { recursive: true })
+    mkdirSync(join(dir, 'looma/docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'knit/docs/feature-roadmap.md'),
+      `# Feature Roadmap
+
+- [ ] Auth callback redirect
+- [ ] Collections parity
+`,
+    )
+    writeFileSync(
+      join(dir, 'looma/docs/component-roadmap.md'),
+      `# Component Roadmap
+
+- [ ] Listbox
+- [ ] Combobox
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'knit/docs/feature-roadmap.md',
+          'looma/docs/component-roadmap.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Auth callback redirect',
+        domainHint: 'knit',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Listbox',
+        domainHint: 'looma',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        scopeHint: 'later',
+      }),
+    ]))
+  })
+
+  it('attaches explicitly named release scope to current and later planning work without making later work current', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'release-plan.md'),
+      `# Release Plan
+
+## Release: Headless MVP
+
+### Current Focus
+
+- Build fixture-driven author voice shaping
+- Generate synopsis to outline records
+
+### Later
+
+- Add browser drafting workspace
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/release-plan.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Build fixture-driven author voice shaping',
+        scopeHint: 'current',
+        releaseId: 'headless-mvp',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Generate synopsis to outline records',
+        scopeHint: 'current',
+        releaseId: 'headless-mvp',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Add browser drafting workspace',
+        scopeHint: 'later',
+        releaseId: 'headless-mvp',
+      }),
+    ]))
+  })
+
+  it('preserves explicit arbitrary release labels from planning headings', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'release-plan.md'),
+      `# Release Plan
+
+## Release: 2.0 alpha
+
+### Current Focus
+
+- Prove package migration dry run
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/release-plan.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Prove package migration dry run',
+      scopeHint: 'current',
+      releaseId: '2-0-alpha',
+      releaseLabel: '2.0 alpha',
+    }))
+  })
+
+  it('treats the current numbered stage as the release scope when no explicit release heading exists', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'release-plan.md'),
+      `# Release Plan
+
+## Stage 1: V1 Release Hardening
+
+Scope:
+
+- Fill the most important unit and E2E gaps.
+
+## Stage 2: Primitive Convergence
+
+Scope:
+
+- Finish remaining high-use primitive replacement.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/release-plan.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'context',
+      title: 'Fill the most important unit and E2E gaps.',
+      scopeHint: 'current',
+      releaseId: 'stage-1-v1-release-hardening',
+      releaseLabel: 'Stage 1: V1 Release Hardening',
+    }))
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Finish remaining high-use primitive replacement.',
+      scopeHint: 'later',
+      releaseId: 'stage-2-primitive-convergence',
+      releaseLabel: 'Stage 2: Primitive Convergence',
+    }))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: 'Finish remaining high-use primitive replacement.',
+        releaseId: 'stage-1-v1-release-hardening',
+      }),
+    ]))
+  })
+
+  it('marks deferred checklist items as later even when they appear in status history', async () => {
+    writeFileSync(
+      join(dir, 'PROJECT_STATE.md'),
+      `# Project State
+
+## Done
+
+### Version History
+- [x] Version list UI
+- [ ] Version diff view (deferred)
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['PROJECT_STATE.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Version diff view (deferred)',
+      scopeHint: 'later',
+    }))
+  })
+
+  it('does not duplicate current-stage deliverables as open work when the roadmap already names explicit current milestone starter tasks', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 1: Fixture And Evaluation Harness
+
+Deliverables:
+
+- fixture directory shape for at least one small story fixture
+- typed fixture and expected-record contracts
+
+## Stage 2: Mastra Agent Prototype
+
+Deliverables:
+
+- Mastra workflow for the prototype iteration loop
+- specialist editor agent calls for the first review lanes
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+
+1. Define fixture, expected-record, prototype-run, and evaluation schemas.
+2. Add the first tiny fiction fixture and human-authored expected records.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Add the first tiny fiction fixture and human-authored expected records.',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'fixture directory shape for at least one small story fixture',
+        role: 'capability',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'typed fixture and expected-record contracts',
+        role: 'capability',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Mastra workflow for the prototype iteration loop',
+        scopeHint: 'later',
+        releaseId: 'stage-2-mastra-agent-prototype',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'specialist editor agent calls for the first review lanes',
+        scopeHint: 'later',
+        releaseId: 'stage-2-mastra-agent-prototype',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'fixture directory shape for at least one small story fixture',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'typed fixture and expected-record contracts',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'fixture directory shape for at least one small story fixture',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'typed fixture and expected-record contracts',
+      }),
+    ]))
+  })
+
+  it('extracts architecture core-loop steps as capability-map context instead of runnable backlog work', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'architecture-notes.md'),
+      `# Architecture Notes
+
+## Core Loop
+
+1. Author defines book intent, genre/form expectations, themes, and voice.
+2. Author builds a house: premise, world, cast, outline, chapter goals, review standards.
+3. Author drafts or imports chapters.
+4. The coordinator chooses reviewers based on current phase.
+5. Reviewers produce evidence-backed findings.
+6. The coordinator summarizes conflicts and turns them into author decisions.
+7. Accepted decisions update the story bible, outline, and manuscript tasks.
+
+## System Records
+| Record | Purpose |
+| --- | --- |
+| Book brief | author voice, premise, genre, themes, constraints |
+| Outline | acts, chapters, scene goals, thread movement |
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/architecture-notes.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        role: 'brief_input',
+        structure: 'record',
+        title: 'Book brief',
+        evidence: expect.stringContaining('author voice, premise, genre, themes, constraints'),
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        structure: 'record',
+        title: 'Outline',
+        evidence: expect.stringContaining('acts, chapters, scene goals, thread movement'),
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'brief_input',
+        title: 'Author builds a house: premise, world, cast, outline, chapter goals, review standards.',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'Author drafts or imports chapters.',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'The coordinator chooses reviewers based on current phase.',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'Accepted decisions update the story bible, outline, and manuscript tasks.',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+      }),
+    ]))
+    expect(sigs.find(signal => signal.title === 'Book brief')?.evidence).toContain(
+      'Also described as: Author defines book intent, genre/form expectations, themes, and voice.',
+    )
+  })
+
+  it('extracts explicit spec-to-task coverage links from decomposition inventory tables', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    mkdirSync(join(dir, 'docs', 'specs'), { recursive: true })
+    writeFileSync(join(dir, 'docs', 'specs', 'author-voice-system.md'), '# Author Voice System\n')
+    writeFileSync(join(dir, 'docs', 'specs', 'world-and-object-continuity.md'), '# World And Object Continuity\n')
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      `# Remaining Spec Decomposition Inventory
+
+## 1. Already-Decomposed Specs (Reference)
+
+| Spec File | Matching Task(s) | Notes |
+|-----------|------------------|-------|
+| \`author-voice-system.md\` | \`author-voice-loop-mvp\` | done |
+| \`world-and-object-continuity.md\` | \`coherence-reviewer-mvp\` | done |
+| \`index.md\` | *(table of contents)* | ignore |
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'docs/harness/remaining-spec-decomposition-inventory.md',
+          'docs/specs/author-voice-system.md',
+          'docs/specs/world-and-object-continuity.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        role: 'reference',
+        title: 'Spec coverage: Author Voice System',
+        linkedTaskHints: ['author-voice-loop-mvp'],
+        references: [
+          join(dir, 'docs', 'specs', 'author-voice-system.md'),
+          join(dir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+        ],
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'reference',
+        title: 'Spec coverage: World And Object Continuity',
+        linkedTaskHints: ['coherence-reviewer-mvp'],
+        references: [
+          join(dir, 'docs', 'specs', 'world-and-object-continuity.md'),
+          join(dir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+        ],
+      }),
+    ]))
+    expect(sigs.some((signal) => signal.title === 'Spec coverage: Index')).toBe(false)
+  })
+
+  it('keeps later decomposition inventory recommendations as capability context instead of runnable work', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    mkdirSync(join(dir, 'docs', 'specs'), { recursive: true })
+    writeFileSync(join(dir, 'docs', 'specs', 'dialogue-and-character-voice.md'), '# Dialogue And Character Voice\n')
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      `# Remaining Spec Decomposition Inventory
+
+## 2.2 \`dialogue-and-character-voice.md\`
+
+- **Covers:** Dialogue review behavior.
+- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane
+- **Recommended domain:** coherence
+- **Stage alignment:** Stage 2 (Agent Coordination)
+`,
+    )
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 1: Fixture And Evaluation Harness
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'docs/harness/implementation-roadmap.md',
+          'docs/harness/remaining-spec-decomposition-inventory.md',
+          'docs/specs/dialogue-and-character-voice.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'Spec: Dialogue And Character Voice',
+        scopeHint: 'later',
+        references: [
+          join(dir, 'docs', 'specs', 'dialogue-and-character-voice.md'),
+          join(dir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+        ],
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Implement dialogue-and-character-voice reviewer lane',
+      }),
+    ]))
+  })
+
+  it('does not fold indented completion annotations into current milestone task titles', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+
+1. Use the first run to narrow the MVP story-memory schema.
+   ✓ Completed — see [mvp-story-memory-schema-narrowing.md](../specs/mvp-story-memory-schema-narrowing.md)
+     and the updated [schema-contract-roadmap.md](../specs/schema-contract-roadmap.md#mvp-contract-boundary).
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Use the first run to narrow the MVP story-memory schema.',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: expect.stringContaining('Completed'),
+      }),
+    ]))
+  })
+
+  it('keeps proof and status bullets as context instead of current milestone work', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Headless Drafting And Evaluation MVP.
+
+1. Generate a CLI-first story synopsis, outline, character and voice records, and one chapter draft from the selected model.
+- Implementation: src/cli/generate.ts (CLI tool for story generation)
+- Fixture: fixtures/story-output.json (expected output)
+- Verification: scripts/prove-generation.mjs (proof script)
+- STATUS: COMPLETE - CLI tool implemented with synopsis, outline, character and voice records, world-state, chapter draft, and review findings
+- Files created:
+  - src/cli/generate.ts
+- Acceptance criteria:
+  - AC1: met
+- Review lanes: author_voice, character_voice, world_state, spatial_geographic
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs.filter((signal) => signal.kind === 'open_work').map((signal) => signal.title)).toEqual([
+      'Generate a CLI-first story synopsis, outline, character and voice records, and one chapter draft from the selected model.',
+    ])
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Implementation: src/cli/generate.ts (CLI tool for story generation)',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Fixture: fixtures/story-output.json (expected output)',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Verification: scripts/prove-generation.mjs (proof script)',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: expect.stringContaining('STATUS: COMPLETE'),
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Files created',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Acceptance criteria',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: expect.stringContaining('Review lanes'),
+      }),
+    ]))
+  })
+
+  it('keeps full wrapped stage goals and every stage heading from one roadmap file', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 0: Spec Baseline
+
+Goal: make the product architecture explicit enough that implementation agents
+can work without re-litigating the core design.
+
+## Stage 1: Fixture And Evaluation Harness
+
+Goal: build a no-UI test harness that proves the story-memory and packet
+contracts against small fiction fixtures before any product UI is designed.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Stage 0: Spec Baseline',
+        role: 'capability',
+        scopeHint: 'current',
+        evidence: expect.stringContaining('make the product architecture explicit enough that implementation agents can work without re-litigating the core design.'),
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Stage 1: Fixture And Evaluation Harness',
+        role: 'capability',
+        scopeHint: 'current',
+        evidence: expect.stringContaining('build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.'),
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Stage 0: Spec Baseline',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Stage 1: Fixture And Evaluation Harness',
+        scopeHint: 'current',
+      }),
+    ]))
+  })
+
+  it('keeps earlier stage deliverables as capability context instead of pretending they are completed milestones', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 0: Spec Baseline
+
+Status: current foundation.
+
+Deliverables:
+
+- story-memory schema draft
+- agent packet and compaction spec
+
+## Stage 1: Fixture And Evaluation Harness
+
+Deliverables:
+
+- fixture directory shape for at least one small story fixture
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+
+1. Define fixture, expected-record, prototype-run, and evaluation schemas.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'story-memory schema draft',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'agent packet and compaction spec',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'milestone',
+        title: 'story-memory schema draft',
+      }),
+      expect.objectContaining({
+        kind: 'milestone',
+        title: 'agent packet and compaction spec',
+      }),
+    ]))
   })
 
   it('keeps nested explanatory bullets under a task candidate out of open work', async () => {
@@ -613,6 +1657,32 @@ describe('gitLogSource', () => {
     expect(sigs).toEqual([])
   })
 
+  it('reads immediate child git repos when the workspace root is not a git repo', async () => {
+    mkdirSync(join(dir, 'knit', '.git'), { recursive: true })
+    mkdirSync(join(dir, 'looma', '.git'), { recursive: true })
+    const SEP = '\x1f'
+    const sigs = await gitLogSource.detect({
+      projectPath: dir,
+      exec: fakeExec((_cmd, _args, opts) => {
+        const cwd = String(opts?.cwd ?? '')
+        const subject = cwd.endsWith('/knit')
+          ? 'Ship Knit v1'
+          : 'feat: add Looma toolbar primitive'
+        return {
+          stdout: [['abc12345', subject, 'Alice', '2026-04-20'].join(SEP)].join('\n'),
+          code: 0,
+        }
+      }),
+    })
+
+    expect(sigs.map((s) => [s.domainHint, s.title])).toEqual([
+      ['knit', 'Ship Knit v1'],
+      ['looma', 'feat: add Looma toolbar primitive'],
+    ])
+    expect(sigs[0]!.references).toEqual(['knit:abc12345'])
+    expect(sigs[1]!.evidence).toContain('looma: abc12345')
+  })
+
   it('flags milestone-keyword commits as high-confidence milestones', async () => {
     mkdirSync(join(dir, '.git'))
     const SEP = '\x1f'
@@ -688,6 +1758,50 @@ describe('detectWorkspaceSignals (composition)', () => {
     expect(inv.bySource['readme']!).toHaveLength(1)
     expect(inv.bySource['roadmap']!).toHaveLength(1)
     expect(inv.bySource['text-corpus']!).toHaveLength(3)
+  })
+
+  it('does not promote indented completion annotations into active work from any built-in source', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    mkdirSync(join(dir, 'docs', 'specs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 1: Fixture And Evaluation Harness
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+
+1. Use the first run to narrow the MVP story-memory schema.
+   ✓ Completed — see [mvp-story-memory-schema-narrowing.md](../specs/mvp-story-memory-schema-narrowing.md)
+     and the updated [schema-contract-roadmap.md](../specs/schema-contract-roadmap.md#mvp-contract-boundary).
+`,
+    )
+    writeFileSync(join(dir, 'docs', 'specs', 'schema-contract-roadmap.md'), '# Schema Contract Roadmap\n')
+    const inv = await detectWorkspaceSignals({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'docs/harness/implementation-roadmap.md',
+          'docs/specs/schema-contract-roadmap.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(inv.signals).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Use the first run to narrow the MVP story-memory schema.',
+      }),
+    ]))
+    expect(inv.signals).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: expect.stringContaining('Completed'),
+      }),
+    ]))
   })
 
   it('does not abort the batch when one source throws', async () => {

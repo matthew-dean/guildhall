@@ -14,6 +14,7 @@ import {
   getProjectTaskLocalHistoryDir,
   inferProjectRootFromMemoryDir,
 } from '@guildhall/sessions'
+import { readProjectTaskQueueSync } from '@guildhall/runtime/project-state-boundary'
 
 // ---------------------------------------------------------------------------
 // FR-33 Crash-safe task checkpointing
@@ -98,8 +99,7 @@ export async function writeCheckpoint(
     // Confirm the task exists on the queue. We don't need to mutate the queue,
     // but a checkpoint for an unknown task is a writer bug we'd rather catch
     // early than let reclaim detection trip over.
-    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queue = TaskQueue.parse(readProjectTaskQueueSync(parsed.tasksPath))
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
 

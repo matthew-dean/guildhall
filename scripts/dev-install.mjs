@@ -9,7 +9,7 @@ const ROOT = repoRootFromScript(import.meta.url)
 const paths = devInstallPaths()
 const artifactDir = artifactDirForRoot(ROOT)
 
-run('pnpm', ['build:macos-package'])
+run('node', ['scripts/build-macos-package.mjs'])
 run('sh', [fileURLToPath(new URL('./install.sh', import.meta.url))], {
   env: {
     ...process.env,

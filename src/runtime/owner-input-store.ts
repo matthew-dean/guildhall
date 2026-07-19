@@ -7,12 +7,15 @@ import {
   atomicWriteText,
   getProjectSystemStateDir,
   getProjectSystemStatePathFromMemoryDir,
+  replaceProjectStateDatabaseOwnerInputs,
 } from '@guildhall/sessions'
 import {
   createBoundedChatSession,
   loadBoundedChatSession,
+  saveBoundedChatSession,
   type BoundedChatSession,
 } from './bounded-chat.js'
+import { applyBoundedChatTransition } from './bounded-chat-machine.js'
 import {
   OwnerInputObjective,
   OwnerInputRequest,
@@ -123,6 +126,7 @@ export async function createOwnerInputRequest(
     createdBy: input.actor,
   })
   await writeOwnerInputRequest(memoryDir, request)
+  refreshOwnerInputProjection(input.projectRoot, input.now)
   return { request, session, created: true }
 }
 
@@ -171,6 +175,85 @@ export function waitingOwnerInputTaskIdsSync(projectRoot: string): Set<string> {
   )
 }
 
+export async function cancelOwnerInputRequestsForTask(input: {
+  projectRoot: string
+  taskId: string
+  now?: string
+  reason?: string
+}): Promise<number> {
+  const now = input.now ?? new Date().toISOString()
+  const memoryDir = projectMemoryDir(input.projectRoot)
+  const requests = (await listOwnerInputRequests(input.projectRoot))
+    .filter(request =>
+      request.status !== 'fulfilled' &&
+      request.status !== 'cancelled' &&
+      request.source.kind === 'task' &&
+      request.source.taskId === input.taskId,
+    )
+
+  for (const request of requests) {
+    const nextRequest = OwnerInputRequest.parse({
+      ...request,
+      status: 'cancelled',
+      updatedAt: now,
+      receipts: [
+        ...request.receipts,
+        {
+          machineId: 'owner-input',
+          machineVersion: 1,
+          commandId: `task-reframe:${input.taskId}:${request.id}`,
+          entityId: request.id,
+          from: request.status,
+          event: 'cancel',
+          to: 'cancelled',
+          actor: 'task-reframe',
+          evidenceRefs: [`task:${input.taskId}`],
+          createdAt: now,
+        },
+      ],
+    })
+    await writeOwnerInputRequest(memoryDir, nextRequest)
+
+    const session = await loadBoundedChatSession({
+      memoryDir,
+      sessionId: request.boundedChatSessionId,
+    })
+    if (session.status !== 'fulfilled' && session.status !== 'cancelled') {
+      const transition = applyBoundedChatTransition({
+        sessionId: session.id,
+        currentStatus: session.status,
+        event: 'cancel',
+        commandId: `task-reframe:${input.taskId}:${request.id}:session`,
+        priorReceipts: session.transitionReceipts,
+        actor: 'task-reframe',
+        evidenceRefs: [`owner-input:${request.id}`],
+        now,
+        context: { activeSubObjectiveId: session.activeSubObjectiveId },
+      })
+      if (transition.kind === 'rejected') {
+        throw new Error(`Could not cancel bounded chat ${session.id}: ${transition.reason}`)
+      }
+      if (transition.kind === 'applied') {
+        session.transitionReceipts = [...session.transitionReceipts, transition.receipt]
+      }
+      session.status = transition.kind === 'already_applied' ? transition.currentState : transition.nextState
+      session.closure = {
+        outcome: 'cancelled',
+        summary: input.reason ?? `Cancelled because task ${input.taskId} was reframed.`,
+        settingUpdates: [],
+        taskDrafts: [],
+        evidence: [`task:${input.taskId}`],
+        closedAt: now,
+      }
+      session.updatedAt = now
+      await saveBoundedChatSession(memoryDir, session)
+    }
+  }
+
+  if (requests.length > 0) refreshOwnerInputProjection(input.projectRoot, now)
+  return requests.length
+}
+
 export async function markOwnerInputRequestForBoundedChatReview(input: {
   projectRoot: string
   boundedChatSessionId: string
@@ -203,7 +286,23 @@ export async function markOwnerInputRequestForBoundedChatReview(input: {
     ],
   })
   await writeOwnerInputRequest(projectMemoryDir(input.projectRoot), next)
+  refreshOwnerInputProjection(input.projectRoot, now)
   return next
+}
+
+export function refreshOwnerInputProjection(projectRoot: string, _updatedAt: string): void {
+  const openRequests = listOwnerInputRequestsSync(projectRoot)
+    .filter(request => request.status === 'waiting_for_owner' || request.status === 'coordinator_review')
+    .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id))
+  const next = openRequests[0]
+  replaceProjectStateDatabaseOwnerInputs(projectRoot, openRequests.map(request => ({
+    id: request.id,
+    status: request.status,
+    prompt: request.prompt,
+    taskId: request.source.kind === 'task' ? request.source.taskId : null,
+    updatedAt: request.updatedAt,
+    payload: request,
+  })))
 }
 
 async function writeOwnerInputRequest(memoryDir: string, request: OwnerInputRequestRecord): Promise<void> {

@@ -12,11 +12,11 @@ describe('runtime image contract', () => {
 
     expect(containerfile).toContain('FROM node:22-trixie-slim')
     expect(containerfile).toContain('org.opencontainers.image.title="Guildhall Runtime Debian"')
-    expect(containerfile).toContain('Project-scoped Guildhall runtime image for 0.10 agent execution')
+    expect(containerfile).toContain('Project-scoped Guildhall runtime image for 0.11 agent execution')
     expect(containerfile).toContain('GUILDHALL_RUNTIME_OS=debian')
     expect(containerfile).toContain('GUILDHALL_RUNTIME_DEBIAN_VERSION=13')
     expect(containerfile).toContain('GUILDHALL_RUNTIME_DEBIAN_CODENAME=trixie')
-    expect(containerfile).toContain('GUILDHALL_RUNTIME_IMAGE_TAG=0.10.0-trixie-node22-python313-playwright')
+    expect(containerfile).toContain('GUILDHALL_RUNTIME_IMAGE_TAG=0.11.0-trixie-node22-python313-playwright')
     expect(containerfile).toContain('GUILDHALL_PROJECT_ROOT=/workspace/project')
     expect(containerfile).toContain('GUILDHALL_HOME=/home/guildhall/.guildhall')
   })

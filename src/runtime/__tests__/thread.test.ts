@@ -1,14 +1,32 @@
 import { describe, expect, it } from 'vitest'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { projectStatePath } from '@guildhall/sessions'
+import { projectStatePath, promoteProjectStateDatabaseAuthority } from '@guildhall/sessions'
 
-import { buildThread } from '../thread.js'
+import { buildThread as buildCurrentThread, type BuildThreadOptions, type Thread } from '../thread.js'
+import { writeProjectSummaryProjection } from '../project-summary-projection.js'
 import { emptyWizardsState, type ProjectSnapshot } from '../wizards.js'
 
 function statePath(projectPath: string, ...parts: string[]): string {
   return projectStatePath(projectPath, path.join(...parts))
+}
+
+function buildThread(options: BuildThreadOptions): Thread {
+  const tasksPath = statePath(options.projectPath, 'TASKS.json')
+  if (!options.tasks && existsSync(tasksPath)) {
+    writeProjectSummaryProjection(
+      tasksPath,
+      {
+        queue: JSON.parse(readFileSync(tasksPath, 'utf8')),
+        projectId: options.snapshot?.config?.id,
+        projectRoot: options.projectPath,
+      },
+    )
+    promoteProjectStateDatabaseAuthority(options.projectPath)
+  }
+  return buildCurrentThread(options)
 }
 
 describe('buildThread', () => {
@@ -1755,7 +1773,7 @@ describe('buildThread', () => {
     }
   })
 
-  it('summarizes normal spec_review component tasks as queued coordinator review', async () => {
+  it('summarizes normal spec_review component tasks as owner approval', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(statePath(projectPath), { recursive: true })
@@ -1797,11 +1815,80 @@ describe('buildThread', () => {
         recentEvents: [],
       })
 
-      expect(thread.turns.find(turn => turn.id === 'inflight:task-combobox')).toMatchObject({
-        kind: 'inflight',
-        taskStatus: 'spec_review',
+      expect(thread.turns.find(turn => turn.id === 'spec:task-combobox')).toMatchObject({
+        kind: 'spec_review',
         phase: 'spec',
-        summary: 'Your answers and a spec draft are saved. Coordinator review is next.',
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps source-recovery tasks in shaping even when a draft spec exists', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-source-recovery',
+              title: 'Recover source-backed contract surface',
+              status: 'exploring',
+              createdAt: '2026-06-04T00:00:00.000Z',
+              updatedAt: '2026-06-04T00:01:00.000Z',
+              spec: '## Summary\n\nRepair the imported handoff.',
+              acceptanceCriteria: [{ description: 'Names the concrete source-backed surface.' }],
+              taskReadiness: {
+                recommendation: 'needs_research_spike',
+                summary: 'Needs concrete contract names before worker handoff.',
+              },
+              notes: [
+                {
+                  agentId: 'workspace-importer',
+                  role: 'importer',
+                  content: 'Imported from docs/specs/source.md',
+                  timestamp: '2026-06-04T00:00:00.000Z',
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.turns.some(turn => turn.id === 'spec:task-source-recovery')).toBe(false)
+      const turn = thread.turns.find(item => item.id === 'inflight:task-source-recovery')
+      expect(turn).toMatchObject({
+        kind: 'inflight',
+        phase: 'intake',
+        shapingBlockers: expect.arrayContaining([
+          {
+            code: 'source_recovery',
+            summary: 'Needs concrete contract names before worker handoff.',
+          },
+        ]),
       })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
@@ -2710,13 +2797,12 @@ describe('buildThread', () => {
       const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
 
       expect(thread.turns.find((turn) => turn.id === 'brief:task-block-menu' && turn.status !== 'done')).toBeUndefined()
-      expect(thread.turns.find((turn) => turn.id === 'spec:task-block-menu')).toBeUndefined()
-      expect(thread.activeTurnId).toBe('inflight:task-block-menu')
-      expect(thread.turns.find((turn) => turn.id === 'inflight:task-block-menu')).toMatchObject({
-        kind: 'inflight',
+      expect(thread.turns.find((turn) => turn.id === 'spec:task-block-menu')).toMatchObject({
+        kind: 'spec_review',
         status: 'active',
         phase: 'spec',
       })
+      expect(thread.activeTurnId).toBe('spec:task-block-menu')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -3134,13 +3220,10 @@ coordinators:
       })
 
       expect(thread.turns.find(turn => turn.id === 'q:task-003:q-1')).toBeUndefined()
-      expect(thread.turns.find(turn => turn.id === 'spec:task-003')).toBeUndefined()
-      expect(thread.activeTurnId).toBe('inflight:task-003')
-      const internalTurn = thread.turns.find(turn => turn.id === 'inflight:task-003')
-      expect(internalTurn).toMatchObject({
-        kind: 'inflight',
-        status: 'active',
-        phase: 'spec',
+      expect(thread.turns.find(turn => turn.id === 'spec:task-003')).toMatchObject({
+        kind: 'spec_review',
+        status: 'pending',
+        phase: 'intake',
       })
     } finally {
       await rm(projectPath, { recursive: true, force: true })

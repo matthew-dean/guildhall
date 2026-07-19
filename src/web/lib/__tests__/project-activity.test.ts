@@ -36,6 +36,173 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('lets proof readiness override stale all-terminal run events', () => {
+    expect(
+      buildProjectTicker(
+        {
+          startReadiness: {
+            canStart: false,
+            code: 'proof_evidence_missing',
+            message: 'Stage 1 is waiting on proof evidence for 7 completed tasks.',
+            actionHref: '/work?task=task-1',
+            focusTaskTitle: 'Run fixture evaluator proof',
+            focusKind: 'proof',
+            count: 7,
+          },
+          run: {
+            status: 'stopped',
+            stopSummary: {
+              stopReason: 'all_terminal',
+              stopMessage: 'No actionable tasks remain.',
+            },
+          },
+          recentEvents: [
+            {
+              at: now.toISOString(),
+              event: {
+                type: 'supervisor_stopped',
+                reason: 'all_terminal',
+                message: 'No actionable tasks remain: 8 done, 0 blocked, 20 shelved.',
+              },
+            },
+          ],
+          tasks: [{ id: 'task-1', title: 'Run fixture evaluator proof', status: 'done' }],
+        },
+        {
+          at: now.toISOString(),
+          event: {
+            type: 'supervisor_stopped',
+            reason: 'all_terminal',
+            message: 'No actionable tasks remain: 8 done, 0 blocked, 20 shelved.',
+          },
+        },
+        now,
+      ),
+    ).toMatchObject({
+      label: 'Needs proof',
+      actorLabel: 'Needs proof',
+      message: 'Run fixture evaluator proof',
+      detail: '7 completed tasks missing proof',
+      tone: 'warn',
+    })
+  })
+
+  it('lets selected-scope completion override stale stopped run events', () => {
+    expect(
+      buildProjectTicker(
+        {
+          startReadiness: {
+            canStart: false,
+            code: 'all_terminal',
+            message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+          },
+          run: {
+            status: 'stopped',
+            stopSummary: {
+              stopReason: 'stop_requested',
+              stopMessage: 'Stop requested after tick 4.',
+            },
+          },
+          recentEvents: [
+            {
+              at: now.toISOString(),
+              event: {
+                type: 'supervisor_stopped',
+                reason: 'stop_requested',
+                message: 'Stop requested after tick 4.',
+              },
+            },
+          ],
+          tasks: [
+            { id: 'task-stage-1', title: 'Stage 1 proof', status: 'done' },
+            { id: 'task-later', title: 'Later release feature', status: 'ready' },
+          ],
+        },
+        {
+          at: now.toISOString(),
+          event: {
+            type: 'supervisor_stopped',
+            reason: 'stop_requested',
+            message: 'Stop requested after tick 4.',
+          },
+        },
+        now,
+      ),
+    ).toMatchObject({
+      label: 'Complete',
+      actorLabel: 'Complete',
+      message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+      tone: 'ok',
+    })
+  })
+
+  it('does not call all-terminal scope complete when the orientation spine has gaps', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1 is complete.',
+      },
+      orientationSpine: {
+        summary: {
+          headline: 'Stage 1 has source conflicts to review.',
+          selectedScopeLabel: 'Stage 1',
+          topBlocker: 'Possible duplicate work is split across scopes.',
+          nextAction: 'Review source conflicts before treating the scope as settled.',
+        },
+        sourceHealth: {
+          gaps: 1,
+          conflicts: 1,
+          inferred: 0,
+        },
+      } as any,
+      tasks: [{ id: 'task-1', status: 'done', title: 'Done task' }],
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Review',
+      label: 'Review',
+      message: 'Stage 1 has source conflicts to review.',
+      detail: 'Possible duplicate work is split across scopes.',
+    })
+  })
+
+  it('surfaces source-conflict readiness before stale run events', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'scope_source_conflict',
+        message: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+        actionHref: '/map',
+        focusKind: 'source_conflict',
+      },
+      run: {
+        status: 'stopped',
+        stopSummary: {
+          stopReason: 'all_terminal',
+          stopMessage: 'No actionable tasks remain.',
+        },
+      },
+      tasks: [{ id: 'task-1', status: 'done', title: 'Done task' }],
+    }
+
+    expect(buildProjectTicker(detail, {
+      at: now.toISOString(),
+      event: {
+        type: 'supervisor_stopped',
+        reason: 'all_terminal',
+        message: 'No actionable tasks remain: 1 done.',
+      },
+    }, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Review',
+      label: 'Review',
+      message: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+      detail: 'Open the Project Map to resolve the conflicting source trail.',
+    })
+  })
+
   it('surfaces active worker progress from recent events', () => {
     const detail: ProjectDetail = {
       run: { status: 'running' },
@@ -271,6 +438,35 @@ describe('buildProjectTicker', () => {
       buildProjectTicker(
         {
           tasks: [
+            { id: 'parent-1', status: 'spec_review', title: 'Define schema contracts' },
+            { id: 'parent-2', status: 'ready', title: 'Implement runner' },
+            { id: 'child-1', status: 'exploring', title: 'Split child one' },
+            { id: 'child-2', status: 'exploring', title: 'Split child two' },
+          ],
+          orientationSpine: {
+            summary: {
+              selectedScopeLabel: 'Current task scope',
+              includedWorkCount: 2,
+              deferredWorkCount: 12,
+              topBlocker: 'Define schema contracts is waiting for spec review.',
+            },
+          },
+        },
+        null,
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Current task scope',
+      label: 'Current task scope',
+      message: '2 current tasks; 12 later',
+      detail: 'Define schema contracts is waiting for spec review.',
+    })
+
+    expect(
+      buildProjectTicker(
+        {
+          tasks: [
             { id: 'task-import-1', status: 'import_draft', title: 'Review existing work' },
             { id: 'task-import-2', status: 'import_draft', title: 'Review more work' },
             { id: 'done-1', status: 'done', title: 'Finished' },
@@ -357,6 +553,36 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('uses visible detail progress instead of raw task statuses for paused work', () => {
+    const detail: ProjectDetail = {
+      run: { status: 'stopped' },
+      tasks: [
+        { id: 'task-1', status: 'ready', title: 'Old ready task' },
+        { id: 'task-2', status: 'in_progress', title: 'Old active task' },
+      ],
+      workProgress: {
+        counts: {
+          visibleTotal: 2,
+          visibleActive: 0,
+          visibleBlocked: 0,
+          visibleDone: 2,
+          visibleShelved: 0,
+          deliveryTotal: 2,
+          deliveryRequired: 2,
+          deliveryDone: 2,
+          deliveryBlocked: 0,
+        },
+        byTaskId: {},
+      },
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'idle',
+      actorLabel: 'Idle',
+      message: 'No recent activity',
+    })
+  })
+
   it('surfaces immediate all-terminal supervisor stop details', () => {
     const detail: ProjectDetail = {
       run: { status: 'stopped' },
@@ -440,6 +666,51 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('names the concrete readiness blocker when spec review is the stop reason', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '2 specs are waiting for review before work can start. Start with "Continue drafted spec work".',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Continue drafted spec work',
+        focusKind: 'spec_review',
+        count: 2,
+      },
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Review',
+      label: 'Review',
+      message: 'Continue drafted spec work',
+      detail: '1 more waiting behind it',
+    })
+  })
+
+  it('names the concrete readiness blocker when a brief still needs shaping', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '"Thin ready task" needs a clearer brief before unattended work can run.',
+        focusTaskId: 'task-thin-ready',
+        focusTaskTitle: 'Thin ready task',
+        focusKind: 'brief_cleanup',
+        count: 1,
+      },
+      tasks: [{ id: 'task-thin-ready', status: 'ready', title: 'Thin ready task' }],
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Needs brief',
+      label: 'Needs brief',
+      message: 'Thin ready task',
+      detail: 'Needs a fuller brief before it can run',
+    })
+  })
+
   it('lets current actionable draft state beat stale stopped-event copy', () => {
     const detail: ProjectDetail = {
       run: { status: 'stopped' },
@@ -503,6 +774,49 @@ describe('buildProjectCardTicker', () => {
       pulse: false,
       label: 'Blocked',
       message: 'Bootstrap knit worktree',
+    })
+  })
+
+  it('uses visible work progress instead of raw historical task counts', () => {
+    const project: ServiceProjectSummary = {
+      id: 'narrative-harness',
+      name: 'Narrative Harness',
+      path: '/work/narrative-harness',
+      taskCounts: { total: 168, active: 121, draftReview: 0, blocked: 0, done: 35, shelved: 12 },
+      workProgress: {
+        counts: {
+          visibleTotal: 38,
+          visibleActive: 0,
+          visibleBlocked: 0,
+          visibleDone: 26,
+          visibleShelved: 12,
+          deliveryTotal: 28,
+          deliveryRequired: 28,
+          deliveryDone: 24,
+          deliveryBlocked: 2,
+        },
+        selectedCounts: {
+          visibleTotal: 11,
+          visibleActive: 0,
+          visibleBlocked: 0,
+          visibleDone: 11,
+          visibleShelved: 0,
+          deliveryTotal: 17,
+          deliveryRequired: 17,
+          deliveryDone: 17,
+          deliveryBlocked: 0,
+        },
+        byTaskId: {},
+      },
+      highlights: { recentCompletedTaskTitle: 'Headless MVP scope completed' },
+      run: { status: 'stopped' },
+    }
+
+    expect(buildProjectCardTicker(project)).toEqual({
+      tone: 'ok',
+      pulse: false,
+      label: 'Recent',
+      message: 'Headless MVP scope completed',
     })
   })
 

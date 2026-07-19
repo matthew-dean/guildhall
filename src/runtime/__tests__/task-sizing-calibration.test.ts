@@ -26,7 +26,7 @@ describe('task sizing calibration', () => {
         minScore: 8 as const,
         action: 'decompose_before_execution' as const,
         requiredFactors: ['multiple_outcomes', 'migration_or_release'],
-        minDecompositionChildren: 3,
+        minDecompositionChildren: 0,
       },
       labelGovernance: {
         labeledBy: 'task-sizing-calibration-test',

@@ -69,6 +69,8 @@ function applySplitWorkAction(
     description: draft.description,
     domain: draft.domain ?? parent.domain,
     projectPath: parent.projectPath,
+    references: [],
+    sourceClaims: [],
     status: 'ready',
     priority: draft.priority ?? parent.priority,
     acceptanceCriteria: [],

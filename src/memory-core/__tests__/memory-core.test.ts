@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 
 import {
   buildDeterministicCandidatePacket,
@@ -10,11 +11,19 @@ import {
   auditProjectMemoryState,
   readMemoryEvents,
   buildMemoryCoreCandidatePacket,
+  consolidateProjectMemoryEvents,
   evaluateMemoryCandidatePacketGuarantees,
+  inspectEmptyMastraDatabase,
+  inspectEmptyMastraThreadShells,
   recordMemoryEvent,
+  retireEmptyMastraDatabase,
+  removeEmptyMastraThreadShells,
   resolveMemoryPaths,
   scopeToMastraIds,
+  scopeKey,
   writeMemoryAuditReport,
+  MEMORY_EVENT_HISTORY_MAX_BYTES,
+  MEMORY_EVENT_SUMMARY_MAX_CHARS,
   type GuildhallMemoryScope,
 } from '@guildhall/memory-core'
 
@@ -24,12 +33,14 @@ let previousDataDir: string | undefined
 let previousSemanticRecall: string | undefined
 let previousObservationalMemory: string | undefined
 let previousEngineGate: string | undefined
+let previousSubstrate: string | undefined
 
 beforeEach(async () => {
   previousDataDir = process.env.GUILDHALL_DATA_DIR
   previousSemanticRecall = process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL
   previousObservationalMemory = process.env.GUILDHALL_MEMORY_OBSERVATIONAL
   previousEngineGate = process.env.GUILDHALL_MEMORY_ENGINE_GATE
+  previousSubstrate = process.env.GUILDHALL_MEMORY_SUBSTRATE
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-memory-core-'))
   projectRoot = path.join(tmpDir, 'project')
   process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
@@ -45,6 +56,8 @@ afterEach(async () => {
   else process.env.GUILDHALL_MEMORY_OBSERVATIONAL = previousObservationalMemory
   if (previousEngineGate === undefined) delete process.env.GUILDHALL_MEMORY_ENGINE_GATE
   else process.env.GUILDHALL_MEMORY_ENGINE_GATE = previousEngineGate
+  if (previousSubstrate === undefined) delete process.env.GUILDHALL_MEMORY_SUBSTRATE
+  else process.env.GUILDHALL_MEMORY_SUBSTRATE = previousSubstrate
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -110,12 +123,96 @@ describe('memory-core', () => {
     expect(events).toHaveLength(1)
     expect(events[0]?.source.path).toBe('.guildhall/TASKS.json')
     expect(events[0]?.content.summary).toContain('worker proof')
+    const stored = JSON.parse(await fs.readFile(paths.eventsPath, 'utf8').then(raw => raw.trim())) as Record<string, unknown>
+    expect(stored.schemaVersion).toBe(2)
+    expect(stored.content).toEqual({ summary: 'Context menu is ready for worker proof.' })
+    expect(stored).not.toHaveProperty('text')
+    expect(stored).not.toHaveProperty('json')
 
     const after = await fs.readdir(path.join(projectRoot, '.guildhall'))
     expect(after).toEqual(before)
   })
 
-  it('builds deterministic packets with source refs and fallback health', async () => {
+  it('bounds durable memory summaries and per-scope history at the write boundary', async () => {
+    const scope = taskScope({ taskId: 'bounded-memory' })
+    const paths = resolveMemoryPaths({ projectRoot, scope })
+    const longSummary = 'important '.repeat(MEMORY_EVENT_SUMMARY_MAX_CHARS)
+
+    for (let index = 0; index < 320; index += 1) {
+      await recordMemoryEvent({
+        projectRoot,
+        event: {
+          scope,
+          source: {
+            kind: 'progress',
+            ref: `PROGRESS.md#${index}`,
+            capturedAt: '2026-06-06T12:01:00.000Z',
+          },
+          content: { summary: index === 0 ? longSummary : `Progress ${index}` },
+          metadata: { projectId: 'looma-knit', taskId: 'bounded-memory', retention: 'task_lifecycle' },
+        },
+      })
+    }
+
+    const raw = await fs.readFile(paths.eventsPath, 'utf8')
+    expect(Buffer.byteLength(raw, 'utf8')).toBeLessThanOrEqual(MEMORY_EVENT_HISTORY_MAX_BYTES)
+    const events = await readMemoryEvents({ projectRoot, scope })
+    expect(events.every(event => event.content.summary.length <= MEMORY_EVENT_SUMMARY_MAX_CHARS)).toBe(true)
+  })
+
+  it('enforces one project-wide memory history budget across many scopes', async () => {
+    for (let index = 0; index < 96; index += 1) {
+      const scope = taskScope({ taskId: `scope-${index}`, threadId: `thread-${index}` })
+      await recordMemoryEvent({
+        projectRoot,
+        event: {
+          scope,
+          source: {
+            kind: 'progress',
+            ref: `PROGRESS.md#scope-${index}`,
+            capturedAt: '2026-06-06T12:01:00.000Z',
+          },
+          content: { summary: `${index} ${'important '.repeat(600)}` },
+          metadata: { projectId: 'looma-knit', taskId: `scope-${index}`, retention: 'task_lifecycle' },
+        },
+      })
+    }
+
+    const paths = resolveMemoryPaths({ projectRoot, scope: taskScope() })
+    const raw = await fs.readFile(paths.eventsPath, 'utf8')
+    expect(Buffer.byteLength(raw, 'utf8')).toBeLessThanOrEqual(MEMORY_EVENT_HISTORY_MAX_BYTES)
+    expect((await fs.readdir(path.join(paths.memoryDir, 'events')).catch(() => [])).length).toBe(0)
+  })
+
+  it('ignores legacy per-scope memory files until an explicit migration consolidates them', async () => {
+    const scope = taskScope({ taskId: 'legacy-scope', threadId: 'legacy-thread' })
+    const paths = resolveMemoryPaths({ projectRoot, scope })
+    const legacyPath = path.join(path.dirname(paths.eventsPath), 'events', `${scopeKey(scope)}.jsonl`)
+    const event = {
+      schemaVersion: 2,
+      scope,
+      source: { kind: 'progress', ref: 'PROGRESS.md#legacy', capturedAt: '2026-06-06T12:01:00.000Z' },
+      content: { summary: 'Legacy memory remains readable during migration.' },
+      metadata: { projectId: 'looma-knit', taskId: 'legacy-scope', retention: 'task_lifecycle' },
+      id: 'legacy-event',
+      recordedAt: '2026-06-06T12:01:00.000Z',
+      sourceRefs: [],
+    }
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true })
+    await fs.writeFile(legacyPath, `${JSON.stringify(event)}\n`, 'utf8')
+
+    await expect(readMemoryEvents({ projectRoot, scope })).resolves.toHaveLength(0)
+    const dryRun = await consolidateProjectMemoryEvents(projectRoot, { dryRun: true })
+    expect(dryRun.filesSeen).toBe(1)
+    expect(existsSync(legacyPath)).toBe(true)
+
+    const applied = await consolidateProjectMemoryEvents(projectRoot, { dryRun: false })
+    expect(applied.filesRemoved).toBe(1)
+    expect(existsSync(legacyPath)).toBe(false)
+    await expect(readMemoryEvents({ projectRoot, scope })).resolves.toHaveLength(1)
+  })
+
+  it('builds deterministic packets with source refs and authoritative health', async () => {
     await recordMemoryEvent({
       projectRoot,
       event: {
@@ -147,7 +244,7 @@ describe('memory-core', () => {
 
     expect(packet.health).toEqual({
       adapter: 'deterministic',
-      fallbackUsed: true,
+      fallbackUsed: false,
       warnings: [],
       compactionStatus: 'active',
       semanticValidity: 'valid',
@@ -168,6 +265,7 @@ describe('memory-core', () => {
       projectRoot,
       scope: taskScope(),
       readOnly: true,
+      storage: 'persistent',
     })
 
     expect(adapter.health.adapter).toBe('mastra')
@@ -181,6 +279,112 @@ describe('memory-core', () => {
     expect(adapter.health.scope).toEqual(scopeToMastraIds(taskScope()))
     expect(existsSync(adapter.health.storagePath)).toBe(true)
     expect(await fs.readdir(path.join(projectRoot, '.guildhall'))).toEqual([])
+    await adapter.close()
+    expect(existsSync(`${adapter.health.storagePath}-wal`)).toBe(false)
+  })
+
+  it('does not create Mastra threads from a read-only packet path', async () => {
+    const adapter = await createMastraMemoryCoreAdapter({
+      projectRoot,
+      scope: taskScope(),
+      readOnly: true,
+      storage: 'persistent',
+    })
+    const db = new DatabaseSync(adapter.health.storagePath, { readOnly: true })
+    const row = db.prepare('select count(*) as count from mastra_threads').get() as { count: number | bigint }
+    db.close()
+    expect(Number(row.count)).toBe(0)
+    await adapter.close()
+  })
+
+  it('removes only empty Guildhall Mastra thread shells and preserves message-bearing threads', async () => {
+    const projectScope = { kind: 'project' as const, projectId: 'looma-knit' }
+    const shellAdapter = await createMastraMemoryCoreAdapter({
+      projectRoot,
+      scope: projectScope,
+      readOnly: false,
+      storage: 'persistent',
+    })
+
+    expect(inspectEmptyMastraThreadShells({ projectRoot, projectId: 'looma-knit' }).count).toBe(1)
+    const removed = removeEmptyMastraThreadShells({ projectRoot, projectId: 'looma-knit' })
+    expect(removed.removed).toBe(1)
+    expect(inspectEmptyMastraThreadShells({ projectRoot, projectId: 'looma-knit' }).count).toBe(0)
+    await shellAdapter.close()
+
+    const messageAdapter = await createMastraMemoryCoreAdapter({
+      projectRoot,
+      scope: projectScope,
+      readOnly: false,
+      storage: 'persistent',
+    })
+    const ids = scopeToMastraIds(projectScope)
+    const db = new DatabaseSync(messageAdapter.health.storagePath)
+    const threadId = (db.prepare('select id from mastra_threads limit 1').get() as { id: string }).id
+    db.prepare(`
+      insert into mastra_messages (id, thread_id, content, role, type, createdAt, resourceId)
+      values (?, ?, ?, ?, ?, ?, ?)
+    `).run('message-1', threadId, '{"text":"durable"}', 'user', 'text', '2026-07-14T00:00:00.000Z', ids.resourceId)
+    expect(Number((db.prepare('select count(*) as count from mastra_messages').get() as { count: number | bigint }).count)).toBe(1)
+    db.close()
+
+    expect(removeEmptyMastraThreadShells({ projectRoot, projectId: 'looma-knit' }).removed).toBe(0)
+    const retained = new DatabaseSync(messageAdapter.health.storagePath, { readOnly: true })
+    expect(Number((retained.prepare('select count(*) as count from mastra_threads').get() as { count: number | bigint }).count)).toBe(1)
+    retained.close()
+    await messageAdapter.close()
+  })
+
+  it('retires only an empty Mastra database and preserves databases with data or unknown objects', async () => {
+    const emptyAdapter = await createMastraMemoryCoreAdapter({
+      projectRoot,
+      scope: { kind: 'project', projectId: 'looma-knit' },
+      readOnly: true,
+      storage: 'persistent',
+    })
+    const emptyPath = emptyAdapter.health.storagePath
+    await emptyAdapter.close()
+    expect(inspectEmptyMastraDatabase({ projectRoot, projectId: 'looma-knit' })).toMatchObject({
+      eligible: true,
+      reason: 'empty-mastra-schema',
+    })
+    expect(retireEmptyMastraDatabase({ projectRoot, projectId: 'looma-knit' })).toMatchObject({
+      retired: true,
+      bytesAfter: 0,
+    })
+    expect(existsSync(emptyPath)).toBe(false)
+
+    const messageAdapter = await createMastraMemoryCoreAdapter({
+      projectRoot,
+      scope: { kind: 'project', projectId: 'looma-knit' },
+      readOnly: false,
+      storage: 'persistent',
+    })
+    const database = new DatabaseSync(messageAdapter.health.storagePath)
+    database.prepare(`
+      insert into mastra_resources (id, "createdAt", "updatedAt")
+      values (?, ?, ?)
+    `).run('resource-1', '2026-07-15T00:00:00.000Z', '2026-07-15T00:00:00.000Z')
+    database.close()
+    expect(inspectEmptyMastraDatabase({ projectRoot, projectId: 'looma-knit' })).toMatchObject({
+      eligible: false,
+      reason: 'data-present',
+    })
+    expect(retireEmptyMastraDatabase({ projectRoot, projectId: 'looma-knit' }).retired).toBe(false)
+    expect(existsSync(messageAdapter.health.storagePath)).toBe(true)
+    await messageAdapter.close()
+  })
+
+  it('does not allocate persistent Mastra storage for an implicit read-only adapter', async () => {
+    const adapter = await createMastraMemoryCoreAdapter({
+      projectRoot,
+      scope: taskScope(),
+      readOnly: true,
+    })
+
+    expect(adapter.health.storagePath).toBe('file::memory:')
+    expect(existsSync(resolveMemoryPaths({ projectRoot, scope: taskScope() }).dbPath)).toBe(false)
+    await adapter.close()
   })
 
   it('prepares Mastra observational memory only when explicitly enabled after the quality gate passes', async () => {
@@ -189,6 +393,7 @@ describe('memory-core', () => {
       projectRoot,
       scope: taskScope(),
       readOnly: true,
+      storage: 'persistent',
       observationalMemory: true,
     })
 
@@ -200,9 +405,10 @@ describe('memory-core', () => {
     ]))
     expect(adapter.health.repoLocalWrites).toEqual([])
     expect(await fs.readdir(path.join(projectRoot, '.guildhall'))).toEqual([])
+    await adapter.close()
   })
 
-  it('builds Mastra-normalized packets by default while keeping source refs and semantic recall disabled', async () => {
+  it('builds deterministic packets by default without creating a Mastra database', async () => {
     await recordMemoryEvent({
       projectRoot,
       event: {
@@ -233,21 +439,14 @@ describe('memory-core', () => {
     })
 
     expect(packet.health).toMatchObject({
-      adapter: 'mastra',
+      adapter: 'deterministic',
       fallbackUsed: false,
-      semanticRecallEnabled: false,
-      observationalMemoryEnabled: false,
-      observationalProcessorReady: false,
       compactionStatus: 'active',
       semanticValidity: 'valid',
-      repoLocalWrites: [],
     })
-    expect(packet.health.features).toEqual(expect.arrayContaining([
-      'libsql-storage',
-      'semantic-recall-disabled',
-    ]))
+    expect(existsSync(resolveMemoryPaths({ projectRoot, scope: taskScope() }).dbPath)).toBe(false)
     expect(packet.candidates[0]).toEqual(expect.objectContaining({
-      kind: 'observation',
+      kind: 'deterministic_summary',
       summary: 'Mastra packet should preserve source-backed progress.',
     }))
     expect(packet.candidates[0]?.sourceRefs).toEqual([
@@ -255,9 +454,30 @@ describe('memory-core', () => {
     ])
   })
 
-  it('keeps semantic recall and observational engines disabled until the quality gate passes', async () => {
-    process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL = '1'
-    process.env.GUILDHALL_MEMORY_OBSERVATIONAL = '1'
+  it('does not allocate project history for an empty default memory read', async () => {
+    const previous = process.env.GUILDHALL_MEMORY_SUBSTRATE
+    delete process.env.GUILDHALL_MEMORY_SUBSTRATE
+    try {
+      const paths = resolveMemoryPaths({ projectRoot, scope: taskScope() })
+      const packet = await buildMemoryCoreCandidatePacket({
+        projectRoot,
+        scope: taskScope(),
+        purpose: 'next_worker_context',
+        maxBytes: 4096,
+      })
+
+      expect(packet.health.adapter).toBe('deterministic')
+      expect(existsSync(path.dirname(paths.memoryDir))).toBe(false)
+      expect(existsSync(paths.memoryDir)).toBe(false)
+      expect(existsSync(paths.dbPath)).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.GUILDHALL_MEMORY_SUBSTRATE
+      else process.env.GUILDHALL_MEMORY_SUBSTRATE = previous
+    }
+  })
+
+  it('does not initialize Mastra storage when retrieval is not wired', async () => {
+    process.env.GUILDHALL_MEMORY_SUBSTRATE = 'mastra'
     await recordMemoryEvent({
       projectRoot,
       event: {
@@ -285,19 +505,11 @@ describe('memory-core', () => {
       scope: taskScope(),
       purpose: 'next_worker_context',
       maxBytes: 4096,
-      semanticRecall: true,
-      observationalMemory: true,
     })
 
-    expect(packet.health.semanticRecallEnabled).toBe(false)
-    expect(packet.health.observationalMemoryEnabled).toBe(false)
-    expect(packet.health.observationalProcessorReady).toBe(false)
-    expect(packet.health.features).toEqual(expect.arrayContaining([
-      'semantic-recall-gated',
-      'observational-memory-gated',
-    ]))
-    expect(packet.health.warnings.join('\n')).toContain('Semantic recall requested but held behind the memory engine quality gate.')
-    expect(packet.health.warnings.join('\n')).toContain('Observational Memory requested but held behind the memory engine quality gate.')
+    expect(packet.health.adapter).toBe('deterministic')
+    expect(packet.health.warnings.join('\n')).toContain('Mastra retrieval is not wired')
+    expect(existsSync(resolveMemoryPaths({ projectRoot, scope: taskScope() }).dbPath)).toBe(false)
   })
 
   it('enables only engine paths whose prerequisites pass the quality gate', async () => {
@@ -307,6 +519,7 @@ describe('memory-core', () => {
       projectRoot,
       scope: taskScope(),
       readOnly: true,
+      storage: 'persistent',
       semanticRecall: true,
       observationalMemory: true,
     })
@@ -321,24 +534,34 @@ describe('memory-core', () => {
     expect(adapter.health.observationalProcessorReady).toBe(true)
     expect(adapter.health.warnings.join('\n')).toContain('Semantic recall requested but no vector store is configured.')
     expect(adapter.health.repoLocalWrites).toEqual([])
+    await adapter.close()
   })
 
-  it('falls back to deterministic packets with a visible warning when Mastra is unavailable', async () => {
-    process.env.GUILDHALL_MEMORY_CORE_FORCE_MASTRA_FAILURE = '1'
-    try {
-      const packet = await buildMemoryCoreCandidatePacket({
-        projectRoot,
-        scope: taskScope(),
-        purpose: 'next_worker_context',
-        maxBytes: 4096,
-      })
+  it('keeps explicit Mastra requests honest instead of pretending to retrieve', async () => {
+    process.env.GUILDHALL_MEMORY_SUBSTRATE = 'mastra'
+    const packet = await buildMemoryCoreCandidatePacket({
+      projectRoot,
+      scope: taskScope(),
+      purpose: 'next_worker_context',
+      maxBytes: 4096,
+    })
 
-      expect(packet.health.adapter).toBe('deterministic')
-      expect(packet.health.fallbackUsed).toBe(true)
-      expect(packet.health.warnings.join('\n')).toContain('forced Mastra memory-core failure')
-    } finally {
-      delete process.env.GUILDHALL_MEMORY_CORE_FORCE_MASTRA_FAILURE
-    }
+    expect(packet.health.adapter).toBe('deterministic')
+    expect(packet.health.warnings.join('\n')).toContain('Mastra retrieval is not wired')
+    expect(existsSync(resolveMemoryPaths({ projectRoot, scope: taskScope() }).dbPath)).toBe(false)
+  })
+
+  it('keeps automatic Mastra storage in memory for temporary project roots', async () => {
+    const adapter = await createMastraMemoryCoreAdapter({
+      projectRoot,
+      scope: taskScope(),
+      readOnly: true,
+    })
+
+    expect(adapter.health.storagePath).toBe('file::memory:')
+    expect(adapter.health.features).toContain('ephemeral-storage')
+    expect(existsSync(resolveMemoryPaths({ projectRoot, scope: taskScope() }).dbPath)).toBe(false)
+    await adapter.close()
   })
 
   it('marks memory packets that lose source refs as semantically invalid', async () => {

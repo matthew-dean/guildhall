@@ -5,6 +5,13 @@ import os from 'node:os'
 
 import { proposeTask, preRejectTask } from '../proposal.js'
 import { readTasks } from '../task-queue.js'
+import {
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  readTaskRuntimeStore,
+  readProjectStateDatabaseTask,
+} from '@guildhall/sessions'
+import { writeProjectTaskQueue } from '../../runtime/project-state-boundary.js'
 
 let tmpDir: string
 let tasksPath: string
@@ -117,7 +124,7 @@ describe('preRejectTask', () => {
               title: 'Work on X',
               description: 'Do X',
               domain: 'looma',
-              projectPath: '/p',
+              projectPath: tmpDir,
               status: 'in_progress',
               priority: 'normal',
               dependsOn: [],
@@ -171,6 +178,38 @@ describe('preRejectTask', () => {
     })
     const { queue } = await readTasks({ tasksPath })
     expect(queue!.tasks[0]!.revisionCount).toBe(0)
+  })
+
+  it('uses the promoted point writer and clears runtime assignment on pre-reject', async () => {
+    await seedInProgress('t-1')
+    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const promotedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(promotedTasksPath), { recursive: true })
+    await fs.writeFile(promotedTasksPath, '{}', 'utf-8')
+    writeProjectTaskQueue(promotedTasksPath, queue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+
+    const result = await preRejectTask({
+      tasksPath: promotedTasksPath,
+      taskId: 't-1',
+      code: 'duplicate',
+      detail: 'Already covered by another task',
+      rejectedBy: 'worker:42',
+    })
+
+    expect(result.success).toBe(true)
+    expect(readProjectStateDatabaseTask(promotedTasksPath, 't-1')?.definition).toMatchObject({
+      status: 'shelved',
+    })
+    expect(readProjectStateDatabaseTask(promotedTasksPath, 't-1')?.definition).not.toHaveProperty('shelveReason')
+    expect((await readTaskRuntimeStore(tmpDir)).tasks['t-1']).toMatchObject({
+      assignedTo: null,
+      shelveReason: {
+        code: 'duplicate',
+        detail: 'Already covered by another task',
+        rejectedBy: 'worker:42',
+      },
+    })
   })
 
   it('refuses to pre-reject a task that is already terminal', async () => {

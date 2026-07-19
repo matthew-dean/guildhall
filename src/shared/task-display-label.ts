@@ -9,13 +9,17 @@ export interface DisplayTaskLike {
 }
 
 export function taskDisplayLabel(task: DisplayTaskLike, fallback = 'Untitled work'): string {
+  const title = effectiveTaskTitle(task)
+  const description = task.description?.trim()
+  const derived = derivedQuestionTaskLabel(title, description)
+  if (derived) return derived
+  return title || task.id || fallback
+}
+
+export function effectiveTaskTitle(task: DisplayTaskLike): string | undefined {
   const title = task.title?.trim()
   const description = task.description?.trim()
-  const recovered = recoverClippedTitle(title, description)
-  const derived = derivedQuestionTaskLabel(recovered ?? title, description)
-  if (derived) return derived
-  if (recovered) return recovered
-  return title || task.id || fallback
+  return recoverClippedTitle(title, description) ?? title
 }
 
 export function taskSourceQuestion(task: DisplayTaskLike): string | null {
@@ -54,14 +58,35 @@ function questionCandidate(title: string | undefined, description: string | unde
   return candidate
 }
 
-function recoverClippedTitle(title: string | undefined, description: string | undefined): string | null {
+export function recoverClippedTitle(title: string | undefined, description: string | undefined): string | null {
   if (!title || !description) return null
   const compactTitle = title.replace(/\.\.\.$/, '').trim()
   const titleLooksClipped = title.length >= 60 || title.endsWith('...')
   if (!titleLooksClipped) return null
-  if (description.length <= title.length) return null
-  if (!description.toLowerCase().startsWith(compactTitle.toLowerCase())) return null
+  const descriptionBody = stripSourcePrefix(description)
+  if (descriptionBody.length <= title.length) return null
+  if (!matchableTitle(descriptionBody).startsWith(matchableTitle(compactTitle))) return null
+  return cleanRecoveredTitle(descriptionBody)
+}
+
+function stripSourcePrefix(description: string): string {
   return description
+    .replace(/^(?:[A-Za-z]:)?[^:\n]{1,240}\.(?:md|mdx|txt|yaml|yml|json):\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?/i, '')
+    .trim()
+}
+
+function matchableTitle(value: string): string {
+  return cleanRecoveredTitle(value)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function cleanRecoveredTitle(value: string): string {
+  return value
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function isQuestionLike(value: string): boolean {

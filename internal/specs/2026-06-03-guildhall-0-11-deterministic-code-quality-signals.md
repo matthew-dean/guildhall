@@ -5,8 +5,8 @@
 **Audience:** Guildhall runtime, review, and UI-governance implementation work
 **Related:** `internal/constitutions/design-system-governance.md`,
 `internal/audits/2026-06-01-ui-component-token-governance.md`,
-`internal/plans/2026-06-02-guildhall-0-11-implementation-tracker.md`,
-`internal/plans/2026-06-03-guildhall-0-11-deterministic-code-quality-implementation-plan.md`
+`internal/plans/archive/2026-06-02-guildhall-0-11-implementation-tracker.md`,
+`internal/plans/archive/2026-06-03-guildhall-0-11-deterministic-code-quality-implementation-plan.md`
 
 ## Problem
 

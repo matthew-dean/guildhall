@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import type { ResolvedConfig } from '@guildhall/config'
-import { getProjectRecentEventsPath } from '@guildhall/sessions'
-import { OrchestratorSupervisor } from '../serve-supervisor.js'
+import { getProjectRecentEventsPath, getProjectSystemStatePath, promoteProjectStateDatabaseAuthority } from '@guildhall/sessions'
+import { OrchestratorSupervisor, compactProjectRecentEvents, readPersistedEventPage, recoverOrphanedExecutionProjection } from '../serve-supervisor.js'
+import { readProjectSummaryProjection, updateProjectSummaryProjection, writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
 import { clearProviderClientPool, getOrCreateProviderClient, openAiCompatiblePoolKey } from '../provider-client-pool.js'
 import type { ApiMessageRequest, ApiStreamEvent, SupportsStreamingMessages } from '@guildhall/engine'
 import type { OrchestratorRunResult } from '../orchestrator.js'
@@ -36,6 +37,99 @@ async function drain(client: SupportsStreamingMessages): Promise<void> {
 }
 
 describe('OrchestratorSupervisor', () => {
+  it('recovers a durable run left behind by a crashed service process', async () => {
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-recovery-'))
+    try {
+      const tasksPath = getProjectSystemStatePath(workspacePath, 'TASKS.json')
+      writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+        projectId: 'recovery-project',
+        queue: { version: 1, lastUpdated: '2026-07-17T00:00:00.000Z', tasks: [] },
+      })
+      promoteProjectStateDatabaseAuthority(workspacePath)
+      updateProjectSummaryProjection(tasksPath, {
+        execution: {
+          status: 'running',
+          mode: 'continuous',
+          startedAt: '2026-07-17T00:00:00.000Z',
+          updatedAt: '2026-07-17T00:01:00.000Z',
+        },
+      })
+
+      expect(recoverOrphanedExecutionProjection(workspacePath, '2026-07-17T00:02:00.000Z')).toBe(true)
+      expect(recoverOrphanedExecutionProjection(workspacePath, '2026-07-17T00:03:00.000Z')).toBe(false)
+
+      expect(readProjectSummaryProjection(tasksPath)?.execution).toMatchObject({
+        status: 'error',
+        startedAt: '2026-07-17T00:00:00.000Z',
+        stoppedAt: '2026-07-17T00:02:00.000Z',
+        error: 'Guildhall recovered an interrupted run from a previous service process.',
+      })
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('pages bounded durable activity newest-first', async () => {
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-history-'))
+    try {
+      const file = getProjectRecentEventsPath(workspacePath)
+      await mkdir(path.dirname(file), { recursive: true })
+      await writeFile(file, [1, 2, 3].map(index => JSON.stringify({
+        at: `2026-07-14T00:00:0${index}.000Z`,
+        workspaceId: 'history-project',
+        event: { type: 'task_transition', task_id: `task-${index}`, message: 'x'.repeat(10_000) },
+      })).join('\n') + '\n', 'utf8')
+
+      const first = readPersistedEventPage(workspacePath, 'history-project', { limit: 2 })
+      expect(first.events.map(event => (event.event as { task_id?: string }).task_id)).toEqual(['task-3', 'task-2'])
+      expect(first).toMatchObject({ cursor: 0, limit: 2, total: 3, hasMore: true, nextCursor: 2 })
+
+      const second = readPersistedEventPage(workspacePath, 'history-project', { limit: 2, cursor: first.nextCursor })
+      expect(second.events.map(event => (event.event as { task_id?: string }).task_id)).toEqual(['task-1'])
+      expect(second.hasMore).toBe(false)
+      expect(JSON.stringify(first)).toContain('x'.repeat(10_000))
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('caps worst-case history pages and keeps the durable index payload-free', async () => {
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-history-index-'))
+    try {
+      const file = getProjectRecentEventsPath(workspacePath)
+      await mkdir(path.dirname(file), { recursive: true })
+      await writeFile(file, Array.from({ length: 1000 }, (_, index) => JSON.stringify({
+        at: new Date(2026, 0, 1, 0, 0, index % 60).toISOString(),
+        workspaceId: 'history-project',
+        event: {
+          type: 'task_transition',
+          task_id: `task-${index}`,
+          message: `synthetic retained history payload ${index} ${'x'.repeat(180)}`,
+        },
+      })).join('\n') + '\n', 'utf8')
+
+      const requestedTooMuch = readPersistedEventPage(workspacePath, 'history-project', { limit: 1000 })
+      expect(requestedTooMuch.limit).toBe(100)
+      expect(requestedTooMuch.events).toHaveLength(100)
+      expect(requestedTooMuch.total).toBe(1000)
+      expect(requestedTooMuch.events[0]?.event).toMatchObject({ task_id: 'task-999' })
+
+      const index = JSON.parse(await readFile(`${file}.index.json`, 'utf8')) as {
+        records: Array<Record<string, unknown>>
+      }
+      expect(index.records).toHaveLength(1000)
+      expect(JSON.stringify(index)).not.toContain('synthetic retained history payload')
+
+      const deepPage = readPersistedEventPage(workspacePath, 'history-project', { cursor: 900, limit: 100 })
+      expect(deepPage.events).toHaveLength(100)
+      expect(deepPage.events[0]?.event).toMatchObject({ task_id: 'task-99' })
+      expect(deepPage.events.at(-1)?.event).toMatchObject({ task_id: 'task-0' })
+      expect(deepPage.hasMore).toBe(false)
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
   it('emits provider health changes and refreshes run status for matching pooled providers', async () => {
     clearProviderClientPool()
     const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
@@ -119,10 +213,13 @@ describe('OrchestratorSupervisor', () => {
   it('passes one-task mode through to the orchestrator', async () => {
     const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
     let seenStopAfterOneTask: boolean | undefined
+    let seenWorkerTurnBudget: number | undefined
     const supervisor = new OrchestratorSupervisor({
       resolveConfig: () => ({ workspaceId: 'w', projectPath: workspacePath } as ResolvedConfig),
       runOrchestrator: async (_config, opts) => {
         seenStopAfterOneTask = opts?.stopAfterOneTask
+        const budget = opts?.agentGenerateWallClockTimeoutMs
+        if (budget && typeof budget === 'object') seenWorkerTurnBudget = budget.worker
         return { ...STOP_SUMMARY, stopReason: 'one_task', stopMessage: 'stopAfterOneTask reached task.' }
       },
     })
@@ -137,7 +234,51 @@ describe('OrchestratorSupervisor', () => {
 
       expect(run.mode).toBe('one_task')
       expect(seenStopAfterOneTask).toBe(true)
+      expect(seenWorkerTurnBudget).toBe(2 * 60 * 1000)
       expect(run.stopSummary?.stopReason).toBe('one_task')
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('clears prior execution residue when a new run starts', async () => {
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
+    try {
+      const tasksPath = getProjectSystemStatePath(workspacePath, 'TASKS.json')
+      writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+        projectId: 'w',
+        queue: { version: 1, lastUpdated: '2026-07-17T00:00:00.000Z', tasks: [] },
+      })
+      promoteProjectStateDatabaseAuthority(workspacePath)
+      updateProjectSummaryProjection(tasksPath, {
+        execution: {
+          status: 'error',
+          mode: 'one_task',
+          startedAt: '2026-07-17T00:00:00.000Z',
+          stoppedAt: '2026-07-17T00:01:00.000Z',
+          stopRequestedAt: '2026-07-17T00:00:30.000Z',
+          error: 'stale execution error',
+          updatedAt: '2026-07-17T00:01:00.000Z',
+        },
+      })
+      const supervisor = new OrchestratorSupervisor({
+        resolveConfig: () => ({ workspaceId: 'w', projectPath: workspacePath } as ResolvedConfig),
+        runOrchestrator: async (_config, opts) => {
+          await new Promise<void>((resolve) => opts?.abortSignal?.addEventListener('abort', () => resolve(), { once: true }))
+          return { ...STOP_SUMMARY, stopReason: 'stop_requested', stopMessage: 'Stop requested.' }
+        },
+      })
+
+      const run = supervisor.start({ workspaceId: 'w', workspacePath })
+      await vi.waitFor(() => {
+        const execution = readProjectSummaryProjection(tasksPath)?.execution
+        expect(execution?.status).toBe('running')
+        expect(execution?.error).toBeUndefined()
+        expect(execution?.stoppedAt).toBeUndefined()
+        expect(execution?.stopRequestedAt).toBeUndefined()
+      })
+      await supervisor.stop('w', { waitMs: 500 })
+      await run.runPromise
     } finally {
       await rm(workspacePath, { recursive: true, force: true })
     }
@@ -253,6 +394,7 @@ describe('OrchestratorSupervisor', () => {
             type: 'line_complete',
             task_id: `task-${i}`,
             message: `event ${i}`,
+            output: i === 1204 ? 'provider output that must not become durable reconnect history'.repeat(10_000) : undefined,
           })
         }
         return STOP_SUMMARY
@@ -269,6 +411,8 @@ describe('OrchestratorSupervisor', () => {
       const raw = await readFile(getProjectRecentEventsPath(workspacePath), 'utf8')
       const lines = raw.trim().split('\n')
       expect(lines.length).toBeLessThanOrEqual(1000)
+      expect(Buffer.byteLength(raw, 'utf8')).toBeLessThanOrEqual(512 * 1024)
+      expect(raw).not.toContain('provider output that must not become durable reconnect history')
 
       const freshSupervisor = new OrchestratorSupervisor({
         resolveConfig: () => ({ workspaceId: 'w', projectPath: workspacePath } as ResolvedConfig),
@@ -276,6 +420,33 @@ describe('OrchestratorSupervisor', () => {
       const recent = freshSupervisor.recent('w', 200, workspacePath)
       expect(recent).toHaveLength(200)
       expect(recent.some(ev => JSON.stringify(ev.event).includes('event 1204'))).toBe(true)
+    } finally {
+      delete process.env.GUILDHALL_DATA_DIR
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('compacts legacy reconnect payloads at the explicit migration boundary', async () => {
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-legacy-'))
+    process.env.GUILDHALL_DATA_DIR = path.join(workspacePath, '.guildhall-data')
+    const file = getProjectRecentEventsPath(workspacePath)
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, Array.from({ length: 4 }, (_, index) => JSON.stringify({
+      at: new Date(2026, 0, 1, 0, index).toISOString(),
+      workspaceId: 'w',
+      event: {
+        type: 'tool_completed',
+        task_id: `task-${index}`,
+        output: 'legacy provider output '.repeat(40_000),
+      },
+    })).join('\n') + '\n', 'utf8')
+
+    try {
+      const result = compactProjectRecentEvents(workspacePath, { dryRun: false })
+      const compacted = await readFile(file, 'utf8')
+      expect(result.bytesBefore).toBeGreaterThan(512 * 1024)
+      expect(result.bytesAfter).toBeLessThanOrEqual(512 * 1024)
+      expect(compacted).not.toContain('legacy provider output')
     } finally {
       delete process.env.GUILDHALL_DATA_DIR
       await rm(workspacePath, { recursive: true, force: true })

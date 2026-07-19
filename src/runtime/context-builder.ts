@@ -13,7 +13,7 @@ import {
   selectApplicableReviewRubrics,
   renderRubricSelection,
 } from '@guildhall/core'
-import { checkpointIsFreshForTask, readCheckpoint } from '@guildhall/tools'
+import { checkpointIsFreshForTask, readCheckpoint, readExploringTranscript } from '@guildhall/tools'
 import { latestResolvedRetryEscalationAt } from '@guildhall/tools'
 import {
   selectApplicableGuilds,
@@ -29,7 +29,6 @@ import {
   getProjectSystemStatePath,
   getProjectSystemStatePathFromMemoryDir,
   getProjectTaskReviewPacketPath,
-  getProjectTranscriptPath,
   inferProjectRootFromMemoryDir,
 } from '@guildhall/sessions'
 import { loadGoalForTask } from './business-envelope.js'
@@ -55,6 +54,7 @@ import {
   readProjectDeliveryModel,
   type TaskContextPacket,
 } from './delivery-spine.js'
+import { buildPersonaOutputHints, sanitizeInventedProofCommandFeedback } from './reviewer-fanout.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -86,6 +86,18 @@ const MAX_SPEC_OVERVIEW_CHARS = 3200
 const MAX_CORPUS_MAP_CHARS = 3200
 const MAX_ENV_MANIFEST_FILES = 8
 const MAX_ENV_MANIFEST_KEYS_PER_FILE = 40
+// The task packet is a working brief, not a second copy of project history.
+// Keep the rendered context small enough that tools and the model still have
+// room to do work. Lower-priority sections are omitted after this boundary.
+const MAX_FORMATTED_CONTEXT_CHARS = 14_000
+const MAX_TASK_SUMMARY_CHARS = 8_500
+const MAX_PROOF_PATH_CONTEXT_CHARS = 1_600
+const MAX_COMPLETION_HANDOFF_CONTEXT_CHARS = 1_000
+const MAX_EFFECTIVE_MEMORY_CONTEXT_CHARS = 1_800
+const MAX_DELIVERY_SPINE_CONTEXT_CHARS = 1_200
+const MAX_LANGUAGE_MAP_CONTEXT_CHARS = 900
+const MAX_CONTRACT_SURFACE_CONTEXT_CHARS = 1_200
+const MAX_PROJECT_SKILLS_CONTEXT_CHARS = 1_200
 const RETRY_COACHING_AFTER_REVISIONS = 3
 const execFileP = promisify(execFile)
 const repoFileCache = new Map<string, string[]>()
@@ -532,7 +544,7 @@ function renderProductBriefContext(task: Task): string {
   if (!task.productBrief || looksLikeStaleNewRequestBrief(task)) return ''
   const nonGoals = task.productBrief.nonGoals ?? []
   const antiPatterns = task.productBrief.antiPatterns ?? []
-  return `\n### Product Brief${task.productBrief.approvedAt ? ' (human-approved)' : ' (DRAFT — not yet approved)'}\n**User job:** ${task.productBrief.userJob}${task.productBrief.whyItMattersNow ? `\n**Why it matters now:** ${task.productBrief.whyItMattersNow}` : ''}\n**Success metric:** ${task.productBrief.successMetric}${nonGoals.length > 0 ? `\n**Non-goals:**\n${nonGoals.map(a => `- ${a}`).join('\n')}` : antiPatterns.length > 0 ? `\n**Anti-patterns (must NOT do):**\n${antiPatterns.map(a => `- ${a}`).join('\n')}` : ''}${task.productBrief.rolloutPlan ? `\n**Rollout plan:** ${task.productBrief.rolloutPlan}` : ''}`
+  return clipContextBlock(`\n### Product Brief${task.productBrief.approvedAt ? ' (human-approved)' : ' (DRAFT — not yet approved)'}\n**User job:** ${task.productBrief.userJob}${task.productBrief.whyItMattersNow ? `\n**Why it matters now:** ${task.productBrief.whyItMattersNow}` : ''}\n**Success metric:** ${task.productBrief.successMetric}${nonGoals.length > 0 ? `\n**Non-goals:**\n${nonGoals.map(a => `- ${a}`).join('\n')}` : antiPatterns.length > 0 ? `\n**Anti-patterns (must NOT do):**\n${antiPatterns.map(a => `- ${a}`).join('\n')}` : ''}${task.productBrief.rolloutPlan ? `\n**Rollout plan:** ${task.productBrief.rolloutPlan}` : ''}`, 1_600)
 }
 
 function summarizeRawDesignSystem(raw: string): string {
@@ -650,15 +662,17 @@ function renderResolvedEscalationGuidance(task: Task): string {
   for (const escalation of resolved) {
     lines.push(
       `- **${escalation.id}** [${escalation.reason}] ${escalation.summary}`,
-      `  - Resolution (${escalation.resolvedBy ?? 'human'} at ${escalation.resolvedAt}): ${escalation.resolution?.trim() ?? ''}`,
+      `  - Resolution (${escalation.resolvedBy ?? 'human'} at ${escalation.resolvedAt}): ${clipContextBlock(escalation.resolution?.trim() ?? '', 700)}`,
     )
   }
-  return lines.join('\n')
+  return clipContextBlock(lines.join('\n'), 1_800)
 }
 
 function clipContextBlock(value: string, maxChars: number): string {
   const trimmed = value.trim()
+  if (maxChars <= 0) return ''
   if (trimmed.length <= maxChars) return trimmed
+  if (maxChars <= 19) return trimmed.slice(0, maxChars)
   return `${trimmed.slice(0, Math.max(0, maxChars - 19)).trimEnd()}\n...[truncated]`
 }
 
@@ -754,6 +768,32 @@ function renderSpecOverview(task: Task): string {
   const summaryMatch = raw.match(/## Summary\s*([\s\S]*?)(?=\n##\s+[A-Z]|\n#\s+[A-Z]|$)/i)
   const summaryBody = (summaryMatch?.[1] ?? raw).trim()
   return clipContextBlock(summaryBody, MAX_SPEC_OVERVIEW_CHARS)
+}
+
+function renderAcceptanceCriteria(task: Task): string {
+  if (task.acceptanceCriteria.length === 0) return ''
+  const lines = ['### Acceptance Criteria']
+  for (const [index, criterion] of task.acceptanceCriteria.entries()) {
+    lines.push(`${index + 1}. ${clipContextBlock(criterion.description, 700)}`)
+    const command = typeof criterion.command === 'string' ? criterion.command.trim() : ''
+    if (command) lines.push(`   Command: \`${command}\``)
+  }
+  return clipContextBlock(lines.join('\n'), 3_800)
+}
+
+function boundContextBlocks(blocks: readonly string[], maxChars: number): string {
+  let remaining = Math.max(0, maxChars)
+  const included: string[] = []
+  for (const block of blocks) {
+    const trimmed = block.trim()
+    if (!trimmed || remaining <= 0) continue
+    const bounded = trimmed.length <= remaining
+      ? trimmed
+      : clipContextBlock(trimmed, remaining)
+    if (bounded) included.push(bounded)
+    remaining -= bounded.length
+  }
+  return included.join('\n')
 }
 
 async function summarizeActiveWorktree(task: Task): Promise<string> {
@@ -989,7 +1029,9 @@ export async function buildContext(
     readSafe('design-system.yaml'),
     // Only bother with the transcript when we're actually in the exploring phase.
     task.status === 'exploring'
-      ? readManagedTextFile(getProjectTranscriptPath(projectRoot, 'exploring', task.id), 'utf-8').catch(() => readSafe(path.join('exploring', `${task.id}.md`)))
+      ? readExploringTranscript({ memoryDir, taskId: task.id })
+          .then((result) => result.content ?? '')
+          .catch(() => '')
       : Promise.resolve(''),
     // FR-23: resolve the task's parent goal. Missing-goal cases become
     // `undefined` — the summary renderer omits the envelope block.
@@ -1097,7 +1139,7 @@ export async function buildContext(
   // not pushed into the worker context. collectGuildRubrics is kept available
   // for the reviewer dispatcher.
   void collectGuildRubrics
-  const reviewRubrics = coreRubrics
+  const reviewRubrics = clipContextBlock(coreRubrics, 900)
   const latestCheckpoint = renderLatestCheckpoint(task, checkpoint)
   const likelyTaskFiles = renderLikelyTaskFiles(task, checkpoint?.filesTouched ?? [])
   const corpusMap = codebaseMap
@@ -1128,21 +1170,29 @@ export async function buildContext(
         { maxChars: MAX_CORPUS_MAP_CHARS },
       )
     : ''
-  const activeRecoveryPlaybook = renderActiveRecoveryPlaybook(task)
-  const projectSkills = renderProjectSkills(task, memoryDir, opts.projectSkillsEnabled === true)
+  const activeRecoveryPlaybook = clipContextBlock(renderActiveRecoveryPlaybook(task), 1_200)
+  const projectSkills = clipContextBlock(
+    renderProjectSkills(task, memoryDir, opts.projectSkillsEnabled === true),
+    MAX_PROJECT_SKILLS_CONTEXT_CHARS,
+  )
   const resolvedEscalationGuidance = renderResolvedEscalationGuidance(task)
   const reviewerFeedbackCutoffMs = (() => {
     const cutoff = latestResolvedRetryEscalationAt(task)
     const parsed = cutoff ? Date.parse(cutoff) : Number.NaN
     return Number.isFinite(parsed) ? parsed : null
   })()
-  const latestRevisionFeedback = [...task.notes]
+  const reviewerTaskText = buildPersonaOutputHints(task).taskText ?? ''
+  const rawLatestRevisionFeedback = [...task.notes]
     .reverse()
     .find((note) =>
       (note.agentId === 'reviewer-fanout' || note.agentId === 'reviewer-agent') &&
       note.role === 'reviewer' &&
       (reviewerFeedbackCutoffMs === null || Date.parse(note.timestamp) > reviewerFeedbackCutoffMs),
     )?.content ?? ''
+  const latestRevisionFeedback = sanitizeInventedProofCommandFeedback(
+    rawLatestRevisionFeedback,
+    reviewerTaskText,
+  )
   const clippedRevisionFeedback = latestRevisionFeedback
     ? clipContextBlock(latestRevisionFeedback, MAX_REVISION_FEEDBACK_CHARS)
     : ''
@@ -1156,9 +1206,13 @@ export async function buildContext(
     .filter((note) => note.role !== 'reviewer')
     .slice(-MAX_AGENT_NOTES)
     .map((note) =>
-      `**${note.agentId} (${note.role})** ${note.timestamp}:\n${clipContextBlock(note.content, MAX_AGENT_NOTE_CHARS)}`,
+      `**${note.agentId} (${note.role})** ${note.timestamp}:\n${clipContextBlock(
+        sanitizeInventedProofCommandFeedback(note.content, reviewerTaskText),
+        MAX_AGENT_NOTE_CHARS,
+      )}`,
     )
   const specOverview = renderSpecOverview(task)
+  const acceptanceCriteria = renderAcceptanceCriteria(task)
   const constructionMode = constructionModeForTask({
     status: task.status,
     blocker: task.blockReason,
@@ -1209,7 +1263,7 @@ export async function buildContext(
     ? await buildDeliverySpineWorkerContext({ projectRoot, memoryDir, task }).catch(() => '')
     : ''
 
-  const taskSummary = [
+  const taskSummary = boundContextBlocks([
     `## Current Task: ${task.id}`,
     `**Title:** ${task.title}`,
     `**Domain:** ${task.domain}`,
@@ -1223,11 +1277,9 @@ export async function buildContext(
     specOverview ? `\n### Spec Overview\n${specOverview}` : '',
     renderProductBriefContext(task),
     renderFrontendUiDesignQualityBar(task),
-    task.acceptanceCriteria.length > 0
-      ? `\n### Acceptance Criteria\n${task.acceptanceCriteria.map((c, i) => `${i + 1}. ${c.description}`).join('\n')}`
-      : '',
+    acceptanceCriteria,
     task.outOfScope.length > 0
-      ? `\n### Out of Scope\n${task.outOfScope.map(s => `- ${s}`).join('\n')}`
+      ? `\n### Out of Scope\n${clipContextBlock(task.outOfScope.map(s => `- ${s}`).join('\n'), 1_200)}`
       : '',
     clippedRevisionFeedback
       ? `\n### Latest Required Revisions\n${clippedRevisionFeedback}`
@@ -1259,59 +1311,85 @@ export async function buildContext(
     recentAgentNotes.length > 0
       ? `\n### Agent Notes\n${recentAgentNotes.join('\n\n')}`
       : '',
-  ].filter(Boolean).join('\n')
+  ], MAX_TASK_SUMMARY_CHARS)
 
-  const formatted = [
-    '<!-- FORGE CONTEXT: injected just-in-time, do not modify -->',
-    '',
+  const boundedStructuralMapContext = clipContextBlock(structuralMapContext, 900)
+  const boundedDeliverySpineContext = clipContextBlock(deliverySpineContext, MAX_DELIVERY_SPINE_CONTEXT_CHARS)
+  const boundedLanguageMap = clipContextBlock(languageMap, MAX_LANGUAGE_MAP_CONTEXT_CHARS)
+  const boundedProofPaths = clipContextBlock(proofPaths, MAX_PROOF_PATH_CONTEXT_CHARS)
+  const boundedCompletionHandoffContext = clipContextBlock(
+    completionHandoffContext,
+    MAX_COMPLETION_HANDOFF_CONTEXT_CHARS,
+  )
+  const boundedEffectiveMemory = clipContextBlock(effectiveMemory, MAX_EFFECTIVE_MEMORY_CONTEXT_CHARS)
+  const boundedContractSurfacePackets = clipContextBlock(
+    contractSurfacePackets,
+    MAX_CONTRACT_SURFACE_CONTEXT_CHARS,
+  )
+  const boundedProjectMemory = clipContextBlock(projectMemory, MAX_MEMORY_CHARS)
+  const boundedRecentProgress = clipContextBlock(recentProgress, 1_600)
+  const boundedRecentDecisions = clipContextBlock(recentDecisions, 1_200)
+
+  const boundedPersonaPrompt = clipContextBlock(personaPrompt, 2_000)
+  const boundedEnvelope = clipContextBlock(envelope, 1_600)
+  const boundedDesignSystem = clipContextBlock(designSystem, 1_800)
+  const boundedReviewPacket = clipContextBlock(reviewPacket, 1_600)
+  const boundedCorpusMap = clipContextBlock(corpusMap, MAX_CORPUS_MAP_CHARS)
+  const boundedExploringTranscript = clipContextBlock(exploringTranscript, MAX_EXPLORING_CHARS)
+  const formattedBody = boundContextBlocks([
     taskSummary,
     '',
-    structuralMapContext,
+    boundedStructuralMapContext,
     '',
-    personaPrompt,
+    boundedPersonaPrompt,
     '',
     workerModePrompt,
     '',
-    envelope ? `## Business Envelope (FR-23)\n${envelope}` : '',
+    boundedEnvelope ? `## Business Envelope (FR-23)\n${boundedEnvelope}` : '',
     '',
-    designSystem ? `## Design System\n${designSystem}` : '',
+    boundedDesignSystem ? `## Design System\n${boundedDesignSystem}` : '',
     '',
     reviewRubrics ? `## Review Rubrics (selected for this task)\n${reviewRubrics}` : '',
     '',
-    reviewPacket ? `## Review Packet\n${reviewPacket}` : '',
+    boundedReviewPacket ? `## Review Packet\n${boundedReviewPacket}` : '',
     '',
-    contractSurfacePackets,
+    boundedContractSurfacePackets,
     '',
-    deliverySpineContext,
+    boundedDeliverySpineContext,
     '',
-    corpusMap,
+    boundedCorpusMap,
     '',
-    languageMap,
+    boundedLanguageMap,
     '',
-    proofPaths,
+    boundedProofPaths,
     '',
-    completionHandoffContext,
+    boundedCompletionHandoffContext,
     '',
-    effectiveMemory,
+    boundedEffectiveMemory,
     '',
-    projectMemory ? `## Relevant Project Memory\n${projectMemory}` : '',
+    boundedProjectMemory ? `## Relevant Project Memory\n${boundedProjectMemory}` : '',
     '',
-    recentProgress ? `## Recent Progress\n${recentProgress}` : '',
+    boundedRecentProgress ? `## Recent Progress\n${boundedRecentProgress}` : '',
     '',
-    recentDecisions ? `## Recent Decisions (${task.domain})\n${recentDecisions}` : '',
+    boundedRecentDecisions ? `## Recent Decisions (${task.domain})\n${boundedRecentDecisions}` : '',
     '',
-    exploringTranscript
-      ? `## Exploring Transcript (tail)\n${exploringTranscript}`
+    boundedExploringTranscript
+      ? `## Exploring Transcript (tail)\n${boundedExploringTranscript}`
       : '',
+  ], MAX_FORMATTED_CONTEXT_CHARS - 100).trim()
+  const formatted = [
+    '<!-- FORGE CONTEXT: injected just-in-time, do not modify -->',
+    '',
+    formattedBody,
     '',
     '<!-- END FORGE CONTEXT -->',
-  ].filter(s => s !== undefined).join('\n').trim()
+  ].join('\n').trim()
 
   return {
     taskSummary,
-    projectMemory,
-    recentProgress,
-    recentDecisions,
+    projectMemory: boundedProjectMemory,
+    recentProgress: boundedRecentProgress,
+    recentDecisions: boundedRecentDecisions,
     exploringTranscript,
     personaPrompt,
     applicableGuildSlugs,
@@ -1322,16 +1400,16 @@ export async function buildContext(
     reviewRubrics,
     corpusMap,
     workerMode,
-    languageMap,
-    reviewPacket,
-    proofPaths,
-    completionHandoff: completionHandoffContext,
-    effectiveMemory,
+    languageMap: boundedLanguageMap,
+    reviewPacket: boundedReviewPacket,
+    proofPaths: boundedProofPaths,
+    completionHandoff: boundedCompletionHandoffContext,
+    effectiveMemory: boundedEffectiveMemory,
     effectiveMemoryPacket,
-    structuralMapContext,
+    structuralMapContext: boundedStructuralMapContext,
     structuralMapOmitted,
-    contractSurfacePackets,
-    deliverySpineContext,
+    contractSurfacePackets: boundedContractSurfacePackets,
+    deliverySpineContext: boundedDeliverySpineContext,
     formatted,
   }
 }

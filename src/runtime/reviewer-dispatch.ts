@@ -3,6 +3,7 @@ import {
   summarizeScopedHardGateDisposition,
   type ScopedGateContext,
 } from '@guildhall/tools'
+import { stableProofPathId } from './proof-paths.js'
 
 // ---------------------------------------------------------------------------
 // FR-27 / AC-18: reviewer dispatch with deterministic fallback.
@@ -288,6 +289,7 @@ export function applyDeterministicVerdict(
     ...(input.policyVersion !== undefined ? { policyVersion: input.policyVersion } : {}),
   }
   task.reviewVerdicts.push(record)
+  if (record.verdict === 'approve') recordApprovedReviewProof(task, input.now)
 
   const newStatus: TaskStatus = input.verdict.verdict === 'approve' ? 'gate_check' : 'in_progress'
   task.status = newStatus
@@ -325,9 +327,87 @@ export function extractLlmReviewerReasoning(task: Task): string | undefined {
 function extractStructuredLlmVerdict(reasoning: string | undefined): ReviewVerdict['verdict'] | undefined {
   const text = reasoning?.trim()
   if (!text) return undefined
-  const match = /\*\*Verdict:\*\*\s*(Approved|Approve|Revised?|Revision requested)\b/i.exec(text)
-  if (!match?.[1]) return undefined
-  return /^approve?d?$/i.test(match[1]) ? 'approve' : 'revise'
+  const match = /\*\*Verdict:\*\*\s*(Approved|Approve|Revised?|Revision requested|Needs revision)\b/i.exec(text)
+  if (match?.[1]) return /^approve?d?$/i.test(match[1]) ? 'approve' : 'revise'
+
+  // Reviewers sometimes emit the handoff as a status sentence instead of
+  // repeating the formal verdict heading. That sentence still carries a
+  // durable decision and must not be mistaken for a revision.
+  if (
+    /\bapproved\b/i.test(text) &&
+    /\bgate[_ -]?check\b/i.test(text) &&
+    !/\bnot approved\b|\bneeds revision\b|\brevision requested\b/i.test(text)
+  ) {
+    return 'approve'
+  }
+
+  return undefined
+}
+
+export function recordApprovedReviewProof(
+  task: Task,
+  now: string,
+  recordedBy = 'reviewer-agent',
+): void {
+  const proofPaths = (task as unknown as { proofPaths?: Array<Record<string, unknown>> }).proofPaths
+  if (!Array.isArray(proofPaths)) return
+
+  for (const [index, proofPath] of proofPaths.entries()) {
+    if (proofPath.kind !== 'review') continue
+    const proofPathId = stableProofPathId(proofPath, index)
+    if (typeof proofPath.id !== 'string' || !proofPath.id.trim()) proofPath.id = proofPathId
+    const rawExpectedEvidence = Array.isArray(proofPath.expectedEvidence) ? proofPath.expectedEvidence : []
+    const expectedEvidence = rawExpectedEvidence.map((rawEvidence, index) => {
+      if (rawEvidence && typeof rawEvidence === 'object' && !Array.isArray(rawEvidence)) {
+        return rawEvidence as Record<string, unknown>
+      }
+      return {
+        id: `${proofPathId}-evidence-${index}`,
+        kind: 'artifact',
+        description: String(rawEvidence),
+        required: true,
+      }
+    })
+    // Imported review paths historically stored bare strings. Canonicalize
+    // them before recording evidence so the persisted contract has stable
+    // evidence IDs that proof-health can match on every later read.
+    proofPath.expectedEvidence = expectedEvidence
+    if (expectedEvidence.length === 0) continue
+
+    const existingRecords = Array.isArray(proofPath.verificationRecords)
+      ? proofPath.verificationRecords.filter((record): record is Record<string, unknown> =>
+          Boolean(record) && typeof record === 'object' && !Array.isArray(record),
+        )
+      : []
+    const currentRecords = [...existingRecords]
+
+    expectedEvidence.forEach((evidence, index) => {
+      if (evidence.required === false) return
+      const evidenceId = typeof evidence.id === 'string' && evidence.id.trim()
+        ? evidence.id.trim()
+        : `${proofPathId}-evidence-${index}`
+      const description = typeof evidence.description === 'string' && evidence.description.trim()
+        ? evidence.description.trim()
+        : evidenceId
+      const withoutCurrentRecord = currentRecords.filter((record) => record.evidenceId !== evidenceId)
+      withoutCurrentRecord.push({
+        id: `review-proof-${evidenceId}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
+        evidenceId,
+        kind: 'manual',
+        status: 'passed',
+        summary: `Approved review verified: ${description}`,
+        recordedAt: now,
+        recordedBy,
+        evidenceRefs: [],
+      })
+      currentRecords.splice(0, currentRecords.length, ...withoutCurrentRecord)
+    })
+
+    proofPath.verificationRecords = currentRecords
+    proofPath.status = 'verified'
+    proofPath.updatedAt = now
+    proofPath.updatedBy = 'reviewer-agent'
+  }
 }
 
 function extractRubricImpliedLlmVerdict(reasoning: string | undefined): ReviewVerdict['verdict'] | undefined {
@@ -345,8 +425,22 @@ function extractRubricImpliedLlmVerdict(reasoning: string | undefined): ReviewVe
     const match = pattern.exec(text)
     if (match?.[1]) values.set(key, match[1].toLowerCase())
   }
+  if ([...values.values()].some(value => value === 'no')) return 'revise'
   if (values.size !== required.length) return undefined
   return required.every(key => values.get(key) === 'yes') ? 'approve' : 'revise'
+}
+
+function extractReviewBodyImpliedLlmVerdict(reasoning: string | undefined): ReviewVerdict['verdict'] | undefined {
+  const text = reasoning?.trim()
+  if (!text) return undefined
+  if (/\b(?:not met|request fit:\s*no|needs revision|requested revision|must revise|fails? acceptance)\b/i.test(text)) {
+    return 'revise'
+  }
+  const hasMetAcceptance = /(?:^|\n)\s*(?:ac-\d+|acceptance criterion(?: \d+)?)\s*:\s*met\b/i.test(text)
+  const hasRequestFit = /\*\*Request fit:\*\*\s*yes\b|\bRequest fit:\s*yes\b/i.test(text)
+  const yesRubricCount = (text.match(/\b(?:code-review:)?(?:acceptance-criteria-met|no-scope-creep|conventions-followed|no-regressions|documented|user-job-served|success-metric-measurable|anti-patterns-avoided|rollout-ready)\s*:\s*yes\b/gi) ?? []).length
+  if (hasMetAcceptance && hasRequestFit && yesRubricCount >= 2) return 'approve'
+  return undefined
 }
 
 /**
@@ -380,8 +474,9 @@ export function recordLlmVerdict(input: {
   const reasoning = input.reasoning ?? extractLlmReviewerReasoning(task)
   const structuredVerdict = extractStructuredLlmVerdict(reasoning)
   const rubricVerdict = structuredVerdict ? undefined : extractRubricImpliedLlmVerdict(reasoning)
+  const bodyVerdict = structuredVerdict || rubricVerdict ? undefined : extractReviewBodyImpliedLlmVerdict(reasoning)
   const verdict: ReviewVerdict['verdict'] =
-    structuredVerdict ?? rubricVerdict ?? (input.afterStatus === 'gate_check' ? 'approve' : 'revise')
+    structuredVerdict ?? rubricVerdict ?? bodyVerdict ?? (input.afterStatus === 'gate_check' ? 'approve' : 'revise')
   const normalizedStatus: TaskStatus = verdict === 'approve' ? 'gate_check' : 'in_progress'
   const reason =
     verdict === 'approve'
@@ -398,5 +493,6 @@ export function recordLlmVerdict(input: {
     ...(input.policyVersion !== undefined ? { policyVersion: input.policyVersion } : {}),
   }
   task.reviewVerdicts.push(record)
+  if (verdict === 'approve') recordApprovedReviewProof(task, input.now)
   return { record, normalizedStatus }
 }

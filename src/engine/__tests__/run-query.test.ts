@@ -704,6 +704,77 @@ Uncertainties: none`),
     expect(rejectedRead).toBeTruthy()
   })
 
+  it('uses implementation-tool wording when a worker exhausts read-only budget', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: 'reads a file',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({ output: `read ${input.filePath}`, is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'write-file',
+        description: 'writes a file',
+        inputSchema: z.object({ filePath: z.string(), content: z.string() }),
+        execute: async () => ({ output: 'file written', is_error: false }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('read-file', { filePath: 'a.ts' }, 'toolu_1') },
+      { message: assistantToolUse('read-file', { filePath: 'b.ts' }, 'toolu_2') },
+      { message: assistantToolUse('read-file', { filePath: 'c.ts' }, 'toolu_3') },
+      { message: assistantToolUse('write-file', { filePath: 'proof.ts', content: 'export {}' }, 'toolu_4') },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/tmp',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+          noProgressToolNames: ['write-file'],
+          noProgressTurnNudge:
+            'Stop researching and make the concrete implementation change now.',
+          noProgressTurnNudgeLimit: 1,
+          noProgressTurnThreshold: 2,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+          },
+        },
+        messages,
+      ),
+    )
+
+    const rejectedRead = messages.find((message) =>
+      message.role === 'user' &&
+      Array.isArray(message.content) &&
+      message.content.some((part) =>
+        typeof part === 'object' &&
+        part !== null &&
+        'type' in part &&
+        part.type === 'tool_result' &&
+        String(part.content).includes('Research budget exhausted for this worker turn'),
+      ),
+    )
+    expect(rejectedRead).toBeTruthy()
+    const rejectedReadText = JSON.stringify(rejectedRead?.content ?? [])
+    expect(rejectedReadText).toContain('Use edit-file or write-file')
+    expect(rejectedReadText).not.toContain('update-product-brief')
+  })
+
   it('allows one read-only turn after a durable-progress nudge before refusing', async () => {
     const registry = new ToolRegistry()
     let readOnlyCalls = 0
@@ -1208,6 +1279,17 @@ describe('runQuery — unknown tool + invalid input', () => {
           observedTasksPath = input.tasksPath
           return { output: 'updated', is_error: false }
         },
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'write-checkpoint',
+        description: '',
+        inputSchema: z.object({
+          taskId: z.string().optional(),
+          step: z.number().optional(),
+        }),
+        execute: async () => ({ output: 'checkpoint written', is_error: false }),
       }),
     )
     const client = new ScriptedApiClient([
@@ -1843,6 +1925,133 @@ AC-2 (Email confirmation): Met - /auth/confirm reads token from query params, ca
     expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.output : '').toBe('updated')
   })
 
+  it('allows review handoff after a structured self-critique is persisted as a string note', async () => {
+    const registry = new ToolRegistry()
+    const statuses: string[] = []
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'export const x = 1', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'build passed', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string().optional(),
+          taskId: z.string(),
+          status: z.string(),
+          note: z.unknown().optional(),
+        }),
+        execute: async (input) => {
+          statuses.push(input.status)
+          return { output: 'updated', is_error: false, metadata: { taskId: input.taskId } }
+        },
+      }),
+    )
+    const stringNote = `**Self-critique:**
+
+**Acceptance criteria:**
+- AC 1 (Schemas): Met - fixture and evaluation schema exports were verified.
+
+Minimum-scope check:
+- Files changed: src/schemas/fixture.ts, src/schemas/evaluation.ts
+- Smallest useful change?: yes - only schema files changed.
+- Anything to revert before review?: none.
+
+Review proof packet:
+- Changed files / diff scope: src/schemas/fixture.ts, src/schemas/evaluation.ts
+- Verification commands passed: pnpm build passed.
+- Working hypothesis at handoff: The schema implementation is ready for review.
+- Known gaps / follow-up: none.`
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'in_progress' }, 'start-string-note') },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'read-string-note',
+              name: 'read-file',
+              input: { filePath: '/workspace/project/src/schemas/fixture.ts' },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'shell-string-note',
+              name: 'shell',
+              input: { command: 'pnpm build' },
+            },
+          ],
+        },
+      },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'in_progress',
+            note: stringNote,
+          },
+          'persist-string-note',
+        ),
+      },
+      { message: assistantToolUse('write-checkpoint', { taskId: 'task-1', step: 1 }, 'checkpoint-after-string-note') },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'review',
+          },
+          'review-after-string-note',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+          toolMetadata: { current_task_id: 'task-1' },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    const updateResults = events.filter((event) => event.type === 'tool_execution_completed')
+    expect(statuses).toEqual(['in_progress', 'in_progress', 'review'])
+    expect(updateResults.at(-1)?.type === 'tool_execution_completed' ? updateResults.at(-1)?.is_error : true).toBe(false)
+  })
+
   it('blocks review handoff after source inspection and verification when the self-critique is missing', async () => {
     const registry = new ToolRegistry()
     let called = false
@@ -2422,6 +2631,68 @@ Uncertainties: none`,
     expect(reviewCalls).toBe(1)
     expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
     expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.output : '').toBe('updated')
+  })
+
+  it('allows review handoff from durable proof metadata after fresh verification reruns', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({
+          output: 'build passed',
+          is_error: false,
+          metadata: { success: true, executedCommand: 'pnpm build' },
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return { output: 'updated', is_error: false, metadata: { taskId: input.taskId } }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('shell', { command: 'pnpm build' }, 'shell-resumed-proof') },
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'review' }, 'review-resumed-proof') },
+      { message: assistantText('ok') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_task_id: 'task-1',
+            current_task_has_structured_self_critique: true,
+            current_task_has_review_proof_packet: true,
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    const completed = events.filter((event) => event.type === 'tool_execution_completed')
+    expect(reviewCalls).toBe(1)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
   })
 
   it('allows review handoff for a resumed task when authoritative verification only exists in durable checkpoint history', async () => {
@@ -3844,6 +4115,84 @@ Uncertainties: none`,
         block.type === 'text' &&
         block.text.includes('The latest checkpoint already told you what to do next: Verify typecheck passes with the generated types.'),
       ),
+    )).toBe(true)
+  })
+
+  it('refuses tools outside an active recovery playbook allowlist', async () => {
+    const registry = new ToolRegistry()
+    let grepCalls = 0
+    registry.register(
+      defineTool({
+        name: 'grep',
+        description: '',
+        inputSchema: z.object({ pattern: z.string(), root: z.string() }),
+        execute: async () => {
+          grepCalls += 1
+          return { output: 'should not run', is_error: false }
+        },
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'raise-escalation',
+        description: '',
+        inputSchema: z.object({ taskId: z.string(), agentId: z.string(), reason: z.string(), summary: z.string() }),
+        execute: async () => ({ output: 'escalated', is_error: false }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('grep', { pattern: 'author intent', root: '.' }, 'toolu_1') },
+      {
+        message: assistantToolUse(
+          'raise-escalation',
+          {
+            taskId: 'task-1',
+            agentId: 'worker-agent',
+            reason: 'scope_boundary',
+            summary: 'Recovery playbook cannot proceed without prerequisite files.',
+          },
+          'toolu_2',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'recover' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-1',
+            current_task_recovery_playbook: 'retry_current_task_context',
+            current_task_recovery_allowed_tools: ['list-files', 'read-file', 'edit-file', 'write-file', 'run-shell-command', 'write-checkpoint', 'log-progress', 'update-task', 'raise-escalation'],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(grepCalls).toBe(0)
+    expect(events.some(e =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'grep' &&
+      e.is_error === true &&
+      e.output.includes('does not allow grep'),
+    )).toBe(true)
+    expect(events.some(e =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'raise-escalation' &&
+      e.is_error === false,
     )).toBe(true)
   })
 
@@ -5654,6 +6003,61 @@ Uncertainties: none`,
 
   })
 
+  it('preserves actionable failure lines for authoritative verification history', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({
+          output: [
+            '> narrative-harness@0.1.0 build',
+            '> docusaurus build',
+            '',
+            '[ERROR] Error: Unable to build website for locale en.',
+            'Docusaurus found broken links!',
+            '- Broken link on source page path = /coherence/dialogue-and-character-voice-reviewer:',
+            '   -> linking to ../harness/dialogue-and-character-voice-proof.md',
+          ].join('\n'),
+          is_error: true,
+          metadata: { success: false, exitCode: 1, executedCommand: 'npm run build' },
+        }),
+      }),
+    )
+    const toolMetadata: Record<string, unknown> = {
+      current_task_id: 'task-dialogue-reviewer',
+      current_task_verification_commands: ['npm run build'],
+    }
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('shell', { command: 'npm run build' }, 'shell-build') },
+      { message: assistantText('done') },
+    ])
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 3,
+          toolMetadata,
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    const history = toolMetadata['current_task_verification_history'] as Array<{ summary?: string }>
+    expect(history.at(-1)?.summary).toContain('Docusaurus found broken links')
+    expect(history.at(-1)?.summary).toContain('../harness/dialogue-and-character-voice-proof.md')
+    expect(history.at(-1)?.summary).not.toBe('> narrative-harness@0.1.0 build')
+  })
+
   it('refuses shell commands that parse Guildhall task state files', async () => {
     let shellCalls = 0
     const registry = new ToolRegistry()
@@ -6419,6 +6823,89 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
+  it('refuses immediate repeat file mutations after the assistant says the prior write failed', async () => {
+    const registry = new ToolRegistry()
+    const writes: string[] = []
+    registry.register(
+      defineTool({
+        name: 'write-file',
+        description: '',
+        inputSchema: z.object({
+          filePath: z.string(),
+          content: z.string(),
+        }),
+        execute: async (input) => {
+          writes.push(input.content)
+          return { output: `wrote ${input.filePath}`, is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'write-file',
+          {
+            filePath: '/workspace/project/src/writer.ts',
+            content: 'export const first = true\\n',
+          },
+          'toolu_1',
+        ),
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: 'The file got truncated again. Let me write the complete file in one shot.',
+            },
+            {
+              type: 'tool_use',
+              id: 'toolu_2',
+              name: 'write-file',
+              input: {
+                filePath: '/workspace/project/src/writer.ts',
+                content: 'export const second = true\\n',
+              },
+            },
+          ],
+        },
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+        },
+        messages,
+      ),
+    )
+
+    expect(writes).toEqual(['export const first = true\\n'])
+    expect(events.some(e =>
+      e.type === 'status' &&
+      e.message.includes('self-reported a failed file mutation'),
+    )).toBe(true)
+    expect(events.some(e =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'write-file' &&
+      e.is_error === true &&
+      String(e.output).includes('Do not immediately try another file mutation'),
+    )).toBe(true)
+  })
+
   it('nudges the agent after repeating the same no-match tool call', async () => {
     const registry = new ToolRegistry()
     registry.register(
@@ -6465,6 +6952,48 @@ Uncertainties: none`,
         block.type === 'text' &&
         block.text.includes('returned no useful result'),
       ),
+    )).toBe(true)
+  })
+
+  it('ends a turn after the same unproductive tool call keeps repeating', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'tool-search',
+        description: '',
+        inputSchema: z.object({ query: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: '(no matches)', is_error: false }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('tool-search', { query: '[agent]' }, 'toolu_1') },
+      { message: assistantToolUse('tool-search', { query: '[agent]' }, 'toolu_2') },
+      { message: assistantToolUse('tool-search', { query: '[agent]' }, 'toolu_3') },
+      { message: assistantToolUse('tool-search', { query: '[agent]' }, 'toolu_4') },
+      { message: assistantText('should not be reached') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(events.filter((event) => event.type === 'tool_execution_started')).toHaveLength(4)
+    expect(events.some(event =>
+      event.type === 'status' &&
+      event.message.includes('ending this turn so Guildhall can recover the task'),
     )).toBe(true)
   })
 })

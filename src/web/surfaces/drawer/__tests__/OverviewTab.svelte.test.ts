@@ -55,4 +55,40 @@ describe('OverviewTab', () => {
     expect(screen.getByText('Runtime proof')).toBeInTheDocument()
     expect(screen.getByText('Blocked')).toBeInTheDocument()
   })
+
+  it('shows shaping blockers from the task context packet', () => {
+    render(OverviewTab, {
+      props: {
+        task: task({
+          id: 'task-import-brief',
+          title: 'Recover source-backed contract surface',
+          status: 'import_draft',
+        }),
+        deliverySpine: {
+          contextPacket: {
+            whyThisNow: 'This task can continue after Guildhall repairs the source-backed brief.',
+            executionOrder: {
+              runnableNow: false,
+              shapingBlockers: [
+                {
+                  code: 'imported_brief_shaping',
+                  summary: 'Imported current work needs a real brief before Guildhall can build unattended.',
+                },
+                {
+                  code: 'source_recovery',
+                  summary: 'Needs concrete contract names before worker handoff.',
+                },
+              ],
+            },
+          },
+        } as any,
+      },
+    })
+
+    expect(screen.getByText('Not runnable yet')).toBeInTheDocument()
+    expect(screen.getByText('Imported Brief Shaping')).toBeInTheDocument()
+    expect(screen.getByText('Source Recovery')).toBeInTheDocument()
+    expect(screen.getByText('Imported current work needs a real brief before Guildhall can build unattended.')).toBeInTheDocument()
+    expect(screen.getByText('Needs concrete contract names before worker handoff.')).toBeInTheDocument()
+  })
 })

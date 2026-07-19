@@ -4,10 +4,66 @@ import {
   ProofPath,
   buildProofPathContext,
   buildTaskProofPath,
+  ensureCommandProofPathsFromAcceptanceCriteria,
   recordProofPath,
 } from '../proof-paths.js'
 
 describe('proof paths', () => {
+  it('refreshes an existing command path when its acceptance expectation changes', () => {
+    const task = {
+      id: 'task-negative-fixture',
+      acceptanceCriteria: [{
+        id: 'ac-missing',
+        description: 'Missing files produce a clear error.',
+        verifiedBy: 'automated' as const,
+        command: 'pnpm exec node scripts/validate-fixture.mjs fixtures/missing',
+        expectedExit: 'non_zero' as const,
+        met: false,
+      }],
+      proofPaths: [ProofPath.parse({
+        id: 'task-negative-fixture-ac-missing-command-proof',
+        scope: { type: 'task', id: 'task-negative-fixture' },
+        title: 'Run ac-missing',
+        summary: 'Missing files produce a clear error.',
+        kind: 'command',
+        command: 'pnpm exec node scripts/validate-fixture.mjs fixtures/missing',
+        source: 'documented',
+        status: 'blocked',
+        expectedEvidence: [{
+          id: 'ac-missing',
+          kind: 'automated',
+          description: 'Missing files produce a clear error.',
+          required: true,
+        }],
+        verificationRecords: [{
+          id: 'old-run',
+          evidenceId: 'ac-missing',
+          kind: 'automated',
+          status: 'failed',
+          summary: 'Expected exit was wrong.',
+          recordedAt: '2026-07-18T00:00:00.000Z',
+          recordedBy: 'gate-checker-agent',
+          evidenceRefs: [],
+        }],
+        launchSteps: [],
+        relatedTaskIds: ['task-negative-fixture'],
+        createdAt: '2026-07-18T00:00:00.000Z',
+        updatedAt: '2026-07-18T00:00:00.000Z',
+        createdBy: 'test',
+      })],
+    } as Parameters<typeof ensureCommandProofPathsFromAcceptanceCriteria>[0]
+
+    ensureCommandProofPathsFromAcceptanceCriteria(task, '2026-07-18T01:00:00.000Z', 'test')
+
+    expect(task.proofPaths?.[0]).toMatchObject({
+      status: 'planned',
+      expectedEvidence: [{ id: 'ac-missing', expectedExit: 'non_zero' }],
+      verificationRecords: [],
+      updatedAt: '2026-07-18T01:00:00.000Z',
+      updatedBy: 'test',
+    })
+  })
+
   it('defines task and project scoped proof paths with explicit launch steps and evidence classes', () => {
     const proofPath = ProofPath.parse({
       id: 'proof-task-link-editor',

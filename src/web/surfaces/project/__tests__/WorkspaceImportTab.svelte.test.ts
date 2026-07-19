@@ -29,15 +29,30 @@ const detectedDraft = {
         confidence: 'high',
       },
     ],
+    releases: [
+      {
+        id: 'v1-release-hardening',
+        label: 'V1 Release Hardening',
+        source: 'docs/roadmap.md',
+        confidence: 'high',
+      },
+    ],
     tasks: [
       {
         suggestedId: 'task-link-editor',
         title: 'Knit: add link editor controls',
         description: 'Build URL input, display text, open-in-new-tab, and remove link controls.',
         domain: 'editor',
+        scope: 'current',
         priority: 'high',
+        releaseIds: ['v1-release-hardening'],
         source: 'docs/roadmap.md',
         references: ['docs/roadmap.md', 'web/app/components/editor/toolbar.ts'],
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: ['Link editor controls record focused implementation or reviewer evidence.'],
+          source: 'inferred',
+        }],
         confidence: 'high',
       },
       {
@@ -45,6 +60,7 @@ const detectedDraft = {
         title: 'Knit: preview saved links',
         description: 'Show a compact preview after inserting a link.',
         domain: 'editor',
+        scope: 'later',
         priority: 'normal',
         source: 'docs/notes.md',
         references: ['docs/notes.md'],
@@ -72,6 +88,8 @@ const detectedDraft = {
           key: 'knit',
           label: 'Knit',
           taskCount: 2,
+          currentTaskCount: 1,
+          laterTaskCount: 1,
           milestoneCount: 1,
           goalCount: 1,
           contextCount: 1,
@@ -83,6 +101,8 @@ const detectedDraft = {
           key: 'looma',
           label: 'Looma',
           taskCount: 0,
+          currentTaskCount: 0,
+          laterTaskCount: 0,
           milestoneCount: 0,
           goalCount: 0,
           contextCount: 1,
@@ -99,6 +119,8 @@ const detectedDraft = {
           areaKey: 'knit',
           areaLabel: 'Knit',
           taskCount: 1,
+          currentTaskCount: 1,
+          laterTaskCount: 0,
           milestoneCount: 1,
           goalCount: 1,
           contextCount: 0,
@@ -114,6 +136,8 @@ const detectedDraft = {
           areaKey: 'knit',
           areaLabel: 'Knit',
           taskCount: 1,
+          currentTaskCount: 0,
+          laterTaskCount: 1,
           milestoneCount: 0,
           goalCount: 0,
           contextCount: 1,
@@ -129,6 +153,8 @@ const detectedDraft = {
           areaKey: 'looma',
           areaLabel: 'Looma',
           taskCount: 0,
+          currentTaskCount: 0,
+          laterTaskCount: 0,
           milestoneCount: 0,
           goalCount: 0,
           contextCount: 1,
@@ -138,17 +164,31 @@ const detectedDraft = {
           taskIds: [],
         },
       ],
+      summary: {
+        currentMilestoneLabel: 'Stage 1: V1 Release Hardening',
+        releaseScopeLabel: 'V1 Release Hardening',
+        headline: 'Current import scope',
+        currentScope: '1 current task candidate from active release scope.',
+        deferredScope: '1 later task candidate is deferred.',
+        structuralScope: '1 capability note grounds the current scope.',
+        briefInputCount: 0,
+        briefRecordCount: 0,
+        capabilityCount: 1,
+        capabilityRecordCount: 0,
+      },
       totalTaskCandidates: 2,
+      totalCurrentTaskCandidates: 1,
+      totalLaterTaskCandidates: 1,
       totalMilestones: 1,
       totalGoals: 1,
     },
     learning: {
       defaults: {
-        selectedAreaKeys: ['knit'],
-        selectedSourceKeys: ['roadmap', 'notes'],
+        selectedAreaKeys: ['knit', 'looma'],
+        selectedSourceKeys: ['roadmap', 'notes', 'looma-notes'],
         selectedTaskIds: ['task-link-editor', 'task-link-preview'],
         taskSelectionMode: 'all',
-        note: 'Using the same import defaults you approved last time.',
+        note: 'Guildhall remembers where you focused last time, but starts from the full current import so no project context is dropped.',
       },
       coordinatorSuggestions: [],
       productSuggestions: [],
@@ -203,15 +243,20 @@ describe('WorkspaceImportTab', () => {
 
     render(WorkspaceImportTab)
     await screen.findByText(/Found planning notes in 2 project parts/)
-    expect(screen.getByText(/Using the same import defaults/)).toBeTruthy()
+    expect(screen.getByText(/starts from the full current import/)).toBeTruthy()
     expect(screen.getByText(/Nothing is saved until the final step/)).toBeTruthy()
     expect(screen.getByText(/You can resume this review later/)).toBeTruthy()
+    expect(screen.getByText('Release scope')).toBeTruthy()
+    expect(screen.getByText('V1 Release Hardening')).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     await screen.findByText('Choose the parts for this pass')
 
-    await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
+    await userEvent.click(screen.getByRole('button', { name: /review 2 selected parts/i }))
     await screen.findByText('Review notes in Knit')
+
+    await userEvent.click(screen.getByRole('button', { name: /review looma next/i }))
+    await screen.findByText('Review notes in Looma')
 
     await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
     await screen.findByText('Review tasks from Roadmap')
@@ -364,7 +409,11 @@ describe('WorkspaceImportTab', () => {
 
     await screen.findByText('This project import has already been approved.')
     expect(screen.queryByText(/Found planning notes/)).toBeNull()
-    expect(screen.getByText('2 proposed tasks')).toBeTruthy()
+    expect(screen.getByText('2 saved tasks')).toBeTruthy()
+    expect(screen.getByText('1 now')).toBeTruthy()
+    expect(screen.getByText('1 later')).toBeTruthy()
+    expect(screen.getByLabelText('Completed import scope summary')).toBeTruthy()
+    expect(screen.getByText('1 current task candidate from active release scope.')).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /restore 2 missing drafts/i }))
 
@@ -443,8 +492,75 @@ describe('WorkspaceImportTab', () => {
     render(WorkspaceImportTab)
 
     await screen.findByText('This project import has already been approved.')
-    expect(screen.getByText('All proposed tasks from this completed import already exist in Work.')).toBeTruthy()
+    expect(screen.getByText('All saved tasks from this completed import already exist in Work.')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /restore/i })).toBeNull()
+  })
+
+  it('offers a refresh when a completed import no longer matches current detected scope', async () => {
+    const completedDraft = structuredClone(detectedDraft)
+    completedDraft.taskStatus = 'done'
+    completedDraft.parsed = {
+      goals: [],
+      tasks: [
+        {
+          id: 'task-old-a',
+          title: 'Old current task A',
+          description: '',
+          domain: 'editor',
+          priority: 'high',
+          references: [],
+          scope: 'current',
+        },
+        {
+          id: 'task-old-b',
+          title: 'Old current task B',
+          description: '',
+          domain: 'editor',
+          priority: 'normal',
+          references: [],
+          scope: 'current',
+        },
+        {
+          id: 'task-old-c',
+          title: 'Old current task C',
+          description: '',
+          domain: 'editor',
+          priority: 'normal',
+          references: [],
+          scope: 'current',
+        },
+      ],
+      milestones: [],
+    }
+    project.detail = {
+      id: 'looma-knit',
+      name: 'Looma + Knit',
+      path: '/repo/looma-knit',
+      tasks: [
+        { id: 'task-old-a', title: 'Old current task A', status: 'ready' },
+        { id: 'task-old-b', title: 'Old current task B', status: 'ready' },
+        { id: 'task-old-c', title: 'Old current task C', status: 'ready' },
+      ],
+    } as never
+    const { calls } = installFetchFakes(completedDraft)
+
+    render(WorkspaceImportTab)
+
+    await screen.findByText('This project import has already been approved.')
+    expect(screen.getByText('3 saved tasks')).toBeTruthy()
+    expect(screen.getByText('2 current-note tasks')).toBeTruthy()
+    expect(screen.getByLabelText('Import refresh needed')).toBeTruthy()
+    expect(screen.getByText(/Saved import: 3 tasks \(3 now, 0 later\)/)).toBeTruthy()
+    expect(screen.getByText(/Current notes: 2 tasks \(1 now, 1 later\)/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /restore/i })).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /refresh import from current notes/i }))
+
+    await waitFor(() => {
+      const refreshCall = calls.find(call => call.url.startsWith('/api/project/workspace-import/approve'))
+      expect(refreshCall).toBeDefined()
+      expect(refreshCall?.body).toEqual({ projectId: 'looma-knit' })
+    })
   })
 
   it('lets users narrow sources and individual imported tasks before creating drafts', async () => {
@@ -454,6 +570,7 @@ describe('WorkspaceImportTab', () => {
     await screen.findByText(/Found planning notes/)
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[1]!)
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
     await screen.findByText('Review notes in Knit')
 
@@ -493,6 +610,7 @@ describe('WorkspaceImportTab', () => {
     await screen.findByText(/Found planning notes/)
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[1]!)
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
     await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
     await screen.findByText('Review tasks from Roadmap')
@@ -503,6 +621,25 @@ describe('WorkspaceImportTab', () => {
 
     await screen.findByText('Review tasks from Editor notes')
     expect(screen.queryByRole('complementary', { name: /Knit: add link editor controls/i })).toBeNull()
+  })
+
+  it('shows proof expectations in the task details drawer before import approval', async () => {
+    installFetchFakes()
+
+    render(WorkspaceImportTab)
+    await screen.findByText(/Found planning notes/)
+
+    await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[1]!)
+    await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
+    await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
+    await screen.findByText('Review tasks from Roadmap')
+
+    await userEvent.click(screen.getByRole('button', { name: /Knit: add link editor controls/i }))
+
+    expect(await screen.findByRole('complementary', { name: /Knit: add link editor controls/i })).toBeTruthy()
+    expect(screen.getByText('Proof needed')).toBeTruthy()
+    expect(screen.getByText('Link editor controls record focused implementation or reviewer evidence.')).toBeTruthy()
   })
 
   it('surfaces draft, approve, dismiss, and rerun failures without changing context', async () => {
@@ -530,6 +667,7 @@ describe('WorkspaceImportTab', () => {
     await screen.findByText(/Found planning notes/)
     await userEvent.click(screen.getByRole('button', { name: /shelve import review/i }))
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[1]!)
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
     await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
     await userEvent.click(screen.getByRole('button', { name: /review next source/i }))

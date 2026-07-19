@@ -2,7 +2,11 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { getProjectSystemStatePath } from '@guildhall/sessions'
+import {
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  writeProjectStateDatabaseSnapshot,
+} from '@guildhall/sessions'
 import { migrateWorkDecompositionState } from '../work-decomposition-migration.js'
 
 let root: string
@@ -59,6 +63,8 @@ describe('work decomposition migration', () => {
       now: '2026-06-17T00:00:00.000Z',
     })
     expect(applied.backupPath).toContain('TASKS.before-0.11.0-execution-planning-decomposition.json')
+    expect(applied.manifestPath).toBe(`${applied.backupPath}.manifest.json`)
+    await expect(fs.readFile(applied.manifestPath!, 'utf8')).resolves.toContain('0.11.0/execution-planning-decomposition')
 
     const raw = await readTasks()
     expect(raw.executionPlanActions).toEqual([
@@ -110,5 +116,32 @@ describe('work decomposition migration', () => {
         failureReason: expect.stringContaining('coordinator must regenerate decomposition'),
       }),
     ])
+  })
+
+  it('does not inspect or apply legacy decomposition state after SQLite promotion', async () => {
+    await writeTasks({ version: 1, lastUpdated: '2026-07-15T12:00:00.000Z', tasks: [{ id: 'legacy-task' }] })
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    await writeProjectStateDatabaseSnapshot(tasksPath, {
+      projectRoot: root,
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-15T12:00:00.000Z',
+        tasks: [{ id: 'canonical-task', title: 'Canonical task', status: 'ready' }],
+      },
+      summary: { projectId: 'decomposition-test', generatedAt: '2026-07-15T12:00:00.000Z' },
+    })
+    promoteProjectStateDatabaseAuthority(root)
+
+    await expect(migrateWorkDecompositionState({ projectRoot: root, apply: false }))
+      .resolves.toEqual({ changedTasks: [], createdActions: [], affectedPaths: [] })
+    await expect(migrateWorkDecompositionState({ projectRoot: root, apply: true }))
+      .rejects.toThrow(/SQLite already owns current project state/)
+  })
+
+  it('rejects malformed legacy queue data instead of treating it as empty', async () => {
+    await writeTasks({ tasks: 'not-a-list' })
+
+    await expect(migrateWorkDecompositionState({ projectRoot: root, apply: false }))
+      .rejects.toThrow(/does not contain a task queue/)
   })
 })

@@ -10,42 +10,92 @@ import { projectFetch } from './project-routes.js'
 class ProjectStore {
   detail: ProjectDetail | null = $state(null)
   loading = $state(false)
+  surfaceLoading = $state(false)
   error: string | null = $state(null)
   #requestSeq = 0
   #appliedSeq = 0
   #inFlight: Promise<ProjectDetail | null> | null = null
-  #inFlightProjectId: string | null = null
+  #inFlightKey: string | null = null
+  #inventoryOffsets = new Map<string, number>()
 
-  async refresh(projectId?: string | null): Promise<ProjectDetail | null> {
+  async refresh(
+    projectId?: string | null,
+    surface?: 'overview' | 'work' | 'map' | null,
+    selectedTaskId?: string | null,
+    options: { inventoryOffset?: number; inventoryLimit?: number } = {},
+  ): Promise<ProjectDetail | null> {
     const normalizedProjectId = projectId?.trim() || null
-    if (this.#inFlight && this.#inFlightProjectId === normalizedProjectId) return this.#inFlight
-    this.#inFlightProjectId = normalizedProjectId
+    const normalizedSurface = surface === 'overview' || surface === 'work' || surface === 'map' ? surface : null
+    const normalizedSelectedTaskId = normalizedSurface === 'work' ? selectedTaskId?.trim() || null : null
+    const inventoryKey = `${normalizedProjectId ?? ''}:${normalizedSurface ?? ''}`
+    const inventoryOffset = normalizedSurface === 'work' || normalizedSurface === 'map'
+      ? options.inventoryOffset ?? this.#inventoryOffsets.get(inventoryKey) ?? 0
+      : 0
+    const inventoryLimit = normalizedSurface === 'work'
+      ? options.inventoryLimit ?? 40
+      : normalizedSurface === 'map'
+        ? options.inventoryLimit ?? 24
+        : undefined
+    const requestKey = `${inventoryKey}:${normalizedSelectedTaskId ?? ''}:${inventoryOffset}:${inventoryLimit ?? ''}`
+    if (this.#inFlight && this.#inFlightKey === requestKey) return this.#inFlight
+    this.#inFlightKey = requestKey
     const requestSeq = ++this.#requestSeq
     this.loading = true
+    this.surfaceLoading = true
     this.#inFlight = (async () => {
-      try {
-        const r = await projectFetch('/api/project', { cache: 'no-store' }, normalizedProjectId)
-        const j = (await r.json()) as ProjectDetail
-        if (requestSeq < this.#appliedSeq) return this.detail
-        if (j.error) {
-          this.#appliedSeq = requestSeq
-          this.error = j.error
-          return null
-        }
+      let detailApplied = false
+      const applyPayload = (payload: ProjectDetail): void => {
+        if (requestSeq < this.#appliedSeq) return
         this.#appliedSeq = requestSeq
         this.error = null
-        this.detail = j
-        return j
+        const current = this.detail
+        this.detail = current?.id && current.id === payload.id
+          ? { ...current, ...payload }
+          : payload
+      }
+      try {
+        const endpoint = normalizedSurface
+          ? `/api/project?surface=${normalizedSurface}&compact=true&inventoryLimit=${inventoryLimit ?? ''}&inventoryOffset=${inventoryOffset}${normalizedSelectedTaskId ? `&task=${encodeURIComponent(normalizedSelectedTaskId)}` : ''}`
+          : '/api/project?compact=true'
+        const detailPromise = projectFetch(endpoint, { cache: 'no-store' }, normalizedProjectId)
+          .then(async response => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            return await response.json() as ProjectDetail
+          })
+
+        const detailResult = detailPromise
+          .then(payload => {
+            if (payload.error) throw new Error(payload.error)
+            const payloadOffset = payload.taskPayload?.offset ?? 0
+            if (normalizedSurface === 'work' || normalizedSurface === 'map') {
+              this.#inventoryOffsets.set(inventoryKey, payloadOffset)
+            }
+            const current = this.detail
+            const appendInventory = payloadOffset > 0 && current?.id === payload.id && Array.isArray(current.tasks) && Array.isArray(payload.tasks)
+            const mergedPayload = appendInventory
+              ? {
+                  ...payload,
+                  tasks: [...current.tasks, ...payload.tasks].filter((task, index, all) => all.findIndex(candidate => candidate.id === task.id) === index),
+                }
+              : payload
+            applyPayload(mergedPayload)
+            detailApplied = true
+            return payload
+          })
+        await detailResult
+        return this.detail
       } catch (err) {
-        if (requestSeq < this.#appliedSeq) return this.detail
-        this.#appliedSeq = requestSeq
-        this.error = err instanceof Error ? err.message : String(err)
-        return null
+        if (!detailApplied && requestSeq >= this.#appliedSeq) {
+          this.#appliedSeq = requestSeq
+          this.error = err instanceof Error ? err.message : String(err)
+        }
+        return this.detail
       } finally {
         if (requestSeq === this.#requestSeq) this.loading = false
-        if (this.#inFlightProjectId === normalizedProjectId) {
+        if (requestSeq === this.#requestSeq) this.surfaceLoading = false
+        if (this.#inFlightKey === requestKey) {
           this.#inFlight = null
-          this.#inFlightProjectId = null
+          this.#inFlightKey = null
         }
       }
     })()

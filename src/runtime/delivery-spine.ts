@@ -6,6 +6,8 @@ import {
   type GuildhallPersistence,
   type PersistencePlacement,
 } from '@guildhall/persistence'
+import { emitProjectSummaryInvalidation } from '@guildhall/sessions'
+import { taskShapingBlockers } from '@guildhall/shared'
 
 const DELIVERY_SPINE_COLLECTION = 'delivery-spine'
 const DELIVERY_SPINE_RECORD_ID = 'project-delivery-model'
@@ -231,6 +233,7 @@ export interface TaskContextPacket {
   }
   executionOrder: TaskRelationshipSummary['dependencies'] & {
     runnableNow: boolean
+    shapingBlockers: Array<{ code: string; summary: string }>
   }
   primitiveContext: {
     direct: PrimitiveWithRelations[]
@@ -494,6 +497,11 @@ export async function writeProjectDeliveryModel(
     createdBy: 'guildhall-runtime',
     payload: normalized,
   })
+  // Delivery metadata is its own derived domain. It still refreshes Inbox,
+  // which surfaces delivery validation, but it must not masquerade as a
+  // generic legacy write and force the summary projector to expand every
+  // task's current evidence/runtime state.
+  emitProjectSummaryInvalidation(projectRoot, 'delivery-spine-write', { domains: ['delivery', 'attention'] })
   return normalized
 }
 
@@ -796,13 +804,33 @@ export function planTaskSplit(input: {
 
   const primitiveIds = new Set(input.model.primitives.map(primitive => primitive.id))
   const recommendationToPlannedId = new Map<string, string>()
+  const workUnitIdToPlannedId = new Map<string, string>()
   const children: TaskSplitChildPlan[] = []
   const recommendations = sizePlan.recommendedChildren.length > 0
     ? sizePlan.recommendedChildren
     : buildDecompositionChildDrafts({ task })
+  if (recommendations.length === 0) {
+    return {
+      parentTaskId: task.id,
+      action: sizePlan.action,
+      children: [],
+      errors: [issue(
+        `tasks.${task.id}.workUnitAnalysis`,
+        'missing_split_plan',
+        `Task ${task.id} needs explicit work-unit analysis before Guildhall can materialize a split.`,
+      )],
+      warnings,
+    }
+  }
+  const workUnits = task.workUnitAnalysis?.units ?? []
   for (const [index, recommendation] of recommendations.entries()) {
     const plannedTaskId = recommendation.createdTaskId ?? `${task.id}-split-${slugForId(recommendation.title)}`
     recommendationToPlannedId.set(normalizeKey(recommendation.title), plannedTaskId)
+    const matchingUnit =
+      workUnits[index]?.title === recommendation.title
+        ? workUnits[index]
+        : workUnits.find(unit => normalizeKey(unit.title) === normalizeKey(recommendation.title))
+    if (matchingUnit?.id) workUnitIdToPlannedId.set(matchingUnit.id, plannedTaskId)
     const explicitUses = recommendation.usesPrimitives ?? []
     const inferredUses = explicitUses.length > 0
       ? explicitUses
@@ -875,7 +903,9 @@ export function planTaskSplit(input: {
     children: children.map(child => ({
       ...child,
       dependsOn: child.dependsOn.map(dependency =>
-        recommendationToPlannedId.get(normalizeKey(dependency)) ?? dependency,
+        workUnitIdToPlannedId.get(dependency) ??
+        recommendationToPlannedId.get(normalizeKey(dependency)) ??
+        dependency,
       ),
     })),
     errors,
@@ -1491,8 +1521,9 @@ export function buildTaskContextPacket(input: {
   tasks: Task[]
   taskId: string
   now?: string
+  relationships?: TaskRelationshipSummary
 }): TaskContextPacket {
-  const relationships = deriveTaskRelationships(input)
+  const relationships = input.relationships ?? deriveTaskRelationships(input)
   const task = relationships.task
   const driver = input.model.drivers.find(candidate => candidate.id === task.delivery?.driver)
   const provider = input.model.drivers.find(candidate => candidate.id === task.delivery?.provider)
@@ -1513,6 +1544,7 @@ export function buildTaskContextPacket(input: {
   )
   const executionBlockers = relationships.dependencies.recursiveBlockers.filter(blocker => !isTerminalTaskStatus(blocker.status))
   const primitiveBlockers = relationships.primitiveUse.blockers
+  const shapingBlockers = taskShapingBlockers(task)
   const persona = selectPersona(task, primitiveSet)
   const packageLabel = relationships.hierarchy.parent?.title ?? task.title
   const whyParts = [
@@ -1522,7 +1554,9 @@ export function buildTaskContextPacket(input: {
       ? `after ${executionBlockers[0]?.title ?? executionBlockers[0]?.id} is resolved`
       : primitiveBlockers.length > 0
         ? `once ${primitiveBlockers[0]?.label ?? primitiveBlockers[0]?.id} has proof`
-        : 'and it is runnable now',
+        : shapingBlockers.length > 0
+          ? 'after Guildhall repairs the source-backed brief'
+          : 'and it is runnable now',
   ].filter(Boolean)
 
   return {
@@ -1536,7 +1570,8 @@ export function buildTaskContextPacket(input: {
     },
     executionOrder: {
       ...relationships.dependencies,
-      runnableNow: executionBlockers.length === 0 && primitiveBlockers.length === 0,
+      runnableNow: executionBlockers.length === 0 && primitiveBlockers.length === 0 && shapingBlockers.length === 0,
+      shapingBlockers,
     },
     primitiveContext: {
       direct: relationships.primitiveUse.direct,

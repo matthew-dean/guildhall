@@ -1,11 +1,10 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { readManagedTextFile, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { ResolvedConfig } from '@guildhall/config'
 import { AGENT_SETTINGS_FILENAME, loadLeverSettings, saveLeverSettings, validateLeverSettings } from '@guildhall/levers'
-import { appendTaskEvidence, atomicWriteText, getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { appendTaskEvidence, getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 import { createExploringTask } from './intake.js'
 import { runOrchestrator, type OrchestratorRunOptions, type OrchestratorRunResult } from './orchestrator.js'
@@ -164,11 +163,6 @@ async function appendRunOnceNote(input: {
   proof: RunOnceProofMode
   createdAt: string
 }): Promise<void> {
-  const tasksPath = runOnceStatePath(input.memoryDir, 'TASKS.json')
-  const raw = await readManagedTextFile(tasksPath, 'utf8')
-  const queue = JSON.parse(raw)
-  const task = queue.tasks?.find((candidate: { id?: unknown }) => candidate.id === input.taskId)
-  if (!task) throw new Error(`Task ${input.taskId} not found after run-once intake.`)
   const note = {
     agentId: 'run-once',
     role: 'automation',
@@ -185,9 +179,6 @@ async function appendRunOnceNote(input: {
     recordedAt: input.createdAt,
     payload: note,
   })
-  task.updatedAt = input.createdAt
-  queue.lastUpdated = input.createdAt
-  writeManagedTextFileSync(tasksPath, `${JSON.stringify(queue, null, 2)}\n`)
 }
 
 function runOnceStatePath(memoryDir: string, filename: string): string {
@@ -201,5 +192,5 @@ function runOnceStatePath(memoryDir: string, filename: string): string {
 function compactTitle(value: string): string {
   const first = value.split(/\r?\n/).find(line => line.trim())?.trim() ?? 'Run once task'
   const single = first.replace(/\s+/g, ' ')
-  return single.length <= 60 ? single : `${single.slice(0, 57).trimEnd()}...`
+  return single || 'Run once task'
 }

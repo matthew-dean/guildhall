@@ -673,7 +673,13 @@
 
   async function loadThreadExtras(requestId: number): Promise<void> {
     try {
-      const r = await scopedProjectFetch('/api/project/thread/extras', { cache: 'no-store' })
+      const taskIds = [...new Set(
+        turns
+          .map(turn => ('taskId' in turn ? turn.taskId : null))
+          .filter((id): id is string => Boolean(id)),
+      )]
+      const query = taskIds.length > 0 ? `?taskIds=${encodeURIComponent(taskIds.join(','))}` : ''
+      const r = await scopedProjectFetch(`/api/project/thread/extras${query}`, { cache: 'no-store' })
       if (!r.ok) return
       const j = (await r.json()) as { taskGitStories?: Record<string, unknown> }
       if (requestId !== threadLoadRequestId) return
@@ -1036,6 +1042,7 @@
     if (needsRecovery(t)) return 'warn'
     const owner = ownershipLabel(t)
     if (owner === 'Needs you' || owner === 'Needs brief') return 'warn'
+    if (t.kind === 'setup_step' && t.skippable) return 'neutral'
     if (
       owner === 'Queued' ||
       owner === 'Working'
@@ -1061,6 +1068,7 @@
       if (t.taskStatus === 'in_progress') return runStatus === 'running' ? 'next' : 'paused'
       return canStartTaskTurn(t) ? 'queued' : 'paused'
     }
+    if (t.kind === 'setup_step' && t.skippable) return 'optional'
     if (t.kind === 'spec_review' && t.status === 'active') return 'awaiting approval'
     return t.status === 'active' ? 'now' : 'next'
   }
@@ -2262,7 +2270,7 @@
       case 'deferred': return 'Deferred'
       case 'conflict': return 'Conflict'
       case 'unknown': return 'Unknown'
-      default: return 'Git story'
+      default: return 'Repository'
     }
   }
 
@@ -2282,7 +2290,7 @@
   }
 
   function gitStorySummary(story: GitStorySnapshot): string {
-    return story.reason ?? story.nextAction ?? 'Git story needs closure.'
+    return story.reason ?? story.nextAction ?? 'Repository follow-up needed.'
   }
 
   function metaIntakeChecklistComplete(turn: InFlightTurn): boolean {
@@ -3756,7 +3764,7 @@
                 {/if}
               {/snippet}
               {#if !isHistoricalTaskEvent(t) && gitStoryVisible(t) && 'gitStory' in t && t.gitStory}
-                <div class="git-story-callout" aria-label="Git story">
+                <div class="git-story-callout" aria-label="Repository state">
                   <div class="git-story-main">
                     <Chip label={gitStoryLabel(t.gitStory)} tone={gitStoryTone(t.gitStory)} />
                     <span>{gitStorySummary(t.gitStory)}</span>
@@ -3819,7 +3827,7 @@
                 {:else if t.kind === 'setup_step'}
                   <div class="setup-title">
                     <h3 class="prompt"><Markdown source={setupStepTitle(t)} inline /></h3>
-                    {#if t.skippable}
+                    {#if t.skippable && !showStatusChip(t)}
                       <Chip label="optional" tone="neutral" />
                     {/if}
                   </div>
@@ -5143,7 +5151,7 @@
                           {/if}
 
                           {#if gitStoryVisible(activeDockTurn) && activeDockTurn.gitStory}
-                            <div class="git-story-callout" aria-label="Git story">
+                            <div class="git-story-callout" aria-label="Repository state">
                               <div class="git-story-main">
                                 <Chip label={gitStoryLabel(activeDockTurn.gitStory)} tone={gitStoryTone(activeDockTurn.gitStory)} />
                                 <span>{gitStorySummary(activeDockTurn.gitStory)}</span>

@@ -54,7 +54,7 @@ describe('decomposeTaskForFinishability', () => {
     expect(decomposition.childDrafts).toEqual([])
   })
 
-  it('creates a research precursor when research and implementation are mixed', () => {
+  it('does not invent a generic research child when research and implementation are mixed', () => {
     const mixedTask = task({
       title: 'Research and implement a better search engine',
       description: 'Compare Fuse, MiniSearch, and hosted search, then implement the best choice.',
@@ -66,10 +66,7 @@ describe('decomposeTaskForFinishability', () => {
 
     expect(decomposition.action).toBe('research_first')
     expect(decomposition.reasons.map(reason => reason.code)).toContain('mixed_research_and_implementation')
-    expect(decomposition.childDrafts[0]).toMatchObject({
-      kind: 'research',
-      title: expect.stringMatching(/research/i),
-    })
+    expect(decomposition.childDrafts).toEqual([])
   })
 
   it('stores readiness, definition of done, blocker plans, context budget, and decomposition on the task', () => {
@@ -98,7 +95,7 @@ describe('decomposeTaskForFinishability', () => {
     expect(result.blockerPlans?.length).toBeGreaterThan(0)
     expect(result.contextBudget?.fitsInOneWorkerBrief).toBe(true)
     expect(result.decomposition?.action).toBe('keep')
-    expect(result.notes.at(-1)?.content).toContain('Task readiness: ready')
+    expect(result.notes.at(-1)?.content).toContain('Task readiness action: ready')
   })
 
   it('does not draft split children for one bounded deliverable with multiple proof bullets', () => {

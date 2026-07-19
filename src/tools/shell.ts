@@ -17,12 +17,14 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import { execSync, spawn } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   classifyGateCommand,
   parseAuthoritativeCommands,
   reconcileShellCommandWithAuthority,
 } from '@guildhall/core'
+import { providerCommandEnv } from '@guildhall/config/global-providers'
 
 const OUTPUT_TRUNCATE_LIMIT = 12_000
 
@@ -42,6 +44,14 @@ export interface ShellResult {
   interactiveRequired?: boolean
   /** True when the child was killed by the timeout watchdog. */
   timedOut?: boolean
+}
+
+function shellProcessEnv(env: Record<string, string> | undefined): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...providerCommandEnv(),
+    ...(env ?? {}),
+  }
 }
 
 function resolveShellCwd(inputCwd: string | undefined, fallbackCwd: string | undefined): string {
@@ -287,6 +297,35 @@ function looksLikeDirectFileWrite(command: string): boolean {
   return hasStdoutRedirect || hasHereDoc || hasTee
 }
 
+function shellWriteTargets(command: string, cwd: string): string[] {
+  const targets: string[] = []
+  const addTarget = (raw: string | undefined) => {
+    const value = raw?.trim()
+    if (!value || value.startsWith('&') || value.startsWith('(')) return
+    targets.push(path.resolve(cwd, stripShellCdQuotes(value)))
+  }
+  const redirectPattern = /(^|[^0-9])>>?\s*("[^"]+"|'[^']+'|[^\s;&|]+)/g
+  for (const match of command.matchAll(redirectPattern)) {
+    addTarget(match[2])
+  }
+  const teePattern = /\btee(?:\s+-a)?\s+("[^"]+"|'[^']+'|[^\s;&|]+)/g
+  for (const match of command.matchAll(teePattern)) {
+    addTarget(match[1])
+  }
+  return targets
+}
+
+function shellWriteTouchesTaskScope(command: string, cwd: string, metadata: Record<string, unknown> | undefined): boolean {
+  const targets = shellWriteTargets(command, cwd)
+  if (targets.length === 0) return true
+  const protectedRoots = [
+    String(metadata?.['current_task_project_path'] ?? '').trim(),
+    String(metadata?.['current_task_worktree_path'] ?? '').trim(),
+  ].filter(Boolean).map(root => path.resolve(root))
+  if (protectedRoots.length === 0) return true
+  return targets.some(target => protectedRoots.some(root => target === root || target.startsWith(`${root}${path.sep}`)))
+}
+
 function directFileWriteGuardMessage(metadata: Record<string, unknown> | undefined): string {
   const missingTarget = String(metadata?.['current_missing_likely_target_file'] ?? '').trim()
   const likelyTargets = Array.isArray(metadata?.['current_task_likely_target_files'])
@@ -310,6 +349,62 @@ function normalizePnpmScopedScriptCommand(command: string): string {
     (_match, flag: string, dir: string, script: string, rest: string | undefined) =>
       `pnpm ${flag} ${dir} run ${script}${rest ?? ''}`,
   )
+}
+
+function normalizeShellCommand(command: string): string {
+  return command.trim().replace(/\s+/g, ' ')
+}
+
+function isSelfReferentialGuildhallTaskCommand(command: string): boolean {
+  const normalized = normalizeShellCommand(command)
+  return /\b(?:npx\s+)?guildhall\s+run\b/i.test(normalized) && /\s--task(?:=|\s)/i.test(normalized)
+}
+
+function readPackageScriptBody(cwd: string, scriptName: string): string | null {
+  const packageJsonPath = path.join(cwd, 'package.json')
+  if (!existsSync(packageJsonPath)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+      scripts?: Record<string, unknown>
+    }
+    const body = parsed.scripts?.[scriptName]
+    return typeof body === 'string' ? body : null
+  } catch {
+    return null
+  }
+}
+
+function shellCommandScriptTarget(command: string, cwd: string): { scriptName: string; cwd: string } | null {
+  const normalized = normalizeShellCommand(command)
+  const dirMatch = /^pnpm\s+(?:--dir|-C)\s+(\S+)\s+(?:run\s+)?([a-z0-9:_-]+)(?:\s|$)/i.exec(normalized)
+  if (dirMatch) {
+    return { cwd: path.resolve(cwd, dirMatch[1]!), scriptName: dirMatch[2]! }
+  }
+  const pnpmMatch = /^pnpm\s+(?:run\s+)?([a-z0-9:_-]+)(?:\s|$)/i.exec(normalized)
+  if (pnpmMatch) return { cwd, scriptName: pnpmMatch[1]! }
+  const npmMatch = /^npm\s+run\s+([a-z0-9:_-]+)(?:\s|$)/i.exec(normalized)
+  if (npmMatch) return { cwd, scriptName: npmMatch[1]! }
+  const yarnMatch = /^yarn\s+([a-z0-9:_-]+)(?:\s|$)/i.exec(normalized)
+  if (yarnMatch) return { cwd, scriptName: yarnMatch[1]! }
+  return null
+}
+
+function blockedGuildhallTaskProofMessage(command: string): string {
+  return (
+    `Blocked \`${command}\` as task proof because it delegates back to Guildhall orchestration. ` +
+    'A project proof command must exercise the project itself, such as a typecheck, build, test, fixture runner, or explicit validation script.'
+  )
+}
+
+function selfReferentialGuildhallTaskProofBlock(command: string, cwd: string): string | null {
+  if (isSelfReferentialGuildhallTaskCommand(command)) {
+    return blockedGuildhallTaskProofMessage(command)
+  }
+  const target = shellCommandScriptTarget(command, cwd)
+  if (!target) return null
+  const scriptBody = readPackageScriptBody(target.cwd, target.scriptName)
+  if (!scriptBody || !isSelfReferentialGuildhallTaskCommand(scriptBody)) return null
+  return blockedGuildhallTaskProofMessage(`${command} (${target.scriptName}: ${scriptBody})`)
 }
 
 function normalizeExecErrorOutput(err: {
@@ -359,7 +454,7 @@ export function runShellSync(input: ShellInput): ShellResult {
       timeout: timeoutMs,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: env ? { ...process.env, ...env } : process.env,
+      env: shellProcessEnv(env),
     })
     return { success: true, output: formatOutput(output), exitCode: 0 }
   } catch (err: unknown) {
@@ -408,7 +503,7 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
     const child = spawn('sh', ['-c', command], {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: env ? { ...process.env, ...env } : process.env,
+      env: shellProcessEnv(env),
       detached: process.platform !== 'win32',
     })
 
@@ -530,7 +625,27 @@ export const shellTool = defineTool({
         } as unknown as Record<string, unknown>,
       }
     }
-    if (hasTaskScopedFileMutationGuard(ctx.metadata) && looksLikeDirectFileWrite(executableCommand)) {
+    const effectiveCwd = reconcileShellCwdWithTaskScope(cdAdjustedCwd, ctx.metadata)
+    const selfReferentialProofBlock = selfReferentialGuildhallTaskProofBlock(executableCommand, effectiveCwd)
+    if (selfReferentialProofBlock) {
+      return {
+        output: selfReferentialProofBlock,
+        is_error: true,
+        metadata: {
+          success: false,
+          exitCode: 2,
+          requestedCommand: input.command,
+          executedCommand: executableCommand,
+          usedAuthoritativeCommand: reconciled.usedAuthority,
+          blockedSelfReferentialGuildhallTaskProof: true,
+        } as unknown as Record<string, unknown>,
+      }
+    }
+    if (
+      hasTaskScopedFileMutationGuard(ctx.metadata) &&
+      looksLikeDirectFileWrite(executableCommand) &&
+      shellWriteTouchesTaskScope(executableCommand, effectiveCwd, ctx.metadata)
+    ) {
       return {
         output: directFileWriteGuardMessage(ctx.metadata),
         is_error: true,
@@ -544,7 +659,6 @@ export const shellTool = defineTool({
         } as unknown as Record<string, unknown>,
       }
     }
-    const effectiveCwd = reconcileShellCwdWithTaskScope(cdAdjustedCwd, ctx.metadata)
     const normalizedInput: ShellInput = {
       ...input,
       command: executableCommand,

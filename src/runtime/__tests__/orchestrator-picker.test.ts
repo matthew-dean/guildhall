@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TaskQueue } from '@guildhall/core'
-import { pickNextTask, selectedReleaseScopeForQueue } from '../orchestrator-picker.js'
+import { pickNextTask, selectedReleaseScopeForQueue, selectedTaskScopeForQueue } from '../orchestrator-picker.js'
 import type { OrientationScope } from '../project-orientation-spine.js'
 
 function task(overrides: Record<string, unknown> = {}) {
@@ -75,6 +75,15 @@ describe('pickNextTask bounded scope eligibility', () => {
     expect(pickNextTask(q)?.id).toBe('later')
   })
 
+  it('does not infer a release from task releaseIds when the release record is absent', () => {
+    const q = queue([
+      { id: 'later', title: 'Later release feature', priority: 'critical', status: 'shelved', releaseIds: ['later-release'] },
+      { id: 'included', title: 'Near-term proof task', priority: 'normal', releaseIds: ['near-term-proof-scope'] },
+    ])
+    expect(selectedReleaseScopeForQueue(q)).toBeNull()
+    expect(pickNextTask(q)?.id).toBe('included')
+  })
+
   it('bounds unattended Start to the selected release when releases are defined', () => {
     const q = queueWithRelease([
       { id: 'later', title: 'Later release feature', priority: 'critical' },
@@ -89,6 +98,66 @@ describe('pickNextTask bounded scope eligibility', () => {
       deferredNodeIds: ['work:later'],
     })
     expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('included')
+  })
+
+  it('bounds unattended Start to the approved current task scope when no release is defined', () => {
+    const q = queue([
+      { id: 'later', title: 'Later scope feature', priority: 'critical' },
+      { id: 'included', title: 'Current scope feature', priority: 'normal' },
+    ])
+    const scope = selectedTaskScopeForQueue(q, {
+      currentTaskIds: ['included'],
+      laterTaskIds: ['later'],
+    })
+
+    expect(scope).toMatchObject({
+      id: 'current-work',
+      label: 'Current task scope',
+      nodeIds: ['work:included'],
+      deferredNodeIds: ['work:later'],
+    })
+    expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('included')
+  })
+
+  it('keeps selected release scope membership explicit while still allowing descendant work', () => {
+    const q = queueWithRelease([
+      { id: 'included', title: 'Selected release feature', priority: 'normal', hierarchy: { childIds: ['child'], order: 0 } },
+      { id: 'child', title: 'Scoped child work', priority: 'normal', hierarchy: { parentId: 'included', childIds: [], order: 0 } },
+    ])
+    const scope = selectedReleaseScopeForQueue(q)
+
+    expect(scope?.nodeIds).toEqual(['work:included'])
+    expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('child')
+  })
+
+  it('picks a selected containing task reopened for missing proof after child work is done', () => {
+    const q = queueWithRelease([
+      {
+        id: 'included',
+        title: 'Define fixture and evaluation schemas',
+        status: 'in_progress',
+        priority: 'normal',
+        hierarchy: { childIds: ['child'], order: 0 },
+        releaseIds: ['2-0-alpha'],
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: ['Recorded proof artifact exists.'],
+          status: 'verified',
+        }],
+      },
+      {
+        id: 'child',
+        title: 'Shape fixture ground truth',
+        status: 'done',
+        priority: 'normal',
+        hierarchy: { parentId: 'included', childIds: [], order: 0 },
+      },
+    ])
+
+    expect(pickNextTask(q, undefined, undefined, undefined, 'included')?.id).toBe('included')
+    expect(pickNextTask(q, undefined, undefined, undefined, undefined, {
+      scope: selectedReleaseScopeForQueue(q),
+    })?.id).toBe('included')
   })
 
   it('does not pick deferred ready work during normal unattended current-scope work', () => {
@@ -181,6 +250,56 @@ describe('pickNextTask bounded scope eligibility', () => {
     expect(pickNextTask(q)).toBeUndefined()
   })
 
+  it('does not keep dispatching active work after it records a block reason', () => {
+    const q = queue([
+      {
+        id: 'stage-2-reviewer',
+        title: 'Implement Stage 2 reviewer',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        blockReason: 'Stage sequencing violation: Stage 1 is not complete.',
+        updatedAt: '2026-07-05T14:16:00.000Z',
+      },
+      {
+        id: 'stage-1-prerequisite',
+        title: 'Build Stage 1 prerequisite',
+        status: 'ready',
+        updatedAt: '2026-07-05T14:10:00.000Z',
+      },
+    ])
+
+    expect(pickNextTask(q)?.id).toBe('stage-1-prerequisite')
+  })
+
+  it('dispatches bounded child work after split readiness is settled as proceed-with-warning', () => {
+    const q = queue([
+      {
+        id: 'bounded-child',
+        title: 'Build the bounded writer packet instead of rereading the manuscript',
+        priority: 'normal',
+        status: 'ready',
+        spec: '## Spec\nBuild the writer packet.\n\nWhat counts as done: The packet is produced from bounded records.',
+        acceptanceCriteria: [{ description: 'The writer packet names character and reader knowledge.' }],
+        taskReadiness: {
+          recommendation: 'requires_child_work',
+        },
+        sizePlan: {
+          taskId: 'bounded-child',
+          score: 5,
+          band: 'large',
+          action: 'proceed_with_warning',
+          factors: [],
+          recommendedChildren: [],
+          reasons: ['Kept as runnable bounded child contract work because no materializable split children were planned.'],
+          createdAt: '2026-07-05T02:37:52.658Z',
+          createdBy: 'task-shaping',
+        },
+      },
+    ])
+
+    expect(pickNextTask(q)?.id).toBe('bounded-child')
+  })
+
   it('selects runnable leaves through arbitrary-depth containing work', () => {
     const q = queue([
       { id: 'release', title: 'Current MVP', priority: 'critical', hierarchy: { childIds: ['feature'], order: 0 } },
@@ -209,5 +328,27 @@ describe('pickNextTask bounded scope eligibility', () => {
     ])
 
     expect(pickNextTask(q)?.id).toBe('visible-work')
+  })
+
+  it('can pick internal child steps from selected release containing work', () => {
+    const q = queueWithRelease([
+      {
+        id: 'included',
+        title: 'Selected release feature',
+        priority: 'normal',
+        releaseIds: ['2-0-alpha'],
+        hierarchy: { childIds: ['internal-step'], order: 0 },
+      },
+      {
+        id: 'internal-step',
+        title: 'Runnable internal step',
+        priority: 'normal',
+        hierarchy: { parentId: 'included', childIds: [], order: 0 },
+        workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+      },
+    ])
+    const scope = selectedReleaseScopeForQueue(q)
+
+    expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('internal-step')
   })
 })

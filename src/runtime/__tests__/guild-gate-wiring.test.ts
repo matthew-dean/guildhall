@@ -10,6 +10,7 @@ import { TaskQueue, type Task, type DesignSystem } from '@guildhall/core'
 import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 import { designSystemPath } from '../design-system-store.js'
 import { buildEffectiveTask } from '../effective-task.js'
+import { readProjectCanonicalCurrentState } from '../project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // Integration test: at `gate_check`, the orchestrator's guild deterministic
@@ -162,10 +163,14 @@ const passingDS: DesignSystem = {
 }
 
 async function readQueue(): Promise<TaskQueue> {
-  const queue = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+  const current = await readProjectCanonicalCurrentState(tmpDir)
   return {
-    ...queue,
-    tasks: await Promise.all(queue.tasks.map(async task => buildEffectiveTask(task.projectPath, task))) as unknown as Task[],
+    version: 1,
+    ...current.rawQueue,
+    lastUpdated: current.rawQueue.lastUpdated ?? new Date().toISOString(),
+    tasks: await Promise.all(current.rawQueue.tasks.map(task =>
+      buildEffectiveTask(tmpDir, task as Task, { evidence: 'full' }),
+    )) as unknown as Task[],
   }
 }
 

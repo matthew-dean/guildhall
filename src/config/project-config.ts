@@ -128,7 +128,7 @@ export const ProjectGuildhallConfig = z.object({
 
   /** Memory-core substrate and semantic recall overrides for this checkout. */
   memory: z.object({
-    substrate: z.enum(['mastra', 'deterministic']).default('mastra'),
+    substrate: z.enum(['mastra', 'deterministic']).default('deterministic'),
     semanticRecall: z.boolean().default(false),
     observationalMemory: z.boolean().default(false),
   }).default({}),

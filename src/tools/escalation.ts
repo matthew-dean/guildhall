@@ -13,7 +13,12 @@ import {
 import { logProgress } from './memory-tools.js'
 import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir, readTaskEvidence, upsertTaskRuntimeState } from '@guildhall/sessions'
 import { buildEffectiveTask } from '@guildhall/runtime/effective-task'
-import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
+import {
+  readProjectTaskQueueForMutationSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+} from '@guildhall/runtime/project-state-boundary'
+import { providerCommandEnv } from '@guildhall/config/global-providers'
 
 // ---------------------------------------------------------------------------
 // FR-10 Escalation protocol
@@ -101,6 +106,38 @@ function blockTaskForEscalation(task: Task, input: Pick<RaiseEscalationInput, 'r
   task.updatedAt = now
 }
 
+function persistEscalationTaskState(input: {
+  tasksPath: string
+  projectRoot: string
+  task: Task
+  queue: z.infer<typeof TaskQueue>
+  expectedQueueRevision: number | null
+}): void {
+  const promotedMutation = writePromotedTaskDetailMutation(input.tasksPath, input.task.id, {
+    projectId: path.basename(input.projectRoot),
+    projectRoot: input.projectRoot,
+    mutate: (definition) => {
+      definition.status = input.task.status
+      if (typeof input.task.blockReason === 'string') definition.blockReason = input.task.blockReason
+      else delete definition.blockReason
+      if (Array.isArray((input.task as Task & { openEscalations?: unknown }).openEscalations)) {
+        definition.openEscalations = (input.task as Task & { openEscalations?: unknown }).openEscalations
+      } else {
+        delete definition.openEscalations
+      }
+      definition.updatedAt = input.task.updatedAt
+      return definition
+    },
+  })
+  if (!promotedMutation) {
+    writeProjectTaskQueue(input.tasksPath, input.queue, {
+      ...(input.expectedQueueRevision !== null
+        ? { expectedQueueRevision: input.expectedQueueRevision }
+        : {}),
+    })
+  }
+}
+
 function projectRootForTaskState(tasksPath: string, task: Task): string {
   const stateDir = path.dirname(tasksPath)
   if (path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)) {
@@ -112,9 +149,18 @@ function projectRootForTaskState(tasksPath: string, task: Task): string {
 function looksLikeRoutineVerificationEscalation(input: RaiseEscalationInput): boolean {
   const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
   return (
-    /\bAC-\d+\b/i.test(text) &&
-    /\b(?:evidence|verification|test result|gate)\b/i.test(text) &&
+    /\bAC[- ]?\d+\b/i.test(text) &&
+    /\b(?:evidence|verification|test result|gate|proof)\b/i.test(text) &&
     /\b(?:pnpm|npm|yarn|bun|vitest|test|typecheck|build)\b/i.test(text)
+  )
+}
+
+function looksLikeSelfReferentialProofEscalation(input: RaiseEscalationInput): boolean {
+  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
+  return (
+    /\b(?:npx\s+)?guildhall\s+run\b/i.test(text) &&
+    /\s--task(?:=|\s)/i.test(text) &&
+    /\b(?:proof|verification|AC[- ]?\d+|acceptance criterion)\b/i.test(text)
   )
 }
 
@@ -130,18 +176,46 @@ function looksLikeWorkerImplementationRecovery(input: RaiseEscalationInput): boo
   return brittleEditFailure && (localImplementationEvidence || asksForOwnerToResolveImplementation)
 }
 
+function configuredProviderEnvBlocksCredentialEscalation(input: RaiseEscalationInput): boolean {
+  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}\n${JSON.stringify(input.externalChecklist ?? [])}`
+  const mentionsProviderToken =
+    /\bDEEPINFRA_API_TOKEN\b/.test(text) ||
+    /\bOPENAI_API_KEY\b/.test(text) ||
+    /\bOPENAI_BASE_URL\b/.test(text)
+  if (!mentionsProviderToken) return false
+  let env: Record<string, string>
+  try {
+    env = providerCommandEnv()
+  } catch {
+    return false
+  }
+  return Boolean(
+    (/\bDEEPINFRA_API_TOKEN\b/.test(text) && env.DEEPINFRA_API_TOKEN) ||
+    (/\bOPENAI_API_KEY\b/.test(text) && env.OPENAI_API_KEY) ||
+    (/\bOPENAI_BASE_URL\b/.test(text) && env.OPENAI_BASE_URL),
+  )
+}
+
 export async function raiseEscalation(
   input: RaiseEscalationInput,
 ): Promise<RaiseEscalationResult> {
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
     const projectRoot = projectRootForTaskState(input.tasksPath, task)
     const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
     Object.assign(task, effectiveTask)
     const effectiveEscalations = await readEffectiveEscalations(projectRoot, task)
+
+    if (looksLikeSelfReferentialProofEscalation(input)) {
+      return {
+        success: false,
+        error:
+          'Do not raise a human escalation to decide whether `guildhall run --task=...` counts as project proof. It does not: that command delegates back to Guildhall orchestration. Use the project-local proof command, save its result in the task proof packet or checkpoint, and continue.',
+      }
+    }
 
     if (looksLikeRoutineVerificationEscalation(input)) {
       return {
@@ -156,6 +230,14 @@ export async function raiseEscalation(
         success: false,
         error:
           'This is implementation recovery, not an owner decision: do not ask the owner to resolve failed exact-string edits, whitespace mismatches, local template syntax, imports, or component props. Re-read the current file and component API, apply a smaller structural edit, or record a checkpoint and retry with the existing spec.',
+      }
+    }
+
+    if (configuredProviderEnvBlocksCredentialEscalation(input)) {
+      return {
+        success: false,
+        error:
+          'Do not raise a human escalation for provider credentials that Guildhall already has configured. Run the focused proof command through Guildhall shell/runtime execution, which supplies the configured provider environment, then record the real proof result or command failure.',
       }
     }
 
@@ -174,7 +256,13 @@ export async function raiseEscalation(
           .map((candidate) => candidate.id),
         updatedAt: now,
       })
-      writeProjectTaskQueue(input.tasksPath, queue)
+      persistEscalationTaskState({
+        tasksPath: input.tasksPath,
+        projectRoot,
+        task,
+        queue,
+        expectedQueueRevision: queueRead.expectedQueueRevision,
+      })
       return { success: true, escalationId: existing.id }
     }
 
@@ -208,7 +296,13 @@ export async function raiseEscalation(
         .map((candidate) => candidate.id),
       updatedAt: now,
     })
-    writeProjectTaskQueue(input.tasksPath, queue)
+    persistEscalationTaskState({
+      tasksPath: input.tasksPath,
+      projectRoot,
+      task,
+      queue,
+      expectedQueueRevision: queueRead.expectedQueueRevision,
+    })
 
     if (input.progressPath) {
       const entry: ProgressEntry = {
@@ -365,8 +459,8 @@ export async function resolveEscalation(
   input: ResolveEscalationInput,
 ): Promise<ResolveEscalationResult> {
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
     const projectRoot = projectRootForTaskState(input.tasksPath, task)
@@ -407,6 +501,7 @@ export async function resolveEscalation(
         task.retryWindow = retryWindowPatch
       }
       delete task.blockReason
+      delete (task as Task & { openEscalations?: unknown }).openEscalations
     }
     task.updatedAt = now
     queue.lastUpdated = now
@@ -426,7 +521,13 @@ export async function resolveEscalation(
       ...(retryWindowPatch ?? task.retryWindow ? { retryWindow: retryWindowPatch ?? task.retryWindow } : {}),
       updatedAt: now,
     })
-    writeProjectTaskQueue(input.tasksPath, queue)
+    persistEscalationTaskState({
+      tasksPath: input.tasksPath,
+      projectRoot,
+      task,
+      queue,
+      expectedQueueRevision: queueRead.expectedQueueRevision,
+    })
 
     if (input.progressPath) {
       const entry: ProgressEntry = {

@@ -14,10 +14,14 @@ import {
   isPidAlive,
   launchRouteForProject,
   parseArgs,
+  parseRunOptions,
   persistServiceRuntimeState,
   probeLiveService,
   readServiceRuntimeState,
   renderHelpText,
+  buildCliProjectStatus,
+  renderProjectStatus,
+  buildWorkspaceImportDraftReport,
   runAgentMemoryBridgeCommand,
   resolveServiceLifecycleIntent,
   serviceStatePath,
@@ -199,6 +203,30 @@ describe('CLI service lifecycle helpers', () => {
   })
 })
 
+describe('CLI run options', () => {
+  it('forwards a named task into the orchestrator preferred-task scope', () => {
+    expect(parseRunOptions([
+      'narrative-harness',
+      '--task',
+      'task-theme-and-meaning-review',
+      '--domain',
+      'docs',
+      '--max-ticks',
+      '1',
+      '--one-task',
+    ])).toEqual({
+      maxTicks: 1,
+      stopAfterOneTask: true,
+      domainFilter: 'docs',
+      preferredTaskId: 'task-theme-and-meaning-review',
+    })
+  })
+
+  it('documents named-task execution in the shipped help text', () => {
+    expect(renderHelpText()).toContain('--task <id>                  Run one named task and its bounded child closure')
+  })
+})
+
 describe('Guildhall CLI surface', () => {
   it('can request strict JSON-schema output from OpenAI-compatible JSON completions', async () => {
     let captured: Record<string, unknown> | undefined
@@ -270,6 +298,7 @@ describe('Guildhall CLI surface', () => {
       'register',
       'unregister',
       'list',
+      'status',
       'run',
       'task',
       'serve',
@@ -280,6 +309,7 @@ describe('Guildhall CLI surface', () => {
       'corpus-map',
       'memory',
       'migrate',
+      'workspace-import',
       'review-calibration',
       'model-bakeoff',
       'benchmarks',
@@ -288,6 +318,56 @@ describe('Guildhall CLI surface', () => {
       'mcp',
       'bridge',
     ])
+  })
+
+  it('formats project status from the saved release boundary without reopening task detail', () => {
+    const state = {
+      authority: 'database' as const,
+      queueRevision: 12,
+      projectRevision: 14,
+      rawQueue: { releases: [], selectedReleaseId: 'release-1' },
+      scopeRows: [],
+      scope: {
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release' as const,
+        source: 'release_plan' as const,
+        nodeIds: ['task-1'],
+        deferredNodeIds: ['task-2'],
+      },
+      repositories: [],
+      diagnostics: null,
+      summary: {
+        version: 17 as const,
+        projectId: 'demo',
+        generatedAt: '2026-07-19T00:00:00.000Z',
+        freshness: 'current' as const,
+        source: { taskQueueLastUpdated: null, taskQueueMtimeMs: null, workspaceGoalsMtimeMs: null },
+        counts: { total: 2, active: 0, draftReview: 0, blocked: 0, done: 1, shelved: 0, included: 1, deferred: 1, ready: 0, paused: 0, ownerBlocked: 0, proofBlocked: 0, byStatus: { done: 1 } },
+        scope: { id: 'release-1', label: 'Release 1', kind: 'release' as const, source: 'release_plan', included: 1, deferred: 1 },
+        orientation: null,
+        orientationSpine: null,
+        approvedPlan: null,
+        releaseSummary: {
+          scopeMode: 'named_release' as const,
+          release: { id: 'release-1', label: 'Release 1', kind: 'release' as const, state: 'shipped', source: 'release_plan' },
+          state: 'ready' as const,
+          counts: { total: 1, done: 1, unfinished: 0, ready: 0, active: 0, blocked: 0, deferred: 1, ownerBlocked: 0, proofBlocked: 0 },
+          taskStatusCounts: { done: 1 },
+          blockers: [],
+          updatedAt: '2026-07-19T00:00:00.000Z',
+        },
+        nextAction: { label: 'Review' as const, message: 'Review completed scope.' },
+        blockers: [],
+        recentWork: [],
+        inFlight: [],
+      },
+    }
+    const status = buildCliProjectStatus({ id: 'demo', name: 'Demo', path: '/tmp/demo', state })
+
+    expect(status.release?.release?.state).toBe('shipped')
+    expect(status.scope).toMatchObject({ included: 1, deferred: 1 })
+    expect(renderProjectStatus(status)).toContain('1/1 done / 1 deferred / 0 blocked')
   })
 
   it('does not expose task mutation commands in help', () => {
@@ -308,6 +388,7 @@ describe('Guildhall CLI surface', () => {
     expect(help).toContain('guildhall migrate status')
     expect(help).toContain('guildhall migrate plan')
     expect(help).toContain('guildhall migrate apply')
+    expect(help).toContain('guildhall workspace-import draft')
     expect(help).toContain('guildhall review-calibration escaped-miss')
     expect(help).toContain('guildhall review-calibration draft-case')
     expect(help).toContain('guildhall review-calibration validate-planning')
@@ -320,6 +401,85 @@ describe('Guildhall CLI surface', () => {
     expect(help).toContain('guildhall agent memory import')
     expect(help).toContain('guildhall agent memory review')
     expect(help).toContain('guildhall agent memory reject')
+  })
+
+  it('builds a read-only workspace-import draft report from one planning document', async () => {
+    const project = tmpHome()
+    const doc = join(project, 'old-plan.md')
+    writeFileSync(doc, [
+      '# Historical planning doc',
+      '',
+      '## Goal',
+      '',
+      '- Give owners a CLI-visible way to inspect decomposition before approving imports.',
+      '',
+      '## Current focus',
+      '',
+      '- Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      '- Add a regression fixture for historical Guildhall planning docs.',
+      '',
+      'Contracts: PrototypeRun, RunEvaluation, SchemaFieldUsage, PacketQualityScore.',
+      'Verification: the fixture directory shape includes at least one small story fixture and expected records.',
+      '',
+      '## Later',
+      '',
+      '- Add dashboard comparison views after the CLI report is trustworthy.',
+      '',
+      '## Done',
+      '',
+      '- Existing CLI help lists shipped commands.',
+      '',
+    ].join('\n'))
+
+    const before = existsSync(join(project, '.guildhall'))
+    const report = await buildWorkspaceImportDraftReport({
+      projectPath: project,
+      fromFile: doc,
+    })
+
+    expect(before).toBe(false)
+    expect(existsSync(join(project, '.guildhall'))).toBe(false)
+    expect(report.sourceDocument).toBe(doc)
+    expect(report.review.totalCurrentTaskCandidates).toBeGreaterThan(0)
+    expect(report.review.totalLaterTaskCandidates).toBeGreaterThan(0)
+    expect(report.draft.tasks.map(task => task.scope)).toContain('current')
+    expect(report.draft.tasks.map(task => task.scope)).toContain('later')
+    expect(report.warnings.some(warning => warning.code === 'read_only_report')).toBe(true)
+    expect(report.warnings.some(warning => warning.code === 'generic_task_title')).toBe(false)
+  })
+
+  it('includes materialized proof expectations in full-project workspace-import draft reports', async () => {
+    const project = tmpHome()
+    mkdirSync(join(project, 'docs', 'harness'), { recursive: true })
+    writeFileSync(join(project, 'docs', 'harness', 'implementation-roadmap.md'), [
+      '# Implementation Roadmap',
+      '',
+      '## Stage 1: Headless Drafting And Evaluation MVP',
+      '',
+      'Deliverables:',
+      '',
+      '- Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      '',
+      'Contracts: PrototypeRun, RunEvaluation, SchemaFieldUsage, PacketQualityScore.',
+      'Verification: the fixture directory shape includes at least one small story fixture and expected records.',
+      '',
+      '## Current Next Milestone',
+      '',
+      'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+      '',
+      '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+    ].join('\n'))
+
+    const before = existsSync(join(project, '.guildhall'))
+    const report = await buildWorkspaceImportDraftReport({ projectPath: project })
+
+    expect(before).toBe(false)
+    expect(existsSync(join(project, '.guildhall'))).toBe(false)
+    expect(report.draft.tasks.some(task => (task.proofPaths?.length ?? 0) > 0)).toBe(true)
+    const proofPaths = report.draft.tasks.find(task =>
+      task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+    )?.proofPaths as Array<{ expectedEvidence?: string[] }> | undefined
+    expect(proofPaths?.[0]?.expectedEvidence?.length).toBeGreaterThan(0)
   })
 
   it('exposes external-agent memory bridge import, review, and reject through explicit JSON CLI flows', async () => {

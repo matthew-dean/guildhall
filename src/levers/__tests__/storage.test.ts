@@ -247,7 +247,8 @@ describe('projectLeverInvariantError', () => {
 describe('defaultAgentSettingsPath', () => {
   it('builds the expected system-local project-state path', () => {
     const resolved = defaultAgentSettingsPath('/tmp/proj')
-    expect(resolved).toContain('/.guildhall/data/projects/')
+    const dataRoot = process.env.GUILDHALL_DATA_DIR ?? join(os.homedir(), '.guildhall', 'data')
+    expect(resolved).toContain(join(dataRoot, 'projects'))
     expect(resolved).toContain('/project-state/')
     expect(resolved).toMatch(/\/agent-settings\.yaml$/)
     expect(resolved).not.toBe('/tmp/proj/.guildhall/agent-settings.yaml')

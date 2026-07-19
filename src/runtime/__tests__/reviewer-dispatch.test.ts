@@ -404,6 +404,148 @@ describe('recordLlmVerdict', () => {
     expect(result?.record.verdict).toBe('approve')
     expect(result?.normalizedStatus).toBe('gate_check')
   })
+
+  it('infers approval from met review body plus present yes rubric lines when docs work has no regression line', () => {
+    const q = baseQueue()
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: [
+        '**Review:**',
+        'ac-1: Met — the model selection is recorded in `docs/product/model-registry.json` and the proof artifact documents the chosen model, source-backed facts, and deferrals.',
+        '',
+        '**Request fit:** yes — the implementation fulfills the blueprint request.',
+        '',
+        '**Rubric**',
+        'code-review:acceptance-criteria-met: yes — ac-1 is satisfied by the recorded model selection and proof.',
+        'code-review:no-scope-creep: yes — changes are limited to documentation and registry entries.',
+        'code-review:conventions-followed: yes — registry entry and markdown follow existing conventions.',
+      ].join('\n'),
+      timestamp: 't1',
+    })
+
+    const result = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+      now: 'now',
+    })
+
+    expect(result?.record.verdict).toBe('approve')
+    expect(result?.normalizedStatus).toBe('gate_check')
+  })
+
+  it('recognizes the compact approved-to-gate-check handoff sentence', () => {
+    const q = baseQueue()
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: 'Task task-001 has been approved and transitioned to **gate_check** status.',
+      timestamp: 't1',
+    })
+
+    const result = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+      now: 'now',
+    })
+
+    expect(result?.record.verdict).toBe('approve')
+    expect(result?.normalizedStatus).toBe('gate_check')
+  })
+
+  it('records approved review evidence on the review proof path', () => {
+    const q = baseQueue()
+    q.tasks[0]!.proofPaths = [{
+      kind: 'review',
+      expectedEvidence: [
+        { id: 'scope', kind: 'artifact', description: 'The scoped boundary is explicit', required: true },
+      ],
+      verificationRecords: [],
+      status: 'planned',
+    }] as NonNullable<Task['proofPaths']>
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: '**Rubric**\n- acceptance-criteria-met: yes\n\n**Proof path:** yes\n\n**Verdict:** Approved',
+      timestamp: 't1',
+    })
+
+    recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+      now: '2026-07-14T00:00:00.000Z',
+    })
+
+    expect(q.tasks[0]!.proofPaths?.[0]).toMatchObject({ id: 'review-proof-path', status: 'verified' })
+    expect((q.tasks[0]!.proofPaths?.[0] as Record<string, any>).verificationRecords).toEqual([
+      expect.objectContaining({ evidenceId: 'scope', status: 'passed', kind: 'manual' }),
+    ])
+  })
+
+  it('materializes review proof for concise approval text', () => {
+    const q = baseQueue()
+    q.tasks[0]!.proofPaths = [{
+      kind: 'review',
+      expectedEvidence: [
+        { id: 'boundary', kind: 'artifact', description: 'The scoped boundary is explicit', required: true },
+        { id: 'runtime', kind: 'artifact', description: 'The runtime slice exists', required: true },
+      ],
+      verificationRecords: [],
+      status: 'planned',
+    }] as NonNullable<Task['proofPaths']>
+
+    recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+      now: '2026-07-14T00:00:00.000Z',
+      reasoning: 'Approved. The acceptance criteria are met.',
+    })
+
+    expect(q.tasks[0]!.proofPaths?.[0]?.verificationRecords).toEqual([
+      expect.objectContaining({ evidenceId: 'boundary', status: 'passed', kind: 'manual' }),
+      expect.objectContaining({ evidenceId: 'runtime', status: 'passed', kind: 'manual' }),
+    ])
+  })
+
+  it('does not infer approval when the review body contains a revision phrase', () => {
+    const q = baseQueue()
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: [
+        '**Review:**',
+        'ac-1: Met — most of the work is present.',
+        '',
+        '**Request fit:** yes — the implementation is close.',
+        '',
+        '**Verdict:** Needs revision',
+        '',
+        '**Rubric**',
+        'code-review:acceptance-criteria-met: yes — mostly satisfied.',
+        'code-review:no-scope-creep: yes — changes are limited.',
+      ].join('\n'),
+      timestamp: 't1',
+    })
+
+    const result = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+      now: 'now',
+    })
+
+    expect(result?.record.verdict).toBe('revise')
+    expect(result?.normalizedStatus).toBe('in_progress')
+  })
 })
 
 // ---------------------------------------------------------------------------

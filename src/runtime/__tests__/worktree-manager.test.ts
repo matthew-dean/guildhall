@@ -109,10 +109,13 @@ describe('ensureWorktreeForDispatch', () => {
   })
 
   it('reuses an existing worktree when task already owns the expected one', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worktree-reuse-'))
+    const worktreePath = path.join(tmp, 'abc')
+    await fs.mkdir(worktreePath, { recursive: true })
     const driver = new InMemoryGitDriver()
     const seeded = task({
       id: 'abc',
-      worktreePath: '/repo/.guildhall/worktrees/abc',
+      worktreePath,
       branchName: 'guildhall/task-abc',
       baseBranch: 'main',
     })
@@ -126,6 +129,36 @@ describe('ensureWorktreeForDispatch', () => {
     })
     expect(r.created).toBe(false)
     expect(driver.state.createdWorktrees).toHaveLength(0)
+  })
+
+  it('reattaches when a recorded worktree path no longer exists', async () => {
+    const missingPath = path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc')
+    await fs.rm(missingPath, { recursive: true, force: true })
+    const driver = new InMemoryGitDriver()
+    const seeded = task({
+      id: 'abc',
+      worktreePath: missingPath,
+      branchName: 'guildhall/task-abc',
+      baseBranch: 'main',
+    })
+
+    const result = await ensureWorktreeForDispatch({
+      task: seeded,
+      mode: 'per_task',
+      projectId: 'demo-project',
+      projectPath: '/repo',
+      baseBranch: 'main',
+      gitDriver: driver,
+    })
+
+    expect(result.created).toBe(true)
+    expect(result.worktreePath).toBe(missingPath)
+    expect(driver.state.attachedWorktrees).toEqual([
+      {
+        worktreePath: missingPath,
+        branch: 'guildhall/task-abc',
+      },
+    ])
   })
 
   it('removes stale runtime node_modules symlinks when reusing an existing worktree', async () => {

@@ -10,11 +10,24 @@ import {
   updateTaskTool,
   addTaskTool,
   materializeSplitChildren,
+  materializeProofSetupTask,
   settleMaterializedSplitReadiness,
 } from '../task-queue.js'
-import { getProjectSystemStatePath, readTaskEvidence } from '@guildhall/sessions'
+import {
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseTask,
+  readProjectTaskQueueSync as readProjectTaskQueueSyncRaw,
+  readTaskEvidence,
+  upsertTaskRuntimeState,
+  appendTaskEvidence,
+} from '@guildhall/sessions'
 import { TaskQueue } from '@guildhall/core'
-import { FORBIDDEN_PROJECT_TASK_FIELDS } from '../../runtime/project-state-boundary.js'
+import {
+  writeProjectTaskQueue,
+  writeProjectTaskQueueWithSummary,
+} from '../../runtime/project-state-boundary.js'
 import { buildEffectiveTask } from '../../runtime/effective-task.js'
 
 // ---------------------------------------------------------------------------
@@ -55,13 +68,32 @@ function makeSeedQueue() {
   }
 }
 
+async function seedSystemStateQueue(stateTasksPath: string): Promise<void> {
+  // The root TASKS fixture and the system-local fixture map to different
+  // SQLite paths. Remove the empty system database created by the shared
+  // beforeEach so this test can exercise the real bootstrap path.
+  await fs.rm(path.join(path.dirname(stateTasksPath), 'project-state.db'), { force: true })
+  writeProjectTaskQueue(stateTasksPath, seedQueue, { projectRoot: tmpDir })
+  promoteProjectStateDatabaseAuthority(tmpDir)
+}
+
 const ctx = { cwd: '/tmp', metadata: {} }
+
+type TestTaskQueue = Omit<TaskQueue, 'tasks' | 'executionPlanActions'> & {
+  tasks: [TaskQueue['tasks'][number], ...TaskQueue['tasks']]
+  executionPlanActions: NonNullable<TaskQueue['executionPlanActions']>
+}
+
+function readProjectTaskQueueSync(statePath: string): TestTaskQueue {
+  return TaskQueue.parse(readProjectTaskQueueSyncRaw(statePath)) as TestTaskQueue
+}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-test-'))
   tasksPath = path.join(tmpDir, 'TASKS.json')
   seedQueue = makeSeedQueue()
-  await fs.writeFile(tasksPath, JSON.stringify(seedQueue), 'utf-8')
+  writeProjectTaskQueue(tasksPath, seedQueue, { projectRoot: tmpDir })
+  promoteProjectStateDatabaseAuthority(tmpDir)
 })
 
 afterEach(async () => {
@@ -77,40 +109,189 @@ describe('readTasks', () => {
   })
 
   it('returns null queue with error for missing file', async () => {
-    const result = await readTasks({ tasksPath: path.join(tmpDir, 'nonexistent.json') })
+    const result = await readTasks({ tasksPath: path.join(tmpDir, 'missing', 'TASKS.json') })
     expect(result.queue).toBeNull()
     expect(result.error).toBeDefined()
   })
 
   it('returns null queue with error for malformed JSON', async () => {
-    await fs.writeFile(tasksPath, '{ invalid json', 'utf-8')
-    const result = await readTasks({ tasksPath })
+    const malformedPath = path.join(tmpDir, 'malformed', 'TASKS.json')
+    await fs.mkdir(path.dirname(malformedPath), { recursive: true })
+    await fs.writeFile(malformedPath, '{ invalid json', 'utf-8')
+    const result = await readTasks({ tasksPath: malformedPath })
     expect(result.queue).toBeNull()
     expect(result.error).toBeDefined()
   })
 })
 
 describe('updateTask', () => {
+  it('does not let the spec agent enter spec_review without a durable spec', async () => {
+    const result = await updateTask(
+      { tasksPath, taskId: 'task-001', status: 'spec_review' },
+      { current_agent_id: 'spec-agent' },
+    )
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('without a durable spec'),
+    })
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0].status).toBe('exploring')
+  })
+
+  it('rejects recovery/process history inside the current task spec', async () => {
+    const result = await updateTask(
+      {
+        tasksPath,
+        taskId: 'task-001',
+        spec: [
+          '## Summary',
+          'Build the current task.',
+          '',
+          'Resolved owner decisions:',
+          '- Exceeded maxRevisions (3). Requires human judgment.',
+        ].join('\n'),
+      },
+      { current_agent_id: 'spec-agent' },
+    )
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('Current task specs may only contain the product boundary'),
+    })
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.spec).toBeUndefined()
+  })
+
+  it('rejects bare workspace proof commands in a selected script-only release', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        releaseIds: ['release-1'],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        description: 'The focused proof passes.',
+        verifiedBy: 'automated',
+        command: 'pnpm test',
+      }],
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('Bare workspace test/build commands'),
+    })
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.acceptanceCriteria).toEqual([])
+  })
+
   it('updates task status', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('spec_review')
+  })
+
+  it('allows spec review tasks to return to exploring when a revision is requested', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
+    const result = await updateTask({ tasksPath, taskId: 'task-001', status: 'exploring' })
+
+    expect(result.success).toBe(true)
+
+    const raw = readProjectTaskQueueSync(tasksPath)
+    expect(raw.tasks[0].status).toBe('exploring')
   })
 
   it('updates task domain for lane repair', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', domain: 'harness' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].domain).toBe('harness')
   })
 
   it('persists updates through the project-state boundary', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', title: 'Boundary-safe title' })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].title).toBe('Boundary-safe title')
-    for (const field of FORBIDDEN_PROJECT_TASK_FIELDS) {
-      expect(raw.tasks[0]).not.toHaveProperty(field)
-    }
+    await expect(readTasks({ tasksPath })).resolves.toMatchObject({
+      queue: { tasks: [expect.objectContaining({ title: 'Boundary-safe title' })] },
+    })
+  })
+
+  it('uses the promoted point writer while keeping runtime and note evidence separate', async () => {
+    const stateDir = path.join(tmpDir, '.guildhall', 'project-state')
+    const promotedTasksPath = path.join(stateDir, 'TASKS.json')
+    await fs.mkdir(stateDir, { recursive: true })
+    await fs.writeFile(promotedTasksPath, '{}', 'utf-8')
+    writeProjectTaskQueue(promotedTasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const before = readProjectStateDatabaseQueueRevision(promotedTasksPath)
+    const result = await updateTask(
+      {
+        tasksPath: promotedTasksPath,
+        taskId: 'task-001',
+        title: 'Point-written title',
+        assignedTo: 'worker-agent',
+        note: { agentId: 'worker-agent', role: 'worker', content: 'Updated the definition.' },
+      },
+      { current_task_project_path: tmpDir },
+    )
+
+    expect(result.success).toBe(true)
+    expect(readProjectStateDatabaseQueueRevision(promotedTasksPath)).toBeGreaterThan(before!)
+    expect(readProjectStateDatabaseTask(promotedTasksPath, 'task-001')?.definition).toMatchObject({
+      title: 'Point-written title',
+    })
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-001')?.definition).not.toHaveProperty('assignedTo')
+    expect((await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' }))[0]?.payload).toMatchObject({
+      content: 'Updated the definition.',
+    })
+  })
+
+  it('preserves runtime counters when a promoted definition mutation writes status or evidence', async () => {
+    const stateDir = path.join(tmpDir, '.guildhall', 'project-state')
+    const promotedTasksPath = path.join(stateDir, 'TASKS.json')
+    await fs.mkdir(stateDir, { recursive: true })
+    seedQueue.tasks[0]!.status = 'in_progress'
+    await fs.writeFile(promotedTasksPath, '{}', 'utf-8')
+    writeProjectTaskQueue(promotedTasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await upsertTaskRuntimeState(tmpDir, 'task-001', {
+      assignedTo: 'worker-agent',
+      revisionCount: 2,
+      remediationAttempts: 1,
+    })
+
+    const result = await updateTask({
+      tasksPath: promotedTasksPath,
+      taskId: 'task-001',
+      status: 'review',
+      note: { agentId: 'worker-agent', role: 'self-critique', content: 'Handed off for review.' },
+    }, { current_task_project_path: tmpDir })
+
+    expect(result.success).toBe(true)
+    const effective = await buildEffectiveTask(
+      tmpDir,
+      TaskQueue.parse(readProjectTaskQueueSync(promotedTasksPath)).tasks[0]!,
+    )
+    expect(effective.status).toBe('review')
+    expect(effective.revisionCount).toBe(2)
+    expect(effective.remediationAttempts).toBe(1)
+    expect(effective.assignedTo).toBe('reviewer-agent')
   })
 
   it('normalizes reviewer ownership when a task moves into review', async () => {
@@ -118,7 +299,7 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(raw.tasks[0].status).toBe('review')
     expect(effective.assignedTo).toBe('reviewer-agent')
@@ -130,7 +311,7 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'gate_check' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(raw.tasks[0].status).toBe('gate_check')
     expect(effective.assignedTo).toBe('gate-checker-agent')
@@ -146,7 +327,7 @@ describe('updateTask', () => {
       status: 'review',
       assignedTo: 'custom-review-owner',
     })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(effective.assignedTo).toBe('custom-review-owner')
   })
@@ -157,13 +338,13 @@ describe('updateTask', () => {
     expect(result.success).toBe(false)
     expect(result.error).toContain('cannot request review from exploring')
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('exploring')
   })
 
   it('updates task title', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', title: 'Write a clear implementation spec' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].title).toBe('Write a clear implementation spec')
   })
 
@@ -173,9 +354,6 @@ describe('updateTask', () => {
       taskId: 'task-001',
       note: { agentId: 'spec-agent', role: 'spec', content: 'Spec complete.' },
     })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0]).not.toHaveProperty('notes')
-
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
     expect(evidence).toHaveLength(1)
     expect(evidence[0]?.payload).toMatchObject({
@@ -191,7 +369,7 @@ describe('updateTask', () => {
     const stateTasksPath = path.join(stateDir, 'TASKS.json')
     await fs.mkdir(stateDir, { recursive: true })
     seedQueue.tasks[0]!.status = 'in_progress'
-    await fs.writeFile(stateTasksPath, JSON.stringify(seedQueue, null, 2), 'utf-8')
+    await seedSystemStateQueue(stateTasksPath)
 
     const result = await updateTask({
       tasksPath: stateTasksPath,
@@ -220,7 +398,7 @@ describe('updateTask', () => {
     await fs.mkdir(path.dirname(stateTasksPath), { recursive: true })
     seedQueue.tasks[0]!.projectPath = '.'
     seedQueue.tasks[0]!.status = 'in_progress'
-    await fs.writeFile(stateTasksPath, JSON.stringify(seedQueue, null, 2), 'utf-8')
+    await seedSystemStateQueue(stateTasksPath)
 
     const result = await updateTask({
       tasksPath: stateTasksPath,
@@ -237,7 +415,7 @@ describe('updateTask', () => {
     })
     expect(result.success).toBe(true)
 
-    const raw = JSON.parse(await fs.readFile(stateTasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(stateTasksPath)
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(Array.isArray(effective.notes)).toBe(true)
     const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }>
@@ -249,6 +427,70 @@ describe('updateTask', () => {
 
     const misplaced = await readTaskEvidence(path.dirname(stateTasksPath), 'task-001', { kind: 'note' })
     expect(misplaced).toHaveLength(0)
+  })
+
+  it('uses the workspace project root for evidence when the task target is a subdirectory', async () => {
+    const stateTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(stateTasksPath), { recursive: true })
+    const docsTarget = path.join(tmpDir, 'docs', 'harness')
+    seedQueue.tasks[0]!.projectPath = docsTarget
+    seedQueue.tasks[0]!.status = 'in_progress'
+    await seedSystemStateQueue(stateTasksPath)
+
+    const result = await updateTask({
+      tasksPath: stateTasksPath,
+      taskId: 'task-001',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: '**Self-critique:** Subdirectory-targeted task proof recorded.',
+      },
+    }, {
+      current_agent_id: 'worker-agent',
+      current_task_id: 'task-001',
+      current_task_project_path: docsTarget,
+      current_task_workspace_project_path: tmpDir,
+    })
+    expect(result.success).toBe(true)
+
+    const raw = readProjectTaskQueueSync(stateTasksPath)
+    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }> | undefined
+    expect(effectiveNotes?.at(-1)).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:** Subdirectory-targeted task proof recorded.',
+    })
+
+    const misplaced = await readTaskEvidence(docsTarget, 'task-001', { kind: 'note' })
+    expect(misplaced).toHaveLength(0)
+  })
+
+  it('accepts a plain note string and structures it from current agent metadata', async () => {
+    const stateTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(stateTasksPath), { recursive: true })
+    seedQueue.tasks[0]!.status = 'in_progress'
+    await seedSystemStateQueue(stateTasksPath)
+
+    const result = await updateTask({
+      tasksPath: stateTasksPath,
+      taskId: 'task-001',
+      note: '**Self-critique:** All acceptance criteria are met.',
+    }, {
+      current_agent_id: 'worker-agent',
+      current_task_id: 'task-001',
+      current_task_workspace_project_path: tmpDir,
+    })
+
+    expect(result.success).toBe(true)
+    const raw = readProjectTaskQueueSync(stateTasksPath)
+    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }>
+    expect(effectiveNotes.at(-1)).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:** All acceptance criteria are met.',
+    })
   })
 
   it('accepts a stringified note object from model tool calls', async () => {
@@ -270,6 +512,64 @@ describe('updateTask', () => {
     })
   })
 
+  it('accepts a stringified note object during engine input validation', () => {
+    const parsed = updateTaskTool.inputSchema.safeParse({
+      tasksPath,
+      taskId: 'task-001',
+      note: JSON.stringify({
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: '**Self-critique:** Review proof packet recorded.',
+      }),
+    })
+
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.data.note).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:** Review proof packet recorded.',
+    })
+  })
+
+  it('accepts a multiline JSON-shaped note string during engine input validation', () => {
+    const parsed = updateTaskTool.inputSchema.safeParse({
+      tasksPath,
+      taskId: 'task-001',
+      note:
+        '{"agentId":"worker-agent","role":"self-critique","content":"**Self-critique:**\n\nAC4: `npm run verify:schemas` passed."}',
+    })
+
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.data.note).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:**\n\nAC4: `npm run verify:schemas` passed.',
+    })
+  })
+
+  it('unwraps a malformed JSON-shaped note wrapper from structured note content', async () => {
+    await updateTaskTool.execute({
+      tasksPath,
+      taskId: 'task-001',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content:
+          '{"agentId":"worker-agent","role":"self-critique","content":"**Self-critique:**\\n\\nAC 1: Met.\\n\\nMinimum-scope check: only scripts/run-packet.mjs changed.',
+      },
+    }, ctx)
+
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    expect(evidence.at(-1)?.payload).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content:
+        '**Self-critique:**\n\nAC 1: Met.\n\nMinimum-scope check: only scripts/run-packet.mjs changed.',
+    })
+  })
+
   it('updates the task spec and acceptance criteria', async () => {
     await updateTask({
       tasksPath,
@@ -283,7 +583,7 @@ describe('updateTask', () => {
         },
       ],
     })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].spec).toContain('Build the thing')
     expect(raw.tasks[0].acceptanceCriteria).toEqual([
       {
@@ -294,6 +594,7 @@ describe('updateTask', () => {
         verifiedBy: 'automated',
         command: 'pnpm test',
         met: false,
+        source: 'documented',
       },
     ])
     expect(raw.tasks[0].sizePlan).toMatchObject({
@@ -335,8 +636,8 @@ describe('updateTask', () => {
       },
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0].structuredSpec.whatThisIs).toBe('A block menu for Looma selection actions.')
+    const raw = readProjectTaskQueueSync(tasksPath)
+    expect((raw.tasks[0].structuredSpec as { whatThisIs?: string } | undefined)?.whatThisIs).toBe('A block menu for Looma selection actions.')
     expect(raw.tasks[0].spec).toContain('## What this is')
     expect(raw.tasks[0].spec).toContain('## User-facing behavior')
     expect(raw.tasks[0].acceptanceCriteria).toEqual([
@@ -347,6 +648,7 @@ describe('updateTask', () => {
         expectation: 'Then the approved actions appear.',
         verifiedBy: 'review',
         met: false,
+        source: 'documented',
       },
     ])
   })
@@ -404,15 +706,15 @@ describe('updateTask', () => {
       ],
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].sizePlan).toMatchObject({
       taskId: 'task-001',
       score: 8,
       band: 'epic',
       action: 'decompose_before_execution',
     })
-    expect(raw.tasks[0].parentGoalId).toBeUndefined()
-    expect(raw.tasks[0].sizePlan.recommendedChildren).toEqual([])
+    expect((raw.tasks[0] as unknown as Record<string, unknown>).parentGoalId).toBeUndefined()
+    expect(raw.tasks[0].sizePlan?.recommendedChildren).toEqual([])
   })
 
   it('materializes split-required sizing plans into linked child tasks idempotently', async () => {
@@ -430,23 +732,71 @@ describe('updateTask', () => {
       { id: 'ac-2', description: 'Admin API returns subscription status.', verifiedBy: 'review' as const },
       { id: 'ac-3', description: 'Migration backfills subscriptions.', verifiedBy: 'review' as const },
     ]
+    const workUnitAnalysis = {
+      summary: 'Five independently deliverable work units.',
+      units: [
+        {
+          id: 'billing-ui',
+          title: 'Implement the billing settings workflow',
+          deliverable: 'Billing settings can update subscriptions.',
+          rationale: 'The UI workflow can be reviewed separately from the API and migration work.',
+          suggestedDomain: 'frontend',
+          dependsOn: [],
+        },
+        {
+          id: 'admin-api',
+          title: 'Add the admin subscription API contract',
+          deliverable: 'Admin API returns subscription status.',
+          rationale: 'The API contract is independently verifiable.',
+          suggestedDomain: 'backend',
+          dependsOn: [],
+        },
+        {
+          id: 'migration',
+          title: 'Migrate existing workspace subscription data',
+          deliverable: 'Existing workspace subscriptions are backfilled.',
+          rationale: 'Migration safety needs its own proof loop.',
+          suggestedDomain: 'data',
+          dependsOn: ['admin-api'],
+        },
+        {
+          id: 'invite-email',
+          title: 'Implement invite email delivery',
+          deliverable: 'Invite emails are sent.',
+          rationale: 'Delivery behavior is separate from data migration.',
+          suggestedDomain: 'backend',
+          dependsOn: [],
+        },
+        {
+          id: 'analytics-rollout',
+          title: 'Update analytics documentation and rollout evidence',
+          deliverable: 'Analytics events and rollout evidence are documented.',
+          rationale: 'Docs and rollout proof should stay separate from code changes.',
+          suggestedDomain: 'docs',
+          dependsOn: [],
+        },
+      ],
+      proofOnlyItems: [],
+      createdAt: '2026-05-25T12:00:00.000Z',
+      createdBy: 'coordinator-test',
+    }
 
-    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria })
-    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria, workUnitAnalysis })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria, workUnitAnalysis })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')
+    const raw = readProjectTaskQueueSync(tasksPath)
+    const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')!
     const children = raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     )
 
-    expect(parent.sizePlan.action).toBe('proceed_with_warning')
-    expect(parent.sizePlan.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
-    expect(parent.taskReadiness.recommendation).toBe('ready')
-    expect(parent.taskReadiness.summary).toContain('continue through the child tasks')
-    expect(parent.taskReadiness.dimensions.find((dimension: { id: string }) => dimension.id === 'size')?.status).toBe('ok')
+    expect(parent.sizePlan?.action).toBe('proceed_with_warning')
+    expect(parent.sizePlan?.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
+    expect(parent.taskReadiness?.recommendation).toBe('ready')
+    expect(parent.taskReadiness?.summary).toContain('continue through the child tasks')
+    expect(parent.taskReadiness?.dimensions.find((dimension: { id: string }) => dimension.id === 'size')?.status).toBe('ok')
     expect(parent.status).toBe('ready')
-    expect(parent.hierarchy.childIds).toEqual(children.map((task: { id: string }) => task.id))
+    expect(parent.hierarchy?.childIds).toEqual(children.map((task: { id: string }) => task.id))
     expect(raw.executionPlanActions).toHaveLength(1)
     expect(raw.executionPlanActions[0]).toMatchObject({
       type: 'split_work',
@@ -462,12 +812,12 @@ describe('updateTask', () => {
       'Implement invite email delivery',
       'Update analytics documentation and rollout evidence',
     ])
-    expect(children.every((task: { status: string; origination: string; proposedBy: string }) =>
+    expect(children.every((task) =>
       task.status === 'exploring' &&
       task.origination === 'system' &&
       task.proposedBy === 'task-sizing',
     )).toBe(true)
-    expect(parent.sizePlan.recommendedChildren).toEqual([])
+    expect(parent.sizePlan?.recommendedChildren).toEqual([])
   })
 
   it('materializes split-recommended work units into linked child tasks idempotently', async () => {
@@ -521,19 +871,19 @@ describe('updateTask', () => {
     })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', workUnitAnalysis })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')
+    const raw = readProjectTaskQueueSync(tasksPath)
+    const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')!
     const children = raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     )
 
-    expect(parent.sizePlan.action).toBe('proceed_with_warning')
-    expect(parent.sizePlan.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
-    expect(parent.taskReadiness.recommendation).toBe('ready')
-    expect(parent.taskReadiness.summary).toContain('continue through the child tasks')
-    expect(parent.taskReadiness.dimensions.find((dimension: { id: string }) => dimension.id === 'size')?.status).toBe('ok')
+    expect(parent.sizePlan?.action).toBe('proceed_with_warning')
+    expect(parent.sizePlan?.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
+    expect(parent.taskReadiness?.recommendation).toBe('ready')
+    expect(parent.taskReadiness?.summary).toContain('continue through the child tasks')
+    expect(parent.taskReadiness?.dimensions.find((dimension: { id: string }) => dimension.id === 'size')?.status).toBe('ok')
     expect(parent.status).toBe('ready')
-    expect(parent.hierarchy.childIds).toEqual(children.map((task: { id: string }) => task.id))
+    expect(parent.hierarchy?.childIds).toEqual(children.map((task: { id: string }) => task.id))
     expect(children.map((task: { title: string }) => task.title)).toEqual([
       'Component implementation',
       'Storybook story',
@@ -541,7 +891,7 @@ describe('updateTask', () => {
       'API docs sync',
     ])
     expect(raw.tasks).toHaveLength(5)
-    expect(parent.sizePlan.recommendedChildren).toEqual([])
+    expect(parent.sizePlan?.recommendedChildren).toEqual([])
     expect(children.find((task: { title: string }) => task.title === 'Component implementation')?.workKind).toBe('component')
     expect(children.find((task: { title: string }) => task.title === 'Storybook story')?.workKind).toBe('story')
     expect(children.every((task: { delivery?: { driver?: string; provider?: string; supports?: string[] } }) =>
@@ -663,7 +1013,70 @@ describe('updateTask', () => {
     expect(child?.domain).toBe('harness')
   })
 
-  it('settles duplicate sibling split recommendations without creating nested duplicate children', async () => {
+  it('reattaches generated split rows and inherits parent release/source truth', async () => {
+    const timestamp = '2026-06-12T00:00:00.000Z'
+    const queue = TaskQueue.parse({
+      version: 1,
+      lastUpdated: timestamp,
+      tasks: [
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'task-runner',
+          title: 'Implement a no-UI runner',
+          status: 'ready',
+          releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+          references: ['docs/harness/implementation-roadmap.md'],
+          sizePlan: {
+            taskId: 'task-runner',
+            score: 8,
+            band: 'large',
+            action: 'split_required',
+            factors: [],
+            recommendedChildren: [
+              {
+                title: 'Build the bounded writer packet',
+                reason: 'Prove packet discipline as a separate runnable child.',
+                dependsOn: [],
+              },
+            ],
+            reasons: ['Broad enough to split.'],
+            reviewBudgetHint: 'balanced',
+            createdAt: timestamp,
+            createdBy: 'test',
+          },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'task-runner-split-build-the-bounded-writer-packet',
+          title: 'Build the bounded writer packet',
+          description: 'Split from containing work task-runner: Implement a no-UI runner.',
+          status: 'done',
+          releaseIds: [],
+          references: [],
+          hierarchy: { childIds: [], order: 0 },
+        },
+      ],
+    })
+    const parent = queue.tasks[0]!
+
+    const result = materializeSplitChildren(queue, parent, timestamp)
+
+    expect(result.childTaskIds).toEqual(['task-runner-split-build-the-bounded-writer-packet'])
+    expect(queue.tasks).toHaveLength(2)
+    expect(queue.tasks[1]).toMatchObject({
+      status: 'done',
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      references: ['docs/harness/implementation-roadmap.md'],
+      hierarchy: {
+        parentId: 'task-runner',
+        order: 0,
+        relation: 'decomposes',
+      },
+    })
+    expect(parent.hierarchy?.childIds).toContain('task-runner-split-build-the-bounded-writer-packet')
+  })
+
+  it('settles duplicate sibling child-work plans without creating nested duplicate children', async () => {
     const timestamp = '2026-06-12T00:00:00.000Z'
     const queue = TaskQueue.parse({
       version: 1,
@@ -756,7 +1169,7 @@ describe('updateTask', () => {
     expect(queue.tasks.find(task => task.id === 'child-audit-split-implement')?.hierarchy?.parentId).toBeUndefined()
     expect(queue.tasks.find(task => task.id === 'child-audit-split-verify')?.hierarchy?.parentId).toBeUndefined()
     expect(childAudit.sizePlan?.action).toBe('proceed_with_warning')
-    expect(childAudit.sizePlan?.reasons.at(-1)).toContain('already match existing sibling tasks')
+    expect(childAudit.sizePlan?.reasons.at(-1)).toContain('already matches existing sibling tasks')
     expect(childAudit.taskReadiness?.recommendation).toBe('ready')
     expect(childAudit.taskReadiness?.summary).toBe('This task is ready; sibling tasks already cover the split work.')
   })
@@ -813,8 +1226,8 @@ describe('updateTask', () => {
           },
           taskReadiness: {
             taskKind: 'implementation',
-            recommendation: 'split',
-            summary: 'Task is too broad and should be split.',
+            recommendation: 'requires_child_work',
+            summary: 'Task must be planned as child work before execution.',
             dimensions: [
               {
                 id: 'size',
@@ -934,12 +1347,60 @@ describe('updateTask', () => {
         { id: 'ac-2', description: 'Admin API returns subscription status.', verifiedBy: 'review' },
         { id: 'ac-3', description: 'Migration backfills subscriptions.', verifiedBy: 'review' },
       ],
+      workUnitAnalysis: {
+        summary: 'Five independently deliverable work units.',
+        units: [
+          {
+            id: 'billing-ui',
+            title: 'Implement the billing settings workflow',
+            deliverable: 'Billing settings can update subscriptions.',
+            rationale: 'The UI workflow can be reviewed separately from the API and migration work.',
+            suggestedDomain: 'frontend',
+            dependsOn: [],
+          },
+          {
+            id: 'admin-api',
+            title: 'Add the admin subscription API contract',
+            deliverable: 'Admin API returns subscription status.',
+            rationale: 'The API contract is independently verifiable.',
+            suggestedDomain: 'backend',
+            dependsOn: [],
+          },
+          {
+            id: 'migration',
+            title: 'Migrate existing workspace subscription data',
+            deliverable: 'Existing workspace subscriptions are backfilled.',
+            rationale: 'Migration safety needs its own proof loop.',
+            suggestedDomain: 'data',
+            dependsOn: ['admin-api'],
+          },
+          {
+            id: 'invite-email',
+            title: 'Implement invite email delivery',
+            deliverable: 'Invite emails are sent.',
+            rationale: 'Delivery behavior is separate from data migration.',
+            suggestedDomain: 'backend',
+            dependsOn: [],
+          },
+          {
+            id: 'analytics-rollout',
+            title: 'Update analytics documentation and rollout evidence',
+            deliverable: 'Analytics events and rollout evidence are documented.',
+            rationale: 'Docs and rollout proof should stay separate from code changes.',
+            suggestedDomain: 'docs',
+            dependsOn: [],
+          },
+        ],
+        proofOnlyItems: [],
+        createdAt: '2026-05-25T12:00:00.000Z',
+        createdBy: 'coordinator-test',
+      },
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0].sizePlan.action).toBe('proceed_with_warning')
-    expect(raw.tasks[0].taskReadiness.recommendation).toBe('ready')
-    expect(raw.tasks[0].taskReadiness.summary).toContain('continue through the child tasks')
+    const raw = readProjectTaskQueueSync(tasksPath)
+    expect(raw.tasks[0].sizePlan?.action).toBe('proceed_with_warning')
+    expect(raw.tasks[0].taskReadiness?.recommendation).toBe('ready')
+    expect(raw.tasks[0].taskReadiness?.summary).toContain('continue through the child tasks')
     expect(raw.tasks[0].status).toBe('ready')
     expect(raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
@@ -952,7 +1413,7 @@ describe('updateTask', () => {
       taskId: 'task-001',
       spec: '## Summary\nBuild the thing.',
     })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('spec_review')
     expect(raw.tasks[0].spec).toContain('Build the thing')
   })
@@ -1002,14 +1463,14 @@ describe('updateTask', () => {
       },
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].sizePlan).toMatchObject({
       taskId: 'task-001',
       score: 1,
       action: 'proceed',
     })
     expect(raw.tasks[0].status).toBe('ready')
-    expect(raw.tasks[0].parentGoalId).toBeUndefined()
+    expect((raw.tasks[0] as unknown as Record<string, unknown>).parentGoalId).toBeUndefined()
     expect(raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     )).toEqual([])
@@ -1072,7 +1533,7 @@ describe('updateTask', () => {
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/post-user-question/i)
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('exploring')
     expect(raw.tasks[0].spec).toBeUndefined()
   })
@@ -1087,7 +1548,7 @@ describe('updateTask', () => {
         },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue), 'utf-8')
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
 
     await updateTask({
       tasksPath,
@@ -1116,7 +1577,7 @@ describe('updateTask', () => {
       ],
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].spec).toContain('`web`')
     expect(raw.tasks[0].spec).not.toContain('knit/web')
     expect(raw.tasks[0].acceptanceCriteria).toMatchObject([
@@ -1149,7 +1610,13 @@ describe('updateTask', () => {
         },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(importedQueue), 'utf-8')
+    writeProjectTaskQueue(tasksPath, importedQueue, { projectRoot: tmpDir })
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: 'imported-note-001',
+      kind: 'note',
+      recordedAt: importedQueue.tasks[0]!.notes[0]!.timestamp,
+      payload: importedQueue.tasks[0]!.notes[0]!,
+    })
 
     await updateTask({
       tasksPath,
@@ -1157,7 +1624,7 @@ describe('updateTask', () => {
       spec: '## Summary\nAdd a version diff view to page history.',
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].title).toBe('Knit: add a version diff view to page history')
   })
 
@@ -1175,7 +1642,7 @@ describe('updateTask', () => {
       ].join('\n'),
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].acceptanceCriteria).toEqual([
       {
         id: 'ac-1',
@@ -1184,6 +1651,7 @@ describe('updateTask', () => {
         expectation: 'The table menu renders.',
         verifiedBy: 'review',
         met: false,
+        source: 'documented',
       },
       {
         id: 'ac-2',
@@ -1192,6 +1660,7 @@ describe('updateTask', () => {
         expectation: '`pnpm -F web build` passes.',
         verifiedBy: 'review',
         met: false,
+        source: 'documented',
       },
     ])
   })
@@ -1220,7 +1689,7 @@ describe('updateTask', () => {
       assignedTo: '',
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('review')
     expect(raw.tasks[0].spec).toBe('Existing spec')
     expect(raw.tasks[0].blockReason).toBe('Existing block reason')
@@ -1233,7 +1702,7 @@ describe('updateTask', () => {
     const before = seedQueue.tasks[0]!.updatedAt
     await new Promise((r) => setTimeout(r, 5))
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].updatedAt).not.toBe(before)
   })
 
@@ -1256,7 +1725,7 @@ describe('updateTask', () => {
       status: 'blocked',
       blockReason: 'Spec ambiguous — awaiting human input',
     })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('blocked')
     expect(raw.tasks[0].blockReason).toBe('Spec ambiguous — awaiting human input')
   })
@@ -1275,9 +1744,6 @@ describe('updateTask', () => {
         },
       ],
     })
-
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0]).not.toHaveProperty('gateResults')
 
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
     expect(evidence.map((event) => event.payload)).toEqual([
@@ -1323,7 +1789,7 @@ describe('updateTask', () => {
       gateResults: [],
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('in_progress')
     expect(raw.tasks[0].acceptanceCriteria).toEqual([
       {
@@ -1334,9 +1800,9 @@ describe('updateTask', () => {
         verifiedBy: 'automated',
         command: 'pnpm test',
         met: false,
+        source: 'documented',
       },
     ])
-    expect(raw.tasks[0]).not.toHaveProperty('gateResults')
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
     expect(evidence.map((event) => event.payload)).toEqual([
       {
@@ -1363,8 +1829,57 @@ describe('updateTask', () => {
     expect(result.success).toBe(true)
     expect(result.taskId).toBe('task-001')
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('spec_review')
+  })
+})
+
+describe('materializeProofSetupTask', () => {
+  it('creates one linked internal verification child and inherits release scope', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        releaseIds: ['release-1'],
+        references: ['docs/release-plan.md'],
+      }],
+    })
+    const timestamp = '2026-07-18T20:00:00.000Z'
+
+    const first = materializeProofSetupTask(queue, queue.tasks[0]!, timestamp)
+    const second = materializeProofSetupTask(queue, queue.tasks[0]!, timestamp)
+    const child = queue.tasks.find(task => task.id === first.childTaskId)
+
+    expect(first.status).toBe('materialized')
+    expect(second).toEqual({ status: 'already_represented', childTaskId: first.childTaskId })
+    expect(child).toMatchObject({
+      title: 'Establish concrete proof for Test task',
+      status: 'exploring',
+      workKind: 'verification',
+      releaseIds: ['release-1'],
+      references: ['docs/release-plan.md'],
+      workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+      hierarchy: { parentId: 'task-001', relation: 'decomposes' },
+    })
+    expect(queue.tasks[0]!.hierarchy?.childIds).toContain(first.childTaskId)
+    expect(queue.tasks[0]!.deliverySteps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceTaskId: first.childTaskId,
+        kind: 'verify',
+        blocksCompletion: true,
+      }),
+    ]))
   })
 })
 
@@ -1388,12 +1903,14 @@ describe('addTask', () => {
     expect(result.success).toBe(true)
     expect(result.taskId).toBe('task-002')
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks).toHaveLength(2)
-    expect(raw.tasks[1].id).toBe('task-002')
-    expect(raw.tasks[1]).not.toHaveProperty('notes')
-    expect(raw.tasks[1]).not.toHaveProperty('gateResults')
-    expect(raw.tasks[1]).not.toHaveProperty('revisionCount')
+    await expect(readTasks({ tasksPath })).resolves.toMatchObject({
+      queue: {
+        tasks: [
+          expect.anything(),
+          expect.objectContaining({ id: 'task-002' }),
+        ],
+      },
+    })
   })
 })
 
@@ -1407,7 +1924,7 @@ describe('engine tool wrappers', () => {
 
   it('readTasksTool marks missing file as error', async () => {
     const result = await readTasksTool.execute(
-      { tasksPath: path.join(tmpDir, 'nope.json') },
+      { tasksPath: path.join(tmpDir, 'missing', 'nope.json') },
       ctx,
     )
     expect(result.is_error).toBe(true)
@@ -1450,9 +1967,9 @@ describe('engine tool wrappers', () => {
     )
     expect(result.is_error).toBe(false)
     expect(result.metadata?.taskId).toBe('task-001')
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0].status).toBe('review')
-    expect(raw.tasks[0]).not.toHaveProperty('notes')
+    await expect(readTasks({ tasksPath })).resolves.toMatchObject({
+      queue: { tasks: [expect.objectContaining({ status: 'review' })] },
+    })
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
     expect(evidence[0]?.payload).toMatchObject({
       agentId: 'worker-agent',

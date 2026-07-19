@@ -56,7 +56,7 @@ export function applyTaskShaping(task: Task, opts: { now?: string; recordNote?: 
     task.notes.push({
       agentId: 'coordinator',
       role: 'coordinator',
-      content: `Task readiness: ${readiness.recommendation}. ${readiness.summary}`,
+      content: `Task readiness action: ${readiness.recommendation}. ${readiness.summary}`,
       timestamp: now,
     })
   }
@@ -74,7 +74,7 @@ export function suggestCoordinatorReflection(
     task.sizePlan?.action === 'split_required' ||
     task.sizePlan?.action === 'split_recommended' ||
     task.sizePlan?.action === 'decompose_before_execution' ||
-    task.taskReadiness?.recommendation === 'split',
+    task.taskReadiness?.recommendation === 'requires_child_work',
   )
   if (splitPressure.length >= 2) {
     candidates.push({
@@ -160,7 +160,7 @@ function actionForRecommendation(recommendation: ReturnType<typeof assessTaskRea
       return 'ask_one_question'
     case 'needs_research_spike':
       return 'research_first'
-    case 'split':
+    case 'requires_child_work':
       return 'split'
     case 'shelve_defer':
       return 'defer'
@@ -172,19 +172,7 @@ function childDraftsFor(
   action: TaskDecompositionRecord['action'],
   definitionOfDone: DefinitionOfDone,
 ): TaskDecompositionRecord['childDrafts'] {
-  if (action === 'research_first') {
-    return [{
-      title: `Research ${task.title}`,
-      kind: 'research',
-      reason: 'Separate uncertainty from implementation before dispatch.',
-      dependsOn: [],
-      definitionOfDone: {
-        items: ['Research output names options, recommendation, evidence, and unresolved questions.'],
-        evidenceRequired: ['Decision-ready comparison is attached to the task.'],
-        createdBy: 'task-decomposition',
-      },
-    }]
-  }
+  if (action === 'research_first') return []
 
   if (action !== 'split') return []
   if (!task.workUnitAnalysis?.units?.length) {

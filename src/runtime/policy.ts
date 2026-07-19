@@ -24,6 +24,8 @@ export const RECOVERY_PLAYBOOK_IDS = [
   'repair_touched_file_failure',
   'refresh_stale_edit_target',
   'resume_from_checkpoint',
+  'retry_current_task_context',
+  'review_partial_diff',
   'rebootstrap_project',
   'package_owned_dirty_work',
   'ask_concrete_human_question',
@@ -110,6 +112,33 @@ export interface LastToolError {
   toolName: string
   message: string
   filePath?: string
+}
+
+export function recoveryAllowedToolsForPlaybook(playbook: RecoveryPlaybookId): string[] {
+  switch (playbook) {
+    case 'reread_focused_file':
+      return ['read-file', 'write-checkpoint', 'raise-escalation']
+    case 'rerun_authoritative_command':
+    case 'package_owned_dirty_work':
+      return ['run-shell-command', 'write-checkpoint', 'raise-escalation']
+    case 'repair_touched_file_failure':
+      return ['read-file', 'edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation']
+    case 'refresh_stale_edit_target':
+      return ['read-file', 'edit-file', 'write-checkpoint', 'raise-escalation']
+    case 'resume_from_checkpoint':
+    case 'rebootstrap_project':
+      return ['read-file', 'edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation']
+    case 'retry_current_task_context':
+      return ['list-files', 'read-file', 'edit-file', 'write-file', 'run-shell-command', 'write-checkpoint', 'log-progress', 'update-task', 'raise-escalation']
+    case 'review_partial_diff':
+      return ['read-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation']
+    case 'route_to_review':
+    case 'route_to_gate_check':
+      return ['write-checkpoint', 'raise-escalation']
+    case 'ask_concrete_human_question':
+    case 'stop_with_external_setup_action':
+      return ['raise-escalation']
+  }
 }
 
 export interface LearningCandidate {
@@ -445,13 +474,7 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
         playbook: firstPlaybook,
         reason:
           'Repair the failed verification in files the worker already touched before escalating to a human.',
-        allowedTools: [
-          'read-file',
-          'edit-file',
-          'run-shell-command',
-          'write-checkpoint',
-          'raise-escalation',
-        ],
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
         allowedPaths: touchedFiles,
         command: failedVerification?.command,
         maxTurns: 2,
@@ -464,7 +487,7 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
         playbook: firstPlaybook,
         reason:
           'Refresh the exact stale edit target, then retry one focused mutation or escalate if the target is no longer valid.',
-        allowedTools: ['read-file', 'edit-file', 'write-checkpoint', 'raise-escalation'],
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
         allowedPaths: touchedFiles,
         maxTurns: 1,
         successSignals: ['fresh_target_read', 'focused_mutation_succeeded'],
@@ -475,7 +498,7 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
       return {
         playbook: firstPlaybook,
         reason: 'Read only the focused file evidence needed for the next bounded action.',
-        allowedTools: ['read-file', 'write-checkpoint', 'raise-escalation'],
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
         allowedPaths: touchedFiles,
         maxTurns: 1,
         successSignals: ['focused_file_read'],
@@ -483,26 +506,33 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
         auditRequired: true,
       }
     case 'resume_from_checkpoint':
+    case 'retry_current_task_context':
     case 'rebootstrap_project':
       return {
         playbook: firstPlaybook,
         reason:
           firstPlaybook === 'resume_from_checkpoint'
             ? 'Resume from the durable checkpoint instead of rediscovering context.'
+            : firstPlaybook === 'retry_current_task_context'
+              ? 'Retry from the current task brief/spec because no durable checkpoint exists yet.'
             : 'Re-run the project bootstrap path before returning to implementation.',
-        allowedTools: ['read-file', 'edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation'],
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
         allowedPaths: touchedFiles,
         command: failedVerification?.command,
-        maxTurns: 2,
-        successSignals: ['checkpoint_next_action_completed'],
-        stopSignals: ['same_playbook_failed', 'checkpoint_invalid'],
+        maxTurns: firstPlaybook === 'retry_current_task_context' ? 1 : 2,
+        successSignals: firstPlaybook === 'retry_current_task_context'
+          ? ['visible_progress_or_checkpoint_written']
+          : ['checkpoint_next_action_completed'],
+        stopSignals: firstPlaybook === 'retry_current_task_context'
+          ? ['same_playbook_failed', 'no_visible_progress_after_retry']
+          : ['same_playbook_failed', 'checkpoint_invalid'],
         auditRequired: true,
       }
     case 'package_owned_dirty_work':
       return {
         playbook: firstPlaybook,
         reason: 'Package Guildhall-owned dirty checkout work into a durable task branch.',
-        allowedTools: ['run-shell-command', 'write-checkpoint', 'raise-escalation'],
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
         maxTurns: 1,
         successSignals: ['owned_dirty_work_packaged'],
         stopSignals: ['same_playbook_failed', 'external_changes_detected'],
@@ -512,7 +542,7 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
       return {
         playbook: firstPlaybook,
         reason: 'Stop with an external setup action instead of mutating checkout state Guildhall does not own.',
-        allowedTools: ['raise-escalation'],
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
         maxTurns: 1,
         successSignals: ['external_setup_action_recorded'],
         stopSignals: ['same_playbook_failed'],
@@ -522,7 +552,7 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
       return {
         playbook: firstPlaybook,
         reason: 'Rerun the authoritative verification command before making another recovery decision.',
-        allowedTools: ['run-shell-command', 'write-checkpoint', 'raise-escalation'],
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
         command: failedVerification?.command,
         maxTurns: 1,
         successSignals: ['authoritative_command_reran'],
@@ -533,9 +563,20 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
       return {
         playbook: firstPlaybook,
         reason: 'Route back to review after preserving the infrastructure-noise evidence.',
-        allowedTools: ['write-checkpoint', 'raise-escalation'],
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
         maxTurns: 1,
         successSignals: ['review_rerouted'],
+        stopSignals: ['same_playbook_failed'],
+        auditRequired: true,
+      }
+    case 'review_partial_diff':
+      return {
+        playbook: firstPlaybook,
+        reason: 'Review the saved partial diff and verification evidence before resuming implementation.',
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
+        allowedPaths: touchedFiles,
+        maxTurns: 1,
+        successSignals: ['partial_diff_reviewed', 'review_rerouted'],
         stopSignals: ['same_playbook_failed'],
         auditRequired: true,
       }
@@ -543,7 +584,7 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
       return {
         playbook: firstPlaybook,
         reason: 'Route to gate check with the existing evidence packet.',
-        allowedTools: ['write-checkpoint', 'raise-escalation'],
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
         maxTurns: 1,
         successSignals: ['gate_check_rerouted'],
         stopSignals: ['same_playbook_failed'],

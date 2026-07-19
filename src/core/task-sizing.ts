@@ -443,45 +443,7 @@ export function buildDecompositionChildDrafts(input: BuildTaskSizePlanInput): Ta
       ...(unit.suggestedDomain ? { suggestedDomain: unit.suggestedDomain } : {}),
     }))
   }
-  const text = inScopeTaskText(input.task)
-  const files = [...new Set((input.changedFiles ?? []).map((file) => file.trim()).filter(Boolean))]
-  const lanes = [...new Set((input.riskLanes ?? []).map((lane) => lane.trim()).filter(Boolean))]
-  return recommendChildren({ text, files, lanes })
-}
-
-function recommendChildren(input: { text: string; files: readonly string[]; lanes: readonly string[] }): TaskSplitRecommendation[] {
-  const children: TaskSplitRecommendation[] = []
-  const add = (title: string, reason: string, suggestedDomain?: string) => {
-    if (!children.some((child) => child.title === title)) children.push({ title, reason, suggestedDomain, dependsOn: [] })
-  }
-
-  if (isBroadImportedProgram(input.text)) {
-    add('Audit the remaining replacement scope', 'Turn the imported planning note into a concrete list of remaining independently verifiable targets.', undefined)
-    add('Implement the first independently verifiable replacement', 'Keep the first code change small enough for one worker pass and review boundary.', undefined)
-    add('Verify and update the migration record', 'Keep proof and migration inventory updates explicit after the implementation child lands.', undefined)
-    return children
-  }
-  if (/billing|subscription/i.test(input.text) || input.files.some((file) => /billing|subscription/i.test(file))) {
-    add('Implement the billing settings workflow', 'Keep the user-facing workflow small enough for UX review.', 'frontend')
-  }
-  if (API_PATTERNS.test(input.text) || input.files.some((file) => /api|route|endpoint/i.test(file))) {
-    add('Add the admin subscription API contract', 'Separate API compatibility and security review from UI work.', 'backend')
-  }
-  if (/migration|migrate|backfill|schema/i.test(input.text) || input.files.some((file) => /migration|schema/i.test(file))) {
-    add('Migrate existing workspace subscription data', 'Give data safety, rollback, and idempotency their own verification loop.', 'data')
-  }
-  if (/invite|email/i.test(input.text) || input.files.some((file) => /invite|email/i.test(file))) {
-    add('Implement invite email delivery', 'Keep messaging, delivery, and privacy review focused.', 'backend')
-  }
-  if (/analytics|telemetry|docs?|rollout/i.test(input.text) || input.lanes.includes('release_risk')) {
-    add('Update analytics documentation and rollout evidence', 'Keep docs truth and rollout evidence separate from implementation.', 'docs')
-  }
-
-  if (children.length === 0) {
-    add('Extract the first independently verifiable outcome', 'Start with the smallest user-visible or system-visible outcome.', undefined)
-    add('Extract the second independently verifiable outcome', 'Link this child after the first task proves its boundary.', undefined)
-  }
-  return children
+  return []
 }
 
 function isBroadImportedProgram(text: string): boolean {

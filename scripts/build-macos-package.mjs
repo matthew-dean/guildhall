@@ -16,7 +16,9 @@ const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 const version = manifest.version
 
 if (!args.has('--skip-build')) {
-  run('pnpm', ['build'])
+  run('node', ['packages/ui/scripts/generate-styles.mjs'])
+  run(join(ROOT, 'node_modules', '.bin', 'tsc'), ['-p', 'packages/ui/tsconfig.json'])
+  run('node', ['build.mjs'])
 }
 
 rmSync(PACKAGE_DIR, { recursive: true, force: true })

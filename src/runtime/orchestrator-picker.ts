@@ -15,12 +15,15 @@
 
 import { type Task, type TaskQueue, type TaskStatus } from '@guildhall/core'
 import { hasOpenEscalation } from '@guildhall/tools'
-import { META_INTAKE_TASK_ID } from './meta-intake.js'
-import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { workSubtreeIds } from './work-hierarchy.js'
 import { taskEligibleForSelectedScope, taskNodeId, type OrientationScope } from './project-orientation-spine.js'
+import { selectedProjectScopeForQueue } from './project-scope-projection.js'
 import { deriveWorkExecutionState } from './work-execution-state.js'
+import { specReviewNeedsRepair, specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { hasImportedExecutionBlueprint } from './task-readiness.js'
+import { META_INTAKE_TASK_ID } from './meta-intake.js'
+import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 
 export type TaskLane = 'spec' | 'worker' | 'review' | 'coordinator'
 
@@ -30,39 +33,41 @@ export interface PickNextTaskOptions {
 }
 
 export function selectedReleaseScopeForQueue(queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'>): OrientationScope | null {
-  const releases = queue.releases ?? []
-  if (releases.length === 0) return null
-  const release =
-    releases.find(candidate => candidate.id === queue.selectedReleaseId) ??
-    releases.find(candidate => candidate.state === 'active') ??
-    releases.find(candidate => candidate.state === 'planned') ??
-    releases[0]
-  if (!release) return null
-  const nodeIds = new Set<string>()
-  for (const id of release.nodeIds ?? []) nodeIds.add(id)
-  for (const task of queue.tasks) {
-    if (task.releaseIds?.includes(release.id)) nodeIds.add(taskNodeId(task.id))
-  }
-  for (const nodeId of [...nodeIds]) {
-    if (!nodeId.startsWith('work:')) continue
-    for (const childId of workSubtreeIds(queue.tasks, nodeId.slice('work:'.length))) {
-      nodeIds.add(taskNodeId(childId))
-    }
-  }
-  const deferredNodeIds = new Set<string>(release.deferredNodeIds ?? [])
-  for (const nodeId of [...deferredNodeIds]) {
-    if (!nodeId.startsWith('work:')) continue
-    for (const childId of workSubtreeIds(queue.tasks, nodeId.slice('work:'.length))) {
-      deferredNodeIds.add(taskNodeId(childId))
-    }
-  }
+  return selectedProjectScopeForQueue(queue)
+}
+
+export function selectedTaskScopeForQueue(
+  queue: Pick<TaskQueue, 'tasks'>,
+  membership: {
+    currentTaskIds: string[]
+    laterTaskIds: string[]
+  } | null | undefined,
+): OrientationScope | null {
+  if (!membership) return null
+  const currentTaskIds = membership.currentTaskIds
+    .map(taskId => taskId.trim())
+    .filter(Boolean)
+  const laterTaskIds = membership.laterTaskIds
+    .map(taskId => taskId.trim())
+    .filter(Boolean)
+  if (currentTaskIds.length === 0 && laterTaskIds.length === 0) return null
+
+  const queueTaskIds = new Set(queue.tasks.map(task => task.id))
+  const nodeIds = currentTaskIds
+    .filter(taskId => queueTaskIds.has(taskId))
+    .map(taskNodeId)
+  const deferredNodeIds = laterTaskIds
+    .filter(taskId => queueTaskIds.has(taskId))
+    .map(taskNodeId)
+  if (nodeIds.length === 0 && deferredNodeIds.length === 0) return null
+
   return {
-    id: release.id,
-    label: release.label,
-    kind: release.kind === 'milestone' ? 'milestone' : release.kind === 'release' ? 'release' : 'proposed_feature_set',
-    source: release.source,
-    nodeIds: [...nodeIds],
-    deferredNodeIds: [...deferredNodeIds],
+    id: 'current-work',
+    label: 'Current task scope',
+    kind: 'proposed_feature_set',
+    source: 'inferred',
+    nodeIds,
+    deferredNodeIds,
   }
 }
 
@@ -74,16 +79,27 @@ export function taskHasUnansweredOpenQuestion(task: Task): boolean {
   return hasUnansweredOpenQuestion(task)
 }
 
-export function specReviewRequiresOwnerApproval(task: Pick<Task, 'id'>): boolean {
-  return task.id === META_INTAKE_TASK_ID || task.id === WORKSPACE_IMPORT_TASK_ID
-}
-
 function finishabilityAllowsDispatch(task: Task): boolean {
   return task.status !== 'ready' ||
     task.taskReadiness == null ||
     task.taskReadiness.recommendation === 'ready' ||
     task.taskReadiness.recommendation === 'needs_research_spike' ||
+    settledSplitAllowsDispatch(task) ||
+    hasImportedExecutionBlueprint(task) ||
     hasCompleteWorkerHandoff(task)
+}
+
+function settledSplitAllowsDispatch(task: Task): boolean {
+  return task.taskReadiness?.recommendation === 'requires_child_work' &&
+    task.sizePlan?.action === 'proceed_with_warning' &&
+    (task.sizePlan.recommendedChildren?.length ?? 0) === 0 &&
+    hasSpecDraft(task)
+}
+
+function hasSpecDraft(task: Task): boolean {
+  return typeof task.spec === 'string' && task.spec.trim().length > 0 &&
+    Array.isArray(task.acceptanceCriteria) &&
+    task.acceptanceCriteria.length > 0
 }
 
 function hasCompleteWorkerHandoff(task: Task): boolean {
@@ -171,6 +187,7 @@ export function pickNextTask(
     ? new Set(workSubtreeIds(queue.tasks, preferredTaskId))
     : null
   const explicitTargetIds = scopedIds ?? new Set<string>()
+  const tasksById = new Map(queue.tasks.map(task => [task.id, task] as const))
   const isExcluded = exclude
     ? (t: Task) => exclude.has(t.id)
     : (_t: Task) => false
@@ -184,6 +201,7 @@ export function pickNextTask(
     taskEligibleForSelectedScope(task, options.scope, {
       explicitTaskId: explicitTargetIds.has(task.id) ? task.id : undefined,
       includedDependencyIds: options.includedDependencyIds,
+      tasksById,
     }).eligible
   const matchesStatusSlot = (
     task: Task,
@@ -194,7 +212,11 @@ export function pickNextTask(
     task.status === status &&
     finishabilityAllowsDispatch(task) &&
     derivedExecutionAllowsDispatch(queue, task) &&
-    !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && specReviewRequiresOwnerApproval(task)) &&
+    !(task.status === 'spec_review' && (
+      task.id === META_INTAKE_TASK_ID ||
+      task.id === WORKSPACE_IMPORT_TASK_ID ||
+      (specReviewRequiresOwnerApproval(task) && !specReviewNeedsRepair(task))
+    )) &&
     !((task.status === 'exploring' || task.status === 'spec_review') && hasUnansweredOpenQuestion(task)) &&
     matchesLane(task) &&
     task.priority === priorityLevel &&
@@ -234,8 +256,6 @@ export function pickNextTask(
         matchesLane(t) &&
         t.priority === p &&
         (!domain || t.domain === domain) &&
-        matchesScope(t) &&
-        matchesOrientationScope(t) &&
         !hasOpenEscalation(t) &&
         !isExcluded(t),
     )

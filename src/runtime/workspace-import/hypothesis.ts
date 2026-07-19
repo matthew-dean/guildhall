@@ -23,6 +23,20 @@ import type { WorkspaceSignal } from './types.js'
 
 export type DraftConfidence = 'high' | 'medium' | 'low'
 
+export interface DraftSourceClaim {
+  source: string
+  title: string
+  evidence: string
+  references?: readonly string[]
+  role?: 'capability' | 'reference' | 'brief_input'
+  structure?: 'record' | 'note'
+  scopeHint?: 'current' | 'later'
+  releaseId?: string
+  releaseLabel?: string
+  confidence: DraftConfidence
+  linkedTaskHints?: readonly string[]
+}
+
 export interface DraftGoal {
   id: string
   title: string
@@ -47,7 +61,32 @@ export interface DraftTask {
   domain: string
   scope: 'current' | 'later'
   priority: 'critical' | 'high' | 'normal' | 'low'
+  acceptanceCriteria?: ReadonlyArray<{
+    id: string
+    description: string
+    scenario?: string
+    expectation?: string
+    verifiedBy?: string
+    command?: string
+    expectedExit?: 'zero' | 'non_zero'
+    expectedOutputIncludes?: string[]
+    evidenceHint?: string
+    negativeCase?: string
+  }>
+  dependsOn?: readonly string[]
+  proofPaths?: ReadonlyArray<Record<string, unknown>>
+  releaseIds?: readonly string[]
+  sourceClaims?: readonly DraftSourceClaim[]
   source: string
+  references?: readonly string[]
+  confidence: DraftConfidence
+}
+
+export interface DraftRelease {
+  id: string
+  label: string
+  source: string
+  scope?: 'current' | 'later'
   references?: readonly string[]
   confidence: DraftConfidence
 }
@@ -64,10 +103,17 @@ export interface DraftContext {
   excerpt: string
   source: string
   references?: readonly string[]
+  domain?: string
+  role?: 'capability' | 'reference' | 'brief_input'
+  structure?: 'record' | 'note'
+  scopeHint?: 'current' | 'later'
+  releaseIds?: readonly string[]
+  linkedTaskHints?: readonly string[]
 }
 
 export interface WorkspaceImportDraft {
   goals: readonly DraftGoal[]
+  releases?: readonly DraftRelease[]
   tasks: readonly DraftTask[]
   milestones: readonly DraftMilestone[]
   context: readonly DraftContext[]
@@ -94,15 +140,59 @@ function normalize(title: string): string {
 }
 
 function tokenSet(text: string): Set<string> {
+  const normalized = normalize(text)
+  const expanded = normalized.replace(/-/g, ' ')
   return new Set(
-    normalize(text)
+    expanded
       .split(' ')
       .filter((token) => token.length >= 3),
   )
 }
 
-function firstToken(text: string): string | undefined {
-  return normalize(text).split(' ').find(Boolean)
+const GENERIC_TASK_TOKENS = new Set([
+  'add',
+  'after',
+  'and',
+  'baseline',
+  'build',
+  'create',
+  'define',
+  'fix',
+  'from',
+  'implement',
+  'improve',
+  'into',
+  'lane',
+  'path',
+  'proof',
+  'review',
+  'reviewer',
+  'resolve',
+  'schema',
+  'schemas',
+  'ship',
+  'simpler',
+  'split',
+  'stable',
+  'task',
+  'the',
+  'then',
+  'this',
+  'through',
+  'use',
+  'uses',
+  'using',
+  'work',
+])
+
+function meaningfulTokenSet(text: string): Set<string> {
+  return new Set(
+    [...tokenSet(text)].filter((token) => !GENERIC_TASK_TOKENS.has(token)),
+  )
+}
+
+function firstMeaningfulToken(text: string): string | undefined {
+  return [...meaningfulTokenSet(text)][0] ?? normalize(text).split(' ').find(Boolean)
 }
 
 function overlapRatio(a: Set<string>, b: Set<string>): number {
@@ -112,6 +202,48 @@ function overlapRatio(a: Set<string>, b: Set<string>): number {
     if (b.has(token)) shared += 1
   }
   return shared / Math.max(a.size, b.size)
+}
+
+function sharedTokenCount(a: Set<string>, b: Set<string>): number {
+  let shared = 0
+  for (const token of a) {
+    if (b.has(token)) shared += 1
+  }
+  return shared
+}
+
+function referenceBasenames(refs: readonly string[] | undefined): Set<string> {
+  return new Set(
+    (refs ?? [])
+      .map(ref => ref.replaceAll('\\', '/').split('/').pop()?.trim() ?? '')
+      .filter(Boolean),
+  )
+}
+
+function referencesContainPathSegment(
+  refs: readonly string[] | undefined,
+  segment: string,
+): boolean {
+  const normalizedSegment = `/${segment.replace(/^\/+|\/+$/g, '')}/`
+  return (refs ?? []).some(ref => ref.replaceAll('\\', '/').includes(normalizedSegment))
+}
+
+function planningDocStructuralForm(
+  item: Pick<WorkspaceSignal, 'evidence' | 'source'>,
+): 'numbered' | 'bullet' | null {
+  if (item.source !== 'planning-docs') return null
+  const evidence = item.evidence.trim()
+  if (/: \d+(?:\.\d+)*\.?\s+/.test(evidence)) return 'numbered'
+  if (/: -\s+/.test(evidence)) return 'bullet'
+  return null
+}
+
+function planningDocSourcePath(
+  item: Pick<WorkspaceSignal, 'evidence' | 'source'>,
+): string | null {
+  if (item.source !== 'planning-docs') return null
+  const match = /^(.+?\.md):\s+/.exec(item.evidence.trim())
+  return match?.[1]?.trim() ?? null
 }
 
 function stableHash(input: string): string {
@@ -184,15 +316,40 @@ function domainFromSignal(sig: WorkspaceSignal): string {
   return 'core'
 }
 
+function domainsCompatibleForDedup(left: string, right: string): boolean {
+  return left === right || left === 'core' || right === 'core'
+}
+
 function scopeFromSignal(sig: WorkspaceSignal): DraftTask['scope'] {
   return sig.scopeHint === 'later' ? 'later' : 'current'
 }
 
-function isFormattingDebris(sig: WorkspaceSignal): boolean {
+function releaseIdsFromSignal(sig: WorkspaceSignal): string[] | undefined {
+  const releaseId = sig.releaseId?.trim()
+  if (!releaseId) return undefined
+  return [releaseId]
+}
+
+function releaseFromSignal(sig: WorkspaceSignal): DraftRelease | null {
+  const releaseId = sig.releaseId?.trim()
+  const label = sig.releaseLabel?.trim()
+  if (!releaseId || !label) return null
+  return {
+    id: releaseId,
+    label,
+    source: sig.source,
+    ...(sig.scopeHint ? { scope: scopeFromSignal(sig) } : {}),
+    ...(sig.references ? { references: sig.references } : {}),
+    confidence: sig.confidence,
+  }
+}
+
+export function isFormattingDebris(sig: Pick<WorkspaceSignal, 'title'>): boolean {
   if (sig.title.trim().endsWith(':')) return true
   const title = normalize(sig.title)
   if (!title) return true
   if (title === 'none' || title === 'n a' || title === 'na' || title === 'tbd') return true
+  if (title.includes('umbrella doc') && title.includes('covered by child specs')) return true
   if (title === 'open questions if any' || title === 'out of scope') return true
   if (title === 'numbered given when then acceptance criteria') return true
   if (title === 'test mapping which ac is unit vs integration') return true
@@ -247,6 +404,7 @@ export function formWorkspaceHypothesis(
   inventory: WorkspaceInventory,
 ): WorkspaceImportDraft {
   const goalIndex = new Map<string, DraftGoal>()
+  const releaseIndex = new Map<string, DraftRelease>()
   const taskIndex = new Map<string, DraftTask>()
   const milestoneIndex = new Map<string, DraftMilestone>()
   const contextIndex = new Map<string, DraftContext>()
@@ -261,6 +419,7 @@ export function formWorkspaceHypothesis(
   }
 
   for (const sig of inventory.signals) {
+    addRelease(releaseIndex, sig, bump)
     if (sig.kind === 'goal') addGoal(goalIndex, sig, bump)
     else if (sig.kind === 'open_work') {
       if (isContextualOpenWork(sig)) addContext(contextIndex, sig)
@@ -272,19 +431,118 @@ export function formWorkspaceHypothesis(
 
   // Count merges: signals − unique entries across all buckets.
   const uniques =
-    goalIndex.size + taskIndex.size + milestoneIndex.size + contextIndex.size
+    goalIndex.size + releaseIndex.size + taskIndex.size + milestoneIndex.size + contextIndex.size
   deduped = Math.max(0, inventory.signals.length - uniques)
 
+  const goals = [...goalIndex.values()]
+  const context = [...contextIndex.values()]
+  const preliminaryReleases = [...releaseIndex.values()]
+  const tasks = assignCurrentReleaseScopes(
+    enrichTasksWithRelatedContext(mergeSameTitleTasks([...taskIndex.values()]), context),
+    preliminaryReleases,
+  )
+  const releases = deriveReleaseScopesFromDraft(preliminaryReleases, tasks, context)
+  const milestones = [...milestoneIndex.values()]
+
   return {
-    goals: [...goalIndex.values()],
-    tasks: [...taskIndex.values()],
-    milestones: [...milestoneIndex.values()],
-    context: [...contextIndex.values()],
+    goals,
+    ...(releases.length > 0 ? { releases } : {}),
+    tasks,
+    milestones,
+    context,
     stats: {
       inputSignals: inventory.signals.length,
       drafted: uniques,
       deduped,
     },
+  }
+}
+
+function mergeSameTitleTasks(tasks: DraftTask[]): DraftTask[] {
+  const byKey = new Map<string, DraftTask>()
+  for (const task of tasks) {
+    const key = `${task.domain}\0${normalize(task.title)}`
+    const existing = byKey.get(key)
+    if (!existing) {
+      byKey.set(key, task)
+      continue
+    }
+    byKey.set(key, {
+      ...existing,
+      scope: existing.scope === 'later' || task.scope === 'later' ? 'later' : 'current',
+      priority: CONFIDENCE_RANK[task.confidence] > CONFIDENCE_RANK[existing.confidence]
+        ? task.priority
+        : existing.priority,
+      confidence: CONFIDENCE_RANK[task.confidence] > CONFIDENCE_RANK[existing.confidence]
+        ? task.confidence
+        : existing.confidence,
+      references: mergeReferences(existing.references, task.references),
+      releaseIds: mergeReferences(existing.releaseIds, task.releaseIds),
+      sourceClaims: mergeSourceClaims(existing.sourceClaims, task.sourceClaims),
+    })
+  }
+  return [...byKey.values()]
+}
+
+function deriveReleaseScopesFromDraft(
+  releases: readonly DraftRelease[],
+  tasks: readonly DraftTask[],
+  context: readonly DraftContext[],
+): DraftRelease[] {
+  const releaseUsage = new Map<string, { currentTask: boolean; later: boolean }>()
+  const touch = (releaseId: string, update: Partial<{ currentTask: boolean; later: boolean }>) => {
+    const existing = releaseUsage.get(releaseId) ?? { currentTask: false, later: false }
+    releaseUsage.set(releaseId, {
+      currentTask: existing.currentTask || Boolean(update.currentTask),
+      later: existing.later || Boolean(update.later),
+    })
+  }
+  for (const task of tasks) {
+    for (const releaseId of task.releaseIds ?? []) {
+      touch(releaseId, task.scope === 'current' ? { currentTask: true } : { later: true })
+    }
+  }
+  for (const item of context) {
+    for (const releaseId of item.releaseIds ?? []) {
+      touch(releaseId, item.scopeHint === 'current' ? { currentTask: false } : { later: true })
+    }
+  }
+  return releases.map(release => {
+    const usage = releaseUsage.get(release.id)
+    const scope = usage?.currentTask ? 'current' : 'later'
+    return { ...release, scope }
+  })
+}
+
+function addRelease(
+  index: Map<string, DraftRelease>,
+  sig: WorkspaceSignal,
+  bump: (cur: { confidence: DraftConfidence } | undefined, next: DraftConfidence) => boolean,
+): void {
+  const release = releaseFromSignal(sig)
+  if (!release) return
+  const existing = index.get(release.id)
+  if (!existing) {
+    index.set(release.id, release)
+    return
+  }
+  const refs = mergeReferences(existing.references, release.references)
+  const shouldBump = bump(existing, release.confidence)
+  const mergedScope = existing.scope === 'current' || release.scope === 'current' ? 'current' : existing.scope ?? release.scope
+  if (shouldBump) {
+    index.set(release.id, {
+      ...release,
+      ...(mergedScope ? { scope: mergedScope } : {}),
+      ...(refs ? { references: refs } : {}),
+    })
+    return
+  }
+  if (refs || mergedScope) {
+    index.set(release.id, {
+      ...existing,
+      ...(refs ? { references: refs } : {}),
+      ...(mergedScope ? { scope: mergedScope } : {}),
+    })
   }
 }
 
@@ -331,25 +589,85 @@ function addTask(
   if (!key) return
   if (!index.has(key)) {
     const sigTokens = tokenSet(sig.title)
+    const sigMeaningfulTokens = meaningfulTokenSet(sig.title)
     const sigRef = sig.references?.[0]
     const sigDomain = domainFromSignal(sig)
     for (const [existingKey, existing] of index.entries()) {
-      if (existing.domain !== sigDomain) continue
+      if (!domainsCompatibleForDedup(existing.domain, sigDomain)) continue
       const existingRef = existing.references?.[0]
       const overlap = overlapRatio(sigTokens, tokenSet(existing.title))
-      const sameReference = !sigRef || !existingRef || sigRef === existingRef
+      const existingMeaningfulTokens = meaningfulTokenSet(existing.title)
+      const meaningfulOverlap = overlapRatio(
+        sigMeaningfulTokens,
+        existingMeaningfulTokens,
+      )
+      const sharedMeaningfulTokens = sharedTokenCount(sigMeaningfulTokens, existingMeaningfulTokens)
+      const sameReference = Boolean(sigRef && existingRef && sigRef === existingRef)
+      const sharedReferenceBasename = [...referenceBasenames(sig.references)].some(ref =>
+        referenceBasenames(existing.references).has(ref),
+      )
+      const sigStructuralForm = planningDocStructuralForm(sig)
+      const existingStructuralForm = planningDocStructuralForm({
+        source: existing.source,
+        evidence: existing.description,
+      })
+      const sigSourcePath = planningDocSourcePath(sig)
+      const existingSourcePath = planningDocSourcePath({
+        source: existing.source,
+        evidence: existing.description,
+      })
+      const keepDistinctRoadmapSlices =
+        sigStructuralForm &&
+        existingStructuralForm &&
+        sigStructuralForm !== existingStructuralForm &&
+        sigSourcePath &&
+        existingSourcePath &&
+        sigSourcePath === existingSourcePath
+      if (keepDistinctRoadmapSlices) continue
       const planningDocEcho =
         sig.source === 'planning-docs' &&
         existing.source === 'planning-docs' &&
-        firstToken(sig.title) === firstToken(existing.title) &&
-        overlap >= 0.55
-      if ((sameReference && overlap >= 0.7) || planningDocEcho) {
+        sigStructuralForm === existingStructuralForm &&
+        (
+          (
+            firstMeaningfulToken(sig.title) === firstMeaningfulToken(existing.title) &&
+            meaningfulOverlap >= 0.5
+          ) ||
+          meaningfulOverlap >= 0.45
+        )
+      const sameReferenceEcho =
+        sameReference &&
+        overlap >= 0.7 &&
+        meaningfulOverlap >= 0.34
+      const sameReferenceFamilyEcho =
+        sharedReferenceBasename &&
+        meaningfulOverlap >= 0.45 &&
+        sharedMeaningfulTokens >= 2
+      const currentRoadmapSpecEcho =
+        sig.source === 'planning-docs' &&
+        existing.source === 'planning-docs' &&
+        scopeFromSignal(sig) === 'current' &&
+        existing.scope === 'current' &&
+        meaningfulOverlap >= 0.45 &&
+        sharedMeaningfulTokens >= 3 &&
+        (
+          (
+            referencesContainPathSegment(sig.references, 'specs') &&
+            referencesContainPathSegment(existing.references, 'harness')
+          ) ||
+          (
+            referencesContainPathSegment(existing.references, 'specs') &&
+            referencesContainPathSegment(sig.references, 'harness')
+          )
+        )
+      if (sameReferenceEcho || sameReferenceFamilyEcho || planningDocEcho || currentRoadmapSpecEcho) {
         key = existingKey
         break
       }
     }
   }
   const existing = index.get(key)
+  const sourceClaim = sourceClaimFromSignal(sig)
   if (!existing) {
     index.set(key, {
       suggestedId: compactGeneratedId('task-import', sig.title, index.size + 1),
@@ -363,6 +681,8 @@ function addTask(
       priority: priorityFromConfidence(sig.confidence),
       source: sig.source,
       ...(sig.references ? { references: sig.references } : {}),
+      ...(releaseIdsFromSignal(sig) ? { releaseIds: releaseIdsFromSignal(sig) } : {}),
+      sourceClaims: [sourceClaim],
       confidence: sig.confidence,
     })
     return
@@ -376,16 +696,20 @@ function addTask(
         ? domainFromSignal(sig)
         : existing.domain,
     scope:
-      existing.scope === 'current' || scopeFromSignal(sig) === 'current'
-        ? 'current'
-        : 'later',
+      existing.scope === 'later' || scopeFromSignal(sig) === 'later'
+        ? 'later'
+        : 'current',
     priority: shouldBump
       ? priorityFromConfidence(sig.confidence)
       : existing.priority,
   }
   const refs = mergeReferences(existing.references, sig.references)
   if (refs) merged.references = refs
+  const releaseIds = mergeReferences(existing.releaseIds, releaseIdsFromSignal(sig))
+  if (releaseIds) merged.releaseIds = releaseIds
+  merged.sourceClaims = mergeSourceClaims(existing.sourceClaims, [sourceClaim])
   if (shouldBump) {
+    if (scopeFromSignal(sig) === 'later') merged.title = sig.title
     merged.description = supportingText(sig.title, sig.evidence)
     merged.whyThisMayMatter = supportingText(sig.title, sig.evidence) ? sig.evidence : existing.whyThisMayMatter
     merged.assumptions = draftTaskAssumptions(sig)
@@ -393,6 +717,41 @@ function addTask(
     merged.source = sig.source
   }
   index.set(key, merged)
+}
+
+function sourceClaimFromSignal(sig: WorkspaceSignal): DraftSourceClaim {
+  return {
+    source: sig.source,
+    title: sig.title,
+    evidence: sig.evidence,
+    ...(sig.references ? { references: sig.references } : {}),
+    ...(sig.role ? { role: sig.role } : {}),
+    ...(sig.structure ? { structure: sig.structure } : {}),
+    ...(sig.scopeHint ? { scopeHint: sig.scopeHint } : {}),
+    ...(sig.releaseId ? { releaseId: sig.releaseId } : {}),
+    ...(sig.releaseLabel ? { releaseLabel: sig.releaseLabel } : {}),
+    confidence: sig.confidence,
+    ...(sig.linkedTaskHints ? { linkedTaskHints: sig.linkedTaskHints } : {}),
+  }
+}
+
+function mergeSourceClaims(
+  left: readonly DraftSourceClaim[] | undefined,
+  right: readonly DraftSourceClaim[] | undefined,
+): DraftSourceClaim[] | undefined {
+  const claims = [...(left ?? []), ...(right ?? [])]
+  if (claims.length === 0) return undefined
+  const byKey = new Map<string, DraftSourceClaim>()
+  for (const claim of claims) {
+    const key = [
+      claim.source,
+      normalize(claim.title),
+      claim.evidence.trim().toLowerCase(),
+      (claim.references ?? []).join('|'),
+    ].join('\0')
+    if (!byKey.has(key)) byKey.set(key, claim)
+  }
+  return [...byKey.values()]
 }
 
 function addMilestone(
@@ -419,13 +778,190 @@ function addContext(
   index: Map<string, DraftContext>,
   sig: WorkspaceSignal,
 ): void {
+  const releaseIds = releaseIdsFromSignal(sig)
+  const mergeByStructure =
+    (sig.role === 'brief_input' || sig.role === 'capability') &&
+    sig.structure === 'record'
   const refKey = sig.references?.[0] ?? sig.title
-  const key = `${sig.source}:${refKey}`
-  if (index.has(key)) return
+  const key = mergeByStructure
+    ? `${sig.source}:${sig.role ?? 'context'}:${sig.structure}:${normalize(sig.title)}`
+    : `${sig.source}:${refKey}:${normalize(sig.title)}`
+  const existing = index.get(key)
+  if (existing) {
+    const mergedReferences = mergeReferences(existing.references, sig.references)
+    const mergedHints = mergeReferences(existing.linkedTaskHints, sig.linkedTaskHints)
+    const mergedReleaseIds = mergeReferences(existing.releaseIds, releaseIds)
+    const nextExcerpt = existing.excerpt.length >= sig.evidence.length
+      ? existing.excerpt
+      : sig.evidence
+    const nextScopeHint =
+      existing.scopeHint === 'current' || sig.scopeHint === 'current'
+        ? 'current'
+        : existing.scopeHint ?? sig.scopeHint
+    index.set(key, {
+      ...existing,
+      excerpt: nextExcerpt,
+      ...(nextScopeHint ? { scopeHint: nextScopeHint } : {}),
+      ...(mergedReferences ? { references: mergedReferences } : {}),
+      ...(mergedReleaseIds ? { releaseIds: mergedReleaseIds } : {}),
+      ...(mergedHints ? { linkedTaskHints: mergedHints } : {}),
+    })
+    return
+  }
   index.set(key, {
     label: sig.title,
     excerpt: sig.evidence,
     source: sig.source,
     ...(sig.references ? { references: sig.references } : {}),
+    ...(sig.domainHint ? { domain: sig.domainHint } : {}),
+    ...(sig.role ? { role: sig.role } : {}),
+    ...(sig.structure ? { structure: sig.structure } : {}),
+    ...(sig.scopeHint ? { scopeHint: sig.scopeHint } : {}),
+    ...(releaseIds ? { releaseIds } : {}),
+    ...(sig.linkedTaskHints?.length ? { linkedTaskHints: [...sig.linkedTaskHints] } : {}),
   })
+}
+
+function enrichTasksWithRelatedContext(
+  tasks: DraftTask[],
+  context: readonly DraftContext[],
+): DraftTask[] {
+  if (tasks.length === 0 || context.length === 0) return tasks
+  return tasks.map(task => {
+    const relatedReferences = relatedContextReferences(task, context)
+    if (relatedReferences.length === 0) return task
+    return {
+      ...task,
+      references: mergeReferences(task.references, relatedReferences),
+    }
+  })
+}
+
+function assignCurrentReleaseScopes(
+  tasks: DraftTask[],
+  releases: readonly DraftRelease[],
+): DraftTask[] {
+  if (tasks.length === 0 || releases.length === 0) return tasks
+  const releasesWithRefs = releases.map(release => ({
+    release,
+    refs: new Set(release.references ?? []),
+  }))
+  return tasks.map(task => {
+    if (task.releaseIds?.length) return task
+    const assignmentRefs = (task.sourceClaims ?? [])
+      .flatMap(claim => claim.references ?? [])
+    const sameDomainRefs = (task.references ?? []).filter(ref => referenceMatchesDomain(ref, task.domain))
+    const refs = [...new Set([
+      ...assignmentRefs,
+      ...sameDomainRefs,
+    ])]
+    const matchingRefs = refs.length > 0 ? refs : task.references ?? []
+    const matching = releasesWithRefs
+      .filter(entry => {
+        if (task.scope === 'later' && entry.release.scope !== 'later') return false
+        if (task.scope !== 'later' && entry.release.scope === 'later') return false
+        if (releases.length === 1 && task.scope !== 'later') return true
+        return matchingRefs.some(ref => entry.refs.has(ref))
+      })
+      .map(entry => entry.release.id)
+    const selected = task.scope === 'later'
+      ? [...new Set(matching)]
+      : selectAutomaticCurrentReleaseIds(matching, releases)
+    if (selected.length === 0) return task
+    return {
+      ...task,
+      releaseIds: selected,
+    }
+  })
+}
+
+function referenceMatchesDomain(ref: string, domain: string): boolean {
+  if (!domain || domain === 'general' || domain === 'core') return true
+  return ref.toLowerCase().split(/[\\/]+/).includes(domain.toLowerCase())
+}
+
+function selectAutomaticCurrentReleaseIds(
+  matchingIds: readonly string[],
+  releases: readonly DraftRelease[],
+): string[] {
+  const unique = [...new Set(matchingIds)]
+  if (unique.length <= 1) return unique
+  const byId = new Map(releases.map(release => [release.id, release]))
+  const staged = unique
+    .map(id => {
+      const release = byId.get(id)
+      return release ? { id, stage: parseReleaseStageOrdinal(release.label) } : null
+    })
+    .filter((entry): entry is { id: string; stage: number } => entry !== null && entry.stage !== null)
+  if (staged.length === 0) return []
+  const nonBaseline = staged.filter(entry => entry.stage > 0)
+  const candidates = nonBaseline.length > 0 ? nonBaseline : staged
+  const earliest = Math.min(...candidates.map(entry => entry.stage))
+  return candidates.filter(entry => entry.stage === earliest).map(entry => entry.id)
+}
+
+function parseReleaseStageOrdinal(label: string | null | undefined): number | null {
+  if (!label) return null
+  const match = /^stage\s+(\d+)(?:\b|\s*[:(].*)/i.exec(label.trim())
+  if (!match?.[1]) return null
+  const value = Number.parseInt(match[1], 10)
+  return Number.isFinite(value) ? value : null
+}
+
+function relatedContextReferences(
+  task: DraftTask,
+  context: readonly DraftContext[],
+): string[] {
+  const text = `${task.title}\n${task.description}\n${task.whyThisMayMatter ?? ''}`
+  const taskTokens = meaningfulTokenSet(text)
+  const existingRefs = new Set(task.references ?? [])
+  const ranked = context
+    .map(entry => {
+      const ref = entry.references?.[0]
+      if (!ref || existingRefs.has(ref)) return null
+      const score = relatedContextScore(task, entry, taskTokens)
+      if (score < 2) return null
+      return { ref, score }
+    })
+    .filter((entry): entry is { ref: string; score: number } => Boolean(entry))
+    .sort((left, right) => right.score - left.score || left.ref.localeCompare(right.ref))
+
+  return ranked.slice(0, 4).map(entry => entry.ref)
+}
+
+function relatedContextScore(
+  task: DraftTask,
+  entry: DraftContext,
+  taskTokens: Set<string>,
+): number {
+  const contextText = `${entry.label}\n${entry.excerpt}`
+  const contextTokens = meaningfulTokenSet(contextText)
+  const overlap = overlapRatio(taskTokens, contextTokens)
+  let score = overlap * 10
+  const taskText = normalize(`${task.title} ${task.description} ${task.whyThisMayMatter ?? ''}`)
+  const contextNormalized = normalize(contextText)
+  const contextRef = entry.references?.[0] ?? ''
+
+  if (/\bschema|contract|record\b/.test(taskText) && /\bschema|contract|record\b/.test(contextNormalized)) {
+    score += 4
+  }
+  if (/\bpacket|context|compaction\b/.test(taskText) && /\bpacket|context|compaction\b/.test(contextNormalized)) {
+    score += 4
+  }
+  if (/\bfixture|expected\b/.test(taskText) && /\bfixture|expected|prototype\b/.test(contextNormalized)) {
+    score += 3
+  }
+  if (/\brunner|run|workflow\b/.test(taskText) && /\brunner|run|workflow|prototype\b/.test(contextNormalized)) {
+    score += 3
+  }
+  if (/\bdebug|trace|evaluation|report\b/.test(taskText) && /\bdebug|trace|evaluation|report\b/.test(contextNormalized)) {
+    score += 4
+  }
+  if (task.scope === 'current' && /docs\/harness\//.test(contextRef)) {
+    score += 0.5
+  }
+  if (task.scope === 'current' && /docs\/specs\//.test(contextRef)) {
+    score += 0.5
+  }
+  return score
 }

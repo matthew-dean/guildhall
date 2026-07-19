@@ -245,9 +245,25 @@ describe('drawer task detail tabs', () => {
           providerProof: [],
           residualRisk: 'Browser inspection is still required before release.',
         },
+        completionProof: {
+          state: 'verified',
+          expectedCount: 1,
+          verifiedCount: 2,
+          verified: [
+            'Reviewer proof: tests/generate.test.mjs passed.',
+            'Gate passed: pnpm-build',
+          ],
+          latestAt: now,
+        },
       }),
     })
 
+    expect(screen.getByText('Completion proof')).toBeInTheDocument()
+    expect(screen.getAllByText('Verified').length).toBeGreaterThan(0)
+    expect(screen.getByText('2 verified')).toBeInTheDocument()
+    expect(screen.getByText('1 expected')).toBeInTheDocument()
+    expect(screen.getByText('Reviewer proof: tests/generate.test.mjs passed.')).toBeInTheDocument()
+    expect(screen.getByText('Gate passed: pnpm-build')).toBeInTheDocument()
     expect(screen.getByText('Proof path')).toBeInTheDocument()
     expect(screen.getByText('Verify link editor controls')).toBeInTheDocument()
     expect(screen.getByText('Run focused tests')).toBeInTheDocument()
@@ -256,6 +272,9 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText('Automated Required')).toBeInTheDocument()
     expect(screen.getByText('Manual Required')).toBeInTheDocument()
     expect(screen.getByText('Provider Optional')).toBeInTheDocument()
+    expect(screen.getByText('Focused editor tests pass.')).toBeInTheDocument()
+    expect(screen.getByText('Editor route was inspected.')).toBeInTheDocument()
+    expect(screen.getByText('Preview deployment is green.')).toBeInTheDocument()
     expect(screen.getByText('Completion handoff')).toBeInTheDocument()
     expect(screen.getByText('Runtime evidence')).toBeInTheDocument()
     expect(screen.getByText('Remaining uncertainty')).toBeInTheDocument()
@@ -297,6 +316,82 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText('Delivery completed')).toBeInTheDocument()
     expect(screen.getByText('1 of 2 required delivery steps complete.')).toBeInTheDocument()
     expect(screen.getByText('Runtime proof for link editor controls')).toBeInTheDocument()
+  })
+
+  it('renders repeated historical gate ids without crashing the journey', () => {
+    render(JourneyTab, {
+      task: task({
+        gateResults: [
+          {
+            gateId: 'content.no-truncated-data',
+            type: 'soft',
+            passed: false,
+            checkedAt: '2026-07-06T21:42:10.507Z',
+            output: 'found truncated semantic task data',
+          },
+          {
+            gateId: 'content.no-truncated-data',
+            type: 'soft',
+            passed: true,
+            checkedAt: '2026-07-06T22:22:47.362Z',
+            output: 'no ellipsized semantic task data detected',
+          },
+        ],
+        completionProof: {
+          state: 'verified',
+          expectedCount: 1,
+          verifiedCount: 1,
+          verified: ['Reviewer proof: tests/generate.test.mjs passed.'],
+        },
+      }),
+    })
+
+    expect(screen.getByText('Task journey')).toBeInTheDocument()
+    expect(screen.getByText('Completion proof')).toBeInTheDocument()
+    expect(screen.getAllByText('content.no-truncated-data')).toHaveLength(2)
+  })
+
+  it('labels completion claims superseded by a proof recovery as historical', () => {
+    render(JourneyTab, {
+      task: task({
+        completionProof: {
+          state: 'missing',
+          expectedCount: 1,
+          verifiedCount: 1,
+          verified: ['Gate passed: pnpm-build'],
+          historicalCount: 2,
+          historical: ['Review approved: llm', 'Reviewer proof: fixture output was complete.'],
+          missing: ['Live provider proof is still required.'],
+        },
+      }),
+    })
+
+    expect(screen.getByText('Historical claims')).toBeInTheDocument()
+    expect(screen.getByText(/do not count toward release readiness/)).toBeInTheDocument()
+    expect(screen.getByText('Review approved: llm')).toBeInTheDocument()
+    expect(screen.getByText('Reviewer proof: fixture output was complete.')).toBeInTheDocument()
+    expect(screen.getByText('Live provider proof is still required.')).toBeInTheDocument()
+  })
+
+  it('renders legacy string expected evidence as readable proof expectations', () => {
+    render(JourneyTab, {
+      task: task({
+        proofPaths: [
+          {
+            id: 'chapter-proof',
+            title: 'Chapter proof',
+            status: 'verified',
+            expectedEvidence: [
+              'Chapter draft fixture is generated.',
+            ] as never,
+          },
+        ],
+      }),
+    })
+
+    expect(screen.getByText('Expected proof')).toBeInTheDocument()
+    expect(screen.getByText('Chapter draft fixture is generated.')).toBeInTheDocument()
+    expect(screen.queryByText('Unknown Required')).not.toBeInTheDocument()
   })
 
   it('hides stale handoff packets after a recovery spec seed moves a task back to spec review', () => {

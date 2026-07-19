@@ -1124,6 +1124,53 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('Add the missing login redirect tests')
   })
 
+  it('hides invented proof command demands from latest reviewer feedback', async () => {
+    const taskWithInventedProofCommand: Task = {
+      ...baseTask,
+      status: 'in_progress',
+      revisionCount: 4,
+      title: 'Shape fixture and expected-record ground truth',
+      description: 'Define the fixture and expected-record ground truth surface.',
+      acceptanceCriteria: [
+        {
+          id: 'ac-4',
+          description:
+            'Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result against this task before the parent work is treated as satisfied.',
+          verifiedBy: 'human',
+        },
+      ],
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'worker',
+          content: [
+            '**Self-critique:**',
+            '- AC4: Met — The proof command `npx guildhall run --task=made-up-task` was executed.',
+            '- Fixture data is represented in the repo-local JSON surface.',
+          ].join('\n'),
+          timestamp: '2026-04-11T00:45:00Z',
+        },
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          content: [
+            'What must change:',
+            '- Execute the proof command `npx guildhall run --task=made-up-task` and capture its output.',
+            '- Keep the fixture manifest aligned with expected records.',
+          ].join('\n'),
+          timestamp: '2026-04-11T01:00:00Z',
+        },
+      ],
+    }
+
+    const ctx = await buildContext(taskWithInventedProofCommand, tmpDir)
+
+    expect(ctx.taskSummary).toContain('### Latest Required Revisions')
+    expect(ctx.taskSummary).not.toContain('npx guildhall run')
+    expect(ctx.taskSummary).toContain('Keep the fixture manifest aligned')
+    expect(ctx.taskSummary).toContain('Fixture data is represented')
+  })
+
   it('adds concrete retry coaching when review loops repeat and the worker hits brittle edit failures', async () => {
     const taskWithBrittleRetry: Task = {
       ...baseTask,
@@ -1480,6 +1527,19 @@ describe('buildContext — exploring transcript', () => {
     expect(ctx.exploringTranscript.length).toBeLessThanOrEqual(6_000)
     // The tail marker should survive the truncation (it's near the end).
     expect(ctx.exploringTranscript).toContain('TAIL-MARKER')
+  })
+
+  it('does not read legacy transcript files outside explicit migration', async () => {
+    const exploringTask: Task = { ...baseTask, status: 'exploring' }
+    const legacyFile = path.join(tmpDir, 'exploring', `${exploringTask.id}.md`)
+    await fs.mkdir(path.dirname(legacyFile), { recursive: true })
+    await fs.writeFile(legacyFile, `# Exploring transcript: ${exploringTask.id}\n\nlegacy context`, 'utf-8')
+
+    const ctx = await buildContext(exploringTask, tmpDir)
+
+    expect(ctx.exploringTranscript).toBe('')
+    expect(ctx.formatted).not.toContain('Exploring Transcript')
+    expect(ctx.formatted).not.toContain('legacy context')
   })
 })
 

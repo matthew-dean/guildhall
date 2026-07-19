@@ -196,6 +196,62 @@ describe('WorkTab', () => {
     expect(within(inspector).getByRole('button', { name: /running/i })).toBeDisabled()
   })
 
+  it('shows source-grounded task detail in the row subcopy and selected inspector', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-source')
+    path.value = '/projects/looma-knit/work?task=task-source'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-source',
+            title: 'Define safe smoke-test commands',
+            status: 'ready',
+            sourceRefs: ['docs/harness/smoke-test-commands.md'],
+          }),
+        ]),
+      },
+    })
+
+    const row = await screen.findByRole('button', { name: /inspect work define safe smoke-test commands/i })
+    expect(row).toHaveTextContent('Source: smoke-test-commands.md')
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(inspector).toHaveTextContent('Source')
+    expect(inspector).toHaveTextContent('smoke-test-commands.md')
+  })
+
+  it('explains why an imported source-recovery task is not runnable in the selected work inspector', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=task-import-contract')
+    path.value = '/projects/narrative-harness/work?task=task-import-contract'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-import-contract',
+            title: 'Recover source-backed contract surface',
+            status: 'import_draft',
+            domain: 'harness',
+            taskReadiness: {
+              recommendation: 'needs_research_spike',
+              summary: 'Needs concrete contract names before worker handoff.',
+            },
+          }),
+        ], {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+        }),
+      },
+    })
+
+    const inspector = await screen.findByLabelText('Selected work inspector')
+    expect(inspector).toHaveTextContent('Not runnable yet')
+    expect(inspector).toHaveTextContent('Imported current work needs a real brief before Guildhall can build unattended.')
+    expect(inspector).toHaveTextContent('Needs concrete contract names before worker handoff.')
+    expect(within(inspector).getByRole('button', { name: /draft task brief/i })).toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: /draft and run/i })).not.toBeInTheDocument()
+  })
+
   it('shows delivery-step progress on visible work rows', async () => {
     render(WorkTab, {
       props: {
@@ -239,6 +295,612 @@ describe('WorkTab', () => {
 
     await screen.findByText('1 delivery step blocked')
     expect(screen.getByText('Import review flow')).toBeInTheDocument()
+  })
+
+  it('summarizes scoped current work instead of raw internal delivery blockers', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-runner',
+            title: 'Implement a no-UI runner that builds a packet from fixture records.',
+            status: 'ready',
+            domain: 'harness',
+          }),
+        ], {
+          actionModel: {
+            primaryAction: {
+              source: 'task',
+              label: 'Implement a no-UI runner that builds a packet from fixture records.',
+              detail: 'Needs brief: finish the handoff before a worker can start.',
+              buttonLabel: 'Open Work',
+              href: '/work?task=task-runner',
+              tone: 'warn',
+              taskId: 'task-runner',
+            },
+            secondaryActions: [],
+            runControl: { label: 'Resume', startEnabled: true },
+            ownerInput: { active: false },
+            setup: { state: 'ready', freshIntakeNeeded: false },
+          },
+          workProgress: {
+            counts: {
+              visibleTotal: 18,
+              visibleActive: 6,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 12,
+              deliveryTotal: 60,
+              deliveryRequired: 60,
+              deliveryDone: 0,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {},
+          },
+          orientationSpine: {
+            scope: { label: 'Current task scope' },
+            summary: {
+              headline: 'Current task scope is being shaped.',
+              purpose: 'Build the headless Narrative Harness MVP.',
+              selectedScopeLabel: 'Current task scope',
+              includedWorkCount: 6,
+              deferredWorkCount: 12,
+            },
+            roots: [],
+            nodes: {},
+          },
+          deliverySpine: {
+            queue: {
+              runnable: [],
+              firstRunnable: null,
+              blocked: Array.from({ length: 26 }, (_, index) => ({
+                task: { id: `internal-${index}`, title: `Internal step ${index}`, status: 'blocked' },
+                structuralBlockers: [],
+              })),
+            },
+          },
+        }),
+      },
+    })
+
+    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
+    expect(queue).toHaveTextContent('Current task scope')
+    expect(queue).toHaveTextContent('Implement a no-UI runner that builds a packet from fixture records.')
+    expect(queue).toHaveTextContent('Needs brief: finish the handoff before a worker can start.')
+    expect(queue).toHaveTextContent('6 current tasks')
+    expect(queue).toHaveTextContent('0 blocked')
+    expect(queue).toHaveTextContent('12 deferred')
+    expect(queue).not.toHaveTextContent('0 ready to resume')
+    expect(queue).not.toHaveTextContent('26 blocked')
+    expect(queue).not.toHaveTextContent('No runnable task')
+  })
+
+  it('keeps selected-scope source and proof context visible when work is runnable', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-runner',
+            title: 'Unit tests: use-collections, use-presence, subdomain utils',
+            status: 'ready',
+            domain: 'knit',
+          }),
+        ], {
+          orientationSpine: {
+            scope: { label: 'Stage 1: V1 Release Hardening' },
+            summary: {
+              headline: 'Stage 1: V1 Release Hardening is being shaped.',
+              selectedScopeLabel: 'Stage 1: V1 Release Hardening',
+              includedWorkCount: 5,
+              deferredWorkCount: 30,
+              progress: { blocked: 5 },
+            },
+            scopeRows: [
+              {
+                taskId: 'task-runner',
+                nodeId: 'work:task-runner',
+                title: 'Unit tests: use-collections, use-presence, subdomain utils',
+                scope: 'included',
+                sourceRefs: [
+                  '/Users/matthew/git/oss/looma-knit/docs/PROJECT_STATE.md',
+                  '/Users/matthew/git/oss/looma-knit/docs/release-plan.md',
+                ],
+              },
+            ],
+            proofContracts: Array.from({ length: 5 }, (_, index) => ({
+              nodeId: `work:proof-${index + 1}`,
+              title: `Proof ${index + 1}`,
+              state: 'missing',
+              missing: [`proof-${index + 1}`],
+            })),
+            roots: [],
+            nodes: {},
+          },
+          deliverySpine: {
+            queue: {
+              runnable: [
+                {
+                  task: task({
+                    id: 'task-runner',
+                    title: 'Unit tests: use-collections, use-presence, subdomain utils',
+                    status: 'ready',
+                  }),
+                  why: 'Ready when resumed.',
+                  structuralBlockers: [],
+                },
+              ],
+              firstRunnable: {
+                task: task({
+                  id: 'task-runner',
+                  title: 'Unit tests: use-collections, use-presence, subdomain utils',
+                  status: 'ready',
+                }),
+                why: 'Ready when resumed.',
+                structuralBlockers: [],
+              },
+              blocked: [],
+            },
+          },
+        }),
+      },
+    })
+
+    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
+    expect(queue).toHaveTextContent('Unit tests: use-collections, use-presence, subdomain utils')
+    expect(queue).toHaveTextContent('Sources: PROJECT_STATE.md, release-plan.md')
+    expect(queue).toHaveTextContent('Proof: 0 proven items · 5 missing proof')
+  })
+
+  it('keeps proof-missing completed work visible from the focused Work route', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=proof-task')
+    path.value = '/projects/narrative-harness/work?task=proof-task'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'proof-task',
+            title: 'Generate a CLI-first story synopsis and chapter draft',
+            status: 'done',
+            terminalSummary: { headline: 'Completed, but proof evidence is missing.' },
+          }),
+          task({
+            id: 'later-task',
+            title: 'Later polish task',
+            status: 'shelved',
+          }),
+        ], {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          startReadiness: {
+            canStart: false,
+            code: 'proof_evidence_missing',
+            message: 'Stage 1 is waiting on proof evidence for "Generate a CLI-first story synopsis and chapter draft".',
+            actionHref: '/work?task=proof-task',
+            focusTaskId: 'proof-task',
+            focusKind: 'proof',
+            proofTaskIds: ['proof-task'],
+            count: 1,
+          },
+          workProgress: {
+            counts: {
+              visibleTotal: 2,
+              visibleActive: 0,
+              visibleBlocked: 0,
+              visibleDone: 1,
+              visibleShelved: 1,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 1,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {},
+          },
+          orientationSpine: {
+            scope: { label: 'Stage 1' },
+            summary: {
+              selectedScopeLabel: 'Stage 1',
+              nextAction: 'Attach proof for the completed scoped work.',
+              includedWorkCount: 1,
+              deferredWorkCount: 1,
+            },
+            roots: [],
+            nodes: {},
+          },
+          deliverySpine: {
+            queue: {
+              runnable: [],
+              firstRunnable: null,
+              blocked: [],
+            },
+          },
+        }),
+      },
+    })
+
+    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
+    expect(queue).toHaveTextContent('1 need proof')
+    expect(queue).not.toHaveTextContent('0 current tasks')
+    expect(queue).not.toHaveTextContent('0 blocked')
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('needs-proof')
+    expect(await screen.findByText('1 shown · 2 total')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^run proof$/i })).toBeTruthy()
+  })
+
+  it('keeps completed selected-scope counts visible when no work is ready to run', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'current-done',
+            title: 'Generate a CLI-first story synopsis and chapter draft',
+            status: 'done',
+          }),
+          task({
+            id: 'later-shelved',
+            title: 'Later reviewer lane',
+            status: 'shelved',
+          }),
+        ], {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          startReadiness: {
+            canStart: false,
+            code: 'all_terminal',
+            message: 'Stage 1: Headless Drafting And Evaluation MVP is complete.',
+          },
+          orientationSpine: {
+            scope: { label: 'Stage 1 Headless Drafting And Evaluation MVP' },
+            summary: {
+              headline: 'Stage 1 Headless Drafting And Evaluation MVP is complete.',
+              selectedScopeLabel: 'Stage 1 Headless Drafting And Evaluation MVP',
+              nextAction: 'Review completed scope.',
+              includedWorkCount: 11,
+              deferredWorkCount: 31,
+              progress: { blocked: 0 },
+            },
+            scopeRows: [
+              {
+                taskId: 'current-done',
+                nodeId: 'work:current-done',
+                title: 'Generate a CLI-first story synopsis and chapter draft',
+                scope: 'included',
+                sourceRefs: [
+                  '/Users/matthew/git/oss/narrative-harness/docs/harness/implementation-roadmap.md',
+                  '/Users/matthew/git/oss/narrative-harness/docs/harness/architecture-notes.md',
+                  '/Users/matthew/git/oss/narrative-harness/docs/product/deepinfra-drafting-model-selection.md',
+                  'task:current-done',
+                ],
+              },
+              {
+                taskId: 'later-shelved',
+                nodeId: 'work:later-shelved',
+                title: 'Later reviewer lane',
+                scope: 'deferred',
+                sourceRefs: ['task:later-shelved'],
+              },
+            ],
+            proofContracts: Array.from({ length: 11 }, (_, index) => ({
+              nodeId: `work:proof-${index + 1}`,
+              title: `Proof ${index + 1}`,
+              state: 'proven',
+              missing: [],
+            })),
+            roots: [],
+            nodes: {},
+          },
+          deliverySpine: {
+            queue: {
+              runnable: [],
+              firstRunnable: null,
+              blocked: [],
+            },
+          },
+        }),
+      },
+    })
+
+    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
+    expect(queue).toHaveTextContent('Stage 1 Headless Drafting And Evaluation MVP is complete.')
+    expect(queue).toHaveTextContent('Review completed scope.')
+    expect(queue).toHaveTextContent('11 current tasks')
+    expect(queue).toHaveTextContent('0 blocked')
+    expect(queue).toHaveTextContent('31 deferred')
+    expect(queue).toHaveTextContent('Sources: implementation-roadmap.md, architecture-notes.md, deepinfra-drafting-model-selection.md')
+    expect(queue).toHaveTextContent('Proof: 11 proven items · 0 missing proof')
+    expect(queue).not.toHaveTextContent('0 current tasks')
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
+    expect(await screen.findByText('1 current item · 1 deferred item · 2 total')).toBeTruthy()
+    expect(screen.queryByText('No work is ready to run yet.')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /inspect work later reviewer lane/i })).toBeTruthy()
+  })
+
+  it('defaults to the selected scope before unrelated global blocked work', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'old-global-blocker',
+            title: 'Block menu / block side menu',
+            status: 'blocked',
+            updatedAt: '2026-05-19T12:00:00.000Z',
+            blockReason: 'Old backlog row outside the current release.',
+          }),
+          task({
+            id: 'scope-blocker',
+            title: 'E2E tests: complete current-scope proof',
+            status: 'import_draft',
+            updatedAt: '2026-05-19T08:00:00.000Z',
+          }),
+          task({
+            id: 'scope-blocker-two',
+            title: 'TypeScript: generate proper types from Supabase',
+            status: 'import_draft',
+            updatedAt: '2026-05-19T13:00:00.000Z',
+          }),
+          task({
+            id: 'scope-done',
+            title: 'TypeScript tests: verified',
+            status: 'done',
+            updatedAt: '2026-05-19T11:00:00.000Z',
+          }),
+          task({
+            id: 'scope-later',
+            title: 'Later release polish',
+            status: 'shelved',
+            updatedAt: '2026-05-19T13:00:00.000Z',
+          }),
+        ], {
+          orientationSpine: {
+            scope: { label: 'Stage 1: V1 Release Hardening' },
+            summary: {
+              selectedScopeLabel: 'Stage 1: V1 Release Hardening',
+              includedWorkCount: 3,
+              deferredWorkCount: 1,
+              progress: { blocked: 2 },
+            },
+            scopeRows: [
+              {
+                taskId: 'scope-done',
+                nodeId: 'work:scope-done',
+                title: 'TypeScript tests: verified',
+                scope: 'included',
+                status: 'done',
+              },
+              {
+                taskId: 'scope-blocker',
+                nodeId: 'work:scope-blocker',
+                title: 'E2E tests: complete current-scope proof',
+                scope: 'included',
+                status: 'ready',
+                blocksStart: true,
+                blocksRelease: true,
+              },
+              {
+                taskId: 'scope-blocker-two',
+                nodeId: 'work:scope-blocker-two',
+                title: 'TypeScript: generate proper types from Supabase',
+                scope: 'included',
+                status: 'ready',
+                blocksStart: true,
+                blocksRelease: true,
+              },
+              {
+                taskId: 'scope-later',
+                nodeId: 'work:scope-later',
+                title: 'Later release polish',
+                scope: 'deferred',
+                status: 'shelved',
+              },
+            ],
+            roots: [],
+            nodes: {},
+          },
+          startReadiness: {
+            canStart: false,
+            code: 'imported_scope_needs_shaping',
+            message: 'Start with E2E tests: complete current-scope proof.',
+            focusTaskId: 'scope-blocker',
+          },
+          releaseReadiness: {
+            ready: false,
+            releaseBlockers: [
+              { id: 'scope-blocker', title: 'E2E tests: complete current-scope proof' },
+              { id: 'scope-blocker-two', title: 'TypeScript: generate proper types from Supabase' },
+            ],
+          },
+        }),
+      },
+    })
+
+    await screen.findByText('3 current items · 1 deferred item · 5 total')
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
+    const rows = screen.getAllByRole('button', { name: /inspect work/i })
+    expect(rows[0]).toHaveTextContent('E2E tests: complete current-scope proof')
+    expect(rows[1]).toHaveTextContent('TypeScript: generate proper types from Supabase')
+    expect(rows[2]).toHaveTextContent('TypeScript tests: verified')
+    expect(rows[3]).toHaveTextContent('Later release polish')
+    expect(screen.queryByRole('button', { name: /inspect work block menu/i })).not.toBeInTheDocument()
+  })
+
+  it('reopens proof-missing completed work before starting the selected item', async () => {
+    const fetchSpy = vi.mocked(fetch)
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=proof-task')
+    path.value = '/projects/narrative-harness/work?task=proof-task'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'proof-task',
+            title: 'Select and prove a DeepInfra drafting model',
+            status: 'done',
+            terminalSummary: { headline: 'Completed, but proof evidence is missing.' },
+          }),
+        ], {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          startReadiness: {
+            canStart: false,
+            code: 'proof_evidence_missing',
+            message: 'Stage 1 is waiting on proof evidence.',
+            actionHref: '/work?task=proof-task',
+            focusTaskId: 'proof-task',
+            focusKind: 'proof',
+            proofTaskIds: ['proof-task'],
+            count: 1,
+          },
+        }),
+      },
+    })
+
+    await userEvent.click(await screen.findByRole('button', { name: /^run proof$/i }))
+
+    await waitFor(() => {
+      const urls = fetchSpy.mock.calls.map(call => String(call[0]))
+      expect(urls.some(url => url.includes('/api/project/task/proof-task/retry-work'))).toBe(true)
+      expect(urls.some(url => url.includes('/api/project/task/proof-task/start'))).toBe(true)
+    })
+    const retryCall = fetchSpy.mock.calls.find(call => String(call[0]).includes('/api/project/task/proof-task/retry-work'))
+    expect(String(retryCall?.[1]?.body)).toContain('missing release proof')
+  })
+
+  it('labels dependency-waiting delivery work separately from blocked tasks', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-schema',
+            title: 'Define fixture schemas',
+            status: 'ready',
+          }),
+          task({
+            id: 'task-fixture',
+            title: 'Add the first fiction fixture',
+            status: 'ready',
+          }),
+        ], {
+          workProgress: {
+            counts: {
+              visibleTotal: 2,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 0,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {},
+          },
+          deliverySpine: {
+            queue: {
+              runnable: [{
+                task: task({ id: 'task-schema', title: 'Define fixture schemas', status: 'ready' }),
+                executionBlockers: [],
+                structuralBlockers: [],
+                why: 'Runnable project work.',
+              }],
+              firstRunnable: {
+                task: task({ id: 'task-schema', title: 'Define fixture schemas', status: 'ready' }),
+                executionBlockers: [],
+                structuralBlockers: [],
+                why: 'Runnable project work.',
+              },
+              blocked: [{
+                task: task({ id: 'task-fixture', title: 'Add the first fiction fixture', status: 'ready' }),
+                executionBlockers: [{ id: 'task-schema', title: 'Define fixture schemas', status: 'ready' }],
+                structuralBlockers: [],
+                why: 'Blocked by Define fixture schemas.',
+              }],
+            },
+          },
+        }),
+      },
+    })
+
+    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
+    expect(queue).toHaveTextContent('1 ready to resume')
+    expect(queue).toHaveTextContent('1 waiting on dependencies')
+    expect(queue).not.toHaveTextContent('1 blocked')
+  })
+
+  it('prefers shaped work units over proof-step badges for planning work and names blockers by task title', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-fixture',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            status: 'spec_review',
+            domain: 'harness',
+          }),
+          task({
+            id: 'task-runner',
+            title: 'Implement a no-UI runner that builds a packet from fixture records.',
+            status: 'spec_review',
+            domain: 'harness',
+            dependsOn: ['task-fixture'],
+            workUnitAnalysis: {
+              units: [
+                { id: 'unit-1', title: 'Load fixture inputs and shared records' },
+                { id: 'unit-2', title: 'Execute the packet run without UI help' },
+                { id: 'unit-3', title: 'Prove the runner over a bounded fixture' },
+              ],
+            },
+          }),
+        ], {
+          workProgress: {
+            counts: {
+              visibleTotal: 2,
+              visibleActive: 2,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 0,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {
+              'task-runner': {
+                id: 'task-runner',
+                title: 'Implement a no-UI runner that builds a packet from fixture records.',
+                status: 'spec_review',
+                visibility: { kind: 'primary', countInProjectTotals: true },
+                deliverySteps: [
+                  { id: 'proof:1', title: 'Proof 1', status: 'todo', required: true, blocksCompletion: true },
+                  { id: 'proof:2', title: 'Proof 2', status: 'todo', required: true, blocksCompletion: true },
+                ],
+                rollup: {
+                  primaryState: 'active',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 0,
+                  requiredStepCount: 2,
+                  doneStepCount: 0,
+                  blockedStepCount: 0,
+                },
+              },
+            },
+          },
+        }),
+      },
+    })
+
+    await screen.findByText('3 planned units')
+    const runnerRow = screen.getByRole('button', { name: /inspect work implement a no-ui runner that builds a packet from fixture records/i })
+    expect(runnerRow).toHaveTextContent('Waiting on Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    expect(runnerRow).not.toHaveTextContent('Blocked')
+    expect(runnerRow).toHaveTextContent('Awaiting approval')
+    expect(runnerRow).not.toHaveTextContent('0/2 delivery steps')
+
+    await userEvent.click(runnerRow)
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(within(inspector).getAllByText('3 planned work units are already shaped for this item.')).toHaveLength(2)
   })
 
   it('shows the orientation spine path on work rows', async () => {
@@ -426,7 +1088,7 @@ describe('WorkTab', () => {
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
     await userEvent.click(await screen.findByRole('button', { name: /inspect work knit draft task/i }))
-    await userEvent.click(screen.getByRole('button', { name: /draft and run/i }))
+    await userEvent.click(within(screen.getByLabelText('Selected work inspector')).getByRole('button', { name: /draft task brief/i }))
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) =>
@@ -441,6 +1103,66 @@ describe('WorkTab', () => {
     })
     const runningButton = await screen.findByRole('button', { name: /running/i })
     expect(runningButton).toBeDisabled()
+  })
+
+  it('continues source-recovery shaping before starting a selected work item', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/project/task/task-source-recovery/shape-draft')) {
+        expect(init?.method).toBe('POST')
+        expect(String(init.body)).toContain('"projectId":"looma-knit"')
+        return json({ ok: true, status: 'exploring' })
+      }
+      if (url.includes('/api/project/task/task-source-recovery/start')) {
+        return json({ status: 'running', mode: 'one_task', scope: { type: 'work_item', taskId: 'task-source-recovery' } })
+      }
+      if (url.includes('/api/project?')) {
+        return json({ id: 'looma-knit', name: 'Looma + Knit', run: { status: 'running', mode: 'one_task' }, tasks: [] })
+      }
+      return json({ progress: 'Recent worker progress.' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-source-recovery',
+            title: 'Recover source-backed contract surface',
+            status: 'exploring',
+            domain: 'harness',
+            taskReadiness: {
+              recommendation: 'needs_research_spike',
+              summary: 'Needs concrete source-backed contract names before worker handoff.',
+            },
+            notes: [
+              {
+                agentId: 'workspace-importer',
+                role: 'importer',
+                content: 'Imported from docs/specs/author-involvement-modes.md',
+                timestamp: '2026-05-19T10:00:00.000Z',
+              },
+            ],
+          }),
+        ]),
+      },
+    })
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
+    await userEvent.click(await screen.findByRole('button', { name: /inspect work recover source-backed contract surface/i }))
+    await userEvent.click(within(screen.getByLabelText('Selected work inspector')).getByRole('button', { name: /continue shaping brief/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) =>
+        String(input).includes('/api/project/task/task-source-recovery/shape-draft?projectId=looma-knit'),
+      )).toBe(true)
+      expect(fetchMock.mock.calls.some(([input, init]) =>
+        String(input).includes('/api/project/task/task-source-recovery/start?projectId=looma-knit') &&
+        init?.method === 'POST' &&
+        String(init.body).includes('"mode":"one_task"') &&
+        String(init.body).includes('"scope":"work_item"'),
+      )).toBe(true)
+    })
   })
 
   it('does not show an empty new-request prompt when a zero-task project is blocked by migration', async () => {
@@ -910,6 +1632,171 @@ describe('WorkTab', () => {
     expect(screen.queryByText('In progress')).toBeNull()
   })
 
+  it('keeps active internal steps visible while Guildhall is working on them', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...runningDetail([
+            task({
+              id: 'feature-root',
+              title: 'Define fixture schemas',
+              status: 'ready',
+              hierarchy: { childIds: ['fixture-ground-truth'], order: 0 },
+            }),
+            task({
+              id: 'fixture-ground-truth',
+              title: 'Shape fixture and expected-record ground truth',
+              status: 'in_progress',
+              hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
+            }),
+          ]),
+          workProgress: {
+            counts: {
+              visibleTotal: 1,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 0,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {
+              'feature-root': {
+                id: 'feature-root',
+                title: 'Define fixture schemas',
+                status: 'ready',
+                visibility: { kind: 'primary', countInProjectTotals: true },
+                deliverySteps: [],
+                rollup: {
+                  primaryState: 'ready',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 1,
+                  requiredStepCount: 1,
+                  doneStepCount: 0,
+                  blockedStepCount: 0,
+                },
+              },
+              'fixture-ground-truth': {
+                id: 'fixture-ground-truth',
+                title: 'Shape fixture and expected-record ground truth',
+                status: 'in_progress',
+                visibility: { kind: 'internal_step', countInProjectTotals: false },
+                deliverySteps: [],
+                rollup: {
+                  primaryState: 'active',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 0,
+                  requiredStepCount: 0,
+                  doneStepCount: 0,
+                  blockedStepCount: 0,
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    expect(await screen.findByText('Shape fixture and expected-record ground truth')).toBeTruthy()
+    expect(screen.getByText('1 shown · 2 total')).toBeTruthy()
+    expect((screen.getByRole('combobox', { name: /^show$/i }) as HTMLSelectElement).value).toBe('queued')
+    expect(screen.getByText('1 Working')).toBeTruthy()
+  })
+
+  it('keeps the primary-action internal shaping task visible in Work', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([
+            task({
+              id: 'feature-root',
+              title: 'Define fixture schemas',
+              status: 'ready',
+              hierarchy: { childIds: ['fixture-ground-truth'], order: 0 },
+            }),
+            task({
+              id: 'fixture-ground-truth',
+              title: 'Shape fixture and expected-record ground truth',
+              status: 'exploring',
+              hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
+            }),
+          ], {
+            actionModel: {
+              primaryAction: {
+                source: 'task',
+                label: 'Shape fixture and expected-record ground truth',
+                buttonLabel: 'Open Work',
+                href: '/work?task=fixture-ground-truth',
+                tone: 'accent',
+                taskId: 'fixture-ground-truth',
+              },
+              secondaryActions: [],
+              runControl: { label: 'Resume', startEnabled: true },
+              ownerInput: { active: false },
+              setup: { state: 'ready', freshIntakeNeeded: false },
+            },
+          }),
+          workProgress: {
+            counts: {
+              visibleTotal: 1,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 0,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {
+              'feature-root': {
+                id: 'feature-root',
+                title: 'Define fixture schemas',
+                status: 'ready',
+                visibility: { kind: 'primary', countInProjectTotals: true },
+                deliverySteps: [],
+                rollup: {
+                  primaryState: 'ready',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 1,
+                  requiredStepCount: 1,
+                  doneStepCount: 0,
+                  blockedStepCount: 0,
+                },
+              },
+              'fixture-ground-truth': {
+                id: 'fixture-ground-truth',
+                title: 'Shape fixture and expected-record ground truth',
+                status: 'exploring',
+                visibility: { kind: 'internal_step', countInProjectTotals: false },
+                deliverySteps: [],
+                rollup: {
+                  primaryState: 'active',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 0,
+                  requiredStepCount: 0,
+                  doneStepCount: 0,
+                  blockedStepCount: 0,
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    expect(await screen.findByText('Shape fixture and expected-record ground truth')).toBeTruthy()
+    expect((screen.getByRole('combobox', { name: /^show$/i }) as HTMLSelectElement).value).toBe('planning')
+    expect(screen.getByText('2 shown · 2 total')).toBeTruthy()
+    expect(screen.getByText('Paused')).toBeTruthy()
+  })
+
   it('keeps stopped gate checks labeled as gate work instead of paused work', async () => {
     render(WorkTab, {
       props: {
@@ -981,6 +1868,8 @@ describe('WorkTab', () => {
     expect(scrollBlock).toContain('overflow-x: auto')
     expect(stackBlock).toContain('minmax(280px, 1fr)')
     expect(stackBlock).toContain('inline-size: max(100%, 860px)')
+    expect(source).toContain('@media (max-width: 860px)')
+    expect(source).toContain('--work-list-columns: minmax(0, 1fr)')
   })
 
   it('routes imported-draft review and view-mode controls through project-scoped links', async () => {

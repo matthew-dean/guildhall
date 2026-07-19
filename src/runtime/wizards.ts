@@ -507,6 +507,8 @@ export async function readWizardsStateAsync(projectPath: string, projectStateDir
 export interface BuildSnapshotOptions {
   projectPath: string
   projectStateDir?: string
+  /** Saved project-state count; avoids reopening the raw task queue on reads. */
+  taskCount?: number
   /** Override for tests — defaults to `readGlobalProviders`. */
   readProviders?: () => { providers?: Partial<Record<ProviderKind, unknown>> }
   /** Override for tests — defaults to reading from disk. */
@@ -635,13 +637,13 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   // starter projects can route the user's first real spec-shaping task through
   // `_meta` until richer project lanes exist.
   const tasksPath = projectStatePathWithRoot(projectPath, 'TASKS.json', projectStateDir)
-  const tasksRaw = readJsonSafe(tasksPath)
+  const tasksRaw = opts.taskCount === undefined ? readJsonSafe(tasksPath) : null
   const tasks = Array.isArray(tasksRaw)
     ? tasksRaw
     : tasksRaw && typeof tasksRaw === 'object' && Array.isArray((tasksRaw as { tasks?: unknown }).tasks)
       ? (tasksRaw as { tasks: unknown[] }).tasks
       : []
-  const taskCount = tasks.filter(task => {
+  const taskCount = opts.taskCount ?? tasks.filter(task => {
     if (!task || typeof task !== 'object') return false
     const t = task as { id?: unknown; domain?: unknown }
     if (t.id === 'task-meta-intake' || t.id === 'task-workspace-import') return false
@@ -740,7 +742,7 @@ export async function buildSnapshotAsync(opts: BuildSnapshotOptions): Promise<Pr
     }
   }
 
-  let taskCount = await activeTaskCountFromIndex(projectPath, projectStateDir)
+  let taskCount = opts.taskCount ?? await activeTaskCountFromIndex(projectPath, projectStateDir)
   if (taskCount == null) {
     const tasksPath = projectStatePathWithRoot(projectPath, 'TASKS.json', projectStateDir)
     const tasksRaw = await readCachedJson<unknown>(tasksPath).catch(() => null)

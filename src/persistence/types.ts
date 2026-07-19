@@ -17,6 +17,28 @@ export type PersistenceScope = z.infer<typeof PersistenceScope>
 export const PersistenceRetention = z.enum(['active', 'archive', 'debug', 'ephemeral'])
 export type PersistenceRetention = z.infer<typeof PersistenceRetention>
 
+/** Hard limits for event streams. These are enforced at the file boundary. */
+export interface PersistenceEventRetentionPolicy {
+  maxEvents: number
+  maxBytes: number
+  maxAgeMs?: number
+}
+
+export const PERSISTENCE_EVENT_RETENTION: Record<PersistenceRetention, PersistenceEventRetentionPolicy> = {
+  active: { maxEvents: 512, maxBytes: 256 * 1024 },
+  archive: { maxEvents: 5000, maxBytes: 5 * 1024 * 1024 },
+  debug: { maxEvents: 128, maxBytes: 256 * 1024 },
+  ephemeral: { maxEvents: 64, maxBytes: 64 * 1024, maxAgeMs: 24 * 60 * 60 * 1000 },
+}
+
+/** Hard limits for one durable record, including its envelope and payload. */
+export const PERSISTENCE_RECORD_MAX_BYTES: Record<PersistenceRetention, number> = {
+  active: 256 * 1024,
+  archive: 5 * 1024 * 1024,
+  debug: 256 * 1024,
+  ephemeral: 64 * 1024,
+}
+
 export const PersistenceVisibility = z.enum(['user_visible', 'internal_audit', 'private_runtime'])
 export type PersistenceVisibility = z.infer<typeof PersistenceVisibility>
 
@@ -109,6 +131,7 @@ export interface EventQuery {
   placement: PersistencePlacement
   collection: string
   streamId: string
+  limit?: number
 }
 
 export interface RecordRefInput {

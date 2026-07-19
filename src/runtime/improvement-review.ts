@@ -1,10 +1,9 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { TaskQueue, TERMINAL_TASK_STATUSES, type Task, type TaskQueue as TaskQueueType, type TaskStatus } from '@guildhall/core'
-import { atomicWriteText, getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
+import { appendTaskEvidence, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir, readProjectTaskQueueSync, readTaskEvidence } from '@guildhall/sessions'
 
 import { reviewInProcessWorkForDesignLens, type DesignLensReviewResult } from './design-lens-review.js'
 import { workSubtreeIds } from './work-hierarchy.js'
@@ -115,6 +114,7 @@ export async function reviewInProcessWorkForGuildhallImprovements(input: {
   const designReviewedTaskIds = new Set(design.examinedTaskIds)
   const now = input.now?.() ?? new Date().toISOString()
   const noteBudget = input.maxTaskNotes ?? 3
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
 
   for (const task of queue.tasks) {
     if (notedTaskIds.length >= noteBudget) break
@@ -131,12 +131,15 @@ export async function reviewInProcessWorkForGuildhallImprovements(input: {
     )
     if (!lens) continue
     examinedTaskIds.push(task.id)
-    if (hasImprovementReviewNote(task, lens.id)) {
+    const existingNotes = hasImprovementReviewNote(task, lens.id)
+      ? []
+      : await readTaskEvidence(projectRoot, task.id, { kind: 'note' })
+    if (hasImprovementReviewNote(task, lens.id) || existingNotes.some(event => hasImprovementReviewNotePayload(event.payload, lens.id))) {
       skippedTaskIds.push(task.id)
       continue
     }
 
-    task.notes.push({
+    const note = {
       agentId: 'guildhall-improvement-review',
       role: 'improvement-review',
       content: [
@@ -144,14 +147,14 @@ export async function reviewInProcessWorkForGuildhallImprovements(input: {
         'Advisory only: preserve the accepted task intent, keep the current scope unless the owner accepts a broader pivot, and spend deeper review tokens only when the task naturally reaches spec, implementation, review, or gate check.',
       ].join('\n'),
       timestamp: now,
+    }
+    await appendTaskEvidence(projectRoot, task.id, {
+      id: `improvement-review-${task.id}-${lens.id}`,
+      kind: 'note',
+      recordedAt: now,
+      payload: note,
     })
-    task.updatedAt = now
     notedTaskIds.push(task.id)
-  }
-
-  if (notedTaskIds.length > 0) {
-    queue.lastUpdated = now
-    await writeQueue(input.memoryDir, queue)
   }
 
   return { design, examinedTaskIds, notedTaskIds, skippedTaskIds }
@@ -168,19 +171,20 @@ function isLeanCommandBackedTask(task: Task): boolean {
 async function readQueue(memoryDir: string): Promise<TaskQueueType> {
   const file = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
   try {
-    return TaskQueue.parse(JSON.parse(await readManagedTextFile(file, 'utf-8')))
+    return TaskQueue.parse(readProjectTaskQueueSync(file))
   } catch {
     return TaskQueue.parse({ version: 1, tasks: [] })
   }
 }
 
-async function writeQueue(memoryDir: string, queue: TaskQueueType): Promise<void> {
-  await writeManagedTextFileSync(getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json'), JSON.stringify(TaskQueue.parse(queue), null, 2))
-}
-
 function hasImprovementReviewNote(task: Task, lensId: ImprovementLensId): boolean {
   const marker = `[guildhall-improvement-review:${lensId}]`
   return task.notes.some(note => note.role === 'improvement-review' && note.content.includes(marker))
+}
+
+function hasImprovementReviewNotePayload(payload: Record<string, unknown>, lensId: ImprovementLensId): boolean {
+  const marker = `[guildhall-improvement-review:${lensId}]`
+  return payload.role === 'improvement-review' && typeof payload.content === 'string' && payload.content.includes(marker)
 }
 
 function taskTextForImprovementReview(task: Task): string {

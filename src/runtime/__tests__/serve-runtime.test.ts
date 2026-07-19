@@ -3,10 +3,11 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { promisify } from 'node:util'
 
 import { bootstrapWorkspace } from '@guildhall/config'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectRuntimeStatePath, getProjectStateDir, getProjectSystemStatePath, promoteProjectStateDatabaseAuthority, projectStateDatabasePath } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import {
   ProjectRuntimeSupervisor,
@@ -22,6 +23,8 @@ import { createCapabilityRequest, listCapabilityRequests } from '../capability-r
 import { readRuntimeCommandEvidence } from '../project-runtime-command.js'
 import type { DevServerRecord, StartDevServerRequest } from '../dev-server-manager.js'
 import { applyProjectMigrations } from '../migrations.js'
+import { writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
+import { defaultProjectRuntimeState, writeProjectRuntimeState } from '../project-runtime-store.js'
 
 const execFileP = promisify(execFile)
 const PROJECT_ID = 'runtime-test'
@@ -146,8 +149,12 @@ class FakeDevServerManager {
 }
 
 function scoped(pathname: string): string {
-  const separator = pathname.includes('?') ? '&' : '?'
-  return `http://localhost${pathname}${separator}projectId=${encodeURIComponent(PROJECT_ID)}`
+  const url = new URL(`http://localhost${pathname}`)
+  url.searchParams.set('projectId', PROJECT_ID)
+  if (url.pathname === '/api/project' && !url.searchParams.has('compact') && !url.searchParams.has('detail')) {
+    url.searchParams.set('detail', 'true')
+  }
+  return url.toString()
 }
 
 beforeEach(async () => {
@@ -163,7 +170,23 @@ beforeEach(async () => {
   await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: tmpDir })
   await execFileP('git', ['add', '.'], { cwd: tmpDir })
   await execFileP('git', ['commit', '-m', 'init'], { cwd: tmpDir })
-  await applyProjectMigrations({ projectRoot: tmpDir, only: ['0.10.0/project-state-storage-boundary'] })
+  writeProjectTaskQueueWithSummary(getProjectSystemStatePath(tmpDir, 'TASKS.json'), {
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [],
+  }, { projectRoot: tmpDir })
+  const prerequisites = await applyProjectMigrations({ projectRoot: tmpDir, includePrompt: true })
+  expect(prerequisites.failed).toEqual([])
+  const finalize = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.13.0/project-state-finalize'],
+  })
+  expect(finalize.failed).toEqual([])
+  const cleanup = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.13.0/project-state-legacy-live-file-cleanup'],
+  })
+  expect(cleanup.failed).toEqual([])
 })
 
 afterEach(async () => {
@@ -180,6 +203,7 @@ describe('project runtime API', () => {
     const backend = new CountingBackend()
     const runtimeSupervisor = new ProjectRuntimeSupervisor({ backend })
     const { app } = buildServeApp({ projectPath: tmpDir, runtimeSupervisor })
+    const runtimeStatePath = getProjectRuntimeStatePath(tmpDir)
 
     const project = await app.fetch(new Request(scoped('/api/project')))
     const runtime = await app.fetch(new Request(scoped('/api/project/runtime')))
@@ -193,26 +217,137 @@ describe('project runtime API', () => {
       image: {
         repository: 'ghcr.io/matthew-dean/guildhall-runtime-debian',
       },
+      read: {
+        source: 'missing',
+        freshness: 'missing',
+        reason: 'runtime_state_missing',
+      },
     })
     expect(backend.starts).toBe(0)
     expect(backend.inspections).toBe(0)
+    await expect(fs.readFile(runtimeStatePath, 'utf8')).rejects.toThrow()
   })
 
-  it('reports runtime health through a separate endpoint', async () => {
+  it('reads saved runtime health without inspecting or rewriting it', async () => {
     const backend = new CountingBackend()
     const runtimeSupervisor = new ProjectRuntimeSupervisor({ backend })
-    await runtimeSupervisor.start(tmpDir, { reason: 'command' })
+    const savedState = {
+      ...defaultProjectRuntimeState(tmpDir),
+      status: 'running' as const,
+      containerId: 'runtime-container',
+      lastStartedAt: '2026-05-27T17:59:00.000Z',
+      lastInspectedAt: '2026-05-27T18:00:00.000Z',
+      health: {
+        status: 'healthy' as const,
+        checkedAt: '2026-05-27T18:00:00.000Z',
+        checks: [{ name: 'runtime', ok: true }],
+      },
+    }
+    await writeProjectRuntimeState(tmpDir, savedState)
+    const runtimeStatePath = getProjectRuntimeStatePath(tmpDir)
+    const before = await fs.readFile(runtimeStatePath, 'utf8')
     const { app } = buildServeApp({ projectPath: tmpDir, runtimeSupervisor })
 
-    const res = await app.fetch(new Request(scoped('/api/project/runtime/health')))
+    const runtime = await app.fetch(new Request(scoped('/api/project/runtime')))
+    const health = await app.fetch(new Request(scoped('/api/project/runtime/health')))
 
-    expect(res.status).toBe(200)
-    await expect(res.json()).resolves.toMatchObject({
+    expect(runtime.status).toBe(200)
+    await expect(runtime.json()).resolves.toMatchObject({
+      status: 'running',
+      containerId: 'runtime-container',
+      read: {
+        source: 'database',
+        freshness: 'current',
+        reason: null,
+      },
+    })
+    expect(health.status).toBe(200)
+    await expect(health.json()).resolves.toMatchObject({
       status: 'healthy',
       checks: [{ name: 'runtime', ok: true }],
+      read: {
+        source: 'database',
+        freshness: 'current',
+        reason: null,
+      },
     })
-    expect(backend.starts).toBe(1)
-    expect(backend.inspections).toBe(1)
+    expect(backend.starts).toBe(0)
+    expect(backend.inspections).toBe(0)
+    await expect(fs.readFile(runtimeStatePath, 'utf8')).resolves.toBe(before)
+  })
+
+  it('reads promoted runtime status from the compact database projection', async () => {
+    const backend = new CountingBackend()
+    const runtimeSupervisor = new ProjectRuntimeSupervisor({ backend })
+    const savedState = {
+      ...defaultProjectRuntimeState(tmpDir),
+      status: 'stopped' as const,
+      health: {
+        status: 'unknown' as const,
+        checkedAt: null,
+        checks: [],
+      },
+    }
+    await writeProjectRuntimeState(tmpDir, savedState)
+    writeProjectTaskQueueWithSummary(getProjectSystemStatePath(tmpDir, 'TASKS.json'), {
+      version: 1,
+      tasks: [],
+      releases: [],
+    }, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const { app } = buildServeApp({ projectPath: tmpDir, runtimeSupervisor })
+
+    const database = new DatabaseSync(projectStateDatabasePath(tmpDir))
+    database.prepare(`
+      INSERT INTO current_runtime (id, status, health, last_activity_at, updated_at, payload_json)
+      VALUES (1, 'running', 'healthy', '2026-05-27T18:01:00.000Z', '2026-05-27T18:01:00.000Z', '{}')
+      ON CONFLICT(id) DO UPDATE SET status = excluded.status, health = excluded.health,
+        last_activity_at = excluded.last_activity_at, updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `).run()
+    database.close()
+
+    const runtime = await app.fetch(new Request(scoped('/api/project/runtime')))
+
+    await expect(runtime.json()).resolves.toMatchObject({
+      status: 'running',
+      lastActivityAt: '2026-05-27T18:01:00.000Z',
+      health: { status: 'healthy' },
+      read: { source: 'database', freshness: 'current', reason: null },
+    })
+    expect(backend.inspections).toBe(0)
+  })
+
+  it('reports stale saved health without repairing it during GETs', async () => {
+    const backend = new CountingBackend()
+    const runtimeSupervisor = new ProjectRuntimeSupervisor({ backend })
+    await writeProjectRuntimeState(tmpDir, {
+      ...defaultProjectRuntimeState(tmpDir),
+      status: 'running',
+      containerId: 'runtime-container',
+      lastStartedAt: '2026-05-27T18:00:00.000Z',
+      lastInspectedAt: '2026-05-27T17:00:00.000Z',
+      health: {
+        status: 'healthy',
+        checkedAt: '2026-05-27T17:00:00.000Z',
+        checks: [{ name: 'runtime', ok: true }],
+      },
+    })
+    const runtimeStatePath = getProjectRuntimeStatePath(tmpDir)
+    const before = await fs.readFile(runtimeStatePath, 'utf8')
+    const { app } = buildServeApp({ projectPath: tmpDir, runtimeSupervisor })
+
+    const runtime = await app.fetch(new Request(scoped('/api/project/runtime')))
+    const health = await app.fetch(new Request(scoped('/api/project/runtime/health')))
+
+    await expect(runtime.json()).resolves.toMatchObject({
+      read: { source: 'database', freshness: 'stale', reason: 'runtime_health_stale' },
+    })
+    await expect(health.json()).resolves.toMatchObject({
+      read: { source: 'database', freshness: 'stale', reason: 'runtime_health_stale' },
+    })
+    expect(backend.inspections).toBe(0)
+    await expect(fs.readFile(runtimeStatePath, 'utf8')).resolves.toBe(before)
   })
 
   it('runs runtime commands through the project API and persists ordered evidence', async () => {

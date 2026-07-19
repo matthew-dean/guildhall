@@ -10,7 +10,9 @@ import {
 import {
   getProjectContextDebugLedgerPath,
   getProjectLocalHistoryHealth,
+  readProjectStateDatabaseCurrentAuthorityFromTasksPath,
   getProjectSystemStatePathFromMemoryDir,
+  readProjectTaskQueueSync,
 } from '@guildhall/sessions'
 import { load as yamlLoad } from 'js-yaml'
 import {
@@ -465,15 +467,13 @@ async function renderCapabilityRequests(ctx: GuildhallMcpContext): Promise<strin
 
 async function renderProject(ctx: GuildhallMcpContext): Promise<string> {
   const config = await readOptional(path.join(ctx.projectRoot, 'guildhall.yaml'), '')
-  const [runtime, memoryRecords, latestContext, codebaseMap, staleState] = await Promise.all([
+  const [runtime, memoryRecords, codebaseMap, staleState] = await Promise.all([
     readProjectRuntimeState(ctx.projectRoot),
     listMemoryRecords({ memoryDir: ctx.projectStateDir }),
-    readLatestContextDebug(ctx.projectRoot, 1),
     loadCodebaseMap(ctx.projectStateDir),
     loadCodebaseMapStaleState(ctx.projectStateDir),
   ])
   const memoryByStatus = countBy(memoryRecords, (record) => record.status)
-  const context = latestContext[0]
   return [
     '# Guildhall Project',
     '',
@@ -505,15 +505,6 @@ async function renderProject(ctx: GuildhallMcpContext): Promise<string> {
     staleState
       ? `- Freshness: stale since ${staleState.at} (${staleState.reason})`
       : '- Freshness: current or unknown',
-    '',
-    '## Latest Context Health',
-    '',
-    context
-      ? `- Latest: ${context.at} for ${context.taskId} via ${context.agentName}`
-      : '- Latest: no context-debug records',
-    context
-      ? `- Health: ${context.health.length > 0 ? context.health.map((warning) => `${warning.severity}:${warning.code}`).join(', ') : 'clean'}`
-      : '- Health: unavailable',
     '',
     '## Config',
     '',
@@ -723,7 +714,7 @@ async function renderMemory(ctx: GuildhallMcpContext): Promise<string> {
     `- Storage: ${memoryCorePaths.dbPath}`,
     `- Events: ${memoryCorePaths.eventsPath}`,
     `- Adapter: ${memoryCorePacket?.health.adapter ?? 'deterministic'}`,
-    `- Fallback used: ${memoryCorePacket?.health.fallbackUsed ?? true}`,
+    `- Fallback used: ${memoryCorePacket?.health.fallbackUsed ?? false}`,
     '- Repo-local writes: none',
     `- Compaction: ${memoryCorePacket?.health.compactionStatus ?? 'needs_attention'}`,
     `- Semantic validity: ${memoryCorePacket?.health.semanticValidity ?? 'needs_attention'}`,
@@ -790,7 +781,7 @@ async function renderContext(ctx: GuildhallMcpContext): Promise<string> {
       `- Prompt chars: ${record.promptChars}`,
       `- Health: ${record.health.length > 0 ? record.health.map((warning) => `${warning.severity}:${warning.code}`).join(', ') : 'clean'}`,
       record.memoryPacket
-        ? `- Memory packet: ${record.memoryPacket.included.length} included, ${record.memoryPacket.withheld.length} withheld, ${record.memoryPacket.evidenceRefs} evidence refs`
+        ? `- Memory packet: ${record.memoryPacket.includedCount ?? record.memoryPacket.included.length} included, ${record.memoryPacket.withheldCount ?? record.memoryPacket.withheld.length} withheld, ${record.memoryPacket.evidenceRefs} evidence refs`
         : '- Memory packet: none recorded',
       '',
     ]),
@@ -1003,8 +994,21 @@ export async function rejectMcpExternalMemoryBridgeRecord(ctx: GuildhallMcpConte
 export async function readTasks(
   projectStateDir: string,
 ): Promise<Array<Record<string, unknown> & { id: string; title?: string; status?: string }>> {
-  const raw = await readOptional(getProjectSystemStatePathFromMemoryDir(projectStateDir, 'TASKS.json'), '{"tasks":[]}')
-  const parsed = JSON.parse(raw) as unknown
+  const tasksPath = getProjectSystemStatePathFromMemoryDir(projectStateDir, 'TASKS.json')
+  let parsed: unknown
+  try {
+    parsed = readProjectTaskQueueSync(tasksPath)
+  } catch (error) {
+    let authority: 'legacy' | 'database' | null
+    try {
+      authority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath)
+    } catch {
+      throw projectStateMigrationRequiredError(tasksPath, error)
+    }
+    if (authority === 'database') throw projectStateMigrationRequiredError(tasksPath, error)
+    const raw = await readOptional(tasksPath, '{"tasks":[]}')
+    parsed = JSON.parse(raw) as unknown
+  }
   const tasks = Array.isArray(parsed)
     ? parsed
     : parsed && typeof parsed === 'object' && Array.isArray((parsed as { tasks?: unknown }).tasks)
@@ -1058,6 +1062,11 @@ function safeProjectPath(projectRoot: string, relativePath: string): string {
 
 function trimForMcp(text: string): string {
   return text.length > 12000 ? text.slice(0, 12000) + '\n\n[truncated]\n' : text
+}
+
+function projectStateMigrationRequiredError(tasksPath: string, cause: unknown): Error {
+  const detail = cause instanceof Error ? cause.message : String(cause)
+  return new Error(`Project-state migration required before reading current task state for ${tasksPath}. ${detail}`)
 }
 
 async function readLatestContextDebug(projectRoot: string, limit: number): Promise<ContextDebugRecord[]> {

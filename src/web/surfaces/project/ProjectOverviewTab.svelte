@@ -21,7 +21,10 @@
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref } from '../../lib/project-routes.js'
+  import { releaseCompletionSummary } from '../../lib/release-readiness.js'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
+  import { sourceRefsSummary } from '../../lib/source-refs.js'
+  import { taskGroundingDetail } from '../../lib/task-grounding.js'
   import type { EventEnvelope, ProjectDetail, ProjectMemoryHealth, Task } from '../../lib/types.js'
   import { hasCurrentGitUnavailableStory, type ProjectActivityLine } from '../../lib/project-activity.js'
   import { isGitUnavailableMessage } from '../../lib/runtime-message.js'
@@ -37,6 +40,7 @@
     projectTicker: ProjectActivityLine
     activeProjectId?: string | null
     onMigrate?: () => void | Promise<void>
+    orientationOnly?: boolean
   }
 
   let {
@@ -47,6 +51,7 @@
     projectTicker,
     activeProjectId = null,
     onMigrate,
+    orientationOnly = false,
   }: Props = $props()
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
@@ -67,16 +72,90 @@
     href: string
   }
 
-  const tasks = $derived(detail.tasks ?? [])
+  function isProjectSetupTask(task: Task | null | undefined): boolean {
+    const id = task?.id ?? ''
+    return id === 'task-meta-intake' || id === 'task-workspace-import'
+  }
+
+  function isArchivedTask(task: Task | null | undefined): boolean {
+    return task?.status === 'archived' || task?.status === 'cancelled'
+  }
+
+  const tasks = $derived((detail.tasks ?? []).filter(task => !isProjectSetupTask(task) && !isArchivedTask(task)))
   const displayPath = $derived(formatUserPath(detail.path))
   const running = $derived(detail.run?.status === 'running')
-  const actionableInbox = $derived(inboxItems.filter(item => item.severity !== 'low').slice(0, 3))
+  const requiredMigrationBlocked = $derived(detail.startReadiness?.code === 'required_migration_pending')
+  const allTerminalStart = $derived(detail.startReadiness?.code === 'all_terminal')
+  const startBlocked = $derived(detail.startReadiness?.canStart === false)
+  const actionableInbox = $derived.by(() => {
+    const visible = inboxItems.filter(item => {
+      if (item.severity === 'low') return false
+      if (requiredMigrationBlocked) return item.kind === 'required_migration'
+      return true
+    })
+    return visible.slice(0, 3)
+  })
   const runtime = $derived(detail.runtime ?? null)
   const memoryHealth = $derived(detail.memoryHealth ?? null)
   const structuralMapReview = $derived(detail.structuralMapReview ?? null)
   const orientationSpine = $derived(detail.orientationSpine ?? null)
+  const releaseRoadmap = $derived(orientationSpine?.releases ?? (orientationSpine?.selectedRelease ? [orientationSpine.selectedRelease] : []))
+  const laterReleaseCount = $derived(releaseRoadmap.filter(release => release.id !== orientationSpine?.selectedRelease?.id).length)
+  const releaseReadiness = $derived(detail.releaseReadiness ?? null)
+  const releaseReadinessLabel = $derived(
+    releaseReadiness?.release?.label ??
+    releaseReadiness?.scope?.label ??
+    orientationSpine?.summary?.selectedReleaseLabel ??
+    orientationSpine?.summary?.selectedScopeLabel ??
+    'Current scope',
+  )
+  const releaseReadinessTitle = $derived(
+    releaseReadiness?.release?.kind === 'release' || releaseReadiness?.scope?.kind === 'release'
+      ? 'Current release'
+      : 'Current scope',
+  )
+  const releaseReadinessActionLabel = $derived(releaseReadinessTitle === 'Current release' ? 'Open release' : 'Open scope')
+  const releaseCompletion = $derived(releaseCompletionSummary(releaseReadiness))
+  const releaseReadinessProgress = $derived(releaseCompletion?.detail ?? releaseReadiness?.notReadyReason ?? 'Open Release for the current scope check.')
+  const releaseReadinessChipLabel = $derived(releaseCompletion?.label ?? 'Not complete')
+  const releaseReadinessChipTone = $derived<Tone>(releaseCompletion?.tone === 'ok' ? 'ok' : releaseCompletion?.tone === 'warn' ? 'warn' : 'neutral')
+  const releaseGitBlockers = $derived((releaseReadiness?.gitStory?.blockers ?? []).slice(0, 2))
+  const currentScopeTaskIds = $derived.by(() => {
+    const nodeIds = [
+      ...(releaseReadiness?.scope?.nodeIds ?? []),
+      ...(releaseReadiness?.release?.nodeIds ?? []),
+      ...(orientationSpine?.scope?.nodeIds ?? []),
+      ...(orientationSpine?.selectedRelease?.nodeIds ?? []),
+    ]
+    return new Set(nodeIds
+      .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice(5) : nodeId)
+      .filter(Boolean))
+  })
+  const currentScopeTasks = $derived(currentScopeTaskIds.size > 0 ? tasks.filter(task => currentScopeTaskIds.has(task.id)) : tasks)
+  const tasksById = $derived(new Map(tasks.map(task => [task.id, task])))
+  const releaseBlockerRows = $derived.by(() => {
+    const rows: Array<{ id: string; title: string; reason: string; category: string; href: string }> = []
+    const seen = new Set<string>()
+    for (const blocker of releaseReadiness?.releaseBlockers ?? []) {
+      const id = blocker.id?.trim() || blocker.title?.trim() || blocker.label?.trim()
+      if (!id || seen.has(id)) continue
+      const task = blocker.id ? tasksById.get(blocker.id) : null
+      const title = task ? taskLabel(task) : blocker.title ?? blocker.label ?? id
+      rows.push({
+        id,
+        title,
+        reason: friendlyBlockerText(blocker.label ?? blocker.title ?? 'This work blocks the current scope.'),
+        category: task ? inferBlockerCategory(task) : 'Scope blocker',
+        href: task ? currentTaskHref(task.id, activeProjectId) : currentProjectHref('/release', activeProjectId),
+      })
+      seen.add(id)
+      if (rows.length >= 3) break
+    }
+    return rows
+  })
   const primaryProofPaths = $derived.by(() => {
-    return tasks
+    const proofTasks = currentScopeTaskIds.size > 0 ? currentScopeTasks : tasks.filter(task => task.status !== 'shelved')
+    return proofTasks
       .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
       .sort((left, right) => proofRank(left.proofPath.status) - proofRank(right.proofPath.status))
       .slice(0, 3)
@@ -100,13 +179,16 @@
     if (!blocker) return null
     return typeof blocker === 'string' ? { label: blocker } : blocker
   })
+  const orientationHasSourceConflict = $derived(orientationSpine?.gaps?.some(gap => gap.kind === 'source_conflict') ?? false)
   const orientationNextAction = $derived.by(() => {
     const action = orientationSpine?.summary?.nextAction
     if (!action) return null
-    return typeof action === 'string' ? { label: action, href: currentProjectHref('/work', activeProjectId) } : action
+    return typeof action === 'string'
+      ? { label: action, href: currentProjectHref(orientationHasSourceConflict ? '/map' : '/work', activeProjectId) }
+      : action
   })
   const orientationGap = $derived(orientationSpine?.gaps?.find(gap => gap.severity === 'high' || gap.kind === 'missing_charter' || gap.kind === 'source_conflict') ?? orientationSpine?.gaps?.[0] ?? null)
-  const orientationScopeLabel = $derived(orientationSpine?.summary?.selectedReleaseLabel ?? orientationSpine?.summary?.selectedScopeLabel ?? orientationSpine?.scope?.label ?? 'Current work')
+  const orientationScopeLabel = $derived(orientationSpine?.summary?.selectedScopeLabel ?? orientationSpine?.selectedTaskScope?.label ?? orientationSpine?.scope?.label ?? orientationSpine?.summary?.selectedReleaseLabel ?? orientationSpine?.selectedRelease?.label ?? 'Current task scope')
   const orientationIncludedCount = $derived(orientationSpine?.summary?.includedWorkCount ?? orientationSpine?.summary?.includedCount ?? 0)
   const orientationDeferredCount = $derived(
     orientationSpine?.summary?.progress?.deferred ??
@@ -114,29 +196,124 @@
     orientationSpine?.summary?.deferredCount ??
     0,
   )
+  const orientationCompletedScopedPreview = $derived.by(() => {
+    if (detail.startReadiness) return false
+    const progress = orientationSpine?.summary?.progress
+    const done = progress?.doneCount ?? progress?.done ?? 0
+    const proven = progress?.provenCount ?? progress?.proven ?? 0
+    const blocked = progress?.blockedCount ?? progress?.blocked ?? 0
+    return (
+      orientationSpine?.release?.state === 'ready' &&
+      orientationIncludedCount > 0 &&
+      Math.max(done, proven) >= orientationIncludedCount &&
+      blocked === 0 &&
+      !orientationTopBlocker
+    )
+  })
+  const scopedWorkComplete = $derived(allTerminalStart || orientationCompletedScopedPreview)
   const orientationProofGapCount = $derived(orientationSpine?.gaps?.filter(gap => gap.kind === 'proof_needed').length ?? 0)
+  const orientationProofCounts = $derived.by(() => {
+    const contracts = orientationSpine?.proofContracts ?? []
+    const progress = orientationSpine?.summary?.progress
+    if (contracts.length > 0) {
+      return {
+        proven: contracts.filter(contract => contract.state === 'proven').length,
+        missing: contracts.reduce((sum, contract) => sum + (contract.missing?.length ?? 0), 0),
+      }
+    }
+    return {
+      proven: progress?.provenCount ?? progress?.proven ?? 0,
+      missing: orientationProofGapCount,
+    }
+  })
+  const orientationScopeSourceSummary = $derived.by(() => {
+    const rows = orientationSpine?.scopeRows ?? []
+    const refs = rows
+      .filter(row => row.scope !== 'deferred')
+      .flatMap(row => row.sourceRefs ?? [])
+    return sourceRefsSummary(refs, 2)
+  })
+  const orientationScopeSourceLine = $derived.by(() => {
+    const sourceKind = orientationSpine?.sourceTrail?.find(row => row.label === 'Scope')?.value
+    const pieces = [
+      sourceKind,
+      orientationScopeSourceSummary,
+    ].filter(Boolean)
+    return pieces.length > 0 ? `Sources: ${pieces.join(' · ')}` : null
+  })
+  const orientationScopeProofSummary = $derived.by(() => {
+    const contracts = orientationSpine?.proofContracts ?? []
+    if (contracts.length === 0) return null
+    const { proven, missing } = orientationProofCounts
+    if (proven === 0 && missing === 0) return null
+    return missing > 0
+      ? `${countLabel(proven, 'proven item')} · ${countLabel(missing, 'missing proof', 'missing proof')}`
+      : `${countLabel(proven, 'proven item')} · 0 missing proof`
+  })
+  const verificationSignal = $derived.by((): { tone: Tone; lines: string[] } => {
+    const contracts = orientationSpine?.proofContracts ?? []
+    if (contracts.length > 0) {
+      const { proven, missing } = orientationProofCounts
+      if (proven > 0 || missing > 0) {
+        return {
+          tone: missing > 0 ? 'warn' : 'ok',
+          lines: [`${countLabel(proven, 'verified item')} · ${missing} missing verification`],
+        }
+      }
+    }
+
+    const proven = orientationProofCounts.proven
+    if (orientationSpine && (proven > 0 || orientationProofGapCount > 0)) {
+      return {
+        tone: orientationProofCounts.missing > 0 ? 'warn' : 'ok',
+        lines: [`${countLabel(proven, 'verified item')} · ${orientationProofCounts.missing} missing verification`],
+      }
+    }
+
+    const primary = primaryProofPaths[0]
+    if (primary) {
+      return {
+        tone: primaryProofPaths.some(item => item.proofPath.status === 'blocked')
+          ? 'warn'
+          : primaryProofPaths.some(item => item.proofPath.status === 'verified')
+            ? 'ok'
+            : 'neutral',
+        lines: [
+          proofPathTitle(primary.task, primary.proofPath),
+          friendlyStatus(primary.proofPath.status),
+        ],
+      }
+    }
+
+    return { tone: 'neutral', lines: ['No verification checks linked yet.'] }
+  })
+  const orientationBlockedCount = $derived.by(() => {
+    const progress = orientationSpine?.summary?.progress
+    return progress?.blockedCount ?? progress?.blocked ?? 0
+  })
   const orientationScopeTitle = $derived.by(() => {
     if (!orientationSpine) return 'Scope not mapped yet'
     return orientationScopeLabel
   })
   const orientationScopeDetail = $derived.by(() => {
     if (!orientationSpine) return 'No bounded scope has been derived for this project yet.'
-    const proven = orientationSpine.summary?.progress?.provenCount ?? orientationSpine.summary?.progress?.proven ?? 0
-    const blocked = orientationSpine.summary?.progress?.blockedCount ?? orientationSpine.summary?.progress?.blocked ?? 0
     const pieces = [
       `${orientationIncludedCount} work items in view`,
-      `${orientationProofGapCount} missing verification`,
-      `${blocked} blocked`,
-      `${proven} verified`,
+      `${orientationProofCounts.missing} missing verification`,
+      `${orientationBlockedCount} blocked`,
+      `${orientationProofCounts.proven} verified`,
       `${orientationDeferredCount} deferred`,
     ]
     return pieces.join(' · ')
   })
   const orientationScopeSecondaryDetail = $derived.by(() => {
     if (!orientationSpine) return null
+    const blockerPrefix = orientationBlockedCount > 0 ? 'Blocking' : 'Waiting on'
     const pieces = [
+      orientationScopeProofSummary ? `Proof: ${orientationScopeProofSummary}` : null,
+      orientationScopeSourceLine,
       orientationPins[0]?.label ? `Current focus: ${orientationPins[0].label}` : null,
-      orientationTopBlocker?.label ? `Blocking: ${orientationTopBlocker.label}` : orientationGap?.label ? `Needs attention: ${orientationGap.label}` : null,
+      orientationTopBlocker?.label ? `${blockerPrefix}: ${orientationTopBlocker.label}` : orientationGap?.label ? `Needs attention: ${orientationGap.label}` : null,
     ]
     return pieces.filter(Boolean).join(' · ') || null
   })
@@ -146,12 +323,29 @@
     if (orientationPins.length > 0) return 'accent'
     return 'ok'
   })
+
+  function orientationActionButtonLabel(href: string | undefined): string {
+    return href?.includes('/map') ? 'Open map' : 'Open Work'
+  }
+
   const orientationMapStatus = $derived.by(() => {
     if (!orientationSpine) return 'No project spine has been generated yet.'
     const roots = orientationSpine.roots?.length ?? 0
     const inferred = orientationSpine.sourceHealth?.inferred ?? 0
     const gaps = orientationSpine.sourceHealth?.gaps ?? orientationSpine.gaps?.length ?? 0
-    return `${roots} capability lanes · ${orientationIncludedCount} scoped work items · ${inferred} inferred nodes · ${gaps} gaps`
+    const documented = orientationSpine.sourceHealth?.documented ?? (orientationSpine.roots ?? []).reduce((sum, root) =>
+      sum + (root.children ?? []).filter(child => child.visibility?.kind === 'supporting').length,
+    0)
+    const releasePiece = releaseRoadmap.length > 0
+      ? `${releaseRoadmap.length} ${releaseRoadmap.length === 1 ? 'release/scope' : 'release/scopes'}`
+      : null
+    return [
+      releasePiece,
+      `${orientationIncludedCount} scoped work items`,
+      `${documented} documented capabilities`,
+      `${inferred} inferred nodes`,
+      `${gaps} gaps`,
+    ].filter(Boolean).join(' · ')
   })
   const orientationMapPreviewTitle = $derived.by(() => {
     if (!orientationSpine) return 'Project map not generated yet'
@@ -160,10 +354,15 @@
   const orientationMapPreviewDetail = $derived.by(() => {
     if (!orientationSpine) return 'Open the map when this project has imported work or confirmed planning docs.'
     const progress = orientationSpine.summary?.progress
+    const laterDocumented = orientationSpine.sourceHealth?.deferred ?? (orientationSpine.roots ?? []).reduce((sum, root) =>
+      sum + (root.children ?? []).filter(child => child.visibility?.kind === 'supporting' && child.maturity === 'deferred').length,
+    0)
     const pieces = [
-      progress?.specced ? `${progress.specced} specced` : null,
-      progress?.active ? `${progress.active} active` : null,
-      progress?.blocked ? `${progress.blocked} blocked` : null,
+      releaseRoadmap.length > 1 ? `${laterReleaseCount} later release/scope ${laterReleaseCount === 1 ? 'container' : 'containers'}` : null,
+      progress?.specced ? `${progress.specced} specced work items` : null,
+      progress?.active ? `${progress.active} active work items` : null,
+      progress?.blocked ? `${progress.blocked} blocked work items` : null,
+      laterDocumented ? `${laterDocumented} later capabilities` : null,
       orientationProofGapCount ? `${orientationProofGapCount} proof gaps` : null,
     ].filter(Boolean)
     return pieces.length ? pieces.join(' · ') : orientationScopeDetail
@@ -185,6 +384,7 @@
   })
 
   const workProgressCounts = $derived(detail.workProgress?.counts ?? null)
+  const selectedWorkProgressCounts = $derived(detail.workProgress?.selectedCounts ?? workProgressCounts)
 
   const segments = $derived<WorkMixSegment[]>([
     { key: 'working', label: running ? 'Moving now' : 'Paused work', count: counts.working, tone: 'working' },
@@ -194,10 +394,29 @@
     { key: 'done', label: 'Done', count: counts.done, tone: 'done' },
     { key: 'shelved', label: 'Shelved', count: counts.shelved, tone: 'shelved' },
   ].filter(segment => segment.count > 0))
+  const workMixSegments = $derived.by((): WorkMixSegment[] => {
+    if (!orientationSpine || orientationIncludedCount + orientationDeferredCount <= 0) return segments
+    return [
+      {
+        key: 'current-scope',
+        label: 'Current scope',
+        count: orientationIncludedCount,
+        tone: requiredMigrationBlocked ? 'attention' : 'ready',
+        tooltip: `${orientationIncludedCount} work items are in the current scoped work.`,
+      },
+      {
+        key: 'deferred-scope',
+        label: 'Deferred',
+        count: orientationDeferredCount,
+        tone: 'shelved',
+        tooltip: `${orientationDeferredCount} work items are documented for later scope.`,
+      },
+    ].filter(segment => segment.count > 0)
+  })
 
   const activeTask = $derived.by(() => {
     const priority = ['in_progress', 'review', 'gate_check', 'blocked', 'spec_review', 'ready', 'exploring', 'import_draft']
-    return [...tasks]
+    return [...currentScopeTasks]
       .filter(task => priority.includes(task.status ?? ''))
       .sort((left, right) => {
         const a = priority.indexOf(left.status ?? '')
@@ -209,26 +428,27 @@
 
   const movingTasks = $derived.by(() => {
     const wanted = new Set(['in_progress', 'review', 'gate_check', 'ready', 'spec_review', 'exploring'])
-    return [...tasks]
+    return [...currentScopeTasks]
       .filter(task => wanted.has(task.status ?? ''))
       .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
       .slice(0, 4)
   })
-  const requiredMigrationBlocked = $derived(detail.startReadiness?.code === 'required_migration_pending')
-  const allTerminalStart = $derived(detail.startReadiness?.code === 'all_terminal')
-  const startBlocked = $derived(detail.startReadiness?.canStart === false)
   const runPanelTitle = $derived(
     running
       ? 'Moving now'
-      : allTerminalStart
-        ? 'No runnable work'
-        : 'Ready to resume',
+      : requiredMigrationBlocked || (startBlocked && !scopedWorkComplete)
+        ? 'Execution blocked'
+        : scopedWorkComplete
+          ? 'No runnable work'
+          : 'Ready to resume',
   )
-  const nextActionCardTitle = $derived(allTerminalStart ? 'Scope status' : 'Do this next')
+  const nextActionCardTitle = $derived(scopedWorkComplete ? 'Scope status' : 'Do this next')
   const emptyWorkMixLabel = $derived(
     requiredMigrationBlocked
       ? 'Run the required migration before creating or running work.'
-      : startBlocked
+      : scopedWorkComplete
+        ? 'The selected scope has no runnable work left.'
+        : startBlocked
         ? 'Resolve the project blocker before adding more work.'
         : 'No tasks yet. Create a request when you are ready.',
   )
@@ -245,7 +465,7 @@
   })
 
   const healthItems = $derived.by(() => {
-    const items: Array<{ label: string; detail: string; tone: Tone; href: string }> = []
+    const items: Array<{ label: string; detail: string; tone: Tone; href: string; layout?: 'compact' | 'wide' }> = []
     const provider = detail.providerStatus
     if (provider?.fallback) {
       items.push({
@@ -263,18 +483,20 @@
       })
     }
 
-    const gitBlockers = detail.gitStory?.blockers ?? []
+    const scopedGitStory = releaseReadiness?.gitStory ?? detail.gitStory
+    const gitBlockers = releaseReadiness ? releaseGitBlockers : (detail.gitStory?.blockers ?? [])
     if (gitBlockers.length > 0) {
       items.push({
-        label: 'Git story needs closure',
+        label: 'Repository follow-up',
         detail: friendlyBlockerText(gitBlockers[0]?.reason ?? gitBlockers[0]?.label ?? `${gitBlockers.length} git ${gitBlockers.length === 1 ? 'item' : 'items'} need attention.`),
         tone: 'warn',
         href: currentProjectHref('/release', activeProjectId),
+        layout: 'wide',
       })
-    } else if (detail.gitStory?.ready) {
+    } else if (scopedGitStory?.ready) {
       items.push({
-        label: 'Git story clear',
-        detail: 'No git closure blockers are currently reported.',
+        label: 'Repository clear',
+        detail: 'No repository follow-ups are currently reported.',
         tone: 'ok',
         href: currentProjectHref('/release', activeProjectId),
       })
@@ -322,27 +544,45 @@
         href: currentProjectHref('/settings', activeProjectId),
       })
     }
-    return items.slice(0, 4)
+    return items
+      .slice(0, 4)
+      .sort((left, right) => Number(right.layout === 'wide') - Number(left.layout === 'wide'))
   })
 
   const knowledgeCards = $derived.by(() => {
+    const scopedProgress = orientationSpine?.summary?.progress
+    const orientationTotalCount = orientationSpine
+      ? orientationIncludedCount + orientationDeferredCount
+      : null
     const activeCount = workProgressCounts
       ? workProgressCounts.visibleActive
       : counts.working + counts.ready + counts.approval + counts.shaping
     const blockedCount = workProgressCounts?.visibleBlocked ?? counts.blocked
     const doneCount = workProgressCounts?.visibleDone ?? counts.done
     const totalCount = workProgressCounts?.visibleTotal ?? counts.total
-    const deliveryDetail = workProgressCounts && workProgressCounts.deliveryRequired > 0
-      ? `${workProgressCounts.deliveryDone} / ${workProgressCounts.deliveryRequired} delivery steps done${workProgressCounts.deliveryBlocked ? ` · ${workProgressCounts.deliveryBlocked} blocked` : ''}.`
+    const displayedActiveCount = orientationSpine ? orientationIncludedCount : activeCount
+    const displayedBlockedCount = orientationSpine
+      ? scopedProgress?.blockedCount ?? scopedProgress?.blocked ?? blockedCount
+      : blockedCount
+    const displayedDoneCount = orientationSpine
+      ? scopedProgress?.doneCount ?? scopedProgress?.done ?? doneCount
+      : doneCount
+    const displayedTotalCount = orientationTotalCount ?? totalCount
+    const deliveryDetail = selectedWorkProgressCounts && selectedWorkProgressCounts.deliveryRequired > 0
+      ? `${selectedWorkProgressCounts.deliveryDone} / ${selectedWorkProgressCounts.deliveryRequired} delivery steps done${selectedWorkProgressCounts.deliveryBlocked ? ` · ${selectedWorkProgressCounts.deliveryBlocked} blocked` : ''}.`
       : null
     const baseCards = [
       {
         label: 'Work',
-        title: `${totalCount} total ${totalCount === 1 ? 'work item' : 'work items'}`,
-        detail: `${activeCount} active or shaping · ${doneCount} completed · ${blockedCount} blocked.`,
+        title: orientationSpine
+          ? `${displayedTotalCount} mapped ${displayedTotalCount === 1 ? 'work item' : 'work items'}`
+          : `${displayedTotalCount} total ${displayedTotalCount === 1 ? 'work item' : 'work items'}`,
+        detail: orientationSpine
+          ? `${displayedActiveCount} in current scope · ${displayedDoneCount} completed · ${displayedBlockedCount} blocked.`
+          : `${displayedActiveCount} active or shaping · ${displayedDoneCount} completed · ${displayedBlockedCount} blocked.`,
         secondaryDetail: deliveryDetail,
         href: currentProjectHref('/work', activeProjectId),
-        tone: blockedCount > 0 || (workProgressCounts?.deliveryBlocked ?? 0) > 0 ? 'warn' as Tone : activeCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
+        tone: displayedBlockedCount > 0 || (selectedWorkProgressCounts?.deliveryBlocked ?? 0) > 0 ? 'warn' as Tone : displayedActiveCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
       },
       {
         label: 'History',
@@ -366,8 +606,24 @@
     ]
   })
 
+  const workMixTotalCount = $derived(
+    orientationSpine && orientationIncludedCount + orientationDeferredCount > 0
+      ? orientationIncludedCount + orientationDeferredCount
+      : workProgressCounts?.visibleTotal ?? workMixSegments.reduce((sum, segment) => sum + segment.count, 0),
+  )
+
   const nextAction = $derived.by(() => {
     const shared = detail.actionModel?.primaryAction
+    if (scopedWorkComplete) {
+      return {
+        label: detail.startReadiness?.message ?? orientationSpine?.summary?.headline ?? 'Selected scope is complete.',
+        detail: 'All scoped work is terminal. Open Work to inspect completed and deferred items.',
+        button: 'Open Work',
+        href: currentProjectHref('/work', activeProjectId),
+        tone: 'neutral' as Tone,
+        action: 'navigate' as NextActionKind,
+      }
+    }
     if (shared) {
       return {
         label: shared.label ?? 'Open Work',
@@ -398,16 +654,6 @@
       }
     }
     if (detail.startReadiness?.canStart === false) {
-      if (detail.startReadiness.code === 'all_terminal') {
-        return {
-          label: detail.startReadiness.message ?? startReadinessLabel(detail.startReadiness.code),
-          detail: 'All scoped work is terminal. Open Work to inspect completed and shelved items.',
-          button: 'Open Work',
-          href: currentProjectHref('/work', activeProjectId),
-          tone: 'neutral' as Tone,
-          action: 'navigate' as NextActionKind,
-        }
-      }
       const href = detail.startReadiness.actionHref ?? currentProjectHref('/overview', activeProjectId)
       const matchingInbox = inboxItems.find(item => item.severity !== 'low' && item.actionHref === href)
       return {
@@ -436,7 +682,7 @@
       return {
         label: orientationNextAction.label,
         detail: orientationNextAction.reason ?? orientationTopBlocker?.label ?? orientationGap?.label ?? 'Open the work list to review the next task.',
-        button: 'Open Work',
+        button: orientationActionButtonLabel(orientationNextAction.href),
         href: orientationNextAction.href ?? currentProjectHref('/work', activeProjectId),
         tone: orientationTopBlocker || orientationGap ? 'warn' as Tone : 'accent' as Tone,
         action: 'navigate' as NextActionKind,
@@ -484,7 +730,7 @@
     }
   })
   const nextActionChipLabel = $derived(
-    allTerminalStart
+    scopedWorkComplete
       ? 'Closed scope'
       : nextAction.tone === 'running'
         ? 'Live'
@@ -492,12 +738,13 @@
           ? 'Needs attention'
           : 'Ready',
   )
-  const showHeroStatus = $derived(nextAction.tone !== 'warn' && nextAction.tone !== 'danger')
+  const showHeroStatus = $derived(!orientationOnly && nextAction.tone !== 'warn' && nextAction.tone !== 'danger')
 
   function inboxActionLabel(item: InboxItem): string {
     switch (item.kind) {
       case 'project_understanding': return 'Review update'
       case 'workspace_import_pending': return 'Review import'
+      case 'proof_reconciliation': return 'Review proof'
       case 'required_migration': return 'Migrate'
       default: return 'Open'
     }
@@ -519,7 +766,22 @@
   })
 
   const blockedRows = $derived.by(() => {
-    return tasks
+    const rows: BlockedRow[] = []
+    const seen = new Set<string>()
+    for (const blocker of releaseReadiness?.releaseBlockers ?? []) {
+      const id = blocker.id?.trim()
+      if (!id || seen.has(id)) continue
+      const task = tasksById.get(id)
+      if (!task) continue
+      rows.push({
+        task,
+        reason: friendlyBlockerText(blocker.label ?? blocker.title ?? blocker.id ?? 'This work is blocking the current scope.'),
+        category: inferBlockerCategory(task),
+        href: currentTaskHref(task.id, activeProjectId),
+      })
+      seen.add(id)
+    }
+    const scopedBlockedRows = currentScopeTasks
       .filter(task => task.status === 'blocked' || activeEscalations(task).length > 0 || (Boolean(task.blockReason) && !isRunnableStatus(task.status)))
       .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
       .map(task => ({
@@ -528,7 +790,12 @@
         category: inferBlockerCategory(task),
         href: currentTaskHref(task.id, activeProjectId),
       }))
-      .slice(0, 4)
+    for (const row of scopedBlockedRows) {
+      if (seen.has(row.task.id)) continue
+      rows.push(row)
+      seen.add(row.task.id)
+    }
+    return rows.slice(0, 4)
   })
 
   function isRunnableStatus(status: string | undefined): boolean {
@@ -545,7 +812,7 @@
 
   const runBlocker = $derived.by(() => {
     const shared = detail.actionModel?.primaryAction
-    if (detail.startReadiness?.canStart === false) {
+    if (detail.startReadiness?.canStart === false && detail.startReadiness.code !== 'all_terminal') {
       return {
         label: shared?.label ?? startReadinessLabel(detail.startReadiness.code),
         detail: shared?.detail ?? detail.startReadiness.message ?? 'Resolve the blocker before starting more work.',
@@ -637,6 +904,8 @@
   function statusDetail(task: Task): string {
     if (task.blockReason) return friendlyBlockerText(task.blockReason)
     if (task.latestCheckpoint?.nextPlannedAction) return friendlyBlockerText(task.latestCheckpoint.nextPlannedAction)
+    const grounding = taskGroundingDetail(task)
+    if (grounding) return grounding
     if (task.description) return task.description
     return taskPresentation(task).label
   }
@@ -670,7 +939,7 @@
 
   function sortedTasks(statuses: string[]): Task[] {
     const wanted = new Set(statuses)
-    return [...tasks]
+    return [...currentScopeTasks]
       .filter(task => wanted.has(task.status ?? ''))
       .sort((left, right) => {
         const statusDelta = statuses.indexOf(left.status ?? '') - statuses.indexOf(right.status ?? '')
@@ -730,8 +999,9 @@
 
     const inbox = inboxItems.find(item => item.taskId === task.id || item.title === task.title)
 
+    if (task.status === 'import_draft' || /brief|source-backed|shaping|clearer/.test(haystack)) return 'Needs shaping'
     if (/provider|oauth|api key|model|fallback|stripe|supabase auth/.test(haystack)) return 'Provider settings'
-    if (/git|branch|commit|push|dirty|merge/.test(haystack)) return 'Git story closure'
+    if (/git|branch|commit|push|dirty|merge/.test(haystack)) return 'Repository follow-up'
     if (/bootstrap|readiness|database|migration|db\b/.test(haystack)) return 'Project readiness / bootstrap'
     if ((task.dependsOn ?? []).length > 0 || referencesAnotherTask(task, haystack)) return 'Dependencies'
     if (inbox?.missingSteps?.length) return 'Missing prerequisite'
@@ -752,6 +1022,7 @@
       case 'all_terminal': return 'No runnable tasks'
       case 'provider_unavailable': return 'Provider unavailable'
       case 'bootstrap_blocked': return 'Readiness blocked'
+      case 'proof_evidence_missing': return 'Proof needed'
       case 'no_unattended_progress': return 'Nothing ready to run'
       case 'required_migration_pending': return 'Required migration'
       default: return 'Start is blocked'
@@ -777,6 +1048,10 @@
 
   function go(href: string): void {
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
+  }
+
+  function proofPathTitle(task: Task, proofPath: NonNullable<Task['proofPaths']>[number]): string {
+    return proofPath.title ?? taskLabel(task)
   }
 
   function proofRank(status: string | undefined): number {
@@ -903,12 +1178,61 @@
 
       <Card title="Work mix" titleTag="h2" padding="compact" density="dense" className="overview-card orientation-work-mix">
         <WorkMixChart
-          ariaLabel={`Work mix: ${counts.total} tasks`}
-          {segments}
+          ariaLabel={`Work mix: ${workMixTotalCount} tasks`}
+          segments={workMixSegments}
           emptyLabel={emptyWorkMixLabel}
           onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}
         />
       </Card>
+
+      {#if releaseReadiness}
+        <Card title={releaseReadinessTitle} titleTag="h2" padding="compact" density="dense" className="overview-card orientation-release-readiness">
+          <CardList className="release-readiness-list">
+            <CardListItem
+              as="button"
+              tone={releaseReadinessChipTone}
+              railStrength="strong"
+              onclick={() => go(currentProjectHref('/release', activeProjectId))}
+            >
+              <Chip label={releaseReadinessChipLabel} tone={releaseReadinessChipTone} />
+              <div>
+                <strong>{releaseReadinessLabel}</strong>
+                <p>{releaseReadinessProgress}</p>
+                {#if releaseReadiness?.notReadyReason}
+                  <p>{releaseReadiness.notReadyReason}</p>
+                {/if}
+              </div>
+              <span class="preview-action">{releaseReadinessActionLabel}</span>
+            </CardListItem>
+            {#each releaseBlockerRows as row (row.id)}
+              <CardListItem
+                as="button"
+                tone="warn"
+                onclick={() => go(row.href)}
+              >
+                <Chip label={row.category} tone={row.category === 'Needs triage' ? 'danger' : 'warn'} />
+                <div>
+                  <strong>{row.title}</strong>
+                  <p>{row.reason}</p>
+                </div>
+              </CardListItem>
+            {/each}
+            {#each releaseGitBlockers as blocker (blocker.id ?? blocker.label)}
+              <CardListItem
+                as="button"
+                tone="warn"
+                onclick={() => go(currentProjectHref('/release', activeProjectId))}
+              >
+                <Icon name="git-branch" size={16} />
+                <div>
+                  <strong>{blocker.label ?? 'Repository follow-up'}</strong>
+                  <p>{friendlyBlockerText(blocker.reason ?? blocker.nextAction ?? 'Review the repository follow-up for this scope.')}</p>
+                </div>
+              </CardListItem>
+            {/each}
+          </CardList>
+        </Card>
+      {/if}
 
       <Card title="Project map" titleTag="h2" padding="compact" density="dense" className="overview-card orientation-map-preview-card">
         <CardList className="orientation-map-preview-list">
@@ -955,99 +1279,102 @@
 
   </section>
 
-  <section class="overview-work-section">
-    <Card title={runPanelTitle} titleTag="h2" padding="compact" density="dense" className="overview-card">
-      {#if movingTasks.length === 0}
-        <p class="muted">{running ? 'The run is active, but no task is currently active.' : 'No task is moving right now.'}</p>
-      {:else}
-        <div class="motion-list">
-          {#each movingTasks as task (task.id)}
-            <OverviewTaskRow
-              title={taskLabel(task)}
-              detail={friendlyDomain(task.domain) || statusDetail(task)}
-              chipLabel={overviewTaskStatusLabel(task)}
-              chipTone={toneForTask(task) === 'danger' ? 'danger' : toneForTask(task) === 'warn' ? 'warn' : toneForTask(task) === 'running' ? 'ok' : 'neutral'}
-              onclick={() => go(currentTaskHref(task.id, activeProjectId))}
-            />
-          {/each}
-        </div>
-      {/if}
-    </Card>
-  </section>
-
-  <section class="overview-grid overview-planning-grid">
-    <Card title="Blocked work" titleTag="h2" padding="compact" density="dense" className="overview-card">
-      {#if blockedRows.length === 0}
-        <p class="muted">No blocked tasks are visible right now.</p>
-      {:else}
-        <div class="blocked-work-list">
-          {#each blockedRows as row (row.task.id)}
-            <OverviewTaskRow
-              title={taskLabel(row.task)}
-              detail={row.reason}
-              chipLabel={row.category}
-              chipTone={row.category === 'Needs triage' ? 'danger' : 'warn'}
-              onclick={() => go(row.href)}
-            />
-          {/each}
-        </div>
-      {/if}
-    </Card>
-
-    <Card title="Next run" titleTag="h2" padding="compact" density="dense" className="overview-card">
-      {#if runBlocker}
-        <UtilityPanel
-          as="button"
-          interactive
-          className="run-blocker"
-          tone="warn"
-          onclick={() => {
-            if (detail.startReadiness?.code === 'required_migration_pending') {
-              void onMigrate?.()
-              return
-            }
-            go(runBlocker.href)
-          }}
-        >
-          <Chip label="Blocked" tone="warn" />
-          <div>
-            <strong>{runBlocker.label}</strong>
-            <span>{runBlocker.detail}</span>
+  {#if !orientationOnly}
+    <section class="overview-work-section">
+      <Card title={runPanelTitle} titleTag="h2" padding="compact" density="dense" className="overview-card">
+        {#if movingTasks.length === 0}
+          <p class="muted">{running ? 'The run is active, but no task is currently active.' : 'No task is moving right now.'}</p>
+        {:else}
+          <div class="motion-list">
+            {#each movingTasks as task (task.id)}
+              <OverviewTaskRow
+                title={taskLabel(task)}
+                detail={friendlyDomain(task.domain) || statusDetail(task)}
+                chipLabel={overviewTaskStatusLabel(task)}
+                chipTone={toneForTask(task) === 'danger' ? 'danger' : toneForTask(task) === 'warn' ? 'warn' : toneForTask(task) === 'running' ? 'ok' : 'neutral'}
+                onclick={() => go(currentTaskHref(task.id, activeProjectId))}
+              />
+            {/each}
           </div>
-        </UtilityPanel>
-      {/if}
-      {#if runPlanRows.length === 0}
-        <p class="muted">
-          {#if requiredMigrationBlocked}
-            The next run is blocked until the required migration is applied.
-          {:else if startBlocked}
-            The next run is blocked until the project blocker is resolved.
-          {:else}
-            Nothing is queued for the next run yet.
-          {/if}
-        </p>
-      {:else}
-        <div class="run-plan-list" aria-label="Likely next run order">
-          {#each runPlanRows as row, index (`${row.task?.id ?? 'fallback'}:${index}`)}
-            <UtilityPanel as="button" interactive className="run-plan-row" tone={row.tone === 'warn' ? 'warn' : row.tone === 'running' ? 'ok' : row.tone === 'accent' ? 'accent' : 'neutral'} onclick={() => go(row.href)}>
-              <span class="run-index">{index + 1}</span>
-              <div>
-                <strong>{row.label}</strong>
-                <span>{row.detail}</span>
-              </div>
-              <Chip label={row.tone === 'running' ? 'Live' : row.tone === 'warn' ? 'Needs review' : row.tone === 'accent' ? 'Likely next' : 'Later'} tone={row.tone === 'running' ? 'ok' : row.tone === 'warn' ? 'warn' : row.tone === 'accent' ? 'accent' : 'neutral'} />
-            </UtilityPanel>
-          {/each}
-        </div>
-      {/if}
-    </Card>
-  </section>
+        {/if}
+      </Card>
+    </section>
 
-  <section>
-    <Card title="Signals" titleTag="h2" padding="compact" density="dense" className="overview-card overview-signals-card">
-      <div class="signals-grid">
+    <section class="overview-grid overview-planning-grid">
+      <Card title="Blocked work" titleTag="h2" padding="compact" density="dense" className="overview-card">
+        {#if blockedRows.length === 0}
+          <p class="muted">No blocked tasks are visible right now.</p>
+        {:else}
+          <div class="blocked-work-list">
+            {#each blockedRows as row (row.task.id)}
+              <OverviewTaskRow
+                title={taskLabel(row.task)}
+                detail={row.reason}
+                chipLabel={row.category}
+                chipTone={row.category === 'Needs triage' ? 'danger' : 'warn'}
+                onclick={() => go(row.href)}
+              />
+            {/each}
+          </div>
+        {/if}
+      </Card>
+
+      <Card title="Next run" titleTag="h2" padding="compact" density="dense" className="overview-card">
+        {#if runBlocker}
+          <UtilityPanel
+            as="button"
+            interactive
+            className="run-blocker"
+            tone="warn"
+            onclick={() => {
+              if (detail.startReadiness?.code === 'required_migration_pending') {
+                void onMigrate?.()
+                return
+              }
+              go(runBlocker.href)
+            }}
+          >
+            <Chip label="Blocked" tone="warn" />
+            <div>
+              <strong>{runBlocker.label}</strong>
+              <span>{runBlocker.detail}</span>
+            </div>
+          </UtilityPanel>
+        {/if}
+        {#if runPlanRows.length === 0}
+          <p class="muted">
+            {#if requiredMigrationBlocked}
+              The next run is blocked until the required migration is applied.
+            {:else if allTerminalStart}
+              The selected scope is complete. Choose another release or open Work to inspect completed and deferred items.
+            {:else if startBlocked}
+              The next run is blocked until the project blocker is resolved.
+            {:else}
+              Nothing is queued for the next run yet.
+            {/if}
+          </p>
+        {:else}
+          <div class="run-plan-list" aria-label="Likely next run order">
+            {#each runPlanRows as row, index (`${row.task?.id ?? 'fallback'}:${index}`)}
+              <UtilityPanel as="button" interactive className="run-plan-row" tone={row.tone === 'warn' ? 'warn' : row.tone === 'running' ? 'ok' : row.tone === 'accent' ? 'accent' : 'neutral'} onclick={() => go(row.href)}>
+                <span class="run-index">{index + 1}</span>
+                <div>
+                  <strong>{row.label}</strong>
+                  <span>{row.detail}</span>
+                </div>
+                <Chip label={row.tone === 'running' ? 'Live' : row.tone === 'warn' ? 'Needs review' : row.tone === 'accent' ? 'Likely next' : 'Later'} tone={row.tone === 'running' ? 'ok' : row.tone === 'warn' ? 'warn' : row.tone === 'accent' ? 'accent' : 'neutral'} />
+              </UtilityPanel>
+            {/each}
+          </div>
+        {/if}
+      </Card>
+    </section>
+
+    <section>
+      <Card title="Signals" titleTag="h2" padding="compact" density="dense" className="overview-card overview-signals-card">
+        <div class="signals-grid">
         {#if inboxError}
-          <UtilityPanel className="signal-row" tone="warn">
+          <UtilityPanel className="signal-row" tone="warn" dense>
             <Icon name="alert-triangle" size={16} />
             <div>
               <strong>Needs you</strong>
@@ -1055,7 +1382,7 @@
             </div>
           </UtilityPanel>
         {:else if !inboxLoaded}
-          <UtilityPanel className="signal-row" tone="neutral">
+          <UtilityPanel className="signal-row" tone="neutral" dense>
             <Icon name="inbox" size={16} />
             <div>
               <strong>Needs you</strong>
@@ -1064,7 +1391,7 @@
           </UtilityPanel>
         {:else if actionableInbox.length > 0}
           {#each actionableInbox as item (inboxItemKey(item))}
-            <UtilityPanel as="button" interactive className="signal-row" tone="warn" onclick={() => go(item.actionHref ?? '/thread')}>
+            <UtilityPanel as="button" interactive className="signal-row" tone="warn" dense onclick={() => go(item.actionHref ?? '/thread')}>
               <Icon name="inbox" size={16} />
               <div>
                 <strong>Needs you</strong>
@@ -1079,7 +1406,8 @@
           <UtilityPanel
             as="button"
             interactive
-            className="signal-row"
+            dense
+            className={`signal-row ${item.layout === 'wide' ? 'signal-row--wide' : ''}`}
             tone={item.tone === 'running' ? 'ok' : item.tone === 'ok' ? 'ok' : item.tone === 'danger' ? 'danger' : item.tone === 'warn' ? 'warn' : 'neutral'}
             onclick={() => go(item.href)}
           >
@@ -1092,7 +1420,7 @@
         {/each}
 
         {#if structuralMapReview}
-          <UtilityPanel as="button" interactive className="signal-row" tone={(structuralMapReview.conflicts ?? []).length > 0 || (structuralMapReview.questions ?? []).length > 0 ? 'warn' : structuralMapReview.state === 'accepted' ? 'ok' : 'neutral'} onclick={() => go(currentProjectHref('/structure', activeProjectId))}>
+          <UtilityPanel as="button" interactive dense className="signal-row" tone={(structuralMapReview.conflicts ?? []).length > 0 || (structuralMapReview.questions ?? []).length > 0 ? 'warn' : structuralMapReview.state === 'accepted' ? 'ok' : 'neutral'} onclick={() => go(currentProjectHref('/structure', activeProjectId))}>
             <Icon name="package" size={16} />
             <div>
               <strong>Structure</strong>
@@ -1106,29 +1434,27 @@
           </UtilityPanel>
         {/if}
 
-        <UtilityPanel as="button" interactive className="signal-row" tone={primaryProofPaths.some(item => item.proofPath.status === 'blocked') ? 'warn' : primaryProofPaths.some(item => item.proofPath.status === 'verified') ? 'ok' : 'neutral'} onclick={() => go(currentProjectHref('/work', activeProjectId))}>
+        <UtilityPanel as="button" interactive dense className="signal-row" tone={verificationSignal.tone} onclick={() => go(currentProjectHref('/work', activeProjectId))}>
           <Icon name="check-circle-2" size={16} />
           <div>
             <strong>Verification</strong>
-            {#if primaryProofPaths.length === 0}
-              <span>No verification checks linked yet.</span>
-            {:else}
-              <span>{primaryProofPaths[0].proofPath.title ?? 'Verification check'}</span>
-              <span>{friendlyStatus(primaryProofPaths[0].proofPath.status)}</span>
-            {/if}
+            {#each verificationSignal.lines as line (line)}
+              <span>{line}</span>
+            {/each}
           </div>
         </UtilityPanel>
 
-        <UtilityPanel as="button" interactive className="signal-row" tone="neutral" onclick={() => go(currentProjectHref('/timeline', activeProjectId))}>
+        <UtilityPanel as="button" interactive dense className="signal-row" tone="neutral" onclick={() => go(currentProjectHref('/timeline', activeProjectId))}>
           <Icon name="clock" size={16} />
           <div>
             <strong>Recent changes</strong>
             <span>{recentEvents[0]?.label ?? 'No meaningful recent activity yet.'}</span>
           </div>
         </UtilityPanel>
-      </div>
-    </Card>
-  </section>
+        </div>
+      </Card>
+    </section>
+  {/if}
 </div>
 
 <style>
@@ -1326,19 +1652,39 @@
     line-height: var(--gh-type-line-height-body);
   }
   .motion-list,
-  .signals-grid,
   .blocked-work-list,
   .run-plan-list {
     display: grid;
     gap: var(--s-2);
   }
   .signals-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    align-items: start;
+  }
+  .signals-grid > :global(.signal-row) {
+    flex: 1 1 calc((100% - (2 * var(--s-2))) / 3);
+    block-size: fit-content;
+    min-block-size: 0;
+    align-self: start;
   }
   :global(.signal-row) span {
-    color: var(--text-muted);
+    color: var(--text-soft);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
+  }
+
+  :global(.signal-row) div {
+    align-content: start;
+  }
+
+  :global(.signal-row) div > span:last-child {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
   :global(.signal-row),
   :global(.run-blocker),
@@ -1346,7 +1692,7 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: var(--s-3);
-    align-items: center;
+    align-items: start;
   }
   :global(.signal-row) div,
   :global(.run-blocker) div,
@@ -1359,14 +1705,20 @@
   :global(.run-blocker) strong,
   :global(.run-plan-row) strong {
     color: var(--text);
+    line-height: var(--gh-type-line-height-tight);
     overflow-wrap: anywhere;
+  }
+  .signals-grid > :global(.signal-row--wide) {
+    flex-basis: 100%;
+  }
+  :global(.signal-row--wide div) {
+    max-inline-size: var(--gh-layout-measure-comfortable);
   }
   .motion-list :global(.overview-task-row),
   .blocked-work-list :global(.overview-task-row) {
     min-height: 0;
   }
   :global(.run-blocker) span,
-  :global(.signal-row) span,
   :global(.run-plan-row) span {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
@@ -1407,9 +1759,6 @@
     :global(.orientation-map-card) {
       grid-column: auto;
     }
-    .signals-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
     .overview {
       padding: var(--s-4);
     }
@@ -1419,9 +1768,6 @@
     .overview {
       padding: var(--s-3);
       gap: var(--s-3);
-    }
-    .signals-grid {
-      grid-template-columns: 1fr;
     }
     :global(.live-card) {
       grid-template-columns: auto minmax(0, 1fr);
@@ -1450,5 +1796,21 @@
       width: 1.5rem;
       height: 1.5rem;
     }
+  }
+
+  :global(.overview-signals-card) {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 52rem) {
+    .signals-grid > :global(.signal-row) {
+      flex-basis: calc((100% - var(--s-2)) / 2);
+    }
+    .signals-grid > :global(.signal-row--wide) { flex-basis: 100%; }
+  }
+
+  @container (max-width: 36rem) {
+    .signals-grid > :global(.signal-row),
+    .signals-grid > :global(.signal-row--wide) { flex-basis: 100%; }
   }
 </style>

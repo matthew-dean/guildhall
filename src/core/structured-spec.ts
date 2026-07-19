@@ -69,6 +69,8 @@ export const StructuredAcceptanceCriterion = z.preprocess((value) => {
   verificationMode: z.enum(['automated', 'review', 'human']),
   evidenceHint: cleanedString('Acceptance criterion evidenceHint').optional(),
   negativeCase: cleanedString('Acceptance criterion negativeCase').optional(),
+  expectedExit: z.enum(['zero', 'non_zero']).optional(),
+  expectedOutputIncludes: z.array(z.string()).optional(),
   command: cleanedString('Acceptance criterion command').optional(),
 }).strict())
 export type StructuredAcceptanceCriterion = z.infer<typeof StructuredAcceptanceCriterion>
@@ -143,6 +145,10 @@ function renderAcceptanceCriteria(items: StructuredAcceptanceCriterion[]): strin
       `   Verification: ${item.verificationMode}`,
     ]
     if (item.command) lines.push(`   Command: ${item.command}`)
+    if (item.expectedExit) lines.push(`   Expected exit: ${item.expectedExit}`)
+    if (item.expectedOutputIncludes?.length) {
+      lines.push(`   Expected output includes: ${item.expectedOutputIncludes.join(' | ')}`)
+    }
     if (item.evidenceHint) lines.push(`   Evidence hint: ${item.evidenceHint}`)
     if (item.negativeCase) lines.push(`   Negative case: ${item.negativeCase}`)
     return lines

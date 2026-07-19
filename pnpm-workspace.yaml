@@ -1,2 +1,6 @@
 packages:
   - packages/*
+verifyDepsBeforeRun: false
+allowBuilds:
+  esbuild: set this to true or false
+  svelte-preprocess: set this to true or false

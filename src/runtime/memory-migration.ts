@@ -21,6 +21,7 @@ import {
 } from '@guildhall/config'
 import { compactProjectState, type ProjectStateCompactionResult } from './project-state-compaction.js'
 import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.js'
+import { compactExploringTranscripts, type ExploringHistoryCompactionResult } from '@guildhall/tools'
 
 const execFileP = promisify(execFile)
 
@@ -48,6 +49,7 @@ export interface MemoryMigrationResult {
   gitignoreRoots: string[]
   untrackedIgnoredFiles: string[]
   compaction: ProjectStateCompactionResult | null
+  transcriptCompaction: ExploringHistoryCompactionResult | null
 }
 
 const LEGACY_MEMORY_GITIGNORE_PATTERNS = new Set([
@@ -405,6 +407,7 @@ export async function migrateLegacyMemoryToLocalHistory(
   let gitignoreRoots: string[] = []
   let untrackedIgnoredFiles: string[] = []
   let compaction: ProjectStateCompactionResult | null = null
+  let transcriptCompaction: ExploringHistoryCompactionResult | null = null
 
   if (!dryRun) {
     for (const item of filesToCopy) {
@@ -423,6 +426,7 @@ export async function migrateLegacyMemoryToLocalHistory(
       gitignoreRoots = await updateGitignores(projectRoot)
       untrackedIgnoredFiles = await stopTrackingIgnoredFiles(gitignoreRoots)
     }
+    transcriptCompaction = await compactExploringTranscripts({ projectRoot, dryRun: false })
     compaction = await compactProjectState({ projectRoot, dryRun: false })
     if (repoStateMode(projectRoot) === 'thin') {
       await finalizeThinProjectStateManifest(projectRoot)
@@ -441,5 +445,6 @@ export async function migrateLegacyMemoryToLocalHistory(
     gitignoreRoots,
     untrackedIgnoredFiles,
     compaction,
+    transcriptCompaction,
   }
 }

@@ -31,10 +31,11 @@
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
   import { isWorkerRunnableStatus } from '../lib/task-state.js'
+  import { activeEscalations } from '../lib/escalation.js'
   import { isOperationalReceiptQuestion } from '@guildhall/shared'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
-  import type { AgentQuestion, EventEnvelope, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, Task } from '../lib/types.js'
+  import type { AgentQuestion, EventEnvelope, ProjectDetail, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, Task } from '../lib/types.js'
 
   type MigrationApplyStage = 'idle' | 'applying' | 'refreshing-project' | 'refreshing-inbox' | 'checking-status' | 'complete'
   type MigrationApplyResult = {
@@ -132,6 +133,23 @@
   const pageMode = $derived<'document' | 'surface-fill'>(
     currentView === 'thread' ? 'surface-fill' : 'document',
   )
+  const projectDetailSurface = $derived<'overview' | 'work' | 'map' | null>(
+    currentView === 'overview' ? 'overview' : currentView === 'work' ? 'work' : currentView === 'map' ? 'map' : null,
+  )
+  const surfaceDetailPending = $derived.by(() => {
+    if (!project.surfaceLoading || !detail) return false
+    if (currentView === 'overview' || currentView === 'map') {
+      return !detail.orientationSpine && !detail.tasks
+    }
+    if (currentView === 'work' || currentView === 'planner') return !('tasks' in detail)
+    return false
+  })
+  const routeFocusedTaskId = $derived.by(() => {
+    path.value
+    if (currentView !== 'work' || typeof window === 'undefined') return null
+    const params = new URL(window.location.href).searchParams
+    return params.get('task') ?? params.get('work') ?? null
+  })
   const RAIL_PREVIEW_OPEN_DELAY_MS = 150
   let railPreviewTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   const projectDisplayPath = $derived(formatUserPath(project.detail?.path))
@@ -159,7 +177,9 @@
     }
     inboxLoadInFlight = true
     try {
-      const r = await projectFetch('/api/project/inbox', { cache: 'no-store' }, activeProjectId)
+      const includeHistory = currentView === 'inbox' || currentSub === 'inbox'
+      const endpoint = includeHistory ? '/api/project/inbox?includeHistory=true' : '/api/project/inbox?includeHistory=false'
+      const r = await projectFetch(endpoint, { cache: 'no-store' }, activeProjectId)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as {
         items?: InboxItem[]
@@ -184,6 +204,8 @@
 
   $effect(() => {
     activeProjectId
+    currentView
+    currentSub
     void loadInbox()
   })
   $effect(() => {
@@ -220,13 +242,13 @@
 
   $effect(() => {
     path.value
-    void project.refresh(routeProjectId)
+    void project.refresh(routeProjectId, projectDetailSurface, routeFocusedTaskId)
   })
 
   $effect(() => {
     if (refreshHandle) clearInterval(refreshHandle)
     refreshHandle = setInterval(() => {
-      void project.refresh(activeProjectId)
+      void project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)
     }, 5000)
     return () => {
       if (refreshHandle) {
@@ -369,8 +391,9 @@
     subs?: Array<{ id: string; label: string; path: string }>
   }
 
-  const coordinators = $derived(project.detail?.config?.coordinators ?? [])
-  const needsMeta = $derived(coordinators.length === 0)
+  const needsMeta = $derived(
+    (project.detail?.coordinatorCount ?? project.detail?.config?.coordinators?.length ?? 0) === 0,
+  )
   const entries = $derived<NavEntry[]>([
     {
       id: 'project',
@@ -410,7 +433,9 @@
   ])
   const settingsPath = $derived(currentProjectHref('/settings', activeProjectId))
   const canRenderWithoutProjectDetail = $derived(
-    currentView === 'thread' || currentView === 'inbox',
+    currentView === 'thread' ||
+    currentView === 'inbox' ||
+    currentView === 'release',
   )
   const showingCompactThreadDetail = $derived(
     railForcedCollapsed && currentView === 'thread' && navContextMode === 'detail',
@@ -712,15 +737,57 @@
     const paths = migrationApplyResult?.applied?.flatMap(item => item.affectedPaths ?? []) ?? []
     return [...new Set(paths)].slice(0, 8)
   })
+  function orientationLabel(value: unknown): string | null {
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      return trimmed.length > 0 ? trimmed : null
+    }
+    if (value && typeof value === 'object') {
+      const label = (value as { label?: unknown }).label
+      return typeof label === 'string' && label.trim().length > 0 ? label.trim() : null
+    }
+    return null
+  }
+  const allTerminalReviewNotice = $derived.by(() => {
+    if (!allTerminalStart) return null
+    // Source-map gaps describe documentation provenance, not a release
+    // blocker. A closed release must remain closed in the shell even when its
+    // descriptive spine still contains non-blocking source cleanup notes.
+    if (detail?.releaseReadiness?.ready === true) return null
+    const spine = detail?.orientationSpine
+    const releaseBlockerCount = detail?.releaseReadiness?.releaseBlockers?.length ?? 0
+    const actionableGap = spine?.gaps?.find(gap => [
+      'source_conflict',
+      'missing_charter',
+      'missing_execution_boundary',
+      'needs_breakdown',
+    ].includes(gap.kind))
+    const gapCount = releaseBlockerCount > 0 || actionableGap ? Math.max(1, releaseBlockerCount) : 0
+    const topBlocker = releaseBlockerCount > 0
+      ? orientationLabel(spine?.summary?.topBlocker)
+      : orientationLabel(actionableGap?.label)
+    if (gapCount <= 0 && !topBlocker) return null
+    return {
+      message: orientationLabel(spine?.summary?.headline) ?? 'Current scope needs review.',
+      detail: topBlocker ?? orientationLabel(spine?.summary?.nextAction),
+    }
+  })
   const allTerminalReadinessMessage = $derived(
-    allTerminalStart
+    allTerminalStart && !allTerminalReviewNotice
       ? startReadiness?.message ?? 'All tasks are already finished.'
       : null,
   )
   const projectTicker = $derived(buildProjectTicker(detail, latestTickerEvent, new Date(tickerNow)))
+  const currentScopedTasks = $derived.by(() => {
+    const tasks = detail?.tasks ?? []
+    const includedRows = detail?.orientationSpine?.scopeRows?.filter(row => row.scope === 'included') ?? []
+    if (includedRows.length === 0) return tasks
+    const includedTaskIds = new Set(includedRows.map(row => row.taskId))
+    return tasks.filter(task => includedTaskIds.has(task.id))
+  })
   const currentStopSummary = $derived.by(() => {
     if (runStatus === 'running' || runStatus === 'stopping') return null
-    const tasks = detail?.tasks ?? []
+    const tasks = currentScopedTasks
     if (tasks.length === 0) return null
     const counts = {
       active: 0,
@@ -738,7 +805,7 @@
       const status = task.status ?? ''
       const closed = isClosedTaskStatus(status)
       if (hasVisibleUnansweredQuestion(task)) counts.waitingOnUser += 1
-      if (!closed && (task.escalations ?? []).some(escalation => !escalation.resolvedAt)) counts.escalated += 1
+      if (!closed && activeEscalations(task).length > 0) counts.escalated += 1
       if (!closed && status === 'spec_review') counts.awaitingApproval += 1
       if (!closed && status === 'import_draft') counts.draftReview += 1
       if (status === 'blocked') counts.blocked += 1
@@ -784,12 +851,12 @@
     return null
   })
   const hasCurrentQueueActivity = $derived.by(() => {
-    const tasks = detail?.tasks ?? []
+    const tasks = currentScopedTasks
     return tasks.some((task) => {
       const status = task.status ?? ''
       if (isClosedTaskStatus(status)) return false
       const hasUnansweredQuestion = hasVisibleUnansweredQuestion(task)
-      const hasOpenEscalation = (task.escalations ?? []).some((escalation) => !escalation.resolvedAt)
+      const hasOpenEscalation = activeEscalations(task).length > 0
       return (
         hasUnansweredQuestion ||
         hasOpenEscalation ||
@@ -836,8 +903,10 @@
   }
   const runStopSummaryText = $derived.by(() => {
     if (runStatus === 'running' || runStatus === 'stopping') return null
+    if (allTerminalStart) return null
     const summary = runStopSummary
     if (!summary?.stopMessage) return null
+    if (startReadinessNoticeHref && summary.stopReason === 'all_terminal') return null
     const counts = summary.idleSummary?.counts
     if (!counts) {
       if (summary.stopReason === 'one_task') return 'One task finished.'
@@ -1089,6 +1158,7 @@
   function startReadinessActionLabel(message: string | undefined): string {
     if (/question|answer/i.test(message ?? '')) return 'Answer question'
     if (/draft/i.test(message ?? '')) return 'Review drafts'
+    if (/proof/i.test(message ?? '')) return 'Attach proof'
     if (/spec/i.test(message ?? '')) return /\b\d+\s+specs\b/i.test(message ?? '') ? 'Review next spec' : 'Review spec'
     if (/brief/i.test(message ?? '')) return 'Review brief'
     if (/recover|blocked|escalation/i.test(message ?? '')) return 'Review recovery'
@@ -1512,6 +1582,14 @@
             <strong>{allTerminalReadinessMessage}</strong>
           </AlertBand>
         {/if}
+        {#if detail && allTerminalReviewNotice}
+          <AlertBand tone="warn" role="alert" density="compact" ariaLabel="Review current scope">
+            <strong>{allTerminalReviewNotice.message}</strong>
+            {#if allTerminalReviewNotice.detail}
+              <span>{allTerminalReviewNotice.detail}</span>
+            {/if}
+          </AlertBand>
+        {/if}
         {#each shellAttentionNotices as notice (notice.key ?? notice.id)}
           <AlertBand
             tone={notice.tone}
@@ -1554,11 +1632,32 @@
                 {@const NeedsYouTab = module.default}
                 <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
               {/await}
+            {:else if currentView === 'release'}
+              {#await loadReleaseTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const ReleaseTab = module.default}
+                <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} />
+              {/await}
             {:else}
               <div class="page-centered page-centered-inline">
                 <p class="muted">Loading project...</p>
               </div>
             {/if}
+          {:else if surfaceDetailPending}
+            <div class="page-centered page-centered-inline">
+              <NoticeBand
+                tone="neutral"
+                role="status"
+                density="compact"
+                label="Project summary ready"
+                title={detail.name ?? detail.id ?? 'Project'}
+              >
+                {detail.summary ?? 'The current project summary is ready.'} Loading the selected view...
+              </NoticeBand>
+            </div>
           {:else if currentView === 'overview'}
             {#if currentSub === 'inbox'}
               {#await loadNeedsYouTab()}
@@ -1648,7 +1747,11 @@
               </div>
             {:then module}
               {@const ProjectMapTab = module.default}
-              <ProjectMapTab {detail} activeProjectId={activeProjectId} />
+              <ProjectMapTab
+                {detail}
+                activeProjectId={activeProjectId}
+                onReleaseSelected={() => project.refresh(activeProjectId, 'map')}
+              />
             {/await}
           {:else if currentView === 'structure'}
             {#await loadProjectStructurePanel()}
@@ -1675,7 +1778,7 @@
               </div>
             {:then module}
               {@const ReleaseTab = module.default}
-              <ReleaseTab subView={currentSub} />
+              <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} />
             {/await}
         {:else if currentView === 'settings'}
           {#await loadSettingsTab()}
@@ -1697,7 +1800,7 @@
           <span class="project-ticker-message">
             {projectTicker.message}
             {#if projectTicker.detail}
-              <span class="project-ticker-detail"> - {projectTicker.detail}</span>
+              {' - '}{projectTicker.detail}
             {/if}
           </span>
         </div>

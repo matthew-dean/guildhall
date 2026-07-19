@@ -4,9 +4,18 @@ import os from 'node:os'
 import path from 'node:path'
 
 import type { Task, TaskQueue } from '@guildhall/core'
-import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
+import {
+  promoteProjectStateDatabaseAuthority,
+  projectStatePathFromMemoryDir,
+  readTaskEvidence,
+} from '@guildhall/sessions'
 
 import { reviewInProcessWorkForGuildhallImprovements } from '../improvement-review.js'
+import {
+  readProjectTaskQueueForMutationSync,
+  readProjectTaskQueueSync,
+  writeProjectTaskQueueWithSummary,
+} from '../project-state-boundary.js'
 
 describe('Guildhall improvement review', () => {
   it('adds conservative advisory notes for active work touched by known Guildhall improvements', async () => {
@@ -33,15 +42,14 @@ describe('Guildhall improvement review', () => {
       })
 
       expect(result.notedTaskIds).toEqual(['task-release-proof'])
-      const queue = await readQueue(memoryDir)
-      const release = queue.tasks.find(candidate => candidate.id === 'task-release-proof')
-      expect(release?.notes).toHaveLength(1)
-      expect(release?.notes[0]).toMatchObject({
+      const evidence = await readTaskEvidence(memoryDir, 'task-release-proof', { kind: 'note' })
+      expect(evidence).toHaveLength(1)
+      expect(evidence[0]?.payload).toMatchObject({
         agentId: 'guildhall-improvement-review',
         role: 'improvement-review',
       })
-      expect(release?.notes[0]?.content).toContain('[guildhall-improvement-review:proof-path]')
-      expect(queue.tasks.find(candidate => candidate.id === 'task-done-proof')?.notes).toHaveLength(0)
+      expect(evidence[0]?.payload.content).toContain('[guildhall-improvement-review:proof-path]')
+      expect(await readTaskEvidence(memoryDir, 'task-done-proof', { kind: 'note' })).toHaveLength(0)
     } finally {
       await fs.rm(memoryDir, { recursive: true, force: true })
     }
@@ -72,8 +80,42 @@ describe('Guildhall improvement review', () => {
       expect(first.notedTaskIds).toEqual(['task-one', 'task-two'])
       expect(second.notedTaskIds).toEqual(['task-three'])
       expect(second.skippedTaskIds).toEqual(['task-one', 'task-two'])
-      const queue = await readQueue(memoryDir)
-      expect(queue.tasks.flatMap(candidate => candidate.notes).filter(note => note.role === 'improvement-review')).toHaveLength(3)
+      const evidence = await Promise.all(['task-one', 'task-two', 'task-three'].map(taskId =>
+        readTaskEvidence(memoryDir, taskId, { kind: 'note' }),
+      ))
+      expect(evidence.flat().filter(event => event.payload.role === 'improvement-review')).toHaveLength(3)
+    } finally {
+      await fs.rm(memoryDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not rewrite promoted task detail when recording an advisory note', async () => {
+    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-improvement-review-db-'))
+    try {
+      await writeQueue(memoryDir, [
+        task({
+          id: 'task-db-proof',
+          title: 'Prepare release proof',
+          description: 'Run browser smoke verification and capture release evidence.',
+          status: 'in_progress',
+        }),
+      ])
+
+      await reviewInProcessWorkForGuildhallImprovements({
+        memoryDir,
+        maxDesignFindings: 0,
+        now: () => '2026-05-29T12:00:00.000Z',
+      })
+
+      const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+      const queue = readProjectTaskQueueForMutationSync(tasksPath).queue as TaskQueue
+      expect(queue.tasks[0]?.notes.filter(note => note.role === 'improvement-review')).toEqual([])
+      expect(await readTaskEvidence(memoryDir, 'task-db-proof', { kind: 'note' })).toEqual([
+        expect.objectContaining({
+          kind: 'note',
+          payload: expect.objectContaining({ role: 'improvement-review' }),
+        }),
+      ])
     } finally {
       await fs.rm(memoryDir, { recursive: true, force: true })
     }
@@ -243,11 +285,12 @@ async function writeQueue(memoryDir: string, tasks: Task[]): Promise<void> {
   }
   const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
   await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
+  writeProjectTaskQueueWithSummary(tasksPath, queue, { projectRoot: memoryDir })
+  promoteProjectStateDatabaseAuthority(memoryDir)
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  return JSON.parse(await fs.readFile(projectStatePathFromMemoryDir(memoryDir, 'TASKS.json'), 'utf-8')) as TaskQueue
+  return readProjectTaskQueueSync(projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')) as TaskQueue
 }
 
 function task(overrides: Partial<Task> & Pick<Task, 'id' | 'title' | 'description' | 'status'>): Task {

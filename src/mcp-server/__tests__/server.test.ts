@@ -1,8 +1,18 @@
+import { DatabaseSync } from 'node:sqlite'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { getProjectSystemStatePath } from '@guildhall/sessions'
+import type { Task } from '@guildhall/core'
+import {
+  getProjectSystemStatePath,
+  appendTaskEvidence as appendStoredTaskEvidence,
+  projectStateDatabasePath,
+  promoteProjectStateDatabaseAuthority,
+  readProjectStateDatabaseTaskEvidenceCurrent,
+  readProjectStateDatabaseTaskPointWithRevision,
+} from '@guildhall/sessions'
+import { writeProjectTaskQueueWithSummary } from '@guildhall/runtime/project-state-boundary'
 
 import {
   appendTaskEvidence,
@@ -18,10 +28,15 @@ import {
   rejectMcpExternalMemoryBridgeRecord,
   reviewMcpExternalMemoryBridgeRecord,
   updateMcpMemoryStatus,
+  writeTasks,
 } from '../index.js'
 
+function asTasks(tasks: unknown[]): Task[] {
+  return tasks as Task[]
+}
+
 describe('Guildhall MCP tools', () => {
-  it('appends evidence to PROGRESS.md with MCP provenance', async () => {
+  it('appends evidence to PROGRESS.md with MCP provenance before promotion', async () => {
     const root = mkdtempSync(join(tmpdir(), 'guildhall-mcp-tools-'))
     try {
       mkdirSync(join(root, '.guildhall'), { recursive: true })
@@ -39,6 +54,42 @@ describe('Guildhall MCP tools', () => {
       expect(progress).toContain('task-001')
       expect(progress).toContain('External agent read the flow audit')
       expect(progress).toContain('source: claude-code')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('writes promoted evidence through SQLite without touching PROGRESS.md', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'guildhall-mcp-tools-promoted-'))
+    try {
+      mkdirSync(join(root, '.guildhall'), { recursive: true })
+      const progressPath = getProjectSystemStatePath(root, 'PROGRESS.md')
+      mkdirSync(dirname(progressPath), { recursive: true })
+      writeFileSync(progressPath, '# Legacy progress\n\nThis must remain untouched.\n', 'utf8')
+      promoteProjectStateDatabaseAuthority(root)
+      const ctx = {
+        projectRoot: root,
+        projectStateDir: join(root, '.guildhall'),
+        runtime: { kind: 'host' as const },
+      }
+
+      await appendTaskEvidence(ctx, {
+        taskId: 'task-001',
+        summary: 'Promoted evidence belongs in the normalized current projection.',
+        source: 'claude-code',
+      })
+
+      expect(readFileSync(progressPath, 'utf8')).toBe('# Legacy progress\n\nThis must remain untouched.\n')
+      expect(readProjectStateDatabaseTaskEvidenceCurrent(root, 'task-001')).toMatchObject({
+        byKind: {
+          note: [expect.objectContaining({
+            payload: expect.objectContaining({
+              content: 'Promoted evidence belongs in the normalized current projection.',
+              source: 'claude-code',
+            }),
+          })],
+        },
+      })
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -258,5 +309,119 @@ describe('Guildhall MCP server manifest', () => {
       'guildhall.review_external_memory_bridge_record',
       'guildhall.reject_external_memory_bridge_record',
     ])
+  })
+})
+
+describe('Guildhall MCP contract task writes', () => {
+  it('uses normalized task points for promoted apply/revert updates and preserves evidence-owned detail', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'guildhall-mcp-contract-promoted-'))
+    try {
+      const projectStateDir = join(root, '.guildhall')
+      mkdirSync(projectStateDir, { recursive: true })
+      const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+      const initialTask = {
+        id: 'task-contract',
+        title: 'Link the primitive',
+        description: 'Keep the task definition stable while delivery changes.',
+        status: 'ready',
+        delivery: { driver: 'knit', usesPrimitives: [] },
+      }
+      const untouchedTask = {
+        id: 'task-untouched',
+        title: 'Leave this task alone',
+        status: 'ready',
+        notes: [{ id: 'note-2', content: 'Untouched evidence.' }],
+      }
+      const initialQueue = {
+        version: 1,
+        lastUpdated: '2026-07-15T00:00:00.000Z',
+        releases: [],
+        tasks: [initialTask, untouchedTask],
+      }
+
+      writeProjectTaskQueueWithSummary(tasksPath, initialQueue, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+      await appendStoredTaskEvidence(root, 'task-contract', {
+        id: 'note-1',
+        kind: 'note',
+        recordedAt: '2026-07-15T00:00:01.000Z',
+        payload: { id: 'note-1', content: 'Evidence-owned note.' },
+      })
+      await appendStoredTaskEvidence(root, 'task-contract', {
+        id: 'gate-1',
+        kind: 'gate_result',
+        recordedAt: '2026-07-15T00:00:02.000Z',
+        payload: { command: 'pnpm test', ok: true },
+      })
+      await appendStoredTaskEvidence(root, 'task-contract', {
+        id: 'review-1',
+        kind: 'review_verdict',
+        recordedAt: '2026-07-15T00:00:03.000Z',
+        payload: { reviewer: 'owner', verdict: 'accepted' },
+      })
+      const beforeFile = readFileSync(tasksPath, 'utf8')
+      const beforeDatabase = new DatabaseSync(projectStateDatabasePath(root), { readOnly: true })
+      const untouchedBytes = beforeDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-untouched') as { payload_gzip: Uint8Array }
+      beforeDatabase.close()
+
+      const appliedTask = {
+        ...initialTask,
+        delivery: { driver: 'knit', usesPrimitives: ['menu-item'] },
+      }
+      writeTasks(root, projectStateDir, asTasks([initialTask, untouchedTask]), asTasks([appliedTask, untouchedTask]))
+
+      const appliedPoint = readProjectStateDatabaseTaskPointWithRevision(tasksPath, 'task-contract')
+      expect(appliedPoint?.task.definition).toMatchObject({
+        delivery: { usesPrimitives: ['menu-item'] },
+      })
+      expect(appliedPoint?.task.definition).not.toHaveProperty('notes')
+      expect(appliedPoint?.task.definition).not.toHaveProperty('gateResults')
+      expect(appliedPoint?.task.definition).not.toHaveProperty('reviewVerdicts')
+      expect(readProjectStateDatabaseTaskEvidenceCurrent(root, 'task-contract')).toMatchObject({
+        byKind: {
+          note: [expect.objectContaining({ payload: expect.objectContaining({ content: 'Evidence-owned note.' }) })],
+          gate_result: [expect.objectContaining({ payload: expect.objectContaining({ command: 'pnpm test' }) })],
+          review_verdict: [expect.objectContaining({ payload: expect.objectContaining({ reviewer: 'owner', verdict: 'accepted' }) })],
+        },
+      })
+      expect(readFileSync(tasksPath, 'utf8')).toBe(beforeFile)
+      const afterApplyDatabase = new DatabaseSync(projectStateDatabasePath(root), { readOnly: true })
+      const untouchedAfterApply = afterApplyDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-untouched') as { payload_gzip: Uint8Array }
+      expect(Buffer.from(untouchedAfterApply.payload_gzip)).toEqual(Buffer.from(untouchedBytes.payload_gzip))
+      afterApplyDatabase.close()
+
+      writeTasks(root, projectStateDir, asTasks([appliedTask, untouchedTask]), asTasks([initialTask, untouchedTask]))
+      expect(readProjectStateDatabaseTaskPointWithRevision(tasksPath, 'task-contract')?.task.definition).toMatchObject({
+        delivery: initialTask.delivery,
+      })
+      expect(readProjectStateDatabaseTaskEvidenceCurrent(root, 'task-contract')).toMatchObject({
+        byKind: {
+          note: [expect.objectContaining({ payload: expect.objectContaining({ content: 'Evidence-owned note.' }) })],
+          gate_result: [expect.objectContaining({ payload: expect.objectContaining({ command: 'pnpm test' }) })],
+          review_verdict: [expect.objectContaining({ payload: expect.objectContaining({ reviewer: 'owner', verdict: 'accepted' }) })],
+        },
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses an unpromoted contract task write instead of replacing the legacy queue', () => {
+    const root = mkdtempSync(join(tmpdir(), 'guildhall-mcp-contract-migration-'))
+    try {
+      const projectStateDir = join(root, '.guildhall')
+      mkdirSync(projectStateDir, { recursive: true })
+      const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+      const before = { id: 'task-contract', title: 'Legacy task', status: 'ready', delivery: { driver: 'knit' } }
+      const after = { ...before, delivery: { driver: 'looma' } }
+      mkdirSync(dirname(tasksPath), { recursive: true })
+      writeFileSync(tasksPath, JSON.stringify({ tasks: [before] }), 'utf8')
+      const beforeFile = readFileSync(tasksPath, 'utf8')
+
+      expect(() => writeTasks(root, projectStateDir, asTasks([before]), asTasks([after]))).toThrow(/project-state migration/i)
+      expect(readFileSync(tasksPath, 'utf8')).toBe(beforeFile)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

@@ -63,6 +63,11 @@ const PROMPT_TOO_LONG_SIGNATURES = [
   'maximum context length',
 ]
 
+// A repeated failed tool call gets a few chances to change course, then the
+// turn ends so the orchestrator can recover instead of spinning in one model
+// session forever.
+const REPEATED_UNPRODUCTIVE_TOOL_LIMIT = 4
+
 function invalidToolInputMessage(toolName: string, error: { message: string; issues?: Array<{ path?: Array<string | number>; message?: string }> }): string {
   if (toolName === 'edit-file') {
     const missingOldString = error.issues?.some((issue) => issue.path?.includes('oldString')) ?? false
@@ -412,6 +417,55 @@ function currentAgentId(
   return String(toolMetadata?.['current_agent_id'] ?? '').trim()
 }
 
+function canonicalRecoveryToolName(toolName: string): string {
+  return toolName === 'run-shell-command' ? 'shell' : toolName
+}
+
+function currentRecoveryAllowedTools(
+  toolMetadata: Record<string, unknown> | undefined,
+): Set<string> {
+  const raw = toolMetadata?.['current_task_recovery_allowed_tools']
+  if (!Array.isArray(raw)) return new Set()
+  return new Set(
+    raw
+      .filter((value): value is string => typeof value === 'string')
+      .map(value => canonicalRecoveryToolName(value.trim()))
+      .filter(Boolean),
+  )
+}
+
+function disallowedRecoveryToolCalls(
+  toolMetadata: Record<string, unknown> | undefined,
+  toolCalls: readonly ToolUseBlock[],
+): ToolUseBlock[] {
+  const allowedTools = currentRecoveryAllowedTools(toolMetadata)
+  if (allowedTools.size === 0) return []
+  return toolCalls.filter((toolCall) => !allowedTools.has(canonicalRecoveryToolName(toolCall.name)))
+}
+
+function recoveryToolRefusalMessage(
+  toolMetadata: Record<string, unknown> | undefined,
+  toolCalls: readonly ToolUseBlock[],
+): string {
+  const playbook = String(toolMetadata?.['current_task_recovery_playbook'] ?? 'recovery').trim() || 'recovery'
+  const allowedTools = [...currentRecoveryAllowedTools(toolMetadata)].sort()
+  const attemptedTools = [...new Set(toolCalls.map(toolCall => canonicalRecoveryToolName(toolCall.name)))].sort()
+  return [
+    `The active ${playbook} recovery playbook does not allow ${attemptedTools.join(', ')}.`,
+    `Allowed tools for this recovery pass: ${allowedTools.join(', ')}.`,
+    'Do not route around the recovery contract with read-only or shell commands. Use one allowed tool now, or raise-escalation if the recovery playbook is no longer valid.',
+  ].join(' ')
+}
+
+function readOnlyBudgetRefusalMessage(
+  toolMetadata: Record<string, unknown> | undefined,
+): string {
+  if (currentAgentId(toolMetadata) === 'worker-agent') {
+    return 'Research budget exhausted for this worker turn. Do not call more read-only tools now. Use edit-file or write-file for the next concrete implementation change, write-checkpoint or update-task if implementation progress is already complete, or raise-escalation if the task is genuinely blocked.'
+  }
+  return 'Research budget exhausted for this intake turn. Do not call more read-only tools now. Use update-product-brief, post-user-question, update-task, or raise-escalation instead.'
+}
+
 function strictLikelyTargetMutationGuardsEnabled(
   toolMetadata: Record<string, unknown> | undefined,
 ): boolean {
@@ -450,7 +504,8 @@ function looksLikeStructuredSelfCritiqueContent(content: string): boolean {
   }
   const hasAcceptanceCoverage =
     /for each acceptance criterion:/i.test(normalized) ||
-    /(?:^|\n)\s*(?:-\s*)?(?:\[[^\]]+\]|ac-\d+)(?:\s*\([^)\n]+\))?\s*:\s*(met|not met)\b/im.test(normalized)
+    /(?:^|\n)\s*(?:\*\*)?acceptance criteria:?/i.test(normalized) ||
+    /(?:^|\n)\s*(?:-\s*)?(?:\[[^\]]+\]|ac[-\s]?\d+)(?:\s*\([^)\n]+\))?\s*:\s*(met|not met)\b/im.test(normalized)
   const hasMinimumScope =
     /(?:^|\n)\s*(?:\*\*)?-?\s*(?:minimum|minimal|mini)-scope check:\s*(?:\*\*)?/i.test(normalized)
   const hasProofPacket =
@@ -463,14 +518,46 @@ function looksLikeStructuredSelfCritiqueContent(content: string): boolean {
   return hasAcceptanceCoverage && hasMinimumScope && hasProofPacket && hasVerificationProof && hasDiffScope
 }
 
+function parseJsonShapedNoteContent(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{')) return trimmed
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const content = (parsed as Record<string, unknown>)['content']
+      if (typeof content === 'string' && content.trim().length > 0) return content.trim()
+    }
+  } catch {
+    const match = /"content"\s*:\s*"([\s\S]*)"\s*}\s*$/.exec(trimmed)
+    if (match?.[1]) {
+      return match[1]
+        .replace(/\\"/g, '"')
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t')
+        .replace(/\\\\/g, '\\')
+        .trim()
+    }
+  }
+  return trimmed
+}
+
+function structuredSelfCritiqueContentFromUpdateTaskNote(note: unknown): string {
+  if (!note) return ''
+  if (typeof note === 'string') {
+    const content = parseJsonShapedNoteContent(note)
+    return looksLikeStructuredSelfCritiqueContent(content) ? content : ''
+  }
+  if (typeof note !== 'object' || Array.isArray(note)) return ''
+  const content = (note as Record<string, unknown>)['content']
+  if (typeof content !== 'string') return ''
+  const normalized = parseJsonShapedNoteContent(content)
+  return looksLikeStructuredSelfCritiqueContent(normalized) ? normalized : ''
+}
+
 function structuredSelfCritiqueFromUpdateTaskInput(
   input: Record<string, unknown>,
 ): string {
-  const note = input['note']
-  if (!note || typeof note !== 'object' || Array.isArray(note)) return ''
-  const rec = note as Record<string, unknown>
-  const content = typeof rec['content'] === 'string' ? rec['content'].trim() : ''
-  return looksLikeStructuredSelfCritiqueContent(content) ? content : ''
+  return structuredSelfCritiqueContentFromUpdateTaskNote(input['note'])
 }
 
 function checkpointFilesTouched(
@@ -494,6 +581,21 @@ type VerificationHistoryEntry = {
   passed: boolean
   observedAt: string
   summary?: string
+}
+
+function verificationOutputSummary(output: string, succeeded: boolean): string {
+  const lines = output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (lines.length === 0) return ''
+  if (succeeded) return lines[0]!.slice(0, 240)
+
+  const actionable = lines.filter((line) =>
+    /error|failed|failure|broken link|unable to build|cannot find|not found|syntaxerror|typeerror|referenceerror|assertionerror|->/i.test(line),
+  )
+  const selected = actionable.length > 0 ? actionable : lines
+  return selected.slice(0, 8).join('\n').slice(0, 1200)
 }
 
 function verificationHistory(
@@ -547,13 +649,13 @@ function rememberVerificationResult(
     authoritative.some((candidate) => candidate === command)
   if (!shouldTrack) return
 
-  const outputFirstLine = params.shellOutput.trim().split('\n')[0]?.trim() ?? ''
+  const outputSummary = verificationOutputSummary(params.shellOutput, params.shellSucceeded)
   const bucket = verificationHistory(toolMetadata)
   const nextEntry: VerificationHistoryEntry = {
     command,
     passed: params.shellSucceeded,
     observedAt: new Date().toISOString(),
-    ...(outputFirstLine ? { summary: outputFirstLine.slice(0, 240) } : {}),
+    ...(outputSummary ? { summary: outputSummary } : {}),
   }
   const filtered = bucket.filter((entry) => entry.command !== command)
   filtered.push(nextEntry)
@@ -1281,6 +1383,8 @@ export async function* runQuery(
   let noProgressToolTurns = 0
   let noProgressReadOnlyGraceTurns = 0
   let repeatedReadOnlyRefusals = 0
+  let repeatedRecoveryToolRefusals = 0
+  let repeatedSelfReportedFileMutationFailures = 0
   const initialCheckpointNextAction = latestCheckpointNextAction(context.toolMetadata)
   const initialAuthoritativeVerificationCommands = context.toolMetadata
     ? (parseAuthoritativeCommands(context.toolMetadata) ?? [])
@@ -1542,6 +1646,111 @@ export async function* runQuery(
       return
     }
     sawToolCall = true
+    const disallowedRecoveryTools = disallowedRecoveryToolCalls(context.toolMetadata, toolCalls)
+    if (disallowedRecoveryTools.length > 0) {
+      repeatedRecoveryToolRefusals += 1
+      const refusalMessage = recoveryToolRefusalMessage(context.toolMetadata, disallowedRecoveryTools)
+      const toolResults: ToolResultBlock[] = toolCalls.map((tc) => ({
+        type: 'tool_result',
+        tool_use_id: tc.id,
+        content: refusalMessage,
+        is_error: true,
+      }))
+      for (let i = 0; i < toolCalls.length; i++) {
+        const tc = toolCalls[i]!
+        const result = toolResults[i]!
+        yield {
+          event: { type: 'tool_execution_started', tool_name: tc.name, tool_input: tc.input },
+          usage: null,
+        }
+        yield {
+          event: {
+            type: 'tool_execution_completed',
+            tool_name: tc.name,
+            output: result.content,
+            is_error: true,
+          },
+          usage: null,
+        }
+      }
+      messages.push({ role: 'user', content: toolResults })
+      yield {
+        event: {
+          type: 'status',
+          message: 'Assistant tried to use a tool outside the active recovery playbook; refusing the tool call and requiring an allowed recovery action.',
+        },
+        usage: null,
+      }
+      if (repeatedRecoveryToolRefusals >= 2) {
+        yield {
+          event: {
+            type: 'status',
+            message: 'Assistant kept trying tools outside the active recovery playbook; ending the turn so the coordinator can treat this as recovery no-progress.',
+          },
+          usage: null,
+        }
+        return
+      }
+      continue
+    }
+    repeatedRecoveryToolRefusals = 0
+    const selfReportedFileMutationFailure = fileMutationFailureSelfReport(assistantText)
+    const hasFileMutationToolCall = toolCalls.some((tc) => isFileMutationToolName(tc.name))
+    if (selfReportedFileMutationFailure && hasFileMutationToolCall) {
+      repeatedSelfReportedFileMutationFailures += 1
+      const refusalMessage = [
+        'You just said the previous file mutation was wrong, incomplete, truncated, or targeted at the wrong path.',
+        'Do not immediately try another file mutation.',
+        'First use read-file on the exact target path to ground the current file contents, or use write-checkpoint / raise-escalation if the path or contents are no longer safe.',
+      ].join(' ')
+      for (const tc of toolCalls) {
+        yield {
+          event: { type: 'tool_execution_started', tool_name: tc.name, tool_input: tc.input },
+          usage: null,
+        }
+        yield {
+          event: {
+            type: 'tool_execution_completed',
+            tool_name: tc.name,
+            output: refusalMessage,
+            is_error: true,
+          },
+          usage: null,
+        }
+      }
+      messages.push({
+        role: 'user',
+        content: toolCalls.map((tc) => ({
+          type: 'tool_result',
+          tool_use_id: tc.id,
+          content: refusalMessage,
+          is_error: true,
+        })),
+      })
+      yield {
+        event: {
+          type: 'status',
+          message:
+            'Assistant self-reported a failed file mutation and tried another mutation immediately; requiring a grounded read, checkpoint, or escalation first.',
+        },
+        usage: null,
+      }
+      if (repeatedSelfReportedFileMutationFailures >= 2) {
+        yield {
+          event: {
+            type: 'status',
+            message:
+              'Assistant kept retrying file mutations after self-reporting mutation failure; ending the turn so the orchestrator can treat the work as stalled instead of burning tokens.',
+          },
+          usage: null,
+        }
+        return
+      }
+      continue
+    }
+    if (!selfReportedFileMutationFailure) {
+      repeatedSelfReportedFileMutationFailures = 0
+    }
     const hadProgressToolCall =
       progressToolNames.size > 0 && toolCalls.some((tc) => progressToolNames.has(tc.name))
     if (hadProgressToolCall) {
@@ -1758,7 +1967,7 @@ export async function* runQuery(
             `The latest checkpoint already names your next step: ${checkpointNextAction}. If you use shell here, it must be one of the authoritative verification commands (${authoritativeVerificationCommands.join(', ')}). Otherwise mutate a checkpoint-scoped file or raise-escalation.`)
         : shouldRefuseAfterInspectingLikelyTarget
           ? `You have already inspected an authoritative likely target file at ${inspectedLikelyTarget}. Do not do more read-only exploration now. ${likelyTargetMutationDirective({ likelyTargetFiles, inspectedLikelyTarget })} Or raise-escalation if you still cannot proceed.`
-          : 'Research budget exhausted for this intake turn. Do not call more read-only tools now. Use update-product-brief, post-user-question, update-task, or raise-escalation instead.'
+          : readOnlyBudgetRefusalMessage(context.toolMetadata)
       const toolResults: ToolResultBlock[] = toolCalls.map((tc) => ({
         type: 'tool_result',
         tool_use_id: tc.id,
@@ -1968,6 +2177,20 @@ export async function* runQuery(
           },
           usage: null,
         }
+        if (
+          (repeatedToolCallCounts.get(repeatedToolCallSignature(context.cwd, tc)) ?? 0) >=
+          REPEATED_UNPRODUCTIVE_TOOL_LIMIT
+        ) {
+          yield {
+            event: {
+              type: 'status',
+              message:
+                'The same tool call kept failing; ending this turn so Guildhall can recover the task.',
+            },
+            usage: null,
+          }
+          return
+        }
       }
     } else {
       for (const tc of toolCalls) {
@@ -2037,6 +2260,20 @@ export async function* runQuery(
           },
           usage: null,
         }
+      }
+      if (toolCalls.some((tc) =>
+        (repeatedToolCallCounts.get(repeatedToolCallSignature(context.cwd, tc)) ?? 0) >=
+        REPEATED_UNPRODUCTIVE_TOOL_LIMIT
+      )) {
+        yield {
+          event: {
+            type: 'status',
+            message:
+              'The same tool call kept failing; ending this turn so Guildhall can recover the task.',
+          },
+          usage: null,
+        }
+        return
       }
     }
 
@@ -2133,14 +2370,18 @@ function stableToolInput(input: Record<string, unknown>): string {
   )
 }
 
+function repeatedToolCallSignature(cwd: string, toolCall: ToolUseBlock): string {
+  const hydratedInput = hydrateProjectToolInput(toolCall.name, cwd, toolCall.input)
+  return `${toolCall.name}:${stableToolInput(hydratedInput)}`
+}
+
 function repeatedToolResultNudge(
   repeatedToolCallCounts: Map<string, number>,
   cwd: string,
   toolCall: ToolUseBlock,
   result: ToolResultBlock,
 ): string | null {
-  const hydratedInput = hydrateProjectToolInput(toolCall.name, cwd, toolCall.input)
-  const signature = `${toolCall.name}:${stableToolInput(hydratedInput)}`
+  const signature = repeatedToolCallSignature(cwd, toolCall)
   const unproductive = result.is_error || /^\s*\(no matches\)\s*$/i.test(result.content)
   if (!unproductive) {
     repeatedToolCallCounts.delete(signature)
@@ -2231,6 +2472,25 @@ function isMalformedEditFileToolResult(toolName: string, result: ToolResultBlock
   if (toolName !== 'edit-file' || !result.is_error) return false
   const message = result.content
   return message.includes('Invalid input for edit-file')
+}
+
+function fileMutationFailureSelfReport(text: string): boolean {
+  const normalized = text.toLowerCase()
+  if (!normalized) return false
+  if (!/\b(file|edit-file|write-file|path|write|wrote|mutation|content)\b/.test(normalized)) {
+    return false
+  }
+  return (
+    /\bwrong path\b/.test(normalized) ||
+    /\bincorrect path\b/.test(normalized) ||
+    /\bpath mismatch\b/.test(normalized) ||
+    /\bonly wrote\b.*\b(fragment|partial|part)\b/.test(normalized) ||
+    /\b(fragment|partial|truncated)\b/.test(normalized) ||
+    /\bgot truncated\b/.test(normalized) ||
+    /\bwas truncated\b/.test(normalized) ||
+    /\bwrite-file\b.*\b(fragment|partial|truncated|wrong path)\b/.test(normalized) ||
+    /\bedit-file\b.*\b(fragment|partial|truncated|wrong path)\b/.test(normalized)
+  )
 }
 
 function editFileOldStringMissTarget(
@@ -2450,6 +2710,10 @@ function isEditToolName(name: string): boolean {
   return name === 'edit-file' || name === 'Edit'
 }
 
+function isFileMutationToolName(name: string): boolean {
+  return isWriteToolName(name) || isEditToolName(name)
+}
+
 function reviewHandoffEvidence(
   toolMetadata: Record<string, unknown> | undefined,
 ): ReviewHandoffEvidence | null {
@@ -2608,6 +2872,7 @@ function hasReviewHandoffEvidence(
   if (evidence?.taskId !== taskId) return false
   if (evidence.inspectedImplementationFile && evidence.changedOrVerified) return true
   if (currentTaskLooksLikeVerificationOnly(toolMetadata) && evidence.changedOrVerified) return true
+  if (hasStructuredSelfCritiqueInMetadata(toolMetadata) && evidence.changedOrVerified) return true
   if (checkpointFilesTouched(toolMetadata).length > 0 && hasStructuredSelfCritiqueInMetadata(toolMetadata)) {
     return true
   }
@@ -2625,6 +2890,7 @@ function hasImplementationEvidenceForSelfCritique(
   if (evidence?.taskId === taskId) {
     if (evidence.inspectedImplementationFile && evidence.changedOrVerified) return true
     if (currentTaskLooksLikeVerificationOnly(toolMetadata) && evidence.changedOrVerified) return true
+    if (hasStructuredSelfCritiqueInMetadata(toolMetadata) && evidence.changedOrVerified) return true
   }
   return checkpointFilesTouched(toolMetadata).length > 0
 }

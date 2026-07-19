@@ -13,6 +13,7 @@
   import FrameCard from '../../../packages/ui/src/components/FrameCard.svelte'
   import { onEvent } from '../lib/events.js'
   import { nav, path } from '../lib/nav.svelte.js'
+  import { project } from '../lib/project.svelte.js'
   import { projectActionHref, projectFetch } from '../lib/project-routes.js'
   import type { ProjectActionModel } from '../lib/types.js'
 
@@ -28,6 +29,12 @@
   let threadTurn = $state<ThreadTurn | null>(null)
   let actionModel = $state<ProjectActionModel | null>(null)
   let loaded = $state(false)
+
+  interface StartReadiness {
+    canStart?: boolean
+    code?: string
+    message?: string
+  }
 
   interface ThreadTurn {
     id: string
@@ -45,19 +52,36 @@
 
   async function load(): Promise<void> {
     try {
-      const projectRes = await projectFetch('/api/project')
-      if (projectRes.ok) {
-        const projectJson = (await projectRes.json()) as { actionModel?: ProjectActionModel | null }
-        actionModel = projectJson.actionModel ?? null
-        if (actionModel?.primaryAction) {
-          items = []
-          threadTurn = null
-          return
-        }
-      } else {
-        actionModel = null
+      const current = project.detail
+      let projectJson: {
+        actionModel?: ProjectActionModel | null
+        startReadiness?: StartReadiness | null
+      } | null = current
+        ? { actionModel: current.actionModel ?? null, startReadiness: current.startReadiness ?? null }
+        : null
+      if (!projectJson) {
+        const projectRes = await projectFetch('/api/project?surface=overview&compact=true')
+        projectJson = projectRes.ok
+          ? await projectRes.json() as typeof projectJson
+          : null
       }
-      const inboxRes = await projectFetch('/api/project/inbox')
+      actionModel = projectJson?.actionModel ?? null
+      if (actionModel?.primaryAction) {
+        items = []
+        threadTurn = null
+        return
+      }
+      const terminalScope =
+        projectJson?.startReadiness?.canStart === false &&
+        projectJson.startReadiness.code === 'all_terminal' &&
+        actionModel?.runControl?.startEnabled === false &&
+        actionModel.ownerInput?.active !== true
+      if (terminalScope) {
+        items = []
+        threadTurn = null
+        return
+      }
+      const inboxRes = await projectFetch('/api/project/inbox?includeHistory=false')
       if (inboxRes.ok) {
         const j = (await inboxRes.json()) as { items?: InboxItem[] }
         items = j.items ?? []
@@ -127,6 +151,13 @@
           why: item.detail ?? 'Review the newer project-discovery pass and decide whether to update imported work.',
           button: 'Review update',
           href: item.actionHref ?? '/workspace-import?mode=reconcile',
+        }
+      case 'proof_reconciliation':
+        return {
+          verb: item.title,
+          why: item.detail ?? 'Completed work has proof records that need reconciliation.',
+          button: 'Review proof',
+          href: item.actionHref ?? '/overview/inbox',
         }
       case 'import_draft_queue':
         return {

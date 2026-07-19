@@ -5,6 +5,42 @@ export interface ProjectActionStartReadiness {
   code?: string
   message?: string
   actionHref?: string
+  focusTaskId?: string
+  focusTaskTitle?: string
+  focusKind?: string
+  count?: number
+  executionScope?: {
+    id: string
+    label: string
+    kind: string
+    source?: string
+    taskCount?: number
+    deferredTaskCount?: number
+  }
+}
+
+/**
+ * A saved next-action can still describe the last paused task after a run
+ * starts. Keep the user-facing readiness contract aligned with the live
+ * supervisor observation without rebuilding the project task projection.
+ */
+export function applyRunStatusToStartReadiness(
+  readiness: ProjectActionStartReadiness,
+  runStatus: string | undefined,
+): ProjectActionStartReadiness {
+  if (runStatus !== 'running' && runStatus !== 'stopping') return readiness
+  const focus = readiness.focusTaskTitle?.trim()
+  const action = runStatus === 'stopping' ? 'stopping' : 'running'
+  return {
+    ...readiness,
+    canStart: true,
+    code: action,
+    message: runStatus === 'stopping'
+      ? 'Guildhall is stopping the selected work.'
+      : focus
+        ? `Guildhall is running "${focus}".`
+        : 'Guildhall is running the selected work.',
+  }
 }
 
 export interface ProjectActionInboxItem {
@@ -22,7 +58,10 @@ export interface ProjectActionTask {
   title?: string
   description?: string
   status?: string
+  assignedTo?: string | null
+  blockReason?: string
   updatedAt?: string
+  dependsOn?: string[]
   productBrief?: {
     approvedAt?: string | null
     userJob?: string
@@ -34,6 +73,11 @@ export interface ProjectActionTask {
   spec?: string
   acceptanceCriteria?: unknown[]
   needsBriefCleanup?: boolean
+  hierarchy?: {
+    parentId?: string | null
+    childIds?: string[]
+    relation?: string
+  }
 }
 
 export interface ProjectActionThreadTurn {
@@ -120,11 +164,13 @@ export interface ProjectActionModel {
 
 export interface BuildProjectActionModelInput {
   startReadiness?: ProjectActionStartReadiness | null
+  ownerInput?: ProjectOwnerInputModel | null
   inbox?: { items?: ProjectActionInboxItem[] } | null
   tasks?: ProjectActionTask[]
   thread?: ProjectActionThread | null
   scopeAuthorityRequests?: ProjectActionScopeAuthorityRequest[]
   runStatus?: string | null
+  runMode?: string | null
   availability?: ProjectAvailabilityModel | null
 }
 
@@ -154,7 +200,7 @@ function hasSpecDraft(task: ProjectActionTask): boolean {
 
 function needsBriefCleanup(task: ProjectActionTask): boolean {
   if (task.needsBriefCleanup === true) return true
-  return task.status === 'ready' && !(hasApprovedProductBrief(task) && hasCompleteProductBrief(task) && hasSpecDraft(task))
+  return task.status === 'ready' && !hasSpecDraft(task) && !(hasApprovedProductBrief(task) && hasCompleteProductBrief(task))
 }
 
 function taskLabel(task: ProjectActionTask): string {
@@ -185,7 +231,16 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
     return /question|answer/i.test(readiness.message ?? '') ? 'Open Thread' : 'Open item'
   }
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
+  if (readiness.code === 'imported_scope_shaping') return 'Shape first task'
+  if (readiness.code === 'workspace_import_refresh_needed') return 'Refresh import'
+  if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
+  if (readiness.code === 'scope_source_conflict') return 'Open map'
+  if (readiness.code === 'repository_followup_required') return 'Open release'
+  if (readiness.code === 'paused_live_work') return 'Open Work'
   if (readiness.code === 'no_unattended_progress') {
+    if (readiness.focusKind === 'blocked_work') return 'Open Work'
+    if (readiness.focusKind === 'brief_cleanup') return 'Review brief'
+    if (readiness.focusKind === 'spec_review') return readiness.count && readiness.count > 1 ? 'Review next spec' : 'Review spec'
     const message = readiness.message ?? ''
     if (/brief/i.test(message)) return 'Review brief'
     if (/spec|review|approve/i.test(message)) return pluralSpecReviewMessage(message) ? 'Review next spec' : 'Review spec'
@@ -198,13 +253,23 @@ function pluralSpecReviewMessage(message: string): boolean {
   return /\b\d+\s+specs\b/i.test(message)
 }
 
-function runControlLabel(readiness: ProjectActionStartReadiness | null | undefined, running: boolean): string {
+function runControlLabel(readiness: ProjectActionStartReadiness | null | undefined, running: boolean, stopping: boolean): string {
+  if (stopping) return 'Stopping'
   if (running) return 'Pause'
   if (!readiness || readiness.canStart) return 'Resume'
   const message = readiness.message ?? ''
   if (readiness.code === 'required_migration_pending') return 'Migrate'
   if (isProviderReadinessCode(readiness.code)) return 'Needs provider'
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
+  if (readiness.code === 'imported_scope_shaping') return 'Needs shaping'
+  if (readiness.code === 'workspace_import_refresh_needed') return 'Refresh import'
+  if (readiness.code === 'proof_evidence_missing') return 'Resume'
+  if (readiness.code === 'scope_source_conflict') return 'Review conflict'
+  if (readiness.code === 'repository_followup_required') return 'Repo follow-up'
+  if (readiness.code === 'paused_live_work') return 'Resume'
+  if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'blocked_work') return 'Needs recovery'
+  if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'brief_cleanup') return 'Review brief'
+  if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'spec_review') return 'Review needed'
   if (/question|answer/i.test(message)) return 'Waiting on answer'
   if (/recover|blocked|escalation/i.test(message)) return 'Needs recovery'
   if (/draft/i.test(message)) return 'Review drafts'
@@ -224,8 +289,18 @@ function isProviderReadinessCode(code: string | undefined): boolean {
 function startReadinessActionLabel(readiness: ProjectActionStartReadiness): string {
   if (readiness.code === 'required_migration_pending') return 'Required migration'
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
+  if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs shaping'
+  if (readiness.code === 'workspace_import_refresh_needed') return 'Workspace import needs refresh'
+  if (readiness.code === 'proof_evidence_missing') return readiness.focusTaskTitle?.trim() || 'Proof evidence missing'
+  if (readiness.code === 'scope_source_conflict') return 'Source conflict requires review'
+  if (readiness.code === 'repository_followup_required') return 'Repository follow-up required'
+  if (readiness.code === 'paused_live_work') return readiness.focusTaskTitle?.trim() || 'Paused live work'
   if (isProviderReadinessCode(readiness.code)) return 'Provider unavailable'
   if (readiness.code === 'no_unattended_progress') {
+    if (readiness.focusTaskTitle?.trim()) return readiness.focusTaskTitle.trim()
+    if (readiness.focusKind === 'blocked_work') return 'Blocked work'
+    if (readiness.focusKind === 'brief_cleanup') return 'Needs brief cleanup'
+    if (readiness.focusKind === 'spec_review') return 'Spec review pending'
     const message = readiness.message ?? ''
     if (/brief/i.test(message)) return 'Needs brief cleanup'
     if (/spec|review|approve/i.test(message)) return 'Review waiting specs'
@@ -240,6 +315,10 @@ function startReadinessActionLabel(readiness: ProjectActionStartReadiness): stri
 function activeThreadTurn(thread: ProjectActionThread | null | undefined): ProjectActionThreadTurn | null {
   if (!thread?.activeTurnId) return null
   return (thread.turns ?? []).find(turn => turn.id === thread.activeTurnId && turn.status === 'active') ?? null
+}
+
+function isOwnerQuestionTurn(turn: ProjectActionThreadTurn | null | undefined): boolean {
+  return Boolean(turn && ['bounded_chat', 'agent_question', 'pressure_test_question'].includes(turn.kind ?? ''))
 }
 
 function threadHref(turn: ProjectActionThreadTurn): string {
@@ -262,7 +341,7 @@ function ownerInputFrom(readiness: ProjectActionStartReadiness | null | undefine
       href: readiness.actionHref ?? (turn ? threadHref(turn) : '/thread'),
     }
   }
-  if (!turn || !['bounded_chat', 'agent_question', 'pressure_test_question'].includes(turn.kind ?? '')) {
+  if (!turn || !isOwnerQuestionTurn(turn)) {
     return { active: false }
   }
   return {
@@ -302,6 +381,7 @@ function inboxButtonLabel(item: ProjectActionInboxItem): string {
   switch (item.kind) {
     case 'project_understanding': return 'Review update'
     case 'workspace_import_pending': return 'Review import'
+    case 'proof_reconciliation': return 'Review proof'
     case 'bootstrap_missing': return 'Open readiness checks'
     case 'setup_pending': return 'Open setup'
     case 'import_draft_queue': return item.taskId === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'
@@ -315,6 +395,8 @@ function inboxButtonLabel(item: ProjectActionInboxItem): string {
 function inboxAction(item: ProjectActionInboxItem): ProjectAction {
   const label = item.kind === 'import_draft_queue'
     ? 'Shape the imported drafts'
+    : item.kind === 'proof_reconciliation'
+      ? 'Review proof records'
     : item.kind === 'bootstrap_missing'
       ? 'Verify your bootstrap commands'
       : item.title ?? 'Open project item'
@@ -331,29 +413,73 @@ function inboxAction(item: ProjectActionInboxItem): ProjectAction {
   }
 }
 
+function dependencyBlockedRank(task: ProjectActionTask, tasksById: ReadonlyMap<string, ProjectActionTask>): number {
+  const dependencies = Array.isArray(task.dependsOn) ? task.dependsOn.filter(Boolean) : []
+  if (dependencies.length === 0) return 0
+  const allSatisfied = dependencies.every(dependency => {
+    const dependencyTask = tasksById.get(dependency)
+    return dependencyTask?.status === 'done'
+  })
+  return allSatisfied ? 0 : 1
+}
+
+function taskHasLiveAssignment(task: ProjectActionTask): boolean {
+  return typeof task.assignedTo === 'string' && task.assignedTo.trim().length > 0
+}
+
+function taskBlockedReason(task: ProjectActionTask): string | null {
+  const reason = typeof task.blockReason === 'string' ? task.blockReason.trim() : ''
+  return reason.length > 0 ? reason : null
+}
+
+function hasExecutionChildren(task: ProjectActionTask, tasks: readonly ProjectActionTask[]): boolean {
+  const explicitChildren = task.hierarchy?.childIds ?? []
+  if (explicitChildren.length > 0) return true
+  return tasks.some(candidate =>
+    candidate.id !== task.id &&
+    candidate.hierarchy?.parentId === task.id &&
+    (
+      candidate.hierarchy?.relation === 'decomposes' ||
+      candidate.id.startsWith(`${task.id}-split-`)
+    ),
+  )
+}
+
 function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAction | null {
-  const priority = ['in_progress', 'review', 'gate_check', 'ready', 'spec_review', 'exploring', 'import_draft', 'blocked']
+  const priority = ['in_progress', 'review', 'gate_check', 'blocked', 'exploring', 'spec_review', 'ready', 'import_draft']
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
   const ranked = [...tasks]
     .filter(task => priority.includes(task.status ?? ''))
+    .filter(task => !hasExecutionChildren(task, tasks))
     .sort((left, right) => {
-      const briefDelta = Number(needsBriefCleanup(right)) - Number(needsBriefCleanup(left))
-      if (briefDelta !== 0) return briefDelta
+      if (running) {
+        const assignmentDelta = Number(taskHasLiveAssignment(right)) - Number(taskHasLiveAssignment(left))
+        if (assignmentDelta !== 0) return assignmentDelta
+      }
+      const dependencyDelta = dependencyBlockedRank(left, tasksById) - dependencyBlockedRank(right, tasksById)
+      if (dependencyDelta !== 0) return dependencyDelta
       const statusDelta = priority.indexOf(left.status ?? '') - priority.indexOf(right.status ?? '')
       if (statusDelta !== 0) return statusDelta
+      const briefDelta = Number(needsBriefCleanup(right)) - Number(needsBriefCleanup(left))
+      if (briefDelta !== 0) return briefDelta
       return (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '')
     })
   const task = ranked[0]
   if (!task) return null
   const cleanup = needsBriefCleanup(task)
+  const blockedReason = taskBlockedReason(task)
+  const blocked = task.status === 'blocked' || blockedReason !== null
   return {
     source: 'task',
     label: taskLabel(task),
-    detail: cleanup
+    detail: blockedReason
+      ? blockedReason
+      : cleanup
       ? 'Needs brief: finish the handoff before a worker can start.'
       : task.description,
     buttonLabel: task.status === 'spec_review' ? 'Review in Thread' : 'Open Work',
     href: task.status === 'spec_review' ? threadHrefForTask(task.id) : workHrefForTask(task.id),
-    tone: cleanup || task.status === 'blocked' || task.status === 'spec_review' ? 'warn' : running ? 'running' : 'accent',
+    tone: cleanup || blocked || task.status === 'spec_review' ? 'warn' : running ? 'running' : 'accent',
     taskId: task.id,
   }
 }
@@ -411,17 +537,23 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const startReadiness = input.startReadiness ?? null
   const tasks = input.tasks ?? []
   const running = input.runStatus === 'running'
+  const stopping = input.runStatus === 'stopping'
   const availabilityPaused = input.availability?.status === 'paused'
   const activeTurn = activeThreadTurn(input.thread)
   const scopeOwnerInput = scopeAuthorityOwnerInput(input.scopeAuthorityRequests ?? [])
-  const ownerInput = scopeOwnerInput ?? ownerInputFrom(startReadiness, activeTurn)
+  const ownerInput = scopeOwnerInput ?? input.ownerInput ?? ownerInputFrom(startReadiness, activeTurn)
   const setup = setupModel(startReadiness, tasks, activeTurn)
   const setupBlocksStart = setup.state === 'blocked' && tasks.length === 0
   const inboxActions = (input.inbox?.items ?? [])
     .filter(item => item.severity !== 'low')
     .map(inboxAction)
   const scopeAction = scopeAuthorityAction(input.scopeAuthorityRequests ?? [])
-  const taskAction = bestTaskAction(tasks, running)
+  const focusedRunTaskId = input.runMode === 'one_task' ? startReadiness?.focusTaskId : undefined
+  const taskAction = startReadiness?.code === 'all_terminal'
+    ? null
+    : focusedRunTaskId
+      ? bestTaskAction(tasks.filter(task => task.id === focusedRunTaskId), running)
+      : bestTaskAction(tasks, running)
   const candidates: ProjectAction[] = []
 
   if (startReadiness && !startReadiness.canStart && startReadiness.code !== 'all_terminal') {
@@ -449,7 +581,14 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   if (scopeAction) candidates.push(scopeAction)
   if (taskAction) candidates.push(taskAction)
   candidates.push(...inboxActions)
-  if (activeTurn && !ownerInput.active && (activeTurn.kind !== 'setup_step' || tasks.length === 0)) {
+  if (
+    activeTurn &&
+    !ownerInput.active &&
+    (
+      isOwnerQuestionTurn(activeTurn) ||
+      (activeTurn.kind === 'setup_step' && tasks.length === 0)
+    )
+  ) {
     candidates.push(threadAction(activeTurn))
   }
   if (ownerInput.active && !scopeAction && startReadiness?.canStart !== false && ownerInput.href && !setupBlocksStart) {
@@ -465,8 +604,11 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
 
   const primaryAction = candidates[0] ?? null
   const secondaryActions = candidates.slice(1, 4)
-  const disabledReason = !running && startReadiness?.canStart === false
+  const blockedButRunnable = startReadiness?.code === 'proof_evidence_missing'
+  const disabledReason = !running && startReadiness?.canStart === false && !blockedButRunnable
     ? startReadiness.message
+    : stopping
+      ? 'Pause requested. Guildhall is waiting for active work to stop.'
     : !running && setupBlocksStart
       ? setup.detail ?? ownerInput.detail ?? 'Finish setup before starting work.'
       : undefined
@@ -474,8 +616,8 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     primaryAction,
     secondaryActions,
     runControl: {
-      label: setupBlocksStart && !running ? 'Waiting on setup' : runControlLabel(startReadiness, running),
-      startEnabled: running || availabilityPaused || (startReadiness?.canStart !== false && !setupBlocksStart),
+      label: setupBlocksStart && !running && !stopping ? 'Waiting on setup' : runControlLabel(startReadiness, running, stopping),
+      startEnabled: running || (!stopping && (startReadiness?.canStart !== false || blockedButRunnable) && !setupBlocksStart),
       disabledReason,
       href: startReadiness?.actionHref ?? setup.href,
     },

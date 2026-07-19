@@ -161,10 +161,14 @@ export function buildWorkSurface(detail: ProjectDetail): WorkSurfaceModel {
 function visibleProjectTasks(detail: ProjectDetail): Task[] {
   const allTasks = detail.tasks ?? []
   const progressByTaskId = detail.workProgress?.byTaskId ?? {}
+  const primaryActionTaskId = detail.actionModel?.primaryAction?.taskId
   return allTasks.filter(task => {
+    if (task.id && task.id === primaryActionTaskId) return true
+    if (['in_progress', 'review', 'gate_check'].includes(task.status ?? '')) return true
     const id = typeof task.id === 'string' ? task.id : ''
     const progress = id ? progressByTaskId[id] as { visibility?: { kind?: string; countInProjectTotals?: boolean } } | undefined : undefined
     if (!progress?.visibility) return true
+    if (progress.visibility.countInProjectTotals === false) return false
     return progress.visibility.kind !== 'internal_step' && progress.visibility.kind !== 'hidden'
   })
 }

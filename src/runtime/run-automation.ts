@@ -1,17 +1,33 @@
-import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { TaskQueue, TERMINAL_TASK_STATUSES, type AgentQuestion, type TaskStatus } from '@guildhall/core'
+import { TaskQueue, TERMINAL_TASK_STATUSES, type AgentQuestion, type Task, type TaskStatus } from '@guildhall/core'
 import {
-  atomicWriteText,
+  appendTaskEvidence,
+  getProjectSystemStatePathFromMemoryDir,
+  inferProjectRootFromMemoryDir,
+  readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+  readProjectStateDatabaseQueue,
+  readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseTaskPointWithRevision,
   readProjectStateTextFromMemoryDirAsync,
-  writeProjectStateJsonFromMemoryDirAsync,
+  upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 
 import { approveSpec, resumeExploring } from './intake.js'
 import { reviewInProcessWorkForGuildhallImprovements } from './improvement-review.js'
-import { specSectionBody } from './spec-quality.js'
+import {
+  extractAcceptanceCriteriaFromSpec,
+  productBriefFromSpecCompletionBoundary,
+  specSectionBody,
+  validateProductBriefGrounding,
+  validateSpecCompletionBoundary,
+} from './spec-quality.js'
 import { workSubtreeIds } from './work-hierarchy.js'
+import {
+  FORBIDDEN_PROJECT_TASK_FIELDS,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueueWithSummary,
+} from './project-state-boundary.js'
 
 export type RunAutomationPolicy = 'ask_more_often' | 'ask_when_necessary' | 'fully_automated'
 
@@ -102,7 +118,9 @@ async function answerScopedQuestions(input: {
   actor?: string
   resolutions: RunAutomationResolution[]
 }): Promise<boolean> {
-  const queue = await readQueue(input.memoryDir)
+  const queueRead = await readQueueForMutation(input.memoryDir)
+  const queue = queueRead.queue
+  const previousQueue = structuredClone(queue)
   const scopedIds = input.rootTaskId ? new Set(workSubtreeIds(queue.tasks, input.rootTaskId)) : null
   const resumes: Array<{ taskId: string; message: string }> = []
   let changed = false
@@ -134,14 +152,8 @@ async function answerScopedQuestions(input: {
   }
   if (!changed) return false
   queue.lastUpdated = new Date().toISOString()
-  await writeQueue(input.memoryDir, queue)
-  for (const resume of resumes) {
-    await resumeExploring({
-      memoryDir: input.memoryDir,
-      taskId: resume.taskId,
-      message: resume.message,
-    })
-  }
+  await writeQueue(input.memoryDir, previousQueue, queue, queueRead.expectedQueueRevision)
+  for (const resume of resumes) await resumeAutomationMessage(input.memoryDir, resume.taskId, resume.message)
   return true
 }
 
@@ -152,10 +164,14 @@ async function repairScopedSpecApprovalInputs(input: {
   actor?: string
   resolutions: RunAutomationResolution[]
 }): Promise<boolean> {
-  const queue = await readQueue(input.memoryDir)
+  if (isPromotedProject(input.memoryDir)) return repairPromotedScopedSpecApprovalInputs(input)
+  const queueRead = await readQueueForMutation(input.memoryDir)
+  const queue = queueRead.queue
+  const previousQueue = structuredClone(queue)
   const scopedIds = input.rootTaskId ? new Set(workSubtreeIds(queue.tasks, input.rootTaskId)) : null
   let changed = false
   const now = new Date().toISOString()
+  const promotedEvidence: PromotedTaskEvidence[] = []
   for (const task of queue.tasks) {
     if (scopedIds && !scopedIds.has(task.id)) continue
     if (task.status !== 'spec_review' || !task.spec?.trim()) continue
@@ -167,7 +183,7 @@ async function repairScopedSpecApprovalInputs(input: {
     if (hasUsableBrief) continue
     const brief = inferProductBriefForAutomation(task, input.ownerIntent)
     if (!brief) continue
-    task.productBrief = {
+    const candidateBrief = {
       userJob: brief.userJob,
       successMetric: brief.successMetric,
       antiPatterns: brief.antiPatterns,
@@ -175,7 +191,9 @@ async function repairScopedSpecApprovalInputs(input: {
       authoredBy: input.actor ?? 'run-automation',
       authoredAt: now,
     }
-    task.notes.push({
+    if (!validateProductBriefGrounding(task, candidateBrief).ok) continue
+    task.productBrief = candidateBrief
+    const note = {
       agentId: input.actor ?? 'run-automation',
       role: 'automation',
       content: [
@@ -183,6 +201,16 @@ async function repairScopedSpecApprovalInputs(input: {
         'The brief was inferred from the existing spec/owner intent so the run could continue without a human-only paperwork loop.',
       ].join('\n'),
       timestamp: now,
+    }
+    task.notes = [...(task.notes ?? []), note]
+    promotedEvidence.push({
+      taskId: task.id,
+      event: {
+        id: `automation-note-${task.id}-${now.replace(/[^0-9A-Za-z]/g, '')}-brief`,
+        kind: 'note',
+        recordedAt: now,
+        payload: note,
+      },
     })
     task.updatedAt = now
     changed = true
@@ -194,7 +222,7 @@ async function repairScopedSpecApprovalInputs(input: {
   }
   if (changed) {
     queue.lastUpdated = now
-    await writeQueue(input.memoryDir, queue)
+    await writeQueue(input.memoryDir, previousQueue, queue, queueRead.expectedQueueRevision, promotedEvidence)
   }
   return changed
 }
@@ -214,7 +242,9 @@ async function approveScopedSpecs(input: {
   ownerIntent?: string
   resolutions: RunAutomationResolution[]
 }): Promise<boolean> {
-  const queue = await readQueue(input.memoryDir)
+  if (isPromotedProject(input.memoryDir)) return approvePromotedScopedSpecs(input)
+  const queueRead = await readQueueForMutation(input.memoryDir)
+  const queue = queueRead.queue
   const scopedIds = input.rootTaskId ? new Set(workSubtreeIds(queue.tasks, input.rootTaskId)) : null
   let changed = false
   for (const task of queue.tasks) {
@@ -238,11 +268,7 @@ async function approveScopedSpecs(input: {
         'Revise the spec into Guildhall\'s required completion-boundary shape, preserve the original owner intent, and continue without asking for human approval.',
         ...(input.ownerIntent ? ['', `Original owner intent: ${input.ownerIntent}`] : []),
       ].join('\n')
-      await resumeExploring({
-        memoryDir: input.memoryDir,
-        taskId: task.id,
-        message,
-      })
+      await resumeAutomationMessage(input.memoryDir, task.id, message)
       changed = true
       input.resolutions.push({
         kind: 'request_spec_revision',
@@ -261,14 +287,18 @@ async function resolveScopedAutomationBlockers(input: {
   actor?: string
   resolutions: RunAutomationResolution[]
 }): Promise<boolean> {
-  const queue = await readQueue(input.memoryDir)
+  if (isPromotedProject(input.memoryDir)) return resolvePromotedScopedAutomationBlockers(input)
+  const queueRead = await readQueueForMutation(input.memoryDir)
+  const queue = queueRead.queue
+  const previousQueue = structuredClone(queue)
   const scopedIds = input.rootTaskId ? new Set(workSubtreeIds(queue.tasks, input.rootTaskId)) : null
   let changed = false
+  const promotedEvidence: PromotedTaskEvidence[] = []
   for (const task of queue.tasks) {
     if (scopedIds && !scopedIds.has(task.id)) continue
     const blockerText = [
       task.blockReason,
-      ...task.escalations.filter(escalation => !escalation.resolvedAt).map(escalation => `${escalation.summary} ${escalation.details ?? ''}`),
+      ...(task.escalations ?? []).filter(escalation => !escalation.resolvedAt).map(escalation => `${escalation.summary} ${escalation.details ?? ''}`),
     ].filter(Boolean).join('\n')
     if (
       task.status !== 'blocked' ||
@@ -281,13 +311,13 @@ async function resolveScopedAutomationBlockers(input: {
     task.status = 'exploring'
     task.blockReason = undefined
     task.updatedAt = now
-    task.escalations = task.escalations.map(escalation => escalation.resolvedAt ? escalation : {
+    task.escalations = (task.escalations ?? []).map(escalation => escalation.resolvedAt ? escalation : {
       ...escalation,
       resolvedAt: now,
       resolvedBy: input.actor ?? 'run-automation',
       resolution: 'Fully automated run resolved this as an automation-compatible blocker and asked the task to continue from the owner intent.',
     })
-    task.notes.push({
+    const note = {
       agentId: input.actor ?? 'run-automation',
       role: 'automation',
       content: [
@@ -296,7 +326,28 @@ async function resolveScopedAutomationBlockers(input: {
         ...(input.ownerIntent ? ['', `Owner intent: ${input.ownerIntent}`] : []),
       ].join('\n'),
       timestamp: now,
+    }
+    task.notes = [...(task.notes ?? []), note]
+    promotedEvidence.push({
+      taskId: task.id,
+      event: {
+        id: `automation-note-${task.id}-${now.replace(/[^0-9A-Za-z]/g, '')}-blocker`,
+        kind: 'note',
+        recordedAt: now,
+        payload: note,
+      },
     })
+    for (const escalation of task.escalations ?? []) {
+      promotedEvidence.push({
+        taskId: task.id,
+        event: {
+          id: `automation-escalation-${task.id}-${escalation.id}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
+          kind: 'escalation',
+          recordedAt: now,
+          payload: escalation,
+        },
+      })
+    }
     changed = true
     input.resolutions.push({
       kind: 'resolve_automation_blocker',
@@ -306,12 +357,112 @@ async function resolveScopedAutomationBlockers(input: {
   }
   if (changed) {
     queue.lastUpdated = new Date().toISOString()
-    await writeQueue(input.memoryDir, queue)
+    await writeQueue(input.memoryDir, previousQueue, queue, queueRead.expectedQueueRevision, promotedEvidence)
+  }
+  return changed
+}
+
+async function resolvePromotedScopedAutomationBlockers(input: {
+  memoryDir: string
+  rootTaskId?: string
+  ownerIntent?: string
+  actor?: string
+  resolutions: RunAutomationResolution[]
+}): Promise<boolean> {
+  const queue = await readQueue(input.memoryDir)
+  const scopedIds = input.rootTaskId ? new Set(workSubtreeIds(queue.tasks, input.rootTaskId)) : null
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const tasksPath = getProjectSystemStatePathFromMemoryDir(input.memoryDir, 'TASKS.json')
+  let changed = false
+  for (const indexedTask of queue.tasks) {
+    if (scopedIds && !scopedIds.has(indexedTask.id)) continue
+    if (indexedTask.status !== 'blocked') continue
+    const task = promotedTaskDefinition(input.memoryDir, indexedTask.id)
+    if (!task) continue
+    const blockerText = [
+      task.blockReason,
+      ...(task.escalations ?? []).filter((escalation: { resolvedAt?: string }) => !escalation.resolvedAt)
+        .map((escalation: { summary: string; details?: string }) => `${escalation.summary} ${escalation.details ?? ''}`),
+    ].filter(Boolean).join('\n')
+    if (
+      /worktree|bootstrap|already exists|fatal:|permission denied|missing dependency/i.test(blockerText) ||
+      !/human|approval|question|judgment|ambiguous|turn limit|turn budget/i.test(blockerText)
+    ) continue
+
+    const now = new Date().toISOString()
+    const resolvedEscalations = (task.escalations ?? []).map((escalation: Record<string, any>) => escalation.resolvedAt ? escalation : {
+      ...escalation,
+      resolvedAt: now,
+      resolvedBy: input.actor ?? 'run-automation',
+      resolution: 'Fully automated run resolved this as an automation-compatible blocker and asked the task to continue from the owner intent.',
+    })
+    const promoted = writePromotedTaskDetailMutation(tasksPath, task.id, {
+      projectId: path.basename(projectRoot),
+      projectRoot,
+      mutate: current => {
+        current.status = 'exploring'
+        delete current.blockReason
+        if (resolvedEscalations.some((escalation: { resolvedAt?: string }) => !escalation.resolvedAt)) {
+          current.openEscalations = resolvedEscalations
+            .filter((escalation: { resolvedAt?: string }) => !escalation.resolvedAt)
+            .map((escalation: { id: string }) => escalation.id)
+        } else {
+          delete current.openEscalations
+        }
+        current.updatedAt = now
+        return current
+      },
+    })
+    if (!promoted) throw new Error(`Promoted task ${task.id} could not resolve the automation blocker`)
+
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      openEscalationIds: resolvedEscalations
+        .filter((escalation: { resolvedAt?: string }) => !escalation.resolvedAt)
+        .map((escalation: { id: string }) => escalation.id),
+      updatedAt: now,
+    })
+    for (const escalation of resolvedEscalations) {
+      await appendTaskEvidence(projectRoot, task.id, {
+        id: `automation-escalation-${task.id}-${escalation.id}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
+        kind: 'escalation',
+        recordedAt: now,
+        payload: escalation,
+      })
+    }
+    const note = [
+      'Resolved retryable blocker under fully automated run policy.',
+      'Continue from the owner intent and do not wait for human input unless an external dependency is truly unavailable.',
+      ...(input.ownerIntent ? ['', `Owner intent: ${input.ownerIntent}`] : []),
+    ].join('\n')
+    await appendTaskEvidence(projectRoot, task.id, {
+      id: `automation-note-${task.id}-${now.replace(/[^0-9A-Za-z]/g, '')}-blocker`,
+      kind: 'note',
+      recordedAt: now,
+      payload: {
+        agentId: input.actor ?? 'run-automation',
+        role: 'automation',
+        content: note,
+        timestamp: now,
+      },
+    })
+    changed = true
+    input.resolutions.push({
+      kind: 'resolve_automation_blocker',
+      taskId: task.id,
+      detail: 'Reopened a human-input-style blocker through the promoted point/evidence/runtime boundaries.',
+    })
   }
   return changed
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
+  const tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  if (readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) === 'database') {
+    const queue = readProjectStateDatabaseQueue(tasksPath)
+    if (!queue) throw new Error(`Current project-state index is unavailable for ${tasksPath}`)
+    return queue as unknown as TaskQueue
+  }
+  // Bootstrap-only compatibility read. Promoted projects fail closed above.
   const raw = await readProjectStateTextFromMemoryDirAsync(memoryDir, 'TASKS.json')
   const parsed = JSON.parse(raw)
   return Array.isArray(parsed)
@@ -319,8 +470,312 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
     : TaskQueue.parse(parsed)
 }
 
-async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+interface QueueMutationRead {
+  queue: TaskQueue
+  expectedQueueRevision: number | null
+}
+
+interface PromotedTaskEvidence {
+  taskId: string
+  event: Parameters<typeof appendTaskEvidence>[2]
+}
+
+async function readQueueForMutation(memoryDir: string): Promise<QueueMutationRead> {
+  const tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  if (readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) !== 'database') {
+    return { queue: await readQueue(memoryDir), expectedQueueRevision: null }
+  }
+  const queue = readProjectStateDatabaseQueue(tasksPath)
+  if (!queue) throw new Error(`Current project-state index is unavailable for ${tasksPath}`)
+  return {
+    queue: queue as unknown as TaskQueue,
+    expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
+  }
+}
+
+async function writeQueue(
+  memoryDir: string,
+  previousQueue: TaskQueue,
+  queue: TaskQueue,
+  expectedQueueRevision: number | null,
+  promotedEvidence: readonly PromotedTaskEvidence[] = [],
+): Promise<void> {
+  const tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  if (readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) === 'database') {
+    if (await writePromotedSingleTaskMutation(tasksPath, previousQueue, queue, expectedQueueRevision, memoryDir, promotedEvidence)) return
+    throw new Error(`Promoted automation update for ${tasksPath} did not match a normalized task/evidence mutation`)
+  }
+  // Bootstrap-only queue persistence. Imports/migrations own any later full-state writes.
+  writeProjectTaskQueueWithSummary(tasksPath, queue, {
+    projectId: path.basename(inferProjectRootFromMemoryDir(memoryDir)),
+    expectedQueueRevision,
+  })
+}
+
+async function writePromotedSingleTaskMutation(
+  tasksPath: string,
+  previousQueue: TaskQueue,
+  queue: TaskQueue,
+  expectedQueueRevision: number | null,
+  memoryDir: string,
+  promotedEvidence: readonly PromotedTaskEvidence[],
+): Promise<boolean> {
+  if (!Number.isInteger(expectedQueueRevision) || expectedQueueRevision! < 0) return false
+  if (previousQueue.tasks.length !== queue.tasks.length) return false
+
+  const previousById = new Map(previousQueue.tasks.map(task => [task.id, task]))
+  const nextById = new Map(queue.tasks.map(task => [task.id, task]))
+  if (previousById.size !== nextById.size || [...previousById.keys()].some(id => !nextById.has(id))) return false
+
+  const changedTaskIds = [...previousById.keys()].filter(id => !sameJson(previousById.get(id), nextById.get(id)))
+  if (changedTaskIds.length !== 1) return false
+  const taskId = changedTaskIds[0]
+  if (!taskId) return false
+
+  const previousTask = previousById.get(taskId) as unknown as Record<string, unknown>
+  const nextTask = nextById.get(taskId) as unknown as Record<string, unknown>
+  const changedFields = [...new Set([...Object.keys(previousTask), ...Object.keys(nextTask)])]
+    .filter(field => !sameJson(previousTask[field], nextTask[field]))
+  const forbiddenChanged = changedFields.filter(field => FORBIDDEN_PROJECT_TASK_FIELDS.includes(field as typeof FORBIDDEN_PROJECT_TASK_FIELDS[number]))
+  if (forbiddenChanged.length > 0 && promotedEvidence.length === 0) {
+    return false
+  }
+  const mutableFields = changedFields.filter(field => !FORBIDDEN_PROJECT_TASK_FIELDS.includes(field as typeof FORBIDDEN_PROJECT_TASK_FIELDS[number]))
+  if (mutableFields.length === 0) {
+    return appendPromotedTaskEvidence(
+      inferProjectRootFromMemoryDir(memoryDir),
+      promotedEvidence.filter(entry => entry.taskId === taskId),
+    )
+  }
+
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const committed = writePromotedTaskDetailMutation(tasksPath, taskId, {
+    projectId: path.basename(projectRoot),
+    projectRoot,
+    mutate: current => {
+      const next = { ...current }
+      for (const field of mutableFields) {
+        if (Object.prototype.hasOwnProperty.call(nextTask, field)) next[field] = nextTask[field]
+        else delete next[field]
+      }
+      return next
+    },
+  })
+  if (!committed) return false
+  return appendPromotedTaskEvidence(projectRoot, promotedEvidence.filter(entry => entry.taskId === taskId))
+}
+
+async function resumeAutomationMessage(memoryDir: string, taskId: string, message: string): Promise<void> {
+  if (!isPromotedProject(memoryDir)) {
+    await resumeExploring({ memoryDir, taskId, message })
+    return
+  }
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  const now = new Date().toISOString()
+  const promoted = writePromotedTaskDetailMutation(tasksPath, taskId, {
+    projectId: path.basename(projectRoot),
+    projectRoot,
+    mutate: current => {
+      if (current.status !== 'blocked') current.status = 'exploring'
+      current.updatedAt = now
+      return current
+    },
+  })
+  if (!promoted) throw new Error(`Promoted task ${taskId} could not record automation progress`)
+  await appendTaskEvidence(projectRoot, taskId, {
+    id: `automation-note-${taskId}-${now.replace(/[^0-9A-Za-z]/g, '')}-resume`,
+    kind: 'note',
+    recordedAt: now,
+    payload: {
+      agentId: 'run-automation',
+      role: 'automation',
+      content: message,
+      timestamp: now,
+    },
+  })
+}
+
+async function approvePromotedScopedSpecs(input: {
+  memoryDir: string
+  rootTaskId?: string
+  resolutions: RunAutomationResolution[]
+}): Promise<boolean> {
+  const queueRead = await readQueueForMutation(input.memoryDir)
+  const scopedIds = input.rootTaskId ? new Set(workSubtreeIds(queueRead.queue.tasks, input.rootTaskId)) : null
+  let changed = false
+  for (const indexedTask of queueRead.queue.tasks) {
+    if (scopedIds && !scopedIds.has(indexedTask.id)) continue
+    if (indexedTask.status !== 'spec_review') continue
+    const task = promotedTaskDefinition(input.memoryDir, indexedTask.id)
+    if (!task) continue
+    const result = await approvePromotedSpec(input.memoryDir, task)
+    if (result.success) {
+      changed = true
+      input.resolutions.push({
+        kind: 'approve_spec',
+        taskId: indexedTask.id,
+        detail: 'Approved spec_review through the promoted task point boundary.',
+      })
+      continue
+    }
+    const message = `Fully automated run could not approve this spec yet: ${result.error ?? 'approval failed'}.`
+    await resumeAutomationMessage(input.memoryDir, indexedTask.id, message)
+    changed = true
+    input.resolutions.push({
+      kind: 'request_spec_revision',
+      taskId: indexedTask.id,
+      detail: result.error ?? 'approval failed',
+    })
+  }
+  return changed
+}
+
+async function repairPromotedScopedSpecApprovalInputs(input: {
+  memoryDir: string
+  rootTaskId?: string
+  ownerIntent?: string
+  actor?: string
+  resolutions: RunAutomationResolution[]
+}): Promise<boolean> {
+  const queueRead = await readQueueForMutation(input.memoryDir)
+  const scopedIds = input.rootTaskId ? new Set(workSubtreeIds(queueRead.queue.tasks, input.rootTaskId)) : null
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const tasksPath = getProjectSystemStatePathFromMemoryDir(input.memoryDir, 'TASKS.json')
+  const now = new Date().toISOString()
+  let changed = false
+  for (const indexedTask of queueRead.queue.tasks) {
+    if (scopedIds && !scopedIds.has(indexedTask.id)) continue
+    if (indexedTask.status !== 'spec_review') continue
+    const task = promotedTaskDefinition(input.memoryDir, indexedTask.id)
+    if (!task || typeof task.spec !== 'string' || !task.spec.trim()) continue
+    if (typeof task.productBrief?.approvedAt === 'string') continue
+    const hasUsableBrief =
+      task.productBrief?.userJob?.trim() &&
+      task.productBrief?.successMetric?.trim() &&
+      !isPlaceholderNewRequestBrief(task.productBrief)
+    if (hasUsableBrief) continue
+    const brief = inferProductBriefForAutomation(task as TaskQueue['tasks'][number], input.ownerIntent)
+    if (!brief) continue
+    const candidateBrief = {
+      userJob: brief.userJob,
+      successMetric: brief.successMetric,
+      antiPatterns: brief.antiPatterns,
+      ...(brief.rolloutPlan ? { rolloutPlan: brief.rolloutPlan } : {}),
+      authoredBy: input.actor ?? 'run-automation',
+      authoredAt: now,
+    }
+    if (!validateProductBriefGrounding(task as Task, candidateBrief).ok) continue
+    const note = {
+      agentId: input.actor ?? 'run-automation',
+      role: 'automation',
+      content: [
+        'Fully automated run repaired the structured product brief before spec approval.',
+        'The brief was inferred from the existing spec/owner intent so the run could continue without a human-only paperwork loop.',
+      ].join('\n'),
+      timestamp: now,
+    }
+    const promoted = writePromotedTaskDetailMutation(tasksPath, task.id, {
+      projectId: path.basename(projectRoot),
+      projectRoot,
+      mutate: current => ({
+        ...current,
+        productBrief: candidateBrief,
+        updatedAt: now,
+      }),
+    })
+    if (!promoted) throw new Error(`Promoted task ${task.id} could not record the repaired product brief`)
+    await appendTaskEvidence(projectRoot, task.id, {
+      id: `automation-note-${task.id}-${now.replace(/[^0-9A-Za-z]/g, '')}-brief`,
+      kind: 'note',
+      recordedAt: now,
+      payload: note,
+    })
+    changed = true
+    input.resolutions.push({
+      kind: 'repair_product_brief',
+      taskId: task.id,
+      detail: 'Inferred the missing structured product brief from the spec before approval.',
+    })
+  }
+  return changed
+}
+
+async function approvePromotedSpec(
+  memoryDir: string,
+  task: Record<string, any>,
+): Promise<{ success: boolean; error?: string }> {
+  if (task.status !== 'spec_review' || typeof task.spec !== 'string' || !task.spec.trim()) {
+    return { success: false, error: 'task is not ready for promoted spec approval' }
+  }
+  const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.length > 0
+    ? task.acceptanceCriteria
+    : extractAcceptanceCriteriaFromSpec(task.spec)
+  const productBrief = task.productBrief ?? productBriefFromSpecCompletionBoundary(task.spec) ?? undefined
+  const candidate = { ...task, acceptanceCriteria, productBrief }
+  if (candidate.productBrief) {
+    const grounding = validateProductBriefGrounding(candidate as Task, candidate.productBrief)
+    if (!grounding.ok) {
+      return { success: false, error: `Product brief is not grounded in the visible task/source context: ${grounding.errors.join(' ')}` }
+    }
+  }
+  const quality = validateSpecCompletionBoundary(candidate)
+  if (!quality.ok) return { success: false, error: `Spec is not ready for approval: ${quality.errors.join(' ')}` }
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  const now = new Date().toISOString()
+  const promoted = writePromotedTaskDetailMutation(tasksPath, task.id, {
+    projectId: path.basename(projectRoot),
+    projectRoot,
+    mutate: current => ({
+      ...current,
+      ...(candidate.productBrief ? { productBrief: candidate.productBrief } : {}),
+      acceptanceCriteria: candidate.acceptanceCriteria,
+      status: 'ready',
+      updatedAt: now,
+    }),
+  })
+  if (!promoted) return { success: false, error: 'task point mutation was rejected' }
+  await appendTaskEvidence(projectRoot, task.id, {
+    id: `automation-note-${task.id}-${now.replace(/[^0-9A-Za-z]/g, '')}-approve`,
+    kind: 'note',
+    recordedAt: now,
+    payload: {
+      agentId: 'run-automation',
+      role: 'automation',
+      content: 'Fully automated run approved this spec on behalf of the original owner intent.',
+      timestamp: now,
+    },
+  })
+  return { success: true }
+}
+
+function isPromotedProject(memoryDir: string): boolean {
+  return readProjectStateDatabaseCurrentAuthorityFromTasksPath(
+    getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json'),
+  ) === 'database'
+}
+
+function promotedTaskDefinition(memoryDir: string, taskId: string): Record<string, any> | null {
+  const point = readProjectStateDatabaseTaskPointWithRevision(
+    getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json'),
+    taskId,
+  )
+  return point?.task.definition as Record<string, any> | null
+}
+
+async function appendPromotedTaskEvidence(
+  projectRoot: string,
+  evidence: readonly PromotedTaskEvidence[],
+): Promise<boolean> {
+  for (const entry of evidence) {
+    await appendTaskEvidence(projectRoot, entry.taskId, entry.event)
+  }
+  return true
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
 }
 
 function automaticQuestionAnswer(question: AgentQuestion, ownerIntent: string | undefined): string {
