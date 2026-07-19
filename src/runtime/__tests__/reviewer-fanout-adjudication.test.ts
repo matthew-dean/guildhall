@@ -101,6 +101,7 @@ async function readQueue(): Promise<TaskQueue> {
   return {
     version: 1,
     ...current.rawQueue,
+    lastUpdated: current.rawQueue.lastUpdated ?? new Date().toISOString(),
     tasks: await Promise.all(current.rawQueue.tasks.map(task =>
       buildEffectiveTask(tmpDir, task as Task, { evidence: 'full' }),
     )) as unknown as Task[],

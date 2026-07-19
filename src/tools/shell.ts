@@ -24,7 +24,7 @@ import {
   parseAuthoritativeCommands,
   reconcileShellCommandWithAuthority,
 } from '@guildhall/core'
-import { providerCommandEnv } from '../config/global-providers.js'
+import { providerCommandEnv } from '@guildhall/config/global-providers'
 
 const OUTPUT_TRUNCATE_LIMIT = 12_000
 

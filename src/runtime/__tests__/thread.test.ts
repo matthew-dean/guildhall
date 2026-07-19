@@ -20,7 +20,7 @@ function buildThread(options: BuildThreadOptions): Thread {
       tasksPath,
       {
         queue: JSON.parse(readFileSync(tasksPath, 'utf8')),
-        projectId: options.snapshot?.config.id,
+        projectId: options.snapshot?.config?.id,
         projectRoot: options.projectPath,
       },
     )

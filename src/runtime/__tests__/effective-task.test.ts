@@ -8,7 +8,7 @@ import { buildEffectiveTask, effectiveTaskStatus, legacyEvidenceFromTask, legacy
 import { appendTaskEvidence, taskEvidencePath, upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
 import { promoteProjectStateDatabaseAuthority, projectStateDatabasePath } from '@guildhall/sessions'
 
-function legacyTask(overrides: Partial<Task> = {}): Task {
+function legacyTask(overrides: Record<string, unknown> = {}): Task {
   const now = '2026-05-24T20:00:00.000Z'
   return {
     id: 'task-auth-complete',
@@ -61,7 +61,7 @@ function legacyTask(overrides: Partial<Task> = {}): Task {
     createdAt: now,
     updatedAt: now,
     ...overrides,
-  }
+  } as Task
 }
 
 describe('effective task projection', () => {
@@ -381,8 +381,9 @@ describe('effective task projection', () => {
     const effective = await buildEffectiveTask(projectRoot, legacyTask())
 
     expect(effective.notes).toHaveLength(1)
-    expect(effective.notes[0]?.content).toContain('full output is unavailable')
-    expect(effective.notes[0]?.content).not.toContain('\n...')
+    const notes = effective.notes as Array<{ content?: string }> | undefined
+    expect(notes?.[0]?.content).toContain('full output is unavailable')
+    expect(notes?.[0]?.content).not.toContain('\n...')
     expect(String(effective.evidence[0]?.payload.content)).toContain('full output is unavailable')
     expect(String(effective.evidence[0]?.payload.content)).not.toContain('\n...')
   })
@@ -424,7 +425,7 @@ describe('effective task projection', () => {
         fromBranch: 'guildhall/task-task-auth-complete',
         toBranch: 'main',
       },
-    } as Partial<Task>))
+    }))
 
     expect(effective.status).toBe('done')
     expect(effective.assignedTo).toBeNull()
@@ -555,7 +556,7 @@ describe('effective task projection', () => {
         fromBranch: 'guildhall/task-task-auth-complete',
         toBranch: 'main',
       },
-    } as Partial<Task>))
+    }))
 
     expect(effective.status).toBe('ready')
     expect(effective.assignedTo).toBe('worker-agent')
@@ -581,7 +582,7 @@ describe('effective task projection', () => {
           openResidue: 'No open residue recorded.',
         },
       },
-    } as Partial<Task>))
+    }))
 
     expect(effective.status).toBe('archived')
     expect(effective.releaseIds).toEqual([])
@@ -609,9 +610,9 @@ describe('effective task projection', () => {
           openResidue: 'No open residue recorded.',
         },
       },
-    } as Partial<Task>))
+    }))
 
-    expect(effective.proofPaths?.[0]).toMatchObject({
+    expect((effective.proofPaths as Array<Record<string, unknown>> | undefined)?.[0]).toMatchObject({
       title: 'Chapter draft proof',
       status: 'verified',
     })
@@ -638,9 +639,9 @@ describe('effective task projection', () => {
           openResidue: 'No open residue recorded.',
         },
       },
-    } as Partial<Task>))
+    }))
 
-    expect(effective.proofPaths?.[0]).toMatchObject({
+    expect((effective.proofPaths as Array<Record<string, unknown>> | undefined)?.[0]).toMatchObject({
       title: 'Provider proof',
       status: 'blocked',
     })

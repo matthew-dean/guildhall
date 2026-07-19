@@ -14,7 +14,7 @@ import {
   getProjectTaskLocalHistoryDir,
   inferProjectRootFromMemoryDir,
 } from '@guildhall/sessions'
-import { readProjectTaskQueueSync } from '../runtime/project-state-boundary.js'
+import { readProjectTaskQueueSync } from '@guildhall/runtime/project-state-boundary'
 
 // ---------------------------------------------------------------------------
 // FR-33 Crash-safe task checkpointing

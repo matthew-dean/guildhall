@@ -15,7 +15,7 @@ function importedExploringTask(notes: Task['notes']): Task {
     },
     notes,
     acceptanceCriteria: [],
-  } as Task
+  } as unknown as Task
 }
 
 describe('imported draft state', () => {

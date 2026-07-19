@@ -19,6 +19,18 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: '@guildhall/config/global-providers',
+        replacement: resolve(__dirname, 'src/config/global-providers.ts'),
+      },
+      {
+        find: '@guildhall/runtime/proof-paths',
+        replacement: resolve(__dirname, 'src/runtime/proof-paths.ts'),
+      },
+      {
+        find: '@guildhall/runtime/spec-quality',
+        replacement: resolve(__dirname, 'src/runtime/spec-quality.ts'),
+      },
+      {
         find: '@guildhall/runtime/effective-task',
         replacement: resolve(__dirname, 'src/runtime/effective-task.ts'),
       },
@@ -70,6 +82,10 @@ export default defineConfig({
     ],
   },
   test: {
+    // The suite deliberately exercises process-global data isolation and
+    // SQLite-backed migrations. Parallel workers can race those boundaries
+    // and turn healthy tests into misleading five-second timeout cascades.
+    maxWorkers: 1,
     setupFiles: ['./scripts/vitest-data-isolation.ts'],
     include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
     coverage: {

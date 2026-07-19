@@ -228,6 +228,7 @@ describe('applyProjectMigrations', () => {
         releases: [],
         tasks: [{ id: 'task-runtime-repair', title: 'Runtime repair task', status: 'ready' }],
       },
+      summary: {},
     })
     await applyProjectMigrations({ projectRoot, only: ['0.12.0/project-state-database'] })
     promoteProjectStateDatabaseAuthority(projectRoot)
@@ -509,7 +510,7 @@ describe('applyProjectMigrations', () => {
       only: ['0.13.9/current-proof-read-model'],
     })
     expect(result.applied.map(item => item.id)).toEqual(['0.13.9/current-proof-read-model'])
-    expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks[0].currentSummary).toMatchObject({
+    expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks[0]?.currentSummary).toMatchObject({
       proof: {
         state: 'needed',
         expectationCount: 0,
@@ -589,13 +590,13 @@ describe('applyProjectMigrations', () => {
         })],
       }),
     ])
-    expect(task?.acceptanceCriteria?.[0]).toMatchObject({
+    expect((task?.acceptanceCriteria as Array<Record<string, unknown>> | undefined)?.[0]).toMatchObject({
       verifiedBy: 'review',
       source: 'inferred',
       met: false,
       verificationState: 'stale',
     })
-    expect(task?.acceptanceCriteria?.[0]).not.toHaveProperty('command')
+    expect((task?.acceptanceCriteria as Array<Record<string, unknown>> | undefined)?.[0]).not.toHaveProperty('command')
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.13.10/imported-script-proof-contracts'],
@@ -672,7 +673,7 @@ describe('applyProjectMigrations', () => {
     expect(task?.status).toBe('exploring')
     expect(task?.spec).toBeUndefined()
     expect(task?.productBrief).toBeUndefined()
-    expect(task?.notes?.at(-1)?.content).toContain('internal recovery/process history')
+    expect((task?.notes as Array<Record<string, unknown>> | undefined)?.at(-1)?.content).toContain('internal recovery/process history')
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.13.11/current-plan-recovery-boundary'],
@@ -841,7 +842,7 @@ describe('applyProjectMigrations', () => {
     expect(migrated.prepare("SELECT 1 FROM projection_watermarks WHERE domain = 'owner-input'").get()).toBeTruthy()
     expect(migrated.prepare('SELECT COUNT(*) AS count FROM owner_inputs').get()).toEqual({ count: 1 })
     migrated.close()
-    expect(readProjectStateDatabaseSummary(tasksPath)?.payload.ownerInput).toMatchObject({
+    expect((readProjectStateDatabaseSummary(tasksPath)?.payload as Record<string, unknown> | undefined)?.ownerInput).toMatchObject({
       openCount: 1,
       next: { taskId: 'task-owner-input', prompt: 'Which proof should run first?' },
     })
@@ -886,7 +887,7 @@ describe('applyProjectMigrations', () => {
     expect(stored).not.toHaveProperty('ownerInput')
     expect(database.prepare('SELECT COUNT(*) AS count FROM owner_inputs').get()).toEqual({ count: 0 })
     database.close()
-    expect(readProjectStateDatabaseSummary(tasksPath)?.payload.ownerInput).toMatchObject({
+    expect((readProjectStateDatabaseSummary(tasksPath)?.payload as Record<string, unknown> | undefined)?.ownerInput).toMatchObject({
       openCount: 0,
       next: null,
     })

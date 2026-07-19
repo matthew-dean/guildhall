@@ -1136,7 +1136,7 @@ describe('buildContext — task summary', () => {
           id: 'ac-4',
           description:
             'Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result against this task before the parent work is treated as satisfied.',
-          verifiedBy: 'manual',
+          verifiedBy: 'human',
         },
       ],
       notes: [

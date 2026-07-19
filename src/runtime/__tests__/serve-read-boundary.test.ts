@@ -157,6 +157,7 @@ async function seedDurableState(): Promise<void> {
       kind: 'release',
       state: 'active',
       source: 'owner_approved',
+      proofStyle: 'unspecified',
       nodeIds: ['work:task-boundary'],
       deferredNodeIds: [],
     }],
@@ -294,7 +295,7 @@ describe('GET route read boundaries', () => {
   })
 
   it('reads ordinary Git Story from the saved diagnostic projection without inspecting Git', async () => {
-    const projectRevision = sessions.readProjectStateDatabaseMetadata(tmpDir).revision
+    const projectRevision = sessions.readProjectStateDatabaseMetadata(tmpDir)?.revision ?? 0
     sessions.writeProjectStateDatabaseDiagnosticProjection(tmpDir, {
       sourceRevision: projectRevision,
       freshness: 'current',
@@ -352,6 +353,7 @@ describe('GET route read boundaries', () => {
           kind: 'release',
           state: 'active',
           source: 'owner_approved',
+          proofStyle: 'unspecified',
           nodeIds: ['work:task-boundary'],
           deferredNodeIds: [],
         }],
@@ -1067,8 +1069,6 @@ describe('GET route read boundaries', () => {
       dismissEndpoint: '/api/project/attention/dismiss?id=attention-fleet-boundary',
     }])
     await upsertTaskRuntimeState(tmpDir, 'task-boundary', {
-      taskId: 'task-boundary',
-      status: 'running',
       updatedAt: '2026-07-14T00:02:00.000Z',
     })
     registerWorkspace({ id: projectId, name: 'Read Boundary Test', path: tmpDir, tags: [] })

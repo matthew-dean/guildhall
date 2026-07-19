@@ -4,7 +4,7 @@ import {
   buildReleaseVerdictSummary,
   type ReleaseStatusSummary,
   type ReleaseStatusTone,
-} from '../../shared/release-readiness.js'
+} from '@guildhall/shared'
 
 type ReleaseReadinessLike = ProjectReleaseReadiness & {
   designSystem?: {

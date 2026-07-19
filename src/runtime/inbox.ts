@@ -39,7 +39,7 @@ import {
   progressForTask,
   emptyWizardsState,
 } from './wizards.js'
-import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
+import { taskShapingBlockers } from '@guildhall/shared'
 
 export type InboxSeverity = 'high' | 'medium' | 'low'
 

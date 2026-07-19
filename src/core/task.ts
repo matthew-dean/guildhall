@@ -1429,9 +1429,25 @@ export const Task = z.object({
   completedAt: z.string().optional(),
 })
 type ParsedTask = z.infer<typeof Task>
-export type Task = Omit<ParsedTask, 'hierarchy' | 'releaseIds'> & {
-  hierarchy?: WorkHierarchy
+/**
+ * Task definitions may arrive as raw authoring fixtures before the parser has
+ * filled defaults. The persisted/read Task schema still emits `source` on
+ * every acceptance criterion; keeping it optional here describes the input
+ * boundary without weakening that runtime normalization.
+ */
+type TaskAcceptanceCriterion = Omit<ParsedTask['acceptanceCriteria'][number], 'source' | 'verifiedBy' | 'met'> & {
+  source?: 'documented' | 'inferred'
+  verifiedBy?: 'automated' | 'human' | 'review'
+  met?: boolean
+}
+type TaskHierarchy = Omit<WorkHierarchy, 'order'> & { order?: number }
+export type Task = Omit<ParsedTask, 'hierarchy' | 'releaseIds' | 'references' | 'sourceClaims' | 'acceptanceCriteria'> & {
+  hierarchy?: TaskHierarchy
   releaseIds?: string[]
+  acceptanceCriteria: TaskAcceptanceCriterion[]
+  /** Defaulted at the parse boundary; legacy fixtures may omit these fields. */
+  references?: string[]
+  sourceClaims?: TaskSourceClaim[]
   /**
    * @deprecated Legacy pre-0.10 raw field. The normal Task schema no longer
    * accepts or writes task-local owner questions; use OwnerInputRequest records

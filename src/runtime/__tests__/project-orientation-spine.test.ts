@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { Task } from '@guildhall/core'
 import {
   buildProjectOrientationSpine,
   reconcileOrientationSpineWithReleaseTruth,
@@ -287,15 +288,7 @@ describe('buildProjectOrientationSpine', () => {
           actionHref: '/projects/narrative-harness/work',
         },
         release: {
-          id: 'near-term-proof-scope',
-          label: 'Near-term proof scope',
-          kind: 'release',
           state: 'active',
-          source: 'inferred',
-          description: null,
-          nodeIds: ['work:dialogue', 'work:fixture'],
-          deferredNodeIds: [],
-          proofStyle: 'unspecified',
           blockers: [{
             id: 'dialogue',
             label: 'Implement dialogue-and-character-voice reviewer lane: waiting for review before work can start.',
@@ -1058,7 +1051,7 @@ describe('buildProjectOrientationSpine', () => {
       scopeProjection,
       workspaceImportDraft: {
         source: {
-          kind: 'workspace_import',
+          kind: 'import',
           refs: ['/tmp/narrative-harness/docs/harness/implementation-roadmap.md'],
           confidence: 'high',
           freshness: 'fresh',
@@ -2479,12 +2472,12 @@ describe('buildProjectOrientationSpine', () => {
         start: {
           canStart: false,
           code: 'workspace_import_refresh_needed',
-          label: 'Start blocked',
+          label: 'Review',
           message: 'Workspace import is under-scoped for newly documented work.',
           actionHref: '/workspace-import',
         },
         release: {
-          state: 'done',
+          state: 'blocked',
           blockers: [],
         },
       },
@@ -3126,10 +3119,10 @@ describe('buildProjectOrientationSpine', () => {
         id: 'task-current',
         title: 'Materialized release task',
         description: 'Already approved imported work.',
-        domain: 'knit',
-        status: 'import_draft',
-        releaseIds: ['stage-1-v1-release-hardening'],
-      }],
+          domain: 'knit',
+          status: 'import_draft',
+          releaseIds: ['stage-1-v1-release-hardening'],
+        } as unknown as Task],
     })
     const spine = buildProjectOrientationSpine({
       projectId: 'looma-knit',
@@ -3712,7 +3705,7 @@ describe('buildProjectOrientationSpine', () => {
       deferredNodeIds: ['work:legacy-deferred'],
       proofStyle: 'script_only' as const,
     }]
-    const scopeProjection = buildProjectScopeProjection({ tasks, releases, selectedReleaseId: 'stage-1' })
+    const scopeProjection = buildProjectScopeProjection({ tasks: tasks as unknown as Task[], releases, selectedReleaseId: 'stage-1' })
 
     const spine = buildProjectOrientationSpine({
       projectId: 'demo',

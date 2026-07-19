@@ -105,6 +105,7 @@ export interface ProjectSummaryProjection {
     source: string
     included: number
     deferred: number
+    proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
   } | null
   orientation: ProjectOrientationSnapshot | null
   orientationSpine: ProjectOrientationSpine | null
@@ -207,8 +208,9 @@ type IndexedCurrentProof = {
 }
 
 function indexedCurrentProofForTask(task: ProjectStateDatabaseTask): IndexedCurrentProof | undefined {
-  const proof = task.currentSummary?.proof
-  if (!proof || typeof proof !== 'object' || Array.isArray(proof)) return undefined
+  const currentSummary = isRecord(task.currentSummary) ? task.currentSummary : null
+  const proof = currentSummary && isRecord(currentSummary.proof) ? currentSummary.proof : null
+  if (!proof) return undefined
   const state = proof.state
   if (state !== 'none' && state !== 'needed' && state !== 'partial' && state !== 'proven') return undefined
   return {
@@ -604,6 +606,7 @@ export function buildProjectSummaryProjection(
           source: selectedScope.source,
           included: scopeProjection.counts.included,
           deferred: scopeProjection.counts.deferred,
+          ...(selectedScope.proofStyle ? { proofStyle: selectedScope.proofStyle } : {}),
         }
       : null,
     orientation: input.orientation ?? null,
@@ -636,7 +639,30 @@ function taskStatusCounts(rows: readonly { status?: unknown }[]): Record<string,
 }
 
 function indexedExecutionRows(rows: readonly IndexedSummaryScopeRow[]): IndexedSummaryScopeRow[] {
-  return executionScopeRows(rows as unknown as ProjectScopeRow[]) as unknown as IndexedSummaryScopeRow[]
+  return executionScopeRows(indexedScopeRowsAsProjectScopeRows(rows)) as unknown as IndexedSummaryScopeRow[]
+}
+
+function indexedScopeRowsAsProjectScopeRows(rows: readonly IndexedSummaryScopeRow[]): ProjectScopeRow[] {
+  return rows.map(row => normalizeProjectScopeRowReadModel({
+    ...row,
+    parentTaskId: row.parentTaskId ?? undefined,
+    status: row.status as ProjectScopeRow['status'],
+    eligibilityReason: row.eligibilityReason as ProjectScopeRow['eligibilityReason'],
+    hierarchyRole: row.hierarchyRole as ProjectScopeRow['hierarchyRole'],
+    handoffState: row.handoffState as ProjectScopeRow['handoffState'],
+  } as unknown as ProjectScopeRow))
+}
+
+function indexedScopeSource(value: unknown): ProjectScope['source'] {
+  return value === 'owner_approved' || value === 'spec' || value === 'release_plan' || value === 'inferred'
+    ? value
+    : 'inferred'
+}
+
+function indexedProofStyle(value: unknown): ProjectScope['proofStyle'] | undefined {
+  return value === 'script_only' || value === 'manual' || value === 'mixed' || value === 'unspecified'
+    ? value
+    : undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -659,15 +685,16 @@ function indexedStartReadiness(
         id: selectedReleaseId ?? String(selectedRelease.id),
         label: String(selectedRelease.label ?? selectedRelease.id),
         kind: selectedRelease.kind === 'milestone' ? 'milestone' as const : 'release' as const,
-        source: selectedRelease.source === 'owner_approved' || selectedRelease.source === 'spec' || selectedRelease.source === 'release_plan'
-          ? selectedRelease.source
-          : 'inferred' as const,
+        source: indexedScopeSource(selectedRelease.source),
         nodeIds: Array.isArray(selectedRelease.nodeIds)
           ? selectedRelease.nodeIds.filter((value): value is string => typeof value === 'string')
           : [],
         deferredNodeIds: Array.isArray(selectedRelease.deferredNodeIds)
           ? selectedRelease.deferredNodeIds.filter((value): value is string => typeof value === 'string')
           : [],
+        ...(indexedProofStyle(selectedRelease.proofStyle)
+          ? { proofStyle: indexedProofStyle(selectedRelease.proofStyle) }
+          : {}),
       }
     : null
   return summarizeProjectScopeStart(
@@ -762,7 +789,9 @@ export function buildProjectSummaryProjectionFromIndexedState(
         } satisfies IndexedSummaryScopeRow]
       : []
   })
-  const indexedRows = rawIndexedRows.map(row => normalizeProjectScopeRowReadModel(row as unknown as ProjectScopeRow) as unknown as IndexedSummaryScopeRow)
+  const indexedRows: IndexedSummaryScopeRow[] = rawIndexedRows.map(row =>
+    indexedScopeRowsAsProjectScopeRows([row])[0] as unknown as IndexedSummaryScopeRow,
+  )
   const currentProofByTaskId = new Map<string, IndexedCurrentProof>(
     tasks.flatMap(task => {
       const proof = indexedCurrentProofForTask(task)
@@ -788,11 +817,11 @@ export function buildProjectSummaryProjectionFromIndexedState(
     // Scope rows are persisted projections, not a second source of proof
     // truth. Re-normalize their release flags from the current compact task
     // point so an old proof blocker cannot survive after a linked child closes.
-    return normalizeProjectScopeRowReadModel({
+    return indexedScopeRowsAsProjectScopeRows([{
       ...row,
       proofBlocked,
       ...(proofBlocked ? { blockerSummary: 'Completion proof is missing or stale.' } : {}),
-    })
+    }])[0] as unknown as IndexedSummaryScopeRow
   })
   const rowsByTaskId = new Map(rows.map(row => [row.taskId, row]))
   const executionRows = indexedExecutionRows(rows)
@@ -820,7 +849,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const selectedRelease = selectedReleaseRow && priorRelease?.id === selectedReleaseRow.id
     ? { ...selectedReleaseRow, ...priorRelease }
     : selectedReleaseRow
-  const indexedRelease = summarizeProjectScopeRelease(rows as unknown as ProjectScopeRow[])
+  const indexedRelease = summarizeProjectScopeRelease(indexedScopeRowsAsProjectScopeRows(rows))
   const taskReleaseBlockers = indexedRelease.blockers
   const releaseExecutionRows = includedRows.filter(row => row.hierarchyRole !== 'parent' || !includedRows.some(child => child.parentTaskId === row.taskId))
   const releaseSummary: ProjectSummaryReleaseSummary = {
@@ -843,7 +872,12 @@ export function buildProjectSummaryProjectionFromIndexedState(
       active: releaseExecutionRows.filter(row => ['paused', 'review'].includes(row.handoffState)).length,
       blocked: releaseExecutionRows.filter(row => row.blocksRelease).length,
       deferred: deferredRows.length,
-      ownerBlocked: releaseExecutionRows.filter(projectScopeRowNeedsOwnerInput).length,
+      ownerBlocked: releaseExecutionRows.filter(row => projectScopeRowNeedsOwnerInput({
+        scope: row.scope,
+        status: row.status as ProjectScopeRow['status'],
+        handoffState: row.handoffState as ProjectScopeRow['handoffState'],
+        humanBlocking: row.humanBlocking,
+      })).length,
       proofBlocked: releaseExecutionRows.filter(row => row.proofBlocked).length,
     },
     taskStatusCounts: taskStatusCounts(releaseExecutionRows),
@@ -887,9 +921,12 @@ export function buildProjectSummaryProjectionFromIndexedState(
         id: String(selectedRelease.id),
         label: String(selectedRelease.label ?? selectedRelease.id),
         kind: String(selectedRelease.kind ?? 'release'),
-        source: String(selectedRelease.source ?? 'inferred'),
+        source: indexedScopeSource(selectedRelease.source),
         included: includedRows.length,
         deferred: deferredRows.length,
+        ...(indexedProofStyle(selectedRelease.proofStyle)
+          ? { proofStyle: indexedProofStyle(selectedRelease.proofStyle) }
+          : {}),
       }
     : null
   const currentOrientationSpine = synchronizeIndexedOrientationSpine(base.orientationSpine, {
@@ -915,7 +952,12 @@ export function buildProjectSummaryProjectionFromIndexedState(
       deferred: deferredRows.length,
       ready: includedRows.filter(row => row.handoffState === 'ready').length,
       paused: includedRows.filter(row => row.handoffState === 'paused').length,
-      ownerBlocked: includedRows.filter(projectScopeRowNeedsOwnerInput).length,
+      ownerBlocked: includedRows.filter(row => projectScopeRowNeedsOwnerInput({
+        scope: row.scope,
+        status: row.status as ProjectScopeRow['status'],
+        handoffState: row.handoffState as ProjectScopeRow['handoffState'],
+        humanBlocking: row.humanBlocking,
+      })).length,
       proofBlocked: includedRows.filter(row => row.proofBlocked).length,
     },
     scope,

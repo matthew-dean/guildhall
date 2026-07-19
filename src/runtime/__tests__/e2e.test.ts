@@ -117,7 +117,7 @@ async function applyCanonicalProjectMigrations(projectRoot: string, seedEmptyQue
     if (canonicalIds.length === 0) break
     const result = await applyProjectMigrations({
       projectRoot,
-      only: [canonicalIds[0]],
+      only: [canonicalIds[0]!],
       appVersion: 'e2e-test',
     })
     expect(result.failed).toEqual([])
@@ -243,10 +243,11 @@ async function seedPromotedQueue(queue: TaskQueue): Promise<void> {
   ] as const
 
   for (const task of queue.tasks) {
+    const rawTask = task as Task & Record<string, unknown>
     const updatedAt = typeof task.updatedAt === 'string' ? task.updatedAt : queue.lastUpdated
     const runtime: Record<string, unknown> = {}
     for (const field of ['assignedTo', 'revisionCount', 'retryWindow', 'remediationAttempts', 'handoffStep', 'proofRecovery'] as const) {
-      const value = task[field]
+      const value = rawTask[field]
       if (value !== undefined) runtime[field] = value
     }
     if (Array.isArray(task.escalations)) {
@@ -267,31 +268,32 @@ async function seedPromotedQueue(queue: TaskQueue): Promise<void> {
 
     const workspace = Object.fromEntries(
       ['worktreePath', 'branchName', 'baseBranch', 'mergeRecord']
-        .filter(field => task[field] !== undefined)
-        .map(field => [field, task[field]]),
+        .filter(field => rawTask[field] !== undefined)
+        .map(field => [field, rawTask[field]]),
     )
     if (Object.keys(workspace).length > 0) {
       await upsertTaskWorkspaceState(tmpDir, task.id, { ...workspace, updatedAt } as never)
     }
 
     for (const collection of evidenceCollections) {
-      const values = task[collection.field]
+      const values = rawTask[collection.field]
       if (!Array.isArray(values)) continue
       for (const [index, value] of values.entries()) {
         await appendTaskEvidence(tmpDir, task.id, {
-          id: String(value.id ?? `${task.id}-${collection.kind}-${index + 1}`),
+          id: String((value as Record<string, unknown>).id ?? `${task.id}-${collection.kind}-${index + 1}`),
           kind: collection.kind,
           recordedAt: typeof collection.timestamp(value) === 'string' ? collection.timestamp(value) as string : updatedAt,
-          payload: value,
+          payload: value as Record<string, unknown>,
         })
       }
     }
-    if (task.mergeRecord) {
+    const mergeRecord = rawTask.mergeRecord as Record<string, unknown> | undefined
+    if (mergeRecord) {
       await appendTaskEvidence(tmpDir, task.id, {
-        id: String(task.mergeRecord.id ?? `${task.id}-merge-record-1`),
+        id: String(mergeRecord.id ?? `${task.id}-merge-record-1`),
         kind: 'merge_record',
-        recordedAt: typeof task.mergeRecord.mergedAt === 'string' ? task.mergeRecord.mergedAt : updatedAt,
-        payload: task.mergeRecord,
+        recordedAt: typeof mergeRecord.mergedAt === 'string' ? mergeRecord.mergedAt : updatedAt,
+        payload: mergeRecord,
       })
     }
   }

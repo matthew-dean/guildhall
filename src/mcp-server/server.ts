@@ -7,7 +7,7 @@ import {
   createMcpCapabilityRequest,
   listMcpCapabilityRequests,
 } from './evidence.js'
-import { writePromotedTaskDetailMutation } from '../runtime/project-state-boundary.js'
+import { writePromotedTaskDetailMutation } from '@guildhall/runtime/project-state-boundary'
 import {
   buildGuildhallResourceIndex,
   importMcpExternalMemoryBridgeRecord,

@@ -36,14 +36,15 @@ import {
 } from './current-milestone-shadowing.js'
 import { deriveReleaseContainersFromTaskMembership, releaseLabelFromId, taskScopeNodeId } from './project-scope-projection.js'
 import { applyTaskShaping } from './task-decomposition.js'
-import { isMaterializableSplitAction, materializeSplitChildren } from '../tools/task-queue.js'
-import { effectiveTaskTitle } from '../shared/task-display-label.js'
+import { isMaterializableSplitAction, materializeSplitChildren } from '@guildhall/tools'
+import { effectiveTaskTitle } from '@guildhall/shared'
 import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
 import {
   contractShapedImportHasNoConcreteContracts,
   titleLooksContractShaped,
 } from './imported-work-integrity.js'
 import { readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
+import { WORKSPACE_IMPORT_TASK_ID } from './project-reserved-task-ids.js'
 import { writeProjectSummaryProjectionFromUnknownQueue } from './project-summary-projection.js'
 
 // ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ import { writeProjectSummaryProjectionFromUnknownQueue } from './project-summary
 // ask about the ambiguous ones before the import lands.
 // ---------------------------------------------------------------------------
 
-export const WORKSPACE_IMPORT_TASK_ID = 'task-workspace-import'
+export { WORKSPACE_IMPORT_TASK_ID } from './project-reserved-task-ids.js'
 export const WORKSPACE_IMPORT_DOMAIN = '_workspace_import'
 
 export function workspaceImportTasksPath(memoryDir: string): string {
@@ -633,9 +634,9 @@ function importedSourceClaimsForTask(
 }
 
 function dedupeImportSourceClaims(claims: readonly NonNullable<MaterializedImportTask['sourceClaims']>[number][]): Task['sourceClaims'] {
-  const byKey = new Map<string, Task['sourceClaims'][number]>()
+  const byKey = new Map<string, NonNullable<Task['sourceClaims']>[number]>()
   for (const claim of claims) {
-    const normalized: Task['sourceClaims'][number] = {
+    const normalized: NonNullable<Task['sourceClaims']>[number] = {
       source: claim.source,
       title: claim.title,
       evidence: claim.evidence,

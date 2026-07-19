@@ -42,7 +42,7 @@ import {
   validateProductBriefGrounding,
   validateSpecCompletionBoundary,
 } from './spec-quality.js'
-import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
+import { taskShapingBlockers } from '@guildhall/shared'
 import { applyTaskShaping } from './task-decomposition.js'
 import { transitionTaskStatus } from './task-transition.js'
 import { cancelOwnerInputRequestsForTask, createOwnerInputRequest } from './owner-input-store.js'

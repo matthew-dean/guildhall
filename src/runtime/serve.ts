@@ -127,7 +127,7 @@ import {
   settleMaterializedSplitReadiness,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { DesignSystem, parseAcceptanceCriteriaFromSpec, summarizeDesignSystem, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
+import { DesignSystem, parseAcceptanceCriteriaFromSpec, summarizeDesignSystem, Task as TaskSchema, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -226,6 +226,7 @@ import {
   taskEligibleForSelectedScope,
   type BuildProjectOrientationSpineInput,
   type OrientationRelease,
+  type OrientationReleaseState,
   type OrientationScope,
   type ProjectOrientationCharter,
   type ProjectOrientationSpine,
@@ -337,9 +338,7 @@ import {
   resetProjectSkillProposals,
 } from '@guildhall/skills'
 import { importedTaskNeedsBriefShaping, importedTaskNeedsSourceRecovery, normalizeImportedDraftTask } from './import-drafts.js'
-import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
-import { buildReleaseCompletionSummary, buildReleaseVerdictSummary } from '../shared/release-readiness.js'
-import { ownerInputObjectiveLabel } from '../shared/owner-input-label.js'
+import { taskShapingBlockers, buildReleaseCompletionSummary, buildReleaseVerdictSummary, ownerInputObjectiveLabel } from '@guildhall/shared'
 import { selectedReleaseScopeForQueue, selectedTaskScopeForQueue } from './orchestrator-picker.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import {
@@ -968,7 +967,8 @@ function savedProofEvidenceStartBlocker(
   proofTaskIds: string[]
   count: number
 } | null {
-  const count = summary?.releaseSummary.counts.proofBlocked ?? 0
+  if (!summary) return null
+  const count = summary.releaseSummary.counts.proofBlocked
   if (count <= 0) return null
 
   const proofTaskIds = summary.releaseSummary.blockers
@@ -1720,7 +1720,9 @@ async function repairWeakRecoverySpecReviewTask(projectPath: string, requestedTa
     const queue = TaskQueue.parse(queueRead.queue)
     const taskIndex = queue.tasks.findIndex(candidate => candidate.id === requestedTaskId)
     if (taskIndex < 0) return false
-    queue.tasks[taskIndex] = await buildEffectiveTask(projectPath, queue.tasks[taskIndex], { evidence: 'full' })
+    const task = queue.tasks[taskIndex]
+    if (!task) return false
+    queue.tasks[taskIndex] = TaskSchema.parse(await buildEffectiveTask(projectPath, task, { evidence: 'full' }))
     const repaired = repairWeakRecoverySpecReviewSeedInQueue(queue, {
       taskId: requestedTaskId,
       now,
@@ -1768,7 +1770,9 @@ async function repairWeakRecoverySpecReviewTask(projectPath: string, requestedTa
   } as TaskQueue
   const taskIndex = queue.tasks.findIndex(candidate => candidate.id === requestedTaskId)
   if (taskIndex < 0) return false
-  queue.tasks[taskIndex] = await buildEffectiveTask(projectPath, queue.tasks[taskIndex], { evidence: 'full' })
+  const task = queue.tasks[taskIndex]
+  if (!task) return false
+  queue.tasks[taskIndex] = TaskSchema.parse(await buildEffectiveTask(projectPath, task, { evidence: 'full' }))
   const repaired = repairWeakRecoverySpecReviewSeedInQueue(queue, {
     taskId: requestedTaskId,
     now,
@@ -2453,7 +2457,7 @@ function summarizeProjectFromProjection(
     // restart, the compact execution row is the only durable status; falling
     // back to "stopped" would make the action model disagree with the saved
     // project state until another run event arrived.
-    runStatus: run?.status ?? projection.execution?.status ?? 'stopped',
+    runStatus: projection.execution?.status ?? 'stopped',
     runMode: projection.execution?.mode,
     tasks: [
       ...(projection.nextAction.focusTaskId
@@ -3250,13 +3254,17 @@ function buildOrientationSpineWithScopedReleaseTruth(
 function orientationReleaseTruthFromSummary(
   summary: ProjectSummaryProjection['releaseSummary'] | null | undefined,
   queue?: {
-    releases?: readonly ProjectRelease[]
+    releases?: readonly unknown[]
     selectedReleaseId?: string | null
   },
 ) {
   const selectedReleaseId = queue?.selectedReleaseId ?? null
-  const lifecycleState = selectedReleaseId
-    ? queue?.releases?.find(release => release.id === selectedReleaseId)?.state
+  const selectedRelease = selectedReleaseId
+    ? queue?.releases?.find(release => isRecord(release) && release.id === selectedReleaseId)
+    : undefined
+  const lifecycleState: OrientationReleaseState | undefined = selectedRelease && isRecord(selectedRelease) &&
+      ['active', 'deferred', 'planned', 'ready', 'shipped'].includes(String(selectedRelease.state))
+    ? selectedRelease.state as OrientationReleaseState
     : undefined
   return {
     ...(lifecycleState ? { lifecycleState } : {}),
@@ -6947,7 +6955,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const liveSummarySpine = reconcileOrientationSpineWithReleaseTruth(
       {
         ...builtOrientationSpine,
-        summary: liveOrientationPreview.summary,
+        summary: liveOrientationPreview.summary as ProjectOrientationSpine['summary'],
       },
       {
         ...orientationReleaseTruthFromSummary(projection.releaseSummary, scopeQueue),
@@ -14551,7 +14559,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         // checking raw release nodeIds here would disagree with Overview,
         // Release, and Start readiness.
         const selectedTaskIsEligible = selectedScope
-          ? releaseState.scopeRows.some(row => row.taskId === String(task.id ?? '') && row.scope === 'included')
+          ? releaseState.scopeRows.some(row => row.taskId === String(task?.id ?? '') && row.scope === 'included')
           : false
         const selectedProofStyle = selectedTaskIsEligible ? selectedRelease?.proofStyle : undefined
         const currentTaskRead = await readProjectTaskCurrentStateAtBoundary(project.path, id)

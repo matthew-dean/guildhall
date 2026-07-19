@@ -10,8 +10,8 @@ import {
   readProjectTaskQueueSync,
   writePromotedTaskDetailMutation,
   writeProjectTaskQueueWithSummary,
-} from '../runtime/project-state-boundary.js'
-import { currentPlanProcessLeakage, validateProductBriefGrounding } from '../runtime/spec-quality.js'
+} from '@guildhall/runtime/project-state-boundary'
+import { currentPlanProcessLeakage, validateProductBriefGrounding } from '@guildhall/runtime/spec-quality'
 
 // ---------------------------------------------------------------------------
 // update-product-brief: the Spec Agent's authoring surface for the product

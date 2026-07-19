@@ -42,7 +42,7 @@ import { projectTaskStateExistsSync, readProjectTaskQueueSync } from './project-
 import type { GitStorySnapshot } from './git-story.js'
 import { userFacingText } from './user-facing-text.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
-import { taskShapingBlockers, type TaskShapingBlocker } from '../shared/task-shaping-blockers.js'
+import { taskShapingBlockers, type TaskShapingBlocker } from '@guildhall/shared'
 
 // ---------------------------------------------------------------------------
 // Turn shape

@@ -21,7 +21,7 @@ import {
 } from '@guildhall/config'
 import { compactProjectState, type ProjectStateCompactionResult } from './project-state-compaction.js'
 import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.js'
-import { compactExploringTranscripts, type ExploringHistoryCompactionResult } from '../tools/exploring-transcript.js'
+import { compactExploringTranscripts, type ExploringHistoryCompactionResult } from '@guildhall/tools'
 
 const execFileP = promisify(execFile)
 

@@ -40,9 +40,9 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueue,
 } from '@guildhall/runtime/project-state-boundary'
-import { buildEffectiveTask } from '../runtime/effective-task.js'
-import { currentPlanProcessLeakage, validateSpecGrounding } from '../runtime/spec-quality.js'
-import { isConcreteProjectProofCommand } from '../runtime/proof-paths.js'
+import { buildEffectiveTask } from '@guildhall/runtime/effective-task'
+import { currentPlanProcessLeakage, validateSpecGrounding } from '@guildhall/runtime/spec-quality'
+import { isConcreteProjectProofCommand } from '@guildhall/runtime/proof-paths'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -647,7 +647,7 @@ export function materializeSplitChildren(
     if (!queue.tasks.some((candidate) => candidate.id === task.id)) queue.tasks.push(task)
     if (usesSavedChildPlans) childPlan.createdTaskId = task.id
     if ((task.releaseIds ?? []).length === 0 && (parent.releaseIds ?? []).length > 0) task.releaseIds = [...(parent.releaseIds ?? [])]
-    if (task.references.length === 0 && parent.references.length > 0) task.references = [...parent.references]
+    if ((task.references ?? []).length === 0 && (parent.references ?? []).length > 0) task.references = [...(parent.references ?? [])]
     task.hierarchy = {
       ...(task.hierarchy ?? {}),
       parentId: parent.id,
@@ -807,7 +807,7 @@ export function materializeProofSetupTask(
       countInProjectTotals: false,
     },
     releaseIds: [...(parent.releaseIds ?? [])],
-    references: [...parent.references],
+    references: [...(parent.references ?? [])],
     delivery: {
       ...(parent.delivery ?? {}),
       supports: [parent.id, ...(parent.delivery?.supports ?? [])]
@@ -1252,7 +1252,7 @@ function createSplitChildTask(input: {
     proposalRationale: input.reason,
     workKind,
     releaseIds: [...(input.parent.releaseIds ?? [])],
-    references: [...input.parent.references],
+    references: [...(input.parent.references ?? [])],
     delivery: {
       ...(input.parent.delivery ?? {}),
       supports: [

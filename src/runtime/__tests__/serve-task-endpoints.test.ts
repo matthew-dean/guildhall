@@ -44,6 +44,7 @@ import {
 import { writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
 import { buildEffectiveTask } from '../effective-task.js'
 import { applyProjectMigrations, getProjectMigrationStatus } from '../migrations.js'
+import { TaskEvidenceEvent } from '@guildhall/core'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
@@ -79,7 +80,15 @@ type TaskFixture = {
   definition: Record<string, any>
   runtime?: Record<string, any>
   workspace?: Record<string, any>
-  evidence?: Array<Record<string, any>>
+  evidence?: Array<TaskEvidenceEvent>
+}
+
+function findLastMatching<T>(items: readonly T[], predicate: (item: T) => boolean): T | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]
+    if (item !== undefined && predicate(item)) return item
+  }
+  return undefined
 }
 
 const runtimeFixtureFields = [
@@ -98,18 +107,18 @@ function hasOwn(value: Record<string, any>, key: string): boolean {
 
 function fixtureEvent(
   taskId: string,
-  kind: string,
+  kind: TaskEvidenceEvent['kind'],
   value: Record<string, any>,
   index: number,
   recordedAt: string,
-): Record<string, any> {
-  return {
+): TaskEvidenceEvent {
+  return TaskEvidenceEvent.parse({
     id: String(value.id ?? `${taskId}-${kind}-${index + 1}`),
     taskId,
     kind,
     recordedAt,
     payload: value,
-  }
+  })
 }
 
 function normalizeTaskFixture(task: Record<string, any>, now: string): TaskFixture {
@@ -126,8 +135,15 @@ function normalizeTaskFixture(task: Record<string, any>, now: string): TaskFixtu
   const runtime: Record<string, any> = { ...(task.runtime ?? {}) }
   const workspace: Record<string, any> = { ...(task.workspace ?? {}) }
   const evidenceKinds = new Set(['event', 'note', 'gate_result', 'review_verdict', 'adjudication', 'escalation', 'agent_issue', 'merge_record', 'git_story', 'completion_summary'])
-  const evidence: Array<Record<string, any>> = (task.evidence ?? [])
+  const evidence: Array<TaskEvidenceEvent> = (task.evidence ?? [])
     .filter((event: Record<string, any>) => evidenceKinds.has(String(event.kind)))
+    .map((event: Record<string, any>, index: number) => TaskEvidenceEvent.parse({
+      ...event,
+      id: event.id ?? `${taskId}-event-${index + 1}`,
+      taskId: event.taskId ?? taskId,
+      recordedAt: event.recordedAt ?? now,
+      payload: event.payload ?? {},
+    }))
 
   for (const field of runtimeFixtureFields) {
     if (!hasOwn(definition, field)) continue
@@ -154,7 +170,7 @@ function normalizeTaskFixture(task: Record<string, any>, now: string): TaskFixtu
     values.forEach((value: Record<string, any>, index: number) => {
       evidence.push(fixtureEvent(
         taskId,
-        collection.kind,
+        collection.kind as TaskEvidenceEvent['kind'],
         value,
         index,
         collection.timestamp(value) ?? now,
@@ -1332,14 +1348,21 @@ describe('GET /api/project/task/:id', () => {
     await writeProjectDeliveryModel(tmpDir, {
       version: 1,
       updatedAt: '2026-06-05T12:00:00.000Z',
-      drivers: [{ id: 'knit', label: 'Knit', role: 'primary' }],
+      drivers: [{ id: 'knit', label: 'Knit', role: 'primary', paths: [], domains: [] }],
       primitives: [{
         id: 'menu-item',
         label: 'Menu item',
         kind: 'ui_primitive',
+        paths: [],
+        dependsOn: [],
+        invariants: [],
+        proof: [],
         status: 'proposed',
-        provingTaskIds: ['task-storybook'],
+        evidence: [],
+        aliases: [],
       }],
+      validationEvidence: [],
+      rejectedCandidates: [],
     })
     const deliveryRefresh = await refreshProjectDeliveryReadProjection(tmpDir)
     expect(deliveryRefresh.status).toBe('current')
@@ -2268,11 +2291,11 @@ describe('POST /api/project/task/:id/mark-done', () => {
     })
     expect(task.doneSummaryBundle.summary.decision).toMatch(/Task finished as done/)
     const evidence = await readTaskEvidence(tmpDir, 'task-1')
-    expect(evidence.findLast(event => event.kind === 'escalation')?.payload).toMatchObject({
+    expect(findLastMatching(evidence, event => event.kind === 'escalation')?.payload).toMatchObject({
       id: 'esc-1',
       summary: 'Waiting on hosted database credentials',
     })
-    expect(evidence.findLast(event => event.kind === 'note')?.payload).toMatchObject({
+    expect(findLastMatching(evidence, event => event.kind === 'note')?.payload).toMatchObject({
       content: expect.stringMatching(/supabase db push/),
     })
   })
@@ -2386,13 +2409,13 @@ describe('POST /api/project/task/:id/start', () => {
     expect(body.code).toBe('no_unattended_progress')
     expect(starts).toHaveLength(0)
     const queue = await readTaskQueue()
-    const task = queue.tasks.find(candidate => candidate.id === 'task-model-proof')
+    const task = queue.tasks.find((candidate: Record<string, any>) => candidate.id === 'task-model-proof')
     const criteria = (task?.acceptanceCriteria ?? []).map((criterion: Record<string, unknown>) => String(criterion.description ?? '')).join('\n')
     expect(criteria).toContain('DeepInfra-accessible model')
     expect(criteria).toContain('adult genres')
     expect(criteria).toContain('wet hair drying')
     expect(criteria).toContain('walking speed for fantasy epics')
-    expect(task?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+    expect((task?.workUnitAnalysis as Record<string, any> | undefined)?.units?.map((unit: Record<string, any>) => unit.title)).toEqual([
       'Select and prove DeepInfra drafting model',
       'Define world-state continuity review lane',
       'Define spatial/geographic continuity review lane',
@@ -2465,7 +2488,7 @@ describe('POST /api/project/task/:id/start', () => {
     expect((await res.json() as Record<string, unknown>).code).toBe('no_unattended_progress')
     expect(starts).toHaveLength(0)
     const queue = await readTaskQueue()
-    const task = queue.tasks.find(candidate => candidate.id === 'task-proof-recovery')
+    const task = queue.tasks.find((candidate: Record<string, any>) => candidate.id === 'task-proof-recovery')
     expect(task?.spec).toBe(originalSpec)
     expect(task?.notes?.at(-1)?.content).toContain('deterministic recovery spec seed')
     expect(task?.notes?.at(-1)?.content).not.toContain('under-shaped recovery spec')
@@ -2616,7 +2639,7 @@ describe('POST /api/project/task/:id/start', () => {
         })
       })
       const queue = await readTaskQueue()
-      const task = queue.tasks.find(candidate => candidate.id === 'task-model-proof')
+      const task = queue.tasks.find((candidate: Record<string, any>) => candidate.id === 'task-model-proof')
       expect(task).toMatchObject({
         status: 'exploring',
         assignedTo: null,
@@ -3058,7 +3081,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     expect(parent?.status).toBe('exploring')
     expect(parent?.assignedTo).toBeNull()
     const evidence = await readTaskEvidence(tmpDir, 'task-1', { kind: 'note' })
-    expect(evidence.findLast(event => String((event.payload as Record<string, unknown>)?.content).match(/fresh spec pass/i))).toBeTruthy()
+    expect(findLastMatching(evidence, event => String((event.payload as Record<string, unknown>)?.content).match(/fresh spec pass/i) !== null)).toBeTruthy()
     expect(staleChild?.hierarchy?.parentId).toBeUndefined()
     expect(activeChild?.hierarchy?.parentId).toBe('task-1')
   })
@@ -5840,11 +5863,11 @@ describe('GET /api/project/activity', () => {
     expect(task.assignedTo).toBe('worker-agent')
     const evidence = await readTaskEvidence(tmpDir, 't1', { kind: 'note' })
     const notes = evidence.map(event => event.payload as Record<string, unknown>)
-    expect(notes.findLast(note => note.role === 'policy-classification')?.content)
+    expect(findLastMatching(notes, note => note.role === 'policy-classification')?.content)
       .toContain('"safePlaybooks":["resume_from_checkpoint"]')
-    expect(notes.findLast(note => note.role === 'recovery-playbook')?.content)
+    expect(findLastMatching(notes, note => note.role === 'recovery-playbook')?.content)
       .toContain('"playbook":"resume_from_checkpoint"')
-    expect(notes.findLast(note => note.role === 'provider-recovery')).toBeUndefined()
+    expect(findLastMatching(notes, note => note.role === 'provider-recovery')).toBeUndefined()
   })
 
   it('keeps dirty worktree recovery state unchanged during activity polling', async () => {
@@ -5925,11 +5948,11 @@ describe('GET /api/project/activity', () => {
     expect(task.assignedTo).toBe('worker-agent')
     const evidence = await readTaskEvidence(tmpDir, 't1', { kind: 'note' })
     const notes = evidence.map(event => event.payload as Record<string, unknown>)
-    expect(notes.findLast(note => note.role === 'policy-classification')?.content)
+    expect(findLastMatching(notes, note => note.role === 'policy-classification')?.content)
       .toContain('"class":"provider_unavailable"')
-    expect(notes.findLast(note => note.role === 'recovery-playbook')?.content)
+    expect(findLastMatching(notes, note => note.role === 'recovery-playbook')?.content)
       .toContain('"playbook":"resume_from_checkpoint"')
-    expect(notes.findLast(note => note.role === 'recovery')).toBeUndefined()
+    expect(findLastMatching(notes, note => note.role === 'recovery')).toBeUndefined()
   })
 
   it('keeps corrected provider recovery state unchanged during activity polling', async () => {
@@ -6016,9 +6039,9 @@ describe('GET /api/project/activity', () => {
     const task = await buildEffectiveTask(tmpDir, queue.tasks[0] as any) as Record<string, any>
     const evidence = await readTaskEvidence(tmpDir, 't1', { kind: 'note' })
     const notes = evidence.map(event => event.payload as Record<string, unknown>)
-    expect(notes.findLast(note => note.role === 'policy-classification')?.content)
+    expect(findLastMatching(notes, note => note.role === 'policy-classification')?.content)
       .toContain('"class":"provider_unavailable"')
-    expect(notes.findLast(note => note.role === 'recovery')).toBeUndefined()
+    expect(findLastMatching(notes, note => note.role === 'recovery')).toBeUndefined()
   })
 
   it('returns empty summary when no tasks file exists yet', async () => {

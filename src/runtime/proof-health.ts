@@ -224,7 +224,8 @@ export function normalizeAcceptanceCriteriaForCurrentProof(task: Record<string, 
   const representedCommands = new Set(linkedCriteria
     .map(criterion => comparableCommand(criterion.command))
     .filter(Boolean))
-  const missingCommandCriteria = documentedCommands
+  type AcceptanceCriterion = Record<string, unknown>
+  const missingCommandCriteria: AcceptanceCriterion[] = documentedCommands
     .filter(command => !representedCommands.has(comparableCommand(command)))
     .map(command => ({
       id: commandCriterionId(command),
@@ -236,7 +237,7 @@ export function normalizeAcceptanceCriteriaForCurrentProof(task: Record<string, 
       command,
       met: false,
     }))
-  const projectedCriteria = missingCommandCriteria.length > 0
+  const projectedCriteria: AcceptanceCriterion[] = missingCommandCriteria.length > 0
     ? [...linkedCriteria, ...missingCommandCriteria]
     : linkedCriteria
   const projectedTask = commandProjection || missingCommandCriteria.length > 0

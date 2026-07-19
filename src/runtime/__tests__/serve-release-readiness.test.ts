@@ -50,7 +50,7 @@ afterEach(async () => {
   await fs.rm(remoteDir, { recursive: true, force: true })
 })
 
-function makeTask(overrides: Partial<Task>): Task {
+function makeTask(overrides: Record<string, unknown>): Task {
   const now = new Date().toISOString()
   return {
     id: 'task-1',
@@ -152,7 +152,7 @@ async function seedQueue(queue: TaskQueue): Promise<void> {
     if (canonicalIds.length === 0) break
     const result = await applyProjectMigrations({
       projectRoot: tmpDir,
-      only: [canonicalIds[0]],
+      only: [canonicalIds[0]!],
       appVersion: 'serve-release-readiness-test',
     })
     if (result.failed.length > 0) {
@@ -172,7 +172,7 @@ async function seedQueue(queue: TaskQueue): Promise<void> {
   // asynchronous project projector publishes in a running service.
   const migratedQueue = readProjectStateDatabaseQueueDefinition(projectStatePath(tmpDir, 'TASKS.json'))
   if (migratedQueue) {
-    const projectionTasks = await buildEffectiveTasks(tmpDir, migratedQueue.tasks as Task[], { evidence: 'current' })
+    const projectionTasks = await buildEffectiveTasks(tmpDir, migratedQueue.tasks as Task[], { evidence: 'current' }) as unknown as Task[]
     writeProjectSummaryProjectionFromUnknownQueue(projectStatePath(tmpDir, 'TASKS.json'), {
       projectId,
       projectRoot: tmpDir,
@@ -492,7 +492,7 @@ describe('GET /api/project/release-readiness', () => {
             dependsOn: [],
           }],
         },
-      } as Partial<Task>)],
+      })],
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -526,7 +526,7 @@ describe('GET /api/project/release-readiness', () => {
         title: 'Already running task',
         status: 'in_progress',
         assignedTo: null,
-      } as Partial<Task>)],
+      })],
     })
     const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
     const before = readProjectStateDatabaseQueueDefinition(tasksPath)
@@ -606,6 +606,7 @@ describe('GET /api/project/release-readiness', () => {
         kind: 'release',
         state: 'active',
         source: 'owner_approved',
+        proofStyle: 'unspecified',
         nodeIds: ['work:task-real'],
         deferredNodeIds: [],
       }],
@@ -1121,7 +1122,7 @@ describe('GET /api/project/release-readiness', () => {
           assignedTo: 'worker-agent',
           releaseIds: ['headless-mvp'],
           worktreePath: taskWorktreePath,
-        } as Partial<Task>),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1204,7 +1205,7 @@ describe('GET /api/project/release-readiness', () => {
             strategy: 'ff_only_local',
             mergedAt: '2026-07-06T20:01:00.000Z',
           },
-        } as Partial<Task>),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1286,7 +1287,7 @@ describe('GET /api/project/release-readiness', () => {
             strategy: 'ff_only_local',
             mergedAt: '2026-07-06T20:01:00.000Z',
           },
-        } as Partial<Task>),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1366,7 +1367,7 @@ describe('GET /api/project/release-readiness', () => {
             strategy: 'ff_only_local',
             mergedAt: '2026-07-06T20:01:00.000Z',
           },
-        } as Partial<Task>),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1459,7 +1460,7 @@ describe('GET /api/project/release-readiness', () => {
             strategy: 'ff_only_local',
             mergedAt: '2026-07-06T20:01:00.000Z',
           },
-        } as Partial<Task>),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1522,7 +1523,7 @@ describe('GET /api/project/release-readiness', () => {
             mergedAt: '2026-07-06T20:01:00.000Z',
             detail: 'Legacy task completed before automatic merge record capture.',
           },
-        } as Partial<Task>),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1569,14 +1570,14 @@ describe('GET /api/project/release-readiness', () => {
           status: 'done',
           releaseIds: ['headless-mvp'],
           proofPaths: [missingProofPath],
-        } as Partial<Task>),
+        }),
         makeTask({
           id: 'task-current',
           title: 'Run fixture evaluator proof',
           status: 'done',
           releaseIds: ['headless-mvp'],
           proofPaths: [missingProofPath],
-        } as Partial<Task>),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1678,7 +1679,7 @@ describe('GET /api/project/release-readiness', () => {
             summary: 'Worker hit its turn budget while creating proof.',
             raisedAt: '2026-07-06T20:10:00.000Z',
           }],
-        } as Partial<Task>),
+        }),
         makeTask({
           id: 'task-duplicate-proof',
           title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing',
@@ -2190,6 +2191,7 @@ describe('GET /api/project/release-readiness', () => {
         kind: 'release',
         state: 'active',
         source: 'release_plan',
+        proofStyle: 'unspecified',
         nodeIds: ['work:task-block-menu'],
         deferredNodeIds: [],
       }],
@@ -2805,7 +2807,7 @@ describe('GET /api/project/release-readiness', () => {
             reasoning: 'All acceptance criteria are met.',
             recordedAt: '2026-07-06T10:00:00.000Z',
           }],
-        } as Partial<Task>),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -3267,7 +3269,7 @@ describe('GET /api/project/release-readiness', () => {
           }],
           proofPaths: [{ kind: 'command', command: 'npm run build' }],
           gateResults: [{ status: 'passed', command: 'npm run build', checkedAt: '2026-06-17T04:45:00.000Z' }],
-        } as Partial<Task>),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -3331,7 +3333,7 @@ describe('GET /api/project/release-readiness', () => {
           }],
           proofPaths: [{ kind: 'command', command: 'npm run build' }],
           gateResults: [{ status: 'passed', command: 'npm run build', checkedAt: '2026-06-17T08:00:00.000Z' }],
-        } as Partial<Task>),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -4879,7 +4881,6 @@ describe('GET /api/project/release-readiness', () => {
       })
       promoteProjectStateDatabaseAuthority(envelopePath)
       await upsertTaskWorkspaceState(envelopePath, 'task-looma-worktree', {
-        taskId: 'task-looma-worktree',
         worktreePath: taskWorktreePath,
         updatedAt: queue.lastUpdated,
       })
@@ -5042,7 +5043,7 @@ describe('GET /api/project/release-readiness', () => {
           summary: 'Worker hit its turn budget while creating proof.',
           raisedAt: '2026-07-06T20:10:00.000Z',
         }],
-      } as Partial<Task>),
+      }),
     ])
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))

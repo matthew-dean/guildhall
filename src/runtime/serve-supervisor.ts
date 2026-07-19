@@ -654,10 +654,11 @@ export class OrchestratorSupervisor {
   }
 
   /** Snapshot of all runs (for GET /api/workspaces — "is it running?"). */
-  list(): Array<Pick<WorkspaceRun, 'workspaceId' | 'startedAt' | 'stoppedAt' | 'status' | 'error' | 'providerStatus' | 'stopSummary'>> {
+  list(): Array<Pick<WorkspaceRun, 'workspaceId' | 'startedAt' | 'stoppedAt' | 'status' | 'mode' | 'error' | 'providerStatus' | 'stopSummary'>> {
     return Array.from(this.runs.values()).map(r => ({
       workspaceId: r.workspaceId,
       startedAt: r.startedAt,
+      mode: r.mode,
       ...(r.stoppedAt ? { stoppedAt: r.stoppedAt } : {}),
       status: r.status,
       ...(r.error ? { error: r.error } : {}),

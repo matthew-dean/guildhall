@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
-import { TaskQueue } from '@guildhall/core'
+import { TaskQueue, type Task } from '@guildhall/core'
 import { appendTaskEvidence, getProjectSystemStatePath, markProjectSummaryStale, promoteProjectStateDatabaseAuthority, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabasePath, readProjectStateDatabaseQueue, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseInventory, readProjectStateDatabaseSummary, writeProjectStateDatabaseSummarySnapshot } from '@guildhall/sessions'
 
 import {
@@ -310,7 +310,7 @@ describe('project-summary-projection', () => {
     writeProjectStateDatabaseSummarySnapshot(tasksPath, {
       summary: { ...historicalProjection, orientationSpine: staleOrientation },
     })
-    expect(readProjectStateDatabaseSummary(tasksPath)?.payload.orientationSpine?.proofContracts[0]?.state).toBe('proven')
+    expect(((readProjectStateDatabaseSummary(tasksPath)?.payload as Record<string, any> | undefined)?.orientationSpine?.proofContracts as Array<Record<string, any>> | undefined)?.[0]?.state).toBe('proven')
 
     const committed = writePromotedTaskDetailMutation(tasksPath, 'reopened-task', {
       projectId: 'proof-refresh',
@@ -371,7 +371,7 @@ describe('project-summary-projection', () => {
     writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'indexed-proof-refresh', projectRoot: temp })
     promoteProjectStateDatabaseAuthority(temp)
 
-    expect(readProjectStateDatabaseSummary(tasksPath)?.payload.releaseSummary.counts.proofBlocked).toBe(1)
+    expect((readProjectStateDatabaseSummary(tasksPath)?.payload as Record<string, any> | undefined)?.releaseSummary.counts.proofBlocked).toBe(1)
 
     await appendTaskEvidence(temp, 'task-proof', {
       id: 'gate-proof',
@@ -448,7 +448,7 @@ describe('project-summary-projection', () => {
     writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'indexed-parent-proof', projectRoot: temp })
     promoteProjectStateDatabaseAuthority(temp)
 
-    const initial = readProjectStateDatabaseSummary(tasksPath)?.payload
+    const initial = readProjectStateDatabaseSummary(tasksPath)?.payload as Record<string, any> | undefined
     expect(initial?.releaseSummary.counts.proofBlocked).toBe(1)
     expect(initial?.releaseSummary.state).toBe('blocked')
 
@@ -1003,7 +1003,7 @@ describe('project-summary-projection', () => {
     const projected = writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
       projectId: 'evidence-status-project',
       queue: queueValue,
-      projectionTasks: [task('evidence-done', 'done', { completedAt: now })],
+      projectionTasks: [task('evidence-done', 'done', { completedAt: now }) as unknown as Task],
       queueCommit: false,
       expectedQueueRevision: revision,
     })

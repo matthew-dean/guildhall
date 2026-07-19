@@ -3,6 +3,18 @@ import type { EvidenceRef, GuildhallPersistence, PersistedRecord, PersistencePla
 
 export { LaunchStepBase, LaunchStep, EvidenceKind, ExpectedEvidence, ProofPath, ProofPathScope, VerificationRecord }
 
+type TaskProofPath = ProofPathType
+type TaskProofEvidence = TaskProofPath['expectedEvidence'][number]
+type TaskProofVerification = TaskProofPath['verificationRecords'][number]
+type CommandProofPath = TaskProofPath & {
+  kind: 'command'
+  command: string
+  expectedEvidence: TaskProofEvidence[]
+  verificationRecords: TaskProofVerification[]
+  updatedAt: string
+  updatedBy?: string
+}
+
 export function stableProofPathId(value: Record<string, unknown>, index: number): string {
   const existing = typeof value.id === 'string' ? value.id.trim() : ''
   if (existing) return existing
@@ -35,7 +47,7 @@ export function buildTaskProofPath(input: {
   const expectedEvidence = input.task.acceptanceCriteria.length > 0
     ? input.task.acceptanceCriteria.map((criterion, index) => ExpectedEvidence.parse({
         id: criterion.id ?? `ac-${index + 1}`,
-        kind: evidenceKindFromCriterion(criterion.verifiedBy),
+        kind: evidenceKindFromCriterion(criterion.verifiedBy ?? 'review'),
         description: criterion.description,
         required: true,
         sourceRef: criterion.command,
@@ -79,10 +91,13 @@ export function ensureCommandProofPathsFromAcceptanceCriteria(
   now: string,
   createdBy = 'acceptance-command-gates',
 ): NonNullable<Task['proofPaths']> {
-  const existing = dedupeCommandProofPaths(Array.isArray(task.proofPaths) ? [...task.proofPaths] : [])
+  const existing = dedupeCommandProofPaths(Array.isArray(task.proofPaths)
+    ? task.proofPaths
+      .filter((path): path is Record<string, unknown> => Boolean(path) && typeof path === 'object' && !Array.isArray(path))
+      .map(path => path as ProofPathType)
+    : [])
   const existingCommands = new Set(
     existing
-      .filter((path): path is Record<string, unknown> => Boolean(path) && typeof path === 'object' && !Array.isArray(path))
       .filter(path => isCommandProofPath(path))
       .map(path => comparableCommand(path.command))
       .filter(Boolean),
@@ -105,7 +120,7 @@ export function ensureCommandProofPathsFromAcceptanceCriteria(
         ? { expectedOutputIncludes: criterion.expectedOutputIncludes }
         : {}),
     }
-    const existingPath = existing.find((path) =>
+    const existingPath = existing.find((path): path is CommandProofPath =>
       isCommandProofPath(path) && comparableCommand(path.command) === comparable,
     )
     if (existingPath) {
@@ -156,10 +171,10 @@ export function ensureCommandProofPathsFromAcceptanceCriteria(
 }
 
 function dedupeCommandProofPaths(
-  paths: NonNullable<Task['proofPaths']>,
-): NonNullable<Task['proofPaths']> {
-  const result: NonNullable<Task['proofPaths']> = []
-  const byCommand = new Map<string, NonNullable<Task['proofPaths']>[number]>()
+  paths: TaskProofPath[],
+): TaskProofPath[] {
+  const result: TaskProofPath[] = []
+  const byCommand = new Map<string, TaskProofPath>()
 
   for (const path of paths) {
     if (!isCommandProofPath(path)) {
@@ -218,8 +233,13 @@ export function isConcreteProjectProofCommand(command: string): boolean {
  */
 export function replaceGenericProjectProofPathsWithSetup(
   task: Pick<Task, 'id' | 'title' | 'proofPaths'>,
-): NonNullable<Task['proofPaths']> {
-  return (task.proofPaths ?? []).map((path) => {
+): TaskProofPath[] {
+  const proofPaths = Array.isArray(task.proofPaths)
+    ? task.proofPaths
+      .filter((path): path is Record<string, unknown> => Boolean(path) && typeof path === 'object' && !Array.isArray(path))
+      .map(path => path as ProofPathType)
+    : []
+  return proofPaths.map((path) => {
     if (
       !path ||
       typeof path !== 'object' ||
@@ -229,8 +249,9 @@ export function replaceGenericProjectProofPathsWithSetup(
       isConcreteProjectProofCommand(path.command)
     ) return path
 
-    const expectedEvidence = Array.isArray(path.expectedEvidence)
-      ? path.expectedEvidence
+    const rawExpectedEvidence = (path as unknown as Record<string, unknown>).expectedEvidence
+    const expectedEvidence = Array.isArray(rawExpectedEvidence)
+      ? rawExpectedEvidence
         .map((evidence) => {
           if (typeof evidence === 'string') return evidence.trim()
           if (evidence && typeof evidence === 'object' && !Array.isArray(evidence)) {
@@ -262,7 +283,7 @@ export function replaceGenericProjectProofPathsWithSetup(
       ...(expectedEvidence.length > 0 ? { expectedEvidence } : {}),
       verificationRecords: [],
     }
-  }) as NonNullable<Task['proofPaths']>
+  }) as TaskProofPath[]
 }
 
 export function recordCommandProofPathResults(
@@ -414,8 +435,10 @@ export function comparableCommand(value: unknown): string {
     .replace(/^pnpm\s+exec\s+/i, '')
 }
 
-function isCommandProofPath(path: { kind?: unknown; command?: unknown }): boolean {
-  return path.kind === 'command' || typeof path.command === 'string'
+function isCommandProofPath(path: TaskProofPath | Record<string, unknown>): path is CommandProofPath {
+  return Boolean(path) && typeof path === 'object' && !Array.isArray(path) &&
+    (path.kind === 'command' || typeof path.command === 'string') &&
+    typeof path.command === 'string'
 }
 
 function renderLaunchStep(step: LaunchStep): string {

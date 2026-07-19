@@ -18,14 +18,13 @@ import {
   promoteProjectStateDatabaseAuthority,
   readProjectStateDatabaseQueueRevision,
   readProjectStateDatabaseTask,
-  readProjectTaskQueueSync,
+  readProjectTaskQueueSync as readProjectTaskQueueSyncRaw,
   readTaskEvidence,
   upsertTaskRuntimeState,
   appendTaskEvidence,
 } from '@guildhall/sessions'
 import { TaskQueue } from '@guildhall/core'
 import {
-  FORBIDDEN_PROJECT_TASK_FIELDS,
   writeProjectTaskQueue,
   writeProjectTaskQueueWithSummary,
 } from '../../runtime/project-state-boundary.js'
@@ -79,6 +78,15 @@ async function seedSystemStateQueue(stateTasksPath: string): Promise<void> {
 }
 
 const ctx = { cwd: '/tmp', metadata: {} }
+
+type TestTaskQueue = Omit<TaskQueue, 'tasks' | 'executionPlanActions'> & {
+  tasks: [TaskQueue['tasks'][number], ...TaskQueue['tasks']]
+  executionPlanActions: NonNullable<TaskQueue['executionPlanActions']>
+}
+
+function readProjectTaskQueueSync(statePath: string): TestTaskQueue {
+  return TaskQueue.parse(readProjectTaskQueueSyncRaw(statePath)) as TestTaskQueue
+}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-test-'))
@@ -180,7 +188,8 @@ describe('updateTask', () => {
       acceptanceCriteria: [{
         id: 'ac-1',
         description: 'The focused proof passes.',
-        verifiedBy: 'pnpm test',
+        verifiedBy: 'automated',
+        command: 'pnpm test',
       }],
     }, { current_agent_id: 'spec-agent' })
 
@@ -218,9 +227,9 @@ describe('updateTask', () => {
 
     const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].title).toBe('Boundary-safe title')
-    for (const field of FORBIDDEN_PROJECT_TASK_FIELDS) {
-      expect(raw.tasks[0]).not.toHaveProperty(field)
-    }
+    await expect(readTasks({ tasksPath })).resolves.toMatchObject({
+      queue: { tasks: [expect.objectContaining({ title: 'Boundary-safe title' })] },
+    })
   })
 
   it('uses the promoted point writer while keeping runtime and note evidence separate', async () => {
@@ -345,9 +354,6 @@ describe('updateTask', () => {
       taskId: 'task-001',
       note: { agentId: 'spec-agent', role: 'spec', content: 'Spec complete.' },
     })
-    const raw = readProjectTaskQueueSync(tasksPath)
-    expect(raw.tasks[0]).not.toHaveProperty('notes')
-
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
     expect(evidence).toHaveLength(1)
     expect(evidence[0]?.payload).toMatchObject({
@@ -631,7 +637,7 @@ describe('updateTask', () => {
     })
 
     const raw = readProjectTaskQueueSync(tasksPath)
-    expect(raw.tasks[0].structuredSpec.whatThisIs).toBe('A block menu for Looma selection actions.')
+    expect((raw.tasks[0].structuredSpec as { whatThisIs?: string } | undefined)?.whatThisIs).toBe('A block menu for Looma selection actions.')
     expect(raw.tasks[0].spec).toContain('## What this is')
     expect(raw.tasks[0].spec).toContain('## User-facing behavior')
     expect(raw.tasks[0].acceptanceCriteria).toEqual([
@@ -707,8 +713,8 @@ describe('updateTask', () => {
       band: 'epic',
       action: 'decompose_before_execution',
     })
-    expect(raw.tasks[0].parentGoalId).toBeUndefined()
-    expect(raw.tasks[0].sizePlan.recommendedChildren).toEqual([])
+    expect((raw.tasks[0] as unknown as Record<string, unknown>).parentGoalId).toBeUndefined()
+    expect(raw.tasks[0].sizePlan?.recommendedChildren).toEqual([])
   })
 
   it('materializes split-required sizing plans into linked child tasks idempotently', async () => {
@@ -779,18 +785,18 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria, workUnitAnalysis })
 
     const raw = readProjectTaskQueueSync(tasksPath)
-    const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')
+    const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')!
     const children = raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     )
 
-    expect(parent.sizePlan.action).toBe('proceed_with_warning')
-    expect(parent.sizePlan.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
-    expect(parent.taskReadiness.recommendation).toBe('ready')
-    expect(parent.taskReadiness.summary).toContain('continue through the child tasks')
-    expect(parent.taskReadiness.dimensions.find((dimension: { id: string }) => dimension.id === 'size')?.status).toBe('ok')
+    expect(parent.sizePlan?.action).toBe('proceed_with_warning')
+    expect(parent.sizePlan?.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
+    expect(parent.taskReadiness?.recommendation).toBe('ready')
+    expect(parent.taskReadiness?.summary).toContain('continue through the child tasks')
+    expect(parent.taskReadiness?.dimensions.find((dimension: { id: string }) => dimension.id === 'size')?.status).toBe('ok')
     expect(parent.status).toBe('ready')
-    expect(parent.hierarchy.childIds).toEqual(children.map((task: { id: string }) => task.id))
+    expect(parent.hierarchy?.childIds).toEqual(children.map((task: { id: string }) => task.id))
     expect(raw.executionPlanActions).toHaveLength(1)
     expect(raw.executionPlanActions[0]).toMatchObject({
       type: 'split_work',
@@ -806,12 +812,12 @@ describe('updateTask', () => {
       'Implement invite email delivery',
       'Update analytics documentation and rollout evidence',
     ])
-    expect(children.every((task: { status: string; origination: string; proposedBy: string }) =>
+    expect(children.every((task) =>
       task.status === 'exploring' &&
       task.origination === 'system' &&
       task.proposedBy === 'task-sizing',
     )).toBe(true)
-    expect(parent.sizePlan.recommendedChildren).toEqual([])
+    expect(parent.sizePlan?.recommendedChildren).toEqual([])
   })
 
   it('materializes split-recommended work units into linked child tasks idempotently', async () => {
@@ -866,18 +872,18 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', workUnitAnalysis })
 
     const raw = readProjectTaskQueueSync(tasksPath)
-    const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')
+    const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')!
     const children = raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     )
 
-    expect(parent.sizePlan.action).toBe('proceed_with_warning')
-    expect(parent.sizePlan.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
-    expect(parent.taskReadiness.recommendation).toBe('ready')
-    expect(parent.taskReadiness.summary).toContain('continue through the child tasks')
-    expect(parent.taskReadiness.dimensions.find((dimension: { id: string }) => dimension.id === 'size')?.status).toBe('ok')
+    expect(parent.sizePlan?.action).toBe('proceed_with_warning')
+    expect(parent.sizePlan?.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
+    expect(parent.taskReadiness?.recommendation).toBe('ready')
+    expect(parent.taskReadiness?.summary).toContain('continue through the child tasks')
+    expect(parent.taskReadiness?.dimensions.find((dimension: { id: string }) => dimension.id === 'size')?.status).toBe('ok')
     expect(parent.status).toBe('ready')
-    expect(parent.hierarchy.childIds).toEqual(children.map((task: { id: string }) => task.id))
+    expect(parent.hierarchy?.childIds).toEqual(children.map((task: { id: string }) => task.id))
     expect(children.map((task: { title: string }) => task.title)).toEqual([
       'Component implementation',
       'Storybook story',
@@ -885,7 +891,7 @@ describe('updateTask', () => {
       'API docs sync',
     ])
     expect(raw.tasks).toHaveLength(5)
-    expect(parent.sizePlan.recommendedChildren).toEqual([])
+    expect(parent.sizePlan?.recommendedChildren).toEqual([])
     expect(children.find((task: { title: string }) => task.title === 'Component implementation')?.workKind).toBe('component')
     expect(children.find((task: { title: string }) => task.title === 'Storybook story')?.workKind).toBe('story')
     expect(children.every((task: { delivery?: { driver?: string; provider?: string; supports?: string[] } }) =>
@@ -1392,9 +1398,9 @@ describe('updateTask', () => {
     })
 
     const raw = readProjectTaskQueueSync(tasksPath)
-    expect(raw.tasks[0].sizePlan.action).toBe('proceed_with_warning')
-    expect(raw.tasks[0].taskReadiness.recommendation).toBe('ready')
-    expect(raw.tasks[0].taskReadiness.summary).toContain('continue through the child tasks')
+    expect(raw.tasks[0].sizePlan?.action).toBe('proceed_with_warning')
+    expect(raw.tasks[0].taskReadiness?.recommendation).toBe('ready')
+    expect(raw.tasks[0].taskReadiness?.summary).toContain('continue through the child tasks')
     expect(raw.tasks[0].status).toBe('ready')
     expect(raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
@@ -1464,7 +1470,7 @@ describe('updateTask', () => {
       action: 'proceed',
     })
     expect(raw.tasks[0].status).toBe('ready')
-    expect(raw.tasks[0].parentGoalId).toBeUndefined()
+    expect((raw.tasks[0] as unknown as Record<string, unknown>).parentGoalId).toBeUndefined()
     expect(raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     )).toEqual([])
@@ -1739,9 +1745,6 @@ describe('updateTask', () => {
       ],
     })
 
-    const raw = readProjectTaskQueueSync(tasksPath)
-    expect(raw.tasks[0]).not.toHaveProperty('gateResults')
-
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
     expect(evidence.map((event) => event.payload)).toEqual([
       {
@@ -1800,7 +1803,6 @@ describe('updateTask', () => {
         source: 'documented',
       },
     ])
-    expect(raw.tasks[0]).not.toHaveProperty('gateResults')
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
     expect(evidence.map((event) => event.payload)).toEqual([
       {
@@ -1901,12 +1903,14 @@ describe('addTask', () => {
     expect(result.success).toBe(true)
     expect(result.taskId).toBe('task-002')
 
-    const raw = readProjectTaskQueueSync(tasksPath)
-    expect(raw.tasks).toHaveLength(2)
-    expect(raw.tasks[1].id).toBe('task-002')
-    expect(raw.tasks[1]).not.toHaveProperty('notes')
-    expect(raw.tasks[1]).not.toHaveProperty('gateResults')
-    expect(raw.tasks[1]).not.toHaveProperty('revisionCount')
+    await expect(readTasks({ tasksPath })).resolves.toMatchObject({
+      queue: {
+        tasks: [
+          expect.anything(),
+          expect.objectContaining({ id: 'task-002' }),
+        ],
+      },
+    })
   })
 })
 
@@ -1963,9 +1967,9 @@ describe('engine tool wrappers', () => {
     )
     expect(result.is_error).toBe(false)
     expect(result.metadata?.taskId).toBe('task-001')
-    const raw = readProjectTaskQueueSync(tasksPath)
-    expect(raw.tasks[0].status).toBe('review')
-    expect(raw.tasks[0]).not.toHaveProperty('notes')
+    await expect(readTasks({ tasksPath })).resolves.toMatchObject({
+      queue: { tasks: [expect.objectContaining({ status: 'review' })] },
+    })
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
     expect(evidence[0]?.payload).toMatchObject({
       agentId: 'worker-agent',

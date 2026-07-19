@@ -7,7 +7,7 @@ import {
   getProjectSystemStatePath,
   readProjectStateDatabaseQueueDefinitionForMigration,
 } from '@guildhall/sessions'
-import { effectiveTaskTitle } from '../shared/task-display-label.js'
+import { effectiveTaskTitle } from '@guildhall/shared'
 import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
 import {
   describePath,

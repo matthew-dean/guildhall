@@ -3,9 +3,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
-import { TaskQueue } from '@guildhall/core'
+import { TaskQueue, type Task } from '@guildhall/core'
 import {
-  getProjectTaskLocalHistoryDir,
   getProjectSystemStatePath,
   promoteProjectStateDatabaseAuthority,
   readProjectStateJsonAsync,
@@ -44,6 +43,16 @@ import type { WorkspaceImportDraft } from '../workspace-import/index.js'
 let tmpDir: string
 let dataDir: string
 let memoryDir: string
+
+type ProofPathFixture = {
+  kind?: string
+  expectedEvidence?: string[]
+  launchSteps?: Array<{ kind?: string }>
+}
+
+function proofPathsOf(task: { proofPaths?: unknown } | undefined): ProofPathFixture[] {
+  return Array.isArray(task?.proofPaths) ? task.proofPaths as ProofPathFixture[] : []
+}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-ws-import-'))
@@ -718,7 +727,7 @@ describe('workspaceNeedsImport', () => {
       draft,
     })
 
-    const expectedEvidence = materialized.tasks[0]?.proofPaths?.[0]?.expectedEvidence ?? []
+    const expectedEvidence = proofPathsOf(materialized.tasks[0])[0]?.expectedEvidence ?? []
     expect(expectedEvidence).not.toContain('[ ] Unit tests: use-collections, use-presence, subdomain utils')
     expect(expectedEvidence.join('\n')).not.toMatch(/\[[ x]\]\s+/i)
     expect(materialized.tasks[0]?.proofPaths).toEqual(expect.arrayContaining([
@@ -732,8 +741,8 @@ describe('workspaceNeedsImport', () => {
         })],
       }),
     ]))
-    expect(materialized.tasks[0]?.proofPaths?.some(path =>
-      path.kind === 'command' && path.launchSteps?.some(step => step.kind === 'blocked_until_setup'),
+    expect(proofPathsOf(materialized.tasks[0]).some(proofPath =>
+      proofPath.kind === 'command' && proofPath.launchSteps?.some(step => step.kind === 'blocked_until_setup'),
     )).toBe(false)
   })
 
@@ -833,8 +842,8 @@ describe('workspaceNeedsImport', () => {
       }),
     ]))
     expect(materialized.tasks[0]?.proofPaths).toHaveLength(1)
-    expect(materialized.tasks[0]?.proofPaths?.some(path =>
-      path.expectedEvidence?.some(evidence => /\[[ x]\]\s+/i.test(evidence)),
+    expect(proofPathsOf(materialized.tasks[0]).some(proofPath =>
+      proofPath.expectedEvidence?.some(evidence => /\[[ x]\]\s+/i.test(evidence)),
     )).toBe(false)
   })
 
@@ -2550,7 +2559,6 @@ tasks:
           title: 'Stage 1: Fixture And Evaluation Harness',
           evidence: 'docs/harness/implementation-roadmap.md: The next milestone is Stage 1: Fixture And Evaluation Harness.',
           source: 'workspace-importer',
-          confidence: 'high',
         },
       ],
       context: [],
@@ -2622,6 +2630,8 @@ tasks:
           projectPath: tmpDir,
           status: 'spec_review',
           priority: 'high',
+          revisionCount: 0,
+          remediationAttempts: 0,
           spec: '',
           acceptanceCriteria: [],
           dependsOn: [],
@@ -2632,8 +2642,6 @@ tasks:
           adjudications: [],
           escalations: [],
           agentIssues: [],
-          revisionCount: 0,
-          remediationAttempts: 0,
           origination: 'system',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -3168,6 +3176,7 @@ tasks:
           origination: 'system',
           hierarchy: {
             parentId: 'task-old-parent',
+            childIds: [],
             relation: 'contains',
             order: 0,
           },
@@ -3544,6 +3553,8 @@ tasks:
           projectPath: tmpDir,
           status: 'spec_review',
           priority: 'high',
+          revisionCount: 0,
+          remediationAttempts: 0,
           acceptanceCriteria: [],
           dependsOn: [],
           outOfScope: [],
@@ -3924,13 +3935,28 @@ tasks:
           projectPath: tmpDir,
           status: 'import_draft',
           priority: 'normal',
+          requestIntake: {
+            intent: 'spec_only',
+            recommendedNextAction: 'draft_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: [],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'automatic',
+              qualityBar: 'Keep imported work tied to current project evidence.',
+              ownerQuestionPolicy: 'Only ask when source evidence cannot establish a trustworthy boundary.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: now,
+            createdBy: 'workspace-importer',
+          },
           acceptanceCriteria: [],
           dependsOn: [],
           outOfScope: [],
           references: [path.join(tmpDir, 'knit', 'PROJECT_STATE.md')],
-          requestIntake: {
-            createdBy: 'workspace-importer',
-          },
           notes: [],
           gateResults: [],
           reviewVerdicts: [],
@@ -3945,9 +3971,9 @@ tasks:
         },
       ],
     })
-    const archiveEvidencePath = path.join(
-      getProjectTaskLocalHistoryDir(tmpDir, 'task-006'),
-      'archive-evidence.json',
+    const archiveEvidencePath = getProjectSystemStatePath(
+      tmpDir,
+      path.join('tasks', 'archive', 'task-006.json'),
     )
     await fs.mkdir(path.dirname(archiveEvidencePath), { recursive: true })
     await fs.writeFile(archiveEvidencePath, JSON.stringify({
@@ -4969,7 +4995,7 @@ tasks:
     expect(dialogue?.taskReadiness?.recommendation).toBe('ready')
     expect(dialogue?.hierarchy?.childIds).toHaveLength(4)
     expect(dialogue?.acceptanceCriteria?.[1]?.description).toContain('Could the line be reassigned to another character without anyone noticing?')
-    expect(dialogue?.proofPaths?.[0]?.expectedEvidence?.join(' ')).toContain('Recorded findings answer prompts')
+    expect(proofPathsOf(dialogue)[0]?.expectedEvidence?.join(' ')).toContain('Recorded findings answer prompts')
     expect(dialogue?.spec).not.toContain('follows target-area conventions')
 
     expect(feedback?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
@@ -5758,10 +5784,9 @@ tasks:
       'deterministic-proof',
     ])
     expect(materialized.tasks.filter(task => task.scope !== 'later')).toHaveLength(5)
-    const missingCommandProof = materialized.tasks.filter(task => task.scope !== 'later' && !task.proofPaths?.some(path =>
-        path.kind === 'command' &&
-        path.source === 'inferred' &&
-        path.launchSteps?.some(step => step.kind === 'blocked_until_setup'),
+    const missingCommandProof = materialized.tasks.filter(task => task.scope !== 'later' && !proofPathsOf(task).some(proofPath =>
+        proofPath.kind === 'command' &&
+        proofPath.launchSteps?.some(step => step.kind === 'blocked_until_setup'),
       ),
     ).map(task => ({ title: task.title, proofPaths: task.proofPaths }))
     expect(missingCommandProof).toEqual([])
@@ -5879,7 +5904,7 @@ tasks:
         launchSteps: [expect.objectContaining({ kind: 'copy_command' })],
       }),
     ]))
-    expect(task?.proofPaths?.some(path => path.launchSteps?.some(step => step.kind === 'blocked_until_setup'))).toBe(false)
+    expect(proofPathsOf(task).some(proofPath => proofPath.launchSteps?.some(step => step.kind === 'blocked_until_setup'))).toBe(false)
     expect(task?.acceptanceCriteria?.find(criterion => criterion.id === 'deterministic-proof')).toMatchObject({
       verifiedBy: 'automated',
       source: 'documented',
@@ -5977,7 +6002,7 @@ tasks:
         source: 'documented',
       }),
     ]))
-    expect(worldStateTask?.proofPaths?.some(path => path.launchSteps?.some(step => step.kind === 'blocked_until_setup'))).toBe(false)
+    expect(proofPathsOf(worldStateTask).some(proofPath => proofPath.launchSteps?.some(step => step.kind === 'blocked_until_setup'))).toBe(false)
     const authorIntentTask = (await readQueue()).tasks.find(candidate => candidate.id === 'task-author-intent')
     expect(authorIntentTask?.references).not.toContain(worldReviewer)
     expect(authorIntentTask?.proofPaths?.some(path => path.command === 'pnpm run prove:world-state-continuity')).toBe(false)

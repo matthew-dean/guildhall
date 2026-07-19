@@ -34,6 +34,7 @@ import {
   writeProjectStateTextAsync,
 } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
+import { TaskEvidenceEvent, type Task } from '@guildhall/core'
 import { buildEffectiveTask } from '../effective-task.js'
 import { persistLearningCandidates } from '../learning.js'
 import { applyProjectMigrations, getProjectMigrationStatus } from '../migrations.js'
@@ -91,20 +92,20 @@ type TaskFixture = {
   definition: Record<string, any>
   runtime?: Record<string, any>
   workspace?: Record<string, any>
-  evidence?: Array<Record<string, any>>
+  evidence?: Array<TaskEvidenceEvent>
 }
 
 const runtimeFixtureFields = ['assignedTo', 'revisionCount', 'retryWindow', 'proofRecovery', 'remediationAttempts', 'handoffStep'] as const
 const workspaceFixtureFields = ['worktreePath', 'branchName', 'baseBranch'] as const
 
-function fixtureEvent(taskId: string, kind: string, value: Record<string, any>, index: number, recordedAt: string): Record<string, any> {
-  return {
+function fixtureEvent(taskId: string, kind: TaskEvidenceEvent['kind'], value: Record<string, any>, index: number, recordedAt: string): TaskEvidenceEvent {
+  return TaskEvidenceEvent.parse({
     id: String(value.id ?? `${taskId}-${kind}-${index + 1}`),
     taskId,
     kind,
     recordedAt,
     payload: value,
-  }
+  })
 }
 
 function normalizeTaskFixture(task: Record<string, any>, now: string): TaskFixture {
@@ -118,8 +119,9 @@ function normalizeTaskFixture(task: Record<string, any>, now: string): TaskFixtu
   const runtime: Record<string, any> = { ...(task.runtime ?? {}) }
   const workspace: Record<string, any> = { ...(task.workspace ?? {}) }
   const evidenceKinds = new Set(['event', 'note', 'gate_result', 'review_verdict', 'adjudication', 'escalation', 'agent_issue', 'merge_record', 'git_story'])
-  const evidence: Array<Record<string, any>> = (task.evidence ?? [])
+  const evidence: Array<TaskEvidenceEvent> = (task.evidence ?? [])
     .filter((event: Record<string, any>) => evidenceKinds.has(String(event.kind)))
+    .map((event: Record<string, any>) => TaskEvidenceEvent.parse(event))
 
   for (const field of runtimeFixtureFields) {
     if (!(field in definition)) continue
@@ -148,7 +150,7 @@ function normalizeTaskFixture(task: Record<string, any>, now: string): TaskFixtu
     const values = definition[collection.field]
     if (!Array.isArray(values)) continue
     values.forEach((value: Record<string, any>, index: number) => {
-      evidence.push(fixtureEvent(taskId, collection.kind, value, index, collection.timestamp(value) ?? now))
+      evidence.push(fixtureEvent(taskId, collection.kind as TaskEvidenceEvent['kind'], value, index, collection.timestamp(value) ?? now))
     })
     delete definition[collection.field]
   }
@@ -179,7 +181,7 @@ async function refreshCanonicalSummary(): Promise<void> {
   const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
   const queue = readProjectStateDatabaseQueueDefinition(tasksPath)
   if (!queue) throw new Error('Missing canonical SQLite task queue')
-  const projectionTasks = await Promise.all(queue.tasks.map(task => buildEffectiveTask(tmpDir, task as any)))
+  const projectionTasks = await Promise.all(queue.tasks.map(task => buildEffectiveTask(tmpDir, task as any))) as unknown as Task[]
   writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
     projectId: PROJECT_ID,
     projectRoot: tmpDir,
@@ -220,7 +222,7 @@ async function applyCanonicalMigrations(): Promise<void> {
     // the same pass against a boundary its earlier prerequisite just created.
     const result = await applyProjectMigrations({
       projectRoot: tmpDir,
-      only: [automaticIds[0]],
+      only: [automaticIds[0]!],
       appVersion: 'serve-settings-test',
     })
     if (result.failed.length > 0) {
@@ -1673,7 +1675,7 @@ describe('POST /api/project/start', () => {
     })
     // Optional releases do not infer a named release from task membership,
     // but current work still needs to remain visible in the project scope.
-    expect(readiness.statusCounts?.spec_review).toBe(1)
+    expect(readiness.diagnostics?.statusCounts?.spec_review).toBe(1)
     expect(readiness.diagnostics?.unapprovedSpecs).toBeUndefined()
   })
 

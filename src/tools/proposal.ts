@@ -33,7 +33,7 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueueAtCurrentStateBoundary,
   writeProjectTaskQueueWithSummary,
-} from '../runtime/project-state-boundary.js'
+} from '@guildhall/runtime/project-state-boundary'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 

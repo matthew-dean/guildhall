@@ -271,7 +271,8 @@ describe('project re-intake planner', () => {
         stageAlignment: 'stage 1: finish knit primitive replacement wave',
       },
     })
-    expect(created.kind === 'create' ? created.task.releaseIds : undefined).toBeUndefined()
+    if (!created || created.kind !== 'create') throw new Error('Expected a create change for the later task')
+    expect(created.task.releaseIds).toBeUndefined()
   })
 
   it('lets an explicit current release scope override a stale later-stage inventory label', () => {
@@ -346,9 +347,8 @@ describe('project re-intake planner', () => {
         proofPaths: [],
       },
     })
-    if (change.kind === 'create') {
-      expect(change.task).not.toHaveProperty('productBrief')
-    }
+    if (!change || change.kind !== 'create') throw new Error('Expected a create change for synopsis expansion')
+    expect(change.task).not.toHaveProperty('productBrief')
   })
 
   it('does not plan the same source-backed task for creation and archival', () => {

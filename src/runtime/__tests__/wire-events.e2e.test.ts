@@ -227,6 +227,7 @@ describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
         status: 'done',
         gateResults: [{
           gateId: 'a-completion',
+          type: 'hard',
           passed: true,
           checkedAt: '2026-04-01T00:00:01.000Z',
           output: 'The acceptance criterion is met.',
@@ -316,6 +317,7 @@ describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
               t.acceptanceCriteria = t.acceptanceCriteria.map(criterion => ({ ...criterion, met: true }))
               t.gateResults = [{
                 gateId: `${id}-completion`,
+                type: 'hard',
                 passed: true,
                 checkedAt: '2026-04-01T00:00:01.000Z',
                 output: 'The acceptance criterion is met.',

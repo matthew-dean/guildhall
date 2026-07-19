@@ -10,7 +10,7 @@ import {
   upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 import type { Task, TaskQueue } from '@guildhall/core'
-import { TaskQueue as TaskQueueSchema } from '@guildhall/core'
+import { AcceptanceCriteria, TaskQueue as TaskQueueSchema } from '@guildhall/core'
 import { buildEffectiveTask } from './effective-task.js'
 import { readProjectTaskQueueForMutationSync, writeProjectTaskQueue } from './project-state-boundary.js'
 import { reconcileAcceptanceCriteriaFromCompletionProof } from './proof-health.js'
@@ -288,7 +288,7 @@ export async function repairCompletionProofCriteriaForProjectWithEvidence(projec
     } as Task
     const result = reconcileAcceptanceCriteriaFromCompletionProof(candidate, now)
     if (!result.changed) continue
-    task.acceptanceCriteria = candidate.acceptanceCriteria
+    task.acceptanceCriteria = AcceptanceCriteria.array().parse(candidate.acceptanceCriteria)
     task.updatedAt = now
     repairs.push({
       taskId: task.id,

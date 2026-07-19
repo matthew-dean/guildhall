@@ -13,7 +13,7 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
-import { readProjectTaskQueueForMutationSync } from '../runtime/project-state-boundary.js'
+import { readProjectTaskQueueForMutationSync } from '@guildhall/runtime/project-state-boundary'
 import {
   appendTaskEvidence,
   inferProjectRootFromMemoryDir,

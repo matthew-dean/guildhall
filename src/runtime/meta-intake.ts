@@ -14,6 +14,7 @@ import {
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { appendExploringTranscript, replaceExploringTranscript } from '@guildhall/tools'
 import { readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
+import { META_INTAKE_TASK_ID } from './project-reserved-task-ids.js'
 import {
   AGENT_SETTINGS_FILENAME,
   loadLeverSettings,
@@ -48,8 +49,9 @@ import {
 // owns the reserved task, the draft-format parser, and the config merge.
 // ---------------------------------------------------------------------------
 
-export const META_INTAKE_TASK_ID = 'task-meta-intake'
 export const META_INTAKE_DOMAIN = '_meta'
+
+export { META_INTAKE_TASK_ID } from './project-reserved-task-ids.js'
 
 function agentSettingsPathFor(memoryDir: string): string {
   return projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME)

@@ -9,6 +9,7 @@ import { workspaceProjectNamedInText } from './workspace-project-match.js'
 
 type BootstrapBlock = NonNullable<ResolvedConfig['bootstrap']>
 type WorkspaceProjectBlock = NonNullable<ResolvedConfig['projects']>[number]
+type TaskProjectPathInput = Partial<Pick<Task, 'projectPath' | 'domain' | 'title' | 'description'>>
 
 function hasBootstrapSignal(bootstrap: BootstrapBlock | undefined): boolean {
   if (!bootstrap) return false
@@ -1119,7 +1120,7 @@ function mergeVerificationCommands(
 }
 
 function workspaceProjectForTask(
-  task: Pick<Task, 'projectPath' | 'domain'> & Partial<Pick<Task, 'title' | 'description'>>,
+  task: TaskProjectPathInput,
   workspaceProjects: readonly WorkspaceProjectBlock[] | undefined,
 ): WorkspaceProjectBlock | undefined {
   if (!workspaceProjects || workspaceProjects.length === 0) return undefined
@@ -1139,7 +1140,7 @@ function workspaceProjectForTask(
 }
 
 export function resolveEffectiveTaskProjectPath(
-  task: Pick<Task, 'projectPath' | 'domain'> & Partial<Pick<Task, 'title' | 'description'>>,
+  task: TaskProjectPathInput,
   workspaceProjectPath: string,
   options: { workspaceProjects?: readonly WorkspaceProjectBlock[] } = {},
 ): string {
@@ -1170,7 +1171,7 @@ export function resolveEffectiveTaskProjectPath(
 }
 
 function workspaceProjectNamedInTask(
-  task: Pick<Task, 'projectPath' | 'domain'> & Partial<Pick<Task, 'title' | 'description'>>,
+  task: TaskProjectPathInput,
   workspaceProjects: readonly WorkspaceProjectBlock[],
 ): WorkspaceProjectBlock | undefined {
   return workspaceProjectNamedInText(workspaceProjects, [

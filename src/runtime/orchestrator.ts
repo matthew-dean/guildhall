@@ -224,7 +224,7 @@ import {
   parseCoordinatorDraft,
 } from './meta-intake.js'
 import { taskEligibleForSelectedScope, taskNodeId } from './project-orientation-spine.js'
-import { recoverClippedTitle } from '../shared/task-display-label.js'
+import { recoverClippedTitle } from '@guildhall/shared'
 import {
   createOwnerInputRequest,
   listOwnerInputRequestsSync,
@@ -4954,7 +4954,7 @@ export class Orchestrator {
                 })
                 if (
                   backendEvent?.type === 'line_complete' &&
-                  isCheckpointNoProgressMessage(backendEvent.message)
+                  isCheckpointNoProgressMessage(backendEvent.message ?? undefined)
                 ) {
                   checkpointNoProgressStatusSeen = true
                 }
@@ -5728,11 +5728,11 @@ export class Orchestrator {
           agent.name === 'spec-agent' &&
           beforeStatus === 'exploring' &&
           taskAfter.status === 'spec_review' &&
-          task.proofRecovery
+          (task as Task & { proofRecovery?: unknown }).proofRecovery
         ) {
           const proofRecoveryTask = {
             ...taskAfter,
-            proofRecovery: task.proofRecovery,
+            proofRecovery: (task as Task & { proofRecovery?: unknown }).proofRecovery,
           } as Task
           if (needsSourceShapingForScriptProofRecovery(proofRecoveryTask)) {
             resetCurrentPlanForProofRecovery(taskAfter, {
@@ -8949,7 +8949,7 @@ export class Orchestrator {
 
         const evidenceSummary = passingArtifact.summary
         const recordedAt = passingArtifact.checkedAt ?? now
-        const normalizedProofPaths = currentProofPaths.map((proofPath) => {
+        const normalizedProofPaths: RuntimeProofPath[] = currentProofPaths.map((proofPath) => {
           if (proofPath.kind !== 'command' || proofPath.command?.trim() !== command) return proofPath
           const expectedEvidence = (proofPath.expectedEvidence ?? []).map((evidence, index) => ({
             id: evidence.id || `${proofPath.id ?? 'proof-path'}-evidence-${index}`,
@@ -9006,8 +9006,8 @@ export class Orchestrator {
             verificationRecords: [...existingRecords, ...artifactRecords],
             updatedAt: now,
           }
-        }) as unknown as NonNullable<Task['proofPaths']>
-        current.proofPaths = normalizedProofPaths
+        })
+        current.proofPaths = normalizedProofPaths as unknown as NonNullable<Task['proofPaths']>
         const verifiedCommandProof = normalizedProofPaths.some((proofPath) =>
           proofPath.kind === 'command' &&
           proofPath.command?.trim() === command &&
@@ -13632,30 +13632,41 @@ export class Orchestrator {
         .map(request => normalizeFallbackQuestionPrompt(request.prompt)),
     )
     const postedOwnerInputPrompts = new Set(existingOwnerInputPrompts)
-    const legacyQuestions = (task.openQuestions ?? [])
-      .filter((question): question is Record<string, unknown> =>
-        Boolean(question) && typeof question === 'object' && !('answeredAt' in question && question.answeredAt),
-      )
+    type FallbackQuestion = {
+      id: string
+      kind: 'text' | 'choice'
+      prompt: string
+      subject?: string
+      description?: string
+      choices?: string[]
+      selectionMode?: 'single' | 'multiple'
+    }
+    const legacyQuestions: FallbackQuestion[] = (task.openQuestions ?? [])
+      .filter(question => {
+        const record = question as unknown as Record<string, unknown>
+        return Boolean(record) && typeof record === 'object' && !('answeredAt' in record && record.answeredAt)
+      })
       .map((question) => {
-        const prompt = typeof question.prompt === 'string'
-          ? question.prompt
-          : typeof question.restatement === 'string'
-            ? question.restatement
+        const record = question as unknown as Record<string, unknown>
+        const prompt = typeof record.prompt === 'string'
+          ? record.prompt
+          : typeof record.restatement === 'string'
+            ? record.restatement
             : ''
-        const choices = Array.isArray(question.choices)
-          ? question.choices.filter((choice): choice is string => typeof choice === 'string' && choice.trim().length > 0)
+        const choices = Array.isArray(record.choices)
+          ? record.choices.filter((choice): choice is string => typeof choice === 'string' && choice.trim().length > 0)
           : []
         return {
-          id: typeof question.id === 'string' && question.id.trim() ? question.id : `legacy-${task.id}`,
-          kind: typeof question.kind === 'string' ? question.kind : 'text',
+          id: typeof record.id === 'string' && record.id.trim() ? record.id : `legacy-${task.id}`,
+          kind: record.kind === 'choice' ? 'choice' as const : 'text' as const,
           prompt: normalizeFallbackQuestionPrompt(prompt),
-          ...(typeof question.subject === 'string' ? { subject: question.subject } : {}),
-          ...(typeof question.description === 'string' ? { description: question.description } : {}),
+          ...(typeof record.subject === 'string' ? { subject: record.subject } : {}),
+          ...(typeof record.description === 'string' ? { description: record.description } : {}),
           ...(choices.length > 0 ? { choices } : {}),
-          ...(question.selectionMode === 'single' || question.selectionMode === 'multiple'
-            ? { selectionMode: question.selectionMode }
+          ...(record.selectionMode === 'single' || record.selectionMode === 'multiple'
+            ? { selectionMode: record.selectionMode }
             : {}),
-        }
+        } as FallbackQuestion
       })
       .filter(question => question.prompt.trim().length > 0)
     const missingDrafts = drafts.filter(
@@ -13675,14 +13686,12 @@ export class Orchestrator {
       const now = this.now()
       const questionDrafts = missingDrafts.length > 0 ? missingDrafts : drafts
       const questionStamp = Date.now().toString(36)
-      const questionRecords = questionDrafts.map((draft, index) => {
+      const questionRecords: FallbackQuestion[] = questionDrafts.map((draft, index) => {
         const questionId = `q-fallback-${task.id}-${questionStamp}-${index}`
-        return draft.kind === 'choice'
+        return (draft.kind === 'choice'
           ? {
               kind: 'choice' as const,
               id: questionId,
-              askedBy: 'spec-agent',
-              askedAt: now,
               prompt: draft.prompt,
               ...(draft.subject ? { subject: draft.subject } : {}),
               ...(draft.description ? { description: draft.description } : {}),
@@ -13692,15 +13701,13 @@ export class Orchestrator {
           : {
               kind: 'text' as const,
               id: questionId,
-              askedBy: 'spec-agent',
-              askedAt: now,
               prompt: draft.prompt,
               ...(draft.subject ? { subject: draft.subject } : {}),
               ...(draft.description ? { description: draft.description } : {}),
-            }
+            }) as FallbackQuestion
       })
-      const acceptedQuestions: typeof questionRecords = []
-      const questionsToPost = [
+      const acceptedQuestions: FallbackQuestion[] = []
+      const questionsToPost: FallbackQuestion[] = [
         ...legacyQuestions,
         ...questionRecords.filter(question => !postedOwnerInputPrompts.has(normalizeFallbackQuestionPrompt(question.prompt))),
       ]
@@ -13718,7 +13725,7 @@ export class Orchestrator {
             question: {
               kind: question.kind,
               prompt: question.prompt,
-              ...(question.kind === 'choice' ? { choices: question.choices } : {}),
+              ...(question.kind === 'choice' ? { choices: question.choices ?? [] } : {}),
               ...(question.kind === 'choice' && question.selectionMode
                 ? { selectionMode: question.selectionMode }
                 : {}),

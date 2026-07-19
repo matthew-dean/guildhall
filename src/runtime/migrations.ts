@@ -50,7 +50,7 @@ import {
   projectStateDatabaseTaskSummary,
 } from '@guildhall/sessions'
 import type { ProjectStateDatabaseScopeRow } from '@guildhall/sessions'
-import { Task as TaskSchema, TaskRuntimeState } from '@guildhall/core'
+import { Task as TaskSchema, TaskRuntimeState, type ProjectRelease } from '@guildhall/core'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
@@ -66,7 +66,7 @@ import {
   appendTaskEvidence,
   runtimeStatePath,
   taskWorkspaceStatePath,
-} from '../sessions/task-state-store.js'
+} from '@guildhall/sessions'
 import { repairOwnerInputState } from './owner-input-state-repair.js'
 import { listOwnerInputRequestsSync, refreshOwnerInputProjection } from './owner-input-store.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
@@ -91,7 +91,7 @@ import {
 } from './project-summary-projection.js'
 import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
 import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from './delivery-read-projection.js'
-import { effectiveTaskTitle } from '../shared/task-display-label.js'
+import { effectiveTaskTitle } from '@guildhall/shared'
 import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
 import { currentPlanProcessLeakage, stripCurrentPlanProcessLeakage } from './spec-quality.js'
 import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
@@ -214,7 +214,8 @@ interface FinalProjectStateMigrationResult {
 
 function taskIsImportedSourceWork(task: Task): boolean {
   const createdBy = task.requestIntake?.createdBy
-  return task.importedDraft === true ||
+  const importedDraft = (task as unknown as Record<string, unknown>).importedDraft === true
+  return importedDraft ||
     createdBy === 'workspace-importer' ||
     createdBy === 'project-reintake' ||
     (task.sourceClaims?.length ?? 0) > 0 ||
@@ -352,7 +353,11 @@ function cleanCurrentPlanBrief(task: Task): boolean {
   if (!nextBrief.userJob || !nextBrief.successMetric) {
     delete task.productBrief
   } else {
-    task.productBrief = nextBrief
+    task.productBrief = {
+      ...nextBrief,
+      userJob: nextBrief.userJob,
+      successMetric: nextBrief.successMetric,
+    }
   }
   return changed || !task.productBrief
 }
@@ -391,9 +396,12 @@ function importedScriptProofRepairTaskIds(projectRoot: string): string[] {
   const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
   const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
   if (!queue) return []
-  const selectedRelease = queue.releases?.find(release => release.id === queue.selectedReleaseId)
+  const selectedRelease = queue.releases
+    ?.map(release => release as unknown as ProjectRelease)
+    .find(release => release.id === queue.selectedReleaseId)
   if (selectedRelease?.proofStyle !== 'script_only') return []
-  return queue.tasks
+  const tasks = queue.tasks as unknown as Task[]
+  return tasks
     .filter(task => task.releaseIds?.includes(selectedRelease.id))
     .filter(taskNeedsImportedScriptProofRepair)
     .map(task => task.id)
@@ -492,7 +500,7 @@ async function realignPromotedSummaryWithEffectiveState(projectRoot: string): Pr
       updatedAt: typeof effective.updatedAt === 'string' ? effective.updatedAt : task.updatedAt,
       completedAt: typeof effective.completedAt === 'string' ? effective.completedAt : task.completedAt,
       ...(currentSummary && typeof currentSummary === 'object' && !Array.isArray(currentSummary)
-        ? { currentSummary }
+        ? { currentSummary: currentSummary as Record<string, unknown> }
         : {}),
     }
   })
@@ -3160,7 +3168,9 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
           affectedPaths: [],
         }
       }
-      const selectedRelease = queue.releases?.find(release => release.id === queue.selectedReleaseId)
+      const selectedRelease = queue.releases
+        ?.map(release => release as unknown as ProjectRelease)
+        .find(release => release.id === queue.selectedReleaseId)
       if (selectedRelease?.proofStyle !== 'script_only') {
         return {
           summary: 'Skipped imported proof-contract normalization because the selected scope is not script-only.',
@@ -3168,7 +3178,7 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
         }
       }
       let changed = 0
-      for (const task of queue.tasks) {
+      for (const task of queue.tasks as unknown as Task[]) {
         if (!task.releaseIds?.includes(selectedRelease.id) || !taskNeedsImportedScriptProofRepair(task)) continue
         if (repairImportedScriptProofContract(task)) changed += 1
       }
@@ -3200,7 +3210,7 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
       const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
       const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
-      const taskIds = queue?.tasks.filter(taskHasCurrentPlanProcessLeakage).map(task => task.id) ?? []
+      const taskIds = (queue?.tasks as unknown as Task[] | undefined)?.filter(taskHasCurrentPlanProcessLeakage).map(task => task.id) ?? []
       return {
         needed: taskIds.length > 0,
         affectedPaths: taskIds.length > 0
@@ -3219,7 +3229,7 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
       const now = new Date().toISOString()
       let changed = 0
-      for (const task of queue.tasks) {
+      for (const task of queue.tasks as unknown as Task[]) {
         if (repairCurrentPlanRecoveryBoundary(task, now)) changed += 1
       }
       if (changed > 0) {

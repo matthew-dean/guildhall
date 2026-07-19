@@ -7,7 +7,7 @@ import {
   type PersistencePlacement,
 } from '@guildhall/persistence'
 import { emitProjectSummaryInvalidation } from '@guildhall/sessions'
-import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
+import { taskShapingBlockers } from '@guildhall/shared'
 
 const DELIVERY_SPINE_COLLECTION = 'delivery-spine'
 const DELIVERY_SPINE_RECORD_ID = 'project-delivery-model'

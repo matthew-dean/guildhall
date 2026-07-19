@@ -18,7 +18,7 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueue,
 } from '@guildhall/runtime/project-state-boundary'
-import { providerCommandEnv } from '../config/global-providers.js'
+import { providerCommandEnv } from '@guildhall/config/global-providers'
 
 // ---------------------------------------------------------------------------
 // FR-10 Escalation protocol

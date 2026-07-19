@@ -14,12 +14,12 @@ import {
   reconcileRequestedGatesWithAuthority,
 } from '@guildhall/core'
 import { summarizeScopedHardGateDisposition } from './gate-scope-exceptions.js'
-import { recordCommandProofPathResults } from '../runtime/proof-paths.js'
+import { recordCommandProofPathResults } from '@guildhall/runtime/proof-paths'
 import {
   readProjectTaskQueueForMutationSync,
   writePromotedTaskDetailMutation,
   writeProjectTaskQueueWithSummary,
-} from '../runtime/project-state-boundary.js'
+} from '@guildhall/runtime/project-state-boundary'
 
 export { reconcileRequestedGatesWithAuthority } from '@guildhall/core'
 

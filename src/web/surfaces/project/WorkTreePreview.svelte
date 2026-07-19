@@ -8,8 +8,7 @@
   import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
-  import { taskDisplayLabel, taskSourceQuestion } from '../../../shared/task-display-label.js'
-  import { taskShapingBlockerLabel, taskShapingBlockers } from '../../../shared/task-shaping-blockers.js'
+  import { taskDisplayLabel, taskSourceQuestion, taskShapingBlockerLabel, taskShapingBlockers } from '@guildhall/shared'
   import type { ProjectDetail, Task } from '../../lib/types.js'
 
   interface Props {

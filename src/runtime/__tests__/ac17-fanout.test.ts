@@ -180,6 +180,7 @@ function makeWorkerAgent(getOrch: () => Orchestrator): SpyAgent {
           t.acceptanceCriteria = t.acceptanceCriteria.map(criterion => ({ ...criterion, met: true }))
           t.gateResults = [{
             gateId: `${taskId}-completion`,
+            type: 'hard',
             passed: true,
             checkedAt: '2026-04-22T00:00:01.000Z',
             output: 'The acceptance criterion is met.',

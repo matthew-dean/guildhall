@@ -405,9 +405,15 @@ describe('repairCompletionProofCriteriaInQueue', () => {
           { id: 'ac1', description: 'Fixture writes an artifact.', verifiedBy: 'automated', command: 'pnpm review', met: false },
           { id: 'ac2', description: 'Reviewer taxonomy is reused.', verifiedBy: 'review', met: false },
         ],
-        reviewVerdicts: [{ verdict: 'revise', recordedAt: '2026-07-04T10:07:21.557Z' }],
+        reviewVerdicts: [{
+          verdict: 'revise',
+          reviewerPath: 'llm',
+          reason: 'The proof still needs revision.',
+          failingSignals: [],
+          recordedAt: '2026-07-04T10:07:21.557Z',
+        }],
       })])
-    Object.assign(q.tasks[0], {
+    Object.assign(q.tasks[0]!, {
       evidence: [
         {
           id: 'gate-task-proof',

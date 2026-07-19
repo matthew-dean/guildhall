@@ -4,6 +4,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import { bootstrapWorkspace } from '@guildhall/config'
+import type { Task } from '@guildhall/core'
 import {
   appendTaskEvidence,
   getProjectSystemStatePath,
@@ -79,7 +80,29 @@ describe('GET /api/project/progress', () => {
           version: 1,
           lastUpdated: '2026-07-15T00:00:00.000Z',
           releases: [],
-          tasks: [{ id: 'task-promoted', title: 'Promoted task', status: 'ready' }],
+          tasks: [{
+            id: 'task-promoted',
+            title: 'Promoted task',
+            description: 'Promoted task.',
+            domain: 'project',
+            projectPath: root,
+            status: 'ready',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            origination: 'human',
+            createdAt: '2026-07-15T00:00:00.000Z',
+            updatedAt: '2026-07-15T00:00:00.000Z',
+          } satisfies Task],
         },
       })
       const database = new DatabaseSync(projectStateDatabasePath(root))

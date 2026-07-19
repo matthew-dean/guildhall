@@ -14,7 +14,6 @@ import {
   type ReviewerFanoutRunner,
 } from '../orchestrator.js'
 import { LivenessTracker } from '../liveness.js'
-import { upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
 import { buildEffectiveTask } from '../effective-task.js'
 import { hasUsableBlueprint } from '../task-plan-recovery.js'
 import { updateProjectConfig, type ResolvedConfig } from '@guildhall/config'
@@ -77,6 +76,16 @@ let memoryDir: string
 let tasksPath: string
 let progressPath: string
 let agentSettingsPath: string
+
+// These tests exercise migration/overlay compatibility. Keep the retired
+// runtime fields in a test-only patch/view type rather than adding them back
+// to the authoritative Task definition.
+type TestTaskPatch = Partial<Task> & Record<string, unknown>
+type LegacyTaskView = Task & {
+  runtime?: { proofRecovery?: { reason?: string } }
+  proofRecovery?: { reason?: string; reopenedAt?: string }
+  workerRecovery?: Record<string, unknown>
+}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-orch-test-'))
@@ -172,7 +181,7 @@ const VALID_SPEC = [
   '1. Thing is done.',
 ].join('\n')
 
-function mkTask(overrides: Partial<Task> = {}): Task {
+function mkTask(overrides: TestTaskPatch = {}): Task {
   const task: Task = {
     id: 'task-001',
     title: 'Do a thing',
@@ -239,10 +248,11 @@ async function writeQueueState(input: Partial<TaskQueue> & { tasks: Task[] }): P
   // keep explicit empty/undefined specs intact for recovery tests, but make
   // non-empty legacy worker specs honest before they reach the write boundary.
   const tasks = input.tasks.map((task) => {
+    const legacyTask = task as LegacyTaskView
     const explicitlyMissingSpec = Object.hasOwn(task, 'spec') &&
       (task.spec === undefined || task.spec.trim() === '')
     const legacyWorkerSpec = task.status === 'in_progress' &&
-      !task.proofRecovery &&
+      !legacyTask.proofRecovery &&
       !explicitlyMissingSpec &&
       (!Object.hasOwn(task, 'spec') || !hasUsableBlueprint(task))
     if (!legacyWorkerSpec) return task
@@ -301,13 +311,14 @@ async function writeQueueState(input: Partial<TaskQueue> & { tasks: Task[] }): P
 
 async function seedTaskOverlays(tasks: readonly Task[]): Promise<void> {
   for (const task of tasks) {
+    const legacyTask = task as LegacyTaskView
     await upsertTaskRuntimeState(tmpDir, task.id, {
       ...(task.assignedTo !== undefined ? { assignedTo: task.assignedTo } : {}),
       ...(task.revisionCount !== undefined ? { revisionCount: task.revisionCount } : {}),
       ...(task.retryWindow !== undefined ? { retryWindow: task.retryWindow } : {}),
-      ...(task.proofRecovery !== undefined ? { proofRecovery: task.proofRecovery } : {}),
+      ...(legacyTask.proofRecovery !== undefined ? { proofRecovery: legacyTask.proofRecovery } : {}),
       ...(task.remediationAttempts !== undefined ? { remediationAttempts: task.remediationAttempts } : {}),
-      ...(task.workerRecovery !== undefined ? { workerRecovery: task.workerRecovery } : {}),
+      ...(legacyTask.workerRecovery !== undefined ? { workerRecovery: legacyTask.workerRecovery } : {}),
       ...(task.handoffStep !== undefined ? { handoffStep: task.handoffStep } : {}),
       ...(task.shelveReason !== undefined ? { shelveReason: task.shelveReason } : {}),
       ...(task.escalations !== undefined
@@ -317,7 +328,7 @@ async function seedTaskOverlays(tasks: readonly Task[]): Promise<void> {
         ? { openIssueIds: task.agentIssues.filter((item) => !item.resolvedAt).map((item) => item.id) }
         : {}),
       updatedAt: task.updatedAt,
-    })
+    } as unknown as Parameters<typeof upsertTaskRuntimeState>[2])
     if (task.worktreePath !== undefined || task.branchName !== undefined || task.baseBranch !== undefined) {
       await upsertTaskWorkspaceState(tmpDir, task.id, {
         ...(task.worktreePath !== undefined ? { worktreePath: task.worktreePath } : {}),
@@ -469,7 +480,7 @@ function queueOf(tasks: Task[]): TaskQueue {
 /**
  * Mutate a task on disk as if the real agent had called the update-task tool.
  */
-async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
+async function mutateTask(id: string, patch: TestTaskPatch): Promise<void> {
   const q = await readManagedQueue()
   const t = q.tasks.find((t) => t.id === id)
   if (!t) throw new Error(`No task ${id}`)
@@ -564,7 +575,7 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
     ...(Object.prototype.hasOwnProperty.call(patch, 'shelveReason') ? { shelveReason } : {}),
   }
   if (Object.keys(runtimePatch).length > 0) {
-    await upsertTaskRuntimeState(tmpDir, id, { ...runtimePatch, updatedAt })
+    await upsertTaskRuntimeState(tmpDir, id, { ...runtimePatch, updatedAt } as unknown as Parameters<typeof upsertTaskRuntimeState>[2])
   }
 
   const workspacePatch = {
@@ -720,9 +731,10 @@ describe('Orchestrator queue writes', () => {
     const hydrated = await (orch as unknown as {
       hydrateEffectiveTaskForDispatch(task: Task): Promise<Task>
     }).hydrateEffectiveTaskForDispatch(initialQueue.tasks[0]!)
+    const hydratedLegacy = hydrated as LegacyTaskView
 
-    expect(hydrated.runtime?.proofRecovery?.reason).toContain('current proof command is missing')
-    expect(hydrated.proofRecovery?.reason).toContain('current proof command is missing')
+    expect(hydratedLegacy.runtime?.proofRecovery?.reason).toContain('current proof command is missing')
+    expect(hydratedLegacy.proofRecovery?.reason).toContain('current proof command is missing')
   })
 
   it('keeps a promoted proof-recovery task in source-backed shaping instead of seeding a generic spec', async () => {
@@ -854,8 +866,8 @@ describe('Orchestrator queue writes', () => {
     })
 
     const runtime = (await readTaskRuntimeStore(tmpDir)).tasks['task-runtime-boundary']
-    expect(runtime.retryWindow).toBeUndefined()
-    expect(runtime.workerRecovery).toEqual({ noProgressAttempts: 2 })
+    expect(runtime?.retryWindow).toBeUndefined()
+    expect(runtime?.workerRecovery).toEqual({ noProgressAttempts: 2 })
     expect(readProjectStateDatabaseTaskPointWithRevision(tasksPath, 'task-runtime-boundary')?.task.definition)
       .not.toHaveProperty('retryWindow')
   })
@@ -1612,7 +1624,6 @@ describe('Orchestrator.tick — idle handling', () => {
           summary: 'Stale escalation after provider timeout.',
           details: 'Should not survive durable merge evidence.',
           raisedAt: '2026-04-01T00:10:00.000Z',
-          raisedBy: 'worker-agent',
         }],
       }),
     ])
@@ -8176,14 +8187,14 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
         timestamp: '2026-07-04T10:07:20.557Z',
       }],
     })
-    const queue = { tasks: [task], lastUpdated: '2026-07-04T10:07:20.557Z' }
+    const queue: TaskQueue = { version: 1, tasks: [task], lastUpdated: '2026-07-04T10:07:20.557Z' }
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet(),
     })
 
     const repair = (orch as unknown as {
-      repairSyntheticBootstrapOutputTruncationInQueue(queue: typeof queue): { changed: boolean }
+      repairSyntheticBootstrapOutputTruncationInQueue(queue: TaskQueue): { changed: boolean }
     }).repairSyntheticBootstrapOutputTruncationInQueue(queue)
 
     expect(repair.changed).toBe(true)
@@ -8208,7 +8219,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     })
 
     await (orch as unknown as {
-      normalizeGateCheckOwnership(task: typeof task): Promise<void>
+      normalizeGateCheckOwnership(task: Task): Promise<void>
     }).normalizeGateCheckOwnership(task)
 
     const queue = await readQueue()
@@ -8668,7 +8679,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       passed: true,
     })
     expect(recorded.tasks[0]!.proofPaths?.[0]).toMatchObject({ status: 'verified' })
-    expect(recorded.tasks[0]!.proofPaths?.[0]?.verificationRecords?.[0]).toMatchObject({
+    expect((recorded.tasks[0]!.proofPaths?.[0] as unknown as { verificationRecords?: unknown[] })?.verificationRecords?.[0]).toMatchObject({
       status: 'passed',
       evidenceId: 'command-proof-path-evidence-0',
     })
@@ -11444,6 +11455,7 @@ describe('Orchestrator.run — full loops', () => {
       spec: VALID_SPEC,
     })
     const queue: TaskQueue = {
+      version: 1,
       tasks: [task],
       lastUpdated: '2026-07-06T00:00:00.000Z',
     }
@@ -12942,7 +12954,11 @@ describe('Orchestrator.run — full loops', () => {
     ])
 
     const seen: Array<{ taskId: string; resetCount: number; priorMessages: number }> = []
-    const worker = {
+    const worker: OrchestratorAgent & {
+      messages: Array<{ role?: string; content?: unknown }>
+      metadata: Record<string, unknown>
+      resetCount: number
+    } = {
       name: 'worker-agent',
       messages: [] as Array<{ role?: string; content?: unknown }>,
       metadata: {} as Record<string, unknown>,
@@ -12959,16 +12975,14 @@ describe('Orchestrator.run — full loops', () => {
         this.metadata = {}
       },
       async generate(prompt: string) {
-        const taskId = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)?.[1]
-        if (!taskId) throw new Error('missing current task id in prompt')
+        const matchedTaskId = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)?.[1]
+        if (!matchedTaskId) throw new Error('missing current task id in prompt')
+        const taskId = matchedTaskId
         seen.push({ taskId, resetCount: this.resetCount, priorMessages: this.messages.length })
         this.messages.push({ role: 'user', content: prompt })
         await mutateTask(taskId, { status: 'done' })
         return { text: 'done' }
       },
-    } satisfies OrchestratorAgent & {
-      metadata: Record<string, unknown>
-      resetCount: number
     }
 
     const orch = new Orchestrator({
@@ -15014,7 +15028,7 @@ describe('Orchestrator.tick — FR-21 proposal promotion', () => {
     })
   }
 
-  function proposal(overrides: Partial<Task> = {}): Task {
+  function proposal(overrides: TestTaskPatch = {}): Task {
     return mkTask({
       id: 'prop-1',
       status: 'proposed',
@@ -15243,7 +15257,7 @@ describe('Orchestrator.tick — FR-22 pre-rejection policy', () => {
     })
   }
 
-  function shelved(overrides: Partial<Task> = {}): Task {
+  function shelved(overrides: TestTaskPatch = {}): Task {
     return mkTask({
       id: 'shelve-1',
       status: 'shelved',
@@ -17337,7 +17351,7 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
 
   /** A review-ready task with ACs met and a passing hard gate, so the
    *  deterministic rubric clears the 0.8 threshold and returns approve. */
-  function reviewReadyTask(overrides: Partial<Task> = {}): Task {
+  function reviewReadyTask(overrides: TestTaskPatch = {}): Task {
     return mkTask({
       id: 't-review',
       status: 'review',

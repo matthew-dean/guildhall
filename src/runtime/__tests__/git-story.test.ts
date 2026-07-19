@@ -247,7 +247,11 @@ describe('summarizeGitStories', () => {
       changedCount: 0,
       untrackedCount: 0,
       samplePaths: [],
-      localCommits: ['a', 'b', 'c'],
+      localCommits: [
+        { sha: 'a', subject: 'First local commit' },
+        { sha: 'b', subject: 'Second local commit' },
+        { sha: 'c', subject: 'Third local commit' },
+      ],
       reason: 'main has 3 local commits not pushed to origin/main.',
       nextAction: 'Push the branch or open a PR according to this project policy.',
       inspectedAt: '2026-07-07T11:55:00.000Z',

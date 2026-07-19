@@ -330,34 +330,34 @@ describe('Guildhall CLI surface', () => {
       scope: {
         id: 'release-1',
         label: 'Release 1',
-        kind: 'release',
-        source: 'release_plan',
+        kind: 'release' as const,
+        source: 'release_plan' as const,
         nodeIds: ['task-1'],
         deferredNodeIds: ['task-2'],
       },
       repositories: [],
       diagnostics: null,
       summary: {
-        version: 17,
+        version: 17 as const,
         projectId: 'demo',
         generatedAt: '2026-07-19T00:00:00.000Z',
         freshness: 'current' as const,
         source: { taskQueueLastUpdated: null, taskQueueMtimeMs: null, workspaceGoalsMtimeMs: null },
         counts: { total: 2, active: 0, draftReview: 0, blocked: 0, done: 1, shelved: 0, included: 1, deferred: 1, ready: 0, paused: 0, ownerBlocked: 0, proofBlocked: 0, byStatus: { done: 1 } },
-        scope: { id: 'release-1', label: 'Release 1', kind: 'release', source: 'release_plan', included: 1, deferred: 1 },
+        scope: { id: 'release-1', label: 'Release 1', kind: 'release' as const, source: 'release_plan', included: 1, deferred: 1 },
         orientation: null,
         orientationSpine: null,
         approvedPlan: null,
         releaseSummary: {
           scopeMode: 'named_release' as const,
-          release: { id: 'release-1', label: 'Release 1', kind: 'release', state: 'shipped', source: 'release_plan' },
+          release: { id: 'release-1', label: 'Release 1', kind: 'release' as const, state: 'shipped', source: 'release_plan' },
           state: 'ready' as const,
           counts: { total: 1, done: 1, unfinished: 0, ready: 0, active: 0, blocked: 0, deferred: 1, ownerBlocked: 0, proofBlocked: 0 },
           taskStatusCounts: { done: 1 },
           blockers: [],
           updatedAt: '2026-07-19T00:00:00.000Z',
         },
-        nextAction: { label: 'Review completed scope', message: 'Review completed scope.' },
+        nextAction: { label: 'Review' as const, message: 'Review completed scope.' },
         blockers: [],
         recentWork: [],
         inFlight: [],
@@ -476,9 +476,10 @@ describe('Guildhall CLI surface', () => {
     expect(before).toBe(false)
     expect(existsSync(join(project, '.guildhall'))).toBe(false)
     expect(report.draft.tasks.some(task => (task.proofPaths?.length ?? 0) > 0)).toBe(true)
-    expect(report.draft.tasks.find(task =>
+    const proofPaths = report.draft.tasks.find(task =>
       task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
-    )?.proofPaths?.[0]?.expectedEvidence?.length).toBeGreaterThan(0)
+    )?.proofPaths as Array<{ expectedEvidence?: string[] }> | undefined
+    expect(proofPaths?.[0]?.expectedEvidence?.length).toBeGreaterThan(0)
   })
 
   it('exposes external-agent memory bridge import, review, and reject through explicit JSON CLI flows', async () => {

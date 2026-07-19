@@ -64,16 +64,17 @@ import {
 import { executionScopeRows, taskScopeNodeId, type ProjectScope } from './project-scope-projection.js'
 import { buildEffectiveTask, buildEffectiveTasks } from './effective-task.js'
 import { appendTaskEvidence, TASK_EVIDENCE_RETENTION } from './task-state-store.js'
-import { recoverClippedTitle } from '../shared/task-display-label.js'
+import { recoverClippedTitle } from '@guildhall/shared'
 
 function projectSummaryAtRuntimeVersion(
-  summary: ProjectStateDatabaseSummary<ProjectSummaryProjection>,
+  summary: ProjectStateDatabaseSummary<ProjectSummaryProjection> | ProjectSummaryProjection,
 ): ProjectSummaryProjection {
-  const version = summary.payload && typeof summary.payload === 'object'
-    ? (summary.payload as { version?: unknown }).version
+  const payload = 'payload' in summary ? summary.payload : summary
+  const version = payload && typeof payload === 'object'
+    ? (payload as { version?: unknown }).version
     : undefined
   return {
-    ...summary.payload,
+    ...payload,
     freshness: typeof version !== 'number' || version === PROJECT_SUMMARY_PROJECTION_VERSION
       ? summary.freshness
       : 'stale',
@@ -319,10 +320,7 @@ async function buildProjectCanonicalCurrentState(
     diagnostics: currentState.diagnostics,
     memoryHealth: currentState.memoryHealth,
     summary: currentState.summary
-      ? {
-          ...currentState.summary,
-          payload: projectSummaryAtRuntimeVersion(currentState.summary),
-        }
+      ? projectSummaryAtRuntimeVersion(currentState.summary)
       : null,
     authority: currentState.authority,
     queueRevision: currentState.queueRevision,
@@ -1469,7 +1467,7 @@ export function writePromotedTaskDetailMutation(
     // old indexed value. Historical completion belongs in evidence; the
     // current index must reflect the mutation exactly.
     completedAt: Object.prototype.hasOwnProperty.call(nextTask, 'completedAt')
-      ? (typeof nextTask.completedAt === 'string' ? nextTask.completedAt : undefined)
+      ? (typeof nextTask.completedAt === 'string' ? nextTask.completedAt : null)
       : point.task.completedAt,
     scopeRow: nextScopeRow,
   }

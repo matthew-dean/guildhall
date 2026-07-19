@@ -1,8 +1,7 @@
 import type { ProjectRelease, Task, TaskQueue, TaskStatus } from '@guildhall/core'
-import { taskDisplayLabel } from '../shared/task-display-label.js'
+import { taskDisplayLabel } from '@guildhall/shared'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
-import { META_INTAKE_TASK_ID } from './meta-intake.js'
-import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
+import { META_INTAKE_TASK_ID, WORKSPACE_IMPORT_TASK_ID } from './project-reserved-task-ids.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import { effectiveTaskStatus } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
@@ -435,7 +434,8 @@ export function taskScopeEligibility(
 }
 
 export function buildProjectScopeProjection(
-  queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'>,
+  queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'> &
+    Partial<Pick<TaskQueue, 'version' | 'lastUpdated'>>,
   options: BuildProjectScopeProjectionOptions = {},
 ): ProjectScopeProjection {
   // All scope consumers receive the same current task status before any

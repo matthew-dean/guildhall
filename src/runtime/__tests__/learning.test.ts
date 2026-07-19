@@ -31,11 +31,25 @@ let previousHome: string | undefined
 
 function sampleReview(): WorkspaceImportReview {
   return {
+    summary: {
+      currentMilestoneLabel: null,
+      releaseScopeLabel: null,
+      headline: '4 candidate tasks',
+      currentScope: '4 current tasks',
+      deferredScope: null,
+      structuralScope: null,
+      briefInputCount: 0,
+      briefRecordCount: 0,
+      capabilityCount: 0,
+      capabilityRecordCount: 0,
+    },
     areaGroups: [
       {
         key: 'looma',
         label: 'Looma',
         taskCount: 2,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
         milestoneCount: 0,
         goalCount: 0,
         contextCount: 0,
@@ -47,6 +61,8 @@ function sampleReview(): WorkspaceImportReview {
         key: 'knit',
         label: 'Knit',
         taskCount: 2,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
         milestoneCount: 0,
         goalCount: 0,
         contextCount: 0,
@@ -63,6 +79,8 @@ function sampleReview(): WorkspaceImportReview {
         areaKey: 'looma',
         areaLabel: 'Looma',
         taskCount: 2,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
         milestoneCount: 0,
         goalCount: 0,
         contextCount: 0,
@@ -78,6 +96,8 @@ function sampleReview(): WorkspaceImportReview {
         areaKey: 'knit',
         areaLabel: 'Knit',
         taskCount: 2,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
         milestoneCount: 0,
         goalCount: 0,
         contextCount: 0,
@@ -88,6 +108,8 @@ function sampleReview(): WorkspaceImportReview {
       },
     ],
     totalTaskCandidates: 4,
+    totalCurrentTaskCandidates: 4,
+    totalLaterTaskCandidates: 0,
     totalMilestones: 0,
     totalGoals: 0,
   }
@@ -109,6 +131,7 @@ function sampleDraft(): WorkspaceImportDraft {
         source: 'planning-docs',
         references: ['/tmp/project/looma/docs/component-roadmap.md'],
         confidence: 'high',
+        scope: 'current',
       },
       {
         suggestedId: 'task-2',
@@ -119,6 +142,7 @@ function sampleDraft(): WorkspaceImportDraft {
         source: 'planning-docs',
         references: ['/tmp/project/looma/docs/component-roadmap.md'],
         confidence: 'low',
+        scope: 'current',
       },
       {
         suggestedId: 'task-3',
@@ -129,6 +153,7 @@ function sampleDraft(): WorkspaceImportDraft {
         source: 'planning-docs',
         references: ['/tmp/project/knit/docs/feature-roadmap.md'],
         confidence: 'medium',
+        scope: 'current',
       },
       {
         suggestedId: 'task-4',
@@ -139,6 +164,7 @@ function sampleDraft(): WorkspaceImportDraft {
         source: 'planning-docs',
         references: ['/tmp/project/knit/docs/feature-roadmap.md'],
         confidence: 'high',
+        scope: 'current',
       },
     ],
   }

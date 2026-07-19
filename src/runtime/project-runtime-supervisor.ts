@@ -20,7 +20,7 @@ import type {
   RuntimeBackendCommandEvent,
   RuntimeBackendCommandRequest,
 } from './project-runtime-backend.js'
-import { providerCommandEnv } from '../config/global-providers.js'
+import { providerCommandEnv } from '@guildhall/config/global-providers'
 
 export type RuntimeStartReason = RuntimeKeepAliveReason | 'ui-open'
 

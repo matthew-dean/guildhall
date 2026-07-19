@@ -37,7 +37,7 @@ import {
   readTaskRuntimeStore,
   readTaskWorkspaceStore,
 } from './task-state-store.js'
-import { effectiveTaskTitle } from '../shared/task-display-label.js'
+import { effectiveTaskTitle } from '@guildhall/shared'
 import {
   hasActiveProofRecovery,
   latestFallbackApprovalHasUnresolvedSubstantiveRevision,

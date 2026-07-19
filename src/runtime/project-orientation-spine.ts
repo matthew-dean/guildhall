@@ -1,5 +1,4 @@
-import { taskDisplayLabel } from '../shared/task-display-label.js'
-import { summarizeCurrentProof } from '../shared/current-proof.js'
+import { taskDisplayLabel, summarizeCurrentProof } from '@guildhall/shared'
 import {
   executionScopeRows,
   releaseLabelFromId,
@@ -35,6 +34,7 @@ export interface OrientationScope {
   source: OrientationReleaseSource
   nodeIds: string[]
   deferredNodeIds: string[]
+  proofStyle?: OrientationReleaseProofStyle
 }
 
 export interface OrientationRelease {
@@ -505,6 +505,8 @@ function compactOrientationMapProofContract(contract: OrientationProofContract):
 }
 
 export interface OrientationTaskInput {
+  /** Permit legacy source records at this authoring boundary; ignored fields are not persisted. */
+  [key: string]: unknown
   id: string
   title?: string
   description?: string
@@ -516,7 +518,7 @@ export interface OrientationTaskInput {
   priority?: string
   spec?: string
   structuredSpec?: unknown
-  productBrief?: { approvedAt?: string | null } | null
+  productBrief?: { approvedAt?: string | null; [key: string]: unknown } | null
   acceptanceCriteria?: Array<{ met?: boolean; [key: string]: unknown }>
   proofPaths?: unknown[]
   doneSummaryBundle?: unknown
@@ -529,7 +531,7 @@ export interface OrientationTaskInput {
     notVerified?: string[]
     remainingRisks?: string[]
   } | Record<string, unknown> | null
-  hierarchy?: { parentId?: string; childIds?: string[]; relation?: string }
+  hierarchy?: { parentId?: string; childIds?: string[]; relation?: string; order?: number }
   dependsOn?: string[]
   releaseIds?: string[]
   workKind?: string
@@ -603,6 +605,7 @@ export interface BuildProjectOrientationSpineInput {
   } | null
   scopeProjection?: ProjectScopeProjection | null
   runStatus?: 'running' | 'stopping' | 'stopped' | 'error' | string | null
+  runMode?: 'continuous' | 'one_task' | string | null
   workspaceImportDraft?: OrientationWorkspaceImportDraft | null
   sourceConflicts?: Array<{ id: string; summary: string; refs: string[] }>
   sourceRefs?: string[]
@@ -1103,7 +1106,7 @@ function proofForTask(
 ): OrientationProofSummary {
   const recorded = recordedCompletionProofForTask(task)
   const classified = classifyCompletionProof(recorded, taskProofIsStale(task))
-  const current = summarizeCurrentProof(task as Record<string, unknown>)
+  const current = summarizeCurrentProof(task as unknown as Record<string, unknown>)
   const handoff = task.completionHandoff && typeof task.completionHandoff === 'object'
     ? task.completionHandoff as {
         verified?: string[]

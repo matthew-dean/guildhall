@@ -24,7 +24,7 @@ import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TaskQueue } from '@guildhall/core'
-import { readProjectTaskQueueSync } from '../runtime/project-state-boundary.js'
+import { readProjectTaskQueueSync } from '@guildhall/runtime/project-state-boundary'
 import { createHash } from 'node:crypto'
 import { createOwnerInputRequest } from '@guildhall/runtime/owner-input-store'
 

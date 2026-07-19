@@ -155,7 +155,7 @@ describe('proof health', () => {
       ],
     })
 
-    expect(task.acceptanceCriteria?.[0]).not.toHaveProperty('command')
+    expect((task.acceptanceCriteria as Array<Record<string, unknown>> | undefined)?.[0]).not.toHaveProperty('command')
   })
 
   it('creates an executable criterion when a documented command path has no criterion link', () => {
@@ -334,9 +334,10 @@ describe('proof health', () => {
       met: true,
       verificationState: 'verified',
     })])
-    expect(normalized.acceptanceCriteria?.[0]).not.toHaveProperty('persistedMet')
-    expect(normalized.acceptanceCriteria?.[0]).not.toHaveProperty('staleReason')
-    expect(normalized.acceptanceCriteria?.[0]).not.toHaveProperty('staleGateId')
+    const firstCriterion = (normalized.acceptanceCriteria as Array<Record<string, unknown>> | undefined)?.[0]
+    expect(firstCriterion).not.toHaveProperty('persistedMet')
+    expect(firstCriterion).not.toHaveProperty('staleReason')
+    expect(firstCriterion).not.toHaveProperty('staleGateId')
     expect(normalized.acceptanceCriteriaProofState).toEqual({ state: 'verified' })
   })
 

@@ -4,7 +4,7 @@ import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership,
 
 const now = '2026-07-04T12:00:00.000Z'
 
-function task(overrides: Partial<Task> = {}): Task {
+function task(overrides: Record<string, unknown> = {}): Task {
   return {
     id: 'task-ready',
     title: 'Ready task',
@@ -207,6 +207,7 @@ describe('buildProjectScopeProjection', () => {
         kind: 'release',
         state: 'active',
         source: 'release_plan',
+        proofStyle: 'unspecified',
         nodeIds: ['work:task-done'],
         deferredNodeIds: ['work:task-later'],
       }],
@@ -428,7 +429,7 @@ describe('buildProjectScopeProjection', () => {
           status: 'done',
           releaseIds: ['stage-1'],
           proofPaths: [{ kind: 'command', command: 'pnpm test' }],
-          gateResults: [{ status: 'passed', command: 'pnpm test' }],
+    gateResults: [{ type: 'hard', passed: true, command: 'pnpm test', checkedAt: now }],
         }),
         task({
           id: 'blocked-task',
@@ -524,7 +525,7 @@ describe('buildProjectScopeProjection', () => {
         title: 'Define harness contracts',
         hierarchy: { childIds: ['task-ground-truth'], order: 0 },
         spec: 'Define the fixture contract.',
-        acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is defined.', verifiedBy: 'test', met: false }],
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is defined.', verifiedBy: 'automated', met: false }],
       }),
       task({
         id: 'task-ground-truth',
@@ -533,7 +534,7 @@ describe('buildProjectScopeProjection', () => {
         assignedTo: 'worker-agent',
         hierarchy: { parentId: 'task-contracts', childIds: [], order: 0 },
         spec: 'Shape fixture records.',
-        acceptanceCriteria: [{ id: 'AC-1', description: 'Fixture exists.', verifiedBy: 'test', met: false }],
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Fixture exists.', verifiedBy: 'automated', met: false }],
       }),
       task({
         id: 'task-later',
@@ -567,7 +568,7 @@ describe('buildProjectScopeProjection', () => {
         title: 'Define harness contracts',
         hierarchy: { childIds: ['task-model', 'task-world'], order: 0, relation: 'contains' },
         spec: 'Define the fixture contract.',
-        acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is defined.', verifiedBy: 'test', met: false }],
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is defined.', verifiedBy: 'automated', met: false }],
       }),
       task({
         id: 'task-model',
@@ -576,7 +577,7 @@ describe('buildProjectScopeProjection', () => {
         assignedTo: 'worker-agent',
         hierarchy: { parentId: 'task-contracts', childIds: [], order: 0, relation: 'decomposes' },
         spec: 'Select a DeepInfra model.',
-        acceptanceCriteria: [{ id: 'AC-1', description: 'Model is selected.', verifiedBy: 'test', met: false }],
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Model is selected.', verifiedBy: 'automated', met: false }],
       }),
       task({
         id: 'task-world',
@@ -584,7 +585,7 @@ describe('buildProjectScopeProjection', () => {
         status: 'ready',
         hierarchy: { parentId: 'task-contracts', childIds: [], order: 1, relation: 'decomposes' },
         spec: 'Define the world-state reviewer.',
-        acceptanceCriteria: [{ id: 'AC-1', description: 'Reviewer lane is defined.', verifiedBy: 'test', met: false }],
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Reviewer lane is defined.', verifiedBy: 'automated', met: false }],
       }),
     ]))
 
@@ -664,7 +665,7 @@ describe('buildProjectScopeProjection', () => {
           successMetric: 'The runner can read it.',
         },
         spec: 'Fixture contract spec.',
-        acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is parseable.', verifiedBy: 'test', met: false }],
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is parseable.', verifiedBy: 'automated', met: false }],
       }),
     ]))
 
@@ -684,7 +685,7 @@ describe('buildProjectScopeProjection', () => {
         title: 'Define fixture contracts.',
         status: 'spec_review',
         spec: 'Fixture contract spec.',
-        acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is parseable.', verifiedBy: 'test', met: false }],
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is parseable.', verifiedBy: 'automated', met: false }],
       }),
     ]))
 
@@ -702,7 +703,7 @@ describe('buildProjectScopeProjection', () => {
         id: 'task-contracts',
         title: 'Current scoped task',
         spec: 'Current work spec.',
-        acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'test', met: false }],
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'automated', met: false }],
       }),
       task({
         id: 'task-future',
@@ -735,7 +736,7 @@ describe('buildProjectScopeProjection', () => {
         id: 'task-contracts',
         title: 'Current scoped task',
         spec: 'Current work spec.',
-        acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'test', met: false }],
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'automated', met: false }],
       }),
       task({
         id: 'task-model-proof',
@@ -784,7 +785,7 @@ describe('buildProjectScopeProjection', () => {
           id: 'task-current',
           title: 'Current task from provisional scope',
           spec: 'Current work spec.',
-          acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'test', met: false }],
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'automated', met: false }],
         }),
         task({
           id: 'task-model-proof',
@@ -889,7 +890,7 @@ describe('buildProjectScopeProjection', () => {
         id: 'task-contracts',
         title: 'Current scoped task',
         spec: 'Current work spec.',
-        acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'test', met: false }],
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'automated', met: false }],
       }),
       task({
         id: 'task-stale',
@@ -918,7 +919,7 @@ describe('buildProjectScopeProjection', () => {
         status: 'done',
         completedAt: now,
         proofPaths: [{ kind: 'command', command: 'pnpm test' }],
-        gateResults: [{ status: 'passed', command: 'pnpm test' }],
+        gateResults: [{ type: 'hard', passed: true, command: 'pnpm test', checkedAt: now }],
       }),
     ]))
 
