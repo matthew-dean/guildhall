@@ -1988,6 +1988,8 @@ describe('POST /api/project/task/:id/git-story/:closureAction', () => {
     const taskRepo = path.join(tmpDir, 'task-repo')
     await fs.mkdir(path.join(taskRepo, 'src'), { recursive: true })
     execFileSync('git', ['init', '-q'], { cwd: taskRepo })
+    execFileSync('git', ['config', 'user.email', 'guildhall-tests@example.invalid'], { cwd: taskRepo })
+    execFileSync('git', ['config', 'user.name', 'Guildhall Tests'], { cwd: taskRepo })
     await fs.writeFile(path.join(taskRepo, 'src', 'proof.txt'), 'proof\n', 'utf8')
     await upsertTaskWorkspaceState(tmpDir, 'task-1', {
       worktreePath: taskRepo,

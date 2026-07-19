@@ -1305,13 +1305,19 @@ describe('POST /api/project/stop', () => {
         new Request('http://localhost/api/project/stop?projectId=provider-test', { method: 'POST' }),
       )
       expect(stopRes.status).toBe(200)
-      const body = (await stopRes.json()) as { ok?: boolean }
+      const body = (await stopRes.json()) as { ok?: boolean; status?: string }
       expect(body.ok).toBe(true)
-      // Supervisor state settles asynchronously after the stop response.
-      await vi.waitFor(() => {
-        const run = supervisor.list()[0]
-        expect(run).toBeDefined()
-        expect(['stopped', 'error']).toContain(run!.status)
+      expect(['stopped', 'stopping']).toContain(body.status)
+      // Stop may acknowledge before the orchestrator finishes. Verify the
+      // user-visible project status on refresh instead of asserting supervisor
+      // internals.
+      await vi.waitFor(async () => {
+        const refreshRes = await app.fetch(
+          new Request('http://localhost/api/project/activity?projectId=provider-test'),
+        )
+        expect(refreshRes.status).toBe(200)
+        const refreshed = (await refreshRes.json()) as { runStatus?: string }
+        expect(['stopped', 'error']).toContain(refreshed.runStatus)
       }, { timeout: 1_000, interval: 20 })
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})

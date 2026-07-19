@@ -16068,7 +16068,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ running: false, counts: {}, inFlight: [] })
       const run = supervisor.get(project.id)
-      const empty = { running: run?.status === 'running', counts: {}, inFlight: [] as unknown[] }
+      const empty = {
+        running: run?.status === 'running',
+        runStatus: run?.status ?? 'stopped',
+        counts: {},
+        inFlight: [] as unknown[],
+      }
       // Activity is polled from every project surface. Read only the shell
       // summary here: the full orientation tree belongs to Map/Structure,
       // never to a status chip.
