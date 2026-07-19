@@ -5,7 +5,6 @@ import {
   readProjectStateDatabaseAuthority,
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
   readProjectStateDatabaseCurrentAuthority,
-  readProjectStateDatabaseInventory,
   readProjectStateDatabaseProjectionState,
   readProjectStateDatabaseQueue,
   readProjectStateDatabaseSummary,
@@ -36,14 +35,19 @@ import {
   type ProjectScopeRow,
 } from './project-scope-projection.js'
 import { inferProjectOrientationSnapshot, type ProjectOrientationSnapshot } from './project-orientation-snapshot.js'
-import { buildProjectOrientationSpine, compactProjectOrientationSpineForMap, type ProjectOrientationSpine } from './project-orientation-spine.js'
+import {
+  buildProjectOrientationSpine,
+  compactProjectOrientationSpineForMap,
+  reconcileOrientationSpineWithReleaseTruth,
+  type ProjectOrientationSpine,
+} from './project-orientation-spine.js'
 import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 15 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 17 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -199,6 +203,99 @@ type IndexedCurrentProof = {
   expectationCount: number
   verified: string[]
   missing: string[]
+  hasExecutablePath?: boolean
+}
+
+function indexedCurrentProofForTask(task: ProjectStateDatabaseTask): IndexedCurrentProof | undefined {
+  const proof = task.currentSummary?.proof
+  if (!proof || typeof proof !== 'object' || Array.isArray(proof)) return undefined
+  const state = proof.state
+  if (state !== 'none' && state !== 'needed' && state !== 'partial' && state !== 'proven') return undefined
+  return {
+    state,
+    expectationCount: typeof proof.expectationCount === 'number' ? proof.expectationCount : 0,
+    verified: Array.isArray(proof.verified) ? proof.verified.filter((value): value is string => typeof value === 'string') : [],
+    missing: Array.isArray(proof.missing) ? proof.missing.filter((value): value is string => typeof value === 'string') : [],
+    ...(proof.hasExecutablePath === true ? { hasExecutablePath: true } : {}),
+  }
+}
+
+function indexedTaskHasCompletionProofGap(
+  task: ProjectStateDatabaseTask,
+  proof: IndexedCurrentProof | undefined,
+): boolean {
+  const status = String(task.status ?? '')
+  if (status !== 'done' && status !== 'pending_pr') return false
+  if (!proof) return false
+  if (['needed', 'partial'].includes(proof.state)) return true
+  // A compact point can legitimately say `none` while still carrying the
+  // acceptance-criteria count. That is an unproven completed task, not a
+  // task with no proof contract.
+  return proof.state === 'none' && Number(task.currentSummary?.acceptanceCriteriaCount ?? 0) > 0
+}
+
+function indexedTaskCompletionChildren(
+  task: ProjectStateDatabaseTask,
+  tasksById: ReadonlyMap<string, ProjectStateDatabaseTask>,
+): ProjectStateDatabaseTask[] {
+  const childIds = new Set(
+    [...tasksById.values()]
+      .filter(candidate => candidate.parentId === task.id)
+      .map(candidate => candidate.id),
+  )
+  const hierarchyChildIds = task.hierarchy?.childIds
+  if (Array.isArray(hierarchyChildIds)) {
+    for (const childId of hierarchyChildIds) {
+      if (typeof childId === 'string' && tasksById.has(childId)) childIds.add(childId)
+    }
+  }
+  return [...childIds]
+    .map(childId => tasksById.get(childId))
+    .filter((child): child is ProjectStateDatabaseTask => Boolean(child))
+    .filter(child => indexedIsMaterializedExecutionChild(task, child))
+    .filter(child => !['archived', 'cancelled', 'shelved'].includes(String(child.status ?? '')))
+}
+
+function indexedIsMaterializedExecutionChild(
+  parent: ProjectStateDatabaseTask,
+  child: ProjectStateDatabaseTask,
+): boolean {
+  const relation = isRecord(child.hierarchy) && child.hierarchy.relation === 'decomposes'
+  return relation || child.id.startsWith(`${parent.id}-split-`)
+}
+
+/**
+ * Indexed summaries carry enough graph and proof state to preserve the same
+ * parent/child completion rule as the rich scope projection. A completed
+ * parent is not a second proof obligation when every materialized child is
+ * terminal and either proven or satisfied by its own children.
+ */
+function indexedTaskCompletionProofSatisfiedByLinkedChildren(
+  task: ProjectStateDatabaseTask,
+  tasksById: ReadonlyMap<string, ProjectStateDatabaseTask>,
+  proofByTaskId: ReadonlyMap<string, IndexedCurrentProof>,
+  visiting = new Set<string>(),
+): boolean {
+  if (visiting.has(task.id)) return false
+  const children = indexedTaskCompletionChildren(task, tasksById)
+  if (children.length === 0) return false
+  const nextVisiting = new Set(visiting).add(task.id)
+  return children.every(child => {
+    const status = String(child.status ?? '')
+    if (status !== 'done' && status !== 'pending_pr') return false
+    if (!indexedTaskHasCompletionProofGap(child, proofByTaskId.get(child.id))) return true
+    return indexedTaskCompletionProofSatisfiedByLinkedChildren(child, tasksById, proofByTaskId, nextVisiting)
+  })
+}
+
+function indexedTaskProofBlocked(
+  task: ProjectStateDatabaseTask,
+  proof: IndexedCurrentProof | undefined,
+  tasksById: ReadonlyMap<string, ProjectStateDatabaseTask>,
+  proofByTaskId: ReadonlyMap<string, IndexedCurrentProof>,
+): boolean {
+  if (indexedTaskCompletionProofSatisfiedByLinkedChildren(task, tasksById, proofByTaskId)) return false
+  return indexedTaskHasCompletionProofGap(task, proof)
 }
 
 export function applyOwnerInputToStartReadiness(
@@ -638,14 +735,14 @@ export function buildProjectSummaryProjectionFromIndexedState(
   })
   if (!current?.summary) return null
   const base = current.summary.payload
-  // An indexed refresh can update release/count facts, but it cannot rebuild
-  // the orientation tree. Never publish a null spine over the durable one:
-  // treat this as a projection miss and let the explicit queue-backed refresh
-  // repair it instead.
-  if (!base.orientationSpine) return null
+  const generatedAt = input.generatedAt ?? new Date().toISOString()
+  // Indexed refreshes cannot rebuild the rich orientation tree, but that is
+  // not a reason to skip the compact summary. Promoted projects can predate
+  // the spine; their counts, release state, action model, and scope rows are
+  // still fully derivable from the indexed queue/points and must be refreshed
+  // through this same boundary.
   const inventory = current.inventory
   const queue = current.queue
-  const generatedAt = input.generatedAt ?? new Date().toISOString()
   const releases = queue.releases as readonly Record<string, unknown>[]
   const selectedReleaseId = queue.selectedReleaseId ?? null
   const taskOverrides = new Map((input.taskOverrides ?? []).map(task => [task.id, task]))
@@ -668,36 +765,34 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const indexedRows = rawIndexedRows.map(row => normalizeProjectScopeRowReadModel(row as unknown as ProjectScopeRow) as unknown as IndexedSummaryScopeRow)
   const currentProofByTaskId = new Map<string, IndexedCurrentProof>(
     tasks.flatMap(task => {
-      const proof = task.currentSummary?.proof
-      if (!proof || typeof proof !== 'object' || Array.isArray(proof)) return []
-      const state = proof.state
-      if (state !== 'none' && state !== 'needed' && state !== 'partial' && state !== 'proven') return []
-      return [[task.id, {
-        state,
-        expectationCount: typeof proof.expectationCount === 'number' ? proof.expectationCount : 0,
-        verified: Array.isArray(proof.verified) ? proof.verified.filter((value): value is string => typeof value === 'string') : [],
-        missing: Array.isArray(proof.missing) ? proof.missing.filter((value): value is string => typeof value === 'string') : [],
-      }] as const]
+      const proof = indexedCurrentProofForTask(task)
+      return proof ? [[task.id, proof] as const] : []
     }),
   )
   // Indexed task points carry the compact proof summary, not the rich
   // completion payload. Apply that summary to the same scope-row authority
   // used by Release/Overview so a task detail read cannot say "proof needed"
-  // while the saved release projection counts the task as releasable.
+  // while the saved release projection counts the task as releasable. The
+  // persisted scope bit is only a cache: evidence can update the proof point
+  // without rewriting every derived row, so never let that older bit override
+  // the current indexed proof answer.
   const rows = indexedRows.map(row => {
-    const task = tasksById.get(row.taskId)
-    const proof = currentProofByTaskId.get(row.taskId)
-    const proofBlocked = Boolean(
-      task && proof &&
-      ['done', 'pending_pr'].includes(String(task.status ?? '')) &&
-      ['needed', 'partial'].includes(proof.state),
-    )
-    return {
+    const indexedTask = tasksById.get(row.taskId)
+    const explicitRow = scopeRowOverrides.get(row.taskId)
+    const indexedProofGap = indexedTask
+      ? indexedTaskProofBlocked(indexedTask, currentProofByTaskId.get(row.taskId), tasksById, currentProofByTaskId)
+      : false
+    const proofBlocked = currentProofByTaskId.has(row.taskId)
+      ? indexedProofGap
+      : Boolean(explicitRow?.proofBlocked ?? row.proofBlocked)
+    // Scope rows are persisted projections, not a second source of proof
+    // truth. Re-normalize their release flags from the current compact task
+    // point so an old proof blocker cannot survive after a linked child closes.
+    return normalizeProjectScopeRowReadModel({
       ...row,
-      proofBlocked: proofBlocked || row.proofBlocked,
-      blocksRelease: row.blocksRelease || proofBlocked,
+      proofBlocked,
       ...(proofBlocked ? { blockerSummary: 'Completion proof is missing or stale.' } : {}),
-    }
+    })
   })
   const rowsByTaskId = new Map(rows.map(row => [row.taskId, row]))
   const executionRows = indexedExecutionRows(rows)
@@ -964,7 +1059,7 @@ function synchronizeIndexedOrientationSpine(
         : currentProof.state === 'proven' ? [] : contract.missing,
     }
   })
-  return {
+  return reconcileOrientationSpineWithReleaseTruth({
     ...spine,
     updatedAt: input.generatedAt,
     selectedRelease,
@@ -995,7 +1090,19 @@ function synchronizeIndexedOrientationSpine(
     },
     proofContracts,
     roots: spine.roots.map(patchNode),
-  }
+    },
+    {
+      state: input.releaseSummary.state,
+      counts: {
+        total: counts.total,
+        done: counts.done,
+        unfinished: counts.unfinished,
+        deferred: counts.deferred,
+        proofBlocked: counts.proofBlocked,
+      },
+      blockers,
+    },
+  )
 }
 
 /**
@@ -1017,38 +1124,93 @@ export function writeProjectSummaryProjectionFromIndexedState(
   const projection = buildProjectSummaryProjectionFromIndexedState(tasksPath, input)
   if (!projection) return null
   const expectedProjectRevision = capturedProjectRevision
-  const currentProjection = input.scopeRowOverrides && input.taskOverrides
+  const indexedState = readProjectStateDatabaseProjectionState(tasksPath, {
+    includeDefinitions: false,
+  })
+  const taskById = new Map([
+    ...(indexedState?.inventory.tasks ?? []),
+    ...(input.taskOverrides ?? []),
+  ].map(task => [task.id, task]))
+  const currentProofByTaskId = new Map<string, IndexedCurrentProof>(
+    [...taskById.values()].flatMap(task => {
+      const proof = indexedCurrentProofForTask(task)
+      return proof ? [[task.id, proof] as const] : []
+    }),
+  )
+  const persistedScopeRows = (input.scopeRowOverrides
+    ? input.scopeRowOverrides.filter(
+        (row): row is ProjectStateDatabaseScopeRow => row !== null,
+      )
+    : indexedState?.scopeRows ?? [])
+    .map(row => {
+      const task = taskById.get(row.taskId)
+      const proof = task ? indexedCurrentProofForTask(task) : undefined
+      const proofBlocked = indexedTaskProofBlocked(task!, proof, taskById, currentProofByTaskId) ||
+        (!proof && !currentProofByTaskId.has(task!.id) && Boolean(row.proofBlocked))
+      const normalized = normalizeProjectScopeRowReadModel({
+        ...row,
+        title: task?.title ?? row.taskId,
+        status: task?.status ?? 'unknown',
+        ...(task?.parentId ? { parentTaskId: task.parentId } : {}),
+        proofBlocked,
+      } as unknown as ProjectScopeRow)
+      const {
+        title: _title,
+        status: _status,
+        parentTaskId,
+        ...scopeRow
+      } = normalized as ProjectScopeRow & { title?: string; status?: string; parentTaskId?: string | null }
+      return {
+        ...scopeRow,
+        ...(parentTaskId ? { parentTaskId } : {}),
+      } satisfies ProjectStateDatabaseScopeRow
+    })
+  const scopeRowSnapshot = (row: ProjectStateDatabaseScopeRow): string => JSON.stringify({
+    taskId: row.taskId,
+    parentTaskId: row.parentTaskId ?? null,
+    scope: row.scope,
+    eligibilityReason: row.eligibilityReason,
+    hierarchyRole: row.hierarchyRole,
+    handoffState: row.handoffState,
+    blocksStart: row.blocksStart,
+    blocksRelease: row.blocksRelease,
+    humanBlocking: row.humanBlocking,
+    countInProjectTotals: row.countInProjectTotals !== false,
+    proofBlocked: row.proofBlocked === true,
+    blockerSummary: row.blockerSummary ?? null,
+    sourceRefs: row.sourceRefs,
+  })
+  const savedScopeRows = indexedState?.scopeRows ?? []
+  const scopeRowsChanged = persistedScopeRows.length !== savedScopeRows.length ||
+    persistedScopeRows.some((row, index) => scopeRowSnapshot(row) !== scopeRowSnapshot(savedScopeRows[index]!))
+  const taskStatusRows = [...taskById.values()].map(task => ({
+    taskId: task.id,
+    status: task.status ?? null,
+    completedAt: task.completedAt ?? null,
+  }))
+  const currentProjection = scopeRowsChanged
     ? {
-        scopeRows: input.scopeRowOverrides.filter(
-          (row): row is ProjectStateDatabaseScopeRow => row !== null,
-        ),
-        taskStatusRows: input.taskOverrides.map(task => ({
-          taskId: task.id,
-          status: task.status ?? null,
-          completedAt: task.completedAt ?? null,
-        })),
+        // Indexed proof refreshes must publish the corrected scope rows as
+        // well as the compact summary. Otherwise Release/Overview can be
+        // current while Work still reads a stale proof_blocked bit.
+        scopeRows: persistedScopeRows,
+        taskStatusRows: input.taskOverrides ? taskStatusRows : [],
       }
     : undefined
+  const statusProjection = !scopeRowsChanged && input.taskOverrides
+    ? { taskStatusRows }
+    : {}
+  const snapshotProjection = currentProjection
+    ? { currentProjection }
+    : statusProjection
+  /*
+   * Indexed proof refreshes must publish the corrected scope rows as well as
+   * the compact summary. Otherwise Release/Overview can be current while
+   * Work still reads a stale proof_blocked bit from work_scope.
+   */
   writeProjectStateDatabaseSummarySnapshot(tasksPath, {
     summary: projection,
-    ...(currentProjection ? { currentProjection } : {
-      ...(input.scopeRowOverrides
-        ? {
-            scopeRows: input.scopeRowOverrides.filter(
-              (row): row is ProjectStateDatabaseScopeRow => row !== null,
-            ),
-          }
-        : {}),
-      ...(input.taskOverrides
-        ? {
-            taskStatusRows: input.taskOverrides.map(task => ({
-              taskId: task.id,
-              status: task.status ?? null,
-              completedAt: task.completedAt ?? null,
-            })),
-          }
-        : {}),
-    }),
+    ...snapshotProjection,
     ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
       ? { expectedQueueRevision: input.expectedQueueRevision }
       : {}),
@@ -1212,6 +1374,14 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
   const orientation = input.projectRoot
     ? inferProjectOrientationSnapshot(input.projectRoot)
     : supplemental.orientation ?? null
+  // A write must project the queue it is about to commit. Re-reading the
+  // previous database inventory here can retain scope rows for deleted tasks
+  // (or miss newly added tasks) while the incoming queue is already current.
+  // Callers with a deliberately richer task-point projection may still supply
+  // it explicitly; otherwise the parsed queue is the single write authority.
+  const projectionTasks = input.projectionTasks ?? (
+    parsed.success ? parsed.data.tasks : undefined
+  )
   const projection = parsed.success
     ? buildProjectSummaryProjection({
         projectId: input.projectId ?? existingSummary?.projectId,
@@ -1221,7 +1391,7 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
         workspaceGoalsMtimeMs: goalsMtimeMs,
         approvedPlan,
         currentStateAuthority: databaseAuthority ? 'database' : 'legacy',
-        projectionTasks: input.projectionTasks,
+        projectionTasks,
         ...supplemental,
         orientation,
       })
@@ -1255,7 +1425,7 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
       ))
     : null
   const scopeRows = detailQueue
-    ? projectSummaryScopeRowsForQueue(detailQueue, projection.approvedPlan, input.projectionTasks, {
+    ? projectSummaryScopeRowsForQueue(detailQueue, projection.approvedPlan, projectionTasks, {
         currentStateAuthority: databaseAuthority ? 'database' : 'legacy',
       })
     : undefined

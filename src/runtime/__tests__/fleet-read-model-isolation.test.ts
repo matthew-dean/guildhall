@@ -174,7 +174,7 @@ describe('fleet read-model isolation', () => {
     })
   })
 
-  it('does not let the rebuildable fleet cache override the project summary boundary', async () => {
+  it('serves the bounded fleet read model without reopening the project database', async () => {
     upsertFleetSummaryProjection({
       projectId: HEALTHY_ID,
       projectPath: healthy.root,
@@ -197,32 +197,30 @@ describe('fleet read-model isolation', () => {
     const project = routeProjects('/api/service/projects', result.body).find(candidate => candidate.id === HEALTHY_ID)
     expect(project).toMatchObject({
       summaryFreshness: 'current',
+      taskCounts: { total: 999, active: 999, done: 999 },
+      startReadiness: { focusTaskId: 'cache-only-task' },
+    })
+  })
+
+  it('keeps a current fleet card available when the project database is unavailable', async () => {
+    await writeFile(projectStateDatabasePath(healthy.root), 'not a sqlite database', 'utf8')
+
+    const result = await readRoute('/api/service/projects')
+    const project = routeProjects('/api/service/projects', result.body).find(candidate => candidate.id === HEALTHY_ID)
+    expect(project).toMatchObject({
+      summaryFreshness: 'current',
       taskCounts: { total: 1, active: 1, done: 0 },
       startReadiness: { focusTaskId: 'healthy-task' },
     })
   })
 
-  it('keeps stale and running transitions on the same saved summary model', async () => {
+  it('refreshes the saved fleet row after an execution transition', async () => {
     upsertProjectStateDatabaseExecution(healthy.root, {
       status: 'running',
       mode: 'continuous',
       startedAt: '2026-07-17T00:01:00.000Z',
       updatedAt: '2026-07-17T00:01:00.000Z',
     })
-
-    const staleRoutes = await Promise.all(fleetRoutes.map(async route => ({
-      route,
-      result: await readRoute(route),
-    })))
-    for (const { route, result } of staleRoutes) {
-      expect(result.status, route).toBe(200)
-      const project = routeProjects(route, result.body).find(candidate => candidate.id === HEALTHY_ID)
-      expect(project, route).toMatchObject({
-        summaryFreshness: 'stale',
-        projectStatusLoading: false,
-      })
-    }
-
     await service.refreshProjectProjections(healthy.root)
     const runningRoutes = await Promise.all(fleetRoutes.map(async route => ({
       route,

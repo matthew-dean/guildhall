@@ -9,6 +9,7 @@ import type { Task, TaskQueue } from '@guildhall/core'
 import {
   getProjectLocalHistoryDir,
   getProjectStateDir,
+  markFleetSummaryProjectionStale,
   projectStateDatabasePath,
   projectStatePath,
   promoteProjectStateDatabaseAuthority,
@@ -612,10 +613,7 @@ describe('GET route read boundaries', () => {
     const body = await response.json() as any
 
     expect(response.status).toBe(200)
-    expect(surfaceRead).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-      includeProjection: false,
-      includeAttention: true,
-    }))
+    expect(surfaceRead).not.toHaveBeenCalled()
     expect(body.groups).toEqual(expect.any(Array))
     surfaceRead.mockRestore()
   })
@@ -1075,15 +1073,20 @@ describe('GET route read boundaries', () => {
     })
     registerWorkspace({ id: projectId, name: 'Read Boundary Test', path: tmpDir, tags: [] })
 
-    const { app } = buildServeApp({ projectPath: tmpDir })
-    const response = await app.fetch(new Request(projectUrl('/api/fleet/attention')))
+    const service = buildServeApp({ projectPath: tmpDir })
+    await service.refreshProjectProjections(tmpDir)
+    markFleetSummaryProjectionStale({
+      projectId,
+      projectPath: tmpDir,
+    })
+    const response = await service.app.fetch(new Request(projectUrl('/api/fleet/attention')))
     const body = await response.json() as any
 
     expect(response.status).toBe(200)
     const group = body.groups.find((candidate: any) => candidate.project?.path === tmpDir)
     expect(group).toEqual(expect.objectContaining({
       items: [],
-      error: 'Attention projection is not current.',
+      error: expect.stringContaining('fleet summary'),
     }))
   })
 

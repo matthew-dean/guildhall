@@ -474,6 +474,29 @@ export function buildProjectScopeProjection(
   }
 }
 
+/**
+ * A containing task stops being a second proof obligation once every linked
+ * decomposition child has closed with its own proof. This is deliberately
+ * derived from the task graph rather than by rewriting the parent's
+ * acceptance criteria: the parent remains the durable product boundary and
+ * the children satisfy the work it contains.
+ */
+export function taskCompletionProofSatisfiedByLinkedChildren(
+  task: Task,
+  tasks: readonly Task[],
+  proofStyle: 'script_only' | 'manual' | 'mixed' | 'unspecified' | null | undefined,
+): boolean {
+  const tasksById = new Map(tasks.map(candidate => [candidate.id, candidate] as const))
+  const childIdsByParent = buildChildMap(tasks)
+  return taskCompletionProofSatisfiedByLinkedChildrenAtIndex(
+    task,
+    tasksById,
+    childIdsByParent,
+    proofStyle,
+    new Set<string>(),
+  )
+}
+
 function currentTaskForProjection(task: Task): Task {
   const status = effectiveTaskStatus(task)
   return status && status !== task.status
@@ -576,7 +599,13 @@ function buildScopeRow(
     childIdsByParent: input.childIdsByParent,
     selectedScope: input.selectedScope,
   })
-  const proofBlocked = completionProofBlockedForTask(task, input.suppressedProofTaskIds, input.requiresScriptProof)
+  const proofBlocked = completionProofBlockedForTask(
+    task,
+    input.suppressedProofTaskIds,
+    input.requiresScriptProof,
+    input.tasksById,
+    input.childIdsByParent,
+  )
   const humanBlocking = proofBlocked ? false : humanBlockingFor(task, handoffState, scope)
   return normalizeProjectScopeRowReadModel({
     taskId: task.id,
@@ -648,11 +677,25 @@ function handoffStateForTask(
   return 'not_shaped'
 }
 
-function completionProofBlockedForTask(task: Task, suppressedProofTaskIds: ReadonlySet<string>, requiresScriptProof: boolean): boolean {
+function completionProofBlockedForTask(
+  task: Task,
+  suppressedProofTaskIds: ReadonlySet<string>,
+  requiresScriptProof: boolean,
+  tasksById: ReadonlyMap<string, Task>,
+  childIdsByParent: ReadonlyMap<string, string[]>,
+): boolean {
   const status = effectiveTaskStatus(task) ?? task.status
+  const proofStyle = requiresScriptProof ? 'script_only' as const : undefined
   return !suppressedProofTaskIds.has(task.id) &&
     (status === 'done' || status === 'pending_pr') &&
-    taskDoneButProofMissingForScope(task, requiresScriptProof ? 'script_only' : undefined)
+    taskDoneButProofMissingForScope(task, proofStyle) &&
+    !taskCompletionProofSatisfiedByLinkedChildrenAtIndex(
+      task,
+      tasksById,
+      childIdsByParent,
+      proofStyle,
+      new Set<string>(),
+    )
 }
 
 function duplicateProofMissingTaskIds(
@@ -667,6 +710,7 @@ function duplicateProofMissingTaskIds(
   for (const task of scopedTasks) {
     const status = effectiveTaskStatus(task) ?? task.status
     if (status !== 'done' || !taskDoneButProofMissingForScope(task, requiresScriptProof ? 'script_only' : undefined)) continue
+    if (taskCompletionProofSatisfiedByLinkedChildren(task, tasks, requiresScriptProof ? 'script_only' : undefined)) continue
     const duplicateOwner = blockedScopedTasks.find(blocked =>
       blocked.id !== task.id &&
       taskTitleOverlap(taskDisplayLabel(blocked, blocked.id), taskDisplayLabel(task, task.id)) >= 0.8 &&
@@ -675,6 +719,36 @@ function duplicateProofMissingTaskIds(
     if (duplicateOwner) result.add(task.id)
   }
   return result
+}
+
+function taskCompletionProofSatisfiedByLinkedChildrenAtIndex(
+  task: Task,
+  tasksById: ReadonlyMap<string, Task>,
+  childIdsByParent: ReadonlyMap<string, string[]>,
+  proofStyle: 'script_only' | 'manual' | 'mixed' | 'unspecified' | null | undefined,
+  visiting: Set<string>,
+): boolean {
+  if (visiting.has(task.id)) return false
+  visiting.add(task.id)
+  const childIds = childIdsByParent.get(task.id) ?? []
+  const children = childIds
+    .map(childId => tasksById.get(childId))
+    .filter((child): child is Task => Boolean(child))
+    .filter(child => isMaterializedExecutionChild(task, child))
+    .filter(child => !['archived', 'cancelled'].includes(String(child.status ?? '')))
+  if (children.length === 0) return false
+  return children.every(child => {
+    const status = effectiveTaskStatus(child) ?? child.status
+    if (status !== 'done' && status !== 'pending_pr') return false
+    if (!taskDoneButProofMissingForScope(child, proofStyle)) return true
+    return taskCompletionProofSatisfiedByLinkedChildrenAtIndex(
+      child,
+      tasksById,
+      childIdsByParent,
+      proofStyle,
+      new Set(visiting),
+    )
+  })
 }
 
 function hasInScopeMaterializedChildWork(
@@ -859,23 +933,6 @@ export function summarizeProjectScopeStart(
     }
   }
   const blocked = included.find(row => row.handoffState === 'blocked')
-  const proofBlocked = included.find(row => row.proofBlocked)
-  if (proofBlocked) {
-    const count = included.filter(row => row.proofBlocked).length
-    return {
-      canStart: false,
-      code: 'proof_evidence_missing',
-      label: 'Review',
-      focusTaskId: proofBlocked.taskId,
-      focusTaskTitle: proofBlocked.title,
-      focusKind: 'proof',
-      count,
-      message: count === 1
-        ? `"${proofBlocked.title}" is complete but its completion proof is missing or stale.`
-        : `${count} completed work items are missing current completion proof. Start with "${proofBlocked.title}".`,
-      actionHref: `/work?task=${encodeURIComponent(proofBlocked.taskId)}`,
-    }
-  }
   if (blocked) {
     const count = included.filter(row => row.handoffState === 'blocked').length
     const reason = blocked.blockerSummary?.trim()
@@ -891,6 +948,23 @@ export function summarizeProjectScopeStart(
         ? `"${blocked.title}" is blocked before unattended work can run${reason ? `: ${reason}` : '.'}`
         : `${count} work items are blocked before unattended work can run. Start with "${blocked.title}".`,
       actionHref: `/work?task=${encodeURIComponent(blocked.taskId)}`,
+    }
+  }
+  const proofBlocked = included.find(row => row.proofBlocked)
+  if (proofBlocked) {
+    const count = included.filter(row => row.proofBlocked).length
+    return {
+      canStart: false,
+      code: 'proof_evidence_missing',
+      label: 'Review',
+      focusTaskId: proofBlocked.taskId,
+      focusTaskTitle: proofBlocked.title,
+      focusKind: 'proof',
+      count,
+      message: count === 1
+        ? `"${proofBlocked.title}" is complete but its completion proof is missing or stale.`
+        : `${count} completed work items are missing current completion proof. Start with "${proofBlocked.title}".`,
+      actionHref: `/work?task=${encodeURIComponent(proofBlocked.taskId)}`,
     }
   }
   const briefCleanup = included.find(row => row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped')
@@ -946,15 +1020,15 @@ export function summarizeProjectScopeStart(
   const scopeLabel = selectedScope?.label ?? 'Current work'
   const outsideWork = summarizeProjectScopeOutsideWork(rows, selectedScope)
   if (outsideWork.count > 0) {
-    const outsideFragments = Object.entries(outsideWork.byStatus)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([status, count]) => `${count} ${status.replaceAll('_', ' ')}`)
     return {
       canStart: false,
       code: 'all_terminal',
       label: 'Review',
       focusKind: 'terminal',
-      message: `${scopeLabel} is complete. ${outsideFragments.join(', ')} ${outsideWork.count === 1 ? 'task remains' : 'tasks remain'} outside this release.`,
+      // Start is bounded to the selected release. Work assigned to a later
+      // scope is orientation information, not a reason to change the action
+      // or imply that Start will cross the release boundary.
+      message: `${scopeLabel} has no runnable work remaining.`,
       actionHref: '/work',
     }
   }

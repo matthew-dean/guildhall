@@ -874,8 +874,21 @@ function evidenceTaskToDraft(
     .map(reference => sources.find(source => source.path === reference)?.content)
     .filter((content): content is string => Boolean(content))
     .flatMap(content => extractNeededContractNames(content, task.title)))
-  const importedBlueprint = projectPath
-    ? buildImportedBlueprintSeed(evidenceTaskToMaterializedImportTask(task, normalizedReferences), normalizedReferences, projectPath, now)
+  const hasConcreteSourceEvidence = (
+    contractNames.length > 0 ||
+    task.proofPaths.some(path => path.source === 'documented') ||
+    reintakePrototypeTaskKind(task.title) !== null ||
+    sourceEvidenceSupportsBlueprint(sources, references) ||
+    task.sourceRefs.some(ref => /`[^`\n]{2,80}`/.test(ref.snippet)) ||
+    /\breviewer?\b|\breview\b/i.test(task.title)
+  )
+  const importedBlueprint = projectPath && hasConcreteSourceEvidence
+    ? buildImportedBlueprintSeed(
+      evidenceTaskToMaterializedImportTask(task, normalizedReferences, hasConcreteSourceEvidence),
+      normalizedReferences,
+      projectPath,
+      now,
+    )
     : null
   const sourceShapedCriteria = reintakeAcceptanceCriteria(task, contractNames)
   const acceptanceCriteriaSource = reintakePrototypeTaskKind(task.title)
@@ -889,9 +902,16 @@ function evidenceTaskToDraft(
     source: criterion.source ?? 'inferred',
     met: false,
   })))
+  const evidenceReviewable = hasReviewableReintakeBlueprint(
+    task,
+    references,
+    acceptanceCriteria,
+    contractNames,
+    hasConcreteSourceEvidence,
+  )
   const reviewableBlueprint = importedBlueprint
-    ? importedBlueprint.status === 'spec_review' && hasConcreteReintakeBlueprint(importedBlueprint)
-    : hasReviewableReintakeBlueprint(task, references, acceptanceCriteria, contractNames)
+    ? (importedBlueprint.status === 'spec_review' && hasConcreteReintakeBlueprint(importedBlueprint)) || evidenceReviewable
+    : evidenceReviewable
   return {
     id: task.id,
     title: task.title,
@@ -918,6 +938,21 @@ function evidenceTaskToDraft(
     ...(importedBlueprint?.blockerPlans ? { blockerPlans: importedBlueprint.blockerPlans } : {}),
     ...(importedBlueprint?.contextBudget ? { contextBudget: importedBlueprint.contextBudget } : {}),
   }
+}
+
+function sourceEvidenceSupportsBlueprint(
+  sources: ProjectReintakeSource[],
+  references: string[],
+): boolean {
+  const relevantSources = sources.filter(source => references.includes(source.path))
+  return relevantSources.some(source => {
+    const content = source.content
+    return (
+      /`[^`\n]{2,80}`/.test(content) ||
+      /(?:^|\n)\s*#{2,6}\s+(?:acceptance criteria|finding contract|proof|reviewer questions|success criteria|verification)\b/im.test(content) ||
+      /\b(?:acceptance criteria|deterministic proof|needed contracts|proof command|verification)\s*:/i.test(content)
+    )
+  })
 }
 
 function hasConcreteReintakeBlueprint(blueprint: ReturnType<typeof buildImportedBlueprintSeed>): boolean {
@@ -991,6 +1026,7 @@ function inventorySiblingSpecRefsForTask(task: EvidenceTask, sources: ProjectRei
 function evidenceTaskToMaterializedImportTask(
   task: EvidenceTask,
   references: string[],
+  hasConcreteSourceEvidence: boolean,
 ): MaterializedImportTask {
   const evidenceSnippets = task.sourceRefs
     .map(ref => ref.snippet)
@@ -1001,15 +1037,17 @@ function evidenceTaskToMaterializedImportTask(
     description: evidenceSnippets.length > 0
       ? evidenceTaskDescription(task)
       : evidenceTaskWhyThisMayMatter(task),
-    whyThisMayMatter: evidenceSnippets.join(' '),
+    ...(hasConcreteSourceEvidence && evidenceSnippets.length > 0
+      ? { whyThisMayMatter: evidenceSnippets.join(' ') }
+      : {}),
     domain: task.targetArea,
     scope: 'current',
     priority: evidenceTaskPriority(task),
     references,
     acceptanceCriteria: task.acceptanceCriteria,
     dependsOn: task.dependsOn,
-    proofPaths: task.proofPaths,
-    evidenceGraphTask: true,
+    proofPaths: hasConcreteSourceEvidence ? task.proofPaths : [],
+    ...(hasConcreteSourceEvidence ? { evidenceGraphTask: true } : {}),
   }
 }
 
@@ -1262,6 +1300,7 @@ function hasReviewableReintakeBlueprint(
   references: string[],
   acceptanceCriteria: Task['acceptanceCriteria'],
   contractNames: string[],
+  sourceEvidenceIsConcrete = false,
 ): boolean {
   if (contractShapedImportHasNoConcreteContracts({ title: task.title, contractNames })) return false
   return (
@@ -1269,8 +1308,8 @@ function hasReviewableReintakeBlueprint(
     acceptanceCriteria.length > 0 &&
     (
       contractNames.length > 0 ||
-      task.proofPaths.length > 0 ||
-      task.sourceRefs.length > 0
+      task.proofPaths.some(path => path.source === 'documented') ||
+      sourceEvidenceIsConcrete
     )
   )
 }

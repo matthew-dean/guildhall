@@ -64,6 +64,7 @@ import {
 import { executionScopeRows, taskScopeNodeId, type ProjectScope } from './project-scope-projection.js'
 import { buildEffectiveTask, buildEffectiveTasks } from './effective-task.js'
 import { appendTaskEvidence, TASK_EVIDENCE_RETENTION } from './task-state-store.js'
+import { recoverClippedTitle } from '../shared/task-display-label.js'
 
 function projectSummaryAtRuntimeVersion(
   summary: ProjectStateDatabaseSummary<ProjectSummaryProjection>,
@@ -1344,10 +1345,14 @@ function writeTargetedTaskMutationIfSafe(
   const inventory = readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })
   if (!inventory) return false
   const currentScope = new Map(inventory.tasks.map(task => [task.id, task.scopeRow]))
+  const projectionQueue = queueForProjection(queue)
   const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
     projectId: options.projectId,
     projectRoot: options.projectRoot,
-    queue: queueForProjection(queue),
+    queue: projectionQueue,
+    projectionTasks: isRecord(projectionQueue) && Array.isArray(projectionQueue.tasks)
+      ? projectionQueue.tasks as Task[]
+      : undefined,
   })
   if (!prepared.parsedQueue || !prepared.scopeRows) return false
   const nextScope = scopeRowByTaskId(prepared.scopeRows)
@@ -1392,11 +1397,39 @@ export function writePromotedTaskDetailMutation(
 ): { committedRevision: number; task: Record<string, unknown> } | null {
   if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return null
   const point = readProjectStateDatabaseTaskPointWithRevision(tasksPath, taskId)
-  if (!point || Object.keys(point.task.definition).length === 0) return null
+  if (!point) return null
   // Detail rows from older promoted projects can still contain overlay fields.
   // Remove them before handing the task to a definition mutator so an ordinary
   // edit cannot copy stale runtime state back into the canonical definition.
-  const currentDefinition = sanitizeTaskForProjectWrite(point.task.definition).task as Record<string, unknown>
+  // A promoted task is allowed to have an intentionally sparse detail payload:
+  // the indexed row still owns its identity and plan fields. Build the
+  // mutator's input from the whole point so a sparse detail row remains
+  // editable instead of being treated as a missing task.
+  const indexedDefinitionFields = {
+    id: point.task.id,
+    title: point.task.title,
+    ...(point.task.description !== null ? { description: point.task.description } : {}),
+    ...(point.task.status !== null ? { status: point.task.status } : {}),
+    ...(point.task.domain !== null ? { domain: point.task.domain } : {}),
+    ...(point.task.priority !== null ? { priority: point.task.priority } : {}),
+    ...(point.task.workKind !== null ? { workKind: point.task.workKind } : {}),
+    ...(point.task.hierarchy ? { hierarchy: point.task.hierarchy } : {}),
+    ...(point.task.dependsOn.length > 0 ? { dependsOn: [...point.task.dependsOn] } : {}),
+    ...(point.task.releaseIds.length > 0 ? { releaseIds: [...point.task.releaseIds] } : {}),
+    ...(point.task.sourceRefs.length > 0 ? { sourceRefs: [...point.task.sourceRefs] } : {}),
+    ...(point.task.updatedAt !== null ? { updatedAt: point.task.updatedAt } : {}),
+    ...(point.task.completedAt !== null ? { completedAt: point.task.completedAt } : {}),
+  }
+  const currentDefinition = sanitizeTaskForProjectWrite(
+    { ...indexedDefinitionFields, ...point.task.definition },
+  ).task as Record<string, unknown>
+  // Completion summaries are historical state, not live assignment/runtime
+  // state. Preserve an existing summary through an ordinary point edit so a
+  // reopen clears current `completedAt` without erasing the reason/history
+  // that explains the reopen.
+  if (isRecord(point.task.definition) && 'doneSummaryBundle' in point.task.definition) {
+    currentDefinition.doneSummaryBundle = point.task.definition.doneSummaryBundle
+  }
   const mutatedTask = options.mutate({ ...currentDefinition })
   if (!mutatedTask) return null
   // A point mutation must never add or change runtime/evidence ownership in
@@ -1406,6 +1439,9 @@ export function writePromotedTaskDetailMutation(
   )
   if (changedForbiddenField) return null
   const nextTask = sanitizeTaskForProjectWrite(mutatedTask).task as Record<string, unknown>
+  if ('doneSummaryBundle' in currentDefinition && !('doneSummaryBundle' in nextTask)) {
+    nextTask.doneSummaryBundle = currentDefinition.doneSummaryBundle
+  }
   nextTask.id = taskId
   const nextScopeRow = options.scopeRow === undefined ? point.task.scopeRow : options.scopeRow
   const compact = projectStateDatabaseTaskSummary(nextTask)
@@ -1549,10 +1585,14 @@ function writeTargetedTaskBatchMutationIfSafe(
   const inventory = readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })
   if (!inventory) return false
   const currentScope = new Map(inventory.tasks.map(task => [task.id, task.scopeRow]))
+  const projectionQueue = queueForProjection(queue)
   const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
     projectId: options.projectId,
     projectRoot: options.projectRoot,
-    queue: queueForProjection(queue),
+    queue: projectionQueue,
+    projectionTasks: isRecord(projectionQueue) && Array.isArray(projectionQueue.tasks)
+      ? projectionQueue.tasks as Task[]
+      : undefined,
   })
   if (!prepared.parsedQueue || !prepared.scopeRows) return false
   const nextScope = scopeRowByTaskId(prepared.scopeRows)
@@ -1661,6 +1701,25 @@ export function sanitizeTaskForProjectWrite(task: unknown): SanitizedTaskResult 
   const next = cloneRecord(task)
   const removedFields: ForbiddenProjectTaskField[] = []
   const removedEvidence: Partial<Record<ForbiddenProjectTaskField, unknown>> = {}
+
+  const request = isRecord(next.request) ? next.request : null
+  const titleSource = typeof next.description === 'string'
+    ? next.description
+    : typeof request?.raw === 'string'
+      ? request.raw
+      : undefined
+  const recoveredTitle = recoverClippedTitle(
+    typeof next.title === 'string' ? next.title : undefined,
+    titleSource,
+  )
+  if (recoveredTitle && recoveredTitle !== next.title) next.title = recoveredTitle
+  const recoveredRequestTitle = recoverClippedTitle(
+    typeof request?.title === 'string' ? request.title : undefined,
+    titleSource,
+  )
+  if (request && recoveredRequestTitle && recoveredRequestTitle !== request.title) {
+    next.request = { ...request, title: recoveredRequestTitle }
+  }
 
   for (const field of FORBIDDEN_PROJECT_TASK_FIELDS) {
     if (!(field in next)) continue

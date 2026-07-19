@@ -113,6 +113,41 @@ turn because the file is concurrently owned.
   `pnpm typecheck` remains blocked by unrelated pre-existing model/test errors.
 - `git diff --check` passed.
 
-No persisted schema or authoritative contract was changed. The remaining route
-finding is deliberately recorded here rather than hidden behind conflicting
-edits to `src/runtime/serve.ts`.
+## Follow-up implementation: fleet projection is now the route authority
+
+The previously recorded route finding is resolved for the Projects-page shell.
+`/api/service/projects` and compact `/api/service` now read the bounded
+machine-level `fleet_summary_projection` page directly. They do not call
+`readProjectSummaryShellAtBoundary` for each registered project and do not
+reconstruct project state when a row is missing or stale. The route returns the
+saved row with explicit freshness, while background projection refresh remains
+the write-side owner of current rows.
+
+`src/runtime/__tests__/fleet-read-model-isolation.test.ts` now proves that a
+corrupt project database does not prevent a current cached fleet card from
+being served, and that a deliberately divergent cached row is the row the
+fleet route serves. The remaining performance work is to apply the same rule
+to any other fleet-wide route that is confirmed to be on the initial shell
+path, especially `/api/fleet/attention`.
+
+## 2026-07-19 closure of the initial-shell performance finding
+
+The route-authority follow-up is now complete. `/api/service/projects`, compact
+`/api/service`, and `/api/fleet/attention` read the bounded machine-level fleet
+projection. They do not reopen every registered project database on the
+initial shell path, and missing/stale rows remain explicit instead of causing a
+request-time reconstruction.
+
+Installed proof after build, dev install, stop/start, and stale-server check:
+
+- `/api/service/projects`: `27.38 ms`, `31,556 bytes`, 7 projects, no loading or
+  error rows.
+- compact `/api/service`: `6.57 ms`, `31,571 bytes`, 7 projects.
+- `/api/service?detail=true`: `50.64 ms`, `42,247 bytes`, 7 projects.
+- `/api/fleet/attention`: `2.04 ms`, `36,450 bytes`, 7 groups and 12 items.
+- cold per-project reads: `27.82-66.53 ms`; warm reads: `22.13-42.05 ms`.
+
+The older serial-loop finding above is retained as historical audit context;
+it is no longer the current implementation description. The remaining fleet
+performance work is no longer on the initial shell path and should not be
+reopened without new measurements.

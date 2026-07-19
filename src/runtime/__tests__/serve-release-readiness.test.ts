@@ -81,7 +81,10 @@ function makeTask(overrides: Partial<Task>): Task {
 function modeledScriptProof(command = 'pnpm test'): Pick<Task, 'proofPaths' | 'gateResults'> {
   return {
     proofPaths: [{
+      kind: 'command',
+      source: 'documented',
       title: command,
+      command,
       launchSteps: [{ id: command, title: command, kind: 'copy_command', command }],
       expectedEvidence: [`${command} passed.`],
     }],
@@ -129,11 +132,40 @@ async function seedQueue(queue: TaskQueue): Promise<void> {
     queue: normalized,
     queueCommit: false,
   })
-  const status = await getProjectMigrationStatus({ projectRoot: tmpDir })
-  await applyProjectMigrations({
-    projectRoot: tmpDir,
-    only: status.blocked.map(item => item.id),
-  })
+  for (let attempt = 0; attempt < 128; attempt += 1) {
+    const prerequisites = await applyProjectMigrations({
+      projectRoot: tmpDir,
+      includePrompt: true,
+      appVersion: 'serve-release-readiness-test',
+    })
+    if (prerequisites.failed.length > 0) {
+      throw new Error(prerequisites.failed.map(item => `${item.id}: ${item.error}`).join('; '))
+    }
+    const status = await getProjectMigrationStatus({ projectRoot: tmpDir })
+    const canonicalIds = status.blocked
+      .filter(item => item.safety !== 'manual' && (
+        item.safety === 'required' || item.requirement === 'required'
+      ))
+      .map(item => item.id)
+      .filter((id, index, all) => all.indexOf(id) === index)
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+    if (canonicalIds.length === 0) break
+    const result = await applyProjectMigrations({
+      projectRoot: tmpDir,
+      only: [canonicalIds[0]],
+      appVersion: 'serve-release-readiness-test',
+    })
+    if (result.failed.length > 0) {
+      throw new Error(result.failed.map(item => `${item.id}: ${item.error}`).join('; '))
+    }
+    if (result.applied.length === 0) {
+      throw new Error(`Canonical migrations made no progress: ${canonicalIds.join(', ')}`)
+    }
+  }
+  const remainingMigrations = await getProjectMigrationStatus({ projectRoot: tmpDir })
+  if (remainingMigrations.blocked.length > 0) {
+    throw new Error(`Required migrations remain blocked: ${remainingMigrations.blocked.map(item => item.id).join(', ')}`)
+  }
 
   // Migrations are authoritative writes. Re-materialize the compact summary
   // after they finish so this fixture reaches the same current state that the
@@ -203,6 +235,27 @@ async function initChildRepo(repoPath: string): Promise<void> {
 }
 
 describe('GET /api/project/release-readiness', () => {
+  it('serves saved status counts for current work without a named release', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        makeTask({ id: 'task-ready', title: 'Ready task', status: 'ready' }),
+        makeTask({ id: 'task-blocked', title: 'Blocked task', status: 'blocked', blockReason: 'waiting on a dependency' }),
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    expect(response.status).toBe(200)
+    const body = await response.json() as any
+
+    expect(body.release).toBeNull()
+    expect(body.statusCounts).toEqual({ ready: 1, blocked: 1 })
+    expect(body.totals).toMatchObject({ tasks: 2, unfinishedCount: 2 })
+    expect(body.diagnostics.statusCounts).toEqual({ ready: 1, blocked: 1 })
+  })
+
   it('serves the saved release summary without task expansion or repository inspection', async () => {
     await seedQueue({
       version: 1,
@@ -4416,6 +4469,42 @@ describe('GET /api/project/release-readiness', () => {
       focusTaskId: 'task-runner',
       focusKind: 'proof',
     })
+  })
+
+  it('keeps a shipped release shipped across project and spine reads', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'shipped',
+        source: 'release_plan',
+        nodeIds: ['work:task-runner'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [makeTask({
+        id: 'task-runner',
+        title: 'Implement command-line runner.',
+        status: 'done',
+        releaseIds: ['headless-mvp'],
+        ...modeledScriptProof('pnpm test'),
+      })],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const project = await (await app.fetch(new Request(projectUrl('/api/project')))).json() as any
+    const spine = await (await app.fetch(new Request(projectUrl('/api/project/spine')))).json() as any
+    const readiness = await (await app.fetch(new Request(projectUrl('/api/project/release-readiness')))).json() as any
+
+    expect(project.orientationSpine.selectedRelease.state).toBe('shipped')
+    expect(project.orientationSpine.release.lifecycleState).toBe('shipped')
+    expect(spine.spine.selectedRelease.state).toBe('shipped')
+    expect(spine.spine.release.lifecycleState).toBe('shipped')
+    expect(readiness.release.state).toBe('shipped')
   })
 
   it('does not turn terminal complete start readiness into an overview blocker', async () => {

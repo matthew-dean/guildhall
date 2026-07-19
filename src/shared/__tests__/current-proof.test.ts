@@ -26,6 +26,7 @@ describe('summarizeCurrentProof', () => {
     })).toEqual({
       state: 'partial',
       expectationCount: 2,
+      hasExecutablePath: true,
       verified: ['Review approved: Review the coherence boundary'],
       missing: ['Required proof evidence is missing for pnpm test -- focused.'],
     })
@@ -52,6 +53,51 @@ describe('summarizeCurrentProof', () => {
     })).toMatchObject({
       state: 'proven',
       verified: ['Proof passed: pnpm test -- current'],
+      missing: [],
+    })
+  })
+
+  it('uses current evidence records when the task index has not copied them to top-level fields', () => {
+    expect(summarizeCurrentProof({
+      status: 'done',
+      proofPaths: [{ kind: 'command', command: 'pnpm test -- current' }],
+      evidence: [{
+        kind: 'gate_result',
+        payload: { gateId: 'pnpm test -- current', passed: true },
+      }],
+    })).toMatchObject({
+      state: 'proven',
+      verified: ['Proof passed: pnpm test -- current'],
+      missing: [],
+    })
+  })
+
+  it('matches an acceptance gate id embedded in an imported Run command', () => {
+    expect(summarizeCurrentProof({
+      status: 'done',
+      proofPaths: [{ kind: 'command', command: 'Run AC-1' }],
+      evidence: [{
+        kind: 'gate_result',
+        payload: { gateId: 'AC-1', passed: true },
+      }],
+    })).toMatchObject({
+      state: 'proven',
+      verified: ['Proof passed: Run AC-1'],
+      missing: [],
+    })
+  })
+
+  it('counts a passed current evidence gate for a completed task without a proof path', () => {
+    expect(summarizeCurrentProof({
+      status: 'done',
+      acceptanceCriteria: [{ id: 'ac-1', met: false }],
+      evidence: [{
+        kind: 'gate_result',
+        payload: { gateId: 'ac-1', passed: true },
+      }],
+    })).toMatchObject({
+      state: 'proven',
+      expectationCount: 0,
       missing: [],
     })
   })

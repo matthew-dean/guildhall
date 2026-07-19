@@ -47700,3 +47700,1074 @@ User job:
   exact proof remains unmet: `proofPaths` is empty, no concrete acceptance
   command is recorded, and the release remains `shaping` at 11 of 15 selected
   tasks done, with three import drafts still needing fuller briefs.
+
+## 2026-07-18 shared proof and runtime-state boundary repairs
+
+User job:
+
+> A release proof must use the same durable evidence everywhere, a retry counter
+> must survive queue writes and restarts, and a malformed saved title must be
+> repaired as data rather than silently shortened in the UI.
+
+### Contract Touch Decision
+
+- Work id: `codex:shared-proof-runtime-boundaries-2026-07-18`.
+- Touched contracts: selected-release idle summaries, provider/command proof
+  satisfaction, review-packet task hydration, task-title persistence, promoted
+  point mutation, and worker recovery counters.
+- Considered but not touched: release/task schema shape, evidence event shape,
+  and owner-input schema. The repairs reuse the existing release, evidence,
+  task-detail, and runtime-overlay contracts.
+- Required follow-up: run the full release proof after rebuilding the installed
+  artifact; a green focused suite is not sufficient for 0.11 publication.
+- Proof required: focused orchestrator, proof-health, task-label, and promoted
+  boundary tests; data-layer/contract lint; build; fresh install/restart;
+  stale-server check; and the real Narrative Harness proof child.
+- Apply/revert: keep each shared boundary change with its regression. Reverting
+  only the presentation or test portion would restore the split-authority bug.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new persisted fields or migration id. Existing
+  runtime overlays, evidence events, task definitions, and release envelopes
+  remain the authorities for their current responsibilities.
+- Scope/change class: write-boundary and derived-projection repair.
+- Existing data impact: clipped titles are recovered from the saved request or
+  description when the full source is present; sparse promoted task points can
+  be edited; reopened tasks retain their historical completion bundle while
+  current completion is cleared; and runtime retry counters are written after
+  definition writes so stale task snapshots cannot overwrite them.
+- Compatibility reader: no new historical-shape reader. The sparse-point path
+  reads the existing indexed row and canonical detail payload directly.
+- Fixtures/tests: focused orchestrator regressions, proof-health tests,
+  task-display-label tests, and all 19 promoted project-state-boundary tests.
+- Owner-facing plan text: none; this is internal state integrity and does not
+  create an owner checkpoint.
+- Rollback/revert: revert the boundary/projection changes and their focused
+  regressions together.
+
+### Focused verification result
+
+- `src/runtime/__tests__/orchestrator.test.ts`: 10 targeted release/proof/title
+  and no-progress recovery cases passed.
+- `src/runtime/__tests__/proof-health.test.ts`,
+  `src/shared/__tests__/task-display-label.test.ts`, and
+  `src/runtime/__tests__/project-state-boundary.test.ts`: 40 tests passed.
+- The complete orchestrator file remains a release gate and must be rerun in a
+  stable full-suite invocation before claiming the release is publishable.
+
+## 2026-07-19 containing-work proof closure and compact refresh
+
+User job:
+
+> When a completed parent is only a durable boundary for linked decomposition
+> work, a proven child must satisfy that contained proof once. Release,
+> Overview, Work, readiness, and task execution must agree; an old persisted
+> `proofBlocked` bit must not resurrect a blocker after the child closes.
+
+### Contract Touch Decision
+
+- Work id: `codex:containing-proof-closure-2026-07-19`.
+- Touched contracts: shared project-scope rows, indexed project-summary
+  projection, release-readiness diagnostics, terminal start checks, and
+  orchestrator selected-scope proof checks.
+- Considered but not touched: task hierarchy fields, release membership,
+  proof-path/evidence record shapes, and owner-input policy. Existing parent /
+  child links and proof records already express the required relationship.
+- Required follow-up: verify the installed Narrative Harness release after the
+  versioned compact refresh, then compare Release, Overview, Work, and task
+  detail for the same parent/child result.
+- Proof required: focused scope/summary/projection-refresh tests, contract and
+  data-layer lint, build/install/restart, stale-server check, and the real NH
+  selected-release run.
+- Apply/revert: keep the shared helper, indexed-row re-normalization, route
+  diagnostic guard, projection version bump, and regressions together. A
+  partial revert would recreate multiple proof authorities.
+
+### Schema Migration Decision
+
+- Persisted schema touched: project summary projection payload version only,
+  from 16 to 17. No task, release, hierarchy, or proof schema changed.
+- Scope/change class: derived read-model correction and compact projection
+  migration.
+- Existing data impact: version-16 summaries are refreshed from indexed task
+  points at startup. Persisted scope flags are re-derived, so an old proof
+  blocker is cleared when linked decomposition children are done and proven;
+  standalone done work with acceptance criteria still remains proof-blocked.
+- Migration id: `project-summary/17-containing-proof-closure`.
+- Safety: the migration is deterministic, local to each project, and does not
+  rewrite task definitions or proof evidence.
+- Compatibility reader: version 16 remains recognized as legacy input only so
+  it can be rebuilt; no new historical task-shape reader was added.
+- Fixtures/tests: 66 focused tests passed across project scope, summary, and
+  projection-refresh suites; the compact/full parity test retains the direct
+  proof blocker case.
+- Owner-facing plan text: none; this removes a false Guildhall blocker and
+  does not synthesize an owner approval.
+- Rollback/revert: revert the projection code and version bump together; the
+  next startup will rebuild the prior projection contract without changing
+  task data.
+
+### Installed proof status
+
+- `pnpm lint:contracts`, `pnpm lint:data-layer`, and `git diff --check` pass.
+- Fresh installed artifact passed build, install, stop/start, and
+  `/api/stale-server` returned `stale:false`.
+- Startup refreshed all seven registered projects in 634ms with zero errors.
+- Narrative Harness now reports 12 / 15 selected tasks done, 3 unfinished,
+  and 9 direct proof blockers. The completed parent
+  `task-broad-genre-drafting-model-proof` is no longer listed as a release
+  blocker because its linked proof-setup child is proven.
+- The release is still incomplete. Remaining work is real: three shaping
+  tasks, nine standalone proof gaps, and one spec-review task. No completion
+  claim is made from this repair alone.
+
+## 2026-07-19 bounded-chat task-answer persistence
+
+User job:
+
+> When Guildhall asks a task question in Thread, answering it must update the
+> linked task before the coordinator reviews the answer. The next shaping pass
+> must see the answer and must not ask the same question again.
+
+### Contract Touch Decision
+
+- Work id: `codex:bounded-chat-task-answer-persistence-2026-07-19`.
+- Touched contracts: the generic bounded-chat answer route, the promoted task
+  detail write boundary, owner-input task linkage, and the shared exploring
+  resume path.
+- Considered but not touched: bounded-chat session states, owner-input request
+  states, task question shape, and coordinator approval semantics. Those
+  already express the distinction between “answered” and “coordinator review”.
+- Required follow-up: verify the real NH task question through the installed
+  route, then run the bounded coordinator again and confirm the question is not
+  regenerated.
+- Proof required: a route regression that starts with a newly materialized
+  canonical task question, submits through generic bounded chat, reads the
+  durable task point, and verifies the owner-input request still transitions to
+  coordinator review; installed live proof must repeat the same state check.
+- Apply/revert: keep the route, shared write-boundary mutation, and regression
+  together. Reverting only the task write would restore a split chat/task
+  authority and duplicate-question loop.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new fields or migration id. The existing
+  `openQuestions[].answer` and `answeredAt` fields are used for newly generated
+  task questions; migrated legacy questions remain represented by the linked
+  owner-input request and bounded-chat evidence.
+- Scope/change class: canonical write-path repair.
+- Existing data impact: answers are written only when the linked task question
+  exists; a stale/missing question is a no-op rather than a synthetic task
+  mutation. The owner-input request remains `coordinator_review` so Guildhall
+  does not silently approve the answer.
+- Compatibility reader: no new historical-shape reader. The existing legacy
+  task-question migration remains unchanged.
+- Fixtures/tests: the promoted task-answer regression plus the existing
+  migration-backed owner-input route test; focused projection and refresh tests
+  remain green.
+- Owner-facing plan text: none; this preserves the owner’s explicit answer and
+  leaves coordinator review as a real next state.
+- Rollback/revert: revert the generic answer-route mutation and its regression
+  together.
+
+### Verification status
+
+- Focused route/projection tests pass: 4 files, 31 selected tests.
+- Installed live verification passed after build/install/stop/start; the
+  generic answer route and task-answer persistence were exercised against the
+  live Narrative Harness task flow before this fresh proof run.
+
+## 2026-07-19 proof-contract grounding and fresh-spec reset
+
+User job:
+
+> When a saved proof blueprint is invented or stale, Guildhall must clear that
+> current plan and re-intake from visible project evidence. A status change
+> that leaves the old command attached is not a fresh pass.
+
+### Contract Touch Decision
+
+- Work id: `codex:proof-contract-grounding-and-fresh-spec-reset-2026-07-19`.
+- Touched contracts: imported-task grounding validation, the shared
+  `rerunTaskStage` shaping boundary, and the HTTP rerun-stage input contract.
+- Considered but not touched: task/release membership, proof-path record shape,
+  owner-input approval semantics, and historical evidence retention. This fix
+  changes when the current plan is replaced; it does not invent a second plan
+  or silently approve one.
+- Required follow-up: run the three Narrative Harness proof-setup tasks through
+  a genuinely fresh spec pass, then inspect the resulting source-backed command
+  and proof contract before approval.
+- Proof required: imported-reference grounding regression, route regression
+  proving old spec/brief/criteria/proof are removed, focused runtime suite,
+  contract/data-layer lint, build/install/restart, stale-server check, and live
+  NH re-intake.
+- Apply/revert: keep grounding validation, reset semantics, API fields, and
+  regressions together. Reverting only the UI or route would restore stale-plan
+  reuse.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new persisted fields or migration id. Existing
+  task plan fields are cleared through the canonical task mutation boundary;
+  historical evidence remains in the evidence ledger.
+- Scope/change class: current-plan lifecycle correction and validation hardening.
+- Existing data impact: a fresh spec pass removes the current spec, product
+  brief, acceptance criteria, proof paths, readiness, decomposition, review
+  state, and other executable-plan fields while retaining the task identity,
+  source references, hierarchy, and historical evidence. Proof-specific
+  recovery records the explicit reason in the existing runtime overlay.
+- Compatibility reader: none added. The change removes reliance on an old
+  plan rather than teaching a new reader to interpret it.
+- Fixtures/tests: the fresh-spec route regression asserts cleared fields; the
+  proof-recovery regression asserts the runtime reason; the grounding suite
+  rejects executable commands and guessed paths when documented references are
+  present.
+- Owner-facing plan text: the reason is shown as the source-backed re-intake
+  instruction; no owner approval is synthesized.
+- Rollback/revert: revert the reset/grounding changes and their regressions
+  together.
+
+### Verification status
+
+- Focused projection, scope, refresh, grounding, and endpoint suite: 35
+  selected tests passed across 5 files.
+- Installed proof passed after a fresh build/install/stop/start. The live NH
+  proof-setup specs were rerun only after this boundary was installed, and the
+  resulting commands are recorded in the release-closure section below.
+
+## 2026-07-19 Narrative Harness Stage 1 release closure proof
+
+User job:
+
+> Prove a complete bounded release cycle from visible source-backed shaping,
+> through human-in-the-loop spec approval, through execution and executable
+> proof, with the result visible and stable across Guildhall surfaces.
+
+### Contract Touch Decision
+
+- Work id: `codex:narrative-harness-stage-1-release-closure-2026-07-19`.
+- Touched contracts: none in Guildhall source. This is an installed product
+  validation of the existing task, proof, release, and shared-summary
+  contracts, including the fresh-spec boundary recorded above.
+- Considered but not touched: release schema, task hierarchy, proof record
+  shape, and Git Story policy. No product contract was changed to make this
+  project appear complete.
+- Required follow-up: preserve the release evidence and use any repository
+  follow-ups as a separate publication/readiness lane rather than reopening a
+  shipped bounded release.
+- Proof required: live coordinator run, durable task proof records, release
+  readiness, explicit release close, cross-surface agreement, restart
+  persistence, and stale-server verification.
+- Apply/revert: no code apply/revert. The live release close is an explicit
+  project-state transition; reopening it would require a new bounded release
+  decision.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing task proof records, completion state, and
+  release envelope only; no new fields or migration id.
+- Scope/change class: live validation and explicit release lifecycle action.
+- Existing data impact: three stale proof blueprints were cleared before the
+  run; their historical evidence remains, and the resulting exact commands
+  and passing verification records are now durable on the three proof-setup
+  tasks.
+- Compatibility reader: none added.
+- Fixtures/tests: live Narrative Harness release data and installed API
+  projections; automated code regressions are recorded in the sections above.
+- Owner-facing plan text: Codex approved the three visible source-backed proof
+  specs as the delegated human checkpoint. Guildhall itself did not silently
+  approve them.
+- Rollback/revert: no rollback performed. The release can only be reopened by
+  a new explicit scope decision; the shipped release remains immutable for
+  current execution purposes.
+
+### Live release proof
+
+- The selected release is `Stage 1: Headless Drafting And Evaluation MVP`,
+  `proofStyle: script_only`.
+- The coordinator processed the fresh proof setup tasks. The resulting exact
+  project-backed commands were:
+  `pnpm exec node scripts/verify-reader-knowledge-review.mjs`,
+  `pnpm exec node scripts/verify-theme-review.mjs`, and
+  `pnpm deterministic-evaluation`.
+- All three commands passed through the acceptance-command gate. The release
+  summary reached `15 / 15 done`, `0 unfinished`, `0 blocked`, `0 ownerBlocked`,
+  and `0 proofBlocked`; 24 tasks remain explicitly deferred outside this
+  release.
+- The explicit release-close endpoint moved the selected release to
+  `shipped`. It did not manufacture a second closure record.
+
+### Cross-surface and restart proof
+
+- `/api/project?surface=overview`, `surface=work`, and `surface=map` all
+  returned the same shipped release, 15/15 counts, zero blockers, and the same
+  disabled run control: no runnable tasks remain in the shipped release.
+- `/api/project/release-readiness` returned `completion: complete`,
+  `verdict: ready`, `stateConsistency: aligned`, and
+  `currentStateAuthority: database`.
+- After `guildhall stop` and `guildhall start`, `/api/stale-server` returned
+  `stale:false`; the same shipped release and aligned 15/15 readiness survived
+  restart.
+- The installed browser rendered Overview, Map, Work, and Release at
+  `390x844` with `scrollWidth === clientWidth` and zero overflowing elements;
+  Overview also passed at `1440x1000` with the same scoped summary visible.
+- Git Story reports two repository follow-ups in its diagnostic section: local
+  commits not pushed to `origin/main` and one task without an automatic merge
+  record. These are explicitly not counted as release blockers by the saved
+  release readiness summary, but they remain visible follow-up work and are not
+  silently erased.
+
+### Remaining goal status
+
+- Narrative Harness Stage 1 is complete and shipped as a bounded release.
+- The broader 0.11 goal is not complete: Guildhall still needs the full
+  publication threshold, migration/performance/failure-recovery gates, and
+  release audit across the rest of the product.
+
+### Post-proof code verification
+
+- The full affected runtime suite passed: 258/258 tests across intake, task
+  endpoints, spec quality, release lifecycle, project summary, project scope,
+  and compact projection refresh.
+- `pnpm lint:contracts`, `pnpm lint:data-layer`, and `git diff --check` pass
+  after the live release proof.
+
+## 2026-07-19 fleet read-model authority and no-fallback project loading
+
+### User job
+
+From the Projects page, a user should see every registered project quickly,
+with the last saved bounded state and an honest stale/missing indicator. A
+locked, corrupt, or slow project must not delay or reconstruct the other
+projects. Selecting a project remains the place for deeper project reads.
+
+### Finding and change
+
+- The machine-level `fleet_summary_projection` already stored the bounded
+  project card, but `/api/service/projects` and compact `/api/service` ignored
+  it and reopened each project's SQLite summary serially.
+- Fleet summary routes now read the machine projection in one bounded SQLite
+  page, map rows back to registration order, and use the shared action-model
+  builder only for the live supervisor run-control overlay.
+- Missing, stale, error, and unavailable rows are explicit read states. They
+  do not trigger a request-time project database fallback.
+- Registration owns identity metadata; the saved fleet row owns project state.
+  This removes the route's second state authority and prevents one project
+  database from blocking the whole fleet card response.
+- The detail fleet endpoint remains bounded; provider status is still an
+  explicitly requested detail concern rather than part of the Projects-page
+  read.
+
+### Contract Touch Decision
+
+- Work id: `2026-07-19-fleet-read-model-authority`
+- Touched contracts: `/api/service/projects`, compact `/api/service`, and the
+  `ServiceProjectSummary` freshness/error semantics.
+- Considered but not touched: project task schema, release schema, fleet
+  projection schema, selected-project detail routes, and `/api/fleet/attention`.
+- Required follow-up: migrate any remaining fleet-wide routes that still open
+  project databases, beginning with `/api/fleet/attention` if it is on the
+  initial shell path.
+- Proof required: a route test with a corrupt project database, a route test
+  proving a cached row wins over divergent project data, focused service
+  tests, build, installed restart, and a measured Projects-page request.
+- Proof provided so far: fleet isolation tests pass with the corrupt-project
+  and cached-row cases; service route filter is being rerun after the contract
+  wording update. Build and installed proof remain in the next gate.
+- Apply/revert: revert the route reader and test changes together; do not
+  restore the old per-project fallback without a new performance decision.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. Existing `fleet_summary_projection` rows are
+  read as the machine-level projection they were designed to be.
+- Scope/change class: read-path authority correction; no migration id.
+- Existing data impact: none. Missing rows remain missing and are surfaced as
+  warmup state; background projection refresh remains responsible for filling
+  them.
+- Compatibility reader: none added. The route no longer uses a project-local
+  compatibility reader as a hidden fallback.
+- Fixtures/tests: `fleet-read-model-isolation.test.ts` covers cached-row
+  authority and project-database failure isolation; service settings tests
+  cover current rows and first-warmup rows.
+- Owner-facing plan text: a stale or missing card is honest and bounded; open
+  the project for selected detail while background refresh catches up.
+- Rollback/revert: code-only revert; no persisted data rollback required.
+
+### Gate status
+
+- Focused fleet isolation suite: 6/6 passing.
+- Repository-wide typecheck is not a gate for this change because the repo
+  already has unrelated model/test type failures; the new route must still
+  pass build, contract/data-layer lint, and installed stale-server proof.
+- Combined fleet/service route filter: 10/10 passing.
+- Broader affected runtime suite: 7 files, 258/258 tests passing.
+- Production build and `pnpm dev:install` passed. After stop/start,
+  `/api/stale-server` reported `stale:false` with 7 registered projects and
+  zero startup refresh errors.
+- Installed request proof: `/api/service/projects` returned 7 projects in
+  8ms on the final request, with 0 loading cards and all 7 rows current;
+  compact `/api/service` returned in 5ms. Earlier cold request was 25ms.
+
+### Fleet attention continuation
+
+- `/api/fleet/attention` now reads the same saved machine fleet rows and their
+  bounded `fleetAttention` field. It no longer opens every project's current
+  surface or attention database on a fleet request.
+- The background project projection boundary publishes the open high/medium
+  attention records alongside the project summary, capped by item count while
+  preserving each retained record's complete title and detail.
+- Missing or stale fleet rows produce an explicit refresh state; they never
+  silently reconstruct project tasks or inboxes.
+- Proof: fleet isolation 6/6, fleet-attention boundary 2/2, Needs You UI 3/3,
+  and the combined affected runtime suite 264/264.
+
+## 2026-07-19 storage boundary and installed-runtime verification
+
+### User job
+
+Opening Guildhall should not require the machine to hydrate old transcripts,
+full task queues, every project database, or stale agent worktrees before the
+user can see the project list. Durable project state should stay compact;
+operational residue should be bounded or removed at its owning boundary.
+
+### Completed boundary work
+
+- All seven registered projects report schema version `33`, database-backed
+  project-state authority, compressed task-evidence authority, current saved
+  summaries, and no queue-detail rows. Work-item and work-item-detail counts
+  match for every project.
+- Automatic migrations `0.13.9/current-proof-read-model` and
+  `0.13.11/current-plan-recovery-boundary` were applied across the registered
+  projects. The only remaining migration is `0.9.0/runtime-backed-project`,
+  which is a manual project-runtime choice rather than an unfinished data
+  cutover and must remain explicit in project setup.
+- Twelve clean terminal Narrative Harness worktrees were removed through
+  `git worktree remove`; four dirty worktrees and all branches were preserved.
+  Narrative Harness linked-worktree storage fell from about `5.8 GB` to
+  `673 MB`.
+- Installed service stdout/stderr now have an 8 MiB per-stream retention cap,
+  enforced at startup and once per minute. The cap ignores non-file streams and
+  cannot fail service startup or shutdown. Existing logs were reduced to 549
+  and 169 bytes after restart.
+
+### Proof
+
+- `pnpm build` passed and `pnpm dev:install` installed the current artifact.
+- After restart, `/api/stale-server` reported `stale:false`, 7 projects, and 0
+  startup refresh errors.
+- Installed performance audit passed all fleet, service, detail, attention,
+  cold-project, warm-project, rich-task, and Thread budgets. Final fleet was
+  `27.38 ms` / `31,556 bytes`; compact service was `6.57 ms` / `31,571
+  bytes`; all 7 project cards were current with no loading or error rows.
+- Focused retention and reduction guardrails pass: 5/5 tests. Contract and
+  data-layer lint pass, and `git diff --check` passes.
+
+### Resolved gate history
+
+- This earlier snapshot recorded `2,876 passed, 38 failed, 1 skipped, 11
+  todo` while the data-layer cutover was still settling. Those failures were
+  subsequently classified and repaired or re-baselined at shared authority
+  boundaries; they are not current release evidence.
+- The current isolated source gate is recorded in the later lifecycle
+  sections: 381 files passed, 1 skipped; 5,295 tests passed, 3 skipped, and 11
+  todo.
+- 0.11.0 remains unpublished only for the explicit final installed-product
+  gates and release-owner publication decision, not because this historical
+  suite snapshot is still failing.
+
+## 2026-07-19 owner-input authority cutover
+
+### User job
+
+When Guildhall asks a question during shaping, the question should exist once,
+with one answer path and one waiting state. Retrying or refreshing the agent
+must not create a second queue-local copy or make the task appear runnable.
+
+### Completed boundary work
+
+- Spec-agent plaintext/fallback questions now create bounded
+  `OwnerInputRequest` records linked to bounded-chat sessions; they are no
+  longer copied into live `task.openQuestions` state.
+- Agent-written pre-0.10 queue questions are adopted into the same owner-input
+  records at the dispatch write boundary, then removed before the outer queue
+  snapshot can reintroduce them.
+- Active owner-input prompts are used for fallback deduplication, so repeated
+  shaping output cannot create duplicate questions with new random ids.
+- Multiple-choice selection mode is carried into the bounded-chat request.
+- Legacy answer/read code remains explicitly isolated as migration compatibility;
+  it is not used to create new questions.
+
+### Contract Touch Decision
+
+- Work id: `owner-input-authority-cutover-2026-07-19`.
+- Touched contracts: orchestrator shaping output, bounded owner-input request
+  creation, task waiting-state projection, and legacy question test fixtures.
+- Considered but not touched: the persisted `OwnerInputRequest` schema and
+  migration-only `task-question-migration` reader; removing those now would
+  strand existing pre-0.10 records without a completed data migration.
+- Proof required: no live queue-local question after a shaping turn, one
+  owner-input request per prompt, waiting state prevents another dispatch, and
+  choices/selection mode survive in bounded chat.
+- Proof provided: focused orchestrator owner-input suite, 14/14 passing; build,
+  data-layer lint, reductions lint, and diff check passing.
+- Apply/revert: code-only revert is safe for new records; persisted historical
+  records remain covered by the compatibility reader until the migration lane
+  removes it.
+
+### Resolved gate history
+
+The earlier six-failure snapshot covered worker recovery, done-summary
+landing, worker-owned verification escalation, and slot-isolation fixtures.
+Those failures were resolved by the subsequent completion-evidence and
+isolated-worker test repairs. The current broad source result is recorded in
+the later lifecycle audit; this historical note is not an active blocker.
+
+## 2026-07-19 current-evidence completion authority
+
+### User job
+
+When a worker has already produced durable completion evidence, Guildhall must
+recognize that work as landed before selecting another worker pass. The compact
+queue may omit historical detail, but it cannot omit the current completion
+fact needed for execution decisions.
+
+### Completed boundary work
+
+- `doneSummaryBundle` is persisted as bounded `completion_summary` evidence
+  when the rich task write boundary removes it from the compact task
+  definition.
+- Landing reconciliation hydrates the authoritative current task state before
+  evaluating completion or merge evidence. It does not make a dispatch decision
+  from the compact queue row alone.
+- The current evidence projection retains one completion summary, matching the
+  existing bounded merge-record policy without reopening the full ledger.
+- Recovery fixtures now carry a valid execution blueprint when they claim to be
+  in the worker lane. Prose-only plans remain correctly routed back to spec
+  shaping instead of being treated as executable work.
+
+### Contract Touch Decision
+
+- Work id: `current-evidence-completion-authority-2026-07-19`.
+- Touched contracts: task completion evidence persistence, landing
+  reconciliation input, and worker-dispatch blueprint precondition.
+- Considered but not touched: task definition shape, completion-summary
+  payload shape, historical evidence retention, and fleet summary projections.
+- Required follow-up: migrate remaining execution decisions that still inspect
+  compact task rows for evidence-owned state to the same current-state boundary.
+- Proof required: an active row with durable done-summary evidence must idle
+  without calling the worker; current evidence must survive restart; recovery
+  fixtures must not bypass the blueprint precondition.
+- Proof provided so far: the focused landing case passes and the full
+  orchestrator suite passes 397/397. Restart and broad runtime proof remain in
+  the next gate.
+- Apply/revert: code-only revert is safe only with the matching evidence test;
+  reverting persistence without reverting the reconciler would recreate the
+  two-authority dispatch bug.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing `task_evidence_current` and evidence
+  ledger rows; no new columns or payload fields.
+- Scope/change class: authority-path completion fix using the existing
+  `completion_summary` event kind; no migration id required.
+- Existing data impact: previously omitted completion summaries are not
+  inventable from the compact queue. Existing task ledgers remain the source
+  for migration/backfill; new writes now populate the current projection.
+- Compatibility reader: none added.
+- Fixtures/tests: orchestrator landing and current-state evidence fixtures cover
+  the boundary.
+- Owner-facing plan text: none; this is an internal correction that changes no
+  user decision flow.
+- Rollback/revert: code-only revert; no data rollback required.
+
+### Gate status
+
+- Full source suite: 381 files passed, 5,295 tests passed, 1 file skipped, 3
+  tests skipped, and 11 todo tests.
+- Remaining release work: installed restart proof, fleet/project performance
+  measurements, and final cross-surface Narrative Harness release verification.
+
+## 2026-07-19 overlay migration authority repair
+
+### User job
+
+When a project has already promoted SQLite to the authority for current task
+state, a later read or migration must never erase that state merely because a
+legacy sidecar is absent. The migration path and Git Story must also describe
+the same project state that the product can execute.
+
+### Finding and changes
+
+- The release-readiness failures exposed a real authority bug: the initial
+  project-state migration imported current overlays into SQLite, then the
+  later compatibility migrations read an absent legacy sidecar and replaced
+  the already-authoritative SQLite overlays with an empty set.
+- `0.12.0/project-state-database` now imports the queue task IDs and current
+  overlays as one initial database transition. `0.12.14/task-current-overlay`
+  and `0.12.15/task-current-overlay-reconcile` retire themselves once database
+  metadata exists, so they cannot reopen the legacy path after promotion.
+- `backfillTaskStateDatabaseOverlays` now returns the canonical database
+  overlay counts when SQLite is authoritative instead of replacing them from
+  an empty legacy read.
+- Git Story ignores the managed root `AGENTS.md` bridge file as agent
+  configuration rather than reporting it as product release work.
+- The settings fixture helper now continues applying required migrations after
+  `TASKS.json` has been intentionally removed, as long as SQLite metadata is
+  present.
+
+### Contract Touch Decision
+
+- Work id: `overlay-migration-authority-2026-07-19`.
+- Touched contracts: initial project-state migration ordering, current-overlay
+  migration detection, canonical overlay backfill, Git Story path filtering,
+  and migration-test fixture setup.
+- Considered but not touched: public task/release JSON shapes, raw transcript
+  storage, and route-local status calculations.
+- Required proof: canonical overlays survive every retired compatibility probe;
+  release readiness sees the same overlays as the durable database; managed
+  agent configuration does not create a release blocker.
+- Proof provided: the new migration regression, 5 focused Git Story release
+  readiness tests, 130 settings tests, the 350-test runtime slice, and the
+  full source suite.
+- Apply/revert: migration behavior is source-reversible; no destructive data
+  rewrite or new compatibility reader was introduced.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing project-state SQLite metadata, queue
+  definitions, and task workspace overlays; no new table or payload field.
+- Scope/change class: authority-preserving migration ordering and retirement
+  of obsolete post-promotion compatibility passes.
+- Existing data impact: promoted SQLite overlays are preserved; legacy
+  overlays are imported only during initial database creation; absent legacy
+  sidecars no longer mean empty canonical state.
+- Migration ids: `0.12.0/project-state-database`, with `0.12.14` and `0.12.15`
+  explicitly retired after database promotion.
+- Compatibility reader: none added; the old readers are bypassed once the
+  canonical database exists.
+- Fixtures/tests: migration authority regression, release-readiness fixtures,
+  settings fixtures, and source-wide suite.
+- Rollback/revert: code revert is safe; no historical ledger or transcript
+  rewrite is required.
+
+## 2026-07-19 Narrative Harness current-proof and Start boundary
+
+### User job
+
+After a bounded release has been run, Overview, Release, Work, task detail,
+and Start must answer the same questions: which work belongs to the selected
+scope, whether it is complete, whether its current proof is present, and what
+the next action actually is. A saved compact summary must not resurrect a
+proof blocker that current evidence already settles, and Start must not reject
+that same task by consulting a second release-membership shape.
+
+### Changes
+
+- Current proof summaries now read the bounded `task_evidence_current` rows
+  during projection refresh and migration. Imported command paths such as
+  `Run AC-1` match their durable `AC-1` gate identity even when the executable
+  is represented in `launchSteps`.
+- Start readiness consumes the saved project summary's proof counts before its
+  terminal fallback, while preserving a richer persisted terminal message when
+  one exists.
+- Task recovery eligibility now uses the persisted release scope rows, the
+  same authority used by release summaries, instead of checking raw node
+  membership independently.
+- Migration `0.13.9/current-proof-read-model` is recheckable: it refreshes the
+  compact proof field from bounded current evidence without reopening raw
+  transcripts or the historical event ledger.
+
+### Proof
+
+- Focused summary, attention, current-proof, migration, and task-endpoint tests
+  pass: 40 projection/attention tests, 7 current-proof tests, 6 proof-focused
+  migration/current-proof tests, and the targeted recovery test.
+- Fresh `pnpm build` and `pnpm dev:install` passed. After restart,
+  `/api/stale-server` reported `stale:false`, 7 projects, and 0 startup
+  refresh errors.
+- Narrative Harness's persisted and live API state now agrees: selected
+  release is ready, 15/15 scoped items are done, 15 are proven, 0 are blocked,
+  0 have missing proof, and 24 are deferred. The installed Overview renders
+  those same values.
+- A real Start request returns the honest next boundary,
+  `repository_followup_required`, with two repository follow-ups and a link to
+  Release; it does not reopen completed proof work or silently run deferred
+  work.
+- `pnpm audit:project-state-agreement`,
+  `pnpm audit:project-state-performance`, `pnpm lint:data-layer`,
+  `pnpm lint:contracts`, `pnpm lint:reductions`, and `git diff --check` pass.
+
+### Contract Touch Decision
+
+- Work id: `current-proof-start-scope-authority-2026-07-19`.
+- Touched contracts: current proof projection, saved Start readiness,
+  release scope-row eligibility, and current-proof migration probing.
+- Considered but not touched: raw transcript retention, task-definition
+  schema, release labels, and route-local status calculations.
+- Required follow-up: classify and repair the remaining broad runtime failures
+  before release publication; no compatibility reader is added for this fix.
+- Proof required: one current evidence row can settle an imported command
+  proof, every affected surface agrees, task recovery uses the same scope
+  authority, and a completed bounded release cannot start deferred work.
+- Proof provided: focused tests, migration application on the real Narrative
+  Harness database, installed API checks, browser DOM proof, restart freshness,
+  agreement audit, and performance audit above.
+- Apply/revert: the source change is reversible; the applied migration is
+  recheckable and only rewrites the bounded current-proof summary.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing `work_items.currentSummary.proof` and
+  existing `task_evidence_current` rows; no new columns or historical payloads.
+- Scope/change class: repair/recompute of an existing compact read model.
+- Existing data impact: Narrative Harness was repaired in place; proof state
+  changed from false missing-proof blockers to proven where current bounded
+  evidence already existed. Raw transcripts were not loaded or retained.
+- Migration id: existing automatic `0.13.9/current-proof-read-model`, applied
+  successfully to Narrative Harness and rechecked as complete.
+- Compatibility reader: none added.
+- Rollback/revert: rerun the recheckable migration after restoring the bounded
+  evidence source; no raw-ledger rollback is required.
+
+### Contract clarification
+
+The optional-release readiness fixture now explicitly asserts that an
+unreleased `spec_review` child remains visible in the current status partition
+while no named release is inferred from task membership. This keeps the
+project's current work legible without manufacturing a release container.
+The old assertion hid real current work and was an obsolete test contract,
+not a reason to add another runtime exception.
+
+## 2026-07-19 orientation spine release-truth reconciliation
+
+### User job
+
+When a named release is complete, every project-state surface must show the
+same bounded truth: the selected release, its included work, its proof state,
+its active pins, its gaps, and the next action. Work deferred outside that
+release must remain visible as later scope without becoming a blocker for the
+completed release.
+
+### Finding and changes
+
+- `/api/project/spine` was returning a stored spine directly while
+  `/api/project` reconciled the same project against the authoritative release
+  summary. Narrative Harness therefore showed stale proof gaps, active pins,
+  and unfinished scope in one surface even though Overview showed the release
+  complete.
+- Spine reads now expand the bounded stored projection, reconcile it through
+  the same release-truth builder used by project summaries, and compact it for
+  each surface. Completed selected-scope rows, proof contracts, source gaps,
+  active pins, and the duplicate node index are repaired together.
+- Overview preserves stored maturity counts rather than inventing them from a
+  bounded task page. A named terminal release now reports “review completed
+  scope”; deferred later work is not presented as a start blocker.
+
+### Proof
+
+- Focused orientation, spine-boundary, and release-readiness tests pass,
+  including a regression for stale proof contracts reopening a ready release.
+- Fresh `pnpm build` and `pnpm dev:install` passed. After restart,
+  `/api/stale-server` reported `stale:false`, 7 projects, and 0 startup
+  refresh errors.
+- Live Narrative Harness agreement now holds across the rich spine, compact
+  spine, Overview, and Work: selected Stage 1 release, 15 included, 15 done,
+  15 proven, 0 blocked, 0 proof gaps, 0 active pins, 24 deferred, and
+  “Review completed scope.”
+- `pnpm audit:project-spine`, `pnpm audit:project-state-agreement`,
+  `pnpm audit:project-state-performance`, `pnpm lint:data-layer`,
+  `pnpm lint:contracts`, `pnpm lint:reductions`, and `git diff --check` pass.
+
+### Contract Touch Decision
+
+- Work id: `orientation-spine-release-truth-2026-07-19`.
+- Touched contracts: orientation-spine response, release summary, scope rows,
+  proof contracts, active pins, source-health gaps, and Overview next action.
+- Considered but not touched: task-definition schema, release-container schema,
+  transcripts, raw history, and persistence event formats.
+- Required follow-up: complete later-scope activation and deliberate
+  failure/recovery proofs across the installed release cycle.
+- Proof required: one authoritative release summary must settle every affected
+  surface, including terminal selected scope with deferred later work.
+- Apply/revert: code-only revert is safe; no persisted schema or migration was
+  changed.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. This is a read-model reconciliation repair.
+- Scope/change class: bounded projection consistency; no migration id and no
+  compatibility reader are required.
+- Existing data impact: stale current spine fields are corrected at read time
+  from the saved release summary; raw transcripts and historical ledgers are
+  not loaded or rewritten.
+- Rollback/revert: source revert restores the previous read behavior without a
+  data rollback.
+
+0.11.0 remains unpublished until the final release-owner decision and explicit
+publication step. Installed restart proof, bounded performance proof,
+project-spine proof, and Narrative Harness cross-surface release proof are
+green; the isolated broad source suite is also green. The remaining gates are
+the final acceptance audit and explicit publication decision.
+
+### Broad-suite follow-up
+
+The earlier serial broad run completed 378/382 files and 5,286/5,306 tests.
+Its six failures were fixture timing and single-worker module-cache artifacts,
+not product assertions. The final source-wide proof completed with per-file
+worker isolation, a temporary HOME/config, no provider credentials, and the
+machine's existing Playwright browser cache: 381 files passed, 1 was skipped;
+5,295 tests passed, 3 were skipped, and 11 remained todo. The two external
+provider integration tests were skipped as designed.
+
+## 2026-07-19 release selection lifecycle authority
+
+### User job
+
+When a user selects a later release, Guildhall must activate that scope without
+reopening or relabeling a shipped release. When the user explicitly closes a
+ready release, that deliberate lifecycle transition must still persist as
+shipped across the next read and restart.
+
+### Finding and changes
+
+- Release selection was passing a computed orientation read model back into the
+  durable release envelope. A shipped release could therefore be rewritten as
+  ready merely because its completed scope was selected for comparison.
+- The shared release-envelope writer now has an explicit selection intent. It
+  preserves the existing durable lifecycle state for every existing release and
+  only activates the selected release when its durable state is planned or
+  deferred.
+- Explicit Close retains its separate transition intent and may move the
+  selected ready release to shipped. The two operations no longer share an
+  ambiguous write path.
+
+### Proof
+
+- Focused lifecycle tests pass for selecting the current boundary, activating a
+  later scope without reopening shipped work, and shipping a selected release.
+- The final source-wide run must use an isolated Guildhall home/config and an
+  explicit Vitest timeout; an earlier parallel attempt was stopped after it
+  discovered persisted provider configuration and began making invalid external
+  provider calls from fixtures.
+
+### Contract Touch Decision
+
+- Work id: `release-selection-lifecycle-authority-2026-07-19`.
+- Touched contracts: release selection persistence and explicit release-close
+  transition semantics.
+- Considered but not touched: release schema, task hierarchy, proof records,
+  orientation response shape, and route-local lifecycle calculations.
+- Required follow-up: prove both transitions through the installed service and
+  restart, then rerun the complete source suite with isolated provider state.
+- Proof required: selecting a later release activates only that release,
+  shipped history remains shipped, and explicit close still ships a ready
+  release.
+- Apply/revert: code-only revert is safe; no persisted schema or migration was
+  changed.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing release `state` and `selectedReleaseId`
+  fields only; no new columns or compatibility reader.
+- Scope/change class: authoritative write-intent correction.
+- Existing data impact: selection no longer overwrites historical shipped state;
+  Close retains its existing shipped transition.
+- Migration id: none required because the fix changes future writes and does
+  not reinterpret stored records.
+- Rollback/revert: source revert restores the previous writer behavior; no data
+  rollback is needed.
+
+## 2026-07-19 lifecycle/readiness response authority
+
+### User job
+
+When a user opens Overview, Map, Work, or Release after a release has shipped,
+they must see one coherent answer: the selected release is shipped, its
+readiness is complete, and later deferred work does not reopen it. Compact
+overview responses must preserve the same answer as rich responses.
+
+### Finding and changes
+
+- The durable release lifecycle and computed readiness were being passed through
+  one `state` field at the orientation adapter. A shipped release was therefore
+  relabeled `ready` while rebuilding a read response.
+- The shared orientation truth adapter now carries durable lifecycle state from
+  the same queue snapshot used by Release readiness. Reconciliation only uses
+  that lifecycle to preserve shipped history; it continues to use readiness for
+  current proof/blocker language.
+- The orientation response now exposes the distinction explicitly as
+  `release.lifecycleState` while retaining `release.state` for computed
+  readiness. The overview compactor preserves that field, so rich and compact
+  surfaces cannot silently diverge.
+
+### Proof
+
+- Route regression covers project, spine, and Release readiness responses for a
+  shipped release and asserts `shipped` in all three lifecycle views.
+- The same test asserts compact overview/spine output equals the rich release
+  summary for active and blocked scopes.
+- The full isolated source suite passed: 381 files passed, 1 skipped; 5,295
+  tests passed, 3 skipped, and 11 todo.
+- Installed proof is still required after the final build: stale-server,
+  project-state agreement, performance, spine, data-layer, contract, reduction,
+  desktop, mobile, and failure-recovery checks must all pass together.
+
+### Contract Touch Decision
+
+- Work id: `orientation-lifecycle-readiness-2026-07-19`.
+- Touched contracts: orientation release truth, orientation release summary,
+  compact orientation response, and project/spine response agreement.
+- Considered but not touched: task definitions, release storage schema, proof
+  evidence, transcripts, and historical event records.
+- Required follow-up: keep lifecycle/readiness assertions in the installed
+  cross-surface release-cycle gate.
+- Proof required: a shipped release must remain shipped across rich, compact,
+  project, spine, and Release responses after restart.
+- Apply/revert: code-only revert is safe; persisted records do not change.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. `lifecycleState` is a derived response field
+  sourced from the existing durable release `state`.
+- Scope/change class: read-model contract clarification and compactor repair.
+- Existing data impact: none; existing release rows and summary records remain
+  unchanged.
+- Migration id: none required; no compatibility reader was added.
+- Rollback/revert: source revert restores the prior response shape without data
+  rollback.
+
+## 2026-07-19 final 0.11 acceptance audit
+
+### User job
+
+The user must be able to open Guildhall and immediately understand the selected
+release, its exact scope, progress, deferred work, blockers, next action, and
+whether the same answer survives across Overview, Map, Work, Activity, Release,
+Thread, task detail, APIs, CLI, and restart.
+
+### Current verdict
+
+- [x] Installed bundle is fresh after build, install, stop/start, and
+      `/api/stale-server` verification.
+- [x] Fleet/project loading is bounded, fast, current, and free of startup
+      refresh errors.
+- [x] Narrative Harness has one database-backed selected release with 15/15
+      included work items done, 24 deferred items, 0 blocked items, and a
+      shipped lifecycle.
+- [x] Computed readiness is complete/ready without relabeling the durable
+      lifecycle or reopening deferred work.
+- [x] Overview, Work, Map, Activity, Spine, Release summary, Release detail,
+      Thread, task detail, and CLI agree on release identity, counts, and
+      authority.
+- [x] Desktop and mobile route proof passes for the four accepted Narrative
+      Harness routes with no horizontal overflow or clipped elements.
+- [x] The isolated source suite passes 381 files and 5,296 tests, with only
+      the designed skips and todo tests remaining.
+- [x] Project-state agreement, performance, spine, data-layer, contract,
+      reduction, and diff audits pass.
+- [x] Prior installed failure/recovery and restart evidence remains valid and
+      is replayed at the settled state by the final acceptance audit.
+- [x] The complete evidence is recorded in
+      `internal/audits/2026-07-19-release-acceptance.md`.
+
+The final acceptance command is:
+
+```sh
+PLAYWRIGHT_BROWSERS_PATH=/Users/matthew/Library/Caches/ms-playwright \
+  pnpm audit:release-acceptance
+```
+
+It passed all 42 checks. This supersedes earlier entries that described the
+final acceptance audit, installed proof, or broad source suite as pending.
+
+0.11.0 is release-ready but remains unpublished and unbumped. The explicit
+publication action is intentionally outside this audit. The remaining known
+warnings are the pre-existing advisory design-token baseline and stale generic
+fixture assertions in `scripts/browser-route-proof.mjs`; neither is a failure
+of the accepted Narrative Harness product routes or a release-blocking data,
+state, or safety regression.
+
+### Contract Touch Decision
+
+- Work id: `release-acceptance-audit-2026-07-19`.
+- Touched contracts: final acceptance evidence, the read-only CLI status
+  surface, and the package audit command.
+- Considered but not touched: persisted task/release schemas, migration
+  readers, transcript storage, provider settings, and route-local state.
+- Required follow-up: explicit publication-owner action for 0.11.0; advisory
+  design and generic fixture cleanup remain separate work.
+- Proof required/provided: 42 installed checks, full isolated source suite,
+  bounded audits, and desktop/mobile route geometry; all pass.
+- Apply/revert: source-only revert is safe; no persisted data rollback applies.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none by the acceptance harness or CLI status
+  surface.
+- Scope/change class: read-only verification and projection formatting.
+- Existing data impact: none; the final audit does not manufacture or rewrite
+  tasks, releases, transcripts, or event records.
+- Migration id: none. Compatibility reader: none.
+- Rollback/revert: remove the audit tooling and CLI surface; saved project
+  state remains unchanged.
+
+## 2026-07-19 0.11 publication preparation
+
+### User job
+
+Once product acceptance is green, the owner must be able to prepare and publish
+0.11.0 without stale version metadata, a missing runtime-image workflow, an
+incorrect package, or an unrecorded gate failure.
+
+### Current status
+
+- [x] Release metadata is staged at `0.11.0` in `package.json`, README, quick
+      start, release notes, and the public release index.
+- [x] Runtime image build defaults, Containerfile metadata, workflow triggers,
+      and release artifact assertions now target the 0.11 line.
+- [x] `node scripts/publish.mjs 0.11.0 --dry-run --allow-dirty
+      --allow-branch --skip-tests` built the real CLI/web bundle, built the
+      macOS package, passed package-content checks, and produced the
+      `guildhall-0.11.0.tgz` dry-run artifact.
+- [ ] The normal pre-publish typecheck is not green: `pnpm typecheck` reports
+      631 errors, including 90 production-source errors and stale test fixture
+      errors against the stricter task/proof contracts. The publisher was not
+      allowed to bypass this gate for a real release.
+- [ ] The dependency gate is not green: `pnpm lint:deps` reports 117
+      dependency violations, including 59 errors. The product acceptance audit
+      and source suite do not replace this release-contract check.
+- [ ] npm publication is not authenticated on this machine: `npm whoami`
+      returns HTTP 401. This is an external release-owner step that can be
+      completed together once the typecheck gate is resolved.
+
+The release has therefore been prepared but not published, tagged, or pushed.
+The product acceptance verdict remains green; publication readiness is pending
+the repository static gate and npm authentication.
+
+### Contract Touch Decision
+
+- Work id: `release-preparation-0.11.0-2026-07-19`.
+- Touched contracts: package version and release scripts, public release-note
+  pointers, runtime image version triggers/defaults, and release artifact
+  assertions.
+- Considered but not touched: task/release persistence schemas, migration
+  readers, project data, provider configuration, and npm credentials.
+- Required follow-up: repair the typecheck contract and authenticate npm before
+  invoking a real publish.
+- Proof required/provided: dry-run package build, macOS packaging, package
+  content guard, and explicit recorded failure output for the remaining gates.
+- Apply/revert: source-only revert returns the worktree to the pre-release
+  version; no published package or tag exists to roll back.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. Release preparation changes version metadata,
+  documentation, runtime image defaults, and CI workflow configuration only.
+- Scope/change class: release metadata and packaging contract.
+- Existing data impact: none; no project, task, release, transcript, or event
+  records were rewritten.
+- Migration id: none. Compatibility reader: none.
+- Rollback/revert: revert the release-preparation commit before publication;
+  no data rollback is required.

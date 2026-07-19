@@ -16,6 +16,7 @@ import {
 import { LivenessTracker } from '../liveness.js'
 import { upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
 import { buildEffectiveTask } from '../effective-task.js'
+import { hasUsableBlueprint } from '../task-plan-recovery.js'
 import { updateProjectConfig, type ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
 import { getProjectSystemStatePath } from '../../sessions/local-history.js'
@@ -196,7 +197,11 @@ function mkTask(overrides: Partial<Task> = {}): Task {
     updatedAt: '2026-04-01T00:00:00Z',
     ...overrides,
   }
-  if (task.status === 'ready' && !Object.hasOwn(overrides, 'spec')) {
+  const statusesThatRequireAWorkerBlueprint: TaskStatus[] = [
+    'ready',
+    'in_progress',
+  ]
+  if (statusesThatRequireAWorkerBlueprint.includes(task.status) && !Object.hasOwn(overrides, 'spec')) {
     task.spec = VALID_SPEC
   }
   if (task.status !== 'exploring' && task.spec === VALID_SPEC) {
@@ -222,12 +227,48 @@ async function writeQueue(tasks: Task[]): Promise<void> {
   await writeQueueState({ tasks })
 }
 
+async function ownerInputsForTask(taskId: string) {
+  return (await listOwnerInputRequests(tmpDir)).filter((request) =>
+    request.source.kind === 'task' && request.source.taskId === taskId,
+  )
+}
+
 async function writeQueueState(input: Partial<TaskQueue> & { tasks: Task[] }): Promise<void> {
+  // The execution lane now requires the same completion-boundary contract as
+  // production. Older loop fixtures used short prose specs as placeholders;
+  // keep explicit empty/undefined specs intact for recovery tests, but make
+  // non-empty legacy worker specs honest before they reach the write boundary.
+  const tasks = input.tasks.map((task) => {
+    const explicitlyMissingSpec = Object.hasOwn(task, 'spec') &&
+      (task.spec === undefined || task.spec.trim() === '')
+    const legacyWorkerSpec = task.status === 'in_progress' &&
+      !task.proofRecovery &&
+      !explicitlyMissingSpec &&
+      (!Object.hasOwn(task, 'spec') || !hasUsableBlueprint(task))
+    if (!legacyWorkerSpec) return task
+    return {
+      ...task,
+      spec: `${VALID_SPEC}\n\n${typeof task.spec === 'string' ? task.spec : ''}`.trim(),
+      acceptanceCriteria: task.acceptanceCriteria.length > 0
+        ? task.acceptanceCriteria
+        : [{
+            id: 'ac-1',
+            description: 'The requested change is complete.',
+            verifiedBy: 'review' as const,
+            met: false,
+          }],
+      productBrief: task.productBrief ?? {
+        userJob: 'I want the requested task completed.',
+        successMetric: 'The acceptance criterion is met.',
+        approvedAt: '2026-05-26T00:00:00.000Z',
+      },
+    }
+  })
   const queue: TaskQueue = {
     version: 1,
     lastUpdated: '2026-04-01T00:00:00Z',
     ...input,
-    tasks: input.tasks,
+    tasks,
   }
   if (readProjectStateDatabaseAuthority(tmpDir) === 'database') {
     const sanitizedQueue = sanitizeTaskQueueForProjectWrite(queue).queue as TaskQueue
@@ -332,6 +373,12 @@ async function seedTaskEvidence(tasks: readonly Task[]): Promise<void> {
         kind: 'merge_record' as const,
         recordedAt: task.mergeRecord.mergedAt ?? task.updatedAt,
         payload: task.mergeRecord,
+      }] : []),
+      ...(task.doneSummaryBundle ? [{
+        id: `completion-${task.id}-${(task.doneSummaryBundle.completedAt ?? task.updatedAt).replace(/[^0-9A-Za-z]/g, '')}`,
+        kind: 'completion_summary' as const,
+        recordedAt: task.doneSummaryBundle.completedAt ?? task.updatedAt,
+        payload: task.doneSummaryBundle,
       }] : []),
     ]
     for (const event of evidence) {
@@ -473,6 +520,35 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
       createdAt: completedAt,
       createdBy: 'test-harness',
     }
+  }
+  if (definitionPatch.status === 'done' && !definitionPatch.completionHandoff &&
+    (!Array.isArray(t.proofPaths) || t.proofPaths.length === 0)) {
+    definitionPatch.completionHandoff = {
+      id: `${id}-completion-handoff`,
+      taskId: id,
+      completedAt: patch.updatedAt ?? t.updatedAt ?? '2026-04-01T00:00:00Z',
+      completedBy: 'test-harness',
+      summary: 'Test worker completed the requested task.',
+      proofPathIds: [],
+      verificationSummary: 'Test harness completion proof recorded.',
+      automatedProof: [],
+      manualProof: [],
+      providerProof: [],
+      residualRisk: 'None recorded.',
+      followUpTaskIds: [],
+      evidenceRefs: [{
+        scope: 'test',
+        collection: 'completion',
+        id: 'test:completion',
+        path: 'test-harness',
+      }],
+    }
+  }
+  if (definitionPatch.status === 'done' && !definitionPatch.acceptanceCriteria && t.acceptanceCriteria.length > 0) {
+    definitionPatch.acceptanceCriteria = t.acceptanceCriteria.map((criterion) => ({
+      ...criterion,
+      met: true,
+    }))
   }
   Object.assign(t, definitionPatch)
 
@@ -951,7 +1027,7 @@ describe('pickNextTask', () => {
     expect(pickNextTask(q)?.id).toBe('t-review')
   })
 
-  it('bounds continuous ticks to approved current workspace-goals scope', async () => {
+  it('bounds continuous ticks to the selected release scope', async () => {
     await writeQueue([
       mkTask({
         id: 'current-parent',
@@ -974,29 +1050,19 @@ describe('pickNextTask', () => {
         priority: 'critical',
       }),
     ])
-    await fs.writeFile(
-      getProjectSystemStatePath(tmpDir, 'workspace-goals.json'),
-      JSON.stringify({
-        version: 3,
-        recordedAt: '2026-07-03T20:10:00.000Z',
-        goals: [],
-        tasks: [],
-        milestones: [],
-        context: [],
-        approved: {
-          goalCount: 0,
-          taskCount: 2,
-          milestoneCount: 0,
-          currentTaskCount: 1,
-          laterTaskCount: 1,
-          taskIds: ['current-parent', 'later-critical'],
-          currentTaskIds: ['current-parent'],
-          laterTaskIds: ['later-critical'],
-        },
-        detected: null,
-      }),
-      'utf-8',
-    )
+    const scopedQueue = await readQueue()
+    scopedQueue.selectedReleaseId = 'current-scope'
+    scopedQueue.releases = [{
+      id: 'current-scope',
+      label: 'Current scope',
+      kind: 'release',
+      state: 'active',
+      source: 'owner_approved',
+      nodeIds: ['work:current-parent'],
+      deferredNodeIds: ['work:later-critical'],
+      proofStyle: 'unspecified',
+    }]
+    await writeQueueState(scopedQueue)
 
     const worker = stubAgent('worker-agent', async () => {
       await mutateTask('current-child', { status: 'review' })
@@ -1582,66 +1648,25 @@ describe('Orchestrator.tick — idle handling', () => {
     expect(task?.notes.some(note => note.content.includes('durable merge evidence'))).toBe(true)
   })
 
-  it('reports broader documented work when the current task scope is exhausted but later scope remains', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'done' })])
-    await fs.writeFile(
-      getProjectSystemStatePath(tmpDir, 'workspace-goals.json'),
-      JSON.stringify({
-        version: 3,
-        recordedAt: '2026-06-18T12:00:00.000Z',
-        goals: [],
-        tasks: [
-          {
-            id: 'a',
-            title: 'Current harness slice',
-            description: 'Current scope.',
-            domain: 'harness',
-            priority: 'normal',
-            references: ['docs/harness/implementation-roadmap.md'],
-          },
-        ],
-        milestones: [],
-        context: [
-          {
-            label: 'Mastra workflow for the prototype iteration loop',
-            excerpt: 'Later-stage capability.',
-            source: 'planning-docs',
-            references: ['docs/harness/implementation-roadmap.md'],
-            role: 'capability',
-            scopeHint: 'later',
-          },
-          {
-            label: 'provider/model registry schema',
-            excerpt: 'Later-stage capability.',
-            source: 'planning-docs',
-            references: ['docs/harness/implementation-roadmap.md'],
-            role: 'capability',
-            scopeHint: 'later',
-          },
-        ],
-        approved: {
-          goalCount: 0,
-          taskCount: 1,
-          milestoneCount: 0,
-          currentTaskCount: 1,
-          laterTaskCount: 0,
-          taskIds: ['a'],
-          currentTaskIds: ['a'],
-          laterTaskIds: [],
-        },
-        detected: {
-          goalCount: 0,
-          taskCount: 2,
-          milestoneCount: 0,
-          currentTaskCount: 1,
-          laterTaskCount: 1,
-          taskIds: ['a', 'task-later'],
-          currentTaskIds: ['a'],
-          laterTaskIds: ['task-later'],
-        },
-      }, null, 2),
-      'utf-8',
-    )
+  it('reports deferred release work when the selected scope is exhausted', async () => {
+    await writeQueueState({
+      selectedReleaseId: 'current-scope',
+      releases: [{
+        id: 'current-scope',
+        label: 'Current scope',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:a'],
+        deferredNodeIds: ['work:later-one', 'work:later-two'],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        mkTask({ id: 'a', status: 'done' }),
+        mkTask({ id: 'later-one', status: 'ready' }),
+        mkTask({ id: 'later-two', status: 'ready' }),
+      ],
+    })
 
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     const out = await orch.tick()
@@ -1650,8 +1675,7 @@ describe('Orchestrator.tick — idle handling', () => {
       expect(out.allDone).toBe(true)
       expect(out.summary?.reason).toBe('all_terminal')
       expect(out.summary?.message).toContain('Current task scope is exhausted')
-      expect(out.summary?.message).toContain('2 later documented capabilities')
-      expect(out.summary?.message).toContain('1 additional detected task not yet in the approved scope')
+      expect(out.summary?.message).toContain('2 later documented tasks')
     }
   })
 
@@ -2249,9 +2273,10 @@ describe('Orchestrator.tick — routing', () => {
     const task = queue.tasks[0]!
     expect(task.status).toBe('exploring')
     expect(task.blockReason).toBeUndefined()
-    expect(task.openQuestions).toHaveLength(1)
-    expect(task.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'What exactly should this task do now that both dependencies are done?',
       choices: [
         'Create the inventory document that was supposed to exist, then verify it',
@@ -2347,9 +2372,10 @@ describe('Orchestrator.tick — routing', () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!
     expect(task.status).toBe('exploring')
-    expect(task.openQuestions).toHaveLength(1)
-    expect(task.openQuestions?.[0]?.kind).toBe('choice')
-    expect(task.openQuestions?.[0] && 'prompt' in task.openQuestions[0] ? task.openQuestions[0].prompt : '').toContain('Pick one')
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]?.prompt).toContain('Pick one')
 
     const transcript = await fs.readFile(
       getProjectTranscriptPath(tmpDir, 'exploring', 'a'),
@@ -2434,12 +2460,12 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(1)
-    expect(task.openQuestions?.[0]?.kind).toBe('choice')
-    expect(task.openQuestions?.[0] && 'prompt' in task.openQuestions[0] ? task.openQuestions[0].prompt : '').toBe('Pick one')
-    expect(task.openQuestions?.[0]).toMatchObject({
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]?.prompt).toBe('Pick one')
+    expect(ownerInputs[0]).toMatchObject({
       choices: ['happy path only', 'error cases too'],
-      selectionMode: 'single',
     })
 
     const transcript = await fs.readFile(getProjectTranscriptPath(tmpDir, 'exploring', 'a'), 'utf-8')
@@ -2480,21 +2506,23 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(3)
-    expect(task.openQuestions?.map((q) => q.kind)).toEqual(['choice', 'choice', 'choice'])
-    expect(task.openQuestions?.[0]).toMatchObject({
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(3)
+    expect(ownerInputs.every((request) => request.choices?.length === 3 || request.choices?.length === 2)).toBe(true)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'Primary scenario to spec',
       choices: ['Validation failure', 'Empty assistant message', 'Any of the above'],
       selectionMode: 'single',
     })
-    expect(task.openQuestions?.[1]).toMatchObject({
+    expect(ownerInputs[1]).toMatchObject({
       prompt: 'What the fallback must do',
       choices: [
         'Post one structured choice question, then stop turn',
         'Post structured question + transcript entry + stop turn',
       ],
     })
-    expect(task.openQuestions?.[2]).toMatchObject({
+    expect(ownerInputs[2]).toMatchObject({
       prompt: 'Out-of-scope guardrails',
       choices: [
         'Don’t redesign the task state machine',
@@ -2539,9 +2567,10 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(3)
-    expect(task.openQuestions?.map((q) => q.kind)).toEqual(['choice', 'choice', 'choice'])
-    expect(task.openQuestions?.map((q) => ('prompt' in q ? q.prompt : ''))).toEqual([
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(3)
+    expect(ownerInputs.map((request) => request.prompt)).toEqual([
       'First',
       'Second',
       'Third',
@@ -2580,8 +2609,10 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(2)
-    expect(task.openQuestions?.[0]).toMatchObject({
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(2)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'To lock scope before I draft acceptance criteria, pick one:',
       choices: [
         'Behavior spec only',
@@ -2590,7 +2621,7 @@ describe('Orchestrator.tick — routing', () => {
         'Other',
       ],
     })
-    expect(task.openQuestions?.[1]).toMatchObject({
+    expect(ownerInputs[1]).toMatchObject({
       prompt: 'Also, what should success look like in one concrete check?',
       choices: [
         'In first turn, agent asks at most N questions and yields.',
@@ -2652,8 +2683,10 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(3)
-    expect(task.openQuestions?.map((q) => ('prompt' in q ? q.prompt : ''))).toEqual([
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(3)
+    expect(ownerInputs.map((request) => request.prompt)).toEqual([
       'Test level target (pick one)',
       'Coverage posture (pick one)',
       'If first-turn data is still insufficient (pick one)',
@@ -2819,14 +2852,14 @@ describe('Orchestrator.tick — routing', () => {
         'We want to verify fallback brief creation and structured question recovery after spec-agent failures.',
       authoredBy: 'spec-agent',
     })
-    expect(task.openQuestions).toHaveLength(2)
-    expect(task.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(2)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'Primary outcome',
       choices: ['Spec-agent flow only', 'Shared orchestration recovery', 'Both'],
     })
-    expect(task.openQuestions?.[1]).toMatchObject({
-      kind: 'choice',
+    expect(ownerInputs[1]).toMatchObject({
       prompt: 'Test depth',
       choices: ['Unit only', 'Unit + integration'],
     })
@@ -3082,9 +3115,10 @@ describe('Orchestrator.tick — routing', () => {
       userJob: 'Add unit coverage for the use-collections happy path and one state-update behavior.',
       authoredBy: 'spec-agent',
     })
-    expect((task.openQuestions ?? []).filter((q) => !q.answeredAt)).toHaveLength(1)
-    expect(task.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'Which state update matters most first?',
       choices: ['Initial collection tree normalization', 'Optimistic create/update behavior'],
     })
@@ -4518,8 +4552,10 @@ describe('Orchestrator.tick — routing', () => {
 
   it('does not fossilize legacy cropped task titles into recovered specs or briefs', async () => {
     const fullTitle = 'What commands should I run to smoke test this project without changing files?'
-    await writeQueue([
-      mkTask({
+    // Seed this one fixture as historical raw queue data. Normal writes repair
+    // the title at the boundary, so only a legacy read can exercise the
+    // coordinator's re-intake path for an already-persisted clipped title.
+    const legacyTask = mkTask({
         id: 'a',
         status: 'exploring',
         title: 'What commands should I run to smoke test this project without changin...',
@@ -4545,8 +4581,8 @@ describe('Orchestrator.tick — routing', () => {
           content: 'Reframe requested from blocked. Guildhall will rebuild the task in plain language before continuing.',
           timestamp: '2026-06-15T18:48:51.097Z',
         }],
-      }),
-    ])
+      })
+    await fs.writeFile(tasksPath, JSON.stringify(queueOf([legacyTask]), null, 2), 'utf8')
     const spec = stubAgent('spec-agent')
     const orch = new Orchestrator({
       config: baseConfig(),
@@ -4610,9 +4646,10 @@ describe('Orchestrator.tick — routing', () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!
     expect(task.productBrief).toBeUndefined()
-    expect((task.openQuestions ?? []).filter((q) => !q.answeredAt)).toHaveLength(1)
-    expect(task.openQuestions?.[0]).toMatchObject({
-      kind: 'choice',
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'Which host shape matters most first?',
       choices: ['localhost and bare root domains', 'malformed hosts and unexpected dots'],
     })
@@ -4657,8 +4694,10 @@ describe('Orchestrator.tick — routing', () => {
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.openQuestions).toHaveLength(2)
-    expect(task.openQuestions?.[0]).toMatchObject({
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(2)
+    expect(ownerInputs[0]).toMatchObject({
       prompt: 'What should be the **primary success signal** for this task? (pick one)',
       choices: [
         'Spec quality only: clear ACs + testing strategy, no implementation expectations',
@@ -4666,7 +4705,7 @@ describe('Orchestrator.tick — routing', () => {
         'End-to-end governance: includes ACs for behavior, tests, task-state transitions, and transcript persistence as release gates',
       ],
     })
-    expect(task.openQuestions?.[1]).toMatchObject({
+    expect(ownerInputs[1]).toMatchObject({
       prompt: 'Coverage posture for the future implementation (pick one)',
       choices: [
         'Standard floor only (existing project defaults; no extra target)',
@@ -8291,6 +8330,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       mkTask({
         id: 'a',
         status: 'in_progress',
+        spec: undefined,
         proofRecovery: {
           reopenedAt: '2026-07-06T21:52:58.418Z',
           reason: 'Missing release proof evidence.',
@@ -9605,13 +9645,14 @@ describe('Orchestrator.tick — error handling', () => {
     expect(task.status).toBe('exploring')
     expect(task.escalations).toHaveLength(0)
     expect(task.blockReason).toBeUndefined()
-    const question = task.openQuestions?.[0]
-    expect(question?.kind).toBe('text')
-    if (question?.kind === 'text') {
-      expect(question.prompt).toContain('Zapier / webhook support')
-      expect(question.prompt).toContain('concrete success boundary')
-      expect(question.description).toContain('knit/docs/features.md')
-    }
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('draft-a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]).toMatchObject({
+      prompt: expect.stringContaining('Zapier / webhook support'),
+    })
+    expect(ownerInputs[0]?.prompt).toContain('concrete success boundary')
+    expect(ownerInputs[0]?.boundedChatSessionId).toBeTruthy()
   })
 
   it('preserves worker progress instead of escalating when turn limit hits after dirtying the worktree', async () => {
@@ -10254,7 +10295,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'Edit `src/report.ts` so every run writes a developer-readable debug report.',
+        spec: VALID_SPEC,
         blockReason: 'human_judgment_required: Worker timed out after failing to mutate the likely target file.',
         escalations: [
           {
@@ -10311,7 +10352,7 @@ describe('Orchestrator.run — full loops', () => {
         title: 'Select and prove DeepInfra drafting model',
         status: 'blocked',
         assignedTo: 'worker-agent',
-        spec: 'Select and prove a DeepInfra-accessible drafting model across genres.',
+        spec: VALID_SPEC,
         blockReason: 'human_judgment_required: Worker timed out after producing no visible progress.',
         notes: [
           {
@@ -10395,7 +10436,7 @@ describe('Orchestrator.run — full loops', () => {
         title: 'Select and prove DeepInfra drafting model',
         status: 'blocked',
         assignedTo: 'worker-agent',
-        spec: 'Select and prove a DeepInfra-accessible drafting model across genres.',
+        spec: VALID_SPEC,
         worktreePath,
         blockReason: 'human_judgment_required: Worker timed out after producing no visible progress.',
         notes: [
@@ -13632,6 +13673,7 @@ describe('Orchestrator.run — full loops', () => {
       mkTask({
         id: 'task-proof-recovery',
         status: 'in_progress',
+        spec: undefined,
         assignedTo: 'worker-agent',
         worktreePath,
         branchName: 'guildhall/task-proof-recovery',
@@ -13900,8 +13942,10 @@ describe('Orchestrator.run — full loops', () => {
     const q = await readQueue()
     const task = q.tasks.find((t) => t.id === 'a')!
     expect(task.status).toBe('exploring')
-    expect(task.openQuestions).toHaveLength(1)
-    expect(task.openQuestions?.[0]?.answeredAt).toBeUndefined()
+    expect(task.openQuestions).toBeUndefined()
+    const ownerInputs = await ownerInputsForTask('a')
+    expect(ownerInputs).toHaveLength(1)
+    expect(ownerInputs[0]?.status).toBe('waiting_for_owner')
   })
 
   it('adds immediate resume instructions for in-progress worker tasks with likely target files', async () => {
@@ -14534,6 +14578,7 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
         title: 'Basic project listing',
         status: 'blocked',
         assignedTo: null,
+        spec: VALID_SPEC,
         blockReason:
           "spec_ambiguous: Verification commands don't work in this environment but implementation is complete",
         projectPath: 'frontend/',

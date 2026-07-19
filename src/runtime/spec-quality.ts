@@ -103,6 +103,7 @@ function validateImportedPlanningText(
   if (!text) return { ok: true, errors: [] }
   const imported = (task.sourceClaims?.length ?? 0) > 0 ||
     task.requestIntake?.evidenceRefs?.some(ref => /^import:/.test(ref)) === true ||
+    (task.references?.length ?? 0) > 0 ||
     (!requireSourceEvidence && task.requestIntake?.createdBy === 'workspace-importer')
   if (!imported) return { ok: true, errors: [] }
   const context = groundingContext(task, includeProductBriefInContext)

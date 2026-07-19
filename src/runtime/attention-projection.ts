@@ -34,6 +34,61 @@ export interface AttentionSurfaceReadModel {
 }
 
 /**
+ * The release facts needed to decide whether an attention item still belongs
+ * to the current work envelope. This is deliberately smaller than the full
+ * project summary so the attention projection cannot grow a second summary
+ * model of its own.
+ */
+export interface AttentionReleaseTruth {
+  state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
+  counts: {
+    unfinished: number
+    blocked: number
+    ownerBlocked: number
+    proofBlocked: number
+  }
+}
+
+function currentScopeIsComplete(truth: AttentionReleaseTruth | null | undefined): boolean {
+  return truth?.state === 'ready' &&
+    truth.counts.unfinished === 0 &&
+    truth.counts.blocked === 0 &&
+    truth.counts.ownerBlocked === 0 &&
+    truth.counts.proofBlocked === 0
+}
+
+/**
+ * Setup, shaping, and proof-reconciliation prompts describe unfinished
+ * current work. Once the selected scope is durably complete they are stale
+ * for Needs you, even if an older attention record still exists. Genuine
+ * machine/runtime gates remain visible because they can affect the next run.
+ * History is intentionally left untouched by this filter.
+ */
+export function attentionItemsForReleaseTruth<T extends Pick<InboxItem, 'kind'>>(
+  items: readonly T[],
+  truth: AttentionReleaseTruth | null | undefined,
+): T[] {
+  if (!currentScopeIsComplete(truth)) return [...items]
+  return items.filter(item => item.kind === 'required_migration' || item.kind === 'bootstrap_missing')
+}
+
+/**
+ * Startup can use this cheap saved-state check to schedule one reconciliation
+ * after a release closes. It reads only the attention table and never expands
+ * tasks or scans project sources.
+ */
+export function attentionProjectionNeedsReleaseReconciliation(
+  projectRoot: string,
+  releaseTruth: AttentionReleaseTruth | null | undefined,
+): boolean {
+  if (!currentScopeIsComplete(releaseTruth)) return false
+  const current = readCurrentAttentionProjection(projectRoot)
+  if (!current) return false
+  const ownedOpenItems = current.openItems.filter(isAttentionOwnedInboxItem)
+  return attentionItemsForReleaseTruth(ownedOpenItems, releaseTruth).length !== ownedOpenItems.length
+}
+
+/**
  * Read the current attention projection without rediscovering Inbox items.
  * A missing or stale watermark is an honest cache miss, not permission to
  * present old attention as current.
@@ -62,6 +117,7 @@ export function readCurrentAttentionProjection(projectRoot: string): AttentionPr
 export function readSavedAttentionSurface(
   projectRoot: string,
   initializationNeeded: boolean,
+  releaseTruth?: AttentionReleaseTruth | null,
 ): AttentionSurfaceReadModel {
   if (initializationNeeded) {
     return {
@@ -81,7 +137,10 @@ export function readSavedAttentionSurface(
       requiresRefresh: true,
     }
   }
-  const items = current.openItems.filter(isAttentionOwnedInboxItem)
+  const items = attentionItemsForReleaseTruth(
+    current.openItems.filter(isAttentionOwnedInboxItem),
+    releaseTruth,
+  )
   return {
     items,
     history: current.history.filter(isAttentionOwnedInboxItem),
@@ -100,6 +159,7 @@ export function readSavedAttentionSurfaceFromBoundary(input: {
   records: readonly { payload: unknown }[] | null
   watermarkSourceRevision: number | null
   projectRevision: number | null
+  releaseTruth?: AttentionReleaseTruth | null
 }): AttentionSurfaceReadModel {
   if (input.initializationNeeded) {
     return {
@@ -129,10 +189,11 @@ export function readSavedAttentionSurfaceFromBoundary(input: {
   const items = history
     .filter(record => record.status === 'open')
     .filter(isAttentionOwnedInboxItem)
+  const currentItems = attentionItemsForReleaseTruth(items, input.releaseTruth)
   return {
-    items,
+    items: currentItems,
     history: history.filter(isAttentionOwnedInboxItem),
-    blockers: buildInboxBlockers(items),
+    blockers: buildInboxBlockers(currentItems),
     freshness: 'current',
   }
 }

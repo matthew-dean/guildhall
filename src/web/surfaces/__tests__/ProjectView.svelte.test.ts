@@ -944,6 +944,55 @@ describe('ProjectView', () => {
     expect(screen.getAllByText(conflictMessage).length).toBeGreaterThan(0)
   })
 
+  it('does not surface stale proof gaps as a shell blocker after release readiness is complete', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1 is complete.',
+      },
+      releaseReadiness: {
+        ready: true,
+        releaseCounts: { total: 1, done: 1, unfinished: 0, proofBlocked: 0 },
+        releaseBlockers: [],
+      },
+      orientationSpine: {
+        summary: {
+          headline: 'Stage 1 is waiting on proof.',
+          purpose: 'Headless proof scope.',
+          selectedScopeLabel: 'Stage 1',
+          selectedReleaseLabel: 'Stage 1',
+          includedCount: 1,
+          includedWorkCount: 1,
+          deferredCount: 0,
+          deferredWorkCount: 0,
+          pinnedNow: [],
+          topBlocker: 'Proof needed: Stage 1.',
+          nextAction: 'Attach proof.',
+          progress: { scopeId: 'stage-1', total: 1, done: 1 },
+        },
+        gaps: [{ kind: 'proof_needed', label: 'Proof needed: Stage 1.', severity: 'warn', refs: ['task:task-stage-1'] }],
+        sourceHealth: { inferred: 1, conflicts: 0, gaps: 2 },
+        scopeRows: [],
+        releases: [],
+        charter: { goal: 'Headless proof scope.', targetAudience: null, currentReleaseTarget: null, successDefinition: null, nonGoals: [], source: 'inferred' },
+        executionBoundary: { label: 'Headless proof', mode: 'headless', proofStyle: 'script_only', detail: 'Script proof.', source: { kind: 'inferred', refs: [], confidence: 'medium', freshness: 'fresh', inferred: true, refreshedAt: now } },
+        proofContracts: [],
+        roots: [],
+        nodes: {},
+        activePins: [],
+        release: { state: 'ready', blockers: [] },
+        projectId: 'looma-knit',
+        updatedAt: now,
+      } as any,
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('map', null, 'looma-knit', projectPayload)
+
+    expect(screen.queryByRole('alert', { name: 'Review current scope' })).toBeNull()
+  })
+
   it('does not let deferred blocked work override completed current-scope chrome', async () => {
     const projectPayload = detail({
       startReadiness: { canStart: true, message: 'Ready' },

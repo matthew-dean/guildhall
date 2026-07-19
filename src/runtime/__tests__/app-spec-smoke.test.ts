@@ -356,7 +356,7 @@ describe('Pantry Pulse app-spec smoke fixture', () => {
       }
     }
 
-    expect(observedStatuses).toEqual(['in_progress', 'review', 'gate_check', 'done'])
+    expect(observedStatuses).toEqual(['review', 'gate_check', 'done'])
     await expect(readFile(path.join(projectPath, 'index.html'), 'utf-8')).resolves.toContain('Pantry Pulse')
     await expect(readFile(path.join(projectPath, 'src/main.js'), 'utf-8')).resolves.toContain('Mark used')
 

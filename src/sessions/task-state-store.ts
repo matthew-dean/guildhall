@@ -1145,6 +1145,18 @@ export async function backfillTaskStateDatabaseOverlays(
   projectRoot: string,
   taskIds: readonly string[],
 ): Promise<{ runtime: number; workspace: number; latestProof: number }> {
+  // Once SQLite owns current state, legacy sidecars are retired input, even
+  // when an old migration is invoked explicitly or its ledger is incomplete.
+  // Treating a missing sidecar as an empty replacement would erase canonical
+  // overlays that were written after promotion.
+  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database') {
+    const stores = readProjectStateDatabaseTaskOverlayStores(projectRoot)
+    return {
+      runtime: stores?.runtime.length ?? 0,
+      workspace: stores?.workspace.length ?? 0,
+      latestProof: stores?.evidenceCurrent.size ?? 0,
+    }
+  }
   const [runtimeStore, workspaceStore] = await Promise.all([
     readLegacyTaskRuntimeStore(projectRoot),
     readLegacyTaskWorkspaceStore(projectRoot),

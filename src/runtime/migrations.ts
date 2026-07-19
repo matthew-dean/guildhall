@@ -47,6 +47,7 @@ import {
   readProjectStateDatabaseTaskEvidenceAuthority,
   readProjectStateDatabaseTaskOverlayStores,
   replaceProjectStateDatabaseTaskRuntimes,
+  projectStateDatabaseTaskSummary,
 } from '@guildhall/sessions'
 import type { ProjectStateDatabaseScopeRow } from '@guildhall/sessions'
 import { Task as TaskSchema, TaskRuntimeState } from '@guildhall/core'
@@ -483,12 +484,16 @@ async function realignPromotedSummaryWithEffectiveState(projectRoot: string): Pr
   const taskOverrides: typeof inventory.tasks = inventory.tasks.map(task => {
     const effective = effectiveById.get(task.id)
     if (!effective) throw new Error(`The promoted SQLite task index is missing effective task ${task.id}.`)
+    const currentSummary = projectStateDatabaseTaskSummary(effective).currentSummary
     return {
       ...task,
       title: typeof effective.title === 'string' ? effective.title : task.title,
       status: typeof effective.status === 'string' ? effective.status : task.status,
       updatedAt: typeof effective.updatedAt === 'string' ? effective.updatedAt : task.updatedAt,
       completedAt: typeof effective.completedAt === 'string' ? effective.completedAt : task.completedAt,
+      ...(currentSummary && typeof currentSummary === 'object' && !Array.isArray(currentSummary)
+        ? { currentSummary }
+        : {}),
     }
   })
   const scopeRows = scopeRowsForEffectiveTasks(queueRead.definition, effectiveTasks)
@@ -1511,10 +1516,15 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       const projection = backfillProjectSummaryProjection(tasksPath, {
         projectId: path.basename(projectRoot),
       })
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = queue?.tasks
+        .map(task => task.id)
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0) ?? []
+      const overlays = await backfillTaskStateDatabaseOverlays(projectRoot, taskIds)
       return {
         summary: projection.freshness === 'error'
           ? 'Created an explicit error summary and state database because the existing task queue could not be parsed; task history was not rewritten.'
-          : `Built the normalized project-state database for ${projection.counts.total} task${projection.counts.total === 1 ? '' : 's'}.`,
+          : `Built the normalized project-state database for ${projection.counts.total} task${projection.counts.total === 1 ? '' : 's'} and imported ${overlays.runtime + overlays.workspace} current runtime/workspace overlay row${overlays.runtime + overlays.workspace === 1 ? '' : 's'}.`,
         affectedPaths: [projectStateDatabasePath(projectRoot), getProjectSystemStatePath(projectRoot, 'project-summary.json')],
       }
     },
@@ -1931,6 +1941,12 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Imports current runtime, workspace, and latest-proof facts into the project database without rewriting task definitions or evidence history.',
     async detect(projectRoot) {
       const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      // Initial database creation imports these overlays atomically. Once a
+      // database exists, this compatibility migration is retired and must not
+      // reopen sidecars as a second current-state source.
+      if (readProjectStateDatabaseMetadata(projectRoot) !== null) {
+        return { needed: false, affectedPaths: [] }
+      }
       try {
         await fs.access(tasksPath)
       } catch {
@@ -1965,6 +1981,9 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Keeps only current task runtime, workspace, and latest-proof rows in the database; historical evidence remains unchanged.',
     async detect(projectRoot) {
       const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      if (readProjectStateDatabaseMetadata(projectRoot) !== null) {
+        return { needed: false, affectedPaths: [] }
+      }
       try {
         await fs.access(tasksPath)
       } catch {
@@ -3092,7 +3111,7 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     safety: 'automatic',
     requirement: 'required',
     recheckAfterApply: true,
-    summary: 'Adds the bounded current-proof answer to existing task read models so reopened work cannot inherit historical proof as if it were current evidence.',
+    summary: 'Repairs the owner-facing current-proof state in existing task read models so reopened work cannot inherit historical proof as if it were current evidence.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
       const status = readProjectStateDatabaseCurrentProofReadModelStatus(projectRoot)
@@ -3121,7 +3140,7 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     safety: 'automatic',
     requirement: 'required',
     recheckAfterApply: true,
-    summary: 'Replaces bare workspace test conventions on imported tasks in a selected script-only release with explicit proof-setup work so generic commands cannot masquerade as task proof.',
+    summary: 'Converts bare workspace test conventions on imported tasks in a selected script-only release into explicit owner-facing proof state and proof-setup work so generic commands cannot masquerade as task proof.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
       const taskIds = importedScriptProofRepairTaskIds(projectRoot)
@@ -3424,6 +3443,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.12.22/current-summary-rebuild-after-authority': 'migrations.test.ts: rebuilds a stale summary after current-state authority promotion',
   '0.12.23/project-state-single-authority': 'migrations.test.ts: removes duplicate current-state files only after the database queue is readable',
   '0.12.24/project-summary-action-model': 'migrations.test.ts: persists one canonical action model after the database becomes authoritative',
+  '0.12.25/project-summary-task-status-counts': 'migrations.test.ts: persists partitioned task-status counts without changing task or release records',
   '0.12.34/task-current-inbox-summary': 'migrations.test.ts: materializes current inbox facts without replaying task history',
   '0.12.35/task-essential-current-evidence': 'project-state-database.test.ts: collapses current evidence without deleting historical records',
   '0.12.36/project-summary-current-scope-authority': 'project-summary-projection.test.ts: ignores stale approved-plan identities and keeps replacement work current',

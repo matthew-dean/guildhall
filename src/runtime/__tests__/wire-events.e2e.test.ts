@@ -89,7 +89,34 @@ function mkTask(overrides: Partial<Task> = {}): Task {
     projectPath: tmpDir,
     status: 'exploring',
     priority: 'normal',
-    acceptanceCriteria: [],
+    acceptanceCriteria: [{
+      id: 'ac-1',
+      description: 'The requested change is complete.',
+      verifiedBy: 'review',
+      met: false,
+    }],
+    productBrief: {
+      userJob: 'I want the requested task completed.',
+      successMetric: 'The acceptance criterion is met.',
+      approvedAt: '2026-04-01T00:00:00.000Z',
+    },
+    spec: [
+      '## Summary',
+      '',
+      'Implement the requested change.',
+      '',
+      '## Completion Boundary',
+      '- Product outcome: The task is complete for the requested scope.',
+      '- What Guildhall can complete in code: Update the project and its tests.',
+      '- External dependencies: None.',
+      '- Owner-only setup: None.',
+      '- Verification environment: Local test environment.',
+      '- What counts as done: The acceptance criterion is met and review can proceed.',
+      '- What must be split or blocked: Nothing.',
+      '',
+      '## Acceptance Criteria',
+      '1. The requested change is complete.',
+    ].join('\n'),
     outOfScope: [],
     dependsOn: [],
     notes: [],
@@ -196,7 +223,15 @@ describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
     })
     // Fake gate checker passes → done
     const gateChecker = stubAgent('gate-checker-agent', async () => {
-      await mutateTask('a', { status: 'done' })
+      await mutateTask('a', {
+        status: 'done',
+        gateResults: [{
+          gateId: 'a-completion',
+          passed: true,
+          checkedAt: '2026-04-01T00:00:01.000Z',
+          output: 'The acceptance criterion is met.',
+        }],
+      })
     })
 
     const orch = new Orchestrator({
@@ -275,8 +310,27 @@ describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
         const id = m?.[1]
         if (id && orchRef) {
           await orchRef.updateQueueAtomically((queue) => {
-            const t = queue.tasks.find((x) => x.id === id)
-            if (t && t.status === 'in_progress') t.status = 'done'
+          const t = queue.tasks.find((x) => x.id === id)
+            if (t && t.status === 'in_progress') {
+              t.status = 'done'
+              t.acceptanceCriteria = t.acceptanceCriteria.map(criterion => ({ ...criterion, met: true }))
+              t.gateResults = [{
+                gateId: `${id}-completion`,
+                passed: true,
+                checkedAt: '2026-04-01T00:00:01.000Z',
+                output: 'The acceptance criterion is met.',
+              }]
+              t.completionHandoff = {
+                id: `${id}-completion`,
+                taskId: id,
+                completedAt: '2026-04-01T00:00:01.000Z',
+                completedBy: 'worker-agent',
+                summary: 'The task was completed by the worker.',
+                verified: ['The acceptance criterion is met.'],
+                evidenceRefs: [`task:${id}:completion`],
+              }
+              t.completedAt = '2026-04-01T00:00:01.000Z'
+            }
           })
         }
         return { text: 'ok' }

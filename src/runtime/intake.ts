@@ -1097,7 +1097,6 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   task.productBrief = undefined
   task.spec = undefined
   task.acceptanceCriteria = []
-  task.openQuestions = []
   // Reframing is a new planning pass. Do not let readiness, sizing, review,
   // or decomposition decisions from the discarded frame make the fresh
   // exploring task look runnable before the spec lane has rebuilt it.
@@ -1403,17 +1402,18 @@ export async function rerunTaskStage(
     task.completedAt = undefined
     task.status = 'exploring'
     task.assignedTo = null
-    if (input.recoveryReason) {
-      // A stale current plan is a shaping boundary, not a worker retry.
-      // Remove the old executable contract so the spec lane must re-intake a
-      // real proof path from current project evidence.
-      resetCurrentPlanForProofRecovery(task, {
-        reason: input.recoveryReason,
-        now,
-        agentId: 'system',
-        role: 'system',
-      })
-    }
+    // "Rerun spec" is a new shaping boundary, not a worker retry. Remove the
+    // old executable contract even when the caller did not provide a special
+    // recovery reason; otherwise the coordinator can keep reusing a blueprint
+    // that the user explicitly asked it to replace.
+    resetCurrentPlanForProofRecovery(task, {
+      reason:
+        input.recoveryReason?.trim() ||
+        'The current plan was cleared for a fresh spec pass from current project reality.',
+      now,
+      agentId: 'system',
+      role: input.recoveryKind === 'proof' ? 'proof-recovery' : 'spec-recovery',
+    })
     detachStaleShelvedReverseChildren(queue, task, now)
     task.updatedAt = now
     queue.lastUpdated = now
@@ -1431,12 +1431,14 @@ export async function rerunTaskStage(
       content:
         'Human requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
     })
-    if (input.recoveryReason && (input.recoveryKind ?? 'proof') === 'proof') {
+    if (input.recoveryKind === 'proof') {
       await upsertTaskRuntimeState(projectRoot, task.id, {
         assignedTo: null,
         proofRecovery: {
           reopenedAt: now,
-          reason: input.recoveryReason,
+          reason:
+            input.recoveryReason?.trim() ||
+            'The current proof plan was cleared for a fresh source-backed spec pass.',
         },
         updatedAt: now,
       })

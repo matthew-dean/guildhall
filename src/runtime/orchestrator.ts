@@ -103,6 +103,7 @@ import { buildPromptCacheKey } from './prompt-cache.js'
 import { resolveModelApiPolicy, type ModelApiRole } from './model-api-policy.js'
 import { repairStaleBlockersInQueue } from './stale-blocker-repair.js'
 import { buildEffectiveTask } from './effective-task.js'
+import { taskCompletionProofSatisfiedByLinkedChildren } from './project-scope-projection.js'
 import {
   hasActiveProofRecovery,
   latestFallbackApprovalHasUnresolvedSubstantiveRevision,
@@ -200,7 +201,7 @@ import {
   getProjectSystemStatePath,
   getProjectSystemStatePathFromMemoryDir,
   getProjectTranscriptPath,
-  getProjectTaskLocalHistoryDir,
+  getProjectTaskReviewPacketPath,
   inferProjectRootFromMemoryDir,
   loadSessionById,
   appendTaskEvidence,
@@ -222,9 +223,11 @@ import {
   META_INTAKE_TASK_ID,
   parseCoordinatorDraft,
 } from './meta-intake.js'
-import { taskEligibleForSelectedScope } from './project-orientation-spine.js'
+import { taskEligibleForSelectedScope, taskNodeId } from './project-orientation-spine.js'
+import { recoverClippedTitle } from '../shared/task-display-label.js'
 import {
   createOwnerInputRequest,
+  listOwnerInputRequestsSync,
   waitingOwnerInputTaskIdsSync,
 } from './owner-input-store.js'
 import { hasWorkspaceImportProvenance } from './import-drafts.js'
@@ -368,7 +371,9 @@ function taskDoneButMissingSelectedScopeProof(
   if (!selectedScope) return taskDoneButProofMissing(task)
   const tasksById = new Map(queue.tasks.map(candidate => [candidate.id, candidate] as const))
   const eligible = taskEligibleForSelectedScope(task, selectedScope, { tasksById }).eligible
-  return taskDoneButProofMissingForScope(task, eligible ? selectedScope.proofStyle : undefined)
+  const proofStyle = eligible ? selectedScope.proofStyle : undefined
+  return taskDoneButProofMissingForScope(task, proofStyle) &&
+    !taskCompletionProofSatisfiedByLinkedChildren(task, queue.tasks, proofStyle)
 }
 
 function normalizeAcceptanceCommandForGuildhallState(command: string): string {
@@ -3570,9 +3575,16 @@ export class Orchestrator {
       laterContextCount: number
       detectedAdditionalTaskCount: number
     } | null,
+    selectedScope?: Parameters<typeof taskEligibleForSelectedScope>[1] | null,
   ): NonNullable<Extract<TickOutcome, { kind: 'idle' }>['summary']> {
     const scopedIds = scopeTaskId ? new Set(workSubtreeIds(queue.tasks, scopeTaskId)) : null
-    const tasks = scopedIds ? queue.tasks.filter(task => scopedIds.has(task.id)) : queue.tasks
+    const tasks = scopedIds
+      ? queue.tasks.filter(task => scopedIds.has(task.id))
+      : selectedScope
+        ? queue.tasks.filter(task => taskEligibleForSelectedScope(task, selectedScope, {
+            tasksById: new Map(queue.tasks.map(candidate => [candidate.id, candidate] as const)),
+          }).eligible)
+        : queue.tasks
     const waitingOwnerInputTaskIds = this.waitingOwnerInputTaskIds(queue)
     const counts = {
       total: tasks.length,
@@ -3835,21 +3847,34 @@ export class Orchestrator {
       const allDone = scopedTasks.length > 0 && scopedTasks.every((t) =>
         (TERMINAL_TASK_STATUSES as readonly TaskStatus[]).includes(t.status),
       )
-      const broaderDocumentedScope = !opts.preferredTaskId && !explicitReleaseScope && workspaceGoalsState
+      const broaderDocumentedScope = !opts.preferredTaskId && explicitReleaseScope
         ? {
-            laterTaskCount: workspaceGoalsState.approved.laterTaskIds.length,
-            laterContextCount: workspaceGoalsState.context.filter(context =>
-              (context.role === 'capability' || context.role === 'brief_input') &&
-              context.scopeHint === 'later',
+            laterTaskCount: queueBefore.tasks.filter(task =>
+              explicitReleaseScope.deferredNodeIds.includes(taskNodeId(task.id)),
             ).length,
-            detectedAdditionalTaskCount: Math.max(
-              0,
-              (workspaceGoalsState.detected?.taskCount ?? workspaceGoalsState.approved.taskCount) -
-                workspaceGoalsState.approved.taskCount,
-            ),
+            laterContextCount: 0,
+            detectedAdditionalTaskCount: 0,
           }
-        : null
-      const summary = this.summarizeIdleQueue(queueBefore, opts.preferredTaskId, broaderDocumentedScope)
+        : !opts.preferredTaskId && workspaceGoalsState
+          ? {
+              laterTaskCount: workspaceGoalsState.approved.laterTaskIds.length,
+              laterContextCount: workspaceGoalsState.context.filter(context =>
+                (context.role === 'capability' || context.role === 'brief_input') &&
+                context.scopeHint === 'later',
+              ).length,
+              detectedAdditionalTaskCount: Math.max(
+                0,
+                (workspaceGoalsState.detected?.taskCount ?? workspaceGoalsState.approved.taskCount) -
+                  workspaceGoalsState.approved.taskCount,
+              ),
+            }
+          : null
+      const summary = this.summarizeIdleQueue(
+        queueBefore,
+        opts.preferredTaskId,
+        broaderDocumentedScope,
+        selectedReleaseScope,
+      )
       return {
         kind: 'idle',
         consecutiveIdleTicks: this.consecutiveIdleTicks,
@@ -5741,9 +5766,9 @@ export class Orchestrator {
           }
         }
 
-        let transcriptAppended = false
-        let fallbackBriefAuthored = false
-        let fallbackQuestionPosted = false
+    let transcriptAppended = false
+    let fallbackBriefAuthored = false
+    let fallbackQuestionPosted = false
         if (
           agent.name === 'spec-agent' &&
           beforeStatus === 'exploring' &&
@@ -5757,6 +5782,15 @@ export class Orchestrator {
           transcriptAppended = fallback.transcriptAppended
           fallbackBriefAuthored = fallback.fallbackBriefAuthored
           fallbackQuestionPosted = fallback.fallbackQuestionPosted
+          if (fallbackQuestionPosted && (taskAfter.openQuestions?.length ?? 0) > 0) {
+            // The agent may have written the pre-0.10 queue field directly
+            // during the same turn. OwnerInputRequest is authoritative now;
+            // remove the stale copy before the outer dispatch write lands.
+            taskAfter.openQuestions = undefined
+            taskAfter.updatedAt = this.now()
+            queueAfter.lastUpdated = taskAfter.updatedAt
+            await this.writeQueue(queueAfter)
+          }
         }
 
         const madeExploringProgress =
@@ -6176,7 +6210,6 @@ export class Orchestrator {
           !hasCheckpointScopedVerifiedProgress
         if (repeatedWorkerNoProgress) {
           const attempts = ((await this.readWorkerRecovery(task.id)).noProgressAttempts ?? 0) + 1
-          await this.patchWorkerRecovery(task.id, { noProgressAttempts: attempts })
           if (attempts >= WORKER_NO_PROGRESS_ESCALATION_AFTER) {
             if (
               (checkpointNoProgressStatusSeen || hasFailedCheckpointVerification) &&
@@ -6192,6 +6225,11 @@ export class Orchestrator {
                 },
               })
               if (remediated) {
+                // The remediation helper writes the task queue as part of
+                // recording its restart. Restore the dedicated counter after
+                // that write so the stale task snapshot cannot resurrect the
+                // pre-remediation retry count.
+                await this.patchWorkerRecovery(task.id, { noProgressAttempts: 0 })
                 await this.maybeCleanupWorktree(taskAfter, worktreeMode)
                 return {
                   kind: 'processed',
@@ -6267,6 +6305,10 @@ export class Orchestrator {
           taskAfter.updatedAt = this.now()
           queueAfter.lastUpdated = taskAfter.updatedAt
           await this.writeQueue(queueAfter)
+          // Queue writes sanitize runtime-only fields out of the task
+          // definition. Patch the dedicated runtime overlay after that write
+          // so a stale embedded snapshot cannot clobber the new counter.
+          await this.patchWorkerRecovery(task.id, { noProgressAttempts: attempts })
         } else {
           await this.resetWorkerRecoveryCounters(task.id, ['noProgressAttempts'])
         }
@@ -8907,7 +8949,7 @@ export class Orchestrator {
 
         const evidenceSummary = passingArtifact.summary
         const recordedAt = passingArtifact.checkedAt ?? now
-        current.proofPaths = currentProofPaths.map((proofPath) => {
+        const normalizedProofPaths = currentProofPaths.map((proofPath) => {
           if (proofPath.kind !== 'command' || proofPath.command?.trim() !== command) return proofPath
           const expectedEvidence = (proofPath.expectedEvidence ?? []).map((evidence, index) => ({
             id: evidence.id || `${proofPath.id ?? 'proof-path'}-evidence-${index}`,
@@ -8965,7 +9007,8 @@ export class Orchestrator {
             updatedAt: now,
           }
         }) as unknown as NonNullable<Task['proofPaths']>
-        const verifiedCommandProof = currentProofPaths.some((proofPath) =>
+        current.proofPaths = normalizedProofPaths
+        const verifiedCommandProof = normalizedProofPaths.some((proofPath) =>
           proofPath.kind === 'command' &&
           proofPath.command?.trim() === command &&
           proofPath.status === 'verified' &&
@@ -10935,7 +10978,15 @@ export class Orchestrator {
     const landingStrategy = await this.resolveLandingStrategySafe()
     const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
     const runtimeStore = await readTaskRuntimeStore(projectRoot).catch(() => null)
-    for (const task of queue.tasks) {
+    for (const [taskIndex, queuedTask] of queue.tasks.entries()) {
+      // The queue is a compact dispatch projection. Completion summaries and
+      // merge evidence live in the authoritative task state, so landing must
+      // hydrate the candidate before deciding whether to dispatch anything.
+      let task = queuedTask
+      if (queuedTask.status !== 'done') {
+        task = await this.hydrateEffectiveTaskForDispatch(queuedTask)
+        queue.tasks[taskIndex] = task
+      }
       const completedButActive =
         task.status !== 'done' &&
         task.doneSummaryBundle?.status === 'done'
@@ -11450,6 +11501,9 @@ export class Orchestrator {
         payload,
       })
     }
+    if (evidence.doneSummaryBundle && typeof evidence.doneSummaryBundle === 'object' && !Array.isArray(evidence.doneSummaryBundle)) {
+      await appendMany('completion', 'completion_summary', [evidence.doneSummaryBundle], 'completedAt')
+    }
   }
 
   private attachMissingDoneSummaries(queue: TaskQueue): void {
@@ -11476,14 +11530,14 @@ export class Orchestrator {
   private async maybeWriteReviewPacket(task: Task): Promise<void> {
     if (!new Set<TaskStatus>(['review', 'gate_check', ...ONE_TASK_STOP_STATUSES]).has(task.status)) return
 
-    const taskDir = getProjectTaskLocalHistoryDir(
-      inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
-      task.id,
-    )
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    const packetTask = await buildEffectiveTask(projectRoot, task, { evidence: 'full' }) as unknown as Task
+    const packetPath = getProjectTaskReviewPacketPath(projectRoot, task.id)
+    const taskDir = path.dirname(packetPath)
     await fs.mkdir(taskDir, { recursive: true })
     writeManagedTextFileSync(
-      path.join(taskDir, 'review-packet.md'),
-      await this.renderReviewPacket(task),
+      packetPath,
+      await this.renderReviewPacket(packetTask),
     )
   }
 
@@ -12203,10 +12257,6 @@ export class Orchestrator {
       sessionSource: `orchestrator:import-draft-scope:${task.id}:${question.id}`,
     })
 
-    task.openQuestions = [
-      ...(task.openQuestions ?? []),
-      question,
-    ]
     task.blockReason = undefined
     task.assignedTo = null
     task.updatedAt = now
@@ -12641,8 +12691,13 @@ export class Orchestrator {
     if (typeof task.spec === 'string' && task.spec.trim().length > 0) return null
     if (taskHasUnansweredVisibleQuestion(task)) return null
     // A fresh reframe must reach the real spec lane. Older recovery notes are
-    // evidence, not permission to manufacture a new placeholder spec.
-    if (hasFreshReframeBoundary(task)) return null
+    // evidence, not permission to manufacture a new placeholder spec. A
+    // persisted clipped title is different: it is a data-integrity defect,
+    // and the coordinator must repair it from the full request before the
+    // task can re-enter the normal spec lane.
+    const persistedTitle = task.request?.title ?? task.title
+    const titleRepairCandidate = recoverClippedTitle(persistedTitle, task.description ?? task.request?.raw)
+    if (hasFreshReframeBoundary(task) && !titleRepairCandidate) return null
     const notes = Array.isArray(task.notes) ? task.notes : []
     // A reframe is a deliberate fresh planning pass, not evidence that the
     // spec agent already failed. Only a recorded no-progress recovery may
@@ -12665,6 +12720,16 @@ export class Orchestrator {
     queue.tasks[queue.tasks.findIndex((candidate) => candidate.id === liveTask.id)] = liveTask
     if (typeof liveTask.spec === 'string' && liveTask.spec.trim().length > 0) return null
     if (taskHasUnansweredVisibleQuestion(liveTask)) return null
+    const livePersistedTitle = liveTask.request?.title ?? liveTask.title
+    const repairedTitle = recoverClippedTitle(livePersistedTitle, liveTask.description ?? liveTask.request?.raw)
+    const titleWasRepaired = Boolean(repairedTitle && repairedTitle !== livePersistedTitle)
+    if (repairedTitle) {
+      liveTask.title = repairedTitle
+      if (liveTask.request && typeof liveTask.request === 'object') {
+        liveTask.request = { ...liveTask.request, title: repairedTitle }
+      }
+    }
+    if (hasFreshReframeBoundary(liveTask) && !titleWasRepaired) return null
     const proofRecoveryReason = typeof (liveTask as Task & { proofRecovery?: { reason?: unknown } }).proofRecovery?.reason === 'string'
       ? (liveTask as Task & { proofRecovery?: { reason?: string } }).proofRecovery?.reason ?? ''
       : ''
@@ -12676,7 +12741,7 @@ export class Orchestrator {
       return null
     }
     const shouldSeedFromParent = shouldSeedSourceBackedExploringSplit(liveTask, queue)
-    if (!isDurableDraftRecoveryRetry && !shouldSeedFromParent && opts.force !== true) return null
+    if (!isDurableDraftRecoveryRetry && !shouldSeedFromParent && !titleWasRepaired && opts.force !== true) return null
 
     const seed = buildRecoverySpecSeedForTask(liveTask, queue, now)
     const parentId = liveTask.hierarchy?.parentId ?? liveTask.delivery?.supports?.[0]
@@ -13508,6 +13573,7 @@ export class Orchestrator {
     const transcriptAppended = transcriptResult.appended === true
     let fallbackBriefAuthored = false
     let fallbackQuestionPosted = false
+    let legacyQuestionsCleared = false
 
     if (!task.productBrief) {
       const inferredBrief = inferFallbackBriefFromPlaintext(text, task.title)
@@ -13556,8 +13622,47 @@ export class Orchestrator {
         })
         .filter(Boolean),
     )
+    const existingOwnerInputPrompts = new Set(
+      listOwnerInputRequestsSync(this.opts.config.projectPath)
+        .filter(request =>
+          (request.status === 'waiting_for_owner' || request.status === 'coordinator_review') &&
+          request.source.kind === 'task' &&
+          request.source.taskId === task.id,
+        )
+        .map(request => normalizeFallbackQuestionPrompt(request.prompt)),
+    )
+    const postedOwnerInputPrompts = new Set(existingOwnerInputPrompts)
+    const legacyQuestions = (task.openQuestions ?? [])
+      .filter((question): question is Record<string, unknown> =>
+        Boolean(question) && typeof question === 'object' && !('answeredAt' in question && question.answeredAt),
+      )
+      .map((question) => {
+        const prompt = typeof question.prompt === 'string'
+          ? question.prompt
+          : typeof question.restatement === 'string'
+            ? question.restatement
+            : ''
+        const choices = Array.isArray(question.choices)
+          ? question.choices.filter((choice): choice is string => typeof choice === 'string' && choice.trim().length > 0)
+          : []
+        return {
+          id: typeof question.id === 'string' && question.id.trim() ? question.id : `legacy-${task.id}`,
+          kind: typeof question.kind === 'string' ? question.kind : 'text',
+          prompt: normalizeFallbackQuestionPrompt(prompt),
+          ...(typeof question.subject === 'string' ? { subject: question.subject } : {}),
+          ...(typeof question.description === 'string' ? { description: question.description } : {}),
+          ...(choices.length > 0 ? { choices } : {}),
+          ...(question.selectionMode === 'single' || question.selectionMode === 'multiple'
+            ? { selectionMode: question.selectionMode }
+            : {}),
+        }
+      })
+      .filter(question => question.prompt.trim().length > 0)
     const missingDrafts = drafts.filter(
-      (draft) => !existingQuestionPrompts.has(normalizeFallbackQuestionPrompt(draft.prompt)),
+      (draft) => {
+        const prompt = normalizeFallbackQuestionPrompt(draft.prompt)
+        return !existingQuestionPrompts.has(prompt) && !postedOwnerInputPrompts.has(prompt)
+      },
     )
     if (
       task.status === 'exploring' &&
@@ -13595,13 +13700,18 @@ export class Orchestrator {
             }
       })
       const acceptedQuestions: typeof questionRecords = []
-      for (const question of questionRecords) {
+      const questionsToPost = [
+        ...legacyQuestions,
+        ...questionRecords.filter(question => !postedOwnerInputPrompts.has(normalizeFallbackQuestionPrompt(question.prompt))),
+      ]
+      for (const question of questionsToPost) {
         try {
+          const questionNow = new Date(Date.parse(now) + acceptedQuestions.length).toISOString()
           await createOwnerInputRequest({
             projectRoot: this.opts.config.projectPath,
             projectId: this.opts.config.workspaceId,
             commandId: `orchestrator:fallback-question:${task.id}:${question.id}`,
-            now,
+            now: questionNow,
             actor: 'spec-agent',
             source: { kind: 'task', taskId: task.id, questionId: question.id },
             target: { kind: 'thread' },
@@ -13609,6 +13719,9 @@ export class Orchestrator {
               kind: question.kind,
               prompt: question.prompt,
               ...(question.kind === 'choice' ? { choices: question.choices } : {}),
+              ...(question.kind === 'choice' && question.selectionMode
+                ? { selectionMode: question.selectionMode }
+                : {}),
               ...(question.description ? { description: question.description } : {}),
             },
             objective: {
@@ -13619,6 +13732,7 @@ export class Orchestrator {
             sessionSource: `orchestrator:fallback-question:${task.id}:${question.id}`,
           })
           acceptedQuestions.push(question)
+          postedOwnerInputPrompts.add(normalizeFallbackQuestionPrompt(question.prompt))
         } catch (error) {
           // A narration-like fallback question is disposable agent output. It
           // must not turn a failed spec turn into a coordinator crash.
@@ -13626,17 +13740,18 @@ export class Orchestrator {
         }
       }
       if (acceptedQuestions.length > 0) {
-        task.openQuestions = [
-          ...(task.openQuestions ?? []),
-          ...acceptedQuestions,
-        ]
-        task.updatedAt = now
-        queue.lastUpdated = now
         fallbackQuestionPosted = true
+      }
+      if (legacyQuestions.length > 0) {
+        // OwnerInputRequest plus bounded chat is the sole live question model.
+        // Remove the agent's legacy queue copy after it has been adopted so a
+        // later tick cannot display or answer the same question twice.
+        task.openQuestions = undefined
+        legacyQuestionsCleared = true
       }
     }
 
-    if (fallbackBriefAuthored || fallbackQuestionPosted) {
+    if (fallbackBriefAuthored || fallbackQuestionPosted || legacyQuestionsCleared) {
       await this.writeQueue(queue)
     }
 

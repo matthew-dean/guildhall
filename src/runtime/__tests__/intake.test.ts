@@ -792,6 +792,10 @@ describe('approveSpec', () => {
   it('splits a split-required spec into containing work and child tasks when approved', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
+    parent.spec = parent.spec?.replace(
+      'Nothing to split.',
+      'The proposed UI and API work must be split into linked child tasks before execution.',
+    )
     parent.businessEnvelope = { goalId: 'goal-task-001' }
     parent.sizePlan = {
       taskId: 'task-001',
@@ -1080,6 +1084,10 @@ describe('approveSpec', () => {
   it('splits a split-recommended spec into containing work and child tasks when approved', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
+    parent.spec = parent.spec?.replace(
+      'Nothing to split.',
+      'The implementation and visual-proof work should be split into linked child tasks before execution.',
+    )
     parent.sizePlan = {
       taskId: 'task-001',
       score: 5,
@@ -1446,7 +1454,7 @@ describe('approveSpec', () => {
       'Owner-only setup: None.',
       'Verification environment: Local repo checks and browser proof.',
       'What counts as done: Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu is implemented.',
-      'What must be split or blocked: Nothing to split.',
+      'What must be split or blocked: The remaining replacement wave must be split into concrete child tasks before execution.',
     ].join('\n')
     task.acceptanceCriteria = []
     delete task.sizePlan
@@ -1494,6 +1502,10 @@ describe('approveSpec', () => {
   it('describes split approval in plain language in the transcript', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
+    parent.spec = parent.spec?.replace(
+      'Nothing to split.',
+      'The policy work must be split into linked child tasks before execution.',
+    )
     parent.businessEnvelope = { goalId: 'goal-task-001' }
     parent.sizePlan = {
       taskId: 'task-001',

@@ -2083,6 +2083,14 @@ function commitAuthoritativeMutation(
   return revision
 }
 
+function advancePreservedSummaryRevision(database: DatabaseSync, revision: number): void {
+  // Owner-input rows are an auxiliary current-state projection. They change
+  // what readiness says, but they do not invalidate queue-derived counts or
+  // orientation. Keep the saved summary current while hydration supplies the
+  // owner-input queue from its normalized table.
+  database.prepare("UPDATE project_summary SET revision = ? WHERE id = 1 AND freshness = 'current'").run(revision)
+}
+
 function invalidateDerivedProjection(
   database: DatabaseSync,
   projectRoot: string,
@@ -2587,9 +2595,10 @@ function readQueueDefinitionFromWorkItemDetails(
   // Queue order is semantic: hierarchy.childIds and callers that read the
   // rich queue expect the materialized insertion order, not “most recently
   // edited first”. The compact inventory may sort by freshness separately.
-  const taskRows = database.prepare('SELECT id, updated_at FROM work_items ORDER BY rowid').all() as JsonRecord[]
+  const taskRows = database.prepare('SELECT id, updated_at, summary_json FROM work_items ORDER BY rowid').all() as JsonRecord[]
   const detailRows = database.prepare('SELECT task_id, revision, payload_gzip FROM work_item_detail').all() as JsonRecord[]
   if (detailRows.length !== taskRows.length) return null
+  const summaryByTaskId = new Map(taskRows.map(row => [String(row.id), parseJson<JsonRecord>(row.summary_json, {})]))
   const byId = new Map<string, JsonRecord>()
   for (const row of detailRows) {
     const taskId = stringValue(row.task_id)
@@ -2599,7 +2608,10 @@ function readQueueDefinitionFromWorkItemDetails(
     // revision without a table-wide metadata rewrite.
     const detail = taskId ? parseWorkItemDetail(row.payload_gzip) : null
     if (!taskId || !detail) return null
-    byId.set(taskId, detail)
+    const summary = summaryByTaskId.get(taskId) ?? {}
+    byId.set(taskId, isRecord(summary.currentSummary)
+      ? { ...detail, currentSummary: summary.currentSummary }
+      : detail)
   }
   if (byId.size !== taskRows.length || taskRows.some(row => !byId.has(String(row.id)))) return null
   const releaseIdsByTask = readReleaseMembershipByTask(database)
@@ -2759,7 +2771,7 @@ function workItemSummary(task: JsonRecord): JsonRecord {
  * current answer without reopening the detail payload.
  */
 function currentProofSummary(task: JsonRecord): JsonRecord {
-  return summarizeCurrentProof(task)
+  return summarizeCurrentProof(task) as unknown as JsonRecord
 }
 
 /** Build the compact indexed row for a task without persisting it. */
@@ -3145,13 +3157,24 @@ export function migrateProjectStateDatabaseCompactReadModels(
   withWritableDatabase(projectRoot, database => {
     if (!tableExists(database, 'work_items') || !tableExists(database, 'work_item_detail')) return
     const detailRows = database.prepare('SELECT task_id, payload_gzip FROM work_item_detail ORDER BY rowid').all() as JsonRecord[]
+    const currentEvidence = currentEvidenceForTaskIds(
+      database,
+      detailRows.flatMap(row => {
+        const taskId = stringValue(row.task_id)
+        return taskId ? [taskId] : []
+      }),
+    )
     const update = database.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?')
     let changed = false
     for (const row of detailRows) {
       const taskId = stringValue(row.task_id)
       const detail = parseWorkItemDetail(row.payload_gzip)
       if (!taskId || !detail) continue
-      const nextSummary = workItemSummary(detail)
+      const evidence = currentEvidence.get(taskId)
+      const nextSummary = workItemSummary({
+        ...detail,
+        ...(evidence ? { evidence: currentEvidenceEventsForTask(taskId, evidence) } : {}),
+      })
       const current = database.prepare('SELECT summary_json FROM work_items WHERE id = ?').get(taskId) as JsonRecord | undefined
       if (!current || JSON.stringify(parseJson<JsonRecord>(current.summary_json, {})) === JSON.stringify(nextSummary)) continue
       update.run(json(nextSummary), taskId)
@@ -3398,6 +3421,7 @@ export function readProjectStateDatabaseCurrentProofReadModelStatus(
           return taskId && detail ? [[taskId, detail] as const] : []
         }),
     )
+    const currentEvidence = currentEvidenceForTaskIds(database, [...details.keys()])
     let currentProofTaskCount = 0
     for (const row of rows) {
       const taskId = stringValue(row.id)
@@ -3405,7 +3429,11 @@ export function readProjectStateDatabaseCurrentProofReadModelStatus(
       if (!detail) continue
       const summary = parseJson<JsonRecord>(row.summary_json, {})
       const currentSummary = isRecord(summary.currentSummary) ? summary.currentSummary : null
-      const expectedCurrentSummary = workItemSummary(detail).currentSummary
+      const evidence = taskId ? currentEvidence.get(taskId) : undefined
+      const expectedCurrentSummary = workItemSummary({
+        ...detail,
+        ...(evidence ? { evidence: currentEvidenceEventsForTask(taskId!, evidence) } : {}),
+      }).currentSummary
       const actualProof = currentSummary?.proof
       const expectedProof = isRecord(expectedCurrentSummary) ? expectedCurrentSummary.proof : undefined
       if (JSON.stringify(actualProof) === JSON.stringify(expectedProof)) currentProofTaskCount += 1
@@ -6741,6 +6769,10 @@ export function appendProjectStateDatabaseTaskEvidence(
     commitAuthoritativeMutation(database, {
       updatedAt: durable.recordedAt,
       domains: ['evidence'],
+      // Evidence changes can alter proof blockers and release scope rows.
+      // Mark this as an evidence projection so the projector reopens the
+      // bounded current-evidence rows instead of taking the index-only path.
+      projectionDomains: ['evidence'],
       projectRoot,
     })
   })
@@ -6952,6 +6984,56 @@ function currentEvidenceRecord(input: ProjectStateDatabaseTaskProof): ProjectSta
     recordedAt: input.recordedAt,
     payload: compactCurrentEvidencePayload(input.kind, payload),
   }
+}
+
+function currentEvidenceEventsForTask(
+  taskId: string,
+  current: ProjectStateDatabaseTaskEvidenceCurrent,
+): Array<{ kind: string; payload: JsonRecord }> {
+  return Object.entries(current.byKind).flatMap(([kind, records]) => records.map(record => ({
+    id: `${taskId}-current-${kind}-${record.id}`,
+    taskId,
+    kind,
+    recordedAt: record.recordedAt,
+    payload: record.payload,
+  })))
+}
+
+/**
+ * Keep the indexed task point's bounded proof answer in step with the
+ * evidence transaction. The evidence table remains the source for current
+ * proof details; `summary_json.currentSummary.proof` is only its small,
+ * indexed read model and never contains the evidence history.
+ */
+function refreshIndexedTaskProofSummary(
+  database: DatabaseSync,
+  taskId: string,
+  current: ProjectStateDatabaseTaskEvidenceCurrent,
+): void {
+  const detailRow = database.prepare(`
+    SELECT work_items.summary_json, work_item_detail.payload_gzip
+    FROM work_items
+    LEFT JOIN work_item_detail ON work_item_detail.task_id = work_items.id
+    WHERE work_items.id = ?
+  `).get(taskId) as JsonRecord | undefined
+  const detail = parseWorkItemDetail(detailRow?.payload_gzip)
+  if (!detail) return
+  const proof = summarizeCurrentProof({
+    ...detail,
+    evidence: currentEvidenceEventsForTask(taskId, current),
+  })
+  const summary = parseJson<JsonRecord>(detailRow?.summary_json, {})
+  const currentSummary = isRecord(summary.currentSummary) ? summary.currentSummary : {}
+  database.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?').run(
+    json({
+      ...summary,
+      currentSummary: {
+        ...currentSummary,
+        proof,
+      },
+    }),
+    taskId,
+  )
 }
 
 function compactCurrentEvidencePayload(kind: string, payload: JsonRecord): JsonRecord {
@@ -7235,6 +7317,7 @@ function upsertCurrentTaskEvidence(
         .slice(0, currentEvidenceKindLimit(input.kind)),
     },
   })
+  refreshIndexedTaskProofSummary(database, input.taskId, next)
   database.prepare(`
     INSERT INTO task_evidence_current (task_id, updated_at, payload_json)
     VALUES (?, ?, ?)
@@ -7303,8 +7386,10 @@ export function upsertProjectStateDatabaseOwnerInput(
       updatedAt: input.updatedAt,
       domains: ['owner-input'],
       projectRoot,
+      summaryFreshness: 'preserve',
     })
     markProjectionCurrent(database, 'owner-input', revision, input.updatedAt)
+    advancePreservedSummaryRevision(database, revision)
     stripStoredOwnerInputSummary(database)
   })
 }
@@ -7368,8 +7453,10 @@ export function replaceProjectStateDatabaseOwnerInputs(
       updatedAt,
       domains: ['owner-input'],
       projectRoot,
+      summaryFreshness: 'preserve',
     })
     markProjectionCurrent(database, 'owner-input', revision, updatedAt)
+    advancePreservedSummaryRevision(database, revision)
     stripStoredOwnerInputSummary(database)
   })
 }

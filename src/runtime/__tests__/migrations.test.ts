@@ -14,7 +14,7 @@ import {
   writeProjectMigrationLedger,
 } from '../migrations.js'
 import { createOwnerInputRequest } from '../owner-input-store.js'
-import { readProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState } from '../project-summary-projection.js'
+import { PROJECT_SUMMARY_PROJECTION_VERSION, readProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState } from '../project-summary-projection.js'
 import { projectTaskStateExistsSync, readProjectTaskQueueSync, writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
 import { appendTaskEvidence, compressedTaskEvidencePath, readTaskEvidence, readTaskRuntimeStore, runtimeStatePath, taskEvidencePath, upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
 import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from '../delivery-read-projection.js'
@@ -990,6 +990,42 @@ describe('applyProjectMigrations', () => {
     expect(readProjectStateDatabaseMetadata(projectRoot)?.projectStateAuthority).toBe('legacy')
   })
 
+  it('does not let legacy overlay migrations erase promoted SQLite workspace state', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-19T09:30:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        tasks: [{ id: 'task-promoted-overlay', title: 'Promoted overlay task', status: 'in_progress' }],
+      },
+      summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    await upsertTaskWorkspaceState(projectRoot, 'task-promoted-overlay', {
+      worktreePath: path.join(projectRoot, 'worktree'),
+      branchName: 'guildhall/task-promoted-overlay',
+      updatedAt: now,
+    })
+
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.12.14/task-current-overlay'],
+    })).applied).toEqual([])
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.12.15/task-current-overlay-reconcile'],
+    })).applied).toEqual([])
+    expect(readProjectStateDatabaseTaskOverlay(projectRoot, 'task-promoted-overlay')).toMatchObject({
+      workspace: {
+        payload: {
+          worktreePath: path.join(projectRoot, 'worktree'),
+          branchName: 'guildhall/task-promoted-overlay',
+        },
+      },
+    })
+  })
+
   it('backfills the canonical action model from indexed state after compatibility and aggregate files are gone', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     await fs.mkdir(path.dirname(tasksPath), { recursive: true })
@@ -1028,7 +1064,7 @@ describe('applyProjectMigrations', () => {
     expect(result.failed).toEqual([])
     expect(result.applied.map(item => item.id)).toEqual(['0.12.24/project-summary-action-model'])
       expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
-        version: 13,
+        version: PROJECT_SUMMARY_PROJECTION_VERSION,
         freshness: 'current',
       actionModel: { runControl: expect.any(Object) },
     })

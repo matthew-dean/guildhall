@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { projectStateDatabasePath } from '@guildhall/sessions'
 import { readAttentionRecords } from '../attention.js'
 import {
+  attentionItemsForReleaseTruth,
+  attentionProjectionNeedsReleaseReconciliation,
   materializeAttentionProjection,
   previewAttentionProjection,
   readSavedAttentionSurface,
@@ -41,6 +43,56 @@ afterEach(() => {
 })
 
 describe('attention projection', () => {
+  it('removes stale current-scope prompts after the saved release is complete', () => {
+    const closedRelease = {
+      state: 'ready' as const,
+      counts: { unfinished: 0, blocked: 0, ownerBlocked: 0, proofBlocked: 0 },
+    }
+    const items: InboxItem[] = [
+      item('Shape the first spec'),
+      {
+        kind: 'proof_reconciliation',
+        severity: 'medium',
+        taskId: 'task-done',
+        title: 'Review stale proof records',
+        detail: 'An older projection still says proof is missing.',
+        actionHref: '/task/task-done?tab=spec',
+        count: 1,
+        signals: ['task:task-done'],
+        dismissEndpoint: '/api/project/attention/dismiss?id=proof-reconciliation%3Adone-with-unmet-proof',
+      },
+      {
+        kind: 'required_migration',
+        severity: 'high',
+        migrationId: 'migration-1',
+        title: 'Required migration',
+        detail: 'A machine migration still needs to run.',
+        actionHref: '/migrations',
+        blocking: true,
+        dismissible: false,
+        source: { system: 'migrations', id: 'migration-1' },
+      },
+    ]
+
+    expect(attentionItemsForReleaseTruth(items, closedRelease)).toEqual([
+      expect.objectContaining({ kind: 'required_migration' }),
+    ])
+  })
+
+  it('detects stale open records without reading task detail', async () => {
+    const root = projectRoot()
+    await materializeAttentionProjection(input(root, [item('Shape the first spec')]))
+
+    expect(attentionProjectionNeedsReleaseReconciliation(root, {
+      state: 'ready',
+      counts: { unfinished: 0, blocked: 0, ownerBlocked: 0, proofBlocked: 0 },
+    })).toBe(true)
+    expect(attentionProjectionNeedsReleaseReconciliation(root, {
+      state: 'active',
+      counts: { unfinished: 1, blocked: 0, ownerBlocked: 0, proofBlocked: 0 },
+    })).toBe(false)
+  })
+
   it('refreshes idempotently when the computed Inbox items are unchanged', async () => {
     const root = projectRoot()
 
@@ -141,5 +193,35 @@ describe('attention projection', () => {
     expect(surface.items).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'attention-resolved' }),
     ]))
+  })
+
+  it('keeps stale attention in history while removing it from current Needs you', () => {
+    const surface = readSavedAttentionSurfaceFromBoundary({
+      initializationNeeded: false,
+      records: [{
+        payload: {
+          id: 'stale-setup',
+          status: 'open',
+          kind: 'setup_pending',
+          severity: 'medium',
+          stepId: 'firstTask',
+          title: 'Shape the first spec',
+          detail: 'This belonged to the earlier project setup flow.',
+          actionHref: '/thread',
+        },
+      }],
+      watermarkSourceRevision: 9,
+      projectRevision: 9,
+      releaseTruth: {
+        state: 'ready',
+        counts: { unfinished: 0, blocked: 0, ownerBlocked: 0, proofBlocked: 0 },
+      },
+    })
+
+    expect(surface.items).toEqual([])
+    expect(surface.blockers).toEqual({ bootstrap: false, workspaceImport: false })
+    expect(surface.history).toEqual([
+      expect.objectContaining({ id: 'stale-setup', status: 'open' }),
+    ])
   })
 })

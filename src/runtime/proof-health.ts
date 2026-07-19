@@ -488,11 +488,12 @@ function expectedEvidenceSemanticallySatisfied(expected: string, evidenceText: s
 }
 
 function passedGateResultsForTask(task: unknown): Array<Record<string, unknown>> {
-  const gateResults = evidencePayloads(task, 'gate_result') ?? (
-    Array.isArray((task as { gateResults?: unknown } | null)?.gateResults)
+  const fromEvidence = evidencePayloads(task, 'gate_result')
+  const gateResults = fromEvidence && fromEvidence.length > 0
+    ? fromEvidence
+    : Array.isArray((task as { gateResults?: unknown } | null)?.gateResults)
       ? (task as { gateResults: unknown[] }).gateResults
       : []
-  )
   return gateResults.filter((gate): gate is Record<string, unknown> =>
     Boolean(
       gate &&
@@ -679,7 +680,11 @@ function proofPathIsScriptRunnable(proofPath: unknown): boolean {
 /** Keep script-only completion proof in the shared proof authority. */
 export function taskHasScriptProofPath(task: unknown): boolean {
   const record = recordValue(task)
-  if (!record || !Array.isArray(record.proofPaths)) return false
+  if (!record) return false
+  const currentSummary = recordValue(record.currentSummary)
+  const currentProof = recordValue(currentSummary?.proof)
+  if (currentProof?.hasExecutablePath === true) return true
+  if (!Array.isArray(record.proofPaths)) return false
   if (record.proofPaths.some(proofPathIsScriptRunnable)) return true
   if (!taskHasNonReviewCommandBackedProof(task)) return false
   if (!taskDoneButProofMissing(task)) {
@@ -697,6 +702,13 @@ export function taskHasScriptProofPath(task: unknown): boolean {
       /\b(?:pnpm|npm|node|script|command|cli|command-line|no-ui|no ui|headless)\b/i.test(item),
     )
   })
+}
+
+/** A review contract is enough to reopen executable work without re-intaking its scope. */
+export function taskHasReviewProofPath(task: unknown): boolean {
+  const record = recordValue(task)
+  if (!record || !Array.isArray(record.proofPaths)) return false
+  return record.proofPaths.some(path => recordValue(path)?.kind === 'review')
 }
 
 function requiresCommandBackedProofText(value: string): boolean {
@@ -732,6 +744,25 @@ function expectedEvidenceStringsSatisfied(expectedEvidence: unknown[], task: unk
 
 function requiresProviderProofText(value: string): boolean {
   return /\b(?:DeepInfra|OpenAI-compatible|provider|telemetry|latency|cost|refusal|repetition)\b/i.test(value)
+}
+
+function expectedEvidenceRequiresNonReviewVerification(expectedEvidence: unknown[]): boolean {
+  return expectedEvidence.some(item => {
+    const record = recordValue(item)
+    const text = typeof item === 'string'
+      ? item
+      : typeof record?.description === 'string'
+        ? record.description
+        : typeof record?.summary === 'string'
+          ? record.summary
+          : typeof record?.title === 'string'
+            ? record.title
+            : ''
+    const kind = normalizedText(record?.kind).toLowerCase()
+    return requiresProviderProofText(text) ||
+      requiresCommandBackedProofText(text) ||
+      ['automated', 'command', 'provider', 'script'].includes(kind)
+  })
 }
 
 function reviewProofCanSettleStringEvidenceHint(proofPath: Record<string, unknown>, task: unknown): boolean {
@@ -786,6 +817,31 @@ function proofPathMissingEvidence(proofPath: unknown, task: unknown): boolean {
     .map(item => (item as { id?: unknown }).id)
     .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
   if (requiredEvidenceIds.length > 0) {
+    // Imported review paths often carry generated evidence ids without
+    // inline verification records. A recorded command gate, completion
+    // summary, or approved review is the durable evidence for that path; the
+    // absence of the importer's inline bookkeeping must not erase it.
+    if (
+      record.kind === 'review' &&
+      (
+        expectedEvidenceStringsSatisfied(expectedEvidence, task) ||
+        reviewProofCanSettleStringEvidenceHint(record, task)
+      )
+    ) return false
+    const requiresNonReviewVerification = expectedEvidenceRequiresNonReviewVerification(expectedEvidence)
+    if (requiresNonReviewVerification) {
+      const nonReviewPassed = new Set(
+        verificationRecords
+          .filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
+          .filter(item => {
+            const kind = normalizedText((item as { kind?: unknown }).kind).toLowerCase()
+            return kind !== 'manual' && kind !== 'review'
+          })
+          .map(item => (item as { evidenceId?: unknown }).evidenceId)
+          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+      )
+      return requiredEvidenceIds.some(id => !nonReviewPassed.has(id))
+    }
     if (reviewProofCanSettleStringEvidenceHint(record, task)) return false
     return requiredEvidenceIds.some(id => !passedEvidence.has(id))
   }

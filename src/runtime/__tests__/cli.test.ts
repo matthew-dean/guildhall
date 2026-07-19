@@ -19,6 +19,8 @@ import {
   probeLiveService,
   readServiceRuntimeState,
   renderHelpText,
+  buildCliProjectStatus,
+  renderProjectStatus,
   buildWorkspaceImportDraftReport,
   runAgentMemoryBridgeCommand,
   resolveServiceLifecycleIntent,
@@ -296,6 +298,7 @@ describe('Guildhall CLI surface', () => {
       'register',
       'unregister',
       'list',
+      'status',
       'run',
       'task',
       'serve',
@@ -315,6 +318,56 @@ describe('Guildhall CLI surface', () => {
       'mcp',
       'bridge',
     ])
+  })
+
+  it('formats project status from the saved release boundary without reopening task detail', () => {
+    const state = {
+      authority: 'database' as const,
+      queueRevision: 12,
+      projectRevision: 14,
+      rawQueue: { releases: [], selectedReleaseId: 'release-1' },
+      scopeRows: [],
+      scope: {
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['task-1'],
+        deferredNodeIds: ['task-2'],
+      },
+      repositories: [],
+      diagnostics: null,
+      summary: {
+        version: 17,
+        projectId: 'demo',
+        generatedAt: '2026-07-19T00:00:00.000Z',
+        freshness: 'current' as const,
+        source: { taskQueueLastUpdated: null, taskQueueMtimeMs: null, workspaceGoalsMtimeMs: null },
+        counts: { total: 2, active: 0, draftReview: 0, blocked: 0, done: 1, shelved: 0, included: 1, deferred: 1, ready: 0, paused: 0, ownerBlocked: 0, proofBlocked: 0, byStatus: { done: 1 } },
+        scope: { id: 'release-1', label: 'Release 1', kind: 'release', source: 'release_plan', included: 1, deferred: 1 },
+        orientation: null,
+        orientationSpine: null,
+        approvedPlan: null,
+        releaseSummary: {
+          scopeMode: 'named_release' as const,
+          release: { id: 'release-1', label: 'Release 1', kind: 'release', state: 'shipped', source: 'release_plan' },
+          state: 'ready' as const,
+          counts: { total: 1, done: 1, unfinished: 0, ready: 0, active: 0, blocked: 0, deferred: 1, ownerBlocked: 0, proofBlocked: 0 },
+          taskStatusCounts: { done: 1 },
+          blockers: [],
+          updatedAt: '2026-07-19T00:00:00.000Z',
+        },
+        nextAction: { label: 'Review completed scope', message: 'Review completed scope.' },
+        blockers: [],
+        recentWork: [],
+        inFlight: [],
+      },
+    }
+    const status = buildCliProjectStatus({ id: 'demo', name: 'Demo', path: '/tmp/demo', state })
+
+    expect(status.release?.release?.state).toBe('shipped')
+    expect(status.scope).toMatchObject({ included: 1, deferred: 1 })
+    expect(renderProjectStatus(status)).toContain('1/1 done / 1 deferred / 0 blocked')
   })
 
   it('does not expose task mutation commands in help', () => {

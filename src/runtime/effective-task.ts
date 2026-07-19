@@ -72,6 +72,18 @@ export function effectiveTaskStatus(task: unknown): string | undefined {
   // Reopening a falsely completed task must not be immediately re-promoted by
   // older completion proof while the substantive review finding is unresolved.
   if (latestFallbackApprovalHasUnresolvedSubstantiveRevision(record)) return status
+  // Promoted projects keep the current proof answer on the compact task point
+  // because the rich completion bundle is intentionally outside the ordinary
+  // read model. A ready task with a completed timestamp and a proven indexed
+  // contract is stale status, not new work.
+  const currentSummary = record.currentSummary
+  const currentProof = currentSummary && typeof currentSummary === 'object' && !Array.isArray(currentSummary)
+    ? (currentSummary as Record<string, unknown>).proof
+    : null
+  if (status === 'ready' && record.completedAt && currentProof && typeof currentProof === 'object' && !Array.isArray(currentProof) &&
+      (currentProof as Record<string, unknown>).state === 'proven') {
+    return 'done'
+  }
   if (!recordedCompletionProofCanSettleTaskStatus(record) || taskDoneButProofMissing(record)) return status
   if (status === 'blocked') {
     const proofAt = latestRecordedCompletionProofAt(record)

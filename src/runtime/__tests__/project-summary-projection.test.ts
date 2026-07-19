@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TaskQueue } from '@guildhall/core'
-import { getProjectSystemStatePath, markProjectSummaryStale, promoteProjectStateDatabaseAuthority, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabasePath, readProjectStateDatabaseQueue, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseInventory, readProjectStateDatabaseSummary, writeProjectStateDatabaseSummarySnapshot } from '@guildhall/sessions'
+import { appendTaskEvidence, getProjectSystemStatePath, markProjectSummaryStale, promoteProjectStateDatabaseAuthority, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabasePath, readProjectStateDatabaseQueue, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseInventory, readProjectStateDatabaseSummary, writeProjectStateDatabaseSummarySnapshot } from '@guildhall/sessions'
 
 import {
   buildProjectSummaryProjection,
@@ -223,15 +223,15 @@ describe('project-summary-projection', () => {
 
     expect(indexed?.nextAction).toMatchObject({
       code: 'all_terminal',
-      message: 'Current release is complete. 1 ready task remains outside this release.',
+      message: 'Current release has no runnable work remaining.',
     })
     expect(indexed?.orientationSpine?.summary).toMatchObject({
-      topBlocker: 'Current release is complete. 1 ready task remains outside this release.',
-      nextAction: 'Current release is complete. 1 ready task remains outside this release.',
+      topBlocker: 'Current release has no runnable work remaining.',
+      nextAction: 'Current release has no runnable work remaining.',
     })
   })
 
-  it('does not publish an indexed summary when the orientation store is missing', async () => {
+  it('keeps a compact indexed summary when the optional orientation store is missing', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-missing-orientation-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
     const taskQueue = queue([task('task-ready', 'ready')])
@@ -246,11 +246,19 @@ describe('project-summary-projection', () => {
       projectId: 'missing-orientation',
       generatedAt: now,
       sourceQueueLastUpdated: now,
-    })).toBeNull()
+    })).toMatchObject({
+      version: PROJECT_SUMMARY_PROJECTION_VERSION,
+      freshness: 'current',
+      projectId: 'missing-orientation',
+    })
     expect(writeProjectSummaryProjectionFromIndexedState(tasksPath, {
       projectId: 'missing-orientation',
       sourceQueueLastUpdated: now,
-    })).toBeNull()
+    })).toMatchObject({
+      version: PROJECT_SUMMARY_PROJECTION_VERSION,
+      freshness: 'current',
+      projectId: 'missing-orientation',
+    })
   })
 
   it('refreshes a reopened task proof contract from the bounded indexed summary', async () => {
@@ -331,6 +339,143 @@ describe('project-summary-projection', () => {
       state: 'needed',
       missing: ['Current proof contract has not been attached yet.'],
     })
+  })
+
+  it('recomputes release proof state when evidence arrives after the saved scope rows', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-proof-refresh-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('task-proof', 'done', {
+        releaseIds: ['release-current'],
+        completedAt: now,
+        acceptanceCriteria: [{
+          id: 'ac-proof',
+          description: 'The completion proof exists.',
+          verifiedBy: 'automated',
+          met: false,
+        }],
+      }),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        proofStyle: 'script_only',
+        nodeIds: ['work:task-proof'],
+        deferredNodeIds: [],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'indexed-proof-refresh', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    expect(readProjectStateDatabaseSummary(tasksPath)?.payload.releaseSummary.counts.proofBlocked).toBe(1)
+
+    await appendTaskEvidence(temp, 'task-proof', {
+      id: 'gate-proof',
+      taskId: 'task-proof',
+      kind: 'gate_result',
+      recordedAt: '2026-07-14T12:01:00.000Z',
+      payload: {
+        gateId: 'ac-proof',
+        passed: true,
+        checkedAt: '2026-07-14T12:01:00.000Z',
+        output: 'The completion proof exists.',
+      },
+    })
+
+    const refreshed = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'indexed-proof-refresh',
+      generatedAt: '2026-07-14T12:01:00.000Z',
+      sourceQueueLastUpdated: now,
+    })
+
+    expect(refreshed?.releaseSummary.counts.proofBlocked).toBe(0)
+    expect(refreshed?.releaseSummary.state).toBe('ready')
+    expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks
+      .find(indexed => indexed.id === 'task-proof')?.scopeRow?.proofBlocked).toBe(false)
+  })
+
+  it('uses proven decomposition children to satisfy a stale indexed parent proof', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-parent-proof-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('feature-parent', 'done', {
+        releaseIds: ['release-current'],
+        completedAt: now,
+        acceptanceCriteria: [{
+          id: 'ac-parent',
+          description: 'The feature boundary is complete.',
+          verifiedBy: 'automated',
+          met: false,
+        }],
+        hierarchy: {
+          childIds: ['feature-parent-split-proof'],
+          relation: 'contains',
+        },
+      }),
+      task('feature-parent-split-proof', 'done', {
+        releaseIds: ['release-current'],
+        completedAt: now,
+        parentId: 'feature-parent',
+        proofPaths: [{ kind: 'command', command: 'pnpm prove:feature-parent-split-proof' }],
+        acceptanceCriteria: [{
+          id: 'ac-child',
+          description: 'The proof child passes.',
+          verifiedBy: 'automated',
+          met: false,
+        }],
+        hierarchy: {
+          parentId: 'feature-parent',
+          relation: 'decomposes',
+        },
+      }),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        proofStyle: 'script_only',
+        nodeIds: ['work:feature-parent'],
+        deferredNodeIds: [],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'indexed-parent-proof', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    const initial = readProjectStateDatabaseSummary(tasksPath)?.payload
+    expect(initial?.releaseSummary.counts.proofBlocked).toBe(1)
+    expect(initial?.releaseSummary.state).toBe('blocked')
+
+    await appendTaskEvidence(temp, 'feature-parent-split-proof', {
+      id: 'gate-child',
+      taskId: 'feature-parent-split-proof',
+      kind: 'gate_result',
+      recordedAt: '2026-07-14T12:00:30.000Z',
+      payload: {
+        gateId: 'ac-child',
+        command: 'pnpm prove:feature-parent-split-proof',
+        passed: true,
+        checkedAt: '2026-07-14T12:00:30.000Z',
+        output: 'The proof child passes.',
+      },
+    })
+
+    const refreshed = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'indexed-parent-proof',
+      generatedAt: '2026-07-14T12:01:00.000Z',
+      sourceQueueLastUpdated: now,
+    })
+
+    expect(refreshed?.releaseSummary.counts.proofBlocked).toBe(0)
+    expect(refreshed?.releaseSummary.state).toBe('ready')
+    expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks
+      .find(indexed => indexed.id === 'feature-parent')?.scopeRow?.proofBlocked).toBe(false)
   })
 
   it('does not let an imported plan reshape current scope after promotion', async () => {

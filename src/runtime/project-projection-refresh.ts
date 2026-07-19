@@ -28,8 +28,11 @@ export interface ProjectProjectionRefreshSchedulerOptions {
 export function shouldRefreshProjectAtStartup(input: {
   authority: 'database' | 'legacy'
   summaryFreshness: 'current' | 'stale' | 'missing' | 'error' | undefined
+  attentionNeedsRefresh?: boolean
 }): boolean {
-  return input.authority !== 'database' || input.summaryFreshness !== 'current'
+  return input.authority !== 'database' ||
+    input.summaryFreshness !== 'current' ||
+    input.attentionNeedsRefresh === true
 }
 
 export interface ProjectProjectionRefreshScheduler {

@@ -96,6 +96,46 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.start).toMatchObject({ code: 'proof_evidence_missing', focusTaskId: 'task-complete' })
   })
 
+  it('focuses blocked work before completed items with missing proof', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-proof', 'work:task-blocked'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        task({
+          id: 'task-proof',
+          title: 'Completed without proof',
+          status: 'done',
+          releaseIds: ['stage-1'],
+        }),
+        task({
+          id: 'task-blocked',
+          title: 'Blocked work',
+          status: 'blocked',
+          releaseIds: ['stage-1'],
+          blockReason: 'Needs recovery.',
+        }),
+      ],
+    })
+
+    expect(projection.start).toMatchObject({
+      canStart: false,
+      code: 'no_unattended_progress',
+      focusTaskId: 'task-blocked',
+      focusKind: 'blocked_work',
+    })
+  })
+
   it('lets project Start advance an exploring source-backed shaping task', () => {
     const projection = buildProjectScopeProjection({
       version: 1,
@@ -179,7 +219,7 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.start).toMatchObject({
       canStart: false,
       code: 'all_terminal',
-      message: 'Stage 1 is complete. 1 ready task remains outside this release.',
+      message: 'Stage 1 has no runnable work remaining.',
     })
   })
 
@@ -562,6 +602,54 @@ describe('buildProjectScopeProjection', () => {
       label: 'Resume',
       focusTaskId: 'task-model',
       focusKind: 'paused_work',
+    })
+  })
+
+  it('uses a completed linked proof child to satisfy a containing parent without a second proof obligation', () => {
+    const proofCommand = 'pnpm exec node scripts/proof-broad-genre-drafting.mjs'
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-contracts',
+        title: 'Build drafting model proof',
+        status: 'done',
+        hierarchy: { childIds: ['task-proof-step'], relation: 'contains' },
+        spec: 'The containing proof boundary.',
+        acceptanceCriteria: [{ id: 'AC-parent', description: 'The proof is complete.', met: false }],
+      }),
+      task({
+        id: 'task-proof-step',
+        title: 'Run the bounded proof',
+        status: 'done',
+        workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+        hierarchy: { parentId: 'task-contracts', childIds: [], order: 0, relation: 'decomposes' },
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The bounded proof passes.',
+          command: proofCommand,
+          expectedExit: 'zero',
+          verifiedBy: 'automated',
+          met: true,
+        }],
+        proofPaths: [{
+          id: 'proof-step-command',
+          kind: 'command',
+          command: proofCommand,
+          status: 'verified',
+          verificationRecords: [{
+            evidenceId: 'AC-1',
+            status: 'passed',
+            command: proofCommand,
+            recordedAt: now,
+          }],
+        }],
+      }),
+    ]))
+
+    expect(projection.release).toMatchObject({ state: 'ready', blockers: [] })
+    expect(projection.counts).toMatchObject({ included: 1, done: 1, proofBlocked: 0 })
+    expect(projection.rows.find(row => row.taskId === 'task-contracts')).toMatchObject({
+      proofBlocked: false,
+      blocksRelease: false,
     })
   })
 

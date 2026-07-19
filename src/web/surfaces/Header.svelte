@@ -77,7 +77,15 @@
   })
 
   $effect(() => {
+    if (typeof window.matchMedia !== 'function') {
+      compactProjectNav = false
+      return
+    }
     const media = window.matchMedia('(max-width: 920px)')
+    if (!media || typeof media.matches !== 'boolean') {
+      compactProjectNav = false
+      return
+    }
     const sync = () => {
       compactProjectNav = media.matches
     }

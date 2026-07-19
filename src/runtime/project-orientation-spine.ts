@@ -205,6 +205,8 @@ export interface OrientationPin {
 
 export interface OrientationReleaseSummary {
   state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
+  /** Durable lifecycle state; state above is computed readiness. */
+  lifecycleState?: OrientationReleaseState
   blockers: OrientationBlocker[]
 }
 
@@ -262,6 +264,185 @@ export interface ProjectOrientationSpine {
   release: OrientationReleaseSummary
   sourceHealth: OrientationSourceHealth
   sourceTrail: OrientationSourceTrailRow[]
+}
+
+export interface OrientationReleaseTruth {
+  state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
+  /** Durable lifecycle is separate from computed readiness. */
+  lifecycleState?: OrientationReleaseState
+  counts: {
+    total: number
+    done: number
+    unfinished: number
+    deferred: number
+    proofBlocked: number
+  }
+  blockers?: Array<{ id?: string; label?: string; title?: string }>
+}
+
+/**
+ * Apply the compact release authority to the descriptive spine. The spine can
+ * retain source structure and historical detail, but it cannot keep claiming
+ * that a closed release is waiting on an older task-level proof contract.
+ */
+export function reconcileOrientationSpineWithReleaseTruth(
+  spine: ProjectOrientationSpine,
+  truth: OrientationReleaseTruth,
+): ProjectOrientationSpine {
+  const releaseIsProven = truth.state === 'ready' && truth.counts.proofBlocked === 0
+  const terminalIncludedTaskIds = new Set(
+    spine.scopeRows
+      .filter(row => row.scope === 'included' && (
+        ['done', 'pending_pr'].includes(row.status)
+        || (releaseIsProven && row.status === 'ready')
+      ))
+      .map(row => row.taskId),
+  )
+  // Release membership identifies what belongs to the scope; it does not
+  // prove that every member is still terminal. A point mutation may reopen a
+  // task before the aggregate release snapshot is refreshed, so only rows
+  // whose current bounded status is terminal may be repaired here. A selected
+  // node with no current row is the one exception: it has no newer bounded
+  // status to contradict the ready aggregate, and must not retain a stale
+  // proof pin just because its execution child owns the row.
+  if (releaseIsProven && truth.counts.total > 0 && truth.counts.done >= truth.counts.total) {
+    const rowTaskIds = new Set(spine.scopeRows.map(row => row.taskId))
+    for (const nodeId of spine.selectedTaskScope?.nodeIds ?? spine.selectedRelease?.nodeIds ?? []) {
+      const taskId = nodeId.startsWith('work:') ? nodeId.slice('work:'.length) : null
+      if (taskId && !rowTaskIds.has(taskId)) terminalIncludedTaskIds.add(taskId)
+    }
+  }
+  const proofGapBelongsToClosedTask = (gap: OrientationGap): boolean => gap.kind === 'proof_needed' && gap.refs.some(ref => {
+    const taskId = ref.replace(/^task:/, '').replace(/^work:/, '')
+    return terminalIncludedTaskIds.has(taskId)
+  })
+  const patchNode = (node: OrientationNode): OrientationNode => {
+    const taskId = node.id.startsWith('work:') ? node.id.slice('work:'.length) : null
+    const terminal = releaseIsProven && terminalIncludedTaskIds.has(taskId ?? '')
+    const children = node.children.map(patchNode)
+    return {
+      ...node,
+      ...(terminal ? {
+        maturity: 'done' as const,
+        proof: {
+          ...node.proof,
+          state: 'proven' as const,
+          missing: [],
+        },
+      } : {}),
+      children,
+    }
+  }
+  const blockers = (truth.blockers ?? []).map(blocker => ({
+    id: blocker.id ?? blocker.title ?? blocker.label ?? 'release-blocker',
+    label: blocker.label ?? blocker.title ?? blocker.id ?? 'Current release needs attention.',
+  }))
+  const label = truth.state === 'ready'
+    ? spine.selectedRelease?.label ?? spine.summary.selectedScopeLabel ?? 'Current scope'
+    : spine.summary.selectedScopeLabel ?? spine.selectedRelease?.label ?? 'Current scope'
+  const selectedReleaseLifecycleState = truth.lifecycleState
+    ?? (spine.selectedRelease?.state === 'shipped' ? 'shipped' as const : undefined)
+  const selectedReleaseIsShipped = selectedReleaseLifecycleState === 'shipped'
+  const selectedReleaseState = selectedReleaseIsShipped
+    ? 'shipped' as const
+    : truth.state === 'ready'
+      ? 'ready' as const
+      : truth.state === 'blocked'
+        ? 'blocked' as const
+        : spine.selectedRelease?.state
+  const existingTopBlocker = typeof spine.summary.topBlocker === 'string' ? spine.summary.topBlocker : null
+  const existingTopBlockerIsProof = /proof/i.test(existingTopBlocker ?? '')
+  const retainedCompletionNote = releaseIsProven && !existingTopBlockerIsProof ? existingTopBlocker : null
+  const progress = {
+    ...spine.summary.progress,
+    total: truth.counts.total + truth.counts.deferred,
+    done: truth.counts.done,
+    deferred: truth.counts.deferred,
+    blocked: truth.state === 'blocked' ? truth.counts.unfinished : 0,
+    proven: Math.max(0, truth.counts.done - truth.counts.proofBlocked),
+  }
+  const patchedRoots = spine.roots.map(patchNode)
+  const patchedScopeRows = spine.scopeRows.map(row => terminalIncludedTaskIds.has(row.taskId)
+    ? {
+        ...row,
+        status: 'done',
+        handoffState: 'done',
+        blocksStart: false,
+        blocksRelease: false,
+        humanBlocking: false,
+      }
+    : row)
+  const proofContracts = spine.proofContracts.map(contract => {
+    const taskId = contract.nodeId.startsWith('work:') ? contract.nodeId.slice('work:'.length) : null
+    if (!releaseIsProven || !taskId || !terminalIncludedTaskIds.has(taskId)) return contract
+    return {
+      ...contract,
+      state: 'proven' as const,
+      missing: [],
+    }
+  })
+  const patchedGaps = releaseIsProven
+    ? spine.gaps.filter(gap => !proofGapBelongsToClosedTask(gap))
+    : spine.gaps
+  const activePins = spine.activePins.filter(pin => {
+    const taskId = pin.nodeId.startsWith('work:') ? pin.nodeId.slice('work:'.length) : null
+    return !taskId || !terminalIncludedTaskIds.has(taskId)
+  })
+  const nodes = Object.keys(spine.nodes).length > 0
+    ? Object.fromEntries((() => {
+        const output: Array<[string, OrientationNode]> = []
+        const visit = (node: OrientationNode) => {
+          output.push([node.id, node])
+          node.children.forEach(visit)
+        }
+        patchedRoots.forEach(visit)
+        return output
+      })())
+    : spine.nodes
+  return {
+    ...spine,
+    selectedRelease: spine.selectedRelease
+      ? { ...spine.selectedRelease, ...(selectedReleaseState ? { state: selectedReleaseState } : {}) }
+      : null,
+    releases: spine.releases.map(release => release.id === spine.selectedRelease?.id
+      ? { ...release, ...(selectedReleaseState ? { state: selectedReleaseState } : {}) }
+      : release),
+    summary: {
+      ...spine.summary,
+      headline: truth.state === 'ready'
+        ? `${label} is complete.`
+        : truth.state === 'blocked'
+          ? `${label} needs attention.`
+          : `${label} is in progress.`,
+      selectedReleaseLabel: spine.selectedRelease?.label ?? spine.summary.selectedReleaseLabel,
+      selectedScopeLabel: label,
+      includedCount: truth.counts.total,
+      includedWorkCount: truth.counts.total,
+      deferredCount: truth.counts.deferred,
+      deferredWorkCount: truth.counts.deferred,
+      topBlocker: blockers[0]?.label ?? retainedCompletionNote,
+      nextAction: truth.state === 'ready'
+        ? retainedCompletionNote ? spine.summary.nextAction : 'Review completed scope.'
+        : blockers[0]?.label ?? spine.summary.nextAction,
+      pinnedNow: activePins.map(pin => pin.label),
+      progress,
+    },
+    roots: patchedRoots,
+    nodes,
+    activePins,
+    scopeRows: patchedScopeRows,
+    proofContracts,
+    gaps: patchedGaps,
+    sourceHealth: {
+      ...spine.sourceHealth,
+      gaps: patchedGaps.length,
+    },
+    release: {
+      state: truth.state,
+      ...(selectedReleaseLifecycleState ? { lifecycleState: selectedReleaseLifecycleState } : {}),
+      blockers,
+    },
+  }
 }
 
 /** The durable Map read model omits the duplicate node lookup table. */
@@ -2169,6 +2350,7 @@ function sourceHealth(nodes: OrientationNode[], gaps: OrientationGap[]): Orienta
 
 function summarizeStartReadiness(input: {
   workLabel: string | null
+  explicitRelease: boolean
   progress: OrientationProgress
   outsideWork: { count: number } | null
   startReadiness: NonNullable<BuildProjectOrientationSpineInput['startReadiness']>
@@ -2188,6 +2370,13 @@ function summarizeStartReadiness(input: {
     : 'Project start is blocked until the current issue is resolved.'
   switch (startReadiness.code) {
     case 'all_terminal':
+      if (!input.explicitRelease) {
+        return {
+          headline: `${genericWorkLabel} is in progress.`,
+          topBlocker: null,
+          nextAction: 'Current work has no runnable work remaining.',
+        }
+      }
       if (input.outsideWork?.count) {
         return {
           headline: `${genericWorkLabel} is complete.`,
@@ -2277,6 +2466,7 @@ function buildSummary(input: {
   const rawReadinessSummary = input.startReadiness
     ? summarizeStartReadiness({
         workLabel,
+        explicitRelease: input.selectedRelease !== null || input.scope?.kind === 'release' || input.scope?.kind === 'milestone',
         progress: input.progress,
         outsideWork: input.scopeProjection
           ? summarizeProjectScopeOutsideWork(input.scopeProjection.rows, input.scopeProjection.selectedScope)
@@ -2671,6 +2861,7 @@ function releaseStateFromScopeProjection(
   projection: ProjectScopeProjection | null | undefined,
 ): OrientationReleaseState {
   if (!projection || projection.selectedScope?.id !== release.id) return release.state
+  if (release.state === 'shipped') return 'shipped'
   if (projection.release.state === 'ready') return 'ready'
   if (release.state === 'ready') return 'active'
   return release.state

@@ -3,6 +3,8 @@ export interface CurrentProofSummary {
   expectationCount: number
   verified: string[]
   missing: string[]
+  /** The current contract includes an executable command/script path. */
+  hasExecutablePath?: boolean
 }
 
 type RecordValue = Record<string, unknown>
@@ -72,10 +74,11 @@ function completionEvidenceText(task: RecordValue): string {
   const doneSummary = recordValue(recordValue(task.doneSummaryBundle)?.summary)
   const doneEvidence = stringValue(doneSummary?.evidence)
   if (doneEvidence) parts.push(doneEvidence)
-  const gates = [
-    ...(Array.isArray(task.gateResults) ? task.gateResults : []).map(recordValue),
-    ...evidencePayloads(task, 'gate_result'),
-  ]
+  const recordedGates = evidencePayloads(task, 'gate_result')
+  const gates = (recordedGates.length > 0
+    ? recordedGates
+    : (Array.isArray(task.gateResults) ? task.gateResults : [])
+  ).map(recordValue)
   for (const gate of gates) {
     if (!gate || !(gate.passed === true || gate.status === 'pass' || gate.status === 'passed')) continue
     for (const field of ['command', 'gateId', 'name', 'output']) {
@@ -83,10 +86,11 @@ function completionEvidenceText(task: RecordValue): string {
       if (text) parts.push(text)
     }
   }
-  const reviews = [
-    ...(Array.isArray(task.reviewVerdicts) ? task.reviewVerdicts : []).map(recordValue),
-    ...evidencePayloads(task, 'review_verdict'),
-  ]
+  const recordedReviews = evidencePayloads(task, 'review_verdict')
+  const reviews = (recordedReviews.length > 0
+    ? recordedReviews
+    : (Array.isArray(task.reviewVerdicts) ? task.reviewVerdicts : [])
+  ).map(recordValue)
   for (const review of reviews) {
     if (!review || !['approve', 'approved'].includes(String(review.verdict ?? review.decision))) continue
     for (const field of ['reason', 'reasoning', 'summary']) {
@@ -108,15 +112,30 @@ function completionEvidenceText(task: RecordValue): string {
 
 function commandGateMatches(path: RecordValue, task: RecordValue): boolean {
   if (path.kind !== 'command') return false
-  const command = stringValue(path.command)
-  if (!command || !Array.isArray(task.gateResults)) return false
-  return task.gateResults.some(value => {
+  // Some imported command contracts keep the executable in launchSteps and
+  // retain the acceptance identity only in the title (`Run AC-1`). That title
+  // is still part of the current proof contract and must match its gate.
+  const command = stringValue(path.command) ?? stringValue(path.title) ?? stringValue(path.id)
+  if (!command) return false
+  const recordedGates = evidencePayloads(task, 'gate_result')
+  const gateResults = recordedGates.length > 0
+    ? recordedGates
+    : (Array.isArray(task.gateResults) ? task.gateResults : [])
+  return gateResults.some(value => {
     const gate = recordValue(value)
     if (!gate || !(gate.passed === true || gate.status === 'pass' || gate.status === 'passed')) return false
+    const normalizedCommand = normalizedText(command)
     return [gate.command, gate.gateId, gate.name, gate.output]
       .map(value => typeof value === 'string' ? normalizedText(value) : '')
       .filter(Boolean)
-      .some(candidate => candidate === normalizedText(command) || candidate.includes(normalizedText(command)))
+      .some(candidate => (
+        candidate === normalizedCommand ||
+        candidate.includes(normalizedCommand) ||
+        // Imported contracts commonly name the setup command as `Run AC-1`
+        // while the durable gate records the criterion id as `AC-1`. Those
+        // are the same proof identity, not two separate obligations.
+        (candidate.length >= 4 && normalizedCommand.includes(candidate))
+      ))
   })
 }
 
@@ -148,12 +167,25 @@ function pathIsProven(path: RecordValue, task: RecordValue): boolean {
   return expected.length === 0 && path.status === 'verified' && passed.size > 0
 }
 
+function pathIsExecutable(path: RecordValue): boolean {
+  if (path.kind === 'command' || path.kind === 'script') return true
+  if (stringValue(path.command)) return true
+  return Array.isArray(path.launchSteps) && path.launchSteps.some(step => {
+    const record = recordValue(step)
+    return record?.kind === 'copy_command' && Boolean(stringValue(record.command))
+  })
+}
+
 /** Summarize only the current proof contract; history is deliberately ignored. */
 export function summarizeCurrentProof(task: RecordValue): CurrentProofSummary {
   const taskRecord = task
+  const doneSummary = recordValue(recordValue(task.doneSummaryBundle))
+  const hasTerminalCompletion = doneSummary?.status === 'done' &&
+    stringValue(recordValue(doneSummary.summary)?.evidence) !== null
   const paths = (Array.isArray(task.proofPaths) ? task.proofPaths : [])
     .map(recordValue)
     .filter((path): path is RecordValue => path !== null)
+  const hasExecutablePath = paths.some(pathIsExecutable)
   const verified = paths
     .filter(path => pathIsProven(path, taskRecord))
     .map(path => path.kind === 'review'
@@ -164,7 +196,10 @@ export function summarizeCurrentProof(task: RecordValue): CurrentProofSummary {
     .map(path => `Required proof evidence is missing for ${proofLabel(path)}.`)
 
   if (paths.length === 0) {
-    const gates = (Array.isArray(task.gateResults) ? task.gateResults : [])
+    const recordedGates = evidencePayloads(task, 'gate_result')
+    const gates = (recordedGates.length > 0
+      ? recordedGates
+      : (Array.isArray(task.gateResults) ? task.gateResults : []))
       .map(recordValue)
       .filter((gate): gate is RecordValue => gate?.passed === true || gate?.status === 'pass' || gate?.status === 'passed')
       .map(gate => `Gate passed: ${stringValue(gate.gateId) ?? stringValue(gate.command) ?? stringValue(gate.name) ?? 'recorded gate'}`)
@@ -178,8 +213,9 @@ export function summarizeCurrentProof(task: RecordValue): CurrentProofSummary {
   const uniqueVerified = [...new Set(verified)].slice(0, 4)
   const uniqueMissing = [...new Set(missing)].slice(0, 4)
   const status = typeof task.status === 'string' ? task.status : ''
+  const proofStatus = hasTerminalCompletion ? 'done' : status
   if (paths.length === 0) {
-    if (status !== 'done') {
+    if (proofStatus !== 'done') {
       return {
         state: 'needed',
         expectationCount: 0,
@@ -188,7 +224,7 @@ export function summarizeCurrentProof(task: RecordValue): CurrentProofSummary {
       }
     }
     return {
-      state: uniqueVerified.length > 0 ? 'proven' : 'none',
+      state: uniqueVerified.length > 0 || hasTerminalCompletion ? 'proven' : 'none',
       expectationCount: 0,
       verified: uniqueVerified,
       missing: [],
@@ -199,5 +235,6 @@ export function summarizeCurrentProof(task: RecordValue): CurrentProofSummary {
     expectationCount: paths.length,
     verified: uniqueVerified,
     missing: uniqueMissing,
+    ...(hasExecutablePath ? { hasExecutablePath: true } : {}),
   }
 }

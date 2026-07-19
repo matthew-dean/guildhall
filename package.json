@@ -1,6 +1,6 @@
 {
   "name": "guildhall",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "A general-purpose multi-agent operating system for software projects.",
   "license": "LicenseRef-FLL-1.2",
   "licenses": [
@@ -43,8 +43,8 @@
     "audit:project-state-performance": "node scripts/project-state-performance-audit.mjs",
     "audit:project-state-agreement": "node scripts/project-state-agreement-audit.mjs",
     "clean": "rm -rf dist",
-    "release": "node scripts/publish.mjs 0.10.0",
-    "release:dry": "node scripts/publish.mjs 0.10.0 --dry-run --allow-branch",
+    "release": "node scripts/publish.mjs 0.11.0",
+    "release:dry": "node scripts/publish.mjs 0.11.0 --dry-run --allow-branch",
     "runtime:image:build": "node scripts/runtime-image-build.mjs",
     "runtime:image:smoke": "node scripts/runtime-image-smoke.mjs",
     "benchmarks:smoke": "pnpm build && node dist/cli.js benchmarks run lifecycle --fixture-set smoke --automation fully-automated && node dist/cli.js benchmarks run tblite --subset smoke --automation fully-automated && node dist/cli.js benchmarks run swe-local --subset smoke --automation fully-automated",
@@ -53,6 +53,7 @@
     "benchmarks:compare:hermes-app-explicit": "pnpm build && node scripts/compare-hermes-quality.mjs --mode app-explicit",
     "benchmarks:compare:hermes-app-infer": "pnpm build && node scripts/compare-hermes-quality.mjs --mode app-infer",
     "smoke:release": "node scripts/release-smoke.mjs",
+    "audit:release-acceptance": "node scripts/release-acceptance-audit.mjs",
     "model:bakeoff": "node scripts/model-bakeoff.mjs",
     "docs:prepare-versions": "node scripts/prepare-versioned-docs.mjs",
     "docs:check-copy": "node scripts/check-public-copy-voice.mjs",

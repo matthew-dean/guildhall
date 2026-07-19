@@ -38,7 +38,7 @@ import {
 } from '@guildhall/sessions'
 import { readTaskRuntimeStore, readTaskWorkspaceStore, writeTaskRuntimeStore } from './task-state-store.js'
 import { classifyCompletionProof, latestRecordedCompletionProofAt, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
-import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing, taskDoneButProofMissingForScope, taskDoneButReviewConflict, taskHasNonReviewCommandBackedProof, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
+import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing, taskDoneButProofMissingForScope, taskDoneButReviewConflict, taskHasNonReviewCommandBackedProof, taskHasReviewProofPath, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
 import { closeReleaseIfReady } from './release-lifecycle.js'
 import { comparableCommand, ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand } from './proof-paths.js'
 import { normalizeReviewPlanForTask } from './review-planner.js'
@@ -55,6 +55,7 @@ import {
   markFleetSummaryStaleAtBoundary,
   publishFleetSummaryProjection,
   pruneFleetSummaryProjectionAtBoundary,
+  readFleetSummaryProjectionPageAtBoundary,
 } from './fleet-summary-projection.js'
 import { ProjectStateRevisionMismatchError, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
@@ -221,6 +222,7 @@ import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-prog
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 import {
   buildProjectOrientationSpine,
+  reconcileOrientationSpineWithReleaseTruth,
   taskEligibleForSelectedScope,
   type BuildProjectOrientationSpineInput,
   type OrientationRelease,
@@ -228,7 +230,7 @@ import {
   type ProjectOrientationCharter,
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
-import { buildProjectScopeProjection, executionScopeRows, normalizeProjectScopeRowReadModel, projectScopeRowNeedsOwnerInput, releaseLabelFromId, selectedProjectScopeForQueue, summarizeProjectScopeOutsideWork, taskScopeNodeId, type ProjectScope, type ProjectScopeProjection, type ProjectScopeRow } from './project-scope-projection.js'
+import { buildProjectScopeProjection, executionScopeRows, normalizeProjectScopeRowReadModel, projectScopeRowNeedsOwnerInput, releaseLabelFromId, selectedProjectScopeForQueue, summarizeProjectScopeOutsideWork, taskCompletionProofSatisfiedByLinkedChildren, taskScopeNodeId, type ProjectScope, type ProjectScopeProjection, type ProjectScopeRow } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -347,6 +349,7 @@ import {
 } from './inbox.js'
 import {
   findOwnerInputRequestBySource,
+  listOwnerInputRequests,
   listOwnerInputRequestsSync,
   markOwnerInputRequestForBoundedChatReview,
 } from './owner-input-store.js'
@@ -357,7 +360,7 @@ import {
   recordReconciliationResolved,
   type AttentionRecord,
 } from './attention.js'
-import { materializeAttentionProjection, previewAttentionProjection, readSavedAttentionSurface, readSavedAttentionSurfaceFromBoundary } from './attention-projection.js'
+import { attentionItemsForReleaseTruth, attentionProjectionNeedsReleaseReconciliation, materializeAttentionProjection, previewAttentionProjection, readSavedAttentionSurface, readSavedAttentionSurfaceFromBoundary, type AttentionReleaseTruth } from './attention-projection.js'
 import { createProjectProjectionRefreshScheduler, shouldRefreshProjectAtStartup, type ProjectProjectionInvalidation, type ProjectProjectionRefreshScheduler } from './project-projection-refresh.js'
 import { createProjectProjectionFreshnessWatcher } from './project-projection-freshness-watcher.js'
 import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
@@ -638,6 +641,11 @@ interface ServiceProjectSummary {
     next?: { id: string; prompt: string; taskId?: string; href?: string } | null
     updatedAt: string
   }
+  fleetAttention?: {
+    items: AttentionRecord[]
+    total: number
+    freshness: 'current' | 'missing'
+  }
   gitStory?: GitStorySummary
   providerStatus?: unknown
   startReadiness?: {
@@ -660,6 +668,20 @@ interface ServiceProjectSummary {
   }
   projectCheckIn?: ReturnType<typeof summarizeProjectCheckIn> | null
   actionModel?: ProjectActionModel | null
+}
+
+const FLEET_ATTENTION_ITEM_LIMIT = 32
+
+function fleetAttentionProjection(records: readonly AttentionRecord[]): NonNullable<ServiceProjectSummary['fleetAttention']> {
+  const items = records
+    .filter(record => record.status === 'open')
+    .filter(isAttentionOwnedInboxItem)
+    .filter(record => record.severity !== 'low')
+  return {
+    items: items.slice(0, FLEET_ATTENTION_ITEM_LIMIT),
+    total: items.length,
+    freshness: 'current',
+  }
 }
 
 function humanizeGeneratedProjectName(name: string): string {
@@ -928,6 +950,50 @@ type StartStateSnapshot = {
   scope?: ProjectScope | null
   /** Owner-input state captured in the same current-state summary snapshot. */
   ownerInput?: ProjectSummaryProjection['ownerInput'] | null
+  /** The same bounded summary shown by Overview and Release. */
+  summary?: ProjectSummaryProjection | null
+}
+
+function savedProofEvidenceStartBlocker(
+  summary: ProjectSummaryProjection | null | undefined,
+  requestedTaskId?: string,
+): {
+  canStart: false
+  code: 'proof_evidence_missing'
+  message: string
+  actionHref: string
+  focusTaskId?: string
+  focusTaskTitle?: string
+  focusKind: 'proof'
+  proofTaskIds: string[]
+  count: number
+} | null {
+  const count = summary?.releaseSummary.counts.proofBlocked ?? 0
+  if (count <= 0) return null
+
+  const proofTaskIds = summary.releaseSummary.blockers
+    .filter(blocker => /proof evidence|verification evidence|completion proof|proof is missing|proof is stale/i.test(blocker.label))
+    .map(blocker => blocker.owningTaskId ?? blocker.id)
+    .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+  const focusTaskId = summary.nextAction.focusTaskId ?? proofTaskIds[0]
+  if (requestedTaskId && proofTaskIds.length > 0 && !proofTaskIds.includes(requestedTaskId)) return null
+  if (requestedTaskId && proofTaskIds.length === 0 && focusTaskId !== requestedTaskId) return null
+  const focusTaskTitle = summary.nextAction.focusTaskTitle
+  const message = summary.nextAction.code === 'proof_evidence_missing'
+    ? summary.nextAction.message
+    : `${count} completed work item${count === 1 ? '' : 's'} ${count === 1 ? 'is' : 'are'} missing current completion proof.${focusTaskTitle ? ` Start with "${focusTaskTitle}".` : ''}`
+
+  return {
+    canStart: false,
+    code: 'proof_evidence_missing',
+    message,
+    actionHref: focusTaskId ? `/work?task=${encodeURIComponent(focusTaskId)}` : '/work',
+    ...(focusTaskId ? { focusTaskId } : {}),
+    ...(focusTaskTitle ? { focusTaskTitle } : {}),
+    focusKind: 'proof',
+    proofTaskIds,
+    count,
+  }
 }
 
 type StartExecutionScopeSummary = {
@@ -1231,6 +1297,7 @@ async function writeProjectReleaseEnvelope(
   tasksPath: string,
   releaseId: string,
   candidateReleases: readonly ProjectRelease[] = [],
+  options: { preserveExistingLifecycleState?: boolean } = {},
 ): Promise<{ release: ProjectRelease; selectedReleaseId: string }> {
   if (!projectTaskStateExistsSync(tasksPath)) throw new Error('No task queue exists for this project.')
   const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
@@ -1251,9 +1318,24 @@ async function writeProjectReleaseEnvelope(
   for (const release of candidateReleases) {
     const persisted = persistableProjectRelease(release)
     const existing = releasesById.get(release.id)
-    const state = ['planned', 'active', 'ready', 'shipped', 'deferred'].includes(persisted.state)
-      ? persisted.state
-      : existing?.state ?? 'active'
+    // The selectable spine is a read model and may contain computed readiness
+    // for a shipped release. Existing lifecycle state belongs to the durable
+    // release envelope, so never let a selection read turn that projection
+    // back into authoritative state.
+    const candidateState = options.preserveExistingLifecycleState && existing?.state
+      ? existing.state
+      : (
+      ['planned', 'active', 'ready', 'shipped', 'deferred'].includes(persisted.state)
+        ? persisted.state
+        : 'active'
+      )
+    // Selecting a later release is its activation boundary. Keep the
+    // selection and persisted lifecycle state in one write so a cold restart
+    // cannot show the selected scope as active while the durable release still
+    // says planned. A shipped release is historical and must remain closed.
+    const state = release.id === releaseId && (candidateState === 'planned' || candidateState === 'deferred')
+      ? 'active'
+      : candidateState
     releasesById.set(release.id, { ...persisted, state })
   }
   const releases = [...releasesById.values()]
@@ -1714,6 +1796,7 @@ function formatServerTiming(metrics: Array<{ name: string; startedAt: number; en
   coordinatorCount: number
   materializeAttention?: boolean
   taskStateOverride?: TaskQueue
+  releaseTruth?: AttentionReleaseTruth | null
   }) {
     if (input.initializationNeeded) {
       return { items: [], blockers: { bootstrap: false, workspaceImport: false } }
@@ -1772,15 +1855,16 @@ function formatServerTiming(metrics: Array<{ name: string; startedAt: number; en
       blockers: { bootstrap: false, workspaceImport: false },
     }
   }
-  const computedItems = [
+  const releaseTruth = input.releaseTruth ?? readProjectSummaryForProjectAtBoundary(input.projectPath)?.releaseSummary ?? null
+  const computedItems = attentionItemsForReleaseTruth([
     ...await buildProjectMigrationAdvisories(input.projectPath),
     ...buildProjectUnderstandingAdvisories(input.projectPath),
       ...buildInbox({
       projectPath: input.projectPath,
       ...(inboxTaskStateOverride ? { taskStateOverride: inboxTaskStateOverride } : {}),
       allowMembershipScopeFallback: !databaseAuthority,
-    }),
-  ].filter(isAttentionOwnedInboxItem)
+      }),
+  ].filter(isAttentionOwnedInboxItem), releaseTruth)
   // Ordinary project reads compute their response without creating a new
   // database as a side effect. The service-start projector opts into the
   // durable attention write only for projects that already crossed the
@@ -1908,18 +1992,20 @@ async function refreshProjectProjections(
         return
       }
       let taskStateOverride: TaskQueue | undefined
+      let fleetAttentionItems: readonly AttentionRecord[] | null = null
       if (shouldRefreshRepositories) {
         await refreshProjectRepositoryObservation(resolved.path)
       }
       if (!attentionOnly) {
-      const metadata = databaseAuthority ? readProjectProjectionMetadataAtBoundary(resolved.path) : null
       const compactRefreshDomains = new Set([
         'queue', 'scope', 'release', 'delivery', 'attention', 'reconciliation', 'thread', 'diagnostics', 'memory',
       ])
+      // A stale or newly-versioned summary is still a compact projection
+      // concern. Rebuild it from indexed rows first; summary freshness must
+      // not promote an ordinary card refresh into a full task/evidence read.
       const needsDetailProjection = !databaseAuthority ||
         domains.has('legacy') ||
-        [...domains].some(domain => !compactRefreshDomains.has(domain)) ||
-        metadata?.summaryFreshness !== 'current'
+        [...domains].some(domain => !compactRefreshDomains.has(domain))
       if (databaseAuthority && !needsDetailProjection) {
         // Promoted projects already have the facts needed for Summary/Action/
         // Release in indexed rows. Do not reopen rich task detail or expand
@@ -2032,13 +2118,14 @@ async function refreshProjectProjections(
       })
       if (!threadProjection) throw new Error('Current Thread projection source changed during refresh')
       if (!attentionAlreadyProjected) {
-        await buildProjectInboxSnapshot({
+        const attentionSnapshot = await buildProjectInboxSnapshot({
           projectPath: resolved.path,
           initializationNeeded: resolved.initializationNeeded,
           coordinatorCount: resolved.config?.coordinators?.length ?? 0,
           materializeAttention: true,
           ...(taskStateOverride ? { taskStateOverride } : {}),
         })
+        fleetAttentionItems = attentionSnapshot.items
       }
       if (shouldRefreshDiagnostics && options.refreshDiagnostic) {
         await options.refreshDiagnostic(resolved.path)
@@ -2052,13 +2139,28 @@ async function refreshProjectProjections(
         resolved,
         options.supervisor.get(resolved.id),
       )
+      const savedAttention = fleetAttentionItems
+        ? fleetAttentionProjection(fleetAttentionItems)
+        : (() => {
+            const attention = readSavedAttentionSurface(
+              resolved.path,
+              resolved.initializationNeeded,
+              readProjectSummaryForProjectAtBoundary(resolved.path)?.releaseSummary ?? null,
+            )
+            return attention.freshness === 'current'
+              ? fleetAttentionProjection(attention.items)
+              : { items: [], total: 0, freshness: 'missing' as const }
+          })()
       publishFleetSummaryProjection({
         projectId: resolved.id,
         projectPath: resolved.path,
         sourceProjectRevision: fleetAuthority.projectRevision,
         sourceQueueRevision: fleetAuthority.queueRevision,
         state: 'current',
-        payload: fleetSummary,
+        payload: {
+          ...fleetSummary,
+          fleetAttention: savedAttention,
+        },
       })
     } catch (error) {
       try {
@@ -2396,15 +2498,16 @@ function summarizeProjectFromProjection(
 }
 
 function unavailableFleetProjectSummary(
-  entry: { id: string; path: string },
+  entry: { id: string; path: string; name?: string; tags?: string[]; initializationNeeded?: boolean },
   run?: ReturnType<OrchestratorSupervisor['list']>[number],
   error?: unknown,
 ): ServiceProjectSummary {
   return {
     id: entry.id,
     path: entry.path,
-    name: entry.id,
-    initializationNeeded: false,
+    name: entry.name ?? entry.id,
+    initializationNeeded: entry.initializationNeeded ?? false,
+    ...(entry.tags ? { tags: entry.tags } : {}),
     projectStatusLoading: false,
     summaryFreshness: 'error',
     projectStatusError: error instanceof Error && error.message.trim()
@@ -2429,18 +2532,107 @@ function readFleetProjectSummaries(
   entries: Array<{ id: string; path: string; name?: string; tags?: string[]; initializationNeeded?: boolean }>,
   runsById: Map<string, ReturnType<OrchestratorSupervisor['list']>[number]>,
 ): ServiceProjectSummary[] {
+  const page = readFleetSummaryProjectionPageAtBoundary({
+    projectIds: entries.map(entry => entry.id),
+    limit: entries.length,
+  })
+  const rows = new Map(page.rows.map(row => [row.projectId, row]))
+  const freshnessByState: Record<string, NonNullable<ServiceProjectSummary['summaryFreshness']>> = {
+    current: 'current',
+    stale: 'stale',
+    error: 'error',
+    unavailable: 'missing',
+  }
+
   return entries.map(entry => {
     try {
-      const resolved = resolveProject(entry.path)
-      const summary = summarizeProjectFromProjection(
-        entry,
-        resolved,
-        runsById.get(entry.id),
-        readProjectSummaryShellAtBoundary(entry.path).summary,
-      )
-      // Registration identifies the card; the project boundary supplies its
-      // current facts. Do not let a rebuildable fleet cache become a second
-      // source for either identity or state.
+      const run = runsById.get(entry.id)
+      const row = rows.get(entry.id)
+      if (!row) {
+        if (entry.initializationNeeded) {
+          return {
+            id: entry.id,
+            path: entry.path,
+            name: entry.name ?? entry.id,
+            initializationNeeded: true,
+            projectStatusLoading: false,
+            summaryFreshness: 'missing',
+            projectStatusError: 'Project setup is not complete.',
+            ...(entry.tags ? { tags: entry.tags } : {}),
+          }
+        }
+        const missing = unavailableFleetProjectSummary(
+          entry,
+          run,
+          page.databaseError
+            ? new Error(`Fleet summary store unavailable: ${page.databaseError}`)
+            : new Error('Saved fleet summary is not available yet.'),
+        )
+        if (page.databaseError) return missing
+        return {
+          ...missing,
+          summaryFreshness: 'missing',
+          projectStatusError: 'Saved fleet summary is not available yet. Background refresh will populate it.',
+        }
+      }
+
+      const payload = row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+        ? row.payload as ServiceProjectSummary
+        : null
+      if (!payload) {
+        return unavailableFleetProjectSummary(
+          entry,
+          run,
+          new Error(row.error ?? 'Saved fleet summary payload is invalid.'),
+        )
+      }
+
+      const summary: ServiceProjectSummary = {
+        ...payload,
+        projectStatusLoading: false,
+        summaryFreshness: freshnessByState[row.state] ?? 'error',
+        ...(row.state === 'current'
+          ? {}
+          : {
+              projectStatusError: row.error
+                ?? payload.projectStatusError
+                ?? 'The saved fleet summary needs a background refresh.',
+            }),
+      }
+      if (run) {
+        summary.run = {
+          status: run.status,
+          startedAt: run.startedAt,
+          stoppedAt: run.stoppedAt,
+          error: run.error,
+          stopSummary: run.stopSummary,
+          providerStatus: run.providerStatus,
+        }
+        if (summary.startReadiness && summary.actionModel) {
+          const liveReadiness = applyRunStatusToStartReadiness(summary.startReadiness, run.status)
+          const liveAction = buildProjectActionModel({
+            startReadiness: liveReadiness,
+            runStatus: run.status,
+            runMode: (run as { mode?: string }).mode,
+            tasks: summary.startReadiness.focusTaskId
+              ? [{
+                  id: summary.startReadiness.focusTaskId,
+                  title: summary.startReadiness.focusTaskTitle,
+                  status: run.status === 'running' ? 'in_progress' : 'ready',
+                }]
+              : [],
+          })
+          summary.startReadiness = liveReadiness
+          summary.actionModel = {
+            ...summary.actionModel,
+            runControl: liveAction.runControl,
+          }
+        }
+      }
+
+      // Registration owns identity and presentation metadata. The saved fleet
+      // row owns project state; no request-time project database read is allowed
+      // on this fleet route.
       return {
         ...summary,
         id: entry.id,
@@ -2486,13 +2678,23 @@ function publishFleetSummaryFromSavedState(
   const authority = readProjectStateAuthorityAtBoundary(tasksPath)
   const shell = readProjectSummaryShellAtBoundary(entry.path).summary
   const payload = summarizeProjectFromProjection(entry, resolved, run, shell)
+  const attention = readSavedAttentionSurface(
+    entry.path,
+    resolved.initializationNeeded,
+    shell?.releaseSummary ?? null,
+  )
   publishFleetSummaryProjection({
     projectId: entry.id,
     projectPath: entry.path,
     sourceProjectRevision: authority.projectRevision,
     sourceQueueRevision: authority.queueRevision,
     state: shell?.freshness === 'current' ? 'current' : shell ? 'stale' : 'unavailable',
-    payload,
+    payload: {
+      ...payload,
+      fleetAttention: attention.freshness === 'current'
+        ? fleetAttentionProjection(attention.items)
+        : { items: [], total: 0, freshness: 'missing' as const },
+    },
     ...(shell ? {} : { error: 'The saved project summary is not available yet.' }),
   })
 }
@@ -2721,6 +2923,9 @@ function summarizeScopedReleaseWork(
     options.commandProofRequired === true &&
     String((task as { status?: string }).status ?? '') === 'done' &&
     !taskHasScriptProofPath(task)
+  const scopeProofStyle = options.proofStyle ?? (options.commandProofRequired === true ? 'script_only' : undefined)
+  const proofSatisfiedByLinkedChildren = (task: Task): boolean =>
+    taskCompletionProofSatisfiedByLinkedChildren(task, tasks, scopeProofStyle)
   const completionProofSupersedesEscalation = (
     task: Task,
     escalation: { raisedAt?: string },
@@ -2859,7 +3064,11 @@ function summarizeScopedReleaseWork(
       addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs shaping before unattended work can start.` })
       continue
     }
-    if (status === 'done' && (taskDoneButProofMissing(t) || taskMissingModeledProofExpectation(t))) {
+    if (
+      status === 'done' &&
+      (taskDoneButProofMissing(t) || taskMissingModeledProofExpectation(t)) &&
+      !proofSatisfiedByLinkedChildren(t)
+    ) {
       if (!proofMissingTaskIsDuplicateOfBlockedWork(t)) {
         proofMissingDoneTasks.push({ id, title })
         addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs proof evidence before the release is complete.` })
@@ -3036,6 +3245,39 @@ function buildOrientationSpineWithScopedReleaseTruth(
     },
   })
   return { orientationSpine, releaseTruth }
+}
+
+function orientationReleaseTruthFromSummary(
+  summary: ProjectSummaryProjection['releaseSummary'] | null | undefined,
+  queue?: {
+    releases?: readonly ProjectRelease[]
+    selectedReleaseId?: string | null
+  },
+) {
+  const selectedReleaseId = queue?.selectedReleaseId ?? null
+  const lifecycleState = selectedReleaseId
+    ? queue?.releases?.find(release => release.id === selectedReleaseId)?.state
+    : undefined
+  return {
+    ...(lifecycleState ? { lifecycleState } : {}),
+    state: summary?.state === 'ready'
+      ? 'ready' as const
+      : summary?.state === 'blocked'
+        ? 'blocked' as const
+        : summary?.state === 'active'
+          ? 'active' as const
+          : summary?.state === 'shaping'
+            ? 'shaping' as const
+            : 'unknown' as const,
+    counts: {
+      total: summary?.counts.total ?? 0,
+      done: summary?.counts.done ?? 0,
+      unfinished: summary?.counts.unfinished ?? 0,
+      deferred: summary?.counts.deferred ?? 0,
+      proofBlocked: summary?.counts.proofBlocked ?? 0,
+    },
+    blockers: summary?.blockers ?? [],
+  }
 }
 
 /**
@@ -4837,7 +5079,7 @@ function compactOrientationRelease(release: unknown): unknown {
   if (!release || typeof release !== 'object' || Array.isArray(release)) return release
   const raw = release as Record<string, unknown>
   const compact: Record<string, unknown> = {}
-  for (const key of ['id', 'label', 'kind', 'state', 'source', 'proofStyle']) {
+  for (const key of ['id', 'label', 'kind', 'state', 'lifecycleState', 'source', 'proofStyle']) {
     if (key in raw) compact[key] = raw[key]
   }
   if (Array.isArray(raw.blockers)) {
@@ -4960,9 +5202,16 @@ function buildOverviewOrientationPreviewSpine(input: {
       : input.rawQueue.selectedReleaseId ? { selectedReleaseId: input.rawQueue.selectedReleaseId } : {}),
   }
   const sourceSelectedScope = sourceSpine?.selectedTaskScope ?? sourceSpine?.scope ?? null
+  const sourceSelectedRelease = sourceSpine?.selectedRelease ?? input.rawQueue.releases.find(release =>
+    release.id === (sourceSelectedScope?.id ?? input.rawQueue.selectedReleaseId),
+  ) ?? null
+  const sourceScopeProofStyle = (sourceSelectedScope as ProjectScope | null)?.proofStyle
+  const selectedScopeForProjection = sourceSelectedScope && !sourceScopeProofStyle && sourceSelectedRelease?.proofStyle
+    ? { ...sourceSelectedScope, proofStyle: sourceSelectedRelease.proofStyle }
+    : sourceSelectedScope
   const projection = buildProjectScopeProjection(
     queue,
-    sourceSelectedScope ? { selectedScope: sourceSelectedScope as ProjectScope } : {},
+    selectedScopeForProjection ? { selectedScope: selectedScopeForProjection as ProjectScope } : {},
   )
   const scope = projection.selectedScope
   const scopeRows = executionScopeRows(projection.rows)
@@ -4970,6 +5219,9 @@ function buildOverviewOrientationPreviewSpine(input: {
     ? sourceSpine?.selectedRelease?.id === scope.id
       ? sourceSpine.selectedRelease
       : input.rawQueue.releases.find(release => release.id === scope.id) ?? null
+    : null
+  const persistedSelectedRelease = scope
+    ? input.rawQueue.releases.find(release => release.id === scope.id) ?? null
     : null
   const sourceScope = scope && sourceSpine?.scope?.id === scope.id
     ? sourceSpine?.scope ?? null
@@ -4979,12 +5231,22 @@ function buildOverviewOrientationPreviewSpine(input: {
   const sourceReleaseState = sourceSpine !== null && sourceSpine.selectedRelease?.id === scope?.id
     ? sourceSpine.release?.state
     : undefined
+  const persistedReleaseIsShipped = persistedSelectedRelease?.state === 'shipped'
+  const sourceReleaseIsShipped = sourceSpine?.selectedRelease?.state === 'shipped'
+  const releaseLifecycleState = persistedSelectedRelease?.state ?? (
+    sourceSpine?.selectedRelease?.state === 'shipped' ? 'shipped' : undefined
+  )
   const release = selectedRelease
     ? {
         id: selectedRelease.id,
         label: selectedRelease.label,
         kind: selectedRelease.kind === 'milestone' ? 'milestone' : selectedRelease.kind === 'marker' ? 'marker' : 'release',
-        state: sourceReleaseState ?? (projection.release.state === 'ready' ? 'ready' : projection.release.state === 'blocked' ? 'blocked' : selectedRelease.state ?? 'active'),
+        // Readiness is derived from bounded work, but lifecycle is durable.
+        // A completed shipped release must remain shipped in Overview even
+        // though its readiness projection is still complete/ready.
+        state: persistedReleaseIsShipped || sourceReleaseIsShipped
+          ? 'shipped'
+          : sourceReleaseState ?? (projection.release.state === 'ready' ? 'ready' : projection.release.state === 'blocked' ? 'blocked' : selectedRelease.state ?? 'active'),
         source: selectedRelease.source ?? 'inferred',
         description: selectedRelease.description ?? null,
         nodeIds: scope?.nodeIds ?? selectedRelease.nodeIds ?? [],
@@ -4999,25 +5261,34 @@ function buildOverviewOrientationPreviewSpine(input: {
         kind: sourceScope?.kind ?? scope.kind,
         source: sourceScope?.source ?? scope.source,
         nodeIds: scope.nodeIds,
-        deferredNodeIds: scope.deferredNodeIds,
+      deferredNodeIds: scope.deferredNodeIds,
       }
     : null
+  const sourceProgress = sourceSpine?.summary.progress
   const progress = {
     scopeId: scope?.id ?? null,
     total: projection.counts.included + projection.counts.deferred,
-    briefed: 0,
-    specced: scopeRows.filter(row => row.scope === 'included' && (row.status === 'spec_review' || row.status === 'ready')).length,
-    sliced: 0,
+    // Maturity counts describe the assembled plan, not the bounded task page
+    // used by this preview. Preserve the saved plan counts while refreshing
+    // execution/proof counts from the current compact release projection.
+    briefed: sourceProgress?.briefed ?? 0,
+    specced: sourceProgress?.specced ?? scopeRows.filter(row => row.scope === 'included' && (row.status === 'spec_review' || row.status === 'ready')).length,
+    sliced: sourceProgress?.sliced ?? 0,
     ready: projection.counts.ready,
     active: projection.counts.active,
-    proven: projection.counts.done,
+    proven: Math.max(0, projection.counts.done - projection.counts.proofBlocked),
     done: projection.counts.done,
     blocked: projection.counts.ownerBlocked,
     deferred: projection.counts.deferred,
   }
-  const scopeLabel = scope?.label ?? release?.label ?? 'Current task scope'
-  const displayScopeLabel = scopeReadModel?.label ?? release?.label ?? scopeLabel
+  const hasExplicitRelease = selectedRelease !== null
   const start = input.startReadiness ?? null
+  const noReleaseTerminal = !hasExplicitRelease && start?.code === 'all_terminal'
+  const savedScopeLabel = scopeReadModel?.label?.trim()
+  const genericScopeLabel = savedScopeLabel === 'Current task scope' || savedScopeLabel === 'Current work'
+  const displayScopeLabel = genericScopeLabel && noReleaseTerminal
+    ? 'Current scope'
+    : savedScopeLabel ?? release?.label ?? 'Current scope'
   const startMessage = typeof start?.message === 'string' && start.message.trim()
     ? start.message.trim()
     : null
@@ -5041,17 +5312,25 @@ function buildOverviewOrientationPreviewSpine(input: {
   const focusHref = start?.canStart === false && start.actionHref
     ? start.actionHref
     : projection.start.actionHref
-  const terminalCompleteMessage = start?.code === 'all_terminal'
-  const outsideWork = summarizeProjectScopeOutsideWork(projection.rows, scope)
+  const terminalCompleteMessage = hasExplicitRelease && start?.code === 'all_terminal'
   const firstBlocker = projection.release.blockers[0]
-  const topBlocker = start?.canStart === false && startMessage && (!terminalCompleteMessage || outsideWork.count > 0)
-    ? startMessage
-    : firstBlocker?.label ?? (
+  const proofMissing = projection.counts.proofBlocked > 0 || start?.code === 'proof_evidence_missing'
+  const topBlocker = firstBlocker?.label ?? (
+    start?.canStart === false && startMessage && !noReleaseTerminal && !terminalCompleteMessage
+      ? startMessage
+      : (
       projection.start.canStart || projection.start.code === 'all_terminal'
         ? null
         : projection.start.message
+      )
     )
-  const headline = projection.release.state === 'ready'
+  const headline = noReleaseTerminal
+    ? `${displayScopeLabel} is in progress.`
+    : proofMissing
+      ? `${displayScopeLabel} is waiting on proof.`
+    : start?.code === 'imported_scope_shaping'
+      ? `${displayScopeLabel} needs attention.`
+      : projection.release.state === 'ready'
     ? `${displayScopeLabel} is complete.`
     : projection.release.state === 'blocked'
       ? `${displayScopeLabel} needs attention.`
@@ -5081,35 +5360,45 @@ function buildOverviewOrientationPreviewSpine(input: {
     deferredWorkCount: projection.counts.deferred,
     pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],
     topBlocker,
-    nextAction: projection.release.state === 'ready'
+    nextAction: noReleaseTerminal
+      ? 'Current work has no runnable work remaining.'
+      : proofMissing
+        ? firstBlocker?.label ?? startMessage ?? 'Completion proof is missing or stale.'
+      : projection.release.state === 'ready'
       ? 'Review completed scope.'
       : start?.canStart === false
         ? startMessage ?? 'Resolve the current start blocker.'
         : projection.start.message,
     progress,
   }
-  const summary = input.sourceSpine?.summary && start?.canStart === false && (!terminalCompleteMessage || outsideWork.count > 0)
+  const summary = input.sourceSpine?.summary
     ? {
         ...input.sourceSpine.summary,
-        pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],
-        topBlocker,
-        // The start-readiness builder owns the current blocker message. Do not
-        // preserve an older generic orientation action when the selected
-        // scope has a more specific, actionable start message.
-        nextAction: startMessage ?? (
-          typeof input.sourceSpine.summary.nextAction === 'string' && input.sourceSpine.summary.nextAction.trim()
-            ? input.sourceSpine.summary.nextAction
-            : 'Resolve the current start blocker.'
-        ),
+        // Source context is durable, but these fields are live projection
+        // state. Never let an older compact summary win over current rows.
+        headline: computedSummary.headline,
+        selectedReleaseLabel: computedSummary.selectedReleaseLabel,
+        selectedScopeLabel: computedSummary.selectedScopeLabel,
+        includedCount: computedSummary.includedCount,
+        includedWorkCount: computedSummary.includedWorkCount,
+        deferredCount: computedSummary.deferredCount,
+        deferredWorkCount: computedSummary.deferredWorkCount,
+        pinnedNow: computedSummary.pinnedNow,
+        topBlocker: computedSummary.topBlocker,
+        nextAction: computedSummary.nextAction,
+        progress: computedSummary.progress,
       }
     : input.sourceSpine?.summary ?? computedSummary
-  const releaseSummary = input.sourceSpine?.release ?? {
-    state: projection.release.state,
-    blockers: projection.release.blockers.map(blocker => ({
-      id: blocker.id,
-      label: blocker.label,
-      ...(blocker.owningTaskId ? { owningNodeId: taskScopeNodeId(blocker.owningTaskId) } : {}),
-    })),
+  const releaseSummary = {
+    ...(input.sourceSpine?.release ?? {
+      state: projection.release.state,
+      blockers: projection.release.blockers.map(blocker => ({
+        id: blocker.id,
+        label: blocker.label,
+        ...(blocker.owningTaskId ? { owningNodeId: taskScopeNodeId(blocker.owningTaskId) } : {}),
+      })),
+    }),
+    ...(releaseLifecycleState ? { lifecycleState: releaseLifecycleState } : {}),
   }
 
   return {
@@ -5854,7 +6143,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }
 } {
   const preferredProjectPath = opts.preferredProjectPath ?? opts.projectPath ?? null
-  const getRegisteredProjects = () => listWorkspaces()
+  const getRegisteredProjects = () => listWorkspaces().map(entry => ({
+    ...entry,
+    // Registration can outlive project setup. This is cheap filesystem
+    // metadata, not a project-state read, and keeps the fleet shell honest
+    // for rows that have no Guildhall config yet.
+    initializationNeeded: !existsSync(join(entry.path, FORGE_YAML_FILENAME)),
+  }))
   const pickProjectFolder = opts.pickProjectFolder ?? chooseProjectFolderMacOS
   const explicitProjectPath = preferredProjectPath ? resolve(preferredProjectPath) : null
   const fallbackProjectPath = explicitProjectPath
@@ -6184,60 +6479,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/fleet/attention', async c => {
     const registeredProjects = getRegisteredProjects()
-    const groups = registeredProjects.map((entry) => {
-      try {
-        const resolved = resolveProject(entry.path)
-        if (resolved.initializationNeeded) {
-          const projectSummary = summarizeProjectFromProjection(entry, resolved, supervisor.get(resolved.id), null)
-          return { project: projectSummary, items: [], error: null, topWaitingThread: null }
+    const runsById = new Map(supervisor.list().map(run => [run.workspaceId, run]))
+    const projectSummaries = readFleetProjectSummaries(registeredProjects, runsById)
+    const projectById = new Map(projectSummaries.map(project => [project.id, project]))
+    const groups = registeredProjects.map(entry => {
+      const project = projectById.get(entry.id) ?? unavailableFleetProjectSummary(entry)
+      const attention = project.fleetAttention
+      if (project.initializationNeeded) {
+        return { project, items: [], error: null, topWaitingThread: null }
+      }
+      if (project.summaryFreshness !== 'current' || attention?.freshness !== 'current') {
+        return {
+          project,
+          items: [],
+          error: project.projectStatusError ?? 'Saved fleet attention is not available yet. Background refresh will populate it.',
+          topWaitingThread: null,
         }
-        const attentionState = readProjectSurfaceStateAtBoundary(entry.path, {
-          // Fleet attention needs the saved summary and attention rows only.
-          // Requesting the compact projection here expands the entire task
-          // inventory merely to render a small fleet card.
-          includeProjection: false,
-          includeAttention: true,
-        })
-        // Fleet attention is one ordinary project surface. Summary and Inbox
-        // must come from the same saved transaction or a concurrent write can
-        // make the fleet card describe a different revision than its items.
-        const summaryProjection = attentionState?.summary ?? (
-          attentionState === null
-            ? readProjectSummaryShellAtBoundary(entry.path).summary
-            : null
-        )
-        const projectSummary = summarizeProjectFromProjection(
-          entry,
-          resolved,
-          supervisor.get(resolved.id),
-          summaryProjection,
-        )
-        const attention = readSavedAttentionSurfaceFromBoundary({
-          initializationNeeded: resolved.initializationNeeded,
-          records: attentionState?.attentionRecords ?? null,
-          watermarkSourceRevision: attentionState?.attentionWatermark?.sourceRevision ?? null,
-          projectRevision: attentionState?.projectRevision ?? null,
-        })
-        const items = attention.items
+      }
+      return {
+        project,
+        items: attention.items
           .filter(record => record.status === 'open')
           .filter(isAttentionOwnedInboxItem)
-          .filter(item => item.severity !== 'low')
-        return {
-          project: projectSummary,
-          items,
-          error: attention.requiresRefresh ? 'Attention projection is not current.' : null,
-          // The fleet surface only renders durable inbox records. Project inbox
-          // reads and startup warmup own projection refresh; Thread is an
-          // explicit project route and is never reconstructed here.
-          topWaitingThread: null,
-        }
-      } catch (error) {
-        return {
-          project: unavailableFleetProjectSummary(entry, undefined, error),
-          items: [],
-          error: error instanceof Error ? error.message : 'Could not read project attention.',
-          topWaitingThread: null,
-        }
+          .filter(item => item.severity !== 'low'),
+        error: null,
+        // The fleet surface only renders the bounded attention projection.
+        // Thread and project inbox remain explicit project routes.
+        topWaitingThread: null,
       }
     })
     const visibleGroups = groups.filter(group => group.items.length > 0 || group.error || group.topWaitingThread)
@@ -6665,21 +6933,31 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
       }
     }
+    const liveOrientationPreview = buildOverviewOrientationPreviewSpine({
+      projectId: project.id,
+      rawQueue: {
+        tasks: (indexedInventory?.tasks ?? tasks) as unknown as Array<Record<string, unknown>>,
+        releases: scopeQueue.releases as unknown as ProjectRelease[],
+        ...(scopeQueue.selectedReleaseId ? { selectedReleaseId: scopeQueue.selectedReleaseId } : {}),
+      },
+      charter: projection.orientation?.charter ?? null,
+      startReadiness: summary.startReadiness,
+      sourceSpine: builtOrientationSpine,
+    })
+    const liveSummarySpine = reconcileOrientationSpineWithReleaseTruth(
+      {
+        ...builtOrientationSpine,
+        summary: liveOrientationPreview.summary,
+      },
+      {
+        ...orientationReleaseTruthFromSummary(projection.releaseSummary, scopeQueue),
+      },
+    ) as unknown as Record<string, unknown>
     const initialOrientationSpine = input.surface === 'overview'
-      ? buildOverviewOrientationPreviewSpine({
-          projectId: project.id,
-          rawQueue: {
-            tasks: tasks as unknown as Array<Record<string, unknown>>,
-            releases: scopeQueue.releases as unknown as ProjectRelease[],
-            ...(scopeQueue.selectedReleaseId ? { selectedReleaseId: scopeQueue.selectedReleaseId } : {}),
-          },
-          charter: projection.orientation?.charter ?? null,
-          startReadiness: summary.startReadiness,
-          sourceSpine: builtOrientationSpine,
-        })
-        : input.surface === 'map'
-        ? compactOrientationSpineForMapSurface(builtOrientationSpine as unknown as Record<string, unknown>)
-        : compactOrientationSpineForWorkSurface(builtOrientationSpine as unknown as Record<string, unknown>)
+      ? compactOrientationSpineForOverviewSurface(liveSummarySpine)
+      : input.surface === 'map'
+        ? compactOrientationSpineForMapSurface(liveSummarySpine)
+        : compactOrientationSpineForWorkSurface(liveSummarySpine)
     // A stored orientation snapshot can lag after task decomposition or
     // release selection changes. Its charter and narrative are still useful,
     // but the selected scope is owned by the same compact database snapshot
@@ -6836,12 +7114,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ? task => compactTaskForWorkSurface(task, { includeDefinitions: input.includeDetailSections })
           : compactTaskForProjectSummary)
       .filter((task): task is Record<string, unknown> => Boolean(task))
-    const detailInbox = input.includeDetailSections
+      const detailInbox = input.includeDetailSections
       ? readSavedAttentionSurfaceFromBoundary({
           initializationNeeded: project.initializationNeeded,
           records: surfaceState?.attentionRecords ?? null,
           watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
           projectRevision: surfaceState?.projectRevision ?? null,
+          releaseTruth: projection.releaseSummary,
         })
       : null
     const detailMemoryHealth = input.includeDetailSections
@@ -7016,6 +7295,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             queue: rawQueue,
             effectiveTasks: currentState.tasks as Task[],
             scope: currentState.scope ?? null,
+            summary: currentState.summary,
             startTiming: name => startTiming(`readiness_${name}`),
           })
         : projectedSummary?.startReadiness ?? null
@@ -7130,7 +7410,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const endThreadInbox = startTiming('thread_inbox')
       const inbox = mapSurface
         ? null
-        : readSavedAttentionSurface(project.path, project.initializationNeeded)
+        : readSavedAttentionSurface(
+            project.path,
+            project.initializationNeeded,
+            currentState.summary?.releaseSummary ?? null,
+          )
       const thread = mapSurface
         ? null
         : readThreadReadProjection(project.path).payload
@@ -7158,9 +7442,28 @@ export function buildServeApp(opts: ServeOptions = {}): {
         storedOrientationSpine as unknown as Record<string, unknown>,
         project.id,
       ) as unknown as ReturnType<typeof buildOrientationSpineWithScopedReleaseTruth>['orientationSpine']
+      const savedReleaseSummary = currentState.summary?.releaseSummary
+      const reconciledOrientationSpine = reconcileOrientationSpineWithReleaseTruth(
+        fullOrientationSpine,
+        orientationReleaseTruthFromSummary(savedReleaseSummary, rawQueue),
+      )
+      const currentOrientationPreview = buildOverviewOrientationPreviewSpine({
+        projectId: project.id,
+        rawQueue: {
+          tasks: orientationTasks as unknown as Array<Record<string, unknown>>,
+          releases: rawQueue.releases as unknown as ProjectRelease[],
+          ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
+        },
+        charter: reconciledOrientationSpine.charter,
+        startReadiness,
+        sourceSpine: reconciledOrientationSpine,
+      })
       const orientationSpine = overviewSurface
-        ? compactOrientationSpineForOverviewSurface(fullOrientationSpine as unknown as Record<string, unknown>)
-        : fullOrientationSpine
+        ? compactOrientationSpineForOverviewSurface(reconciledOrientationSpine as unknown as Record<string, unknown>)
+        : {
+            ...reconciledOrientationSpine,
+            summary: currentOrientationPreview.summary,
+          }
       const selectedProgressTaskIds = selectedTaskIdsForProgress(orientationSpine as Record<string, unknown>)
       const progressTaskIds = new Set(
         (orientationTasks as unknown as Task[])
@@ -7366,11 +7669,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
           })
         }
         // This route is consumed by Structure and Releases. A compact read
-        // must return the same stored orientation as Overview, Work, and Map,
-        // never rebuild scope/readiness from TASKS.json for one request.
-        const compactSpine = surface === 'map'
-          ? compactOrientationSpineForMapSurface(storedSpine as unknown as Record<string, unknown>)
-          : compactOrientationSpineForWorkSurface(storedSpine as unknown as Record<string, unknown>)
+        // must use the same release truth as Overview, Work, and Map. The
+        // stored spine is the durable source context, but its node maturity
+        // and proof details are a projection that must be reconciled before
+        // any surface-specific compaction.
+        const reconciledSpine = reconcileOrientationSpineWithReleaseTruth(
+          expandStoredOrientationSpineForMap(
+            storedSpine as unknown as Record<string, unknown>,
+            project.id,
+          ) as unknown as ProjectOrientationSpine,
+          orientationReleaseTruthFromSummary(savedProjection?.releaseSummary, compactState?.queue),
+        )
+        const compactSpine = overviewSurface
+          ? compactOrientationSpineForOverviewSurface(reconciledSpine as unknown as Record<string, unknown>)
+          : surface === 'map'
+            ? compactOrientationSpineForMapSurface(reconciledSpine as unknown as Record<string, unknown>)
+            : compactOrientationSpineForWorkSurface(reconciledSpine as unknown as Record<string, unknown>)
         return c.json({
           spine: { ...compactSpine, nodes: {} },
           summary,
@@ -7403,13 +7717,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
           requiresRefresh: true,
         }, 503)
       }
-      const spine = expandStoredOrientationSpineForMap(
-        storedSpine as unknown as Record<string, unknown>,
-        project.id,
+      const spine = reconcileOrientationSpineWithReleaseTruth(
+        expandStoredOrientationSpineForMap(
+          storedSpine as unknown as Record<string, unknown>,
+          project.id,
+        ) as unknown as ProjectOrientationSpine,
+        orientationReleaseTruthFromSummary(projection.releaseSummary, compactState?.queue),
       )
       return c.json({
         spine: overviewSurface
-          ? compactOrientationSpineForOverviewSurface(spine)
+          ? compactOrientationSpineForOverviewSurface(spine as unknown as Record<string, unknown>)
           : spine,
         summaryFreshness: projection.freshness,
         queueRevision: compactState?.queueRevision ?? null,
@@ -7465,7 +7782,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         startReadiness,
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
-      const result = await writeProjectReleaseEnvelope(projectTasksPath(project.path), releaseId, selectableSpine.releases as ProjectRelease[])
+      const result = await writeProjectReleaseEnvelope(
+        projectTasksPath(project.path),
+        releaseId,
+        selectableSpine.releases as ProjectRelease[],
+        { preserveExistingLifecycleState: true },
+      )
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
       const tasks = await buildEffectiveTasks(project.path, rawQueue.tasks as Task[])
       const { orientationSpine: spine } = buildOrientationSpineWithScopedReleaseTruth({
@@ -8604,9 +8926,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       effectiveTasks: input.effectiveTasks,
       scope: input.scope,
     }))
-    if (terminal?.selectedReleaseTerminal && terminal.code !== 'proof_evidence_missing') {
-      return attachExecutionScope(startReadinessForTerminalState(terminal))
-    }
     const hasMaterializedStartWork = await time('materialized', () => hasMaterializedScopedStartWork(
       input.projectPath,
       input.requestedTaskId,
@@ -8625,10 +8944,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ? null
       : await time('workspace_coverage', () => startBlockerForWorkspaceImportCoverage(input.projectPath, startStateOptions))
     if (workspaceImportCoverageBlocker) return attachExecutionScope(workspaceImportCoverageBlocker)
-
-    if (terminal && terminal.code !== 'proof_evidence_missing') {
-      return attachExecutionScope(startReadinessForTerminalState(terminal))
-    }
 
     const orientationShapingBlocker = await time('shape', () => startBlockerForOrientationScopeShaping(
       input.projectPath,
@@ -8653,9 +8968,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ))
     if (importDraftBlocker) return attachExecutionScope(importDraftBlocker)
 
+    // A canonical read bundle contains the current task/evidence state, so
+    // its terminal calculation is authoritative whenever it is available.
+    // The saved compact summary is the fallback for intentionally compact
+    // reads that omit enough detail to calculate terminal proof directly.
     if (terminal && terminal.code !== 'proof_evidence_missing') {
       return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
+    if (terminal?.code === 'proof_evidence_missing') {
+      return attachExecutionScope(startReadinessForTerminalState(terminal))
+    }
+    const savedProofBlocker = savedProofEvidenceStartBlocker(input.summary, input.requestedTaskId)
+    if (savedProofBlocker) return attachExecutionScope(savedProofBlocker)
 
     if (input.allowTaskReadinessBlocker !== false) {
       const taskReadinessBlocker = await time('task_readiness', () => startBlockerForTaskReadiness(input.projectPath, {
@@ -8984,9 +9308,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       runtimeProvider,
       allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
       ...(canonicalState ? { queue: canonicalState.rawQueue as Awaited<ReturnType<typeof readTaskQueueFileNormalized>> } : {}),
-      ...(canonicalState ? { effectiveTasks: canonicalState.tasks } : {}),
-      ...(canonicalState ? { scope: canonicalState.scope } : {}),
-      ...(canonicalState ? { ownerInput: canonicalState.summary?.ownerInput ?? null } : {}),
+    ...(canonicalState ? { effectiveTasks: canonicalState.tasks } : {}),
+    ...(canonicalState ? { scope: canonicalState.scope } : {}),
+    ...(canonicalState ? { ownerInput: canonicalState.summary?.ownerInput ?? null } : {}),
+    ...(canonicalState ? { summary: canonicalState.summary ?? null } : {}),
       ...(opts.allowTaskReadinessBlocker !== undefined
         ? { allowTaskReadinessBlocker: opts.allowTaskReadinessBlocker }
         : {}),
@@ -9207,7 +9532,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (status === 'done') {
         done += 1
         terminal += 1
-	        if (taskDoneButProofMissingForScope(task, selectedScopeProofStyle)) {
+	        if (
+          taskDoneButProofMissingForScope(task, selectedScopeProofStyle) &&
+          !taskCompletionProofSatisfiedByLinkedChildren(task, effectiveTasks, selectedScopeProofStyle)
+        ) {
           const id = typeof (task as { id?: unknown }).id === 'string' && (task as { id: string }).id.trim()
             ? (task as { id: string }).id.trim()
             : ''
@@ -10072,7 +10400,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
     for (const task of tasks) {
       if (!task || typeof task !== 'object') continue
       const status = String((task as { status?: unknown }).status ?? '')
-      if (['done', 'blocked', 'shelved', 'pending_pr', 'archived', 'cancelled'].includes(status)) {
+      if (status === 'blocked') {
+        terminal += 1
+        blockedExecution += 1
+        if (!firstBlockedExecutionTaskId) {
+          firstBlockedExecutionTaskId = task.id
+          firstBlockedExecutionTaskTitle = typeof task.title === 'string' && task.title.trim()
+            ? task.title.trim()
+            : task.id
+          const blockReason = taskBlockerSummary(task)
+          firstBlockedExecutionReason = blockReason.length > 0 ? blockReason : null
+        }
+        continue
+      }
+      if (['done', 'shelved', 'pending_pr', 'archived', 'cancelled'].includes(status)) {
         terminal += 1
         continue
       }
@@ -10136,25 +10477,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
 
-    if (selectedReleaseScope && waitingForApproval > 0) {
-      const focusTitle = firstWaitingSpecTaskTitle ?? 'the first spec'
+    if (runnable > 0 || (terminal === tasks.length && blockedExecution === 0)) return null
+    if (blockedExecution > 0) {
+      const focusTitle = firstBlockedExecutionTaskTitle ?? 'the first blocked task'
       return {
         canStart: false,
         code: 'no_unattended_progress',
-        message:
-          waitingForApproval === 1
-            ? `"${focusTitle}" is waiting for review before work can start.`
-            : `${waitingForApproval} specs are waiting for review before work can start. Start with "${focusTitle}".`,
-        actionHref: firstWaitingSpecTaskId
-          ? `/thread?thread=${encodeURIComponent(`task:${firstWaitingSpecTaskId}`)}`
-          : '/thread',
-        focusTaskId: firstWaitingSpecTaskId ?? undefined,
-        focusTaskTitle: firstWaitingSpecTaskTitle ?? undefined,
-        focusKind: 'spec_review',
-        count: waitingForApproval,
+        message: blockedExecution === 1
+          ? `"${focusTitle}" is blocked before unattended work can run${firstBlockedExecutionReason ? `: ${firstBlockedExecutionReason}` : '.'}`
+          : `${blockedExecution} work items are blocked before unattended work can run. Start with "${focusTitle}".`,
+        actionHref: firstBlockedExecutionTaskId ? `/work?task=${encodeURIComponent(firstBlockedExecutionTaskId)}` : '/work',
+        focusTaskId: firstBlockedExecutionTaskId ?? undefined,
+        focusTaskTitle: firstBlockedExecutionTaskTitle ?? undefined,
+        focusKind: 'blocked_work',
+        count: blockedExecution,
       }
     }
-    if (runnable > 0 || terminal === tasks.length) return null
     if (structurallyIncomplete > 0) {
       const focusTitle = firstStructurallyIncompleteTaskTitle ?? 'the first imported contract task'
       return {
@@ -10169,21 +10507,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         focusTaskTitle: firstStructurallyIncompleteTaskTitle ?? undefined,
         focusKind: 'brief_cleanup',
         count: structurallyIncomplete,
-      }
-    }
-    if (blockedExecution > 0) {
-      const focusTitle = firstBlockedExecutionTaskTitle ?? 'the first blocked task'
-      return {
-        canStart: false,
-        code: 'no_unattended_progress',
-        message: blockedExecution === 1
-          ? `"${focusTitle}" is blocked before unattended work can run${firstBlockedExecutionReason ? `: ${firstBlockedExecutionReason}` : '.'}`
-          : `${blockedExecution} work items are blocked before unattended work can run. Start with "${focusTitle}".`,
-        actionHref: firstBlockedExecutionTaskId ? `/work?task=${encodeURIComponent(firstBlockedExecutionTaskId)}` : '/work',
-        focusTaskId: firstBlockedExecutionTaskId ?? undefined,
-        focusTaskTitle: firstBlockedExecutionTaskTitle ?? undefined,
-        focusKind: 'blocked_work',
-        count: blockedExecution,
       }
     }
     if (needsBriefCleanup > 0) {
@@ -10203,6 +10526,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
     if (waitingForApproval > 0) {
+      const focusTitle = firstWaitingSpecTaskTitle ?? 'the first spec'
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message:
+          waitingForApproval === 1
+            ? `"${focusTitle}" is waiting for review before work can start.`
+            : `${waitingForApproval} specs are waiting for review before work can start. Start with "${focusTitle}".`,
+        actionHref: firstWaitingSpecTaskId
+          ? `/thread?thread=${encodeURIComponent(`task:${firstWaitingSpecTaskId}`)}`
+          : '/thread',
+        focusTaskId: firstWaitingSpecTaskId ?? undefined,
+        focusTaskTitle: firstWaitingSpecTaskTitle ?? undefined,
+        focusKind: 'spec_review',
+        count: waitingForApproval,
+      }
+    }
+    if (selectedReleaseScope && waitingForApproval > 0) {
       const focusTitle = firstWaitingSpecTaskTitle ?? 'the first spec'
       return {
         canStart: false,
@@ -10460,6 +10801,80 @@ export function buildServeApp(opts: ServeOptions = {}): {
     })
   }
 
+  /**
+   * Compatibility bridge for pre-0.10 task-local questions. New owner-input
+   * requests are answered in bounded chat and transition their own request
+   * record; only legacy records need this queue mutation while migration data
+   * is still present.
+   */
+  async function recordBoundedChatTaskResponse(input: {
+    taskId: string
+    questionId: string
+    answer: string
+  }): Promise<boolean> {
+    const tasksPath = projectTasksPath(project.path)
+    if (!projectTaskStateExistsSync(tasksPath)) return false
+    const now = new Date().toISOString()
+    let questionFound = false
+    const promoted = writePromotedTaskDetailMutation(tasksPath, input.taskId, {
+      projectId: project.id,
+      projectRoot: project.path,
+      mutate: task => {
+        const questions = Array.isArray(task.openQuestions)
+          ? [...task.openQuestions as Array<Record<string, unknown>>]
+          : []
+        const question = questions.find(candidate => candidate.id === input.questionId)
+        if (!question) return null
+        questionFound = true
+        delete question.draftAnswer
+        question.answeredAt = now
+        question.answer = input.answer
+        task.openQuestions = questions
+        task.updatedAt = now
+        return task
+      },
+    })
+    if (promoted) {
+      if (questionFound) {
+        await resumeExploring({
+          memoryDir: getProjectStateDir(project.path),
+          taskId: input.taskId,
+          message: `Answer to "${input.questionId}": ${input.answer}`,
+        })
+      }
+      return questionFound
+    }
+    if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') return false
+
+    const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
+    const parsed = queueRead.queue as
+      | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+      | Array<Record<string, unknown>>
+    const queue = Array.isArray(parsed)
+      ? { version: 1, lastUpdated: now, tasks: parsed }
+      : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? now, tasks: parsed.tasks ?? [] }
+    const task = queue.tasks.find(candidate => candidate.id === input.taskId)
+    if (!task) return false
+    const questions = Array.isArray(task.openQuestions)
+      ? [...task.openQuestions as Array<Record<string, unknown>>]
+      : []
+    const question = questions.find(candidate => candidate.id === input.questionId)
+    if (!question) return false
+    delete question.draftAnswer
+    question.answeredAt = now
+    question.answer = input.answer
+    task.openQuestions = questions
+    task.updatedAt = now
+    queue.lastUpdated = now
+    writeProjectTaskQueueWithSummary(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
+    await resumeExploring({
+      memoryDir: getProjectStateDir(project.path),
+      taskId: input.taskId,
+      message: `Answer to "${input.questionId}": ${input.answer}`,
+    })
+    return true
+  }
+
   async function appendPromotedHumanTaskNote(input: {
     taskId: string
     action: string
@@ -10592,6 +11007,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               effectiveTasks: canonicalState.tasks,
               scope: canonicalState.scope,
               ownerInput: canonicalState.summary?.ownerInput ?? null,
+              summary: canonicalState.summary ?? null,
             }
           : {}),
       })
@@ -11027,12 +11443,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
         return c.json({ boundedChat })
       }
+      const linkedRequest = (await listOwnerInputRequests(project.path))
+        .find(request => request.boundedChatSessionId === session.id)
       const boundedChat = await submitBoundedChatUserResponse({
         memoryDir: getProjectStateDir(project.path),
         sessionId: session.id,
         subObjectiveId,
         response,
       })
+      if (
+        linkedRequest?.source.kind === 'task' &&
+        linkedRequest.source.questionId === subObjectiveId
+      ) {
+        await recordBoundedChatTaskResponse({
+          taskId: linkedRequest.source.taskId,
+          questionId: subObjectiveId,
+          answer: response,
+        })
+      }
       await markOwnerInputRequestForBoundedChatReview({
         projectRoot: project.path,
         boundedChatSessionId: session.id,
@@ -12313,6 +12741,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         records: surfaceState?.attentionRecords ?? null,
         watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
         projectRevision: surfaceState?.projectRevision ?? null,
+        releaseTruth: surfaceState?.summary?.releaseSummary ?? null,
       }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -14001,6 +14430,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (action === 'rerun-stage') {
         const body = await c.req.json().catch(() => ({})) as {
           stage?: 'spec' | 'review' | 'gate'
+          recoveryReason?: string
+          recoveryKind?: 'proof' | 'blueprint'
         }
         if (body.stage !== 'spec' && body.stage !== 'review' && body.stage !== 'gate') {
           return c.json({ error: 'Missing or invalid stage' }, 400)
@@ -14009,6 +14440,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           memoryDir,
           taskId: id,
           stage: body.stage,
+          ...(body.recoveryReason?.trim() ? { recoveryReason: body.recoveryReason.trim() } : {}),
+          ...(body.recoveryKind ? { recoveryKind: body.recoveryKind } : {}),
         })
         if (!result.success) return c.json({ error: result.error ?? 'rerun failed' }, 400)
         return c.json({ ok: true, status: result.newStatus })
@@ -14113,8 +14546,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ? releaseState.rawQueue.releases.find(release => release.id === releaseState.scope?.id)
           : undefined
         const selectedScope = releaseState.scope
+        // Scope rows are the shared release-membership authority. A task can
+        // be included through an ancestor or other normalized scope rule, so
+        // checking raw release nodeIds here would disagree with Overview,
+        // Release, and Start readiness.
         const selectedTaskIsEligible = selectedScope
-          ? selectedScope.nodeIds.includes(taskScopeNodeId(String(task.id ?? '')))
+          ? releaseState.scopeRows.some(row => row.taskId === String(task.id ?? '') && row.scope === 'included')
           : false
         const selectedProofStyle = selectedTaskIsEligible ? selectedRelease?.proofStyle : undefined
         const currentTaskRead = await readProjectTaskCurrentStateAtBoundary(project.path, id)
@@ -14201,7 +14638,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             reason: 'Guildhall refused to resume work without a current implementation blueprint and reopened source-backed shaping.',
           })
         }
-        if (isProofRecovery && selectedProofStyle === 'script_only' && !hasExecutableRecoveredProof) {
+        if (isProofRecovery && selectedProofStyle === 'script_only' && !hasExecutableRecoveredProof && !taskHasReviewProofPath(effectiveTask)) {
           const result = await rerunTaskStage({
             memoryDir,
             taskId: id,
@@ -16272,6 +16709,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const diagnostic = state.diagnostics
       const git = diagnostic?.git
       const diagnosticBlockers = git?.blockers ?? []
+      // An optional release is not the same thing as an empty project. When
+      // no named release is selected, current-work still has a saved status
+      // partition and Release detail must expose it instead of returning
+      // totals alongside an empty bucket map.
       const statusCounts = savedReleaseSummary ? savedStatusCounts : {}
       const diagnosticTotals = {
         tasks: savedCounts.total,
@@ -16413,6 +16854,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ? scopedTasks
         .filter(task => String(task.status ?? '') === 'done')
         .filter(task => !taskHasScriptProofPath(task))
+        .filter(task => !taskCompletionProofSatisfiedByLinkedChildren(task, tasks, savedRelease?.proofStyle))
         .map(task => ({ id: task.id, title: task.title }))
       : []
     const scopedTaskIds = new Set(scopedTasks.map(task => task.id))
@@ -18164,6 +18606,10 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
             return shouldRefreshProjectAtStartup({
               authority: authority.authority,
               summaryFreshness: summary?.freshness,
+              attentionNeedsRefresh: attentionProjectionNeedsReleaseReconciliation(
+                entry.path,
+                summary?.releaseSummary ?? null,
+              ),
             })
           } catch {
             // An unreadable boundary is itself a repair candidate. Keep the

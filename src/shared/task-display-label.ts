@@ -58,7 +58,7 @@ function questionCandidate(title: string | undefined, description: string | unde
   return candidate
 }
 
-function recoverClippedTitle(title: string | undefined, description: string | undefined): string | null {
+export function recoverClippedTitle(title: string | undefined, description: string | undefined): string | null {
   if (!title || !description) return null
   const compactTitle = title.replace(/\.\.\.$/, '').trim()
   const titleLooksClipped = title.length >= 60 || title.endsWith('...')

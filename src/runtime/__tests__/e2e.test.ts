@@ -45,7 +45,7 @@ import { LivenessTracker } from '../liveness.js'
 import { buildServeApp } from '../serve.js'
 import { InMemoryGitDriver } from '../git-driver.js'
 import { buildEffectiveTask } from '../effective-task.js'
-import { applyProjectMigrations } from '../migrations.js'
+import { applyProjectMigrations, getProjectMigrationStatus } from '../migrations.js'
 import {
   appendTaskEvidence,
   readTaskEvidence,
@@ -99,18 +99,32 @@ async function applyCanonicalProjectMigrations(projectRoot: string, seedEmptyQue
       { projectRoot },
     )
   }
-  const prerequisites = await applyProjectMigrations({ projectRoot, includePrompt: true })
-  expect(prerequisites.failed).toEqual([])
-  const finalize = await applyProjectMigrations({
-    projectRoot,
-    only: ['0.13.0/project-state-finalize'],
-  })
-  expect(finalize.failed).toEqual([])
-  const cleanup = await applyProjectMigrations({
-    projectRoot,
-    only: ['0.13.0/project-state-legacy-live-file-cleanup'],
-  })
-  expect(cleanup.failed).toEqual([])
+  for (let attempt = 0; attempt < 128; attempt += 1) {
+    const prerequisites = await applyProjectMigrations({
+      projectRoot,
+      includePrompt: true,
+      appVersion: 'e2e-test',
+    })
+    expect(prerequisites.failed).toEqual([])
+    const status = await getProjectMigrationStatus({ projectRoot })
+    const canonicalIds = status.blocked
+      .filter(item => item.safety !== 'manual' && (
+        item.safety === 'required' || item.requirement === 'required'
+      ))
+      .map(item => item.id)
+      .filter((id, index, all) => all.indexOf(id) === index)
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+    if (canonicalIds.length === 0) break
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: [canonicalIds[0]],
+      appVersion: 'e2e-test',
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.length).toBeGreaterThan(0)
+  }
+  const remaining = await getProjectMigrationStatus({ projectRoot })
+  expect(remaining.blocked).toEqual([])
 }
 
 function buildValidSpec(summary: string, criterion: string): string {
@@ -758,6 +772,10 @@ describe('E2E 0.5.0: service over projects', () => {
         projectRoot: tmpDir,
         only: ['0.10.0/project-state-storage-boundary'],
       })
+      // The explicit historical boundary write can make later required
+      // read-model migrations visible again. Bring this fixture back to the
+      // canonical current schema before asserting project start behavior.
+      await applyCanonicalProjectMigrations(tmpDir)
 
       const startRes = await app.fetch(new Request('http://localhost/api/project/start?projectId=service-proof', {
         method: 'POST',

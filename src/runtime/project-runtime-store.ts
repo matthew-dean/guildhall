@@ -109,7 +109,7 @@ export function defaultProjectRuntimeState(projectRoot: string): ProjectRuntimeS
     status: 'stopped',
     image: {
       repository: 'ghcr.io/matthew-dean/guildhall-runtime-debian',
-      tag: '0.10.0-trixie-node22-python313-playwright',
+      tag: '0.11.0-trixie-node22-python313-playwright',
       digest: null,
     },
     runtimeApiVersion: '1',
@@ -149,7 +149,7 @@ export function defaultProjectRuntimeState(projectRoot: string): ProjectRuntimeS
       runtimeApiVersion: '1',
       image: {
         repository: 'ghcr.io/matthew-dean/guildhall-runtime-debian',
-        tag: '0.10.0-trixie-node22-python313-playwright',
+        tag: '0.11.0-trixie-node22-python313-playwright',
         digest: null,
       },
       mountLayout: {

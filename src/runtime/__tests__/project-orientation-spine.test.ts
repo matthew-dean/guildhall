@@ -1,11 +1,133 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildProjectOrientationSpine,
+  reconcileOrientationSpineWithReleaseTruth,
   taskEligibleForSelectedScope,
 } from '../project-orientation-spine.js'
 import { buildProjectScopeProjection } from '../project-scope-projection.js'
 
 describe('buildProjectOrientationSpine', () => {
+  it('preserves a shipped release lifecycle when bounded readiness is complete', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'shipped-release',
+      now: '2026-07-19T00:00:00.000Z',
+      scope: {
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:task-1'],
+        deferredNodeIds: [],
+      },
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'shipped',
+        source: 'release_plan',
+        nodeIds: ['work:task-1'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      selectedReleaseId: 'release-1',
+      tasks: [{ id: 'task-1', title: 'Proven work', status: 'done', releaseIds: ['release-1'] }],
+      releaseReadiness: { verdict: 'ready', blockers: [] },
+    })
+
+    expect(spine.selectedRelease?.state).toBe('shipped')
+    expect(spine.releases[0]?.state).toBe('shipped')
+
+    const staleSpine = {
+      ...spine,
+      selectedRelease: spine.selectedRelease ? { ...spine.selectedRelease, state: 'ready' as const } : null,
+      releases: spine.releases.map(release => ({ ...release, state: 'ready' as const })),
+    }
+    const reconciled = reconcileOrientationSpineWithReleaseTruth(staleSpine, {
+      state: 'ready',
+      lifecycleState: 'shipped',
+      counts: { total: 1, done: 1, unfinished: 0, deferred: 0, proofBlocked: 0 },
+    })
+
+    expect(reconciled.selectedRelease?.state).toBe('shipped')
+    expect(reconciled.releases[0]?.state).toBe('shipped')
+    expect(reconciled.release.state).toBe('ready')
+    expect(reconciled.release.lifecycleState).toBe('shipped')
+  })
+
+  it('does not let stale task proof contracts reopen a release already marked ready', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'proof-authority',
+      now: '2026-07-19T00:00:00.000Z',
+      charter: { goal: 'Prove the bounded release.', source: 'owner_approved' },
+      scope: {
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        source: 'owner_approved',
+        nodeIds: ['work:task-1'],
+        deferredNodeIds: [],
+      },
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-1'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      selectedReleaseId: 'release-1',
+      tasks: [{
+        id: 'task-1',
+        title: 'Completed task',
+        status: 'done',
+        proofPaths: [{ title: 'Run proof', status: 'planned' }],
+      }],
+      releaseReadiness: { verdict: 'ready', blockers: [] },
+    })
+
+    const reconciled = reconcileOrientationSpineWithReleaseTruth({
+      ...spine,
+      scopeRows: [{
+        taskId: 'task-1',
+        nodeId: 'work:task-1',
+        title: 'Completed task',
+        scope: 'included',
+        eligibilityReason: 'selected release',
+        hierarchyRole: 'task',
+        status: 'ready',
+        handoffState: 'ready',
+        blocksStart: true,
+        blocksRelease: true,
+        humanBlocking: false,
+        sourceRefs: [],
+      }],
+    }, {
+      state: 'ready',
+      counts: { total: 1, done: 1, unfinished: 0, deferred: 0, proofBlocked: 0 },
+    })
+
+    expect(reconciled.summary.headline).toBe('Release 1 is complete.')
+    expect(reconciled.selectedRelease?.nodeIds).toContain('work:task-1')
+    expect(reconciled.gaps.some(gap => gap.kind === 'proof_needed')).toBe(false)
+    expect(reconciled.proofContracts.every(contract => contract.state === 'proven' && contract.missing.length === 0)).toBe(true)
+    expect(reconciled.roots[0]?.maturity).toBe('done')
+    expect(reconciled.roots[0]?.proof.state).toBe('proven')
+    expect(reconciled.activePins).toEqual([])
+    expect(reconciled.summary.pinnedNow).toEqual([])
+    expect(reconciled.scopeRows[0]).toMatchObject({
+      status: 'done',
+      handoffState: 'done',
+      blocksStart: false,
+      blocksRelease: false,
+    })
+    expect(reconciled.nodes['work:task-1']).toMatchObject({
+      maturity: 'done',
+      proof: { state: 'proven', missing: [] },
+    })
+  })
+
   it('builds a scoped state-of-the-union spine from charter, release scope, work hierarchy, and proof', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

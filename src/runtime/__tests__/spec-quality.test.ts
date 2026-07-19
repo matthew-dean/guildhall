@@ -38,6 +38,18 @@ describe('validateSpecGrounding', () => {
 
     expect(result).toEqual({ ok: true, errors: [] })
   })
+
+  it('treats documented source references as grounding evidence even without source claims', () => {
+    const result = validateSpecGrounding({
+      ...baseTask,
+      sourceClaims: [],
+      spec: 'Run pnpm proof:evaluation and add src/reviewers/theme-proof.test.ts.',
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.errors.join(' ')).toContain('executable detail')
+    expect(result.errors.join(' ')).toContain('project paths')
+  })
 })
 
 describe('validateProductBriefGrounding', () => {

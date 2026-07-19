@@ -78,6 +78,9 @@ export async function pruneStaleGitIndexLockFromError(
 function isIgnorableGuildhallStatePath(file: string): boolean {
   return (
     file === 'guildhall.yaml' ||
+    // AGENTS.md is the managed Codex bridge file installed by Guildhall. Its
+    // presence is agent configuration, not release work in the repository.
+    file === 'AGENTS.md' ||
     file === 'memory' ||
     file.startsWith('memory/') ||
     file === '.guildhall' ||

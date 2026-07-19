@@ -54,6 +54,15 @@ import type { ConsumerReturnPacket, DeliveryReceipt } from './project-graph.js'
 import { detectWorkspaceSignals, formWorkspaceHypothesis, type WorkspaceImportDraft, type WorkspaceSignal } from './workspace-import/index.js'
 import { buildWorkspaceImportReview, type WorkspaceImportReview } from './workspace-import/review.js'
 import { materializeWorkspaceImportDraft } from './workspace-importer.js'
+import { startProcessLogRetention } from './process-log-retention.js'
+import {
+  readProjectSavedReleaseState,
+  type ProjectSavedReleaseReadModel,
+} from './project-state-boundary.js'
+import type {
+  ProjectSummaryProjection,
+  ProjectSummaryReleaseSummary,
+} from './project-summary-projection.js'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -364,6 +373,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'register',
   'unregister',
   'list',
+  'status',
   'run',
   'task',
   'serve',
@@ -426,6 +436,8 @@ Usage:
   guildhall register <path>          Register an existing workspace (must contain guildhall.yaml)
   guildhall unregister <id|path> Remove a workspace from the registry
   guildhall list                     Show all registered workspaces
+  guildhall status [id|path]          Show one project's saved release and work state
+    --json                       Print the same bounded status as JSON
 
   guildhall run [id|path]            Run the coordinator for a workspace
     --domain <id>                Filter to tasks in one coordinator domain
@@ -702,6 +714,119 @@ function cmdList() {
   console.log()
 }
 
+export interface CliProjectStatus {
+  id: string
+  name: string
+  path: string
+  authority: ProjectSavedReleaseReadModel['authority']
+  freshness: ProjectSummaryProjection['freshness'] | 'missing'
+  queueRevision: number | null
+  projectRevision: number | null
+  release: ProjectSummaryReleaseSummary | null
+  scope: {
+    id: string
+    label: string
+    kind: string
+    included: number
+    deferred: number
+  } | null
+  nextAction: ProjectSummaryProjection['nextAction'] | null
+  blockers: ProjectSummaryProjection['blockers']
+  recentWork: ProjectSummaryProjection['recentWork']
+}
+
+/**
+ * Format the bounded saved project projection for the CLI. This intentionally
+ * does not reopen the task queue or derive a second release summary: the CLI
+ * and web surfaces must read the same persisted state boundary.
+ */
+export function buildCliProjectStatus(input: {
+  id: string
+  name: string
+  path: string
+  state: ProjectSavedReleaseReadModel
+}): CliProjectStatus {
+  const summary = input.state.summary
+  return {
+    id: input.id,
+    name: input.name,
+    path: input.path,
+    authority: input.state.authority,
+    freshness: summary?.freshness ?? 'missing',
+    queueRevision: input.state.queueRevision,
+    projectRevision: input.state.projectRevision,
+    release: summary?.releaseSummary ?? null,
+    scope: input.state.scope
+      ? {
+          id: input.state.scope.id,
+          label: input.state.scope.label,
+          kind: input.state.scope.kind,
+          included: input.state.scope.nodeIds.length,
+          deferred: input.state.scope.deferredNodeIds.length,
+        }
+      : null,
+    nextAction: summary?.nextAction ?? null,
+    blockers: summary?.blockers ?? [],
+    recentWork: summary?.recentWork ?? [],
+  }
+}
+
+export function renderProjectStatus(status: CliProjectStatus): string {
+  const release = status.release
+  const counts = release?.counts
+  const releaseLabel = release?.release?.label ?? 'No named release selected'
+  const releaseState = release?.release?.state ?? release?.state ?? 'unknown'
+  const progress = counts
+    ? `${counts.done}/${counts.total} done / ${counts.deferred} deferred / ${counts.blocked} blocked`
+    : 'No saved release summary'
+  const next = status.nextAction?.message ?? 'No next action recorded.'
+  const blockers = status.blockers.length === 0
+    ? 'none'
+    : status.blockers.map(blocker => blocker.label).join('; ')
+  return [
+    status.name,
+    `  Release: ${releaseLabel} [${releaseState}]`,
+    `  Progress: ${progress}`,
+    `  Readiness: ${release?.state ?? 'unknown'}`,
+    `  Next: ${next}`,
+    `  Blockers: ${blockers}`,
+    `  State: ${status.freshness} via ${status.authority} (queue ${status.queueRevision ?? 'n/a'}, project ${status.projectRevision ?? 'n/a'})`,
+  ].join('\n')
+}
+
+async function cmdStatus() {
+  const pos = positionals()
+  const idOrPath = pos[0]
+  try {
+    const workspace = idOrPath
+      ? loadWorkspace(findWorkspace(idOrPath)?.path ?? resolve(expandPath(idOrPath)))
+      : resolveWorkspace()
+    const registryEntry = findWorkspace(idOrPath ?? workspace.root)
+    const workspaceConfig = readWorkspaceConfig(workspace.root)
+    const name = registryEntry?.name
+      ?? (typeof workspaceConfig.name === 'string' ? workspaceConfig.name : null)
+      ?? basename(workspace.root)
+    const id = registryEntry?.id
+      ?? (typeof workspaceConfig.id === 'string' ? workspaceConfig.id : null)
+      ?? slugify(name)
+    const state = readProjectSavedReleaseState(workspace.root)
+    const status = buildCliProjectStatus({
+      id,
+      name,
+      path: workspace.root,
+      state,
+    })
+    if (args.includes('--json')) {
+      console.log(JSON.stringify(status, null, 2))
+      return
+    }
+    console.log(renderProjectStatus(status))
+  } catch (err) {
+    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+}
+
 async function cmdRun() {
   const pos = positionals()
   const idOrPath = pos[0]
@@ -921,6 +1046,7 @@ async function cmdServeInternal() {
   const serviceState = getFlag('--service-state')
   void positionals
 
+  startProcessLogRetention()
   const { runServe } = await import('./serve.js')
   await runServe({
     ...(portArg ? { port: Number(portArg) } : {}),
@@ -2368,6 +2494,7 @@ async function main() {
     case 'register': return cmdRegister()
     case 'unregister': return cmdUnregister()
     case 'list':    return cmdList()
+    case 'status':  return cmdStatus()
     case 'run':     return cmdRun()
     case 'task':    return cmdTask()
     case 'serve':   return cmdServe()

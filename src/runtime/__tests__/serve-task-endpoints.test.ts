@@ -218,14 +218,25 @@ async function applyCanonicalMigrations(): Promise<void> {
   }
   await refreshCanonicalSummary()
   for (;;) {
+    const prerequisites = await applyProjectMigrations({
+      projectRoot: tmpDir,
+      includePrompt: true,
+      appVersion: 'serve-task-endpoints-test',
+    })
+    if (prerequisites.failed.length > 0) {
+      throw new Error(prerequisites.failed.map(item => `${item.id}: ${item.error}`).join('; '))
+    }
     const status = await getProjectMigrationStatus({ projectRoot: tmpDir })
-    const automatic = [...status.pending, ...status.blocked]
-      .filter(item => item.safety === 'automatic' || item.safety === 'required')
+    const automatic = status.blocked
+      .filter(item => item.safety !== 'manual' && (
+        item.safety === 'required' || item.requirement === 'required'
+      ))
+    automatic.sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }))
     if (automatic.length === 0) return
 
     const result = await applyProjectMigrations({
       projectRoot: tmpDir,
-      only: automatic.map(item => item.id),
+      only: [automatic[0]!.id],
       appVersion: 'serve-task-endpoints-test',
     })
     if (result.failed.length > 0) {
@@ -261,6 +272,8 @@ async function seedCanonicalQueue(queue: Record<string, any>): Promise<void> {
     }
     if (!taskId) throw new Error(`Missing seeded task id at index ${index}`)
   }
+  await refreshCanonicalSummary()
+  await applyCanonicalMigrations()
   await refreshCanonicalSummary()
 }
 
@@ -573,6 +586,8 @@ describe('GET /api/project/task/:id', () => {
               createdTaskId: 'task-child',
             },
           ],
+          createdAt: '2026-06-01T00:00:00.000Z',
+          createdBy: 'test',
         },
       },
       {
@@ -2962,9 +2977,46 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
 
     const raw = await readTaskQueue()
     expect(raw.tasks[0]?.status).toBe('exploring')
+    expect(raw.tasks[0]?.spec).toBeUndefined()
+    expect(raw.tasks[0]?.acceptanceCriteria).toEqual([])
+    expect(raw.tasks[0]?.productBrief).toBeUndefined()
     expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh spec pass/i)
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/fresh spec pass/i)
+  })
+
+  it('records explicit proof re-intake guidance and clears the old executable plan', async () => {
+    await seedTask('task-1', {
+      status: 'ready',
+      spec: 'Invented proof command',
+      proofPaths: [{ command: 'pnpm proof:evaluation', kind: 'command' }],
+      acceptanceCriteria: ['Run the invented command'],
+      productBrief: {
+        userJob: 'Run the release proof.',
+        successMetric: 'The proof produces durable evidence.',
+      },
+      notes: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const reason = 'The saved command is not grounded in visible project evidence.'
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/rerun-stage'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stage: 'spec', recoveryReason: reason, recoveryKind: 'proof' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+
+    const raw = await readTaskQueue()
+    expect(raw.tasks[0]?.status).toBe('exploring')
+    expect(raw.tasks[0]?.spec).toBeUndefined()
+    expect(raw.tasks[0]?.proofPaths).toBeUndefined()
+    expect(raw.tasks[0]?.acceptanceCriteria).toEqual([])
+    expect(raw.tasks[0]?.productBrief).toBeUndefined()
+    expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh spec pass/i)
+    const runtime = (await readTaskRuntimeStore(tmpDir)).tasks['task-1']
+    expect(runtime?.proofRecovery).toMatchObject({ reason })
   })
 
   it('reopens a falsely done task for a fresh spec pass', async () => {
@@ -5122,6 +5174,62 @@ describe('POST /api/project/bounded-chat/:id/answer for task owner input', () =>
     expect(session.status).toBe('coordinator_review')
     expect(session.subObjectives[0]?.localTurns.at(-1)?.content).toBe('A')
     expect(readProjectStateDatabaseTaskPointWithRevision(taskQueuePath(), 'task-1')?.task.definition.openQuestions).toBeUndefined()
+  })
+
+  it('records the answer on the linked task before coordinator review', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+    })
+    const seededQuestion = writePromotedTaskDetailMutation(taskQueuePath(), 'task-1', {
+      projectId,
+      projectRoot: tmpDir,
+      mutate: task => ({
+        ...task,
+        openQuestions: [{
+          kind: 'text',
+          id: 'q-1',
+          prompt: 'What is the bounded proof target?',
+        }],
+      }),
+    })
+    expect(seededQuestion?.task.openQuestions).toMatchObject([{
+      id: 'q-1',
+      prompt: 'What is the bounded proof target?',
+    }])
+    const ownerInput = await createOwnerInputRequest({
+      projectRoot: tmpDir,
+      projectId,
+      commandId: 'test:task-q-1-persisted-answer',
+      now: '2026-06-03T12:00:00.000Z',
+      actor: 'test',
+      source: { kind: 'task', taskId: 'task-1', questionId: 'q-1' },
+      target: { kind: 'thread' },
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify Seeded task for tests',
+        successCriteria: ['Owner answers the linked bounded-chat session.'],
+      },
+      question: {
+        kind: 'text',
+        prompt: 'What is the bounded proof target?',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl(`/api/project/bounded-chat/${ownerInput.session.id}/answer`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ subObjectiveId: 'q-1', response: 'A deterministic CLI proof over the fixture.' }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(readProjectStateDatabaseTaskPointWithRevision(taskQueuePath(), 'task-1')?.task.definition.openQuestions).toMatchObject([{
+      id: 'q-1',
+      answer: 'A deterministic CLI proof over the fixture.',
+      answeredAt: expect.any(String),
+    }])
+    expect((await listOwnerInputRequests(tmpDir))[0]).toMatchObject({ status: 'coordinator_review' })
   })
 })
 

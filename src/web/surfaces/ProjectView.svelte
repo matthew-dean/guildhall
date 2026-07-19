@@ -750,9 +750,22 @@
   }
   const allTerminalReviewNotice = $derived.by(() => {
     if (!allTerminalStart) return null
+    // Source-map gaps describe documentation provenance, not a release
+    // blocker. A closed release must remain closed in the shell even when its
+    // descriptive spine still contains non-blocking source cleanup notes.
+    if (detail?.releaseReadiness?.ready === true) return null
     const spine = detail?.orientationSpine
-    const gapCount = spine?.sourceHealth?.gaps ?? spine?.gaps?.length ?? 0
-    const topBlocker = orientationLabel(spine?.summary?.topBlocker)
+    const releaseBlockerCount = detail?.releaseReadiness?.releaseBlockers?.length ?? 0
+    const actionableGap = spine?.gaps?.find(gap => [
+      'source_conflict',
+      'missing_charter',
+      'missing_execution_boundary',
+      'needs_breakdown',
+    ].includes(gap.kind))
+    const gapCount = releaseBlockerCount > 0 || actionableGap ? Math.max(1, releaseBlockerCount) : 0
+    const topBlocker = releaseBlockerCount > 0
+      ? orientationLabel(spine?.summary?.topBlocker)
+      : orientationLabel(actionableGap?.label)
     if (gapCount <= 0 && !topBlocker) return null
     return {
       message: orientationLabel(spine?.summary?.headline) ?? 'Current scope needs review.',

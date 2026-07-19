@@ -64,7 +64,34 @@ function mkTask(overrides: Partial<Task> = {}): Task {
     projectPath: tmpDir,
     status: 'in_progress',
     priority: 'normal',
-    acceptanceCriteria: [],
+    acceptanceCriteria: [{
+      id: 'ac-1',
+      description: 'The requested change is complete.',
+      verifiedBy: 'review',
+      met: false,
+    }],
+    productBrief: {
+      userJob: 'I want the requested task completed.',
+      successMetric: 'The acceptance criterion is met.',
+      approvedAt: '2026-04-22T00:00:00.000Z',
+    },
+    spec: [
+      '## Summary',
+      '',
+      'Implement the requested change.',
+      '',
+      '## Completion Boundary',
+      '- Product outcome: The task is complete for the requested scope.',
+      '- What Guildhall can complete in code: Update the project and its tests.',
+      '- External dependencies: None.',
+      '- Owner-only setup: None.',
+      '- Verification environment: Local test environment.',
+      '- What counts as done: The acceptance criterion is met and review can proceed.',
+      '- What must be split or blocked: Nothing.',
+      '',
+      '## Acceptance Criteria',
+      '1. The requested change is complete.',
+    ].join('\n'),
     outOfScope: [],
     dependsOn: [],
     notes: [],
@@ -150,6 +177,23 @@ function makeWorkerAgent(getOrch: () => Orchestrator): SpyAgent {
         const t = queue.tasks.find((x) => x.id === taskId)
         if (t && t.status === 'in_progress') {
           t.status = 'done'
+          t.acceptanceCriteria = t.acceptanceCriteria.map(criterion => ({ ...criterion, met: true }))
+          t.gateResults = [{
+            gateId: `${taskId}-completion`,
+            passed: true,
+            checkedAt: '2026-04-22T00:00:01.000Z',
+            output: 'The acceptance criterion is met.',
+          }]
+          t.completionHandoff = {
+            id: `${taskId}-completion`,
+            taskId,
+            completedAt: '2026-04-22T00:00:01.000Z',
+            completedBy: 'worker-agent',
+            summary: 'The task was completed by the worker.',
+            verified: ['The acceptance criterion is met.'],
+            evidenceRefs: [`task:${taskId}:completion`],
+          }
+          t.completedAt = '2026-04-22T00:00:01.000Z'
           t.updatedAt = '2026-04-22T00:00:01.000Z'
         }
         queue.lastUpdated = '2026-04-22T00:00:01.000Z'

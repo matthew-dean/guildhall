@@ -192,5 +192,5 @@ function runOnceStatePath(memoryDir: string, filename: string): string {
 function compactTitle(value: string): string {
   const first = value.split(/\r?\n/).find(line => line.trim())?.trim() ?? 'Run once task'
   const single = first.replace(/\s+/g, ' ')
-  return single.length <= 60 ? single : `${single.slice(0, 57).trimEnd()}...`
+  return single || 'Run once task'
 }

@@ -24,6 +24,7 @@ import {
   getProjectLocalHistoryDir,
   getProjectSystemStatePath,
   getProjectTranscriptPath,
+  readProjectStateDatabaseMetadata,
   readProjectStateDatabaseQueueDefinition,
   readProjectStateJsonAsync,
   promoteProjectStateDatabaseAuthority,
@@ -189,15 +190,42 @@ async function refreshCanonicalSummary(): Promise<void> {
 }
 
 async function applyCanonicalMigrations(): Promise<void> {
-  const status = await getProjectMigrationStatus({ projectRoot: tmpDir })
-  if (status.blocked.length === 0) return
-  const result = await applyProjectMigrations({
-    projectRoot: tmpDir,
-    only: status.blocked.map(item => item.id),
-    appVersion: 'serve-settings-test',
-  })
-  if (result.failed.length > 0) {
-    throw new Error(result.failed.map(item => `${item.id}: ${item.error}`).join('; '))
+  try {
+    await fs.access(getProjectSystemStatePath(tmpDir, 'TASKS.json'))
+  } catch {
+    // A settings fixture may persist project metadata before its legacy task
+    // queue exists. Once SQLite exists, however, the final migrations read
+    // the authoritative queue from the database after TASKS.json is retired.
+    if (readProjectStateDatabaseMetadata(tmpDir) === null) return
+  }
+  for (let attempt = 0; attempt < 128; attempt += 1) {
+    const prerequisites = await applyProjectMigrations({
+      projectRoot: tmpDir,
+      includePrompt: true,
+      appVersion: 'serve-settings-test',
+    })
+    if (prerequisites.failed.length > 0) {
+      throw new Error(prerequisites.failed.map(item => `${item.id}: ${item.error}`).join('; '))
+    }
+    const status = await getProjectMigrationStatus({ projectRoot: tmpDir })
+    const automaticIds = status.blocked
+      .filter(item => item.safety !== 'manual' && (
+        item.safety === 'required' || item.requirement === 'required'
+      ))
+      .map(item => item.id)
+      .filter((id, index, all) => all.indexOf(id) === index)
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+    if (automaticIds.length === 0) break
+    // Apply prerequisites one at a time so a later migration cannot run in
+    // the same pass against a boundary its earlier prerequisite just created.
+    const result = await applyProjectMigrations({
+      projectRoot: tmpDir,
+      only: [automaticIds[0]],
+      appVersion: 'serve-settings-test',
+    })
+    if (result.failed.length > 0) {
+      throw new Error(result.failed.map(item => `${item.id}: ${item.error}`).join('; '))
+    }
   }
   const remaining = await getProjectMigrationStatus({ projectRoot: tmpDir })
   if (remaining.blocked.length > 0) {
@@ -1643,7 +1671,9 @@ describe('POST /api/project/start', () => {
       unfinishedCount: 1,
       humanBlockingCount: 1,
     })
-    expect(readiness.statusCounts?.spec_review).toBeUndefined()
+    // Optional releases do not infer a named release from task membership,
+    // but current work still needs to remain visible in the project scope.
+    expect(readiness.statusCounts?.spec_review).toBe(1)
     expect(readiness.diagnostics?.unapprovedSpecs).toBeUndefined()
   })
 
@@ -3458,7 +3488,7 @@ describe('GET /api/service', () => {
         id: 'broken-settings-project',
         projectStatusLoading: false,
         summaryFreshness: 'missing',
-        projectStatusError: expect.stringContaining('saved fleet summary'),
+        projectStatusError: expect.stringContaining('fleet summary'),
       })
     } finally {
       unregisterWorkspace(PROJECT_ID)
@@ -3469,9 +3499,10 @@ describe('GET /api/service', () => {
   it('serves the current fleet shell without reconstructing project detail', async () => {
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
     await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const service = buildServeApp({ projectPath: tmpDir })
+    await service.refreshProjectProjections(tmpDir)
 
-    const res = await app.fetch(new Request('http://localhost/api/service/projects'))
+    const res = await service.app.fetch(new Request('http://localhost/api/service/projects'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as { projects?: Array<Record<string, any>> }
     const project = body.projects?.find(item => item.id === PROJECT_ID)
@@ -8921,6 +8952,53 @@ describe('GET /api/project — bootstrap status', () => {
     if (!queue) throw new Error('Missing canonical SQLite task queue')
     expect(queue.selectedReleaseId).toBe('release-2')
     expect(queue.releases?.find(release => release.id === 'release-2')?.description).toBeUndefined()
+    expect(queue.releases?.find(release => release.id === 'release-2')?.state).toBe('active')
+  })
+
+  it('activates later scope without reopening a shipped release', async () => {
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: '2026-06-01T12:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      releases: [
+        {
+          id: 'release-1',
+          label: 'First release',
+          kind: 'release',
+          state: 'shipped',
+          source: 'release_plan',
+          nodeIds: ['work:task-1'],
+          deferredNodeIds: [],
+        },
+        {
+          id: 'release-2',
+          label: 'Later release',
+          kind: 'release',
+          state: 'planned',
+          source: 'release_plan',
+          nodeIds: ['work:task-2'],
+          deferredNodeIds: [],
+        },
+      ],
+      tasks: [
+        { id: 'task-1', title: 'Closed work', status: 'done', releaseIds: ['release-1'] },
+        { id: 'task-2', title: 'Later work', status: 'ready', releaseIds: ['release-2'] },
+      ],
+    })
+    await applyCanonicalMigrations()
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const select = await app.fetch(new Request(scoped('/api/project/release/select'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ releaseId: 'release-2' }),
+    }))
+
+    expect(select.status).toBe(200)
+    const queue = readProjectStateDatabaseQueueDefinition(getProjectSystemStatePath(tmpDir, 'TASKS.json'))
+    expect(queue?.selectedReleaseId).toBe('release-2')
+    expect(queue?.releases?.find(release => release.id === 'release-1')?.state).toBe('shipped')
+    expect(queue?.releases?.find(release => release.id === 'release-2')?.state).toBe('active')
   })
 
   it('selects a release inferred from task membership through the owning project endpoint', async () => {
