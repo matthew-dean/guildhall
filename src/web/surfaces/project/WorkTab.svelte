@@ -27,7 +27,7 @@
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
   import { deliveryProgressBadge } from '../../lib/work-progress-display.js'
-  import { taskDisplayLabel, taskSourceQuestion } from '../../../shared/task-display-label.js'
+  import { taskDisplayLabel, taskSourceQuestion } from '@guildhall/shared'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
   import WorkTreePreview from './WorkTreePreview.svelte'

@@ -3483,7 +3483,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
-      const startReadiness = await projectStartReadiness(project.path)
+      const startReadiness = await projectStartReadinessForPath(project.path)
       const spine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
@@ -4583,6 +4583,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       default:
         return 400
     }
+  }
+
+  async function projectStartReadinessForPath(projectPath: string) {
+    const entryConfig = readProjectConfig(projectPath)
+    const resolvedConfig = resolveConfig({ workspacePath: projectPath })
+    return projectStartReadiness({
+      projectPath,
+      resolvedConfig,
+      runtimeProvider: getRuntimeProviderConfig({
+        projectPath,
+        models: resolvedConfig.models,
+      }),
+      allowPaidProviderFallback: Boolean(entryConfig.allowPaidProviderFallback),
+    })
   }
 
 	  async function terminalStartState(projectPath: string, requestedTaskId?: string): Promise<{
@@ -6735,7 +6749,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         selectedReleaseId: releaseQueue.selectedReleaseId,
         releases: releaseQueue.releases,
         tasks: state.tasks as Task[],
-        startReadiness: await projectStartReadiness(project.path),
+        startReadiness: await projectStartReadinessForPath(project.path),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       timing[0]!.endedAt = Date.now()
@@ -9196,7 +9210,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         selectedReleaseId: rawQueue.selectedReleaseId,
         releases: rawQueue.releases,
         tasks: tasks as unknown as Task[],
-        startReadiness: await projectStartReadiness(project.path),
+        startReadiness: await projectStartReadinessForPath(project.path),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       const release = readinessSpine.selectedRelease

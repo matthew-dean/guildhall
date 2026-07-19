@@ -1,4 +1,4 @@
-import { taskDisplayLabel } from '../shared/task-display-label.js'
+import { taskDisplayLabel } from '@guildhall/shared'
 
 export type OrientationScopeKind =
   | 'release'

@@ -1,6 +1,6 @@
 import type { Task } from '@guildhall/core'
 import { hasOpenEscalation } from '@guildhall/tools'
-import { taskDisplayLabel } from '../shared/task-display-label.js'
+import { taskDisplayLabel } from '@guildhall/shared'
 
 export interface WorkRollup {
   totalChildren: number
