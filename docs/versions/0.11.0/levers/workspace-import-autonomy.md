@@ -1,0 +1,26 @@
+---
+title: workspace_import_autonomy
+help_topic: lever.workspace_import_autonomy
+help_summary: |
+  What happens when Guildhall detects an importable workspace (e.g. existing
+  specs, task backlogs, design docs). `off` ignores them; `suggest` (default)
+  surfaces a banner; `apply` imports automatically.
+---
+
+# `workspace_import_autonomy`
+
+**Scope:** project • **Default:** `suggest`
+
+Controls how Guildhall behaves when it detects importable state from another workspace-shaped tool (issue tracker export, existing spec folder, migration artifact).
+
+## Positions
+
+| Position | Behavior |
+|---|---|
+| `off` | Ignore detected imports. |
+| `suggest` | Show a "Workspace Import" banner in the browser UI offering to review and import. User confirms each item. |
+| `apply` | Import detected items automatically on workspace start. Trust but verify. |
+
+## What gets imported
+
+The importer detects recognized shapes — e.g. a `specs/` folder, a `TASKS.md` markdown backlog, or an external issue tracker export — and translates them into reviewable task candidates.
