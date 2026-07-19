@@ -2,6 +2,8 @@
 
 import { execFileSync } from 'node:child_process'
 import { performance } from 'node:perf_hooks'
+import { resolve } from 'node:path'
+import { auditNarrativeHarnessProof } from './narrative-harness-release-proof.mjs'
 
 const baseUrl = (process.env.GUILDHALL_URL ?? 'http://localhost:7777').replace(/\/$/, '')
 const projectId = process.env.GUILDHALL_ACCEPTANCE_PROJECT ?? 'narrative-harness'
@@ -164,6 +166,17 @@ async function main() {
     state: overview.releaseSummary?.state,
     start: overview.startReadiness,
   })
+
+  const narrativeHarnessRoot = process.env.GUILDHALL_ACCEPTANCE_NARRATIVE_HARNESS_ROOT
+    ?? resolve(process.cwd(), '../narrative-harness')
+  const narrativeHarnessProof = auditNarrativeHarnessProof({
+    root: narrativeHarnessRoot,
+    expectedReleaseLabel: expectedRelease?.label,
+    bakeoffPath: process.env.GUILDHALL_ACCEPTANCE_NH_BAKEOFF_ARTIFACT,
+  })
+  for (const proofCheck of narrativeHarnessProof.checks) {
+    check(`Narrative Harness proof: ${proofCheck.name}`, proofCheck.pass, proofCheck.detail)
+  }
 
   for (const [surface, read] of Object.entries(surfaceReads)) {
     const body = projectBody(read.value)
