@@ -7,15 +7,11 @@ title: Releases
 Guildhall release notes explain what each version can do, how we checked it,
 and what still has limits.
 
-The published docs root defaults to the latest public release. Main-branch docs
+This is the version-pinned docs snapshot for Guildhall 0.12.0. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).
 are published separately under [Next](/next/guide/) so unreleased work can be
 documented without promising it to users who installed the current npm package.
 
-Historical release notes stay versioned with their docs snapshot. The current
-stable release is [Guildhall 0.11.0](./0.11.0); older snapshots remain
-available under [Versions](/versions/0.11.0/guide/quick-start). The merged
-0.12.0 work is documented as upcoming until its tag and package publication
-exist.
+
 
 - [0.11.0](./0.11.0) - project orientation, semantic workspace import, release-readiness hardening, and completed release type contracts.
 - [0.12.0](./0.12.0) - revisioned project-state storage, compact read projections, bounded history, and release-cycle product validation. (Upcoming.)
