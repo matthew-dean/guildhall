@@ -27,7 +27,7 @@ import {
   type LeverSettings,
 } from '@guildhall/levers'
 import { InMemoryGitDriver } from '../git-driver.js'
-import { writeCheckpoint } from '@guildhall/tools'
+import { PROOF_SETUP_RATIONALE, writeCheckpoint } from '@guildhall/tools'
 import { appendFailureClassificationNote, classifyAgentFailure } from '../policy.js'
 import { commandEvidence, touchedFiles } from './policy-fixtures.js'
 import { readProjectLearning } from '../learning.js'
@@ -12010,13 +12010,9 @@ describe('Orchestrator.run — full loops', () => {
         title: 'Proper invite flow',
         status: 'blocked',
         assignedTo: null,
+        spec: VALID_SPEC,
         blockReason:
           'spec_ambiguous: Unable to resolve type errors in settings.vue and invite.post.ts due to missing imports and utilities.',
-        spec: [
-          'Implement the Supabase invite flow in Knit settings.',
-          '- web/app/pages/settings.vue should expose the invite form and send handler.',
-          '- web/server/api/workspaces/[id]/invite.post.ts should validate roles and send the invite.',
-        ].join('\n'),
         acceptanceCriteria: [{
           id: 'ac-1',
           description: 'typecheck passes',
@@ -14222,11 +14218,7 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
         assignedTo: 'worker-agent',
         projectPath: tmpDir,
         worktreePath,
-        spec: [
-          'Implement the Supabase invite flow in Knit settings.',
-          '- web/app/pages/settings.vue should expose the invite form and send handler.',
-          '- web/server/api/workspaces/[id]/invite.post.ts should validate roles and send the invite.',
-        ].join('\n'),
+        spec: VALID_SPEC,
         acceptanceCriteria: [{
           id: 'ac-1',
           description: 'typecheck passes',
@@ -14326,6 +14318,148 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
       ],
     })
     expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
+  })
+
+  it('classifies proof-setup module failures from checkpoint evidence even when the escalation omits the filename', async () => {
+    const proofPath = 'scripts/proof-broad-genre-drafting.mjs'
+    await writeQueue([
+      mkTask({
+        id: 'task-proof-setup-repair',
+        title: 'Establish concrete proof for the drafting model',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        workKind: 'verification',
+        proposalRationale: PROOF_SETUP_RATIONALE,
+        spec: VALID_SPEC,
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-proof-setup-repair',
+      agentId: 'worker-agent',
+      intent: 'Repair the proof script',
+      nextPlannedAction: 'Fix the proof script module imports and rerun it.',
+      filesTouched: [proofPath],
+      resumeContext: {
+        verification: [{
+          command: `node ${proofPath}`,
+          passed: false,
+          observedAt: '2026-05-16T00:00:00.000Z',
+          summary: 'The proof script cannot resolve the SynopsisGenerationPipeline and AuthorIntentAndVoice modules.',
+        }],
+        safeNextMutationSurface: [proofPath],
+      },
+    })
+    const worker = {
+      ...stubAgent('worker-agent', async () => {
+        await mutateTask('task-proof-setup-repair', {
+          status: 'review',
+          assignedTo: 'reviewer-agent',
+          blockReason: 'spec_ambiguous: Proof script module resolution failing',
+          escalations: [{
+            id: 'esc-task-proof-setup-repair-1',
+            taskId: 'task-proof-setup-repair',
+            agentId: 'worker-agent',
+            reason: 'spec_ambiguous',
+            summary: 'Proof script module resolution failing',
+            details: 'The proof script cannot resolve the SynopsisGenerationPipeline and AuthorIntentAndVoice modules with current import paths.',
+            raisedAt: '2026-05-16T00:00:01Z',
+          }],
+        })
+      }),
+      loadToolMetadata() {
+        return {}
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const outcome = await orch.tick()
+
+    expect(outcome.kind).toBe('processed')
+    if (outcome.kind === 'processed') {
+      expect(outcome.agent).toBe('worker-agent')
+      expect(outcome.afterStatus).toBe('in_progress')
+    }
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-proof-setup-repair')!
+    expect(task.status).toBe('in_progress')
+    expect(task.assignedTo).toBe('worker-agent')
+    expect(task.blockReason ?? null).toBeNull()
+    expect(task.escalations[0]?.resolvedBy).toBe('orchestrator')
+    expect(task.escalations[0]?.resolution).toContain('self-authored verification failure')
+  })
+
+  it('reopens an existing proof-setup review escalation after a project restart', async () => {
+    const proofPath = 'scripts/proof-broad-genre-drafting.mjs'
+    await writeQueue([
+      mkTask({
+        id: 'task-proof-setup-restart',
+        title: 'Establish concrete proof after restart',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        workKind: 'verification',
+        proposalRationale: PROOF_SETUP_RATIONALE,
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The exact project proof passes.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        blockReason: 'spec_ambiguous: Proof script module resolution failing',
+        escalations: [{
+          id: 'esc-task-proof-setup-restart-1',
+          taskId: 'task-proof-setup-restart',
+          agentId: 'worker-agent',
+          reason: 'spec_ambiguous',
+          summary: 'Proof script module resolution failing',
+          details: 'The proof script cannot resolve its project modules after the worker attempted the exact command.',
+          raisedAt: '2026-05-16T00:00:01Z',
+        }],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-proof-setup-restart',
+      agentId: 'worker-agent',
+      intent: 'Repair the proof script after restart',
+      nextPlannedAction: 'Fix the proof script module imports and rerun it.',
+      filesTouched: [proofPath],
+      resumeContext: {
+        safeNextMutationSurface: [proofPath],
+      },
+    })
+    let workerCalled = false
+    const worker = {
+      ...stubAgent('worker-agent', async () => {
+        workerCalled = true
+        await mutateTask('task-proof-setup-restart', { status: 'in_progress' })
+      }),
+      loadToolMetadata() {
+        return {}
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const outcome = await orch.tick()
+
+    expect(outcome.kind).toBe('processed')
+    expect(workerCalled).toBe(true)
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-proof-setup-restart')!
+    expect(task.status).toBe('in_progress')
+    expect(task.assignedTo).toBe('worker-agent')
+    expect(task.blockReason ?? null).toBeNull()
+    expect(task.escalations[0]?.resolvedBy).toBe('system')
+    expect(task.escalations[0]?.resolution).toContain('worker-owned verification confusion')
   })
 
   it('routes an implementation target-shape mismatch back through spec shaping', async () => {

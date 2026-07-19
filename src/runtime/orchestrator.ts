@@ -1266,21 +1266,28 @@ function isRecoverableSelfAuthoredVerificationEscalation(input: {
     input.checkpoint?.resumeContext?.verification,
   )
   const blockerMentionsVerificationFailure =
-    /(type errors?|cannot find name|cannot be found|cannot be resolved|missing imports?|missing names?|missing utilities|undefined|TS\d{4})/i.test(
+    /(type errors?|cannot find name|cannot be found|cannot (?:be )?resolve(?:d)?|module resolution|missing imports?|missing names?|missing utilities|undefined|TS\d{4})/i.test(
       text,
     )
   const workerClaimsVerificationEnvironmentMismatch =
     /implementation is complete|code follows|completed implementation/i.test(text) &&
     /verification commands?.*(?:do not|don't|cannot|can't|won't|not work|failed|unavailable|environment)/i.test(text)
+  const proofSetupVerificationRepair =
+    isProofSetupTask(input.task) &&
+    blockerMentionsVerificationFailure &&
+    Boolean(input.checkpoint) &&
+    touchedFiles.length > 0
   if (
     (!hasRecordedVerificationFailure || !blockerMentionsVerificationFailure) &&
-    !workerClaimsVerificationEnvironmentMismatch
+    !workerClaimsVerificationEnvironmentMismatch &&
+    !proofSetupVerificationRepair
   ) {
     return false
   }
 
   if (touchedFiles.length === 0) return false
   if (workerClaimsVerificationEnvironmentMismatch) return true
+  if (proofSetupVerificationRepair) return true
 
   return touchedFiles.some((filePath) => {
     const normalized = filePath.replace(/\\/g, '/')
@@ -1294,7 +1301,7 @@ function isRecoverableSelfAuthoredVerificationBlocker(
   checkpoint: Checkpoint | null,
   touchedFiles: readonly string[] = [],
 ): boolean {
-  return (task.escalations ?? []).some((escalation) => {
+  const result = (task.escalations ?? []).some((escalation) => {
     if (escalation.resolvedAt) return false
     return isRecoverableSelfAuthoredVerificationEscalation({
       agentName: escalation.agentId,
@@ -1305,6 +1312,7 @@ function isRecoverableSelfAuthoredVerificationBlocker(
       escalation,
     })
   })
+  return result
 }
 
 function resolveRecoverableSelfAuthoredVerificationEscalations(
@@ -1830,7 +1838,8 @@ const ONE_TASK_STOP_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
 const EXPLORING_NO_PROGRESS_ESCALATION_AFTER = 3
 const WORKER_NO_PROGRESS_ESCALATION_AFTER = 5
 
-function recoveryEventForStatus(status: TaskStatus): TaskTransitionEvent {
+function recoveryEventForStatus(status: TaskStatus, currentStatus?: TaskStatus): TaskTransitionEvent {
+  if (currentStatus === 'review' && status === 'in_progress') return 'revise'
   switch (status) {
     case 'exploring':
       return 'recover_to_exploring'
@@ -10367,7 +10376,10 @@ export class Orchestrator {
       changed = true
     }
     for (const [taskIndex, queuedTask] of queue.tasks.entries()) {
-      if (queuedTask.status !== 'blocked') continue
+      const reviewVerificationRecovery =
+        queuedTask.status === 'review' &&
+        await this.isRecoverableSelfAuthoredVerificationBlockedTask(queuedTask)
+      if (queuedTask.status !== 'blocked' && !reviewVerificationRecovery) continue
       if (!this.hasGuildhallOwnershipTrail(queuedTask)) continue
       // Recovery classification is one of the few execution paths that may
       // need historical evidence. Keep the project queue compact, but reopen
@@ -10652,6 +10664,7 @@ export class Orchestrator {
             'Guildhall reopened a stale no-output worker timeout as provider/runtime recovery. The task stays in automation so Guildhall can retry from the current task context or route to another provider lane without asking the owner to debug internal execution.'
         }
       } else if (
+        reviewVerificationRecovery ||
         await this.isRecoverableSelfAuthoredVerificationBlockedTask(task)
       ) {
         const checkpoint = await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
@@ -10743,7 +10756,7 @@ export class Orchestrator {
       }
       transitionTaskStatus({
         task,
-        event: recoveryEventForStatus(recoveryStatus),
+        event: recoveryEventForStatus(recoveryStatus, task.status),
         actor: 'orchestrator-recovery',
         evidenceRefs: [`task:recovery:${recoveryStatus}`],
         now,

@@ -47635,3 +47635,68 @@ User job:
   prove the broad-genre model slice. This is the expected fail-closed result;
   Narrative Harness remains below the 0.11 release threshold until the script
   resolves its project module and records a passing exact command.
+
+## 2026-07-18 proof failures recover across a restart
+
+User job:
+
+> If a worker discovers that its own proof script cannot resolve project
+> modules, Guildhall must keep that repair in the worker lane. Restarting the
+> project must not strand the task as a reviewer-owned blocker or require an
+> owner decision.
+
+### Contract Touch Decision
+
+- Work id: `codex:proof-setup-restart-recovery-2026-07-18`.
+- Touched contracts: the orchestrator's self-authored verification classifier,
+  restart recovery queue, and review-to-worker transition.
+- Considered but not touched: task, release, proof-path, and owner-input
+  schemas. The repair uses existing checkpoint, escalation, and task status
+  fields; it does not create a second recovery record.
+- Required follow-up: rebuild and retry the installed Narrative Harness child;
+  the code path is not accepted until the live task is observed recovering
+  from its current review escalation.
+- Proof required: focused orchestrator regressions for same-tick and
+  post-restart recovery, contract/data-layer lint, fresh installed artifact,
+  stale-server check, and the real Narrative Harness child.
+- Apply/revert: keep the classifier, restart recovery, transition mapping, and
+  tests together. Reverting only one would either reopen the false owner
+  blocker or leave review tasks unable to transition through the state machine.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. Checkpoint and escalation records retain
+  their existing shapes; the change only changes derived routing.
+- Scope/change class: runtime recovery behavior; no migration required.
+- Existing data impact: a review task with a live worker-owned verification
+  escalation is reopened to `in_progress` and its escalation is resolved as a
+  Guildhall-owned recovery. No proof is marked passed and no owner decision is
+  synthesized.
+- Migration id: none.
+- Compatibility reader: none added.
+- Fixtures/tests: `src/runtime/__tests__/orchestrator.test.ts`, including
+  same-tick proof-setup module failure and explicit restart recovery.
+- Owner-facing plan text: internal proof-script failures remain executable
+  repair work; only product decisions or genuinely external access remain
+  owner input.
+- Rollback/revert: revert the routing change and its focused regressions
+  together.
+
+### Installed proof status
+
+- Source focused regressions and both guardrail lints pass. The full
+  `orchestrator.test.ts` file still has 84 unrelated fixture failures (313
+  passed), so that suite is recorded as a release gate rather than hidden.
+- Fresh installed proof: `/api/stale-server` returned `stale:false` after
+  rebuilding, reinstalling, and restarting. Startup reported seven projects,
+  zero refreshes, and zero errors.
+- The real child recovered from `review` to `in_progress` through
+  `coordinator-remediation`, then ran through `worker-agent`. Guildhall
+  resolved the stale worker-owned escalation as system recovery and kept the
+  task in live work. It did not fabricate proof success or ask the owner to
+  approve an internal module-resolution repair.
+- After five bounded ticks the worker still produced no new visible proof
+  output. The task is therefore paused in live work with no blocker, while the
+  exact proof remains unmet: `proofPaths` is empty, no concrete acceptance
+  command is recorded, and the release remains `shaping` at 11 of 15 selected
+  tasks done, with three import drafts still needing fuller briefs.
