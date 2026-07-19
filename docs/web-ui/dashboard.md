@@ -58,11 +58,13 @@ work.
 
 The Projects home is deliberately shallow. It helps you choose where to look
 next; the detailed project shell stays inside each project. Project groups
-Overview, Needs you, Facts, and Structure so the project map, alerts, and
-discovered facts stay together. When you are in Project, those four child links
-stay visible. When you move into Work, the rail shows Queue and Board instead;
-Closure does the same for Summary and Checks. Threads, Timeline, and Settings
-do not add extra child links in the rail.
+Overview, Map, Needs you, Facts, and Structure so the project skeleton, alerts,
+and discovered facts stay together. When you are in Project, those child links
+stay visible. Map is the 1,000-foot release-and-capability view; Structure is
+the codebase and cross-project map. When you move into Work, the rail shows
+Queue and Board instead; Release shows the selected release, readiness, proof,
+and deferred work. Threads, Timeline, and Settings do not add extra child links
+in the rail.
 
 ## Provider defaults on the home view
 

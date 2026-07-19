@@ -27,6 +27,7 @@ async function createMinimalReleaseFixture(tmp: string): Promise<void> {
   await fs.copyFile(path.join(root, 'scripts/publish.mjs'), path.join(tmp, 'scripts/publish.mjs'))
   await fs.copyFile(path.join(root, 'scripts/release-manifest.mjs'), path.join(tmp, 'scripts/release-manifest.mjs'))
   await fs.copyFile(path.join(root, 'scripts/version-docs.mjs'), path.join(tmp, 'scripts/version-docs.mjs'))
+  await fs.copyFile(path.join(root, 'scripts/docs-generation.mjs'), path.join(tmp, 'scripts/docs-generation.mjs'))
   await fs.writeFile(
     path.join(tmp, 'scripts/build-macos-package.mjs'),
     'console.log("fake macOS package")\n',

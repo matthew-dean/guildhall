@@ -117,5 +117,5 @@ Each tick:
 4. For any tasks in `gate_check`: run hard gates.
 5. Persist state; emit events.
 
-The Thread, Work, and Closure views show those steps without making you read
+The Thread, Work, and Release views show those steps without making you read
 Guildhall's source code.

@@ -26,6 +26,10 @@ async function createPrepareFixture(tmp: string): Promise<void> {
     path.join(root, 'scripts/prepare-versioned-docs.mjs'),
     path.join(tmp, 'scripts/prepare-versioned-docs.mjs'),
   )
+  await fs.copyFile(
+    path.join(root, 'scripts/docs-generation.mjs'),
+    path.join(tmp, 'scripts/docs-generation.mjs'),
+  )
 
   await fs.writeFile(
     path.join(tmp, 'docs/index.md'),

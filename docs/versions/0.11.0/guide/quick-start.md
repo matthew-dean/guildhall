@@ -48,7 +48,7 @@ That is the little heartbeat you want before asking for more ambitious work.
 
 ## Install
 
-Guildhall 0.11's local app is release-supported on macOS. Your project can be
+Guildhall 0.10's local app is release-supported on macOS. Your project can be
 anything Guildhall can work on; this compatibility note is about the machine
 running Guildhall itself.
 

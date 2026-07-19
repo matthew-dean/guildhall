@@ -36,8 +36,10 @@ Inside a project, the rail keeps the main sections separate. A section's child
 links stay visible while you are in that section, then hide when you move
 somewhere else:
 
-- **Project** groups Overview, Needs you, Facts, and Structure.
+- **Project** groups Overview, Map, Needs you, Facts, and Structure.
 - **Overview** is the project summary.
+- **Map** is the 1,000-foot project view: the capability skeleton, selected
+  release or bounded scope, work distribution, progress, and later work.
 - **Needs you** is the alert view for waiting answers and approvals.
 - **Facts** is what Guildhall knows about identity, environment, gates, and
   routing context.
@@ -47,8 +49,9 @@ somewhere else:
 - **Work** is a top-level work mode; it shows Queue and Board while you are
   working through tasks.
 - **Timeline** is the activity history.
-- **Closure** shows Summary and Checks while you are judging whether current
-  work is actually closed.
+- **Release** shows the selected release, readiness checks, proof, and what is
+  included versus deferred. A project stays open; only a bounded release can
+  ship.
 - **Settings** is readiness, providers, identity, profiles, and configuration.
 
 That split keeps the UI from turning every useful signal into another task
@@ -76,5 +79,5 @@ not a secret second database.
   Structure.
 - **Inspect the run**: read the queue, open the drawer, follow the transcript,
   and decide whether Guildhall is making useful progress.
-- **Judge current work closure**: keep reviewer verdicts, closure checks, and
-  Git Story blockers visible so “probably fine” does not become the standard.
+- **Judge release readiness**: keep reviewer verdicts, release checks, and Git
+  Story blockers visible so “probably fine” does not become the standard.

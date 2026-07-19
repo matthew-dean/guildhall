@@ -1,7 +1,7 @@
 # Guildhall 0.12.0 Release Acceptance Audit
 
 Date: 2026-07-19
-Status: ready for publication, not published
+Status: published and accepted
 Scope: unified project state, bounded projections, release lifecycle, and the
 Narrative Harness release-cycle proof
 
@@ -157,15 +157,16 @@ operation in this flow that transitions a ready release to shipped.
 These are recorded so they cannot be mistaken for hidden success:
 
 - `pnpm lint:design` still reports the repository's pre-existing advisory
-  design-token/style baseline. It is not a 0.11 release gate and the exact
+  design-token/style baseline. It is not a 0.12 release gate and the exact
   acceptance routes pass geometry and overflow proof.
 - `scripts/browser-route-proof.mjs` still contains older generic fixture DOM
   assertions that fail with bridge errors on historical routes. Direct API
   reads are healthy, and the exact Narrative Harness acceptance route proof
   passes at both required viewport sizes. The generic fixture audit is a
   follow-up, not evidence that the accepted product routes fail.
-- The release-preparation worktree is now staged at `0.12.0`. This audit does
-  not publish to npm, create a tag, or push the release branch.
+- This audit records the release proof; it does not replace the package
+  registry or tag as the publication authority. The release is now published
+  as tag `v0.12.0` and package `guildhall@0.12.0`.
 
 None of these warnings is a release-blocking contradiction, data-loss risk,
 synthetic-state bug, or critical regression in the accepted product flow.
@@ -179,7 +180,7 @@ synthetic-state bug, or critical regression in the accepted product flow.
 - Considered but not touched: persisted task/release schemas, transcript and
   process-log retention formats, provider configuration, task mutation
   commands, and web route-specific summary logic.
-- Required follow-up: none for the 0.11 publication gate. The design baseline
+- Required follow-up: none for the 0.12 publication gate. The design baseline
   and historical generic route fixture audit remain separately tracked.
 - Proof required: CLI and web/API surfaces must report one saved release
   identity and one bounded count set.
@@ -204,20 +205,16 @@ synthetic-state bug, or critical regression in the accepted product flow.
 
 ## Decision
 
-Guildhall has met the defined product acceptance threshold for publication as
-0.12.0. The implementation is release-ready and the Narrative Harness cycle
-is proven through a bounded shipped release. The separate publication process
-still requires the repository typecheck and dependency-cruise gates to be
-resolved and npm credentials to be available. No tag or npm publication is
-performed by this audit.
+Guildhall met the defined product acceptance threshold for 0.12.0. The
+implementation was published, and the Narrative Harness cycle was proven
+through a bounded shipped release. The tag and npm package are the publication
+record; this audit is the acceptance record.
 
-## Publication gate status
+## Publication record
 
-The publisher's normal gate is intentionally still authoritative:
+The publisher's normal gate remains authoritative, and completed successfully:
 
 - `pnpm typecheck`: passed on the 0.12.0 branch.
 - `pnpm lint:deps`: passed with 58 advisory no-orphans warnings and no errors.
-- `npm whoami`: blocked by HTTP 401 because npm is not authenticated locally.
-
-The remaining publication prerequisite is npm authentication. This branch has
-not published to npm or created a release tag.
+- Git tag: `v0.12.0`.
+- npm package: `guildhall@0.12.0`.

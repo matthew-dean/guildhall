@@ -90,6 +90,6 @@ touched files.
 Sometimes work should stay local. Sometimes the right Git move is "not yet."
 
 Marking work **local-only** or **deferred** records that decision with a reason
-and removes it from the accidental-residue pile. The Closure view can then
+and removes it from the accidental-residue pile. The Release view can then
 distinguish "we meant to leave this here" from "nobody noticed the branch was
 still dangling."

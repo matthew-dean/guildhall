@@ -40,8 +40,13 @@ function git(args: string[]): string {
 }
 
 function resolveStableVersion(version: string): string {
+  const publishedTag = git(['rev-parse', '--verify', '--quiet', `refs/tags/v${version}`])
+  if (publishedTag) return version
+  const latestTag = git(['tag', '--sort=-version:refname'])
+    .split(/\r?\n/)
+    .find((tag) => /^v\d+\.\d+\.\d+$/.test(tag))
+  if (latestTag) return latestTag.slice(1)
   if (existsSync(new URL(`../versions/${version}`, import.meta.url))) return version
-  if (git(['rev-parse', '--verify', '--quiet', `v${version}`])) return version
   const versionDir = new URL('../versions', import.meta.url)
   if (existsSync(versionDir)) {
     const latestDir = readdirSync(versionDir)
@@ -355,6 +360,8 @@ const releaseSidebarSections = [
     text: 'Releases',
     items: [
       { text: 'Overview', link: '/releases/' },
+      { text: '0.12.0', link: '/releases/0.12.0' },
+      { text: '0.11.0', link: '/releases/0.11.0' },
       { text: '0.8.0', link: '/releases/0.8.0' },
       { text: '0.7.0', link: '/releases/0.7.0' },
       { text: '0.6.0', link: '/releases/0.6.0' },

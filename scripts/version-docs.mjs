@@ -1,10 +1,16 @@
 #!/usr/bin/env node
+// Creates one immutable release snapshot. Ordinary docs builds only project it.
 import { execFileSync } from 'node:child_process'
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import {
+  generateVersionedSnapshot,
+  normalizeDocsBase,
+  removeSameMinorSnapshots,
+} from './docs-generation.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
@@ -19,34 +25,6 @@ const fromRef = takeFlagValue('--from-ref')
 if (!version || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
   console.error('Usage: node scripts/version-docs.mjs <version> [--force] [--from-ref <git-ref>]')
   process.exit(1)
-}
-
-const VERSIONED_ENTRIES = [
-  'assets',
-  'cli',
-  'guide',
-  'levers',
-  'reference',
-  'releases',
-  'subsystems',
-  'web-ui',
-  'index.md',
-]
-
-const VERSIONED_EXCLUDES = [
-  /^web-ui\/flow-audit\.md$/,
-  /^assets\/ui-audit\/[^/]+\/README\.md$/,
-]
-
-function normalizeDocsBase(value) {
-  const trimmed = String(value).trim()
-  if (!trimmed || trimmed === '/') return '/'
-  return `/${trimmed.replace(/^\/+|\/+$/g, '')}/`
-}
-
-function docsHref(prefix, section) {
-  const base = DOCS_BASE === '/' ? '' : DOCS_BASE.slice(0, -1)
-  return `${base}${prefix}/${section}/`
 }
 
 function takeFlagValue(flag) {
@@ -69,84 +47,8 @@ async function docsSourceRoot() {
     cwd: ROOT,
     stdio: 'inherit',
   })
-  execFileSync('tar', ['-xf', archive, '-C', tmp], {
-    stdio: 'inherit',
-  })
+  execFileSync('tar', ['-xf', archive, '-C', tmp], { stdio: 'inherit' })
   return { sourceRoot: join(tmp, 'docs'), cleanup: () => rm(tmp, { recursive: true, force: true }) }
-}
-
-async function copyEntry(fromRoot, toRoot, entry, excludePatterns = []) {
-  const from = join(fromRoot, entry)
-  if (!existsSync(from)) return
-  await cp(from, join(toRoot, entry), {
-    recursive: true,
-    force: true,
-    filter(source) {
-      const rel = source.slice(fromRoot.length + 1)
-      return !excludePatterns.some((pattern) => pattern.test(rel))
-    },
-  })
-}
-
-async function walkFiles(dir) {
-  const entries = await readdir(dir, { withFileTypes: true })
-  const files = []
-  for (const entry of entries) {
-    const full = join(dir, entry.name)
-    if (entry.isDirectory()) files.push(...(await walkFiles(full)))
-    else if (entry.isFile() && (entry.name.endsWith('.md') || entry.name.endsWith('.ts'))) files.push(full)
-  }
-  return files
-}
-
-async function rewriteAbsoluteDocLinks(root, prefix) {
-  const files = await walkFiles(root)
-  const rootDocLink = /(?<=["'(])\/(?:guildhall\/)?(guide|reference|web-ui|cli|levers|releases)\//g
-  for (const file of files) {
-    const raw = await readFile(file, 'utf8')
-    const next = raw.replace(rootDocLink, (_match, section) => docsHref(prefix, section))
-    if (next !== raw) await writeFile(file, next, 'utf8')
-  }
-}
-
-async function rewriteStableReleaseIndex(root) {
-  const file = join(root, 'releases', 'index.md')
-  if (!existsSync(file)) return
-  const raw = await readFile(file, 'utf8')
-  const snapshotNotice = `This is the version-pinned docs snapshot for Guildhall ${version}. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).`
-  let next = raw.replace(
-    /The published docs root defaults[^\n]*(?:\nMain-branch docs[^\n]*(?:\nare published[^\n]*)?)?/,
-    snapshotNotice,
-  )
-  next = next.replace(
-    /Historical release notes stay versioned[\s\S]*?\/guide\/quick-start\)\./,
-    '',
-  )
-  if (!next.includes('version-pinned docs snapshot')) {
-    next = next.replace(
-      'Guildhall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.',
-      `Guildhall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.\n\n${snapshotNotice}`,
-    )
-  }
-  await writeFile(file, next, 'utf8')
-}
-
-async function removeSameMinorSnapshots(targetVersion) {
-  const versionsRoot = join(DOCS, 'versions')
-  if (!existsSync(versionsRoot)) return
-  const targetMinor = minorLine(targetVersion)
-  const entries = await readdir(versionsRoot, { withFileTypes: true })
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    if (entry.name === targetVersion) continue
-    if (minorLine(entry.name) !== targetMinor) continue
-    await rm(join(versionsRoot, entry.name), { recursive: true, force: true })
-  }
-}
-
-function minorLine(value) {
-  const match = value.match(/^(\d+)\.(\d+)(?:\.\d+)?(?:-[\w.]+)?$/)
-  return match ? `${match[1]}.${match[2]}` : value
 }
 
 async function main() {
@@ -160,15 +62,17 @@ async function main() {
       await rm(target, { recursive: true, force: true })
     }
 
-    await removeSameMinorSnapshots(version)
+    await removeSameMinorSnapshots(join(DOCS, 'versions'), version)
     await mkdir(target, { recursive: true })
-    for (const entry of VERSIONED_ENTRIES) {
-      await copyEntry(sourceRoot, target, entry, VERSIONED_EXCLUDES)
-    }
-    await rewriteAbsoluteDocLinks(target, `/versions/${version}`)
-    await rewriteStableReleaseIndex(target)
+    await generateVersionedSnapshot({
+      sourceRoot,
+      targetRoot: target,
+      version,
+      docsBase: DOCS_BASE,
+      canonicalReleaseRoot: DOCS,
+    })
 
-    console.log(`docs: cut versioned docs at docs/versions/${version}${fromRef ? ` from ${fromRef}` : ''}`)
+    console.log(`docs: cut one-time versioned snapshot at docs/versions/${version}${fromRef ? ` from ${fromRef}` : ''}`)
   } finally {
     await cleanup()
   }

@@ -19,6 +19,7 @@ async function createDocsFixture(tmp: string, marker = 'current docs'): Promise<
   await fs.mkdir(path.join(tmp, 'docs/releases'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/assets/ui-audit/0-9-0'), { recursive: true })
   await fs.copyFile(path.join(root, 'scripts/version-docs.mjs'), path.join(tmp, 'scripts/version-docs.mjs'))
+  await fs.copyFile(path.join(root, 'scripts/docs-generation.mjs'), path.join(tmp, 'scripts/docs-generation.mjs'))
   await fs.writeFile(
     path.join(tmp, 'docs/index.md'),
     `# Home\n\n${marker}\n\n[Guide](/guide/quick-start)\n[Old guide](/guildhall/guide/quick-start)\n`,
@@ -47,8 +48,13 @@ async function createDocsFixture(tmp: string, marker = 'current docs'): Promise<
       'are published separately under [Next](/next/guide/) so unreleased work can be',
       'documented without promising it to users who installed the current npm package.',
       '',
+      '- [1.2.3](./1.2.3) - this release. (Upcoming.)',
     ].join('\n'),
   )
+}
+
+async function writeReleaseIndex(tmp: string, contents: string): Promise<void> {
+  await fs.writeFile(path.join(tmp, 'docs/releases/index.md'), contents)
 }
 
 describe('docs versioning script', () => {
@@ -74,6 +80,10 @@ describe('docs versioning script', () => {
       expect(quickStart).not.toContain('/guildhall/')
       expect(releaseIndex).toContain('version-pinned docs snapshot for Guildhall 1.2.3')
       expect(releaseIndex).not.toContain('Main-branch docs')
+      expect(releaseIndex).not.toContain('(Upcoming.)')
+      await expect(execFileP('node', ['scripts/version-docs.mjs', '1.2.3'], { cwd: tmp })).rejects.toThrow(
+        'docs version already exists',
+      )
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
     }
@@ -117,6 +127,36 @@ describe('docs versioning script', () => {
       await expect(fs.stat(path.join(tmp, 'docs/versions/1.2.2'))).rejects.toThrow()
       await expect(fs.stat(path.join(tmp, 'docs/versions/1.2.3'))).resolves.toBeTruthy()
       await expect(fs.stat(path.join(tmp, 'docs/versions/2.0.0'))).resolves.toBeTruthy()
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('rewrites an already-pinned release index without duplicating or orphaning the release list', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-version-docs-'))
+    try {
+      await createDocsFixture(tmp)
+      await writeReleaseIndex(
+        tmp,
+        [
+          '# Releases',
+          '',
+          'This is the version-pinned docs snapshot for Guildhall 1.2.2. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).',
+          '',
+          '- [1.2.2](./1.2.2) - old snapshot',
+          '- [1.1.0](./1.1.0) - old release',
+          '',
+        ].join('\n'),
+      )
+
+      await execFileP('node', ['scripts/version-docs.mjs', '1.2.3'], { cwd: tmp })
+
+      const releaseIndex = await fs.readFile(path.join(tmp, 'docs/versions/1.2.3/releases/index.md'), 'utf8')
+      expect(releaseIndex).toContain('version-pinned docs snapshot for Guildhall 1.2.3')
+      expect(releaseIndex).toContain('- [1.2.2](./1.2.2) - old snapshot')
+      expect(releaseIndex).toContain('- [1.1.0](./1.1.0) - old release')
+      expect(releaseIndex).not.toContain('version-pinned docs snapshot for Guildhall 1.2.2')
+      expect(releaseIndex.match(/^- \[/gm)).toHaveLength(2)
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
     }

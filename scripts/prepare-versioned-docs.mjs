@@ -1,8 +1,19 @@
 #!/usr/bin/env node
-import { cp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  CURRENT_ENTRIES,
+  NEXT_ENTRIES,
+  NEXT_EXCLUDES,
+  SNAPSHOT_ASSET_EXCLUDES,
+  copyEntries,
+  normalizeDocsBase,
+  rewriteAbsoluteDocLinks,
+  rewriteCurrentDocLinks,
+} from './docs-generation.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
@@ -10,59 +21,24 @@ const DOCS = join(ROOT, 'docs')
 const DOCS_BASE = normalizeDocsBase(process.env.GUILDHALL_DOCS_BASE ?? '/')
 const PACKAGE_VERSION = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')).version
 
-const GENERATED_DIRS = [
-  join(DOCS, 'current'),
-  join(DOCS, 'next'),
-]
-
-const CURRENT_ENTRIES = [
-  'assets',
-  'cli',
-  'guide',
-  'levers',
-  'reference',
-  'releases',
-  'subsystems',
-  'web-ui',
-]
-
-const NEXT_ENTRIES = [
-  'assets',
-  'cli',
-  'guide',
-  'levers',
-  'reference',
-  'releases',
-  'web-ui',
-  'index.md',
-]
-
-const NEXT_EXCLUDES = [
-  /^web-ui\/flow-audit\.md$/,
-  /^web-ui\/design-tokens\.md$/,
-  /^web-ui\/help-system\.md$/,
-]
-
-const SNAPSHOT_ASSET_EXCLUDES = [
-  /^assets\/ui-audit\/[^/]+\/README\.md$/,
-]
-
-function normalizeDocsBase(value) {
-  const trimmed = String(value).trim()
-  if (!trimmed || trimmed === '/') return '/'
-  return `/${trimmed.replace(/^\/+|\/+$/g, '')}/`
-}
-
-function docsHref(prefix, section) {
-  const base = DOCS_BASE === '/' ? '' : DOCS_BASE.slice(0, -1)
-  return `${base}${prefix}/${section}/`
-}
+const GENERATED_DIRS = [join(DOCS, 'current'), join(DOCS, 'next')]
 
 async function resolveCurrentVersion() {
-  const versionsRoot = join(DOCS, 'versions')
-  if (!existsSync(versionsRoot)) {
-    return PACKAGE_VERSION
+  let latestTag
+  try {
+    latestTag = execFileSync('git', ['tag', '--sort=-version:refname'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    })
+      .split(/\r?\n/)
+      .find((tag) => /^v\d+\.\d+\.\d+$/.test(tag))
+  } catch {
+    latestTag = undefined
   }
+  if (latestTag) return latestTag.slice(1)
+
+  const versionsRoot = join(DOCS, 'versions')
+  if (!existsSync(versionsRoot)) return PACKAGE_VERSION
   const versions = (await readdir(versionsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() && /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(entry.name))
     .map((entry) => entry.name)
@@ -73,57 +49,6 @@ async function resolveCurrentVersion() {
     return PACKAGE_VERSION
   }
   return latestSnapshot
-}
-
-async function copyEntry(fromRoot, toRoot, entry, excludePatterns = []) {
-  const from = join(fromRoot, entry)
-  if (!existsSync(from)) return
-  const to = join(toRoot, entry)
-  await cp(from, to, {
-    recursive: true,
-    force: true,
-    filter(source) {
-      const rel = source.slice(fromRoot.length + 1)
-      return !excludePatterns.some((pattern) => pattern.test(rel))
-    },
-  })
-}
-
-async function copyEntries(fromRoot, toRoot, entries, excludePatterns = []) {
-  for (const entry of entries) {
-    await copyEntry(fromRoot, toRoot, entry, excludePatterns)
-  }
-}
-
-async function walkFiles(dir) {
-  const entries = await readdir(dir, { withFileTypes: true })
-  const files = []
-  for (const entry of entries) {
-    const full = join(dir, entry.name)
-    if (entry.isDirectory()) files.push(...(await walkFiles(full)))
-    else if (entry.isFile() && (entry.name.endsWith('.md') || entry.name.endsWith('.ts'))) files.push(full)
-  }
-  return files
-}
-
-async function rewriteAbsoluteDocLinks(root, prefix) {
-  const files = await walkFiles(root)
-  const rootDocLink = /(?<=["'(])\/(?:guildhall\/)?(guide|reference|web-ui|cli|levers|releases)\//g
-  for (const file of files) {
-    const raw = await readFile(file, 'utf8')
-    const next = raw.replace(rootDocLink, (_match, section) => docsHref(prefix, section))
-    if (next !== raw) await writeFile(file, next, 'utf8')
-  }
-}
-
-async function rewriteCurrentDocLinks(root, version) {
-  const files = await walkFiles(root)
-  const versionedRootDocLink = new RegExp(`(?<=["'(])/(?:guildhall/)?versions/${version}/(guide|reference|web-ui|cli|levers|releases)/`, 'g')
-  for (const file of files) {
-    const raw = await readFile(file, 'utf8')
-    const next = raw.replace(versionedRootDocLink, (_match, section) => docsHref('', section))
-    if (next !== raw) await writeFile(file, next, 'utf8')
-  }
 }
 
 async function rewriteNextHomeStableLinks(root, currentVersion) {
@@ -146,14 +71,14 @@ async function main() {
   const currentSnapshotRoot = join(DOCS, 'versions', currentVersion)
   const currentSourceRoot = existsSync(currentSnapshotRoot) ? currentSnapshotRoot : DOCS
   await copyEntries(currentSourceRoot, currentRoot, CURRENT_ENTRIES, SNAPSHOT_ASSET_EXCLUDES)
-  await rewriteCurrentDocLinks(currentRoot, currentVersion)
+  await rewriteCurrentDocLinks(currentRoot, DOCS_BASE, currentVersion)
 
   const nextRoot = join(DOCS, 'next')
   await copyEntries(DOCS, nextRoot, NEXT_ENTRIES, [...NEXT_EXCLUDES, ...SNAPSHOT_ASSET_EXCLUDES])
-  await rewriteAbsoluteDocLinks(nextRoot, '/next')
+  await rewriteAbsoluteDocLinks(nextRoot, DOCS_BASE, '/next')
   await rewriteNextHomeStableLinks(nextRoot, currentVersion)
 
-  console.log(`docs: prepared /current/ from ${currentVersion} and /next/ from current docs`)
+  console.log(`docs: prepared generated current projection from ${currentVersion} and next projection from canonical docs`)
 }
 
 main().catch((err) => {

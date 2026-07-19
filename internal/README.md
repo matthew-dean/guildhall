@@ -13,6 +13,18 @@ Use this directory for:
 - source-backed research notes that support internal plans, specs, audits, and
   design notes.
 
+## Documentation generation boundary
+
+The authored documentation source is the root `docs/` content used for the
+next development version. `docs/versions/<version>/` is a one-time snapshot
+created by the release publisher from that release's source state; it is not a
+second working copy and must not be refreshed by the normal docs build.
+`scripts/prepare-versioned-docs.mjs` only creates the ignored `docs/current/`
+and `docs/next/` projections from the frozen release snapshot and canonical
+development docs. Use `scripts/version-docs.mjs --from-ref <commit-or-tag>`
+only for an explicit historical snapshot repair, with `--force` as a visible
+exception rather than an ordinary synchronization step.
+
 If a note belongs in public docs, move or rewrite it deliberately under
 `docs/`. Do not assume a planning note is publishable just because it is
 written in Markdown.

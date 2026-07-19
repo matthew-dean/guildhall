@@ -52,7 +52,7 @@ in an open PR, merged, local-only, deferred, conflicted, or unknown. Current
 work closure blocks on unresolved Git stories so a task cannot silently look
 finished while its branch is still wandering around with a backpack.
 
-Closure actions are controlled by the project's Git Story policy. Guildhall may
+Git-story landing actions are controlled by the project's Git Story policy. Guildhall may
 commit, push, or open a PR only when that policy allows it. The default is to
 ask; if the project policy says `commit: auto`, completed task work can be
 auto-committed with a Commit Story message. Local-only and deferred closures

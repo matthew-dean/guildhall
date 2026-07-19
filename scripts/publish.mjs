@@ -14,8 +14,8 @@
  *   2. Refuse to run on a dirty worktree or when not on `main` (override with
  *      `--allow-dirty` / `--allow-branch`).
  *   3. Bump the root `package.json` to the new version.
- *   4. For real publishes, update public docs pointers and cut
- *      docs/versions/<version> from the current docs. Dry-runs skip this.
+ *   4. For real publishes, update public docs pointers and cut the one-time
+ *      docs/versions/<version> snapshot from canonical docs. Dry-runs skip this.
  *   5. Typecheck + docs build + tests + dep-cruise as the pre-publish gate.
  *   6. Rebuild `dist/` fresh.
  *   7. Build the macOS packaged artifact used by the curl installer.
@@ -312,7 +312,8 @@ function updatePublicDocsVersion(version) {
 
   replaceFileText(releasesPath, (raw) => raw
     .replace(/\/versions\/\d+\.\d+\.\d+(-[\w.]+)?\//g, `/versions/${version}/`)
-    .replace(/Guildhall \d+\.\d+\.\d+(-[\w.]+)?/g, `Guildhall ${version}`))
+    .replace(/Guildhall \d+\.\d+\.\d+(-[\w.]+)?/g, `Guildhall ${version}`)
+    .replace(new RegExp(`(^- \\[${version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\][^\\n]*) \\(Upcoming\\.\\)$`, 'm'), '$1'))
 
   log(`Updated public docs pointers to ${version}.`)
 }

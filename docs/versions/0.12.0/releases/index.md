@@ -8,13 +8,9 @@ Guildhall release notes explain what each version can do, how we checked it,
 and what still has limits.
 
 This is the version-pinned docs snapshot for Guildhall 0.12.0. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).
-are published separately under [Next](/next/guide/) so unreleased work can be
-documented without promising it to users who installed the current npm package.
-
-
 
 - [0.11.0](./0.11.0) - project orientation, semantic workspace import, release-readiness hardening, and completed release type contracts.
-- [0.12.0](./0.12.0) - revisioned project-state storage, compact read projections, bounded history, and release-cycle product validation. (Upcoming.)
+- [0.12.0](./0.12.0) - revisioned project-state storage, compact read projections, bounded history, and release-cycle product validation.
 - [0.10.0](./0.10.0) — bounded owner-input conversations, a cleaner project rail, Structure as the project map room, local project graph handoffs, contract surfaces, and clearer current-work closure.
 - [0.9.0](./0.9.0) — runtime-backed execution, proof paths, completion handoffs, project re-intake, clearer next actions, memory lifecycle, MCP context resources, design-quality proof, and calibrated review.
 - [0.8.0](./0.8.0) — Pressure-Test Intake, Project Overview, cleaner project notes, Git Story Closure, Commit Story messages, and clearer provider defaults for the Next docs preview.

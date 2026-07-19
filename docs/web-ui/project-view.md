@@ -27,6 +27,8 @@ to a different section, that previous child list gets out of the way.
 - **Overview**: the first stop. It pulls together the next action, work mix,
   attention items, health, blocked work, recent activity, and Git Story signals
   without making you inspect every view first.
+- **Map**: the 1,000-foot view. It shows the project skeleton, selected release
+  or bounded scope, work distribution, progress, and later work.
 - **Needs you**: the alert view. If Guildhall needs an answer, approval, or
   correction, this is the shortcut to the waiting item.
 - **Facts**: what Guildhall knows about the project: identity, environment,
@@ -36,18 +38,19 @@ to a different section, that previous child list gets out of the way.
   provider/consumer requests, and shared contract surfaces live here instead
   of hiding in Settings.
 
-Threads, Work, Timeline, and Closure stay as top-level siblings because they are
-work modes, not project-orientation details. Work shows Queue and Board while
-you are in Work. Closure shows Summary and Checks while you are in Closure.
-Settings stays pinned at the bottom for Ready checks, Providers, Coordinators,
-Identity, Profile, Developer tools, and autonomy controls.
+Threads, Work, Timeline, and Release stay as top-level siblings because they
+are work modes, not project-orientation details. Work shows Queue and Board
+while you are in Work. Release shows the selected release, readiness, proof,
+and deferred work. Settings stays pinned at the bottom for Ready checks,
+Providers, Coordinators, Identity, Profile, Developer tools, and autonomy
+controls.
 
 ## What the shell is optimizing for
 
 - Make the next real action obvious
 - Let you understand the project from Overview before you dive into Thread or Work
 - Keep your questions and the run's progress in the same story
-- Surface closure and reviewer state before it becomes an unpleasant surprise
+- Surface release and reviewer state before it becomes an unpleasant surprise
 - Keep Git closure visible when work is dirty, local-only, deferred, pushed,
   waiting on a PR, or blocked by a conflict
 - Let you drill into transcripts and provenance without leaving the shell
@@ -65,9 +68,9 @@ Identity, Profile, Developer tools, and autonomy controls.
 ## Current strengths
 
 - Overview as a live project summary
-- Project rail with Overview, Needs you, Facts, and Structure grouped together
+- Project rail with Overview, Map, Needs you, Facts, and Structure grouped together
 - Task drawer inspection model
-- Closure, reviewer, and Git Story visibility
+- Release, reviewer, and Git Story visibility
 - Sparse project controls with one primary Start or Stop path
 - Re-intake from the project conversation when old project state needs to be reconsidered
 
@@ -120,13 +123,14 @@ Re-intake reads current evidence, compares it with accepted tasks and progress,
 and drafts a cleaner plan for review. Empty drafts cannot be applied, and
 applying a re-intake records why the project plan changed.
 
-## Closure as the current-work view
+## Release as the bounded-work view
 
-Closure treats Git state as part of the verdict. Dirty files, local commits,
-branches without upstreams, pending PRs, skipped merges, stale task worktrees,
-and unknown inspection failures are blockers until you close them or
-deliberately mark them local-only or deferred.
+Release treats Git state, proof, and unfinished work as part of the verdict.
+Dirty files, local commits, branches without upstreams, pending PRs, skipped
+merges, stale task worktrees, and unknown inspection failures are blockers until
+you resolve them or deliberately mark them local-only or deferred.
 
-For now, Closure means "the current Guildhall-tracked work," not "the next
-named software release." Future release or milestone grouping can sit on top of
-the same checks once Guildhall has an actual release target to point at.
+The project remains open after a release ships. Selecting later work changes
+the active scope without reopening or rewriting the shipped release. Git Story
+Closure remains the lower-level name for repository landing state, not a
+project navigation concept.
