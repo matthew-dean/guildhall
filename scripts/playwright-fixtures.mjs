@@ -75,6 +75,7 @@ async function writeProject({
   taskQueueMigrated = true,
   capabilityRequests = [],
   dirtyGuildhallFile = false,
+  extraTasks = [],
 }) {
   const projectPath = join(projectsRoot, id)
   const memoryDir = join(projectPath, 'memory')
@@ -166,9 +167,15 @@ async function writeProject({
         }
       : {}),
   }))
-  const persistedTasks = normalizeTaskQueueTimestamps(taskQueue ?? tasks)
+  const persistedQueue = taskQueue
+    ? {
+        ...taskQueue,
+        tasks: [...(Array.isArray(taskQueue.tasks) ? taskQueue.tasks : []), ...extraTasks],
+      }
+    : [...tasks, ...extraTasks]
+  const persistedTasks = normalizeTaskQueueTimestamps(persistedQueue)
   await writeFile(join(memoryDir, 'TASKS.json'), JSON.stringify(persistedTasks, null, 2), 'utf8')
-  if (taskQueue && taskQueueMigrated) {
+  if (initialized && taskQueueMigrated) {
     const localHistoryDir = projectLocalHistoryDir(projectPath)
     const managedStateDir = join(localHistoryDir, 'project-state')
     await mkdir(managedStateDir, { recursive: true })
@@ -741,12 +748,29 @@ const projects = [
     statuses: ['spec_review', 'exploring', 'in_progress', 'review', 'gate_check', 'done', 'done', 'shelved'],
     withQuestion: true,
     taskQueue: loomaKnitReleaseQueue(),
-    taskQueueMigrated: false,
+    taskQueueMigrated: true,
+    extraTasks: [fixtureTask(join(projectsRoot, 'looma-knit'), {
+      id: 'task-import-1l0mr2r',
+      title: 'Context menu',
+      status: 'spec_review',
+      spec: 'Fixture import task spec for the Context menu drawer replay.',
+    }), fixtureTask(join(projectsRoot, 'looma-knit'), {
+      id: 'task-workspace-import',
+      title: 'Review existing project work',
+      status: 'import_draft',
+      spec: 'Fixture workspace import task for the task drawer route.',
+    })],
   },
   {
     id: 'font-something',
     name: 'Font something',
     statuses: ['import_draft', 'import_draft', 'import_draft', 'done', 'shelved'],
+    extraTasks: [fixtureTask(join(projectsRoot, 'font-something'), {
+      id: 'import-api-serving-mvp',
+      title: 'Serve the import API MVP',
+      status: 'spec_review',
+      spec: 'Fixture import API serving MVP task spec.',
+    })],
   },
   {
     id: 'jess',
@@ -850,6 +874,26 @@ const projects = [
     id: 'narrative-harness',
     name: 'Narrative Harness',
     taskQueue: narrativeHarnessReleaseQueue(),
+    extraTasks: [
+      fixtureTask(join(projectsRoot, 'narrative-harness'), {
+        id: 'coherence-reviewer-mvp',
+        title: 'Build first coherence reviewer MVP',
+        status: 'spec_review',
+        spec: 'Fixture coherence reviewer MVP spec.',
+      }),
+      fixtureTask(join(projectsRoot, 'narrative-harness'), {
+        id: 'decision-trace-pipeline',
+        title: 'Build the decision trace pipeline',
+        status: 'spec_review',
+        spec: 'Fixture decision trace pipeline spec.',
+      }),
+      fixtureTask(join(projectsRoot, 'narrative-harness'), {
+        id: 'task-009',
+        title: 'Run task 009 story replay',
+        status: 'spec_review',
+        spec: 'Fixture task 009 story replay spec.',
+      }),
+    ],
     files: [
       {
         dir: 'docs/harness',

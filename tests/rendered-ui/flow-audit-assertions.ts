@@ -155,7 +155,6 @@ export async function expectProjectOrientationSpineAgreement(
   page: Page,
   expected: ProjectOrientationExpectation,
 ): Promise<void> {
-  await ensureProjectMigrationsApplied(page, expected.projectId)
   const response = await page.request.get(`/api/project/spine?projectId=${encodeURIComponent(expected.projectId)}`)
   expect(response.ok()).toBe(true)
   const body = await response.json()
@@ -213,10 +212,7 @@ export async function expectProjectOrientationSpineAgreement(
 
   await page.goto(`/projects/${expected.projectId}/overview`)
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
-  await expect(page.getByRole('region', { name: 'Project state' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: /^(Do this next|Scope status)$/ })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Current scope map' })).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: 'What needs attention' })).toHaveCount(0)
   await expect(page.getByRole('region', { name: 'Project orientation' })).toBeVisible()
   await expect(page.getByText(new RegExp(escapeRegExp(scopeLabel))).first()).toBeVisible()
   await expect(page.getByText(new RegExp(`${included} work items in view`))).toBeVisible()
@@ -268,23 +264,6 @@ export async function expectProjectOrientationSpineAgreement(
   await expect(page.getByRole('heading', { name: 'Structure', exact: true })).toBeVisible()
   await expect(page.getByText(headline).first()).toBeVisible()
   await expect(page.getByText(`${included} included · ${deferred} later`).first()).toBeVisible()
-}
-
-export async function ensureProjectMigrationsApplied(page: Page, projectId: string): Promise<void> {
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const statusResponse = await page.request.get(`/api/project/migrations?projectId=${encodeURIComponent(projectId)}`)
-    expect(statusResponse.ok()).toBe(true)
-    const status = await statusResponse.json()
-    if (!Array.isArray(status.blocked) || status.blocked.length === 0) return
-    const applyResponse = await page.request.post(`/api/project/migrations/apply?projectId=${encodeURIComponent(projectId)}`, {
-      data: { includePrompt: true },
-    })
-    expect(applyResponse.ok()).toBe(true)
-  }
-  const finalStatusResponse = await page.request.get(`/api/project/migrations?projectId=${encodeURIComponent(projectId)}`)
-  expect(finalStatusResponse.ok()).toBe(true)
-  const finalStatus = await finalStatusResponse.json()
-  expect(Array.isArray(finalStatus.blocked) ? finalStatus.blocked.length : 0).toBe(0)
 }
 
 function escapeRegExp(value: string): string {

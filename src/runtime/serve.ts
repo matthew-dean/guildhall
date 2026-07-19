@@ -5323,15 +5323,17 @@ function buildOverviewOrientationPreviewSpine(input: {
   const terminalCompleteMessage = hasExplicitRelease && start?.code === 'all_terminal'
   const firstBlocker = projection.release.blockers[0]
   const proofMissing = projection.counts.proofBlocked > 0 || start?.code === 'proof_evidence_missing'
-  const topBlocker = firstBlocker?.label ?? (
-    start?.canStart === false && startMessage && !noReleaseTerminal && !terminalCompleteMessage
-      ? startMessage
-      : (
-      projection.start.canStart || projection.start.code === 'all_terminal'
-        ? null
-        : projection.start.message
+  const topBlocker = start?.canStart === true
+    ? null
+    : firstBlocker?.label ?? (
+      start?.canStart === false && startMessage && !noReleaseTerminal && !terminalCompleteMessage
+        ? startMessage
+        : (
+        projection.start.canStart || projection.start.code === 'all_terminal'
+          ? null
+          : projection.start.message
+        )
       )
-    )
   const headline = noReleaseTerminal
     ? `${displayScopeLabel} is in progress.`
     : proofMissing
@@ -6952,7 +6954,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       startReadiness: summary.startReadiness,
       sourceSpine: builtOrientationSpine,
     })
-    const liveSummarySpine = reconcileOrientationSpineWithReleaseTruth(
+    const reconciledLiveSummarySpine = reconcileOrientationSpineWithReleaseTruth(
       {
         ...builtOrientationSpine,
         summary: liveOrientationPreview.summary as ProjectOrientationSpine['summary'],
@@ -6960,7 +6962,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       {
         ...orientationReleaseTruthFromSummary(projection.releaseSummary, scopeQueue),
       },
-    ) as unknown as Record<string, unknown>
+    )
+    // Reconciliation owns durable release truth, while this preview owns the
+    // current readiness action. Keep both in the response so an older release
+    // blocker cannot replace the task the shared action model selected now.
+    const liveSummarySpine = {
+      ...reconciledLiveSummarySpine,
+      summary: liveOrientationPreview.summary,
+    } as unknown as Record<string, unknown>
     const initialOrientationSpine = input.surface === 'overview'
       ? compactOrientationSpineForOverviewSurface(liveSummarySpine)
       : input.surface === 'map'
