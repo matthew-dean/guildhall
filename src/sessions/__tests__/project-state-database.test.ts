@@ -103,6 +103,44 @@ afterEach(async () => {
 })
 
 describe('project-state database', () => {
+  it('rejects adding work to a shipped release before replacing current state', () => {
+    const release = {
+      id: 'release-1',
+      label: 'Release 1',
+      kind: 'release',
+      state: 'shipped',
+      source: 'user',
+      proofStyle: 'script',
+      nodeIds: ['work:task-done'],
+      deferredNodeIds: [],
+    }
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        selectedReleaseId: release.id,
+        releases: [release],
+        tasks: [{ id: 'task-done', title: 'Done', status: 'done', releaseIds: [release.id] }],
+      },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+
+    expect(() => writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        selectedReleaseId: release.id,
+        releases: [release],
+        tasks: [
+          { id: 'task-done', title: 'Done', status: 'done', releaseIds: [release.id] },
+          { id: 'task-late', title: 'Late work', status: 'ready', releaseIds: [release.id] },
+        ],
+      },
+      summary: { generatedAt: '2026-07-14T00:01:00.000Z', freshness: 'current' },
+      projectRoot,
+    })).toThrow('Cannot change membership of shipped release release-1')
+
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-done')).toMatchObject({ id: 'task-done', status: 'done' })
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-late')).toBeNull()
+  })
+
   it('stores historical artifact metadata without storing payload bodies', () => {
     writeProjectStateDatabaseSnapshot(tasksPath, {
       queue: { tasks: [] },

@@ -597,6 +597,7 @@ interface ServiceProjectSummary {
     done: number
     shelved: number
   }
+  releaseSummary?: ProjectSummaryProjection['releaseSummary']
   workProgress?: ProjectWorkProgress
   highlights?: {
     activeTaskTitle?: string | null
@@ -670,6 +671,171 @@ interface ServiceProjectSummary {
 }
 
 const FLEET_ATTENTION_ITEM_LIMIT = 32
+const FLEET_SUMMARY_TEXT_LIMIT = 512
+
+function fleetText(value: string | undefined | null, fallback: string): string | undefined {
+  if (value === undefined || value === null) return value ?? undefined
+  return value.length <= FLEET_SUMMARY_TEXT_LIMIT ? value : fallback
+}
+
+function compactFleetAction(action: ProjectActionModel['primaryAction']): ProjectActionModel['primaryAction'] {
+  if (!action) return null
+  return {
+    ...action,
+    label: fleetText(action.label, 'Review selected work') ?? 'Review selected work',
+    ...(action.detail ? { detail: fleetText(action.detail, 'Open the project to review the current work.') } : {}),
+    ...(action.content ? { content: fleetText(action.content, 'Open the project to inspect the full work item.') } : {}),
+    buttonLabel: fleetText(action.buttonLabel, 'Open') ?? 'Open',
+  }
+}
+
+function compactFleetSummaryPayload(summary: ServiceProjectSummary): ServiceProjectSummary {
+  const releaseSummary = summary.releaseSummary
+    ? {
+        ...summary.releaseSummary,
+        release: summary.releaseSummary.release
+          ? {
+              ...summary.releaseSummary.release,
+              label: fleetText(
+                summary.releaseSummary.release.label,
+                `Release ${summary.releaseSummary.release.id}`,
+              ) ?? `Release ${summary.releaseSummary.release.id}`,
+            }
+          : null,
+        blockers: summary.releaseSummary.blockers.map(blocker => ({
+          ...blocker,
+          label: fleetText(
+            blocker.label,
+            blocker.owningTaskId ? `Work item ${blocker.owningTaskId} needs attention.` : 'Release needs attention.',
+          ) ?? 'Release needs attention.',
+        })),
+      }
+    : undefined
+  const startReadiness = summary.startReadiness
+    ? (() => {
+        const { focusTaskTitle: _focusTaskTitle, ...readinessWithoutTitle } = summary.startReadiness
+        return {
+          ...readinessWithoutTitle,
+          ...(readinessWithoutTitle.message
+            ? {
+                message: fleetText(
+                  readinessWithoutTitle.message,
+                  readinessWithoutTitle.focusTaskId
+                    ? `Work item ${readinessWithoutTitle.focusTaskId} needs attention before it can start.`
+                    : 'Selected work needs attention before it can start.',
+                ),
+              }
+            : {}),
+        }
+      })()
+    : null
+  const ownerInput = summary.ownerInput
+    ? {
+        ...summary.ownerInput,
+        ...(summary.ownerInput.next
+          ? {
+              next: {
+                ...summary.ownerInput.next,
+                prompt: fleetText(summary.ownerInput.next.prompt, 'Open Thread to inspect the current question.')
+                  ?? 'Open Thread to inspect the current question.',
+              },
+            }
+          : {}),
+      }
+    : undefined
+  const run = summary.run
+    ? {
+        status: summary.run.status,
+        ...(summary.run.mode ? { mode: summary.run.mode } : {}),
+        ...(summary.run.startedAt ? { startedAt: summary.run.startedAt } : {}),
+        ...(summary.run.stoppedAt ? { stoppedAt: summary.run.stoppedAt } : {}),
+        ...(summary.run.error ? { error: fleetText(summary.run.error, 'The last run reported an error. Open the project for details.') } : {}),
+      }
+    : undefined
+  const fleetAttention = summary.fleetAttention
+    ? {
+        total: summary.fleetAttention.total,
+        freshness: summary.fleetAttention.freshness,
+        items: summary.fleetAttention.items.slice(0, FLEET_ATTENTION_ITEM_LIMIT).map(record => ({
+          id: record.id,
+          status: record.status,
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+          kind: record.kind,
+          severity: record.severity,
+          title: fleetText(record.title, 'Project attention needed.') ?? 'Project attention needed.',
+          detail: fleetText(record.detail, 'Open the project to inspect this item.') ?? 'Open the project to inspect this item.',
+          ...(record.actionHref ? { actionHref: record.actionHref } : {}),
+          ...('taskId' in record && record.taskId ? { taskId: record.taskId } : {}),
+          ...(record.blocking !== undefined ? { blocking: record.blocking } : {}),
+          ...(record.dismissible !== undefined ? { dismissible: record.dismissible } : {}),
+        } as AttentionRecord)),
+      }
+    : undefined
+
+  // Fleet is a saved card projection, not a second task-detail store. Select
+  // only bounded identity, counts, release truth, and next-action fields so a
+  // giant task prompt cannot make every project disappear from the fleet.
+  return {
+    id: summary.id,
+    path: summary.path,
+    name: summary.name,
+    initializationNeeded: summary.initializationNeeded,
+    ...(summary.projectStatusLoading !== undefined ? { projectStatusLoading: summary.projectStatusLoading } : {}),
+    ...(summary.projectStatusError ? { projectStatusError: fleetText(summary.projectStatusError, 'Open the project to inspect the current status.') } : {}),
+    ...(summary.summaryFreshness ? { summaryFreshness: summary.summaryFreshness } : {}),
+    ...(summary.tags ? { tags: summary.tags } : {}),
+    ...(summary.summary ? { summary: fleetText(summary.summary, 'Open the project to read its full summary.') } : {}),
+    ...(summary.taskCounts ? { taskCounts: summary.taskCounts } : {}),
+    ...(summary.workProgress ? { workProgress: summary.workProgress } : {}),
+    ...(releaseSummary ? { releaseSummary } : {}),
+    ...(summary.highlights
+      ? {
+          highlights: {
+            activeTaskTitle: fleetText(summary.highlights.activeTaskTitle, 'Active work is in progress.') ?? null,
+            blockedTaskTitle: fleetText(summary.highlights.blockedTaskTitle, 'Work needs attention.') ?? null,
+            recentCompletedTaskTitle: fleetText(summary.highlights.recentCompletedTaskTitle, 'Recent work completed.') ?? null,
+          },
+        }
+      : {}),
+    ...(run ? { run } : {}),
+    ...(summary.execution ? { execution: summary.execution } : {}),
+    ...(summary.runtime ? { runtime: summary.runtime } : {}),
+    ...(ownerInput ? { ownerInput } : {}),
+    ...(fleetAttention ? { fleetAttention } : {}),
+    ...(startReadiness ? { startReadiness } : {}),
+    ...(summary.actionModel
+      ? {
+          actionModel: {
+            ...summary.actionModel,
+            primaryAction: compactFleetAction(summary.actionModel.primaryAction),
+            secondaryActions: summary.actionModel.secondaryActions.map(action => compactFleetAction(action)!).filter(Boolean),
+            runControl: {
+              ...summary.actionModel.runControl,
+              ...(summary.actionModel.runControl.disabledReason
+                ? { disabledReason: fleetText(summary.actionModel.runControl.disabledReason, 'Open the project to inspect why work is paused.') }
+                : {}),
+            },
+            ownerInput: {
+              ...summary.actionModel.ownerInput,
+              ...(summary.actionModel.ownerInput.label
+                ? { label: fleetText(summary.actionModel.ownerInput.label, 'Answer in Thread') }
+                : {}),
+              ...(summary.actionModel.ownerInput.detail
+                ? { detail: fleetText(summary.actionModel.ownerInput.detail, 'Open Thread to inspect the current question.') }
+                : {}),
+            },
+            setup: {
+              ...summary.actionModel.setup,
+              ...(summary.actionModel.setup.detail
+                ? { detail: fleetText(summary.actionModel.setup.detail, 'Open the project to finish setup.') }
+                : {}),
+            },
+          },
+        }
+      : {}),
+  }
+}
 
 function fleetAttentionProjection(records: readonly AttentionRecord[]): NonNullable<ServiceProjectSummary['fleetAttention']> {
   const items = records
@@ -2155,16 +2321,17 @@ async function refreshProjectProjections(
               ? fleetAttentionProjection(attention.items)
               : { items: [], total: 0, freshness: 'missing' as const }
           })()
+      const compactFleetSummary = compactFleetSummaryPayload({
+        ...fleetSummary,
+        fleetAttention: savedAttention,
+      })
       publishFleetSummaryProjection({
         projectId: resolved.id,
         projectPath: resolved.path,
         sourceProjectRevision: fleetAuthority.projectRevision,
         sourceQueueRevision: fleetAuthority.queueRevision,
         state: 'current',
-        payload: {
-          ...fleetSummary,
-          fleetAttention: savedAttention,
-        },
+        payload: compactFleetSummary,
       })
     } catch (error) {
       try {
@@ -2681,12 +2848,18 @@ function publishFleetSummaryFromSavedState(
   const tasksPath = projectTasksPath(entry.path)
   const authority = readProjectStateAuthorityAtBoundary(tasksPath)
   const shell = readProjectSummaryShellAtBoundary(entry.path).summary
-  const payload = summarizeProjectFromProjection(entry, resolved, run, shell)
+  const basePayload = summarizeProjectFromProjection(entry, resolved, run, shell)
   const attention = readSavedAttentionSurface(
     entry.path,
     resolved.initializationNeeded,
     shell?.releaseSummary ?? null,
   )
+  const payload = compactFleetSummaryPayload({
+    ...basePayload,
+    fleetAttention: attention.freshness === 'current'
+      ? fleetAttentionProjection(attention.items)
+      : { items: [], total: 0, freshness: 'missing' as const },
+  })
   publishFleetSummaryProjection({
     projectId: entry.id,
     projectPath: entry.path,
@@ -2695,9 +2868,6 @@ function publishFleetSummaryFromSavedState(
     state: shell?.freshness === 'current' ? 'current' : shell ? 'stale' : 'unavailable',
     payload: {
       ...payload,
-      fleetAttention: attention.freshness === 'current'
-        ? fleetAttentionProjection(attention.items)
-        : { items: [], total: 0, freshness: 'missing' as const },
     },
     ...(shell ? {} : { error: 'The saved project summary is not available yet.' }),
   })

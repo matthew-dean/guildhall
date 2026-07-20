@@ -173,6 +173,7 @@ async function main() {
     root: narrativeHarnessRoot,
     expectedReleaseLabel: expectedRelease?.label,
     bakeoffPath: process.env.GUILDHALL_ACCEPTANCE_NH_BAKEOFF_ARTIFACT,
+    mvpPath: process.env.GUILDHALL_ACCEPTANCE_NH_MVP_ARTIFACT,
   })
   for (const proofCheck of narrativeHarnessProof.checks) {
     check(`Narrative Harness proof: ${proofCheck.name}`, proofCheck.pass, proofCheck.detail)

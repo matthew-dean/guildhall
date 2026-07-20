@@ -27,14 +27,14 @@ type TestProject = {
   tasksPath: string
 }
 
-function queue(projectRoot: string, taskId: string) {
+function queue(projectRoot: string, taskId: string, title = taskId) {
   return TaskQueue.parse({
     version: 1,
     lastUpdated: now,
     releases: [],
     tasks: [{
       id: taskId,
-      title: taskId,
+      title,
       description: 'A focused fleet read-model test task.',
       domain: 'runtime',
       projectPath: projectRoot,
@@ -200,6 +200,25 @@ describe('fleet read-model isolation', () => {
       taskCounts: { total: 999, active: 999, done: 999 },
       startReadiness: { focusTaskId: 'cache-only-task' },
     })
+  })
+
+  it('stores a bounded fleet card when a task title is an oversized prompt', async () => {
+    writeProjectTaskQueue(healthy.tasksPath, queue(healthy.root, 'healthy-task', 'Prompt '.repeat(2_000)), {
+      projectId: healthy.id,
+      projectRoot: healthy.root,
+    })
+    await service.refreshProjectProjections(healthy.root)
+
+    const result = await readRoute('/api/service/projects')
+    const project = routeProjects('/api/service/projects', result.body).find(candidate => candidate.id === HEALTHY_ID)
+    expect(result.status).toBe(200)
+    expect(project).toMatchObject({
+      id: HEALTHY_ID,
+      summaryFreshness: 'current',
+      startReadiness: { focusTaskId: 'healthy-task' },
+    })
+    expect(project?.startReadiness?.focusTaskTitle).toBeUndefined()
+    expect(JSON.stringify(project).length).toBeLessThan(16_384)
   })
 
   it('keeps a current fleet card available when the project database is unavailable', async () => {

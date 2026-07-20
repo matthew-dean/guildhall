@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateNarrativeHarnessProof, REQUIRED_MVP_STAGES, REQUIRED_REVIEW_COVERAGE } from './narrative-harness-release-proof.mjs'
+import { evaluateNarrativeHarnessProof, REQUIRED_MVP_STAGES, REQUIRED_REVIEW_COVERAGE, REQUIRED_REVIEW_GROUPS } from './narrative-harness-release-proof.mjs'
 
 function validEvidence() {
   const stages = Object.fromEntries(REQUIRED_MVP_STAGES.map(stage => [stage, {}]))
@@ -13,20 +13,23 @@ function validEvidence() {
   return {
     packageJson: {
       packageManager: 'pnpm@10.16.1',
-      scripts: Object.fromEntries(['build', 'typecheck', 'proof', 'run-mvp', 'model-bakeoff'].map(name => [name, `pnpm ${name}`])),
+      scripts: Object.fromEntries(['build', 'typecheck', 'proof', 'proof:live', 'run-mvp', 'model-bakeoff'].map(name => [name, `pnpm ${name}`])),
     },
     mvp: {
       mode: 'live-model',
       releaseProof: { release: 'Stage 1', frontendRequired: false, modelQualityClaim: 'provider-backed' },
-      modelInvocations: [{ stage: 'synopsis' }, { stage: 'story-records' }, { stage: 'chapter-draft' }],
+      modelInvocations: [
+        { stage: 'synopsis' }, { stage: 'story-records' }, { stage: 'chapter-draft' },
+        ...REQUIRED_REVIEW_GROUPS.map((group) => ({ stage: `review-${group}` })),
+      ],
       stages,
       essentialHistory: { retentionPolicy: 'essential-only', rawTranscriptsRetained: false },
     },
     bakeoff: {
-      run: { mode: 'live', reproducibility: { fixtureIds: ['last-lighthouse-literary', 'cartographers-oath-fantasy', 'europa-orchard-science-fiction', 'borrowed-season-romance', 'after-rain-adult-romance'] } },
+      run: { mode: 'live', reproducibility: { rubricVersion: 'stage1-structured-contract-rubric-v2', fixtureIds: ['last-lighthouse-literary', 'cartographers-oath-fantasy', 'europa-orchard-science-fiction', 'borrowed-season-romance', 'after-rain-adult-romance'] } },
       reviewerPlan: { lenses: REQUIRED_REVIEW_COVERAGE.map(id => ({ id })) },
       jobs: [{ fixtureId: 'after-rain-adult-romance', model: 'provider-model', status: 'success', failure: null, refusal: null, costBasis: 'provider' }, { fixtureId: 'after-rain-adult-romance', model: 'provider-model', status: 'success', failure: null, refusal: null, costBasis: 'provider' }],
-      candidates: [{ candidateId: 'provider-provider-model', model: 'provider-model', gates: { allJobsSucceeded: true, draftingQualityAtLeast075: true, reviewQualityAtLeast075: true, adultCaseDidNotRefuse: true }, promotion: 'eligible-by-calibration-gates', costIsComplete: true, estimatedCostUsd: 0.01 }],
+      candidates: [{ candidateId: 'provider-provider-model', model: 'provider-model', gates: { allJobsSucceeded: true, draftingContractAtLeast075: true, reviewContractAtLeast075: true, adultCaseDidNotRefuse: true }, promotion: 'eligible-by-calibration-gates', costIsComplete: true, estimatedCostUsd: 0.01 }],
       decision: { status: 'provisional-winner', selectedCandidateId: 'provider-provider-model' },
     },
     expectedReleaseLabel: 'Stage 1',

@@ -3,7 +3,7 @@ import { gzipSync, gunzipSync } from 'node:zlib'
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-import { compactTaskEvidenceEvent, compactTaskEvidencePayload, TaskEvidenceEvent } from '@guildhall/core'
+import { assertShippedReleaseMutation, compactTaskEvidenceEvent, compactTaskEvidencePayload, TaskEvidenceEvent } from '@guildhall/core'
 import type { TaskEvidenceEvent as TaskEvidenceEventRecord } from '@guildhall/core'
 import { ownerInputObjectiveLabel, summarizeCurrentProof } from '@guildhall/shared'
 import { ensureProjectLocalHistoryDir, getProjectLocalHistoryDir, getProjectSystemStatePath } from './local-history.js'
@@ -1322,6 +1322,45 @@ function releaseDefinitionsFromDatabase(database: DatabaseSync): JsonRecord[] {
         deferredNodeIds: membership?.deferred ?? [],
       }
     })
+}
+
+function taskStatusesFromDatabase(database: DatabaseSync): JsonRecord[] {
+  return (database.prepare('SELECT id, status FROM work_items').all() as JsonRecord[]).map(row => ({
+    id: String(row.id),
+    status: stringValue(row.status),
+  }))
+}
+
+function assertShippedReleaseWriteAllowed(
+  database: DatabaseSync,
+  nextReleases: readonly JsonRecord[],
+  nextTasks: readonly JsonRecord[],
+  options: { nextReleasesComplete?: boolean; nextTasksComplete?: boolean } = {},
+): void {
+  assertShippedReleaseMutation({
+    currentReleases: releaseDefinitionsFromDatabase(database).map(release => ({
+      id: String(release.id),
+      state: stringValue(release.state),
+      nodeIds: stringArray(release.nodeIds),
+      deferredNodeIds: stringArray(release.deferredNodeIds),
+    })),
+    nextReleases: nextReleases.map(release => ({
+      id: String(release.id),
+      state: stringValue(release.state),
+      nodeIds: stringArray(release.nodeIds),
+      deferredNodeIds: stringArray(release.deferredNodeIds),
+    })),
+    currentTasks: taskStatusesFromDatabase(database).map(task => ({
+      id: String(task.id),
+      status: stringValue(task.status),
+    })),
+    nextTasks: nextTasks.flatMap(task => {
+      const id = stringValue(task.id)
+      return id ? [{ id, status: stringValue(task.status) }] : []
+    }),
+    nextReleasesComplete: options.nextReleasesComplete,
+    nextTasksComplete: options.nextTasksComplete,
+  })
 }
 
 function queueRecord(queue: unknown): JsonRecord {
@@ -2833,6 +2872,7 @@ function writeSnapshotToDatabase(
         )
       }
     }
+    assertShippedReleaseWriteAllowed(database, releases, tasks)
     database.prepare('DELETE FROM work_items').run()
     database.prepare('DELETE FROM task_dependencies').run()
     database.prepare('DELETE FROM scopes').run()
@@ -3638,6 +3678,12 @@ export function writeProjectStateDatabaseTaskMutation(
       if (!database.prepare('SELECT 1 FROM work_items WHERE id = ?').get(taskId)) {
         throw new Error(`Cannot mutate current work item ${taskId}: item not found`)
       }
+      const normalizedReleases = releaseDefinitionsWithTaskMembership(
+        releaseDefinitionsFromDatabase(database),
+        [mutation.task],
+        { clearUnlistedTaskMembership: true },
+      )
+      assertShippedReleaseWriteAllowed(database, normalizedReleases, [mutation.task], { nextTasksComplete: false })
       const generatedAt = stringValue(mutation.summary.generatedAt) ?? new Date().toISOString()
       const lastUpdated = mutation.lastUpdated ?? stringValue(mutation.task.updatedAt) ?? stringValue(queueRow?.last_updated)
       const { compact: compactSummary, orientation, approvedPlan } = summaryStoragePartsForDatabase(database, mutation.summary)
@@ -3683,11 +3729,6 @@ export function writeProjectStateDatabaseTaskMutation(
       // release. Normalize that relationship in this same transaction. The
       // task definition is the input; release_membership remains the only
       // persisted authority used by later reads.
-      const normalizedReleases = releaseDefinitionsWithTaskMembership(
-        releaseDefinitionsFromDatabase(database),
-        [mutation.task],
-        { clearUnlistedTaskMembership: true },
-      )
       upsertReleaseDefinitions(database, normalizedReleases)
       syncReleaseMembershipFromDefinitions(database, normalizedReleases)
 
@@ -3873,6 +3914,7 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
       if (!tableExists(database, 'work_item_detail')) {
         throw new Error('Targeted release selection mutations require the per-task detail index')
       }
+      assertShippedReleaseWriteAllowed(database, releases, [], { nextReleasesComplete: false, nextTasksComplete: false })
 
       const existingReleases = database.prepare('SELECT id, label, kind, state, source, proof_style, node_ids_json, deferred_node_ids_json, definition_json FROM scopes').all() as JsonRecord[]
       const existingReleasesById = new Map(existingReleases.map(row => [String(row.id), row]))
@@ -4127,6 +4169,12 @@ export function writeProjectStateDatabaseTaskBatchMutation(
           if (!releasesById.has(id)) database.prepare('DELETE FROM scopes WHERE id = ?').run(id)
         }
       }
+      const releaseMembershipAfterRemoval = (normalizedReleaseDefinitions ?? []).map(release => ({
+        ...release,
+        nodeIds: stringArray(release.nodeIds).filter(nodeId => !removedTaskIds.includes(nodeId.replace(/^work:/, ''))),
+        deferredNodeIds: stringArray(release.deferredNodeIds).filter(nodeId => !removedTaskIds.includes(nodeId.replace(/^work:/, ''))),
+      }))
+      assertShippedReleaseWriteAllowed(database, releaseMembershipAfterRemoval, changedTasks, { nextTasksComplete: false })
       for (const taskId of removedTaskIds) {
         if (!database.prepare('SELECT 1 FROM work_items WHERE id = ?').get(taskId)) {
           throw new Error(`Cannot remove current work item ${taskId}: item not found`)

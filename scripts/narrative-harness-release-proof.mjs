@@ -27,6 +27,8 @@ export const REQUIRED_REVIEW_COVERAGE = [
   'theme-and-meaning',
 ]
 
+export const REQUIRED_REVIEW_GROUPS = ['voice', 'continuity', 'structure', 'reader', 'meaning']
+
 const REQUIRED_FIXTURES = [
   'last-lighthouse-literary',
   'cartographers-oath-fantasy',
@@ -35,21 +37,8 @@ const REQUIRED_FIXTURES = [
   'after-rain-adult-romance',
 ]
 
-const REQUIRED_PNPM_SCRIPTS = ['build', 'typecheck', 'proof', 'run-mvp', 'model-bakeoff']
-
-function normalizeLensIds(ids) {
-  const normalized = new Set()
-  for (const id of ids) {
-    if (id === 'character-voice') normalized.add('character-voice-dialogue')
-    else if (id === 'causal-chain') normalized.add('plot-causality')
-    else if (id === 'pacing-chapter-purpose') {
-      normalized.add('pacing')
-      normalized.add('chapter-purpose')
-    } else if (id === 'reader-knowledge') normalized.add('reader-knowledge-and-revelation')
-    else normalized.add(id)
-  }
-  return normalized
-}
+const REQUIRED_PNPM_SCRIPTS = ['build', 'typecheck', 'proof', 'proof:live', 'run-mvp', 'model-bakeoff']
+const REQUIRED_BAKEOFF_RUBRIC = 'stage1-structured-contract-rubric-v2'
 
 function addCheck(checks, name, pass, detail) {
   checks.push({ name, pass: Boolean(pass), ...(detail === undefined ? {} : { detail }) })
@@ -81,12 +70,35 @@ function latestLiveBakeoffPath(root) {
   return live[0]?.path ?? null
 }
 
-export function resolveNarrativeHarnessProofPaths(root, bakeoffPath) {
+function latestLiveMvpPath(root) {
+  const directory = join(root, 'runs', 'proof', 'live')
+  if (!existsSync(directory)) return null
+  const paths = readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+    .map(entry => join(directory, entry.name))
+    .filter(existsSync)
+  const live = paths
+    .map(path => {
+      try {
+        const artifact = readJson(path)
+        return artifact?.mode === 'live-model' ? { path, generatedAt: artifact.completedAt || artifact.startedAt || '' } : null
+      } catch {
+        return null
+      }
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.generatedAt.localeCompare(left.generatedAt))
+  return live[0]?.path ?? null
+}
+
+export function resolveNarrativeHarnessProofPaths(root, bakeoffPath, mvpPath) {
   const resolvedRoot = resolve(root)
   return {
     root: resolvedRoot,
     packageJson: join(resolvedRoot, 'package.json'),
-    mvp: join(resolvedRoot, 'runs', 'proof', 'mvp.json'),
+    mvp: mvpPath
+      ? resolve(mvpPath)
+      : latestLiveMvpPath(resolvedRoot) || join(resolvedRoot, 'runs', 'proof', 'mvp.json'),
     bakeoff: bakeoffPath
       ? resolve(bakeoffPath)
       : latestLiveBakeoffPath(resolvedRoot),
@@ -111,7 +123,13 @@ export function evaluateNarrativeHarnessProof({ packageJson, mvp, bakeoff, expec
     mode: mvp?.mode ?? null,
     modelQualityClaim: releaseProof.modelQualityClaim ?? null,
   })
-  addCheck(checks, 'NH MVP run records model invocations', Array.isArray(mvp?.modelInvocations) && mvp.modelInvocations.length >= 3, mvp?.modelInvocations?.length ?? null)
+  const modelInvocations = Array.isArray(mvp?.modelInvocations) ? mvp.modelInvocations : []
+  addCheck(checks, 'NH MVP run records model invocations', modelInvocations.length >= 3, modelInvocations.length)
+  const reviewStages = new Set(modelInvocations.map((invocation) => invocation?.stage).filter((stage) => typeof stage === 'string'))
+  addCheck(checks, 'NH MVP run invokes every grouped review role', REQUIRED_REVIEW_GROUPS.every((group) => reviewStages.has(`review-${group}`)), {
+    required: REQUIRED_REVIEW_GROUPS.map((group) => `review-${group}`),
+    actual: [...reviewStages].filter((stage) => stage.startsWith('review-')),
+  })
 
   const stages = mvp?.stages ?? {}
   addCheck(checks, 'NH MVP proof contains the complete stage chain', REQUIRED_MVP_STAGES.every(stage => stages[stage] && typeof stages[stage] === 'object'), Object.keys(stages))
@@ -129,12 +147,13 @@ export function evaluateNarrativeHarnessProof({ packageJson, mvp, bakeoff, expec
 
   const bakeoffRun = bakeoff?.run ?? {}
   addCheck(checks, 'NH live bakeoff exists', bakeoffRun.mode === 'live', { mode: bakeoffRun.mode ?? null, id: bakeoffRun.id ?? null })
+  addCheck(checks, 'NH bakeoff uses the structured contract rubric', bakeoffRun.reproducibility?.rubricVersion === REQUIRED_BAKEOFF_RUBRIC, bakeoffRun.reproducibility?.rubricVersion ?? null)
   const fixtureIds = new Set(bakeoffRun.reproducibility?.fixtureIds ?? [])
   addCheck(checks, 'NH bakeoff covers the complete genre fixture set', REQUIRED_FIXTURES.every(fixture => fixtureIds.has(fixture)), {
     missing: REQUIRED_FIXTURES.filter(fixture => !fixtureIds.has(fixture)),
   })
   const bakeoffLensIds = (bakeoff?.reviewerPlan?.lenses ?? []).map(lens => lens.id).filter(Boolean)
-  const bakeoffCoverage = normalizeLensIds(bakeoffLensIds)
+  const bakeoffCoverage = new Set(bakeoffLensIds)
   addCheck(checks, 'NH bakeoff reviewer plan covers every required lens', REQUIRED_REVIEW_COVERAGE.every(lens => bakeoffCoverage.has(lens)), {
     missing: REQUIRED_REVIEW_COVERAGE.filter(lens => !bakeoffCoverage.has(lens)),
     supplied: bakeoffLensIds,
@@ -160,8 +179,8 @@ export function evaluateNarrativeHarnessProof({ packageJson, mvp, bakeoff, expec
   return { pass: checks.every(check => check.pass), checks }
 }
 
-export function auditNarrativeHarnessProof({ root, expectedReleaseLabel, bakeoffPath } = {}) {
-  const paths = resolveNarrativeHarnessProofPaths(root, bakeoffPath)
+export function auditNarrativeHarnessProof({ root, expectedReleaseLabel, bakeoffPath, mvpPath } = {}) {
+  const paths = resolveNarrativeHarnessProofPaths(root, bakeoffPath, mvpPath)
   const checks = []
   let packageJson
   let mvp
