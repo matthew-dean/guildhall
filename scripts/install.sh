@@ -59,21 +59,32 @@ with open(sys.argv[1], 'r', encoding='utf-8') as fh:
 PY
 )"
 
-RELEASE_DIR="${APP_DIR}/${RELEASE_VERSION}"
-rm -rf "$RELEASE_DIR"
+INSTALL_ID="${RELEASE_VERSION}-$(date +%s)-$$"
+RELEASE_DIR="${APP_DIR}/${INSTALL_ID}"
 mkdir -p "$APP_DIR"
 mv "$TMP_DIR/guildhall-macos" "$RELEASE_DIR"
 
-rm -rf "$CURRENT_DIR"
-ln -s "$RELEASE_DIR" "$CURRENT_DIR"
+# A release version is not a safe install directory identity: development
+# installs regularly reuse it. Stage a complete immutable payload first, then
+# atomically replace the `current` symlink so an existing launcher can never
+# resolve a directory while it is being removed or copied.
+NEXT_CURRENT_DIR="${APP_DIR}/.current-${INSTALL_ID}"
+ln -s "$RELEASE_DIR" "$NEXT_CURRENT_DIR"
+# macOS `mv` follows a destination symlink to a directory, so it cannot
+# replace `current` in place. The payload is already complete and immutable;
+# remove only the symlink, then publish the staged link.
+rm -f "$CURRENT_DIR"
+mv "$NEXT_CURRENT_DIR" "$CURRENT_DIR"
 ln -sf "$CURRENT_DIR/bin/guildhall" "$BIN_DIR/guildhall"
 ln -sf "$BIN_DIR/guildhall" "$LOCAL_BIN_DIR/guildhall"
 
 # Versioned installs contain a full embedded runtime. Keep the active install
 # only; the source checkout and project state are the durable rollback surface.
+CURRENT_TARGET="$(readlink "$CURRENT_DIR")"
 for installed_dir in "$APP_DIR"/*; do
   [ "$installed_dir" = "$RELEASE_DIR" ] && continue
   [ "$installed_dir" = "$CURRENT_DIR" ] && continue
+  [ "$installed_dir" = "$CURRENT_TARGET" ] && continue
   [ -f "$installed_dir/manifest.json" ] || continue
   rm -rf "$installed_dir"
 done
