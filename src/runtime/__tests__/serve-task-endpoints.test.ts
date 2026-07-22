@@ -5148,6 +5148,31 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     expect(q.tasks[0].status).toBe('spec_review')
   })
 
+  it('passes an explicitly delegated Codex owner actor through spec approval', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      structuredSpec: structuredSpecForTest('Delegated spec approval'),
+      productBrief: {
+        userJob: 'Approve a bounded spec through the delegated Codex run.',
+        successMetric: 'The task advances with the correct approval actor.',
+        nonGoals: ['Do not let automation approve the spec.'],
+        authoredBy: 'project-reintake',
+        authoredAt: new Date().toISOString(),
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1/approve-spec'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approvalActor: 'codex_delegated_owner' }),
+    }))
+
+    expect(res.status).toBe(200)
+    const q = await readTaskQueue()
+    expect(q.tasks[0].status).toBe('ready')
+    expect(q.tasks[0].productBrief.approvedBy).toBe('codex_delegated_owner')
+  })
+
   it('seeds a deterministic spec when an approved exploring brief has no concrete spec yet', async () => {
     await seedTask('task-1', {
       status: 'exploring',

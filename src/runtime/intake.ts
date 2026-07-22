@@ -386,6 +386,8 @@ export interface ApproveSpecInput {
   taskId: string
   /** Optional note left on the task by the approving human */
   approvalNote?: string
+  /** Explicit owner actor. Automation must never supply the delegated value. */
+  approvalActor?: 'human' | 'codex_delegated_owner'
 }
 
 export interface ApproveSpecResult {
@@ -399,6 +401,7 @@ export interface ApproveSpecResult {
  * that names multiple child tasks creates them and keeps this task as `parent`.
  */
 export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecResult> {
+  const approvalActor = input.approvalActor ?? 'human'
   const queue = await readQueue(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
@@ -558,7 +561,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     transitionTaskStatus({
       task,
       event: 'mark_ready',
-      actor: 'human',
+      actor: approvalActor,
       evidenceRefs: ['task:approve-spec'],
       now,
     })
@@ -573,7 +576,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     transitionTaskStatus({
       task,
       event: 'mark_ready',
-      actor: 'human',
+      actor: approvalActor,
       evidenceRefs: ['task:approve-spec'],
       now,
     })
@@ -588,7 +591,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     transitionTaskStatus({
       task,
       event: 'mark_ready',
-      actor: 'human',
+      actor: approvalActor,
       evidenceRefs: ['task:approve-spec:research-spike'],
       now,
     })
@@ -598,7 +601,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     transitionTaskStatus({
       task,
       event: 'mark_ready',
-      actor: 'human',
+      actor: approvalActor,
       evidenceRefs: ['task:approve-spec:bounded-child-contract'],
       now,
     })
@@ -611,7 +614,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
         : `Spec approval did not advance ${task.id}; the task is still waiting for spec review.`,
     }
   }
-  approveReintakeBriefWithSpec(task, now)
+  approveReintakeBriefWithSpec(task, now, approvalActor)
   task.updatedAt = now
   resolveSupersededEscalations(task, {
     now,
@@ -623,7 +626,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
 
   if (input.approvalNote) {
     task.notes.push({
-      agentId: 'human',
+      agentId: approvalActor,
       role: 'approver',
       content: input.approvalNote,
       timestamp: now,
@@ -712,11 +715,11 @@ function settleBoundedChildContractWorkWithoutMaterializedChildren(task: Task): 
   return true
 }
 
-function approveReintakeBriefWithSpec(task: Task, now: string): void {
+function approveReintakeBriefWithSpec(task: Task, now: string, approvalActor: 'human' | 'codex_delegated_owner'): void {
   const brief = task.productBrief
   if (!brief || brief.authoredBy !== 'project-reintake') return
   if (typeof brief.approvedAt === 'string' && brief.approvedAt.trim().length > 0) return
-  brief.approvedBy = 'human'
+  brief.approvedBy = approvalActor
   brief.approvedAt = now
   brief.nonGoals = removeDraftApprovalWarnings(brief.nonGoals)
   brief.antiPatterns = removeDraftApprovalWarnings(brief.antiPatterns)

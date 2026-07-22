@@ -14526,7 +14526,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   pause              → deprecated alias for hold
   //   shelve             → shelved      (any non-done task)
   //   unshelve           → proposed     (shelved task only; clears shelveReason)
-  //   approve-spec       → ready  (human approves a spec_review task; body: {approvalNote?})
+  //   approve-spec       → ready  (owner approval; body: {approvalNote?, approvalActor?})
   //   approve-brief      → mark productBrief.approvedBy/approvedAt. The normal
   //                        UI path is human; an explicitly delegated Codex
   //                        owner action is recorded distinctly for audit.
@@ -14592,11 +14592,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
             400,
           )
         }
-        const body = await c.req.json().catch(() => ({})) as { approvalNote?: string }
+        const body = await c.req.json().catch(() => ({})) as {
+          approvalNote?: string
+          approvalActor?: unknown
+        }
+        const approvalActor = body.approvalActor === 'codex_delegated_owner'
+          ? 'codex_delegated_owner'
+          : 'human'
         const result = await approveSpec({
           memoryDir,
           taskId: id,
           ...(body.approvalNote ? { approvalNote: body.approvalNote } : {}),
+          approvalActor,
         })
         if (!result.success) return c.json({ error: result.error ?? 'approve failed' }, 400)
         return c.json({ ok: true, status: result.newStatus })
@@ -15258,7 +15265,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
               return current
             },
           })
-          if (!promoted) return c.json({ error: 'task not found' }, 404)
+          if (!promoted) {
+            return c.json({
+              error: 'Guildhall could not persist the approved brief through the canonical task-state boundary.',
+              code: 'task_state_mutation_rejected',
+            }, 409)
+          }
           if (resolvedEscalationIds.length > 0 || hadRuntimeOpenEscalationIds) {
             await upsertTaskRuntimeState(project.path, id, {
               assignedTo: null,

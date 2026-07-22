@@ -10,9 +10,9 @@ help_summary: |
 ### Contract Touch Decision
 
 - Work id: `0.13.56/delegated-owner-brief-approval`.
-- Touched contracts: task brief approval endpoint request shape, `ProductBrief.approvedBy`, and durable task approval notes.
+- Touched contracts: task brief/spec approval endpoint request shapes, `ProductBrief.approvedBy`, task-lifecycle approval actor, and durable task approval notes.
 - Contracts considered but not touched: task status lifecycle, release membership, worker automation policy, provider routing, and task/release projections.
-- Required follow-up: ordinary UI approval must continue to record `human`; only an explicit caller-provided `codex_delegated_owner` actor may record delegated approval. Automation must never send that actor.
+- Required follow-up: ordinary UI approval must continue to record `human`; only an explicit caller-provided `codex_delegated_owner` actor may record delegated approval. Automation must never send that actor. The same actor must carry through brief and spec gates.
 - Finding during live replay: the approval endpoint's aggregate mutation snapshot omitted a task that the canonical SQLite point read and Work surface both contained. The endpoint now resolves the target through the same point boundary when SQLite is authoritative; aggregate state remains legacy-write support, not task-identity authority.
 - Proof required: endpoint regression for both ordinary and delegated approval, typecheck, model-independence gate, and a live Narrative Harness approval/replay.
 - Proof provided: pending.
