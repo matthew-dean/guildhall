@@ -16,7 +16,7 @@ help_summary: |
 - Finding during live replay: the approval endpoint's aggregate mutation snapshot omitted a task that the canonical SQLite point read and Work surface both contained. The endpoint now resolves the target through the same point boundary when SQLite is authoritative; aggregate state remains legacy-write support, not task-identity authority.
 - Finding during live replay: a stale cooperative-stop marker halted a brand-new CLI `guildhall run` after it had already claimed the selected task. The CLI now clears that marker at the same fresh-run boundary used by the dashboard supervisor.
 - Proof required: endpoint regression for both ordinary and delegated approval, typecheck, model-independence gate, and a live Narrative Harness approval/replay.
-- Proof provided: pending.
+- Proof provided: focused endpoint regression, typecheck, contract detector, and model-independence gate pass. Installed-app replay on Narrative Harness recorded a `codex_delegated_owner` brief and spec approval, then completed `pnpm proof:temporal-spatial-geographic` with its typed output marker. The CLI replay also proved a stale stop marker no longer cancels a fresh run.
 - Waivers: none.
 - Owner-review items: none. This implements the owner delegation already supplied for the Narrative Harness run.
 - Apply/revert: revert the actor parsing, note write, and endpoint regression together. Existing `human` approvals remain valid.
