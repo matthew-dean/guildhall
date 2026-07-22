@@ -5088,6 +5088,38 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     expect(q.tasks[0].productBrief.userJob).toMatch(/new user/)
   })
 
+  it('records an explicitly delegated Codex owner approval without treating it as autonomous approval', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      productBrief: {
+        userJob: 'As an owner I want to approve this bounded brief through my delegated Codex run.',
+        successMetric: 'The task can proceed with a durable, truthful approval record.',
+        nonGoals: ['Do not let Guildhall approve its own work.'],
+        authoredBy: 'agent:spec-agent',
+        authoredAt: new Date().toISOString(),
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/approve-brief'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ approvalActor: 'codex_delegated_owner' }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const q = await readTaskQueue()
+    expect(q.tasks[0].productBrief.approvedBy).toBe('codex_delegated_owner')
+    expect(q.tasks[0].productBrief.approvedAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
+    expect(q.tasks[0].notes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        agentId: 'codex:delegated-owner',
+        content: expect.stringContaining('Guildhall did not approve this brief autonomously.'),
+      }),
+    ]))
+  })
+
   it('promotes an exploring task back to spec_review when the brief is approved after a concrete spec draft already exists', async () => {
     await seedTask('task-1', {
       status: 'exploring',

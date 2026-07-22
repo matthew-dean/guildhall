@@ -5,6 +5,33 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+## 2026-07-22 Delegated owner approval remains distinct from Guildhall automation
+
+### Contract Touch Decision
+
+- Work id: `0.13.56/delegated-owner-brief-approval`.
+- Touched contracts: task brief approval endpoint request shape, `ProductBrief.approvedBy`, and durable task approval notes.
+- Contracts considered but not touched: task status lifecycle, release membership, worker automation policy, provider routing, and task/release projections.
+- Required follow-up: ordinary UI approval must continue to record `human`; only an explicit caller-provided `codex_delegated_owner` actor may record delegated approval. Automation must never send that actor.
+- Proof required: endpoint regression for both ordinary and delegated approval, typecheck, model-independence gate, and a live Narrative Harness approval/replay.
+- Proof provided: pending.
+- Waivers: none.
+- Owner-review items: none. This implements the owner delegation already supplied for the Narrative Harness run.
+- Apply/revert: revert the actor parsing, note write, and endpoint regression together. Existing `human` approvals remain valid.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing optional string `ProductBrief.approvedBy` and existing task notes.
+- Scope: approval audit attribution only.
+- Change class: additive value within an existing permissive string field; no table or field migration.
+- Existing data impact: existing `human` values are retained; no historical record is rewritten.
+- Migration id: none required.
+- Safety: unknown or omitted actor values resolve to the ordinary `human` UI path; only the exact delegated actor receives the distinct label.
+- Compatibility reader: existing string readers already render arbitrary approver IDs.
+- Fixtures/tests: focused endpoint regression.
+- Owner-facing plan text: none.
+- Rollback/revert: restore the former default behavior; existing delegated audit entries remain readable as strings.
+
 ## 2026-07-22 Overview cold-read projection boundary
 
 - Work id: `0.13.55/overview-cold-read-projection`

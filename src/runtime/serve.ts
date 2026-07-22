@@ -14527,7 +14527,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   shelve             → shelved      (any non-done task)
   //   unshelve           → proposed     (shelved task only; clears shelveReason)
   //   approve-spec       → ready  (human approves a spec_review task; body: {approvalNote?})
-  //   approve-brief      → mark productBrief.approvedBy/approvedAt = human
+  //   approve-brief      → mark productBrief.approvedBy/approvedAt. The normal
+  //                        UI path is human; an explicitly delegated Codex
+  //                        owner action is recorded distinctly for audit.
   //   mark-done          → done   (human confirms the task is already complete; body: {evidence?})
   //   update-brief       → fill missing task-brief fields from human input
   //   add-acceptance     → append a human-written acceptance criterion
@@ -15125,6 +15127,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       if (action === 'approve-brief') {
+        const body = await c.req.json().catch(() => ({})) as {
+          approvalActor?: unknown
+        }
+        const approvalActor = body.approvalActor === 'codex_delegated_owner'
+          ? 'codex_delegated_owner'
+          : 'human'
         const tasksPath = projectTasksPath(project.path)
       if (!projectTaskStateExistsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
         const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
@@ -15181,9 +15189,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return c.json({ error: 'brief is incomplete — needs userJob, whyItMattersNow, successMetric, and at least one non-goal' }, 400)
         }
         const now = new Date().toISOString()
-        brief.approvedBy = 'human'
+        brief.approvedBy = approvalActor
         brief.approvedAt = now
         task.productBrief = brief
+        const notes = Array.isArray(task.notes)
+          ? [...task.notes as Array<Record<string, unknown>>]
+          : []
+        if (approvalActor === 'codex_delegated_owner') {
+          notes.push({
+            agentId: 'codex:delegated-owner',
+            role: 'approver',
+            content: 'Approved by Codex under the owner delegation recorded for this run. Guildhall did not approve this brief autonomously.',
+            timestamp: now,
+          })
+        }
+        task.notes = notes
         const effectiveTask = await buildEffectiveTask(project.path, task as Task)
         if (Array.isArray(effectiveTask.escalations)) {
           task.escalations = [...effectiveTask.escalations] as typeof task.escalations
@@ -15231,6 +15251,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               else delete current.spec
               if (Array.isArray(task.acceptanceCriteria)) current.acceptanceCriteria = task.acceptanceCriteria
               if (typeof task.status === 'string') current.status = task.status
+              if (Array.isArray(task.notes)) current.notes = task.notes as Task['notes']
               current.updatedAt = now
               return current
             },
