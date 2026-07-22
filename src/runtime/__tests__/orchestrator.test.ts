@@ -7979,6 +7979,43 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(task.acceptanceCriteria[0]?.met).toBe(true)
   })
 
+  it('routes landed proof recovery to one project-checkout command gate', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'landed-proof-recovery',
+        status: 'in_progress',
+        semanticKind: 'proof_setup',
+        mergeRecord: {
+          fromBranch: 'guildhall/task-landed-proof-recovery',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'push_failed_degraded',
+          mergedAt: '2026-07-22T00:00:00.000Z',
+        },
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The concrete proof command is rerun against current project state.',
+          verifiedBy: 'automated',
+          command: 'pnpm run proof:landed-recovery',
+          met: false,
+        }],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'proof-recovery-gates',
+      afterStatus: 'gate_check',
+    })
+  })
+
   it('lands accepted command-gated task work before cleaning up the task worktree', async () => {
     const projectPath = path.join(tmpDir, 'acceptance-command-land-project')
     const worktreePath = path.join(tmpDir, 'acceptance-command-land-worktree')

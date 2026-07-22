@@ -45,10 +45,16 @@ describe('proof paths', () => {
     }
 
     expect(commandResultSatisfiesProofContract(task, [{ id: 'ac-1', command: 'pnpm proof:world-object-state' }], result)).toBe(false)
-    recordCommandProofPathResults(task, [{ id: 'ac-1', command: 'pnpm proof:world-object-state' }], [result])
+    recordCommandProofPathResults(
+      task,
+      [{ id: 'ac-1', command: 'pnpm proof:world-object-state' }],
+      [result],
+      'run-gates',
+      'project_checkout',
+    )
     expect(task.proofPaths[0]).toMatchObject({
       status: 'blocked',
-      verificationRecords: [{ status: 'failed' }],
+      verificationRecords: [{ status: 'failed', executionRoot: 'project_checkout' }],
     })
   })
 

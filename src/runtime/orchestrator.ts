@@ -355,6 +355,28 @@ function taskHasConcreteProjectProofCommand(task: Task): boolean {
   )
 }
 
+function landedTaskWorkRequiresProjectCheckoutProof(task: Task): boolean {
+  if (!isProofSetupTask(task)) return false
+  if (!['merged', 'pushed', 'push_failed_degraded'].includes(task.mergeRecord?.result ?? '')) return false
+  const commands = task.acceptanceCriteria
+    .map((criterion) => typeof criterion.command === 'string' ? comparableCommand(criterion.command) : null)
+    .filter((command): command is string => Boolean(command))
+  if (commands.length === 0 || !taskHasConcreteProjectProofCommand(task)) return false
+  const projectCheckoutCommands = new Set(
+    (task.proofPaths ?? []).flatMap((path) => {
+      const records = path && typeof path === 'object' && Array.isArray(path.verificationRecords)
+        ? path.verificationRecords
+        : []
+      return records.flatMap((record) =>
+        record.executionRoot === 'project_checkout' && typeof record.command === 'string'
+          ? [comparableCommand(record.command)]
+          : [],
+      )
+    }),
+  )
+  return commands.some((command) => !projectCheckoutCommands.has(command))
+}
+
 function shouldRunAcceptanceCommandCriterion(
   task: Task,
   criterion: Task['acceptanceCriteria'][number],
@@ -7501,7 +7523,11 @@ export class Orchestrator {
     task: Task,
   ): Promise<TickOutcome | null> {
     const proofRecovery = (task as Task & { proofRecovery?: unknown }).proofRecovery
-    if (task.status !== 'in_progress' || !proofRecovery || typeof proofRecovery !== 'object') return null
+    const needsLandedCheckoutProof = landedTaskWorkRequiresProjectCheckoutProof(task)
+    if (
+      task.status !== 'in_progress' ||
+      ((!proofRecovery || typeof proofRecovery !== 'object') && !needsLandedCheckoutProof)
+    ) return null
     const commandCriterionIds = new Set(
       task.acceptanceCriteria
         .filter((criterion) => typeof criterion.command === 'string' && criterion.command.trim())
@@ -7513,7 +7539,7 @@ export class Orchestrator {
     // A failed authoritative command gate is now a worker-repair handoff. Do
     // not route the same unchanged checkout back through the proof gate on
     // every tick; the worker must get a chance to address the recorded output.
-    const reopenedAt = typeof (proofRecovery as { reopenedAt?: unknown }).reopenedAt === 'string'
+    const reopenedAt = typeof (proofRecovery as { reopenedAt?: unknown } | undefined)?.reopenedAt === 'string'
       ? Date.parse((proofRecovery as { reopenedAt: string }).reopenedAt)
       : NaN
     const hasFailedCommandSinceRecovery = Number.isFinite(reopenedAt) && task.gateResults.some((gate) =>
@@ -7523,7 +7549,7 @@ export class Orchestrator {
       Number.isFinite(Date.parse(gate.checkedAt)) &&
       Date.parse(gate.checkedAt) > reopenedAt,
     )
-    if (hasFailedCommandSinceRecovery) return null
+    if (!needsLandedCheckoutProof && hasFailedCommandSinceRecovery) return null
 
     const beforeStatus = task.status
     return await this.withQueueWriteLock(async () => {
@@ -7669,7 +7695,13 @@ export class Orchestrator {
       current.updatedAt = now
       queue.lastUpdated = now
       current.proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(current, now)
-      recordCommandProofPathResults(current, gates, results, 'acceptance-command-gates')
+      recordCommandProofPathResults(
+        current,
+        gates,
+        results,
+        'acceptance-command-gates',
+        taskWorkIsLanded ? 'project_checkout' : 'task_worktree',
+      )
 
       const scopedHardGateDisposition = !allPassed
         ? summarizeScopedHardGateDisposition(

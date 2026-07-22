@@ -58,6 +58,7 @@ export const VerificationRecord = z.object({
   status: z.enum(['passed', 'failed', 'blocked', 'not_run']),
   summary: z.string(),
   command: z.string().optional(),
+  executionRoot: z.enum(['task_worktree', 'project_checkout']).optional(),
   url: z.string().optional(),
   recordedAt: z.string(),
   recordedBy: z.string(),

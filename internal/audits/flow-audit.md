@@ -13,23 +13,23 @@ help_summary: |
 - Touched contracts: acceptance-command gate execution root and task landing/proof-recovery relationship.
 - Contracts considered but not touched: task lifecycle, worktree allocation/cleanup, release scope, proof evidence schema, UI projections, and provider routing.
 - Finding: a proof-recovery task retained its historical task-worktree after its implementation had been cherry-picked locally. The command gate then executed the old checkout and reported a missing proof script that existed in the landed project state. The coordinator subsequently misclassified its own stale-checkout failure as a human decision.
-- Change: a task with a durable local landing result (`merged`, `pushed`, or `push_failed_degraded`) runs its acceptance proof against the effective project checkout. Unlanded task work continues to verify inside its isolated worktree.
-- Proof required: a regression with conflicting project/worktree contents, focused orchestrator test, typecheck, model-independence gate, and installed Narrative Harness replay.
-- Proof provided: regression added; focused test passes. Remaining validation is pending this implementation's installed replay.
+- Change: a task with a durable local landing result (`merged`, `pushed`, or `push_failed_degraded`) runs its acceptance proof against the effective project checkout. Each command verification record now persists its typed execution root (`task_worktree` or `project_checkout`), so a recovery gate runs once against current landed state and a new failure returns to implementation rather than repeating stale-worktree recovery. Unlanded task work continues to verify inside its isolated worktree.
+- Proof required: a regression with conflicting project/worktree contents, a regression for landed proof recovery, typed execution-root evidence coverage, typecheck, model-independence gate, and installed Narrative Harness replay.
+- Proof provided: regressions added; focused tests pass. Remaining validation is pending this implementation's installed replay.
 - Waivers: none.
 - Owner-review items: none. This is a runtime-authority repair, not a product decision.
 - Apply/revert: revert the checkout-selection rule and its regression together. No persisted data changes.
 
 ### Schema Migration Decision
 
-- Persisted schema touched: none.
-- Scope: runtime execution-root selection over existing task `mergeRecord` and worktree metadata.
-- Change class: authority correction.
-- Existing data impact: existing landed merge records begin selecting the current project checkout for proof recovery; unlanded worktree behavior is unchanged.
-- Migration id: none required.
-- Safety: only explicit landing enums switch execution root; unknown or absent records retain the existing worktree behavior.
-- Compatibility reader: not applicable.
-- Fixtures/tests: focused orchestrator regression.
+- Persisted schema touched: `VerificationRecord.executionRoot`.
+- Scope: runtime execution-root selection and proof evidence over existing task `mergeRecord` and worktree metadata.
+- Change class: additive typed proof-evidence field and authority correction.
+- Existing data impact: existing landed merge records begin selecting the current project checkout for proof recovery; unlanded worktree behavior is unchanged. Historical verification records simply omit the new field and are conservatively treated as unknown origin.
+- Migration id: none required; the field is optional and writes only on new command-gate results.
+- Safety: only explicit landing enums switch execution root; unknown or absent records retain existing worktree behavior and cannot falsely satisfy a project-checkout recovery replay.
+- Compatibility reader: optional field readers preserve legacy proof records.
+- Fixtures/tests: focused orchestrator and proof-path regressions.
 - Owner-facing plan text: none.
 - Rollback/revert: code-only revert.
 

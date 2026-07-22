@@ -381,6 +381,7 @@ export function recordCommandProofPathResults(
     checkedAt: string
   }>,
   recordedBy = 'run-gates',
+  executionRoot?: 'task_worktree' | 'project_checkout',
 ): void {
   if (!Array.isArray(task.proofPaths)) return
   const commandById = new Map(gates.map((gate) => [gate.id, comparableCommand(gate.command)]))
@@ -426,6 +427,7 @@ export function recordCommandProofPathResults(
           ? `Observed command passed: ${proofCommand}`
           : `Observed command failed: ${proofCommand}`,
         command: proofCommand,
+        ...(executionRoot ? { executionRoot } : {}),
         recordedAt: result.checkedAt,
         recordedBy,
         evidenceRefs: [],
