@@ -15143,7 +15143,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const queue = Array.isArray(parsed)
           ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
           : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
-        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        // A promoted project owns task identity in SQLite point records. The
+        // aggregate mutation snapshot is still needed for legacy writes, but
+        // it must not make an existing canonical task look absent.
+        const pointTask = databaseAuthority ? readProjectTaskRecordAtBoundary(tasksPath, id) : null
+        const task = pointTask ?? queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
         if (!task) return c.json({ error: 'task not found' }, 404)
         const brief = task.productBrief as Record<string, unknown> | undefined
         if (!brief || typeof brief !== 'object') {
