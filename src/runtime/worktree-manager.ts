@@ -48,7 +48,10 @@ export function computeBranchName(
 ): string {
   const safeId = task.id.replace(/[^A-Za-z0-9_-]/g, '_')
   if (mode === 'per_attempt') {
-    return `guildhall/task-${safeId}/attempt-${task.revisionCount}`
+    // Git refs cannot have both `guildhall/task-x` and descendants beneath
+    // it. Keep attempt branches siblings so a fresh retry can follow a
+    // landed per-task branch without a ref-namespace collision.
+    return `guildhall/task-${safeId}-attempt-${task.revisionCount}`
   }
   return `guildhall/task-${safeId}`
 }

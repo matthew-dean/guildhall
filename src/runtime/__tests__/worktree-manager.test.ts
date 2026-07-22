@@ -62,7 +62,7 @@ describe('computeBranchName / computeWorktreePath', () => {
   it('per_attempt suffixes with the revision counter', () => {
     const t = task({ id: 'abc', revisionCount: 3 })
     expect(computeBranchName(t, 'per_attempt')).toBe(
-      'guildhall/task-abc/attempt-3',
+      'guildhall/task-abc-attempt-3',
     )
     expect(computeWorktreePath('demo-project', t, 'per_attempt')).toBe(
       path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc', 'attempt-3'),
@@ -240,7 +240,7 @@ describe('ensureWorktreeForDispatch', () => {
       id: 'abc',
       revisionCount: 1,
       worktreePath: '/repo/.guildhall/worktrees/abc/attempt-0',
-      branchName: 'guildhall/task-abc/attempt-0',
+      branchName: 'guildhall/task-abc-attempt-0',
       baseBranch: 'main',
     })
     const r = await ensureWorktreeForDispatch({
@@ -252,7 +252,7 @@ describe('ensureWorktreeForDispatch', () => {
       gitDriver: driver,
     })
     expect(r.created).toBe(true)
-    expect(r.branchName).toBe('guildhall/task-abc/attempt-1')
+    expect(r.branchName).toBe('guildhall/task-abc-attempt-1')
   })
 
   it('creates sibling repo symlinks for nested multi-repo worktrees', async () => {
