@@ -14,6 +14,7 @@ help_summary: |
 - Contracts considered but not touched: task status lifecycle, release membership, worker automation policy, provider routing, and task/release projections.
 - Required follow-up: ordinary UI approval must continue to record `human`; only an explicit caller-provided `codex_delegated_owner` actor may record delegated approval. Automation must never send that actor. The same actor must carry through brief and spec gates.
 - Finding during live replay: the approval endpoint's aggregate mutation snapshot omitted a task that the canonical SQLite point read and Work surface both contained. The endpoint now resolves the target through the same point boundary when SQLite is authoritative; aggregate state remains legacy-write support, not task-identity authority.
+- Finding during live replay: a stale cooperative-stop marker halted a brand-new CLI `guildhall run` after it had already claimed the selected task. The CLI now clears that marker at the same fresh-run boundary used by the dashboard supervisor.
 - Proof required: endpoint regression for both ordinary and delegated approval, typecheck, model-independence gate, and a live Narrative Harness approval/replay.
 - Proof provided: pending.
 - Waivers: none.

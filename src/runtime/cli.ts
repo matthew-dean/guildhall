@@ -50,6 +50,7 @@ import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
 import { buildSemanticIndexPrompt, codebaseMapPath, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
 import { censusProjectCache, getProjectStateDir } from '@guildhall/sessions'
+import { clearStopRequested } from './stop-requested.js'
 import type { ConsumerReturnPacket, DeliveryReceipt } from './project-graph.js'
 import { detectWorkspaceSignals, formWorkspaceHypothesis, type WorkspaceImportDraft, type WorkspaceSignal } from './workspace-import/index.js'
 import { buildWorkspaceImportReview, type WorkspaceImportReview } from './workspace-import/review.js'
@@ -868,6 +869,10 @@ async function cmdRun() {
     process.exit(1)
   }
 
+  // A previous cooperative stop must not cancel a new explicit CLI run.
+  // The dashboard supervisor clears this before it claims work; the CLI owns
+  // the same boundary when it runs the orchestrator directly.
+  await clearStopRequested(getProjectStateDir(workspace.root))
   const { runOrchestrator } = await import('./orchestrator.js')
   await runOrchestrator(workspace.config, {
     ...runOptions,
