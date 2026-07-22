@@ -1436,7 +1436,7 @@ export interface PromotedTaskDetailMutationOptions {
  * compact task index and summary are projected from indexed rows with only
  * that task overridden; the database mutation commits all three atomically.
  */
-export function writePromotedTaskDetailMutation(
+function writePromotedTaskDetailMutationOnce(
   tasksPath: string,
   taskId: string,
   options: PromotedTaskDetailMutationOptions,
@@ -1537,6 +1537,35 @@ export function writePromotedTaskDetailMutation(
     scopeRow: nextScopeRow,
   })
   return { committedRevision, task: nextTask }
+}
+
+function isStalePromotedTaskDetailMutation(error: unknown): boolean {
+  return error instanceof Error
+    && /^Stale targeted project mutation: expected (?:project )?revision \d+, found \d+\./.test(error.message)
+}
+
+/**
+ * Commit an ordinary task edit against the current promoted project state.
+ *
+ * The point read and summary projection happen before SQLite can begin its
+ * write transaction, so another process may commit runtime evidence in that
+ * small interval. Rebase this pure definition mutation on the fresh canonical
+ * point instead of making a caller retry an entire orchestration tick.
+ */
+export function writePromotedTaskDetailMutation(
+  tasksPath: string,
+  taskId: string,
+  options: PromotedTaskDetailMutationOptions,
+): { committedRevision: number; task: Record<string, unknown> } | null {
+  const maxAttempts = 3
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return writePromotedTaskDetailMutationOnce(tasksPath, taskId, options)
+    } catch (error) {
+      if (!isStalePromotedTaskDetailMutation(error) || attempt === maxAttempts - 1) throw error
+    }
+  }
+  return null
 }
 
 /**

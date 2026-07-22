@@ -51529,3 +51529,75 @@ Contract Touch Decision
 - Apply/revert: command-bearing review criteria normalize to automated proof.
       Restoring silent active-command mutation or retry loops is release
       blocking.
+
+## 2026-07-22 Promoted task mutations rebase on the canonical project cursor
+
+### Finding
+
+- [x] The installed Narrative Harness proof replay exposed a real cross-process
+      race: `writePromotedTaskDetailMutation` read a task point and its queue /
+      project revisions, then rebuilt the saved compact summary before its
+      transaction committed. A concurrent runtime or evidence update could
+      advance the project revision in that interval. The targeted runner then
+      retried the entire dispatch even though the only stale operation was a
+      pure single-task definition edit.
+
+### Repair
+
+- [x] Keep the task point, queue revision, project revision, derived summary,
+      and SQLite mutation under the same named point-mutation authority.
+- [x] Rebase a stale point mutation on a fresh canonical task point, at most
+      twice after the initial attempt. This reruns only the pure definition
+      mutator and projection. It does not repeat worker execution, infer a new
+      task, or suppress a non-concurrency failure.
+
+### Contract Touch Decision
+
+- Work id: `0.13.56/promoted-task-mutation-cursor`.
+- Touched contracts: promoted task point mutation, optimistic project revision
+      cursor, and compact summary refresh ownership.
+- Considered but not touched: task schema, runtime/evidence payloads, release
+      scope, worker dispatch, provider prose, and historical task data.
+- Required follow-up: add a deterministic stale-CAS regression, rebuild and
+      replay the selected Narrative Harness proof task in the installed app.
+- Proof required: stale point-mutation rebase regression, typecheck,
+      `lint:contracts`, model-independence, and installed targeted replay.
+- Proof provided: pending.
+- Waivers: none.
+- Owner-review items: none.
+- Apply/revert: revert the bounded rebase with its regression; do not restore
+      whole-run retries as the owner of point-mutation concurrency.
+
+## 2026-07-22 Git Story actions invalidate the saved repository observation
+
+### Finding
+
+- [x] Narrative Harness's Git Story push succeeded through Guildhall, but the
+      Release page continued to show the old `committed_local` diagnostic.
+      Git actions changed repository state outside the SQLite task mutation and
+      did not notify the shared projection scheduler.
+
+### Repair
+
+- [x] Successful Git Story commit, push, and pull-request actions emit one
+      repository invalidation through the shared project-state bus.
+      The scheduler owns the later repository inspection and saved projection
+      refresh; the action endpoint does not synthesize a competing status.
+
+### Contract Touch Decision
+
+- Work id: `0.13.56/git-story-projection-invalidation`.
+- Touched contracts: Git Story mutation endpoint and shared project projection
+      invalidation domains.
+- Considered but not touched: repository snapshot schema, release scope,
+      task completion semantics, Git policy, and UI formatting.
+- Required follow-up: installed replay must show the Git Story diagnostic
+      current after a successful push.
+- Proof required: endpoint invalidation regression plus installed release
+      readiness read after the scheduled refresh.
+- Proof provided: pending.
+- Waivers: none.
+- Owner-review items: none; the action remains protected by the existing
+      Git Story policy/confirmation boundary.
+- Apply/revert: revert the invalidation and regression together; do not add a
+      route-local repository status patch as a replacement.

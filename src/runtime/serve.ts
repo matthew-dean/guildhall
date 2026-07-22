@@ -4463,6 +4463,15 @@ function policyAllowsGitWrite(
   return { ok: false, error: `${action} requires confirmation for this project policy.`, status: 409 }
 }
 
+function invalidateGitStoryObservation(projectRoot: string, action: 'commit' | 'push' | 'pullRequest'): void {
+  // Git changed outside the project-state transaction. Notify the shared
+  // projection scheduler so readiness never keeps serving an old repository
+  // observation after a successful Git Story action.
+  emitProjectSummaryInvalidation(projectRoot, `git-story-${action}`, {
+    domains: ['repository'],
+  })
+}
+
 async function commitGitStoryFiles(input: {
   cwd: string
   files: string[]
@@ -14187,6 +14196,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               files,
             },
           })
+          invalidateGitStoryObservation(project.path, 'commit')
           return c.json({ ok: true, commitSha: result.commitSha, task: await enrichTaskForServe(project.path, promoted.task) })
         }
         const notes = Array.isArray(task.notes) ? [...(task.notes as unknown[])] : []
@@ -14195,6 +14205,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.updatedAt = now
         queue.lastUpdated = now
         writeProjectTaskQueueWithSummary(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
+        invalidateGitStoryObservation(project.path, 'commit')
         return c.json({ ok: true, commitSha: result.commitSha, task: await enrichTaskForServe(project.path, task) })
       }
       if (closureAction === 'push') {
@@ -14212,6 +14223,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             ...(fetchFirst ? { nextAction: 'Fetch and merge the remote branch, rerun verification, then push again.' } : {}),
           }, fetchFirst ? 409 : 500)
         }
+        invalidateGitStoryObservation(project.path, 'push')
         return c.json({ ok: true, branch, task: await enrichTaskForServe(project.path, task) })
       }
       if (closureAction === 'open-pr') {
@@ -14230,6 +14242,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           body: typeof body.prBody === 'string' ? body.prBody : typeof body.body === 'string' ? body.body : undefined,
         })
         if (!result.ok) return c.json({ error: result.detail ?? 'open PR failed' }, 500)
+        invalidateGitStoryObservation(project.path, 'pullRequest')
         return c.json({ ok: true, url: result.url, task: await enrichTaskForServe(project.path, task) })
       }
 

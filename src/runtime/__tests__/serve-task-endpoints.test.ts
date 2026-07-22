@@ -19,6 +19,7 @@ import {
   readTaskEvidence,
   readTaskRuntimeStore,
   readTaskWorkspaceStore,
+  subscribeProjectSummaryInvalidations,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
@@ -2069,15 +2070,25 @@ describe('POST /api/project/task/:id/git-story/:closureAction', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
+    const events: Array<{ projectRoot: string; domains: string[] }> = []
+    const unsubscribe = subscribeProjectSummaryInvalidations(event => events.push({
+      projectRoot: event.projectRoot,
+      domains: [...event.domains],
+    }))
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1/git-story/commit'), {
       method: 'POST',
       body: JSON.stringify({ confirmed: true, message: 'record task proof', files: ['src/proof.txt'] }),
       headers: { 'content-type': 'application/json' },
     }))
+    unsubscribe()
 
     expect(res.status).toBe(200)
     expect(execFileSync('git', ['status', '--short'], { cwd: taskRepo, encoding: 'utf8' })).toBe('')
     await expect(fs.access(path.join(tmpDir, 'src', 'proof.txt'))).rejects.toThrow()
+    expect(events).toContainEqual({
+      projectRoot: tmpDir,
+      domains: ['repository'],
+    })
   })
 
   it('records a local-only git story override with a required reason', async () => {
