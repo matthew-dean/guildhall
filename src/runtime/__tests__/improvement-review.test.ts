@@ -27,6 +27,7 @@ describe('Guildhall improvement review', () => {
           title: 'Prepare release proof',
           description: 'Run browser smoke verification and capture release evidence.',
           status: 'in_progress',
+          taskKind: 'verification',
         }),
         task({
           id: 'task-done-proof',
@@ -59,9 +60,9 @@ describe('Guildhall improvement review', () => {
     const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-improvement-review-budget-'))
     try {
       await writeQueue(memoryDir, [
-        task({ id: 'task-one', title: 'Runtime setup', description: 'Podman runtime mount setup.', status: 'ready' }),
-        task({ id: 'task-two', title: 'Review update', description: 'Review rubric calibration update.', status: 'review' }),
-        task({ id: 'task-three', title: 'Memory context', description: 'Refresh corpus map context.', status: 'ready' }),
+        task({ id: 'task-one', title: 'Runtime setup', description: 'Podman runtime mount setup.', status: 'ready', taskKind: 'verification' }),
+        task({ id: 'task-two', title: 'Review update', description: 'Review rubric calibration update.', status: 'review', reviewRisk: { lanes: ['calibration_governance'], recipes: [], requiredArtifacts: [], artifactPolicy: 'advisory', assessedAt: '2026-05-29T12:00:00.000Z', assessedBy: 'test' } }),
+        task({ id: 'task-three', title: 'Memory context', description: 'Refresh corpus map context.', status: 'ready', taskKind: 'learning' }),
       ])
 
       const first = await reviewInProcessWorkForGuildhallImprovements({
@@ -98,6 +99,7 @@ describe('Guildhall improvement review', () => {
           title: 'Prepare release proof',
           description: 'Run browser smoke verification and capture release evidence.',
           status: 'in_progress',
+          taskKind: 'verification',
         }),
       ])
 

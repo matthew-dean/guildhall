@@ -41,6 +41,7 @@ export {
   createInvokedSkillsAttachment,
   createPlanAttachment,
   createRecentFilesAttachment,
+  createRecentVerificationResultsAttachment,
   createRecentVerifiedWorkAttachment,
   createTaskFocusAttachment,
   createWorkLogAttachment,

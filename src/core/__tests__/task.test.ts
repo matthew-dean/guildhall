@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { AcceptanceCriteria, RequestIntake, Task, TaskQueue, TaskStatus } from '../task.js'
-import { parseAcceptanceCriteriaFromSpec } from '../spec-acceptance.js'
+import { migrateLegacyAcceptanceCriteriaFromMarkdown } from '../spec-acceptance.js'
 
 describe('TaskStatus', () => {
   it('accepts all valid statuses', () => {
@@ -21,7 +21,7 @@ describe('TaskStatus', () => {
 
 describe('acceptance proof expectations', () => {
   it('preserves explicit non-zero exit and output requirements from a spec', () => {
-    const criteria = parseAcceptanceCriteriaFromSpec(`
+    const criteria = migrateLegacyAcceptanceCriteriaFromMarkdown(`
 ## Acceptance Criteria
 1. Scenario: An invalid fixture is rejected.
    Expectation: The validator rejects the fixture.
@@ -301,14 +301,14 @@ describe('AcceptanceCriteria', () => {
     expect(result.expectation).toBe('Then the approved actions appear.')
   })
 
-  it('normalizes command-like verifiedBy values from agent-written criteria', () => {
+  it('does not turn command-like verifier prose into an executable proof', () => {
     const result = AcceptanceCriteria.parse({
       id: 'ac-1',
       description: 'Tests pass',
       verifiedBy: 'vitest run',
     })
-    expect(result.verifiedBy).toBe('automated')
-    expect(result.command).toBe('vitest run')
+    expect(result.verifiedBy).toBe('review')
+    expect(result.command).toBeUndefined()
   })
 
   it('normalizes unknown non-command verifiedBy values to reviewer judgment', () => {

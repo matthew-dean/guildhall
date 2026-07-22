@@ -44,7 +44,10 @@ export async function buildEffectiveMemoryPacket(input: {
     input.task.domain,
     input.task.projectPath,
   ].join('\n')
-  const taskKinds = inferTaskKinds(queryText)
+  const taskKinds = [...new Set([
+    ...(input.task.taskKind ? [input.task.taskKind] : []),
+    ...(input.task.workKind ? [input.task.workKind] : []),
+  ])]
   const fileAreas = fileAreaHints(queryText)
   const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
   const memoryConfig = readProjectConfig(projectRoot).memory
@@ -56,7 +59,14 @@ export async function buildEffectiveMemoryPacket(input: {
       taskKinds,
       fileAreas,
       structuralScopeIds,
-      text: queryText,
+      typedKeys: [
+        input.task.domain,
+        ...taskKinds,
+        ...(input.task.semanticKind ? [input.task.semanticKind] : []),
+        ...(input.task.contractNames ?? []),
+        ...fileAreas,
+        ...structuralScopeIds,
+      ],
     }))
   const included = relevant
     .filter((record) => record.status === 'active' || record.status === 'used')
@@ -156,7 +166,7 @@ function isRelevant(record: MemoryRecord, input: {
   taskKinds: readonly string[]
   fileAreas: readonly string[]
   structuralScopeIds: readonly string[]
-  text: string
+  typedKeys: readonly string[]
 }): boolean {
   if (record.domains.length > 0 && !record.domains.includes(input.domain)) return false
   if (record.taskKinds.length > 0 && !record.taskKinds.some((kind) => input.taskKinds.includes(kind))) return false
@@ -171,9 +181,12 @@ function isRelevant(record: MemoryRecord, input: {
     !structuralScopeMatches(record, input.structuralScopeIds)
   ) return true
   if (record.tags.length === 0) return true
-  const haystack = input.text.toLowerCase()
-  return record.tags.some((tag) => haystack.includes(tag.toLowerCase())) ||
-    record.summary.toLowerCase().split(/\s+/).some((word) => word.length > 4 && haystack.includes(word))
+  // Tags are explicit routing metadata. The summary is display/audit prose;
+  // its vocabulary and the task's prose must never decide whether memory
+  // enters a worker packet. A tag is usable only when it matches a typed
+  // routing key supplied by the task contract.
+  const typedKeys = new Set(input.typedKeys.map((key) => key.trim().toLowerCase()).filter(Boolean))
+  return record.tags.some((tag) => typedKeys.has(tag.trim().toLowerCase()))
 }
 
 function structuralScopeMatches(record: MemoryRecord, structuralScopeIds: readonly string[]): boolean {
@@ -204,15 +217,6 @@ function structuralScopesForTask(memoryDir: string, task: Task, fileAreas: reado
   } catch {
     return []
   }
-}
-
-function inferTaskKinds(text: string): string[] {
-  const kinds: string[] = []
-  if (/\b(ui|drawer|component|button|screen|view|svelte|react|vue)\b/i.test(text)) kinds.push('ui')
-  if (/\b(api|route|server|backend|runtime)\b/i.test(text)) kinds.push('api')
-  if (/\b(migration|migrate|legacy|persistence)\b/i.test(text)) kinds.push('migration')
-  if (/\b(docs|documentation|guide)\b/i.test(text)) kinds.push('docs')
-  return [...new Set(kinds)]
 }
 
 function fileAreaHints(value: string): string[] {

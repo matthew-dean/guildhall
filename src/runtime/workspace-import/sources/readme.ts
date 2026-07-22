@@ -41,6 +41,7 @@ export const readmeSource: TaskSource = {
         .map((s) => s.trim())
         .find((s) => s.length > 0 && !s.startsWith('#') && !s.startsWith('!['))
       signals.push({
+        signalId: `${path}:h1`,
         source: 'readme',
         kind: 'goal',
         title,
@@ -53,8 +54,9 @@ export const readmeSource: TaskSource = {
     const goalsBlock = extractSection(raw, /^#{1,3}\s+(goals?|what it does|features)\b/im)
     if (goalsBlock) {
       const bullets = extractTopLevelBullets(goalsBlock)
-      for (const bullet of bullets) {
+      for (const [index, bullet] of bullets.entries()) {
         signals.push({
+          signalId: `${path}:goals:${index + 1}`,
           source: 'readme',
           kind: 'goal',
           title: bullet,

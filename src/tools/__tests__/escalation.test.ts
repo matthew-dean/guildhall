@@ -137,6 +137,24 @@ describe('raiseEscalation', () => {
     expect(task.escalations[0]?.resolvedAt).toBeUndefined()
   })
 
+  it('persists typed recovery identity separately from escalation prose', async () => {
+    const result = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      recoveryCode: 'worker_turn_limit',
+      summary: 'First wording from the runtime.',
+    })
+
+    expect(result.success).toBe(true)
+    const task = await readEffectiveTask()
+    expect(task.escalations[0]).toMatchObject({
+      recoveryCode: 'worker_turn_limit',
+      summary: 'First wording from the runtime.',
+    })
+  })
+
   it('stores external setup checklist steps on owner blockers', async () => {
     const result = await raiseEscalation({
       tasksPath,
@@ -230,6 +248,29 @@ describe('raiseEscalation', () => {
     expect(task.escalations).toHaveLength(1)
   })
 
+  it('deduplicates typed recovery by code even when the model changes its prose', async () => {
+    const first = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      recoveryCode: 'worker_timeout_no_progress',
+      summary: 'The worker timed out before producing output.',
+    })
+    const second = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      recoveryCode: 'worker_timeout_no_progress',
+      summary: 'The provider stopped responding during the next attempt.',
+    })
+
+    expect(first.success).toBe(true)
+    expect(second.escalationId).toBe(first.escalationId)
+    expect((await readEffectiveTask()).escalations).toHaveLength(1)
+  })
+
   it('re-blocks a task when an existing unresolved escalation is raised again after a bad reopen', async () => {
     const first = await raiseEscalation({
       tasksPath,
@@ -268,13 +309,13 @@ describe('raiseEscalation', () => {
       taskId: 'task-001',
       agentId: 'worker-agent',
       reason: 'spec_ambiguous',
+      handling: 'guildhall_recovery',
       summary: 'Card component exists but template syntax mismatch prevents edit',
       details: 'Multiple attempts to edit dashboard.vue failed because the exact string was not found, suggesting a whitespace or formatting mismatch. Need clarification on how to properly apply Card with props in the template.',
     })
 
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/implementation recovery/i)
-    expect(result.error).toMatch(/do not ask the owner/i)
+    expect(result.error).toMatch(/guildhall-owned recovery/i)
 
     const raw = await readRawQueue()
     expect(raw.tasks[0]?.status).toBe('in_progress')
@@ -365,6 +406,66 @@ describe('resolveEscalation', () => {
     expect(effective.escalations[0]?.resolvedAt).toBeDefined()
     expect(effective.escalations[0]?.resolution).toBe('Use library A')
     expect(effective.escalations[0]?.resolvedBy).toBe('human')
+  })
+
+  it('persists a gate exception only from an explicit typed owner field', async () => {
+    const proseOnly = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolution: 'Typecheck is repo-red outside the changed target and scoped to the same file set.',
+      nextStatus: 'in_progress',
+    })
+    expect(proseOnly.success).toBe(true)
+    expect((await readEffectiveTask()).gateScopeExceptions).toEqual([])
+
+    const raised = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'gate_hard_failure',
+      summary: 'Typecheck still reports an unrelated failure.',
+    })
+    expect(raised).toMatchObject({ success: true, escalationId: 'esc-task-001-2' })
+    const typed = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-2',
+      resolution: 'The owner explicitly excluded the unrelated failure for this task.',
+      gateScopeException: {
+        gateId: 'typecheck',
+        disposition: 'exclude_unrelated_failure',
+      },
+      nextStatus: 'in_progress',
+    })
+    expect(typed).toEqual({ success: true })
+    expect((await readEffectiveTask()).gateScopeExceptions).toEqual([
+      expect.objectContaining({
+        id: 'gate-scope-task-001-typecheck',
+        gateId: 'typecheck',
+        disposition: 'exclude_unrelated_failure',
+        sourceEscalationId: 'esc-task-001-2',
+        createdBy: 'human',
+      }),
+    ])
+  })
+
+  it('rejects agent-authored gate exceptions', async () => {
+    const result = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolvedBy: 'coordinator',
+      resolution: 'Proceed with the unrelated failure excluded.',
+      gateScopeException: {
+        gateId: 'typecheck',
+        disposition: 'exclude_unrelated_failure',
+      },
+      nextStatus: 'in_progress',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('explicit owner decision')
+    expect((await readEffectiveTask()).gateScopeExceptions).toEqual([])
   })
 
   it('restores reviewer ownership when an escalation resolves back to review', async () => {
@@ -759,13 +860,14 @@ describe('engine tool wrappers', () => {
         taskId: 'task-001',
         agentId: 'worker-agent',
         reason: 'human_judgment_required',
+        handling: 'guildhall_recovery',
         summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
         details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result.',
       },
       ctx,
     )
     expect(result.is_error).toBe(true)
-    expect(result.output).toMatch(/routine verification evidence/i)
+    expect(result.output).toMatch(/guildhall_recovery/i)
   })
 
   it('raiseEscalationTool rejects Guildhall task orchestration as owner proof policy work', async () => {
@@ -775,6 +877,7 @@ describe('engine tool wrappers', () => {
         taskId: 'task-001',
         agentId: 'worker-agent',
         reason: 'decision_required',
+        handling: 'guildhall_recovery',
         summary:
           'AC4 cannot be satisfied by running `npx guildhall run --task=task-001` because Guildhall blocks that command as delegating back to orchestration.',
         details:
@@ -783,7 +886,7 @@ describe('engine tool wrappers', () => {
       ctx,
     )
     expect(result.is_error).toBe(true)
-    expect(result.output).toMatch(/does not/i)
+    expect(result.output).toMatch(/guildhall_recovery/i)
 
     const { queue } = await readTasks({ tasksPath })
     expect(queue?.tasks[0]?.status).toBe('in_progress')
@@ -810,6 +913,7 @@ describe('engine tool wrappers', () => {
           taskId: 'task-001',
           agentId: 'worker-agent',
           reason: 'human_judgment_required',
+          handling: 'guildhall_recovery',
           summary: 'Provider API token required to complete proof execution',
           details:
             'The proof script `scripts/prove-deepinfra-drafting-model.mjs` requires a valid DEEPINFRA_API_TOKEN to execute.',
@@ -825,7 +929,7 @@ describe('engine tool wrappers', () => {
       )
 
       expect(result.is_error).toBe(true)
-      expect(result.output).toMatch(/provider.*configured/i)
+      expect(result.output).toMatch(/guildhall_recovery/i)
       const { queue } = await readTasks({ tasksPath })
       expect(queue?.tasks[0]?.status).toBe('in_progress')
     } finally {

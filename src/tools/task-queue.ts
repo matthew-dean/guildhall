@@ -17,12 +17,17 @@ import {
   TaskQueue,
   TaskStatus,
   WorkUnitAnalysis,
+  extractStructuredSelfCritique,
   StructuredSpec,
+  WorkerExecutionMode,
   TaskDelivery,
+  BootstrapRepairOwnership,
+  type TaskSplitRecommendation,
   type TaskQueue as TaskQueueModel,
   buildTaskSizePlan,
   buildDecompositionChildDrafts,
-  parseAcceptanceCriteriaFromSpec,
+  acceptanceCriteriaFromStructuredSpec,
+  splitChildSourceIdentity,
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
 import {
@@ -40,9 +45,9 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueue,
 } from '@guildhall/runtime/project-state-boundary'
-import { buildEffectiveTask } from '@guildhall/runtime/effective-task'
-import { currentPlanProcessLeakage, validateSpecGrounding } from '@guildhall/runtime/spec-quality'
-import { isConcreteProjectProofCommand } from '@guildhall/runtime/proof-paths'
+import { validateSpecGrounding } from '@guildhall/runtime/spec-quality'
+import { taskDoneButProofMissing } from '../runtime/proof-health.js'
+import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, proofSetupHasTaskIdentity } from '@guildhall/runtime/proof-paths'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -93,6 +98,7 @@ const structuredUpdateTaskNoteSchema = z.object({
   agentId: z.string(),
   role: z.string(),
   content: z.string(),
+  structured: z.record(z.string(), z.unknown()).optional(),
 })
 
 type StructuredUpdateTaskNote = z.infer<typeof structuredUpdateTaskNoteSchema>
@@ -133,22 +139,31 @@ function normalizeUpdateTaskNote(
   metadata: Record<string, unknown>,
 ): StructuredUpdateTaskNote | undefined {
   if (note === undefined) return undefined
+  const runtimeAgentId = typeof metadata['current_agent_id'] === 'string' && metadata['current_agent_id'].trim()
+    ? metadata['current_agent_id'].trim()
+    : ''
+  const runtimeRole = runtimeAgentId === 'worker-agent'
+    ? 'self-critique'
+    : runtimeAgentId === 'reviewer-agent'
+      ? 'reviewer'
+      : runtimeAgentId === 'gate-checker-agent'
+        ? 'gate-checker'
+        : runtimeAgentId === 'coordinator'
+          ? 'coordinator'
+          : runtimeAgentId === 'human'
+            ? 'human'
+            : 'note'
   if (typeof note !== 'string') {
     const parsedContent = parseJsonShapedNoteString(note.content)
-    return parsedContent ? { ...note, content: parsedContent.content } : note
+    const normalized = parsedContent ? { ...note, content: parsedContent.content } : note
+    return runtimeAgentId
+      ? { ...normalized, agentId: runtimeAgentId, role: runtimeRole }
+      : normalized
   }
   const content = note.trim()
   if (!content) return undefined
-  const agentId = typeof metadata['current_agent_id'] === 'string' && metadata['current_agent_id'].trim()
-    ? metadata['current_agent_id'].trim()
-    : 'agent'
-  const role = agentId === 'worker-agent'
-    ? 'self-critique'
-    : agentId === 'reviewer-agent'
-      ? 'reviewer'
-      : agentId === 'gate-checker-agent'
-        ? 'gate-checker'
-        : 'note'
+  const agentId = runtimeAgentId || 'agent'
+  const role = runtimeAgentId ? runtimeRole : 'note'
   return { agentId, role, content }
 }
 
@@ -158,6 +173,8 @@ const updateTaskInputSchema = z.object({
   title: z.string().optional(),
   domain: z.string().optional(),
   status: TaskStatus.optional(),
+  executionMode: WorkerExecutionMode.optional(),
+  bootstrapRepairOwnership: BootstrapRepairOwnership.optional(),
   assignedTo: z.string().nullable().optional(),
   note: updateTaskNoteSchema.optional(),
   blockReason: z.string().optional(),
@@ -165,6 +182,7 @@ const updateTaskInputSchema = z.object({
   spec: z.string().optional(),
   structuredSpec: StructuredSpec.optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
+  parentAcceptanceCriterionIds: z.array(z.string().min(1)).optional(),
   workUnitAnalysis: WorkUnitAnalysis.optional(),
   delivery: TaskDelivery.optional(),
   gateResults: z.array(GateResult).optional(),
@@ -223,13 +241,16 @@ async function updateTaskUnlocked(
     const task = queue.tasks.find((t) => t.id === taskId)
     if (!task) return { success: false, taskId, error: `Task ${taskId} not found` }
     const originalTask = structuredClone(task)
+    const currentAgentId = typeof metadata['current_agent_id'] === 'string'
+      ? metadata['current_agent_id'].trim()
+      : ''
 
     if (!hasTaskMutation(input)) {
       return {
         success: false,
         taskId,
         error:
-          'No task mutation provided. Set at least one of title, domain, status, assignedTo, note, blockReason, humanJudgment, spec, structuredSpec, acceptanceCriteria, workUnitAnalysis, delivery, gateResults, or completedAt.',
+          'No task mutation provided. Set at least one of title, domain, status, assignedTo, note, blockReason, humanJudgment, executionMode, bootstrapRepairOwnership, spec, structuredSpec, acceptanceCriteria, parentAcceptanceCriterionIds, workUnitAnalysis, delivery, gateResults, or completedAt.',
       }
     }
     if (input.spec !== undefined && input.structuredSpec !== undefined) {
@@ -240,10 +261,41 @@ async function updateTaskUnlocked(
       }
     }
 
-    const currentAgentId = typeof metadata['current_agent_id'] === 'string'
-      ? metadata['current_agent_id'].trim()
-      : ''
+    // Rendered Markdown is a view of the structured contract. A model must not
+    // choose a different planning path by changing headings, bullets, or prose
+    // style. These writers are deterministic migration/import boundaries; old
+    // records are upgraded at intake instead of becoming a second live API.
+    const legacyMarkdownWriter = !currentAgentId ||
+      currentAgentId === 'human' ||
+      currentAgentId === 'system' ||
+      currentAgentId === 'workspace-importer' ||
+      currentAgentId === 'coordinator-recovery'
+    if (input.spec !== undefined && !legacyMarkdownWriter) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Freeform spec Markdown cannot be written by an agent. Submit structuredSpec JSON; Guildhall renders Markdown from that contract and keeps prose display-only.',
+      }
+    }
+
     const normalizedNote = normalizeUpdateTaskNote(input.note, metadata)
+    if (
+      currentAgentId === 'worker-agent' &&
+      normalizedNote?.role === 'self-critique' &&
+      input.status === 'review' &&
+      extractStructuredSelfCritique({
+        content: '',
+        structured: normalizedNote.structured,
+      }) === null
+    ) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Worker self-critique requires note.structured with acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds. Keep prose in note.content; Guildhall never derives state from it.',
+      }
+    }
     if (
       currentAgentId === 'worker-agent' &&
       input.gateResults?.some((result) => result.type === 'hard')
@@ -257,25 +309,6 @@ async function updateTaskUnlocked(
     }
 
     const nextStatus = input.status ? TaskStatus.parse(input.status) : undefined
-    const wouldPromoteSpecReview =
-      nextStatus === 'spec_review' ||
-      (
-        nextStatus === undefined &&
-        (
-          (input.spec !== undefined && input.spec.trim() !== '') ||
-          input.structuredSpec !== undefined
-        ) &&
-        task.status === 'exploring'
-      )
-    if (wouldPromoteSpecReview && input.spec && hasUnansweredMarkdownOpenQuestions(input.spec)) {
-      return {
-        success: false,
-        taskId,
-        error:
-          'Spec contains unanswered human questions in markdown. Use post-user-question to persist structured questions before moving the task to spec_review.',
-      }
-    }
-
     const normalizedSpec = input.spec !== undefined
       ? normalizeSpecForTaskProjectPath(input.spec, task.projectPath)
       : undefined
@@ -286,15 +319,6 @@ async function updateTaskUnlocked(
       ? normalizeSpecForTaskProjectPath(renderStructuredSpecMarkdown(normalizedStructuredSpec), task.projectPath)
       : undefined
     const nextSpec = renderedStructuredSpec ?? normalizedSpec
-    const planLeakage = nextSpec ? currentPlanProcessLeakage(nextSpec) : null
-    if (planLeakage) {
-      return {
-        success: false,
-        taskId,
-        error:
-          'Current task specs may only contain the product boundary. Keep recovery attempts, revision history, and worktree diagnostics in task notes or evidence, then save a clean spec.',
-      }
-    }
     if (nextSpec) {
       const grounding = validateSpecGrounding({ ...task, spec: nextSpec })
       if (!grounding.ok) {
@@ -311,6 +335,86 @@ async function updateTaskUnlocked(
       ? z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
         .map((criterion) => normalizeAcceptanceCriterionForTaskProjectPath(criterion, task.projectPath))
       : undefined
+    const baseAcceptanceCriteria = normalizedAcceptanceCriteria ?? task.acceptanceCriteria
+    const workerSelfCritique = currentAgentId === 'worker-agent' && normalizedNote?.role === 'self-critique'
+      ? extractStructuredSelfCritique({ content: '', structured: normalizedNote.structured })
+      : null
+    const effectiveAcceptanceCriteria = materializeProofCommandFromWorkerHandoff(
+      task,
+      baseAcceptanceCriteria,
+      workerSelfCritique,
+    )
+    const derivedAcceptanceCriteria = !sameJson(effectiveAcceptanceCriteria, baseAcceptanceCriteria)
+      ? effectiveAcceptanceCriteria
+      : undefined
+    if (currentAgentId === 'worker-agent' && input.status === 'review') {
+      if (normalizedNote?.role !== 'self-critique') {
+        return {
+          success: false,
+          taskId,
+          error:
+            'Worker review handoff requires a self-critique note with typed acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds fields. Guildhall never derives a handoff from prose.',
+        }
+      }
+      if (!workerSelfCritique) {
+        return {
+          success: false,
+          taskId,
+          error:
+            'Worker self-critique requires note.structured with the typed acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds fields. Guildhall never derives a handoff from prose.',
+        }
+      }
+      const expectedIds = effectiveAcceptanceCriteria.map((criterion) => criterion.id)
+      const actualIds = (Array.isArray(workerSelfCritique.acceptanceCriteria)
+        ? workerSelfCritique.acceptanceCriteria
+        : [])
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
+        .map((entry: Record<string, unknown>) => typeof entry.id === 'string' ? entry.id.trim() : '')
+      const expectedSet = new Set(expectedIds)
+      const actualSet = new Set(actualIds)
+      const idsMatch = expectedIds.length === actualIds.length &&
+        actualIds.every((id) => id.length > 0 && expectedSet.has(id)) &&
+        expectedIds.every((id) => actualSet.has(id))
+      if (!idsMatch) {
+        return {
+          success: false,
+          taskId,
+          error:
+            `Worker self-critique acceptance criterion IDs must exactly match the current task contract (${expectedIds.join(', ') || 'none'}); do not invent or omit criterion IDs in the handoff packet.`,
+        }
+      }
+      if (isProofSetupTask(task) && !effectiveAcceptanceCriteria.some((criterion) =>
+        typeof criterion.command === 'string' && isConcreteProjectProofCommand(criterion.command),
+      )) {
+        return {
+          success: false,
+          taskId,
+          error:
+            'Proof-setup work cannot enter review until its exact task-specific command is stored on the acceptance criterion. Provider prose and broad build/test commands are not proof.',
+        }
+      }
+      if (isProofSetupTask(task) && !proofSetupHasTaskIdentity({
+        ...task,
+        acceptanceCriteria: effectiveAcceptanceCriteria,
+      })) {
+        return {
+          success: false,
+          taskId,
+          error:
+            'Proof-setup work cannot enter review until the command criterion requires its stable guildhall-proof task marker. Command output identity is machine evidence; provider prose is not.',
+        }
+      }
+      const handoffStep = typeof task.handoffStep === 'number' ? task.handoffStep : 0
+      const hasPendingHandoffStep = Array.isArray(task.handoffSequence) && handoffStep + 1 < task.handoffSequence.length
+      if (hasPendingHandoffStep && !workerSelfCritique.handoff) {
+        return {
+          success: false,
+          taskId,
+          error:
+            'This task has another specialist step. Worker self-critique requires structured.handoff with completed, knownGaps, and optional nextFocus fields; Guildhall never extracts handoff state from prose or Markdown headings.',
+        }
+      }
+    }
     const selectedRelease = queue.selectedReleaseId
       ? queue.releases?.find((release) => release.id === queue.selectedReleaseId)
       : undefined
@@ -345,6 +449,41 @@ async function updateTaskUnlocked(
     }
 
     const explicitStatus = nextStatus
+    if (explicitStatus === 'done' && isProofSetupTask(task)) {
+      const proofContract = {
+        ...task,
+        acceptanceCriteria: effectiveAcceptanceCriteria,
+      }
+      const hasConcreteCommand = effectiveAcceptanceCriteria.some((criterion) =>
+        typeof criterion.command === 'string' && isConcreteProjectProofCommand(criterion.command),
+      )
+      const hasTaskIdentity = proofSetupHasTaskIdentity(proofContract)
+      if (!hasConcreteCommand || !hasTaskIdentity) {
+        return {
+          success: false,
+          taskId,
+          error:
+            'Proof-setup work cannot enter done until its typed acceptance contract contains a concrete task-specific command and stable guildhall-proof marker. Provider prose and a met checkbox are not completion evidence.',
+        }
+      }
+      const proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(proofContract, new Date().toISOString(), currentAgentId || 'update-task')
+      const candidate = {
+        ...proofContract,
+        proofPaths,
+        gateResults: [
+          ...(task.gateResults ?? []),
+          ...(input.gateResults ?? []),
+        ],
+      }
+      if (taskDoneButProofMissing(candidate)) {
+        return {
+          success: false,
+          taskId,
+          error:
+            'Proof-setup work cannot enter done until the exact task-specific command has a passing machine verification record. A self-critique or provider explanation cannot substitute for the proof run.',
+        }
+      }
+    }
     if (
       currentAgentId === 'spec-agent' &&
       explicitStatus === 'spec_review' &&
@@ -380,7 +519,18 @@ async function updateTaskUnlocked(
     }
 
     if (input.title !== undefined) task.title = input.title
+    if (input.executionMode !== undefined) task.executionMode = WorkerExecutionMode.parse(input.executionMode)
+    if (input.bootstrapRepairOwnership !== undefined) {
+      task.bootstrapRepairOwnership = BootstrapRepairOwnership.parse(input.bootstrapRepairOwnership)
+    }
     if (input.domain !== undefined && input.domain.trim() !== '') task.domain = input.domain.trim()
+    if (input.parentAcceptanceCriterionIds !== undefined) {
+      if (input.parentAcceptanceCriterionIds.length > 0) {
+        task.parentAcceptanceCriterionIds = [...new Set(input.parentAcceptanceCriterionIds)]
+      } else {
+        delete task.parentAcceptanceCriterionIds
+      }
+    }
     if (statusTransition?.kind === 'applied') task.status = statusTransition.nextState
     if (input.assignedTo !== undefined) {
       if ((input.assignedTo ?? '').trim() === '') delete task.assignedTo
@@ -395,20 +545,8 @@ async function updateTaskUnlocked(
     }
     if (nextSpec !== undefined && nextSpec.trim() !== '') {
       task.spec = nextSpec
-      if (input.title === undefined) {
-        const effectiveTask = await buildEffectiveTask(
-          projectRootForTaskState(input.tasksPath, task, metadata),
-          task,
-          { evidence: 'current' },
-        )
-        const derivedTitle = deriveImportedTaskTitle(effectiveTask as unknown as TaskRecord)
-        if (derivedTitle) task.title = derivedTitle
-      }
       if (normalizedStructuredSpec && normalizedAcceptanceCriteria === undefined) {
-        task.acceptanceCriteria = parseAcceptanceCriteriaFromSpec(nextSpec)
-      } else if (task.acceptanceCriteria.length === 0) {
-        const derivedCriteria = parseAcceptanceCriteriaFromSpec(nextSpec)
-        if (derivedCriteria.length > 0) task.acceptanceCriteria = derivedCriteria
+        task.acceptanceCriteria = acceptanceCriteriaFromStructuredSpec(normalizedStructuredSpec)
       }
     }
     if (
@@ -426,7 +564,14 @@ async function updateTaskUnlocked(
       explicitStatus,
     })
     if (normalizedAcceptanceCriteria !== undefined && normalizedAcceptanceCriteria.length > 0) {
-      task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(normalizedAcceptanceCriteria)
+      task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(effectiveAcceptanceCriteria)
+    } else if (derivedAcceptanceCriteria !== undefined) {
+      task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(derivedAcceptanceCriteria)
+    }
+    if (task.acceptanceCriteria.some((criterion) =>
+      typeof criterion.command === 'string' && isConcreteProjectProofCommand(criterion.command),
+    )) {
+      task.proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(task, new Date().toISOString(), currentAgentId || 'update-task')
     }
     if (input.workUnitAnalysis !== undefined) {
       task.workUnitAnalysis = WorkUnitAnalysis.parse(input.workUnitAnalysis)
@@ -448,7 +593,9 @@ async function updateTaskUnlocked(
       const sizePlanCreatedAt = new Date().toISOString()
       task.sizePlan = buildTaskSizePlan({
         task,
-        riskLanes: inferSizingRiskLanes(task),
+        // Risk lanes are a structured review-planning output. The task
+        // title/spec prose is not a classifier input for sizing.
+        riskLanes: task.reviewRisk?.lanes ?? [],
         createdAt: sizePlanCreatedAt,
       })
       const representedSplit = isMaterializableSplitAction(task.sizePlan.action)
@@ -570,7 +717,7 @@ async function appendUpdateTaskEvidence(input: {
   task: z.infer<typeof Task>
   taskId: string
   metadata?: Record<string, unknown>
-  note: { agentId: string; role: string; content: string; timestamp: string } | null
+  note: NonNullable<TaskModel['notes']>[number] | null
   gateResults: Array<z.infer<typeof GateResult>>
 }): Promise<void> {
   if (!input.note && input.gateResults.length === 0) return
@@ -609,9 +756,17 @@ export function materializeSplitChildren(
     ? savedChildPlans
     : buildDecompositionChildDrafts({ task: parent })
   if (plannedChildren.length === 0) return { status: 'noop', childTaskIds: [] }
+  // A split is executable only when every new child has an explicit identity
+  // or an already-materialized task id. Never turn display wording or array
+  // position into durable child identity.
+  if (plannedChildren.some(child =>
+    !child.identity &&
+    (!child.createdTaskId || !queue.tasks.some(task => task.id === child.createdTaskId)),
+  )) {
+    return { status: 'noop', childTaskIds: [] }
+  }
   const usesSavedChildPlans = savedChildPlans.length > 0
   const splitLabel = legacySplitLabel(sizePlan.action)
-  const splitNote = legacySplitNote(sizePlan.action)
 
   const representedSplit = savedChildPlans.length > 0
     ? settleAlreadyRepresentedSplitRecommendations(queue, parent, timestamp)
@@ -625,22 +780,25 @@ export function materializeSplitChildren(
     const existingById = childPlan.createdTaskId
       ? queue.tasks.find((task) => task.id === childPlan.createdTaskId)
       : undefined
-    const existingByTitle = queue.tasks.find((task) =>
-      task.id !== parent.id &&
-      task.status !== 'archived' &&
-      task.status !== 'cancelled' &&
-      (
-        task.hierarchy?.parentId === parent.id ||
-        task.id.startsWith(`${parent.id}-split-`)
-      ) &&
-      normalizeTaskTitle(task.title) === normalizeTaskTitle(childPlan.title),
-    )
-    const task = existingById ?? existingByTitle ?? createSplitChildTask({
+    const childIdentity = childPlan.identity
+      ? splitChildSourceIdentity(parent, childPlan.identity)
+      : undefined
+    const existingByIdentity = childIdentity
+      ? queue.tasks.find((task) =>
+        task.id !== parent.id &&
+        task.status !== 'archived' &&
+        task.status !== 'cancelled' &&
+        task.sourceIdentity === childIdentity,
+      )
+      : undefined
+    const task = existingById ?? existingByIdentity ?? createSplitChildTask({
       parent,
+      identity: childPlan.identity!,
+      sourceIdentity: childIdentity,
       title: childPlan.title,
       reason: childPlan.reason,
       suggestedDomain: childPlan.suggestedDomain,
-      index,
+      suggestedTaskKind: childPlan.suggestedTaskKind,
       queue,
       timestamp,
     })
@@ -660,22 +818,13 @@ export function materializeSplitChildren(
     return { childPlan, task }
   })
 
-  const titleToId = new Map(planned.map(({ childPlan, task }) => [
-    normalizeTaskTitle(childPlan.title),
-    task.id,
-  ]))
   const workUnitIdToId = new Map<string, string>()
-  const workUnits = parent.workUnitAnalysis?.units ?? []
-  planned.forEach(({ childPlan, task }, index) => {
-    const matchingUnit =
-      workUnits[index]?.title === childPlan.title
-        ? workUnits[index]
-        : workUnits.find((unit) => normalizeTaskTitle(unit.title) === normalizeTaskTitle(childPlan.title))
-    if (matchingUnit?.id) workUnitIdToId.set(matchingUnit.id, task.id)
+  planned.forEach(({ childPlan, task }) => {
+    if (childPlan.identity) workUnitIdToId.set(childPlan.identity, task.id)
   })
   for (const { childPlan, task } of planned) {
     task.dependsOn = (childPlan.dependsOn ?? [])
-      .map((dependency) => workUnitIdToId.get(dependency) ?? titleToId.get(normalizeTaskTitle(dependency)) ?? dependency)
+      .map((dependency) => workUnitIdToId.get(dependency) ?? dependency)
       .filter((dependency, index, all) => dependency !== task.id && all.indexOf(dependency) === index)
     task.updatedAt = timestamp
   }
@@ -715,26 +864,75 @@ export function materializeSplitChildren(
   }
   delete parent.assignedTo
 
-  const notePrefix = `${splitNote}: created linked child tasks`
-  if (!parent.notes.some((note) => note.agentId === 'task-sizing' && note.content.startsWith(notePrefix))) {
-    parent.notes.push({
-      agentId: 'task-sizing',
-      role: 'coordinator',
-      content: `${notePrefix}: ${planned.map(({ task }) => task.id).join(', ')}.`,
-      timestamp,
-    })
-  }
+  // `executionPlanActions` is the idempotency authority. A note is audit
+  // material only; never use its wording as a duplicate detector because a
+  // different model/provider can phrase the same split differently.
+  parent.notes.push({
+    agentId: 'task-sizing',
+    role: 'coordinator',
+    structured: {
+      event: 'split_work_applied',
+      childTaskIds: planned.map(({ task }) => task.id),
+    },
+    content: `Linked child tasks for ${parent.id}: ${planned.map(({ task }) => task.id).join(', ')}.`,
+    timestamp,
+  })
   return { status: 'materialized', childTaskIds: planned.map(({ task }) => task.id) }
 }
 
 export const materializeRequiredSplitChildren = materializeSplitChildren
 
-export const PROOF_SETUP_RATIONALE = 'proof-recovery: establish a concrete project-backed proof command for the containing task'
+export const PROOF_SETUP_SEMANTIC_KIND = 'proof_setup'
 
 export function isProofSetupTask(
-  task: Pick<TaskRecord, 'workKind' | 'proposalRationale'>,
+  task: Pick<TaskRecord, 'semanticKind'>,
 ): boolean {
-  return task.workKind === 'verification' && task.proposalRationale === PROOF_SETUP_RATIONALE
+  return task.semanticKind === PROOF_SETUP_SEMANTIC_KIND
+}
+
+/**
+ * A proof worker reports its observed command in the structured handoff. Keep
+ * that command in the acceptance contract so later gates, reviewers, and
+ * release projections all read one authority. This is a typed projection, not
+ * an interpretation of the worker's explanation.
+ */
+function materializeProofCommandFromWorkerHandoff(
+  task: TaskRecord,
+  criteria: TaskRecord['acceptanceCriteria'],
+  selfCritique: Record<string, unknown> | null,
+): TaskRecord['acceptanceCriteria'] {
+  if (!isProofSetupTask(task)) return criteria
+  if (criteria.some((criterion) =>
+    typeof criterion.command === 'string' && isConcreteProjectProofCommand(criterion.command),
+  )) return criteria
+
+  const verificationCommands = Array.isArray(selfCritique?.verificationCommands)
+    ? selfCritique.verificationCommands
+      .filter((entry): entry is Record<string, unknown> =>
+        Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry),
+      )
+      .filter((entry) => entry.status === 'passed')
+      .map((entry) => typeof entry.command === 'string' ? entry.command.trim() : '')
+      .filter((command) => isConcreteProjectProofCommand(command))
+    : []
+  const command = verificationCommands[0]
+  const parentId = task.hierarchy?.parentId ?? task.delivery?.supports?.[0]
+  const criterion = criteria[0]
+  if (!command || !parentId || !criterion) return criteria
+
+  const marker = proofIdentityMarkerForTask(parentId)
+  return [
+    {
+      ...criterion,
+      command,
+      expectedExit: criterion.expectedExit ?? 'zero',
+      expectedOutputIncludes: [...new Set([...(criterion.expectedOutputIncludes ?? []), marker])],
+      // A worker handoff reports a command; only the observed hard gate may
+      // mark a command-backed criterion as met.
+      met: false,
+    },
+    ...criteria.slice(1),
+  ]
 }
 
 /**
@@ -748,12 +946,32 @@ export function materializeProofSetupTask(
   queue: TaskQueueRecord,
   parent: TaskRecord,
   timestamp: string,
+  options: {
+    /** Release-local follow-up work must not inherit a shipped release. */
+    releaseIds?: readonly string[]
+    /** Keep a shipped parent immutable when only a later release needs proof. */
+    linkParent?: boolean
+  } = {},
 ): { status: 'materialized' | 'already_represented'; childTaskId: string } {
-  const existing = queue.tasks.find((candidate) =>
-    candidate.hierarchy?.parentId === parent.id &&
-    isProofSetupTask(candidate) &&
-    !['archived', 'cancelled'].includes(candidate.status),
-  )
+  // A proof-setup task is already the executable proof boundary. Treating it
+  // as a parent would create an unbounded proof-setup -> proof-setup chain.
+  if (isProofSetupTask(parent)) {
+    return { status: 'already_represented', childTaskId: parent.id }
+  }
+  const requestedReleaseIds = new Set(options.releaseIds ?? [])
+  const existing = queue.tasks.find((candidate) => {
+    if (candidate.hierarchy?.parentId !== parent.id || !isProofSetupTask(candidate)) return false
+    if (['archived', 'cancelled'].includes(candidate.status)) return false
+    if (requestedReleaseIds.size > 0 &&
+      !(candidate.releaseIds ?? []).some(releaseId => requestedReleaseIds.has(releaseId))) return false
+    // A proof child shared with a shipped release is historical evidence. A
+    // later release gets a fresh child even when the old child also names the
+    // later release, so the current proof contract never mutates history.
+    const hasShippedMembership = (candidate.releaseIds ?? []).some(releaseId =>
+      queue.releases?.some(release => release.id === releaseId && release.state === 'shipped') === true,
+    )
+    return !hasShippedMembership
+  })
   if (existing) {
     return { status: 'already_represented', childTaskId: existing.id }
   }
@@ -766,7 +984,82 @@ export function materializeProofSetupTask(
     suffix += 1
   }
 
-  const child = Task.parse({
+  const child = buildProofSetupTaskContract(parent, timestamp, {
+    id,
+    releaseIds: options.releaseIds,
+  })
+
+  queue.tasks.push(child)
+  if (options.linkParent !== false) {
+    parent.hierarchy = {
+      ...(parent.hierarchy ?? {}),
+      order: parent.hierarchy?.order ?? 0,
+      childIds: [...new Set([...(parent.hierarchy?.childIds ?? []), child.id])],
+      relation: parent.hierarchy?.relation ?? 'contains',
+    }
+    attachInternalDeliveryStep(parent, child)
+    parent.notes.push({
+      agentId: 'proof-recovery',
+      role: 'coordinator',
+      content: `Added linked verification work ${child.id} to establish the missing concrete project proof command.`,
+      timestamp,
+    })
+  }
+  return { status: 'materialized', childTaskId: child.id }
+}
+
+/**
+ * Build the one canonical proof-setup task contract. Existing generated proof
+ * children use this same builder during migration so creation and repair
+ * cannot drift into two subtly different task shapes.
+ */
+export function buildProofSetupTaskContract(
+  parent: TaskRecord,
+  timestamp: string,
+  options: { id?: string; releaseIds?: readonly string[]; command?: string } = {},
+): TaskModel {
+  const id = options.id ?? `${parent.id}-proof-setup`
+  const childStructuredSpec = StructuredSpec.parse({
+    whatThisIs: `A bounded proof-setup task for ${parent.title}.`,
+    problemContext: 'The selected script-only release requires one exact project-backed command before the containing task can be released.',
+    goals: [
+      'Inspect the registered project surface and establish the smallest task-specific proof command.',
+      'Record that command in the typed acceptance contract and run it to produce durable evidence.',
+    ],
+    nonGoals: [
+      'Do not use a broad workspace convention such as pnpm test or pnpm build as task proof.',
+      'Do not expand the containing task or implement sibling product work.',
+    ],
+    proposedDesign: 'Use the existing project package/CLI/test conventions, adding one focused proof entry only when the visible project surface has no suitable command.',
+    keyDecisions: [
+      'The exact command is discovered from the project surface by the worker and stored as structured acceptance data.',
+      'The command result, not provider narration, settles proof.',
+    ],
+    acceptanceCriteria: [{
+      scenario: 'Given the containing task has no concrete project-backed proof command, when proof setup is complete',
+      expectation: 'One exact task-specific command is recorded and its passing result is attached to the selected release proof path.',
+      verificationMode: 'review',
+      evidenceHint: 'Inspect the acceptance criterion command, matching command proof path, and passing verification record.',
+      expectedOutputIncludes: [proofIdentityMarkerForTask(parent.id)],
+      ...(options.command ? { command: options.command } : {}),
+    }],
+    verification: [
+      'Run the exact command recorded on the proof-command-recorded acceptance criterion.',
+      'Confirm the command proof path has a passing verification record for its required evidence.',
+    ],
+    completionBoundary: {
+      productOutcome: `The selected release has concrete proof for ${parent.title}.`,
+      whatGuildhallCanCompleteInCode: 'Repo-local proof command, focused fixture/test/CLI wiring, and durable proof evidence.',
+      externalDependencies: 'None known from the containing task.',
+      ownerOnlySetup: 'None known from the containing task.',
+      verificationEnvironment: 'The registered project checkout and its existing package/CLI/test tooling.',
+      whatCountsAsDone: 'The exact task-specific command is recorded, runs successfully, and its proof evidence is attached.',
+      whatMustBeSplitOrBlocked: 'A genuinely external dependency or product decision outside this proof contract.',
+      splitPolicy: 'none',
+    },
+  })
+
+  return Task.parse({
     id,
     title: `Establish concrete proof for ${parent.title}`,
     description: [
@@ -777,16 +1070,13 @@ export function materializeProofSetupTask(
     ].join('\n'),
     domain: parent.domain,
     projectPath: parent.projectPath,
-    status: 'exploring',
+    status: 'ready',
     priority: parent.priority,
     dependsOn: [],
     outOfScope: [],
-    acceptanceCriteria: [{
-      id: 'proof-command-recorded',
-      description: `A concrete project-backed command is attached to ${parent.title}, and a passing result is recorded for the selected release.`,
-      verifiedBy: 'review',
-      source: 'inferred',
-    }],
+    structuredSpec: childStructuredSpec,
+    spec: renderStructuredSpecMarkdown(childStructuredSpec),
+    acceptanceCriteria: acceptanceCriteriaFromStructuredSpec(childStructuredSpec),
     notes: [{
       agentId: 'proof-recovery',
       role: 'coordinator',
@@ -800,13 +1090,14 @@ export function materializeProofSetupTask(
     revisionCount: 0,
     origination: 'system',
     proposedBy: 'proof-recovery',
-    proposalRationale: PROOF_SETUP_RATIONALE,
+    semanticKind: PROOF_SETUP_SEMANTIC_KIND,
     workKind: 'verification',
+    taskKind: 'verification',
     workVisibility: {
       kind: 'internal_step',
       countInProjectTotals: false,
     },
-    releaseIds: [...(parent.releaseIds ?? [])],
+    releaseIds: [...(options.releaseIds ?? parent.releaseIds ?? [])],
     references: [...(parent.references ?? [])],
     delivery: {
       ...(parent.delivery ?? {}),
@@ -823,22 +1114,6 @@ export function materializeProofSetupTask(
     createdAt: timestamp,
     updatedAt: timestamp,
   })
-
-  queue.tasks.push(child)
-  parent.hierarchy = {
-    ...(parent.hierarchy ?? {}),
-    order: parent.hierarchy?.order ?? 0,
-    childIds: [...new Set([...(parent.hierarchy?.childIds ?? []), child.id])],
-    relation: parent.hierarchy?.relation ?? 'contains',
-  }
-  attachInternalDeliveryStep(parent, child)
-  parent.notes.push({
-    agentId: 'proof-recovery',
-    role: 'coordinator',
-    content: `Added linked verification work ${child.id} to establish the missing concrete project proof command.`,
-    timestamp,
-  })
-  return { status: 'materialized', childTaskId: child.id }
 }
 
 export function isMaterializableSplitAction(action: string | undefined): boolean {
@@ -853,12 +1128,6 @@ function legacySplitLabel(action: string | undefined): string {
   if (action === 'split_required') return 'Decomposition-required'
   if (action === 'split_recommended') return 'Decomposition-planned'
   return 'Decomposition-required'
-}
-
-function legacySplitNote(action: string | undefined): string {
-  if (action === 'split_required') return 'Decomposition required'
-  if (action === 'split_recommended') return 'Decomposition planned'
-  return 'Decomposition required'
 }
 
 export function settleAlreadyRepresentedSplitRecommendations(
@@ -887,14 +1156,19 @@ export function settleMaterializedSplitReadiness(
   timestamp: string,
 ): { childTaskIds: string[] } | null {
   const plannedChildren = parent.sizePlan?.recommendedChildren ?? []
+  const splitIdentityOwner = parent.hierarchy?.parentId
+    ? queue.tasks.find(task => task.id === parent.hierarchy?.parentId) ?? parent
+    : parent
   const representedIds = plannedChildren.map(childPlan => {
     if (childPlan.createdTaskId && queue.tasks.some(task => task.id === childPlan.createdTaskId)) {
       return childPlan.createdTaskId
     }
-    return queue.tasks.find(task =>
-      task.hierarchy?.parentId === parent.id &&
-      normalizeTaskTitle(task.title) === normalizeTaskTitle(childPlan.title),
-    )?.id
+    if (childPlan.identity) {
+      return queue.tasks.find(task =>
+        task.sourceIdentity === splitChildSourceIdentity(splitIdentityOwner, childPlan.identity!),
+      )?.id
+    }
+    return undefined
   })
   const linkedChildIds = linkedChildTaskIds(queue, parent)
   const hasExactRecommendationCoverage = plannedChildren.length > 0 && representedIds.every(Boolean)
@@ -961,18 +1235,23 @@ function linkedChildTaskIds(queue: TaskQueueRecord, parent: TaskRecord): string[
 function splitRecommendationsAlreadyRepresentedBySiblings(
   queue: TaskQueueRecord,
   parent: TaskRecord,
-  recommendations: Array<{ title: string }>,
+  recommendations: Array<{ identity?: string; createdTaskId?: string }>,
 ): string[] | null {
   const containingParentId = parent.hierarchy?.parentId
   if (!containingParentId || recommendations.length === 0) return null
-  const siblingsByTitle = new Map<string, string>()
-  for (const task of queue.tasks) {
-    if (task.id !== parent.id && task.hierarchy?.parentId !== containingParentId) continue
-    siblingsByTitle.set(normalizeTaskTitle(task.title), task.id)
-  }
-  const representedIds = recommendations.map(recommendation =>
-    siblingsByTitle.get(normalizeTaskTitle(recommendation.title)),
-  )
+  const containingParent = queue.tasks.find(task => task.id === containingParentId)
+  if (!containingParent) return null
+  const representedIds = recommendations.map(recommendation => {
+    if (recommendation.createdTaskId && queue.tasks.some(task => task.id === recommendation.createdTaskId)) {
+      return recommendation.createdTaskId
+    }
+    if (!recommendation.identity) return undefined
+    return queue.tasks.find(task =>
+      task.id !== parent.id &&
+      task.hierarchy?.parentId === containingParentId &&
+      task.sourceIdentity === splitChildSourceIdentity(containingParent, recommendation.identity!),
+    )?.id
+  })
   if (representedIds.some(id => !id)) return null
   return representedIds.filter((id): id is string => Boolean(id))
 }
@@ -980,14 +1259,21 @@ function splitRecommendationsAlreadyRepresentedBySiblings(
 function removeDuplicateNestedSplitChildIds(
   queue: TaskQueueRecord,
   parent: TaskRecord,
-  recommendations: Array<{ title: string }>,
+  recommendations: Array<{ identity?: string; createdTaskId?: string }>,
 ): void {
   const hierarchy = parent.hierarchy
   const nestedChildIds = hierarchy?.childIds ?? []
-  const recommendationTitles = new Set(recommendations.map(recommendation => normalizeTaskTitle(recommendation.title)))
+  const containingParent = parent.hierarchy?.parentId
+    ? queue.tasks.find(task => task.id === parent.hierarchy?.parentId)
+    : undefined
+  const recommendationIdentities = new Set(recommendations
+    .map(recommendation => recommendation.identity
+      ? splitChildSourceIdentity(containingParent ?? parent, recommendation.identity)
+      : undefined)
+    .filter((identity): identity is string => Boolean(identity)))
   const nestedDuplicates = queue.tasks.filter(task =>
     task.hierarchy?.parentId === parent.id &&
-    recommendationTitles.has(normalizeTaskTitle(task.title)),
+    recommendationIdentities.has(task.sourceIdentity ?? ''),
   )
   const nestedDuplicateIds = new Set(nestedDuplicates.map(task => task.id))
   if (nestedDuplicateIds.size === 0) return
@@ -1121,6 +1407,7 @@ function rewriteSettledSplitBoundary(parent: TaskRecord, splitBoundary: string):
       completionBoundary: {
         ...parent.structuredSpec.completionBoundary,
         whatMustBeSplitOrBlocked: splitBoundary,
+        splitPolicy: 'none',
       },
     })
     parent.spec = renderStructuredSpecMarkdown(parent.structuredSpec)
@@ -1205,15 +1492,17 @@ function deliveryStepStatusForTask(status: string | undefined): 'todo' | 'active
 
 function createSplitChildTask(input: {
   parent: TaskRecord
+  identity: string
+  sourceIdentity?: string
   title: string
   reason: string
   suggestedDomain?: string
-  index: number
+  suggestedTaskKind?: TaskSplitRecommendation['suggestedTaskKind']
   queue: TaskQueueRecord
   timestamp: string
 }): TaskRecord {
-  const id = uniqueSplitChildTaskId(input.queue, input.parent.id, input.title, input.index)
-  const workKind = splitChildWorkKind(input.title)
+  const id = uniqueSplitChildTaskId(input.queue, input.parent.id, input.identity)
+  const workKind = input.suggestedTaskKind ?? 'implementation'
   const domain = splitChildDomain({
     suggestedDomain: input.suggestedDomain,
     parentDomain: input.parent.domain,
@@ -1228,6 +1517,7 @@ function createSplitChildTask(input: {
       `Split from containing work ${input.parent.id}: ${input.parent.title}.`,
     ].join('\n'),
     domain,
+    ...(input.sourceIdentity ? { sourceIdentity: input.sourceIdentity } : {}),
     projectPath: input.parent.projectPath,
     status: 'exploring',
     priority: input.parent.priority,
@@ -1281,17 +1571,8 @@ function splitChildDomain(input: {
   return existingProjectDomain ?? 'general'
 }
 
-function splitChildWorkKind(title: string): TaskRecord['workKind'] {
-  const normalized = normalizeTaskTitle(title)
-  if (/\bprimitive\b|\bmenuitem\b|\bmenu item\b/.test(normalized)) return 'primitive'
-  if (/\bstorybook\b|\bstory\b/.test(normalized)) return 'story'
-  if (/\btest\b|\be2e\b|\bproof\b|\bverification\b/.test(normalized)) return 'test'
-  if (/\bcomponent\b|\bimplementation\b/.test(normalized)) return 'component'
-  return 'implementation'
-}
-
-function uniqueSplitChildTaskId(queue: TaskQueueRecord, parentId: string, title: string, index: number): string {
-  const base = `${parentId}-split-${slugForTaskId(title) || index + 1}`
+function uniqueSplitChildTaskId(queue: TaskQueueRecord, parentId: string, identity: string): string {
+  const base = `${parentId}-split-${slugForTaskId(identity)}`
   let candidate = base
   let suffix = 2
   while (queue.tasks.some((task) => task.id === candidate)) {
@@ -1307,10 +1588,6 @@ function slugForTaskId(value: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 56)
-}
-
-function normalizeTaskTitle(value: string | undefined): string {
-  return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
 function normalizeAssignmentForStatus(
@@ -1397,31 +1674,16 @@ function hasTaskMutation(input: UpdateTaskInput): boolean {
     input.note !== undefined ||
     input.blockReason !== undefined ||
     input.humanJudgment !== undefined ||
+    input.executionMode !== undefined ||
+    input.bootstrapRepairOwnership !== undefined ||
     input.spec !== undefined ||
     input.structuredSpec !== undefined ||
     input.acceptanceCriteria !== undefined ||
+    input.parentAcceptanceCriterionIds !== undefined ||
     input.workUnitAnalysis !== undefined ||
     input.delivery !== undefined ||
     input.gateResults !== undefined ||
     input.completedAt !== undefined
-}
-
-function inferSizingRiskLanes(task: z.infer<typeof Task>): string[] {
-  const text = [
-    task.title,
-    task.description,
-    task.spec,
-    ...task.acceptanceCriteria.map((criterion) => criterion.description),
-  ].join('\n').toLowerCase()
-  const lanes = new Set<string>()
-  if (/\b(ui|ux|screen|settings|toolbar|dashboard|form|copy)\b/.test(text)) lanes.add('ux_comprehension')
-  if (/\b(api|endpoint|route|contract|status code)\b/.test(text)) lanes.add('api_contract')
-  if (/\b(database|migration|migrate|backfill|schema|subscription|analytics|persistence)\b/.test(text)) lanes.add('data_integrity')
-  if (/\b(migration|migrate|backfill|schema)\b/.test(text)) lanes.add('migration_safety')
-  if (/\b(auth|privacy|pii|token|tenant|permission)\b/.test(text)) lanes.add('privacy')
-  if (/\b(release|rollout|flag|deploy|launch)\b/.test(text)) lanes.add('release_risk')
-  if (/\b(docs?|readme|guide|analytics)\b/.test(text)) lanes.add('docs_truth')
-  return [...lanes]
 }
 
 function inferSingleActiveTaskId(queue: TaskQueueModel): string | null {
@@ -1429,32 +1691,6 @@ function inferSingleActiveTaskId(queue: TaskQueueModel): string | null {
     ['in_progress', 'review', 'gate_check', 'spec_review'].includes(t.status),
   )
   return candidates.length === 1 ? candidates[0]!.id : null
-}
-
-function hasUnansweredMarkdownOpenQuestions(spec: string): boolean {
-  const section = extractMarkdownSection(spec, 'Open Questions')
-  if (!section) return false
-  const lines = section
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.replace(/^[-*]\s*/, '').replace(/^\d+[.)]\s*/, '').trim())
-    .filter(Boolean)
-  if (lines.length === 0) return false
-  const meaningful = lines.filter((line) => !/^(none|n\/a|no open questions|no questions)\.?$/i.test(line))
-  if (meaningful.length === 0) return false
-  return meaningful.some((line) => /\?/.test(line) || /^(who|what|when|where|why|how|should|can|do|does|is|are)\b/i.test(line))
-}
-
-function extractMarkdownSection(markdown: string, heading: string): string | null {
-  const lines = markdown.split('\n')
-  const headingPattern = new RegExp(`^#{2,6}\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i')
-  const start = lines.findIndex((line) => headingPattern.test(line.trim()))
-  if (start < 0) return null
-  const rest = lines.slice(start + 1)
-  const end = rest.findIndex((line) => /^#{2,6}\s+/.test(line.trim()))
-  const sectionLines = end < 0 ? rest : rest.slice(0, end)
-  return sectionLines.join('\n').trim() || null
 }
 
 function normalizeSpecForTaskProjectPath(spec: string, taskProjectPath: string): string {
@@ -1486,52 +1722,6 @@ function stripDuplicatedPathPrefix(value: string, prefix: string): string {
   return value.replace(new RegExp(`\\b${escaped}/`, 'g'), '')
 }
 
-function deriveImportedTaskTitle(task: TaskRecord): string | null {
-  const currentTitle = typeof task.title === 'string' ? task.title.trim() : ''
-  if (!looksLikeImportedFragmentTitle(currentTitle)) return null
-  const area = importedAreaLabel(task)
-  const summary = firstSpecSummaryLine(task.spec)
-  if (!area || !summary) return null
-  return `${area}: ${lowercaseFirst(summary.replace(/[.!?]+$/, '').trim())}`
-}
-
-function looksLikeImportedFragmentTitle(title: string): boolean {
-  if (!title) return false
-  return /\(deferred\)/i.test(title) || /^version diff view$/i.test(title.trim())
-}
-
-function importedAreaLabel(task: TaskRecord): string | null {
-  const notes = Array.isArray(task.notes) ? task.notes : []
-  const importerNote = notes.find((note) =>
-    note?.role === 'importer' &&
-    (note?.agentId === 'workspace-importer' || note?.agentId === 'workspace-importer-agent'),
-  )
-  const content = typeof importerNote?.content === 'string' ? importerNote.content : ''
-  if (!content) return null
-  if (/[/\\]knit[/\\]/i.test(content)) return 'Knit'
-  if (/[/\\]looma[/\\]/i.test(content)) return 'Looma'
-  return null
-}
-
-function firstSpecSummaryLine(spec: string | undefined): string | null {
-  if (typeof spec !== 'string' || !spec.trim()) return null
-  const anchor = /^##\s+(?:Summary|What this is)\s*$/im.exec(spec)
-  const normalized = anchor ? spec.slice(anchor.index + anchor[0].length).trim() : spec.trim()
-  const nextHeadingIndex = normalized.search(/\n##\s|\n###\s/)
-  const summaryBlock = (nextHeadingIndex >= 0 ? normalized.slice(0, nextHeadingIndex) : normalized).trim()
-  if (!summaryBlock) return null
-  const firstParagraph = summaryBlock.split(/\n\s*\n/)[0]?.trim() ?? ''
-  if (!firstParagraph) return null
-  const singleLine = firstParagraph.replace(/\s+/g, ' ').trim()
-  if (!singleLine) return null
-  return (singleLine.match(/^(.+?[.!?])(?:\s|$)/)?.[1] ?? singleLine).trim()
-}
-
-function lowercaseFirst(value: string): string {
-  if (!value) return value
-  return value[0]!.toLowerCase() + value.slice(1)
-}
-
 export const updateTaskTool = defineTool({
   name: 'update-task',
   description:
@@ -1543,6 +1733,8 @@ export const updateTaskTool = defineTool({
       tasksPath: { type: 'string', description: 'Absolute path to TASKS.json' },
       taskId: { type: 'string', description: 'Task id. Omit only when exactly one task is active.' },
       title: { type: 'string' },
+      executionMode: { type: 'string', enum: ['build', 'diagnose', 'tdd'], description: 'Structured worker loop selection. Never inferred from task prose.' },
+      bootstrapRepairOwnership: { type: 'string', enum: ['task', 'workspace'], description: 'Structured bootstrap repair boundary. Never inferred from task prose.' },
       domain: { type: 'string' },
       status: {
         type: 'string',
@@ -1567,13 +1759,14 @@ export const updateTaskTool = defineTool({
           agentId: { type: 'string' },
           role: { type: 'string' },
           content: { type: 'string' },
+          structured: { type: 'object', description: 'Required for worker self-critique notes: machine-readable acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds. Non-final specialist handoffs also require handoff.completed, handoff.knownGaps, and optional handoff.nextFocus. State never comes from note prose.' },
         },
         required: ['agentId', 'role', 'content'],
       },
       blockReason: { type: 'string' },
       humanJudgment: { type: 'string' },
-      spec: { type: 'string' },
-      structuredSpec: { type: 'object', description: 'Structured JSON spec payload. Guildhall renders this into markdown deterministically.' },
+      spec: { type: 'string', description: 'Legacy migration/import input only. Agent spec writes must use structuredSpec.' },
+      structuredSpec: { type: 'object', description: 'Authoritative structured JSON spec payload. Guildhall renders this into markdown deterministically.' },
       acceptanceCriteria: {
         type: 'array',
         items: {

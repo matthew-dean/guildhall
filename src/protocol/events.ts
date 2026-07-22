@@ -53,6 +53,8 @@ export type ErrorEvent = z.infer<typeof errorEventSchema>
 export const statusEventSchema = z.object({
   type: z.literal('status'),
   message: z.string(),
+  /** Machine routing signal; the message is display-only. */
+  statusCode: z.enum(['no_progress']).optional(),
 })
 export type StatusEvent = z.infer<typeof statusEventSchema>
 

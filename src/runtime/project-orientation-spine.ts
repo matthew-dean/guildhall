@@ -1,4 +1,5 @@
 import { taskDisplayLabel, summarizeCurrentProof } from '@guildhall/shared'
+import { explicitTaskStructuralIdentity } from '@guildhall/core'
 import {
   executionScopeRows,
   releaseLabelFromId,
@@ -11,7 +12,6 @@ import {
 import { taskDoneButProofMissing, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
 import { classifyCompletionProof, recordedCompletionProofForTask } from './task-completion-proof.js'
 import { explicitMarkdownSourceRefsFromTask } from './task-source-refs.js'
-import { taskTitleOverlap } from './task-title-overlap.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 
 export type OrientationScopeKind =
@@ -351,8 +351,10 @@ export function reconcileOrientationSpineWithReleaseTruth(
         ? 'blocked' as const
         : spine.selectedRelease?.state
   const existingTopBlocker = typeof spine.summary.topBlocker === 'string' ? spine.summary.topBlocker : null
-  const existingTopBlockerIsProof = /proof/i.test(existingTopBlocker ?? '')
-  const retainedCompletionNote = releaseIsProven && !existingTopBlockerIsProof ? existingTopBlocker : null
+  // A completed scope gets its truth from the current release projection. A
+  // saved display sentence must never be inspected to decide whether it is a
+  // stale blocker or a completion note.
+  const retainedCompletionNote = releaseIsProven ? null : existingTopBlocker
   const progress = {
     ...spine.summary.progress,
     total: truth.counts.total + truth.counts.deferred,
@@ -510,6 +512,9 @@ export interface OrientationTaskInput {
   id: string
   title?: string
   description?: string
+  sourceIdentity?: string
+  deliverableName?: string
+  producedArtifact?: string
   references?: string[]
   sourceClaims?: Array<{ references?: string[] }>
   domain?: string
@@ -547,6 +552,9 @@ export interface OrientationWorkspaceImportDraftTask {
   id: string
   title: string
   description?: string
+  sourceIdentity?: string
+  deliverableName?: string
+  producedArtifact?: string
   domain?: string
   scope: 'current' | 'later'
   refs?: string[]
@@ -592,7 +600,7 @@ export interface BuildProjectOrientationSpineInput {
   tasks?: OrientationTaskInput[]
   releaseReadiness?: {
     verdict?: string
-    blockers?: Array<{ id?: string; label?: string; title?: string; nextAction?: string }>
+    blockers?: Array<{ id?: string; label?: string; title?: string; nextAction?: string; owningTaskId?: string; code?: string }>
   } | null
   startReadiness?: {
     canStart: boolean
@@ -746,10 +754,8 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
     ...(task.releaseIds ? { releaseIds: [...task.releaseIds] } : {}),
   }))
   const idToTask = new Map<string, OrientationTaskInput>()
-  const titleToTask = new Map<string, OrientationTaskInput>()
   for (const task of augmented) {
     idToTask.set(task.id, task)
-    titleToTask.set(normalizeText(taskTitle(task)), task)
   }
 
   const currentNodeIds: string[] = []
@@ -759,7 +765,13 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
   const currentReleaseIds = new Set<string>()
 
   for (const draftTask of draft.tasks) {
-    const existing = idToTask.get(draftTask.id) ?? titleToTask.get(normalizeText(draftTask.title))
+    // Imported ids are the preferred reconciliation key. When an import
+    // adapter owns a stable structural identity, it may reconcile an older
+    // saved id too. Titles are display prose and never participate.
+    const existing = idToTask.get(draftTask.id) ?? augmented.find(task =>
+      explicitTaskStructuralIdentity(task) !== null &&
+      explicitTaskStructuralIdentity(task) === explicitTaskStructuralIdentity(draftTask),
+    )
     const scopedReplacement = scopedReleaseReplacementForDraftTask(draftTask, existing, augmented)
     const taskId = existing?.id ?? draftSyntheticTaskId(draftTask.id)
     const importedRefs = draftTask.refs?.map(stripImportPrefix).filter(Boolean) ?? []
@@ -780,6 +792,9 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
         id: taskId,
         title: draftTask.title,
         description: draftTask.description ?? draftTask.title,
+        ...(draftTask.sourceIdentity ? { sourceIdentity: draftTask.sourceIdentity } : {}),
+        ...(draftTask.deliverableName ? { deliverableName: draftTask.deliverableName } : {}),
+        ...(draftTask.producedArtifact ? { producedArtifact: draftTask.producedArtifact } : {}),
         domain: draftTask.domain,
         ...(importedRefs.length > 0 ? { references: importedRefs } : {}),
         ...(draftTask.releaseIds?.length ? { releaseIds: [...draftTask.releaseIds] } : {}),
@@ -798,7 +813,6 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
       }
       augmented.push(synthetic)
       idToTask.set(synthetic.id, synthetic)
-      titleToTask.set(normalizeText(draftTask.title), synthetic)
     } else if (draftTask.releaseIds?.length && (existing.releaseIds ?? []).length === 0) {
       existing.releaseIds = [...new Set([...(existing.releaseIds ?? []), ...draftTask.releaseIds])]
     }
@@ -896,14 +910,13 @@ function scopedReleaseReplacementForDraftTask(
   if (!existing || !draftTask.releaseIds?.length) return null
   const draftReleaseIds = new Set(draftTask.releaseIds)
   if ((existing.releaseIds ?? []).some(releaseId => draftReleaseIds.has(releaseId))) return null
-  const draftTitle = draftTask.title.trim()
-  if (!draftTitle) return null
+  const structuralIdentity = explicitTaskStructuralIdentity(draftTask)
+  if (!structuralIdentity) return null
   return tasks.find((candidate) => {
     if (candidate.id === existing.id) return false
     if (candidate.status === 'archived' || candidate.status === 'cancelled' || candidate.status === 'shelved') return false
     if (!(candidate.releaseIds ?? []).some(releaseId => draftReleaseIds.has(releaseId))) return false
-    if (taskTitleOverlap(taskTitle(candidate), draftTitle) < 0.8) return false
-    return taskTitle(candidate).length >= taskTitle(existing).length
+    return explicitTaskStructuralIdentity(candidate) === structuralIdentity
   }) ?? null
 }
 
@@ -1208,8 +1221,8 @@ function duplicateProofMissingTaskIds(
     if (!taskDoneButProofMissing(task as unknown)) continue
     const duplicateOwner = blockedScopedTasks.find(blocked => {
       if (blocked.id === task.id) return false
-      if (taskTitleOverlap(blocked.title, task.title) < 0.8) return false
-      return taskTitle(blocked).length >= taskTitle(task).length
+      return explicitTaskStructuralIdentity(blocked) !== null &&
+        explicitTaskStructuralIdentity(blocked) === explicitTaskStructuralIdentity(task)
     })
     if (duplicateOwner) result.add(task.id)
   }
@@ -1881,13 +1894,15 @@ function duplicateScopeConflictGaps(
     for (let j = i + 1; j < candidates.length; j += 1) {
       const left = candidates[i]!
       const right = candidates[j]!
-      if (taskTitleOverlap(taskTitle(left), taskTitle(right)) < 0.65) continue
+      if (explicitTaskStructuralIdentity(left) === null ||
+        explicitTaskStructuralIdentity(left) !== explicitTaskStructuralIdentity(right)) continue
       if (!materiallyDifferentScope(left, right, scope, tasksById)) continue
       const key = [left.id, right.id].sort().join('\n')
       if (seenPairs.has(key)) continue
       seenPairs.add(key)
-      const richer = taskTitle(left).length >= taskTitle(right).length ? left : right
-      const other = richer === left ? right : left
+      const ordered = [left, right].sort((a, b) => a.id.localeCompare(b.id))
+      const richer = ordered[0]!
+      const other = ordered[1]!
       const refs = [
         `task:${richer.id}`,
         `task:${other.id}`,
@@ -1920,7 +1935,6 @@ function sourceRefsForTask(task: OrientationTaskInput): string[] {
         command: typeof criterion.command === 'string' ? criterion.command : undefined,
       })),
       gateResults: task.gateResults,
-      reviewVerdicts: task.reviewVerdicts,
     }),
   ]
     .map(ref => typeof ref === 'string' ? ref.trim() : '')
@@ -2068,12 +2082,6 @@ function sourceRefsFromReleaseSource(source: OrientationRelease['source'] | Orie
   return source && typeof source === 'object' ? source.refs ?? [] : []
 }
 
-function sharedTokenCount(left: string, right: string): number {
-  const leftTokens = new Set(normalizeText(left).split(/\s+/).filter(token => token.length > 2))
-  const rightTokens = normalizeText(right).split(/\s+/).filter(token => token.length > 2)
-  return rightTokens.filter(token => leftTokens.has(token)).length
-}
-
 function attachReleaseBlockers(
   blockers: BuildProjectOrientationSpineInput['releaseReadiness'] extends infer T
     ? T extends { blockers?: infer B } ? B : never
@@ -2093,7 +2101,7 @@ function attachReleaseBlockers(
     })
     .map((blocker, index) => {
     const label = blocker.label ?? blocker.title ?? blocker.id ?? `Release blocker ${index + 1}`
-    const owningNode = releaseBlockerOwnerNode(blocker.id ?? null, label, nodes)
+    const owningNode = releaseBlockerOwnerNode(blocker.id ?? null, blocker.owningTaskId ?? null, nodes)
     const output: OrientationBlocker = {
       id: blocker.id ?? `release-blocker-${index + 1}`,
       label,
@@ -2115,21 +2123,19 @@ function attachReleaseBlockers(
 
 function releaseBlockerOwnerNode(
   blockerId: string | null,
-  label: string,
+  owningTaskId: string | null,
   nodes: OrientationNode[],
 ): OrientationNode | null {
   if (blockerId?.startsWith('start-readiness:')) return null
-  if (blockerId) {
-    const direct = nodes.find(node => node.refs.taskIds.includes(blockerId) || node.id === `work:${blockerId}`)
+  const taskId = owningTaskId ?? blockerId
+  if (taskId) {
+    const direct = nodes.find(node => node.refs.taskIds.includes(taskId) || node.id === `work:${taskId}`)
     if (direct) return direct
   }
-  const normalized = normalizeText(label)
-  const exact = nodes.find(node => {
-    const title = normalizeText(node.title)
-    return title.length > 0 && (normalized === title || normalized.startsWith(`${title} `) || normalized.includes(`${title} `))
-  })
-  if (exact) return exact
-  return nodes.find(node => sharedTokenCount(label, node.title) >= 2) ?? null
+  // A blocker without a durable task id is intentionally left unanchored.
+  // Matching its prose to a task title creates false ownership whenever a
+  // model changes wording or two tasks share ordinary nouns.
+  return null
 }
 
 function activePins(nodes: OrientationNode[]): OrientationPin[] {
@@ -2206,44 +2212,18 @@ function sourceConflictGaps(conflicts: BuildProjectOrientationSpineInput['source
   }))
 }
 
-function taskText(task: OrientationTaskInput): string {
-  return [
-    task.title,
-    task.description,
-    task.spec,
-    task.structuredSpec ? JSON.stringify(task.structuredSpec) : null,
-    ...(task.acceptanceCriteria ?? []).map(criterion =>
-      [criterion.description, criterion.text].filter(Boolean).join(' '),
-    ),
-  ].filter(Boolean).join('\n')
-}
-
 function buildExecutionBoundary(input: {
-  charter: ProjectOrientationCharter
-  tasks: OrientationTaskInput[]
+  proofStyle: OrientationExecutionBoundary['proofStyle']
   now: string
   sourceRefs: string[]
 }): OrientationExecutionBoundary {
-  const releaseText = [
-    input.charter.currentReleaseTarget,
-    input.charter.successDefinition,
-  ].filter(Boolean).join('\n')
-  const text = [
-    releaseText,
-    input.charter.goal,
-    input.charter.targetAudience,
-    ...input.tasks.map(taskText),
-  ].filter(Boolean).join('\n')
-  const releaseDeclaresHeadless = /\b(headless|script[- ]only|scripted|cli|command[- ]line|smoke test|automated proof)\b/i.test(releaseText)
-  const hasHeadless = releaseDeclaresHeadless || /\b(headless|script[- ]only|scripted|cli|command[- ]line|smoke test|automated proof)\b/i.test(text)
-  const hasUi = /\b(ui|browser|screen|visual|frontend|interface)\b/i.test(text)
-  const mode = releaseDeclaresHeadless ? 'headless' : hasHeadless && hasUi ? 'mixed' : hasHeadless ? 'headless' : hasUi ? 'ui' : 'unspecified'
-  const proofStyle = /script[- ]only|scripted|cli|command[- ]line|smoke test|automated proof/i.test(text)
-    ? 'script_only'
-    : hasHeadless && hasUi
-      ? 'mixed'
-      : hasUi
-        ? 'manual'
+  const proofStyle = input.proofStyle
+  const mode = proofStyle === 'script_only'
+    ? 'headless'
+    : proofStyle === 'manual'
+      ? 'ui'
+      : proofStyle === 'mixed'
+        ? 'mixed'
         : 'unspecified'
   const label = mode === 'headless'
     ? 'Headless proof'
@@ -2259,18 +2239,18 @@ function buildExecutionBoundary(input: {
       : proofStyle === 'manual'
         ? 'The current task scope includes UI or manual proof expectations.'
         : 'The current task scope includes more than one proof style.'
-  const refs = input.sourceRefs.length > 0 ? input.sourceRefs : [`project:${input.charter.source}`]
+  const refs = input.sourceRefs.length > 0 ? input.sourceRefs : ['project:release-proof-style']
   return {
     label,
     mode,
     proofStyle,
     detail,
     source: {
-      kind: input.charter.source === 'owner_approved' ? 'charter' : 'inferred',
+      kind: 'scope',
       refs,
-      confidence: mode === 'unspecified' ? 'low' : input.charter.source === 'owner_approved' ? 'high' : 'medium',
+      confidence: mode === 'unspecified' ? 'low' : 'high',
       freshness: 'fresh',
-      inferred: input.charter.source !== 'owner_approved',
+      inferred: false,
       refreshedAt: input.now,
     },
   }
@@ -2326,8 +2306,7 @@ function releaseReadinessProofBlockedTaskIds(
 ): Set<string> {
   const ids = new Set<string>()
   for (const blocker of Array.isArray(blockers) ? blockers : []) {
-    const label = `${blocker.label ?? ''} ${blocker.title ?? ''}`
-    if (!/\bproof\b/i.test(label)) continue
+    if (blocker.code !== 'proof_evidence_missing') continue
     const id = blocker.id?.replace(/^work:/, '').trim()
     if (id && !id.startsWith('repository-followup:')) ids.add(id)
   }
@@ -2606,19 +2585,18 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   const tasks = draftAugmentation.tasks
   const startReadiness = startReadinessWithFocus(input.startReadiness, input.scopeProjection, tasks)
   const charter = normalizeCharter(input)
+  const releases = mergeOrientationReleaseInputs(input.releases, draftAugmentation.releases) ?? []
+  const selectedReleaseId = selectedReleaseIdForOrientation(input, draftAugmentation.selectedReleaseId, releases)
+  const selectedReleaseProofStyle = releases.find(release => release.id === selectedReleaseId)?.proofStyle ?? 'unspecified'
   const executionBoundary = buildExecutionBoundary({
-    charter,
-    tasks,
+    proofStyle: selectedReleaseProofStyle,
     now,
     sourceRefs: input.sourceRefs ?? [],
   })
-  const releases = mergeOrientationReleaseInputs(input.releases, draftAugmentation.releases) ?? []
-  const selectedReleaseId = selectedReleaseIdForOrientation(input, draftAugmentation.selectedReleaseId, releases)
-  const releasesForReadModel = filterDuplicateSelectedStageReleases(releases, selectedReleaseId)
   const selectedRelease = normalizeRelease({
     ...input,
     selectedReleaseId,
-    releases: releasesForReadModel,
+    releases,
     proofStyleFallback: executionBoundary.proofStyle,
   }, tasks)
   const projectionScope = orientationScopeFromProjection(input.scopeProjection)
@@ -2638,7 +2616,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     : projectionScope
   const projectionScopeRows = scopeRowsFromProjection(input.scopeProjection)
   const projectionScopeNodeIds = new Set(projectionScopeRows.map(row => row.nodeId))
-  const normalizedReleases = releasesForReadModel
+  const normalizedReleases = releases
     .map(release => normalizeRelease({
       ...input,
       selectedReleaseId: release.id,
@@ -2696,19 +2674,13 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
         label: blocker.label,
       }))
     : []
-  const explicitReleaseBlockers: Array<{ id?: string; label?: string; title?: string; nextAction?: string }> = [
+  const explicitReleaseBlockers: Array<{ id?: string; label?: string; title?: string; nextAction?: string; code?: string }> = [
     ...projectionBlockers,
     ...(startReadiness?.canStart !== true ? authoritativeReleaseBlockers ?? [] : []),
   ]
   const startReleaseBlocker = startReadinessReleaseBlocker(startReadiness)
-  const normalizedStartReleaseBlockerLabel = normalizeText(startReleaseBlocker?.label ?? '')
   const hasStartReleaseBlocker = startReleaseBlocker
-    ? explicitReleaseBlockers.some((blocker) => {
-        if (blocker.id === startReleaseBlocker.id) return true
-        if (blocker.id?.startsWith('task-')) return false
-        const blockerLabel = normalizeText(blocker.label ?? blocker.title ?? blocker.id ?? '')
-        return blockerLabel.length > 0 && normalizedStartReleaseBlockerLabel.includes(blockerLabel)
-      })
+    ? explicitReleaseBlockers.some((blocker) => blocker.code === startReadiness?.code)
     : false
   const releaseBlockerInput = [
     ...explicitReleaseBlockers,
@@ -2917,30 +2889,6 @@ function releaseVisibleInReadModel(
 
 function taskStatusIsTerminal(status: string | undefined): boolean {
   return status === 'done' || status === 'archived' || status === 'cancelled' || status === 'shelved'
-}
-
-function filterDuplicateSelectedStageReleases<T extends Partial<OrientationRelease>>(
-  releases: readonly T[],
-  selectedReleaseId: string | null,
-): T[] {
-  if (!selectedReleaseId) return [...releases]
-  const selected = releases.find(release => release.id === selectedReleaseId)
-  const selectedStage = parseReleaseStageNumber(selected?.label)
-  if (selectedStage == null) return [...releases]
-  const sameStage = releases.filter(release => parseReleaseStageNumber(release.label) === selectedStage)
-  if (sameStage.length < 2) return [...releases]
-  return releases.filter(release =>
-    release.id === selectedReleaseId ||
-    parseReleaseStageNumber(release.label) !== selectedStage,
-  )
-}
-
-function parseReleaseStageNumber(label: string | null | undefined): number | null {
-  if (!label) return null
-  const match = /^stage\s+(\d+)(?:\b|\s*[:(].*)/i.exec(label.trim())
-  if (!match?.[1]) return null
-  const value = Number.parseInt(match[1], 10)
-  return Number.isFinite(value) ? value : null
 }
 
 function nodeIdIsWorkspaceImportPreview(nodeId: string): boolean {

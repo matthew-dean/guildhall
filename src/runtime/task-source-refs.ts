@@ -6,7 +6,6 @@ export interface TaskSourceRefInput {
   acceptanceCriteria?: Array<{ description?: string; text?: string; command?: string }>
   notes?: unknown[]
   gateResults?: unknown[]
-  reviewVerdicts?: unknown[]
   adjudications?: unknown[]
 }
 
@@ -21,7 +20,6 @@ export function explicitMarkdownSourceRefsFromTask(task: TaskSourceRefInput): st
     ),
     ...(task.notes ?? []).map(value => JSON.stringify(value)),
     ...(task.gateResults ?? []).map(value => JSON.stringify(value)),
-    ...(task.reviewVerdicts ?? []).map(value => JSON.stringify(value)),
     ...(task.adjudications ?? []).map(value => JSON.stringify(value)),
   ].filter(Boolean).join('\n')
   return [...new Set([...text.matchAll(/(?:^|[\s`'"([])([\w./-]*docs\/[\w./-]+\.md)\b/g)]

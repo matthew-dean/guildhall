@@ -50,7 +50,7 @@ describe('memory store', () => {
     expect(record.type).toBe('project_fact')
   })
 
-  it('adapts MEMORY.md, project learning, global learning, and project skills into queryable records', async () => {
+  it('keeps legacy MEMORY.md outside live typed memory retrieval', async () => {
     const memoryMarkdownPath = projectStatePathFromMemoryDir(memoryDir, 'MEMORY.md')
     await fs.mkdir(path.dirname(memoryMarkdownPath), { recursive: true })
     await fs.writeFile(memoryMarkdownPath, [
@@ -99,7 +99,7 @@ describe('memory store', () => {
         id: 'drawer-skill',
         name: 'Drawer proof checks',
         description: 'Check drawer Journey surfaces after runtime evidence changes.',
-        triggerKeywords: ['drawer', 'journey'],
+        routingKeys: ['domain:looma'],
         content: 'Open the drawer and verify Journey proof sections.',
         status: 'active',
         risk: 'low',
@@ -130,8 +130,8 @@ describe('memory store', () => {
 
     const records = await listMemoryRecords({ memoryDir })
 
+    expect(records.map((record) => record.id)).not.toContain('memory-md-frontend')
     expect(records.map((record) => record.id)).toEqual(expect.arrayContaining([
-      'memory-md-frontend',
       'learning-project-active',
       'learning-project-proposed',
       'skill-drawer-skill',

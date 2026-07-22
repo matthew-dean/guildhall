@@ -95,7 +95,7 @@ describe('review calibration cases', () => {
       reviewerFindings: [{
         lane: 'ux_comprehension',
         severity: 'high',
-        summary: 'The safe next action is unclear because Start and Resume compete.',
+        summary: 'A completely different explanation with the same structured severity.',
       }],
     })).toMatchObject({
       outcome: 'pass',
@@ -138,8 +138,8 @@ describe('review calibration cases', () => {
       ],
     })).toMatchObject({
       outcome: 'false_positive_heavy',
-      matchedFindingIds: ['primary-action-ambiguity'],
-      falsePositiveCount: 2,
+        matchedFindingIds: [],
+        falsePositiveCount: 3,
     })
   })
 
@@ -382,10 +382,7 @@ describe('review calibration cases', () => {
         summary: 'The reviewer missed that the primary setup action was ambiguous.',
       }],
     })
-    expect(draft.knownFindings[0]!.matchHints).toEqual([
-      'primary setup action',
-      'ambiguous',
-    ])
+    expect(draft.knownFindings[0]!.matchHints).toEqual([])
     expect(draft.falsePositiveTraps[0]!.summary).toContain('Do not fail this case only because')
   })
 

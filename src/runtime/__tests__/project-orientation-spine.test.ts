@@ -55,6 +55,39 @@ describe('buildProjectOrientationSpine', () => {
     expect(reconciled.release.lifecycleState).toBe('shipped')
   })
 
+  it('does not classify a saved completion note by blocker vocabulary', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'prose-independent-completion',
+      now: '2026-07-19T00:00:00.000Z',
+      scope: {
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:task-1'],
+        deferredNodeIds: [],
+      },
+      selectedReleaseId: 'release-1',
+      tasks: [{ id: 'task-1', title: 'Completed task', status: 'done' }],
+      releaseReadiness: { verdict: 'ready', blockers: [] },
+    })
+
+    const reconciled = reconcileOrientationSpineWithReleaseTruth({
+      ...spine,
+      summary: {
+        ...spine.summary,
+        topBlocker: 'The reviewer called this proof-shaped, but the scope is complete.',
+        nextAction: 'Read the old reviewer paragraph.',
+      },
+    }, {
+      state: 'ready',
+      counts: { total: 1, done: 1, unfinished: 0, deferred: 0, proofBlocked: 0 },
+    })
+
+    expect(reconciled.summary.topBlocker).toBeNull()
+    expect(reconciled.summary.nextAction).toBe('Review completed scope.')
+  })
+
   it('does not let stale task proof contracts reopen a release already marked ready', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'proof-authority',
@@ -196,7 +229,7 @@ describe('buildProjectOrientationSpine', () => {
       ],
       releaseReadiness: {
         verdict: 'blocked',
-        blockers: [{ id: 'proof:anti-sameness', label: 'Anti-sameness has no prototype proof.' }],
+        blockers: [{ id: 'proof:anti-sameness', owningTaskId: 'task-anti-sameness', label: 'Anti-sameness has no prototype proof.' }],
       },
     })
 
@@ -926,6 +959,7 @@ describe('buildProjectOrientationSpine', () => {
         projectPath: '/tmp/narrative-harness',
         status: 'done',
         priority: 'normal',
+        deliverableName: 'deepinfra-drafting-model',
         hierarchy: { parentId: 'task-parent', relation: 'decomposes' },
         spec: 'Model spec.',
         acceptanceCriteria: [{ id: 'ac-model', description: 'Model selected.', verifiedBy: 'review', met: true }],
@@ -945,6 +979,7 @@ describe('buildProjectOrientationSpine', () => {
       {
         id: 'task-spatial',
         title: 'Define spatial/geographic continuity review lane',
+        deliverableName: 'spatial-geographic-continuity-review',
         description: 'Define spatial reviewer.',
         domain: 'product',
         projectPath: '/tmp/narrative-harness',
@@ -1086,7 +1121,7 @@ describe('buildProjectOrientationSpine', () => {
     })
   })
 
-  it('uses the inferred execution boundary as the selected release proof style fallback', () => {
+  it('does not infer a release proof style from charter or task prose', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',
       now: '2026-07-13T05:00:00.000Z',
@@ -1116,9 +1151,9 @@ describe('buildProjectOrientationSpine', () => {
       }],
     })
 
-    expect(spine.executionBoundary.proofStyle).toBe('script_only')
-    expect(spine.selectedRelease?.proofStyle).toBe('script_only')
-    expect(spine.releases.find(release => release.id === 'stage-1-headless-drafting-and-evaluation-mvp')?.proofStyle).toBe('script_only')
+    expect(spine.executionBoundary.proofStyle).toBe('unspecified')
+    expect(spine.selectedRelease?.proofStyle).toBe('unspecified')
+    expect(spine.releases.find(release => release.id === 'stage-1-headless-drafting-and-evaluation-mvp')?.proofStyle).toBe('unspecified')
   })
 
   it('flags near-duplicate work split across scopes instead of hiding richer owner requirements', () => {
@@ -1126,6 +1161,7 @@ describe('buildProjectOrientationSpine', () => {
       {
         id: 'task-model-current',
         title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        deliverableName: 'deepinfra-drafting-model',
         description: 'Imported roadmap task.',
         domain: 'harness',
         projectPath: '/tmp/narrative-harness/docs/harness',
@@ -1139,6 +1175,7 @@ describe('buildProjectOrientationSpine', () => {
       {
         id: 'task-model-owner',
         title: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing.',
+        deliverableName: 'deepinfra-drafting-model',
         description: 'Recovered owner requirement with the legally allowed adult-fiction boundary.',
         domain: 'product',
         projectPath: '/tmp/narrative-harness',
@@ -1150,6 +1187,7 @@ describe('buildProjectOrientationSpine', () => {
       {
         id: 'task-world-current',
         title: 'Prove world-state continuity review over elapsed-time object and property changes.',
+        deliverableName: 'world-state-continuity-review',
         description: 'Imported roadmap task.',
         domain: 'coherence',
         projectPath: '/tmp/narrative-harness/docs/coherence',
@@ -1163,6 +1201,7 @@ describe('buildProjectOrientationSpine', () => {
       {
         id: 'task-world-owner',
         title: 'Define world-state continuity review lane',
+        deliverableName: 'world-state-continuity-review',
         description: 'Recovered owner requirement.',
         domain: 'product',
         projectPath: '/tmp/narrative-harness/docs/product',
@@ -1244,6 +1283,7 @@ describe('buildProjectOrientationSpine', () => {
         projectPath: '/tmp/narrative-harness',
         status: 'blocked',
         priority: 'high',
+        deliverableName: 'deepinfra-drafting-model',
         releaseIds: ['near-term-proof-scope', 'stage-1-headless-mvp'],
         references: ['/tmp/narrative-harness/docs/product/deepinfra-drafting-model-selection.md'],
       },
@@ -1255,6 +1295,7 @@ describe('buildProjectOrientationSpine', () => {
         projectPath: '/tmp/narrative-harness/docs/harness',
         status: 'done',
         priority: 'normal',
+        deliverableName: 'deepinfra-drafting-model',
         references: ['/tmp/narrative-harness/docs/harness/implementation-roadmap.md'],
         proofPaths: [{
           kind: 'command',
@@ -1774,21 +1815,21 @@ describe('buildProjectOrientationSpine', () => {
     })
 
     expect(spine.executionBoundary).toMatchObject({
-      label: 'Headless proof',
-      mode: 'headless',
-      proofStyle: 'script_only',
+      label: 'Proof mode missing',
+      mode: 'unspecified',
+      proofStyle: 'unspecified',
       source: {
         refs: ['project-brief.md'],
-        confidence: 'high',
+        confidence: 'low',
         inferred: false,
       },
     })
-    expect(spine.gaps.map(gap => gap.kind)).not.toContain('missing_execution_boundary')
+    expect(spine.gaps.map(gap => gap.kind)).toContain('missing_execution_boundary')
     expect(spine.selectedRelease).toBeNull()
     expect(spine.proofContracts[0]).toMatchObject({
       nodeId: 'work:coherence-reviewer-mvp',
       title: 'Build first coherence reviewer MVP',
-      required: ['Script or command proof for Build first coherence reviewer MVP.'],
+      required: ['Verification evidence for Build first coherence reviewer MVP.'],
     })
     expect(spine.sourceTrail).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -1804,8 +1845,8 @@ describe('buildProjectOrientationSpine', () => {
       }),
       expect.objectContaining({
         label: 'Proof mode',
-        value: 'Headless proof',
-        tone: 'accent',
+        value: 'Proof mode missing',
+        tone: 'warn',
       }),
     ]))
   })
@@ -2008,7 +2049,7 @@ describe('buildProjectOrientationSpine', () => {
     })
   })
 
-  it('surfaces latest reviewer proof text when it satisfies imported proof evidence', () => {
+  it('surfaces structured reviewer proof IDs when they satisfy imported proof evidence', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',
       now: '2026-07-06T12:00:00.000Z',
@@ -2027,20 +2068,23 @@ describe('buildProjectOrientationSpine', () => {
         acceptanceCriteria: [
           { id: 'state-transition', description: 'The reviewer catches object property changes caused by elapsed time.', met: true },
         ],
-        latestReviewerSummary: [
-          '**Verdict:** Approved',
-          'The proof runs `node scripts/prove-world-state-continuity.mjs`.',
-          'The reviewer catches object property changes caused by elapsed time.',
-          'The proof explains whether wet hair would dry in the story climate.',
-        ].join('\n'),
         proofPaths: [{
+          id: 'world-state-review-proof',
           kind: 'review',
           source: 'inferred',
           status: 'verified',
           expectedEvidence: [
-            'The reviewer catches object property changes caused by elapsed time.',
-            'The proof explains whether wet hair would dry in the story climate.',
+            { id: 'elapsed-object-state', description: 'Object state changes over elapsed time.' },
+            { id: 'climate-drying', description: 'The proof accounts for climate-dependent drying.' },
           ],
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          acceptedCriteriaIds: ['state-transition'],
+          proofEvidenceIds: ['elapsed-object-state', 'climate-drying'],
+          reasoning: 'Any prose explanation is audit-only.',
+          recordedAt: '2026-07-06T11:00:00.000Z',
         }],
       }],
     })
@@ -2053,7 +2097,7 @@ describe('buildProjectOrientationSpine', () => {
       state: 'proven',
       missing: [],
     })
-    expect(spine.proofContracts[0]?.verified[0]).toBe('Reviewer proof: The proof runs `node scripts/prove-world-state-continuity.mjs`.')
+    expect(spine.proofContracts[0]?.verified).toContain('Review approved: world-state-review-proof')
   })
 
   it('counts ready work with missing proof as ready but not proven', () => {
@@ -2296,7 +2340,16 @@ describe('buildProjectOrientationSpine', () => {
           title: 'Define fixture schemas.',
           status: 'done',
           spec: 'Done.',
-          proofPaths: ['src/verify-fixture-schema.ts'],
+          proofPaths: [{
+            kind: 'command',
+            command: 'pnpm test -- fixture-schema',
+            expectedEvidence: [{ id: 'fixture-schema-proof', description: 'Fixture schema proof.' }],
+            verificationRecords: [{
+              evidenceId: 'fixture-schema-proof',
+              command: 'pnpm test -- fixture-schema',
+              status: 'passed',
+            }],
+          }],
           doneSummaryBundle: {
             taskId: 'fixture-schema',
             status: 'done',
@@ -2323,8 +2376,13 @@ describe('buildProjectOrientationSpine', () => {
           title: 'Implement no-UI runner.',
           status: 'done',
           spec: 'Done.',
-          gateResults: [{ gateId: 'runner-smoke', status: 'pass' }],
-          reviewVerdicts: [{ reviewerPath: 'deterministic', verdict: 'approve' }],
+          proofPaths: [{
+            kind: 'command',
+            command: 'pnpm test -- runner-proof',
+            expectedEvidence: [{ id: 'runner-proof', description: 'The runner proof command passes.' }],
+            verificationRecords: [{ evidenceId: 'runner-proof', status: 'passed' }],
+          }],
+          gateResults: [{ gateId: 'runner-proof', command: 'pnpm test -- runner-proof', status: 'pass' }],
         },
       ],
       startReadiness: {
@@ -2339,10 +2397,10 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:runner-proof']?.maturity).toBe('proven')
     expect(spine.summary.progress.proven).toBe(2)
     expect(spine.summary.progress.done).toBe(2)
-    expect(spine.nodes['work:fixture-schema']?.proof.verified[0]).toContain('pnpm test -- fixture-schema passed')
+    expect(spine.nodes['work:fixture-schema']?.proof.verified[0]).toBe('Proof passed: pnpm test -- fixture-schema')
     expect(spine.nodes['work:runner-proof']?.proof.verified).toEqual(expect.arrayContaining([
-      'Gate passed: runner-smoke',
-      'Review approved: deterministic',
+      'Proof passed: pnpm test -- runner-proof',
+      'Gate passed: runner-proof',
     ]))
     expect(spine.gaps.filter(gap => gap.kind === 'proof_needed')).toHaveLength(0)
     expect(spine.activePins.map(pin => pin.kind)).toEqual([])
@@ -2665,7 +2723,7 @@ describe('buildProjectOrientationSpine', () => {
     })
   })
 
-  it('shows only the selected release as the active run boundary', () => {
+  it('keeps arbitrary release labels visible while selecting only one active run boundary', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'looma-knit',
       now: '2026-07-04T12:00:00.000Z',
@@ -2673,7 +2731,7 @@ describe('buildProjectOrientationSpine', () => {
       releases: [
         {
           id: 'stage-1-v1-release-hardening',
-          label: 'Stage 1: V1 Release Hardening',
+          label: 'V1 Release Hardening',
           kind: 'release',
           state: 'active',
           source: 'release_plan',
@@ -2682,7 +2740,7 @@ describe('buildProjectOrientationSpine', () => {
         },
         {
           id: 'stage-1-finish-knit-primitive-replacement-wave',
-          label: 'Stage 1: Finish Knit Primitive Replacement Wave',
+          label: 'Finish Knit Primitive Replacement Wave',
           kind: 'release',
           state: 'active',
           source: 'release_plan',
@@ -2715,6 +2773,7 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.selectedRelease?.id).toBe('stage-1-v1-release-hardening')
     expect(spine.releases.map(release => [release.id, release.state])).toEqual([
       ['stage-1-v1-release-hardening', 'active'],
+      ['stage-1-finish-knit-primitive-replacement-wave', 'planned'],
     ])
   })
 
@@ -2942,6 +3001,7 @@ describe('buildProjectOrientationSpine', () => {
         verdict: 'blocked',
         blockers: [{
           id: 'repository-followup:repo:0',
+          code: 'repository_followup_required',
           label: repositoryLabel,
         }],
       },
@@ -2970,6 +3030,7 @@ describe('buildProjectOrientationSpine', () => {
           id: 'saved-stage-two',
           title: 'Mastra workflow for the prototype iteration loop',
           description: 'Saved task record imported before release buckets existed.',
+          sourceIdentity: 'docs/harness/implementation-roadmap.md#stage-2:mastra-workflow',
           domain: 'agent-workflow',
           status: 'shelved',
         },
@@ -3011,6 +3072,7 @@ describe('buildProjectOrientationSpine', () => {
             id: 'draft-stage-two',
             title: 'Mastra workflow for the prototype iteration loop',
             description: 'Detected deferred Stage 2 work.',
+            sourceIdentity: 'docs/harness/implementation-roadmap.md#stage-2:mastra-workflow',
             domain: 'agent-workflow',
             scope: 'later',
             releaseIds: ['stage-2-mastra-agent-prototype'],

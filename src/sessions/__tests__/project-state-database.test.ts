@@ -448,6 +448,8 @@ describe('project-state database', () => {
           dependsOn: ['task-0'],
           releaseIds: ['release-1'],
           sourceRefs: ['docs/plan.md'],
+          recoveryCode: 'environment_setup',
+          bootstrapRepairOwnership: 'task',
           updatedAt: '2026-07-14T00:00:00.000Z',
         }],
       },
@@ -472,6 +474,8 @@ describe('project-state database', () => {
       dependsOn: ['task-0'],
       releaseIds: ['release-1'],
       sourceRefs: ['docs/plan.md'],
+      recoveryCode: 'environment_setup',
+      bootstrapRepairOwnership: 'task',
     })
     expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
       version: 1,
@@ -1837,6 +1841,7 @@ describe('project-state database', () => {
           id: 'task-1',
           title: 'Bounded card',
           status: 'ready',
+          semanticKind: 'proof_setup',
           spec: 'The full implementation detail stays behind task detail.',
           acceptanceCriteria: [{ id: 'criterion-1', description: 'The list shows the first acceptance signal.' }],
           workUnitAnalysis: { units: [{ id: 'unit-1' }, { id: 'unit-2' }] },
@@ -1853,6 +1858,7 @@ describe('project-state database', () => {
       acceptanceCriteriaFirstDescription: 'The list shows the first acceptance signal.',
       workUnitCount: 2,
       spec: 'present',
+      semanticKind: 'proof_setup',
     })
     expect(card.definition).toEqual({})
     expect(card).not.toHaveProperty('acceptanceCriteria')
@@ -2307,6 +2313,59 @@ describe('project-state database', () => {
     expect(current?.size).toBe(2)
     expect(current?.get('task-1')?.byKind.note?.[0]?.payload).toEqual({ content: 'One' })
     expect(current?.get('task-2')?.byKind.note?.[0]?.payload).toEqual({ content: 'Two' })
+  })
+
+  it('keeps machine review fields in current evidence while bounding note prose', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-1', title: 'One', status: 'review' }] },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+    })
+    const machineSelfCritique = {
+      acceptanceCriteria: [{ id: 'ac-1', status: 'met' }],
+      changedFiles: ['src/index.ts'],
+      verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+      proofEvidenceIds: [],
+    }
+    upsertProjectStateDatabaseTaskProof(projectRoot, {
+      taskId: 'task-1',
+      kind: 'note',
+      recordedAt: '2026-07-14T00:01:00.000Z',
+      payload: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: `${'model prose '.repeat(300)}\n\`\`\`json\n${JSON.stringify(machineSelfCritique)}\n\`\`\``,
+        timestamp: '2026-07-14T00:01:00.000Z',
+      },
+    })
+
+    const current = readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-1')
+    expect(current?.byKind.note?.[0]?.payload).toMatchObject({
+      structured: {
+        kind: 'worker_self_critique',
+        ...machineSelfCritique,
+      },
+    })
+    expect(String(current?.byKind.note?.[0]?.payload.content)).not.toContain(JSON.stringify(machineSelfCritique))
+
+    upsertProjectStateDatabaseTaskProof(projectRoot, {
+      taskId: 'task-1',
+      kind: 'review_verdict',
+      recordedAt: '2026-07-14T00:02:00.000Z',
+      payload: {
+        verdict: 'approve',
+        reviewerPath: 'llm',
+        reason: 'The machine contract passed.',
+        acceptedCriteriaIds: ['ac-1'],
+        proofEvidenceIds: ['review-proof-1'],
+        failingSignals: [],
+        recordedAt: '2026-07-14T00:02:00.000Z',
+      },
+    })
+    const withReview = readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-1')
+    expect(withReview?.byKind.review_verdict?.[0]?.payload).toMatchObject({
+      acceptedCriteriaIds: ['ac-1'],
+      proofEvidenceIds: ['review-proof-1'],
+    })
   })
 
   it('keeps the latest compact note for each operational source', () => {

@@ -810,7 +810,7 @@ export async function draftStructuralMap(input: {
   const ownerQuestions: OwnerQuestion[] = [{
     id: 'confirm-domain-routing',
     reason: 'owner_review_required_before_routing_truth',
-    prompt: 'Review the proposed domains, package graph, executable units, and Git authority before Guildhall uses this map for routing.',
+    prompt: 'Should Guildhall use the proposed domains, package graph, executable units, and Git authority for routing?',
     targetIds: finalNodes.filter(node => node.kind === 'domain_group' || node.kind === 'cross_cutting_domain').map(node => node.id),
   }, ...conflictOwnerQuestions(finalNodes, finalEdges)]
   const ownerInputRequestIds = await createStructuralOwnerInputRequests({
@@ -1086,6 +1086,8 @@ export function buildStructuralContextSlice(map: StructuralMapDraft, task: {
   title: string
   files?: string[]
   text?: string
+  domainId?: string
+  crossCuttingDomainIds?: string[]
 }): StructuralContextSlice {
   if (map.stateMachine.state !== 'accepted') {
     return {
@@ -1099,9 +1101,12 @@ export function buildStructuralContextSlice(map: StructuralMapDraft, task: {
     .filter((node): node is StructuralMapNode & { kind: 'package'; packageId: string } =>
       node.kind === 'package' && Boolean(node.packageId) && taskMatchesPath(task, node.relativePath))
   const primaryPackage = matchedPackages[0]
-  const domainId = primaryPackage
+  const explicitDomainId = task.domainId && map.nodes.some(node =>
+    node.kind === 'domain_group' && node.id === task.domainId,
+  ) ? task.domainId : undefined
+  const domainId = explicitDomainId ?? (primaryPackage
     ? map.edges.find(edge => edge.kind === 'package_belongs_to_domain' && edge.from === primaryPackage.id)?.to
-    : inferDomainFromText(map, task.text ?? task.title)?.id
+    : undefined)
   const executableUnits = map.nodes
     .filter(node => node.kind === 'executable_unit' && (!primaryPackage || node.packageId === primaryPackage.packageId))
     .map(node => node.id)
@@ -1141,6 +1146,8 @@ export function routeTaskWithStructuralMap(input: {
     title: string
     files?: string[]
     text?: string
+    domainId?: string
+    crossCuttingDomainIds?: string[]
   }
   coordinators?: StructuralDomainCoordinator[]
 }): StructuralTaskRoute {
@@ -1789,23 +1796,11 @@ function taskMatchesPath(task: { files?: string[]; text?: string; title?: string
   return (task.files ?? []).some(file => file === relativePath || file.startsWith(`${relativePath}/`))
 }
 
-function inferDomainFromText(map: StructuralMapDraft, text: string): StructuralMapNode | undefined {
-  const normalized = text.toLowerCase()
-  return map.nodes.find(node =>
-    node.kind === 'domain_group' &&
-    (normalized.includes(node.label.toLowerCase()) || normalized.includes(node.id.replace(/^domain:/, ''))))
-}
-
-function activatedCrossCuttingDomains(map: StructuralMapDraft, task: { files?: string[]; text?: string; title?: string }): string[] {
-  const haystack = `${task.title ?? ''} ${task.text ?? ''} ${(task.files ?? []).join(' ')}`.toLowerCase()
+function activatedCrossCuttingDomains(map: StructuralMapDraft, task: { files?: string[]; crossCuttingDomainIds?: string[] }): string[] {
+  const explicitIds = new Set(task.crossCuttingDomainIds ?? [])
   return map.nodes
     .filter(node => node.kind === 'cross_cutting_domain')
-    .filter(node => {
-      const slug = node.id.replace(/^cross-cutting:/, '')
-      if (haystack.includes(slug.replaceAll('-', ' ')) || haystack.includes(slug)) return true
-      if (haystack.includes(node.label.toLowerCase())) return true
-      return node.evidence.some(ref => haystack.includes(ref.ref.toLowerCase()))
-    })
+    .filter(node => explicitIds.has(node.id))
     .map(node => node.id)
     .sort()
 }
@@ -1886,7 +1881,7 @@ function conflictOwnerQuestions(nodes: StructuralMapNode[], edges: StructuralMap
     .map(conflict => ({
       id: `resolve-conflict-${slugify(conflict.targetId)}`,
       reason: 'conflicting_structural_evidence',
-      prompt: conflict.summary,
+      prompt: `${conflict.summary} Which structural interpretation should Guildhall use?`,
       targetIds: [conflict.targetId],
     }))
   const edgeQuestions = edges
@@ -1894,7 +1889,7 @@ function conflictOwnerQuestions(nodes: StructuralMapNode[], edges: StructuralMap
     .map(conflict => ({
       id: `resolve-conflict-${slugify(conflict.targetId)}`,
       reason: 'conflicting_structural_evidence',
-      prompt: conflict.summary,
+      prompt: `${conflict.summary} Which structural interpretation should Guildhall use?`,
       targetIds: [conflict.targetId],
     }))
   return [...nodeQuestions, ...edgeQuestions]
@@ -1946,7 +1941,7 @@ function refreshReviewQuestions(changes: StructuralMapRefreshChange[]): OwnerQue
     .map(change => ({
       id: `review-${change.kind}-${slugify(change.targetId)}`,
       reason: `structural_refresh_changed_${change.reviewImpact}`,
-      prompt: `${change.summary} Review before this structural change affects ${change.reviewImpact}.`,
+      prompt: `${change.summary} Should Guildhall apply this structural change before it affects ${change.reviewImpact}?`,
       targetIds: [change.targetId],
     }))
 }

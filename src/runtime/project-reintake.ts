@@ -1,7 +1,7 @@
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { AcceptanceCriteria, type Task } from '@guildhall/core'
+import { AcceptanceCriteria, explicitTaskStructuralIdentity, type ProjectRelease, type Task } from '@guildhall/core'
 import { getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import {
   planEvidenceWorkGraph,
@@ -13,7 +13,6 @@ import {
   evidenceTaskPriority,
   evidenceTaskWhyThisMayMatter,
 } from './evidence-task-import-draft.js'
-import { detectShadowedCurrentMilestoneDeliverableImports as detectShadowedCurrentMilestoneDeliverables } from './current-milestone-shadowing.js'
 import {
   buildImportedBlueprintSeed,
   type MaterializedImportTask,
@@ -33,6 +32,7 @@ export interface ProjectReintakeInput {
   projectPath?: string
   sources: ProjectReintakeSource[]
   tasks: Array<Record<string, unknown>>
+  releases?: Array<Pick<ProjectRelease, 'id' | 'label' | 'state' | 'nodeIds' | 'deferredNodeIds' | 'supersedesReleaseId'>>
 }
 
 export interface ProjectReintakeDraft {
@@ -68,7 +68,7 @@ export type ReintakeChange =
   | { kind: 'keep'; taskId: string; reason: string }
   | { kind: 'reframe'; taskId: string; before: TaskSummary; after: ReintakeTaskDraft; reason: string }
   | ReintakeMergeChange
-  | { kind: 'archive'; taskId: string; reason: string }
+  | { kind: 'archive'; taskId: string; reason: string; archiveCode?: 'unsupported_weak_preimplementation' | string }
   | { kind: 'create'; task: ReintakeTaskDraft; reason: string }
   | { kind: 'refresh_evidence'; taskId: string; before: TaskSummary; after: ReintakeTaskDraft; reopenForProof: boolean; reason: string }
   | { kind: 'repair_dependencies'; taskId: string; beforeDependsOn: string[]; afterDependsOn: string[]; reason: string }
@@ -87,6 +87,13 @@ export interface ReintakeTaskDraft {
   id: string
   title: string
   description: string
+  sourceIdentity?: string
+  deliverableName?: string
+  producedArtifact?: string
+  workShape?: Task['workShape']
+  targetArea?: string
+  buildsOn?: string[]
+  consumerSurfaces?: string[]
   domain: string
   projectPath?: string
   status: 'import_draft' | 'spec_review' | 'shelved'
@@ -98,14 +105,18 @@ export interface ReintakeTaskDraft {
   releaseIds?: string[]
   stageAlignment?: string
   spec?: string
+  structuredSpec?: Task['structuredSpec']
   productBrief?: Task['productBrief']
   proofPaths?: Task['proofPaths']
   workUnitAnalysis?: Task['workUnitAnalysis']
+  semanticKind?: Task['semanticKind']
   taskReadiness?: Task['taskReadiness']
   taskKind?: Task['taskKind']
   definitionOfDone?: Task['definitionOfDone']
   blockerPlans?: Task['blockerPlans']
   contextBudget?: Task['contextBudget']
+  parentAcceptanceCriterionIds?: string[]
+  contractNames?: string[]
 }
 
 export interface ProjectReintakeReleaseDraft {
@@ -117,6 +128,7 @@ export interface ProjectReintakeReleaseDraft {
   nodeIds: string[]
   deferredNodeIds: string[]
   proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
+  supersedesReleaseId?: string
 }
 
 export interface ProjectReintakeApplyResult {
@@ -129,7 +141,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   const now = input.now ?? new Date().toISOString()
   const groups: ReintakeChangeGroup[] = []
   const usedTaskIds = new Set<string>()
-  const selectedRelease = detectSelectedRelease(input.sources)
+  const selectedRelease = selectReintakeRelease(detectSelectedRelease(input.sources), input)
   const protectedProgressTaskIds = new Set(input.tasks
     .filter(task => isStartedOrCompletedTask(task) && !importedContractWorkIsStructurallyIncomplete(task))
     .map(task => stringField(task, 'id'))
@@ -140,7 +152,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     groups.push({
       id: 'merge-duplicates',
       title: 'Merge duplicate old cards',
-      rationale: 'These tasks have the same normalized title and can be represented by one survivor.',
+      rationale: 'These blocked tasks share an explicit source-owned identity and can be represented by one survivor.',
       changes: duplicateMerges,
     })
     for (const change of duplicateMerges) {
@@ -196,16 +208,17 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       const taskId = taskIdForChange(change)
       if (taskId) usedTaskIds.add(taskId)
     }
-  } else {
-    const singleEdit = singleEditChange(input.sources)
-    if (singleEdit) {
-      groups.push({
-        id: 'single-bounded-edit',
-        title: 'Keep bounded edit as one task',
-        rationale: 'The evidence describes one concrete edit rather than a multi-deliverable graph.',
-        changes: [singleEdit],
-      })
-    }
+  }
+
+  const planningInstructionChanges = archivePlanningInstructionTasks(input.tasks, usedTaskIds)
+  if (planningInstructionChanges.length > 0) {
+    groups.push({
+      id: 'archive-planning-instructions',
+      title: 'Archive planning instructions from executable work',
+      rationale: 'A coordinator instruction is retained as history, but it is not a product deliverable and cannot satisfy a release row by repeating its vocabulary.',
+      changes: planningInstructionChanges,
+    })
+    for (const change of planningInstructionChanges) usedTaskIds.add(change.taskId)
   }
 
   const releaseMembershipChanges = migrateSameStageReleaseMemberships(
@@ -262,26 +275,6 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       changes: structuralRepairChanges,
     })
     for (const change of structuralRepairChanges) {
-      const taskId = taskIdForChange(change)
-      if (taskId) usedTaskIds.add(taskId)
-    }
-  }
-
-  const sourceShapedPrototypeRefreshChanges = refreshSourceShapedPrototypeTasks(
-    input.tasks,
-    usedTaskIds,
-    selectedRelease,
-    input.projectPath,
-    now,
-  )
-  if (sourceShapedPrototypeRefreshChanges.length > 0) {
-    groups.push({
-      id: 'refresh-source-shaped-prototype-tasks',
-      title: 'Refresh source-shaped prototype tasks',
-      rationale: 'Open prototype tasks should carry the current proof criteria from their source docs instead of keeping stale generic import criteria.',
-      changes: sourceShapedPrototypeRefreshChanges,
-    })
-    for (const change of sourceShapedPrototypeRefreshChanges) {
       const taskId = taskIdForChange(change)
       if (taskId) usedTaskIds.add(taskId)
     }
@@ -364,20 +357,6 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     })
   }
 
-  const shadowedCurrentMilestoneDeliverableChanges = archiveShadowedCurrentMilestoneDeliverableTasks(
-    input.tasks,
-    usedTaskIds,
-    input.sources,
-  )
-  if (shadowedCurrentMilestoneDeliverableChanges.length > 0) {
-    groups.push({
-      id: 'archive-shadowed-current-milestone-deliverables',
-      title: 'Archive shadowed current-milestone deliverables',
-      rationale: 'If a roadmap already names the starter-task sequence for the current milestone, old deliverable-bullet task imports should not remain as competing scoped work.',
-      changes: shadowedCurrentMilestoneDeliverableChanges,
-    })
-  }
-
   const releases = selectedRelease ? releaseDraftsFor(selectedRelease, groups, input.tasks) : []
   return {
     id: `reintake-${now.replace(/[^0-9A-Za-z]/g, '').slice(0, 14)}`,
@@ -432,6 +411,7 @@ export async function applyProjectReintakeDraft(input: {
   const groups = selected
     ? draft.groups.filter(group => selected.has(group.id))
     : draft.groups
+  const shippedReleaseIdsByTask = shippedReleaseMembership(queue.releases)
   const refreshedTaskIds = new Set<string>()
   for (const change of groups.flatMap(group => group.changes)) {
     if (change.kind === 'create') refreshedTaskIds.add(change.task.id)
@@ -442,7 +422,7 @@ export async function applyProjectReintakeDraft(input: {
   for (const group of groups) {
     for (const change of group.changes) {
       if (change.kind === 'archive' && refreshedTaskIds.has(change.taskId)) continue
-      applyChange(queue.tasks, change, now)
+      applyChange(queue.tasks, change, now, shippedReleaseIdsByTask)
     }
   }
   applyReleaseDrafts(queue, draft)
@@ -458,7 +438,12 @@ export async function applyProjectReintakeDraft(input: {
   return { success: true, appliedGroups: groups.length }
 }
 
-function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChange, now: string): void {
+function applyChange(
+  tasks: Array<Record<string, unknown>>,
+  change: ReintakeChange,
+  now: string,
+  shippedReleaseIdsByTask: ReadonlyMap<string, readonly string[]> = new Map(),
+): void {
   if (change.kind === 'repair_dependencies') {
     const existing = tasks.find(task => task.id === change.taskId)
     if (!existing) return
@@ -484,7 +469,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
     const notes = Array.isArray(existing.notes) ? existing.notes : []
     clearStaleReintakeDerivedFields(existing)
     Object.assign(existing, {
-      ...change.after,
+      ...withHistoricalReleaseMembership(change.after, shippedReleaseIdsByTask.get(change.taskId)),
       id: change.taskId,
       // Keep active work active. A completed task with no current proof is
       // intentionally reopened into review; its historical notes/evidence
@@ -512,7 +497,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
     const notes = Array.isArray(existing.notes) ? existing.notes : []
     clearStaleReintakeDerivedFields(existing)
     Object.assign(existing, {
-      ...change.after,
+      ...withHistoricalReleaseMembership(change.after, shippedReleaseIdsByTask.get(change.taskId)),
       id: change.taskId,
       updatedAt: now,
       notes: [
@@ -536,7 +521,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
       const notes = Array.isArray(existing.notes) ? existing.notes : []
       clearStaleReintakeDerivedFields(existing)
       Object.assign(existing, {
-        ...change.task,
+        ...withHistoricalReleaseMembership(change.task, shippedReleaseIdsByTask.get(change.task.id)),
         projectPath: change.task.projectPath ?? (typeof existing.projectPath === 'string' ? existing.projectPath : ''),
         outOfScope: Array.isArray(existing.outOfScope) ? existing.outOfScope : [],
         notes: [
@@ -600,6 +585,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
         archivedAt: now,
         reason: change.reason,
         source: 'project-reintake',
+        ...(change.archiveCode ? { code: change.archiveCode } : {}),
       },
       notes: [
         ...notes,
@@ -616,7 +602,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
 
   if (change.kind === 'merge') {
     for (const mergedTaskId of change.mergedTaskIds) {
-      applyChange(tasks, { kind: 'archive', taskId: mergedTaskId, reason: `Superseded by ${change.survivorTaskId}. ${change.reason}` }, now)
+      applyChange(tasks, { kind: 'archive', taskId: mergedTaskId, reason: `Superseded by ${change.survivorTaskId}. ${change.reason}` }, now, shippedReleaseIdsByTask)
     }
   }
 }
@@ -639,6 +625,36 @@ function clearStaleReintakeDerivedFields(task: Record<string, unknown>): void {
   ]) {
     delete task[key]
   }
+}
+
+function withHistoricalReleaseMembership<T extends { releaseIds?: string[] }>(
+  task: T,
+  shippedReleaseIds: readonly string[] | undefined,
+): T {
+  if (!shippedReleaseIds?.length) return task
+  return {
+    ...task,
+    releaseIds: unique([...(task.releaseIds ?? []), ...shippedReleaseIds]),
+  }
+}
+
+function shippedReleaseMembership(
+  releases: Array<Record<string, unknown>> | undefined,
+): ReadonlyMap<string, readonly string[]> {
+  const result = new Map<string, string[]>()
+  for (const release of releases ?? []) {
+    if (release.state !== 'shipped') continue
+    const memberIds = [
+      ...arrayStringField(release.nodeIds).map(nodeId => nodeId.replace(/^work:/, '')),
+      ...arrayStringField(release.deferredNodeIds).map(nodeId => nodeId.replace(/^work:/, '')),
+    ]
+    for (const taskId of memberIds) {
+      const existing = result.get(taskId) ?? []
+      if (!existing.includes(String(release.id))) existing.push(String(release.id))
+      result.set(taskId, existing)
+    }
+  }
+  return result
 }
 
 function detachTaskFromLiveGraph(tasks: Array<Record<string, unknown>>, taskId: string): void {
@@ -688,7 +704,13 @@ function reintakeDraftPath(memoryDir: string): string {
 }
 
 function readQueueFile(queuePath: string): {
-  queue: { version: number; lastUpdated: string; tasks: Array<Record<string, unknown>> }
+  queue: {
+    version: number
+    lastUpdated: string
+    tasks: Array<Record<string, unknown>>
+    releases?: Array<Record<string, unknown>>
+    selectedReleaseId?: string
+  }
   expectedQueueRevision: number | null
 } {
   const result = readProjectTaskQueueForMutationSync(queuePath)
@@ -699,12 +721,20 @@ function readQueueFile(queuePath: string): {
       expectedQueueRevision: result.expectedQueueRevision,
     }
   }
-  const record = parsed as { version?: number; lastUpdated?: string; tasks?: Array<Record<string, unknown>> }
+  const record = parsed as {
+    version?: number
+    lastUpdated?: string
+    tasks?: Array<Record<string, unknown>>
+    releases?: Array<Record<string, unknown>>
+    selectedReleaseId?: string
+  }
   return {
     queue: {
       version: record.version ?? 1,
       lastUpdated: record.lastUpdated ?? new Date().toISOString(),
       tasks: record.tasks ?? [],
+      ...(record.releases ? { releases: record.releases } : {}),
+      ...(record.selectedReleaseId ? { selectedReleaseId: record.selectedReleaseId } : {}),
     },
     expectedQueueRevision: result.expectedQueueRevision,
   }
@@ -727,13 +757,22 @@ function graphTaskChange(
   const reframe = reconciliations.find(change =>
     'existingTaskId' in change && change.existingTaskId === task.id,
   ) as { existingTaskId?: string; reason?: string } | undefined
-  const draft = evidenceTaskToDraft(task, selectedRelease, sources, projectPath, now)
+  const existing = existingTasks.find(candidate => stringField(candidate, 'id') === task.id)
+  const effectiveTask: EvidenceTask = {
+    ...task,
+    ...(!task.semanticKind && stringField(existing ?? {}, 'semanticKind') ? {
+      semanticKind: stringField(existing ?? {}, 'semanticKind') as EvidenceTask['semanticKind'],
+    } : {}),
+    ...(!task.parentAcceptanceCriterionIds?.length && arrayStringField(existing?.parentAcceptanceCriterionIds).length > 0
+      ? { parentAcceptanceCriterionIds: arrayStringField(existing?.parentAcceptanceCriterionIds) }
+      : {}),
+  }
+  const draft = evidenceTaskToDraft(effectiveTask, selectedRelease, sources, projectPath, now)
   const after = importedContractWorkIsStructurallyIncomplete(draft as unknown as Record<string, unknown>)
     ? structurallyIncompleteImportRepairDraft(draft as unknown as Record<string, unknown>, selectedRelease, projectPath, now)
     : draft
 
   if (reframe) {
-    const existing = existingTasks.find(candidate => stringField(candidate, 'id') === task.id)
     return {
       kind: 'reframe',
       taskId: task.id,
@@ -793,12 +832,19 @@ function repairStructurallyIncompleteImportedContractWork(
 }
 
 function isResolvedContractRecoveryArtifact(task: Record<string, unknown>): boolean {
-  const text = [
-    stringField(task, 'title'),
-    stringField(task, 'description'),
-    stringField(task, 'spec'),
-  ].filter(Boolean).join('\n')
-  return /~~.+?~~/.test(text) && /\b(done|resolved|complete|completed|shipped|recovered)\b/i.test(text)
+  // Imported prose is evidence for a repair, never a completion signal. A
+  // task can leave this repair path only through the same typed completion
+  // records used by the rest of the runtime.
+  const doneSummary = task.doneSummaryBundle
+  if (doneSummary && typeof doneSummary === 'object' && !Array.isArray(doneSummary)) {
+    const record = doneSummary as Record<string, unknown>
+    if (record.status === 'done' && typeof record.completedAt === 'string' && record.completedAt.trim()) return true
+  }
+  const mergeRecord = task.mergeRecord
+  if (mergeRecord && typeof mergeRecord === 'object' && !Array.isArray(mergeRecord)) {
+    return (mergeRecord as Record<string, unknown>).result === 'merged'
+  }
+  return false
 }
 
 function structurallyIncompleteImportRepairDraft(
@@ -822,6 +868,15 @@ function structurallyIncompleteImportRepairDraft(
       `Original imported title: ${originalTitle}`,
       'Guildhall imported this as executable contract/type work, but the saved task does not name the concrete contract or type surfaces it owns.',
     ].join('\n\n'),
+    ...(stringField(task, 'sourceIdentity') ? { sourceIdentity: stringField(task, 'sourceIdentity') } : {}),
+    ...(stringField(task, 'deliverableName') ? { deliverableName: stringField(task, 'deliverableName') } : {}),
+    ...(stringField(task, 'producedArtifact') ? { producedArtifact: stringField(task, 'producedArtifact') } : {}),
+    ...(stringField(task, 'workShape') ? { workShape: stringField(task, 'workShape') as Task['workShape'] } : {}),
+    ...(stringField(task, 'targetArea') ? { targetArea: stringField(task, 'targetArea') } : {}),
+    ...(arrayStringField(task.buildsOn).length > 0 ? { buildsOn: arrayStringField(task.buildsOn) } : {}),
+    ...(arrayStringField(task.consumerSurfaces).length > 0 ? { consumerSurfaces: arrayStringField(task.consumerSurfaces) } : {}),
+    ...(stringField(task, 'semanticKind') ? { semanticKind: stringField(task, 'semanticKind') } : {}),
+    ...(arrayStringField(task.contractNames).length > 0 ? { contractNames: arrayStringField(task.contractNames) } : {}),
     domain: stringField(task, 'domain') ?? 'planning',
     ...(projectPath ? { projectPath } : {}),
     status: selectedRelease && !inSelectedRelease ? 'shelved' : 'import_draft',
@@ -870,18 +925,29 @@ function evidenceTaskToDraft(
   const normalizedReferences = projectPath
     ? references.map(reference => path.isAbsolute(reference) ? reference : path.resolve(projectPath, reference))
     : references
-  const contractNames = unique(references
-    .map(reference => sources.find(source => source.path === reference)?.content)
-    .filter((content): content is string => Boolean(content))
-    .flatMap(content => extractNeededContractNames(content, task.title)))
+  const contractNames = unique([...(task.contractNames ?? [])])
   const hasConcreteSourceEvidence = (
     contractNames.length > 0 ||
     task.proofPaths.some(path => path.source === 'documented') ||
-    reintakePrototypeTaskKind(task.title) !== null ||
+    reintakePrototypeTaskKind(task) !== null ||
     sourceEvidenceSupportsBlueprint(sources, references) ||
     task.sourceRefs.some(ref => /`[^`\n]{2,80}`/.test(ref.snippet)) ||
-    /\breviewer?\b|\breview\b/i.test(task.title)
+    task.semanticKind === 'reviewer_lane'
   )
+  const contractNeedsRecovery = contractShapedImportHasNoConcreteContracts({
+    semanticKind: task.semanticKind,
+    contractNames,
+    hasAlternativeStructuralEvidence: false,
+  })
+  const contractRepairReadiness = contractNeedsRecovery
+    ? importedContractStructuralRepairReadiness({
+      title: task.title,
+      description: evidenceTaskDescription(task),
+      references,
+      semanticKind: task.semanticKind,
+      spec: evidenceTaskSpec({ task, references, acceptanceCriteria: [], sources, contractNames }),
+    }, now)
+    : undefined
   const importedBlueprint = projectPath && hasConcreteSourceEvidence
     ? buildImportedBlueprintSeed(
       evidenceTaskToMaterializedImportTask(task, normalizedReferences, hasConcreteSourceEvidence),
@@ -891,14 +957,14 @@ function evidenceTaskToDraft(
     )
     : null
   const sourceShapedCriteria = reintakeAcceptanceCriteria(task, contractNames)
-  const acceptanceCriteriaSource = reintakePrototypeTaskKind(task.title)
+  const acceptanceCriteriaSource = reintakePrototypeTaskKind(task)
     ? sourceShapedCriteria
     : importedBlueprint?.acceptanceCriteria ?? sourceShapedCriteria
   const acceptanceCriteria = AcceptanceCriteria.array().parse(acceptanceCriteriaSource.map(criterion => ({
     ...criterion,
     id: criterion.id,
     description: criterion.description,
-    verifiedBy: criterion.verifiedBy ?? (criterion.id.includes('automated') || criterion.id.includes('regression') ? 'automated' : 'review'),
+    verifiedBy: criterion.verifiedBy ?? 'review',
     source: criterion.source ?? 'inferred',
     met: false,
   })))
@@ -916,10 +982,22 @@ function evidenceTaskToDraft(
     id: task.id,
     title: task.title,
     description: evidenceTaskDescription(task),
+    ...(task.sourceIdentity ? { sourceIdentity: task.sourceIdentity } : {}),
+    ...(task.deliverableName ? { deliverableName: task.deliverableName } : {}),
+    ...(task.producedArtifact ? { producedArtifact: task.producedArtifact } : {}),
+    ...(task.workShape ? { workShape: task.workShape } : {}),
+    ...(task.targetArea ? { targetArea: task.targetArea } : {}),
+    ...(task.buildsOn?.length ? { buildsOn: [...task.buildsOn] } : {}),
+    ...(task.consumerSurface ? { consumerSurfaces: [task.consumerSurface] } : {}),
     domain: task.targetArea,
     ...(projectPath ? { projectPath } : {}),
     status: later ? 'shelved' : reviewableBlueprint ? 'spec_review' : 'import_draft',
     priority: evidenceTaskPriority(task),
+    ...(task.semanticKind ? { semanticKind: task.semanticKind } : {}),
+    ...(task.contractNames?.length ? { contractNames: [...task.contractNames] } : {}),
+    ...(task.parentAcceptanceCriterionIds?.length
+      ? { parentAcceptanceCriterionIds: [...task.parentAcceptanceCriterionIds] }
+      : {}),
     dependsOn: task.dependsOn,
     acceptanceCriteria,
     references,
@@ -927,12 +1005,20 @@ function evidenceTaskToDraft(
     ...(importedBlueprint?.sourceClaims?.length ? { sourceClaims: importedBlueprint.sourceClaims } : {}),
     ...(task.stageAlignment ? { stageAlignment: task.stageAlignment } : {}),
     spec: importedBlueprint?.spec ?? evidenceTaskSpec({ task, references, acceptanceCriteria, sources, contractNames }),
+    ...(importedBlueprint?.structuredSpec ? { structuredSpec: importedBlueprint.structuredSpec } : {}),
     ...(reviewableBlueprint ? { productBrief: reintakeOwnedProductBrief(importedBlueprint?.productBrief) ?? reintakeProductBrief(task, contractNames) } : {}),
     proofPaths: (reviewableBlueprint
       ? (importedBlueprint?.proofPaths ?? task.proofPaths)
       : []) as unknown as Task['proofPaths'],
     ...(importedBlueprint?.workUnitAnalysis ? { workUnitAnalysis: importedBlueprint.workUnitAnalysis } : {}),
     ...(importedBlueprint?.taskReadiness ? { taskReadiness: importedBlueprint.taskReadiness } : {}),
+    ...(contractRepairReadiness ? {
+      taskKind: contractRepairReadiness.taskKind,
+      taskReadiness: contractRepairReadiness,
+      definitionOfDone: contractRepairReadiness.definitionOfDone,
+      blockerPlans: contractRepairReadiness.blockerPlans,
+      contextBudget: contractRepairReadiness.contextBudget,
+    } : {}),
     ...(importedBlueprint?.taskKind ? { taskKind: importedBlueprint.taskKind } : {}),
     ...(importedBlueprint?.definitionOfDone ? { definitionOfDone: importedBlueprint.definitionOfDone } : {}),
     ...(importedBlueprint?.blockerPlans ? { blockerPlans: importedBlueprint.blockerPlans } : {}),
@@ -978,14 +1064,15 @@ function hasConcreteReintakeBlueprint(blueprint: ReturnType<typeof buildImported
   const specificCriteria = criteria.some(criterion => !genericCriteria.has(criterion.id))
   if (specificCriteria) return true
 
-  const specificUnit = blueprint.workUnitAnalysis?.units.some(unit =>
-    !/define the operating boundary|build the bounded behavior/i.test(unit.title),
-  )
-  return specificUnit === true
+  // A work-unit title is presentation prose. It may be translated, rewritten,
+  // or omitted by a provider without changing whether the blueprint is
+  // concrete. Concrete proof/criteria/contract metadata above is the only
+  // authority for this boundary.
+  return false
 }
 
 function releaseIdsForEvidenceTask(task: Pick<EvidenceTask, 'title' | 'stageAlignment'>, selectedRelease: SelectedRelease | null): string[] | undefined {
-  return releaseIdsForStageAlignment(task.stageAlignment, selectedRelease, task.title)
+  return releaseIdsForStageAlignment(task.stageAlignment, selectedRelease)
 }
 
 function reintakeOwnedProductBrief(productBrief: Task['productBrief'] | undefined): Task['productBrief'] | undefined {
@@ -999,28 +1086,8 @@ function reintakeOwnedProductBrief(productBrief: Task['productBrief'] | undefine
 function evidenceReferencesForTask(task: EvidenceTask, sources: ProjectReintakeSource[]): string[] {
   return unique([
     ...task.sourceRefs.map(ref => ref.path),
-    ...inventorySiblingSpecRefsForTask(task, sources),
     ...supportingEvidenceRefsForTask(task, sources),
   ])
-}
-
-function inventorySiblingSpecRefsForTask(task: EvidenceTask, sources: ProjectReintakeSource[]): string[] {
-  const refs: string[] = []
-  for (const source of sources) {
-    if (!/(^|\/)docs\/harness\/remaining-spec-decomposition-inventory\.md$/i.test(source.path.replaceAll('\\', '/'))) continue
-    for (const section of splitMarkdownSectionsForReintake(source.content)) {
-      if (!section.body.includes(task.title)) continue
-      const fileNames = [
-        ...[section.heading, section.body].flatMap(value =>
-          [...value.matchAll(/`([^`\n]+\.md)`/g)].map(match => match[1]?.trim()).filter((name): name is string => Boolean(name)),
-        ),
-      ]
-      for (const fileName of fileNames) {
-        refs.push(`docs/specs/${fileName}`)
-      }
-    }
-  }
-  return refs
 }
 
 function evidenceTaskToMaterializedImportTask(
@@ -1043,6 +1110,11 @@ function evidenceTaskToMaterializedImportTask(
     domain: task.targetArea,
     scope: 'current',
     priority: evidenceTaskPriority(task),
+    ...(task.semanticKind ? { semanticKind: task.semanticKind } : {}),
+    ...(task.contractNames?.length ? { contractNames: [...task.contractNames] } : {}),
+    ...(task.parentAcceptanceCriterionIds?.length
+      ? { parentAcceptanceCriterionIds: [...task.parentAcceptanceCriterionIds] }
+      : {}),
     references,
     acceptanceCriteria: task.acceptanceCriteria,
     dependsOn: task.dependsOn,
@@ -1055,7 +1127,7 @@ function reintakeAcceptanceCriteria(
   task: EvidenceTask,
   contractNames: string[],
 ): Array<{ id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' }> {
-  const prototypeKind = reintakePrototypeTaskKind(task.title)
+  const prototypeKind = reintakePrototypeTaskKind(task)
   if (prototypeKind === 'fixture') {
     return [
       {
@@ -1246,7 +1318,7 @@ function reintakeAcceptanceCriteria(
       },
     ]
   }
-  if (contractNames.length > 0 && /\b(schema|schemas|contract|contracts)\b/i.test(task.title)) {
+  if (contractNames.length > 0 && task.semanticKind === 'contract') {
     const fixtureContracts = contractNames.filter(name => /fixture|expected|signal/i.test(name))
     const runContracts = contractNames.filter(name => /prototype|run|evaluation|score|disagreement/i.test(name))
     return [
@@ -1280,18 +1352,12 @@ function reintakeAcceptanceCriteria(
 }
 
 function reintakePrototypeTaskKind(
-  title: string,
+  task: Pick<EvidenceTask, 'semanticKind'>,
 ): 'fixture' | 'runner' | 'evaluation' | 'debug_report' | 'schema_prune' | 'drafting_model' | 'author_intent' | 'chapter_draft' | 'world_state_review' | 'spatial_review' | null {
-  if (/^add the first tiny fiction fixture and human-authored expected records\.?$/i.test(title)) return 'fixture'
-  if (/\bno-ui runner\b/i.test(title) || /\bbuilds a packet from fixture records\b/i.test(title)) return 'runner'
-  if (/\bdeterministic evaluation output\b/i.test(title)) return 'evaluation'
-  if (/\bdebug report\b/i.test(title)) return 'debug_report'
-  if (/\bnarrow the mvp story-memory schema\b/i.test(title)) return 'schema_prune'
-  if (/\bdeepinfra\b/i.test(title) && /\bdrafting model\b/i.test(title)) return 'drafting_model'
-  if (/\bauthor-intent\b/i.test(title) && /\b(inputs?|voice|genre|audience|theme|review plan)\b/i.test(title)) return 'author_intent'
-  if (/\bcli-first story synopsis\b/i.test(title) || /\bone chapter draft\b/i.test(title)) return 'chapter_draft'
-  if (/\bworld-state\b/i.test(title) && /\bcontinuity review\b/i.test(title)) return 'world_state_review'
-  if (/\bspatial\/geographic\b/i.test(title) && /\bcontinuity review\b/i.test(title)) return 'spatial_review'
+  const kind = task.semanticKind
+  if (kind === 'fixture' || kind === 'runner' || kind === 'evaluation' || kind === 'debug_report' ||
+      kind === 'schema_prune' || kind === 'drafting_model' || kind === 'author_intent' ||
+      kind === 'chapter_draft' || kind === 'world_state_review' || kind === 'spatial_review') return kind
   return null
 }
 
@@ -1302,7 +1368,7 @@ function hasReviewableReintakeBlueprint(
   contractNames: string[],
   sourceEvidenceIsConcrete = false,
 ): boolean {
-  if (contractShapedImportHasNoConcreteContracts({ title: task.title, contractNames })) return false
+  if (contractShapedImportHasNoConcreteContracts({ semanticKind: task.semanticKind, contractNames })) return false
   return (
     references.length > 0 &&
     acceptanceCriteria.length > 0 &&
@@ -1315,7 +1381,7 @@ function hasReviewableReintakeBlueprint(
 }
 
 function reintakeProductBrief(task: EvidenceTask, contractNames: string[]): NonNullable<Task['productBrief']> {
-  const prototypeKind = reintakePrototypeTaskKind(task.title)
+  const prototypeKind = reintakePrototypeTaskKind(task)
   let successMetric = `${task.title} is specified from current source evidence with a clear proof boundary before implementation starts.`
   if (prototypeKind === 'fixture') {
     successMetric = `${task.title} creates a safe first fiction fixture plus expected records that the no-UI Stage 1 harness can load.`
@@ -1346,7 +1412,7 @@ function reintakeProductBrief(task: EvidenceTask, contractNames: string[]): NonN
 }
 
 function supportingEvidenceRefsForTask(task: EvidenceTask, sources: ProjectReintakeSource[]): string[] {
-  if (!/\b(schema|schemas|fixture|expected-record|prototype-run|evaluation)\b/i.test(task.title)) return []
+  if (task.semanticKind !== 'contract' && task.semanticKind !== 'fixture' && task.semanticKind !== 'evaluation') return []
   return sources
     .filter(source => /\bneeded contracts\s*:/i.test(source.content))
     .map(source => source.path)
@@ -1393,93 +1459,7 @@ function evidenceTaskSpec(input: {
 }
 
 function shouldNameContractsInReintakeSpec(task: EvidenceTask): boolean {
-  return /\b(schema|schemas|contract|contracts)\b/i.test(task.title)
-}
-
-function splitMarkdownSectionsForReintake(content: string): Array<{ heading: string; body: string }> {
-  const lines = content.split(/\r?\n/)
-  const sections: Array<{ heading: string; body: string }> = []
-  let currentHeading = '(intro)'
-  let currentBody: string[] = []
-  for (const line of lines) {
-    const heading = /^#{2,6}\s+(.+?)\s*$/.exec(line)
-    if (heading) {
-      sections.push({ heading: currentHeading, body: currentBody.join('\n').trim() })
-      currentHeading = heading[1]!.trim()
-      currentBody = []
-      continue
-    }
-    currentBody.push(line)
-  }
-  sections.push({ heading: currentHeading, body: currentBody.join('\n').trim() })
-  return sections
-}
-
-function normalizeContractMatchText(value: string): string {
-  return value
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .toLowerCase()
-    .replace(/[`*_~]/g, '')
-    .replace(/[^a-z0-9\s-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function contractMatchKeywords(title: string): string[] {
-  const generic = new Set([
-    'define',
-    'using',
-    'schema',
-    'schemas',
-    'contract',
-    'contracts',
-    'concrete',
-    'cited',
-    'docs',
-    'record',
-    'records',
-    'run',
-    'runs',
-  ])
-  const keywords = new Set<string>()
-  for (const word of normalizeContractMatchText(title).split(/\s+/)) {
-    if (!generic.has(word) && word.length >= 4) keywords.add(word)
-    for (const part of word.split('-')) {
-      if (!generic.has(part) && part.length >= 4) keywords.add(part)
-    }
-  }
-  return [...keywords]
-}
-
-function contractSectionMatchesTask(section: { heading: string; body: string }, taskTitle: string): boolean {
-  const contractNames = [...section.body.matchAll(/`([^`\n]{2,80})`/g)].map(match => match[1] ?? '').join(' ')
-  const haystack = normalizeContractMatchText(`${section.heading}\n${contractNames}`)
-  return contractMatchKeywords(taskTitle).some(keyword => haystack.includes(keyword))
-}
-
-function extractNeededContractNames(content: string, taskTitle: string): string[] {
-  const names: string[] = []
-  for (const section of splitMarkdownSectionsForReintake(content)) {
-    if (!/\bneeded contracts\s*:/i.test(section.body)) continue
-    if (!contractSectionMatchesTask(section, taskTitle)) continue
-    const lines = section.body.split(/\r?\n/)
-    let collecting = false
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (/^needed contracts\s*:/i.test(trimmed)) {
-        collecting = true
-        continue
-      }
-      if (collecting && /^[A-Z][A-Za-z ]+\s*:\s*$/.test(trimmed)) {
-        collecting = false
-      }
-      if (!collecting || !/^[-*]\s+/.test(trimmed)) continue
-      const match = /^[-*]\s+`([^`\n]{2,80})`/.exec(trimmed)
-      const name = match?.[1]?.trim()
-      if (name && /^[A-Za-z][A-Za-z0-9_-]+$/.test(name)) names.push(name)
-    }
-  }
-  return names
+  return task.semanticKind === 'contract'
 }
 
 type SelectedRelease = {
@@ -1490,19 +1470,16 @@ type SelectedRelease = {
   scopeDeliverables: string[]
   scopeSourcePath?: string
   proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
+  supersedesReleaseId?: string
 }
 
-function releaseProofStyleFromSource(label: string, content: string): SelectedRelease['proofStyle'] {
-  const text = `${label}\n${content}`
-  const explicit = /\bproof\s*style\s*[:=-]\s*(script[_ -]?only|manual|mixed|unspecified)\b/i.exec(text)?.[1]?.toLowerCase()
+function releaseProofStyleFromSource(content: string): SelectedRelease['proofStyle'] {
+  const explicit = /\bproof\s*style\s*[:=-]\s*(script[_ -]?only|manual|mixed|unspecified)\b/i.exec(content)?.[1]?.toLowerCase()
   if (explicit) {
     if (/script/.test(explicit)) return 'script_only'
     if (explicit === 'manual') return 'manual'
     if (explicit === 'mixed') return 'mixed'
     return 'unspecified'
-  }
-  if (/\b(?:headless|script[_ -]?only|cli[_ -]?first|command[- ]line|no[- ]ui)\b/i.test(text)) {
-    return 'script_only'
   }
   return undefined
 }
@@ -1516,7 +1493,7 @@ function detectSelectedRelease(sources: ProjectReintakeSource[]): SelectedReleas
     const stagePrefix = `Stage ${currentStageNumber}`
     const labelFromCurrent = current[3]?.trim() ? `${stagePrefix}: ${current[3].trim()}` : null
     const label = labelFromCurrent ?? matchingStageHeading(source.content, currentStageNumber) ?? stagePrefix
-    const proofStyle = releaseProofStyleFromSource(label, source.content)
+    const proofStyle = releaseProofStyleFromSource(source.content)
     candidates.push({
       id: slugify(label),
       label,
@@ -1542,7 +1519,7 @@ function firstReleasePlanStage(source: ProjectReintakeSource): SelectedRelease |
   const match = /^##\s+(Stage\s+(\d+)\s*:\s*.+?)\s*$/im.exec(source.content)
   if (!match?.[1] || !match[2]) return null
   const label = match[1].trim()
-  const proofStyle = releaseProofStyleFromSource(label, source.content)
+  const proofStyle = releaseProofStyleFromSource(source.content)
   return {
     id: slugify(label),
     label,
@@ -1559,14 +1536,14 @@ function dedupeTasksCoveredBySelectedReleaseScope(
   selectedRelease: SelectedRelease | null,
 ): ReturnType<typeof planEvidenceWorkGraph> {
   if (!selectedRelease?.scopeSourcePath || selectedRelease.scopeDeliverables.length === 0) return graphPlan
-  const canonicalTitles = graphPlan.tasks
+  const canonicalDeliverables = new Set(graphPlan.tasks
     .filter(task => task.sourceRefs.some(ref => ref.path === selectedRelease.scopeSourcePath))
-    .map(task => task.title)
-  if (canonicalTitles.length === 0) return graphPlan
+    .map(task => normalizeDeliverableIdentity(task.deliverableName)))
+  if (canonicalDeliverables.size === 0) return graphPlan
 
   const suppressedIds = new Set(graphPlan.tasks
     .filter(task => !task.sourceRefs.some(ref => ref.path === selectedRelease.scopeSourcePath))
-    .filter(task => canonicalTitles.some(title => releaseScopeTitleMatch(task.title, title)))
+    .filter(task => canonicalDeliverables.has(normalizeDeliverableIdentity(task.deliverableName)))
     .map(task => task.id))
   if (suppressedIds.size === 0) return graphPlan
   return {
@@ -1618,7 +1595,6 @@ function matchingStageHeading(content: string, selectedStageNumber: number): str
 }
 
 function taskIsAfterSelectedRelease(task: EvidenceTask, selectedRelease: SelectedRelease): boolean {
-  if (selectedReleaseIncludesTitle(selectedRelease, task.title)) return false
   const alignedStage = stageNumber(task.stageAlignment)
   return alignedStage !== null && alignedStage > selectedRelease.stageNumber
 }
@@ -1636,13 +1612,13 @@ function releaseDraftsFor(
 ): ProjectReintakeReleaseDraft[] {
   const nodeIds: string[] = []
   const deferredNodeIds: string[] = []
+  const sourceReleaseIds = new Set([selectedRelease.id, selectedRelease.supersedesReleaseId].filter((id): id is string => Boolean(id)))
   for (const task of existingTasks) {
     const id = stringField(task, 'id')
     if (!id || stringField(task, 'status') === 'archived') continue
+    if (isPlanningInstructionTask(task)) continue
     const releaseIds = Array.isArray(task.releaseIds) ? task.releaseIds : []
-    if (!releaseIds.includes(selectedRelease.id)) continue
-    if (selectedRelease.scopeDeliverables.length > 0 &&
-      !selectedReleaseIncludesTitle(selectedRelease, stringField(task, 'title') ?? '')) continue
+    if (!releaseIds.some(releaseId => sourceReleaseIds.has(releaseId))) continue
     const nodeId = `work:${id}`
     if (stringField(task, 'status') === 'shelved') {
       deferredNodeIds.push(nodeId)
@@ -1654,7 +1630,6 @@ function releaseDraftsFor(
     const task = change.kind === 'create' ? change.task : change.kind === 'reframe' ? change.after : null
     if (!task) continue
     if (!task.releaseIds?.includes(selectedRelease.id)) continue
-    if (selectedRelease.scopeDeliverables.length > 0 && !selectedReleaseIncludesTitle(selectedRelease, task.title)) continue
     const nodeId = `work:${task.id}`
     if (task.status === 'shelved') {
       deferredNodeIds.push(nodeId)
@@ -1662,7 +1637,6 @@ function releaseDraftsFor(
       nodeIds.push(nodeId)
     }
   }
-  if (nodeIds.length === 0 && deferredNodeIds.length === 0) return []
   return [{
     id: selectedRelease.id,
     label: selectedRelease.label,
@@ -1672,11 +1646,84 @@ function releaseDraftsFor(
     nodeIds: unique(nodeIds),
     deferredNodeIds: unique(deferredNodeIds),
     ...(selectedRelease.proofStyle ? { proofStyle: selectedRelease.proofStyle } : {}),
+    ...(selectedRelease.supersedesReleaseId ? { supersedesReleaseId: selectedRelease.supersedesReleaseId } : {}),
   }]
 }
 
+function selectReintakeRelease(
+  selectedRelease: SelectedRelease | null,
+  input: ProjectReintakeInput,
+): SelectedRelease | null {
+  if (!selectedRelease || !input.releases?.length) return selectedRelease
+  const existing = input.releases.find(release => release.id === selectedRelease.id)
+  const reconciled = input.releases.find(release =>
+    release.supersedesReleaseId === selectedRelease.id &&
+    release.state !== 'shipped' &&
+    release.state !== 'deferred',
+  )
+  if (reconciled) {
+    return {
+      ...selectedRelease,
+      id: reconciled.id,
+      label: reconciled.label,
+      supersedesReleaseId: reconciled.supersedesReleaseId,
+    }
+  }
+
+  const staleShippedRelease = existing?.state === 'shipped' && input.tasks.some(task =>
+    arrayStringField(task.releaseIds).includes(selectedRelease.id) && !isTerminalTask(task),
+  )
+  if (!staleShippedRelease) return selectedRelease
+
+  const revisionPattern = new RegExp(`^${escapeRegExp(selectedRelease.id)}-r(\\d+)$`)
+  const nextRevision = input.releases
+    .map(release => revisionPattern.exec(release.id)?.[1])
+    .map(value => value ? Number(value) : 0)
+    .reduce((max, value) => Math.max(max, value), 0) + 1
+  const id = `${selectedRelease.id}-r${nextRevision}`
+  return {
+    ...selectedRelease,
+    id,
+    label: `${selectedRelease.label} (reconciled plan)`,
+    supersedesReleaseId: selectedRelease.id,
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function archivePlanningInstructionTasks(
+  tasks: Array<Record<string, unknown>>,
+  usedTaskIds: Set<string>,
+): Array<Extract<ReintakeChange, { kind: 'archive' }>> {
+  return tasks
+    .filter(task => {
+      const id = stringField(task, 'id')
+      return Boolean(id) && !usedTaskIds.has(id!) && isPlanningInstructionTask(task) && !isTerminalTask(task)
+    })
+    .map(task => ({
+      kind: 'archive' as const,
+      taskId: stringField(task, 'id')!,
+      reason: 'This is a coordinator instruction for repairing or re-intaking the plan, not executable product work. Retain it as history without allowing its prose to claim release scope.',
+    }))
+}
+
+/**
+ * Planning prompts are data about how Guildhall should shape work. They are
+ * not work themselves. Use several structural signals so a long instruction
+ * cannot become a deliverable just because it repeats deliverable names.
+ */
+function isPlanningInstructionTask(task: Record<string, unknown>): boolean {
+  // A long instruction can look exactly like executable work when a model
+  // rewrites it. Only the source adapter's explicit semantic kind may keep it
+  // out of the queue; title length and instruction vocabulary are display
+  // prose, not a durable classification contract.
+  return stringField(task, 'semanticKind') === 'planning_instruction'
+}
+
 function applyReleaseDrafts(
-  queue: { selectedReleaseId?: string; releases?: ProjectReintakeReleaseDraft[]; tasks: Array<Record<string, unknown>> },
+  queue: { selectedReleaseId?: string; releases?: Array<Record<string, unknown>>; tasks: Array<Record<string, unknown>> },
   draft: ProjectReintakeDraft,
 ): void {
   if (!draft.selectedReleaseId || !draft.releases?.length) return
@@ -1693,7 +1740,10 @@ function applyReleaseDrafts(
       if (!taskId) continue
       const releaseIds = arrayStringField(task.releaseIds)
       if (memberIds.has(taskId)) {
-        if (!releaseIds.includes(release.id)) task.releaseIds = [...releaseIds, release.id]
+        task.releaseIds = [
+          ...releaseIds,
+          ...(releaseIds.includes(release.id) ? [] : [release.id]),
+        ]
       } else if (releaseIds.includes(release.id)) {
         task.releaseIds = releaseIds.filter(releaseId => releaseId !== release.id)
       }
@@ -1708,24 +1758,24 @@ function applyReleaseDrafts(
 }
 
 function duplicateMergeChanges(tasks: Array<Record<string, unknown>>): ReintakeMergeChange[] {
-  const byTitle = new Map<string, Array<Record<string, unknown>>>()
+  const byIdentity = new Map<string, Array<Record<string, unknown>>>()
   for (const task of tasks) {
     const id = stringField(task, 'id')
-    const title = stringField(task, 'title')
     const status = stringField(task, 'status')
-    if (!id || !title || status !== 'blocked') continue
-    const key = normalize(title)
-    const bucket = byTitle.get(key) ?? []
+    if (!id || status !== 'blocked') continue
+    const identity = explicitTaskStructuralIdentity(task)
+    if (!identity) continue
+    const bucket = byIdentity.get(identity) ?? []
     bucket.push(task)
-    byTitle.set(key, bucket)
+    byIdentity.set(identity, bucket)
   }
 
   const changes: ReintakeMergeChange[] = []
-  for (const tasksWithTitle of byTitle.values()) {
-    if (tasksWithTitle.length < 2) continue
-    const survivor = stringField(tasksWithTitle[0] ?? {}, 'id')
+  for (const tasksWithIdentity of byIdentity.values()) {
+    if (tasksWithIdentity.length < 2) continue
+    const survivor = stringField(tasksWithIdentity[0] ?? {}, 'id')
     if (!survivor) continue
-    const merged = tasksWithTitle.slice(1).map(task => stringField(task, 'id')).filter((id): id is string => Boolean(id))
+    const merged = tasksWithIdentity.slice(1).map(task => stringField(task, 'id')).filter((id): id is string => Boolean(id))
     if (merged.length > 0) {
       changes.push({
         kind: 'merge',
@@ -1871,81 +1921,11 @@ function documentedProofPlanImproves(existing: Record<string, unknown>, after: R
   return refreshedCommands.some(command => !existingCommands.has(command))
 }
 
-function refreshSourceShapedPrototypeTasks(
-  tasks: Array<Record<string, unknown>>,
-  usedTaskIds: Set<string>,
-  selectedRelease: SelectedRelease | null,
-  projectPath: string | undefined,
-  now: string,
-): ReintakeChange[] {
-  const changes: ReintakeChange[] = []
-  for (const task of tasks) {
-    const id = stringField(task, 'id')
-    const title = stringField(task, 'title')
-    if (!id || !title || usedTaskIds.has(id)) continue
-    if (!isOpenPreImplementationTask(task)) continue
-    if (!reintakePrototypeTaskKind(title)) continue
-
-    const refreshedCriteria = AcceptanceCriteria.array().parse(reintakeAcceptanceCriteria({
-      id,
-      title,
-      description: stringField(task, 'description') ?? title,
-      targetArea: stringField(task, 'domain') ?? 'harness',
-      priority: stringField(task, 'priority') ?? 'normal',
-      dependsOn: arrayStringField(task.dependsOn),
-      acceptanceCriteria: [],
-      sourceRefs: [],
-      proofPaths: Array.isArray(task.proofPaths) ? task.proofPaths as EvidenceTask['proofPaths'] : [],
-    } as unknown as EvidenceTask, []))
-    const existingCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria as Task['acceptanceCriteria'] : []
-    if (sameCriteriaIds(existingCriteria, refreshedCriteria)) continue
-
-    const releaseIds = releaseIdsForStageAlignment(stringField(task, 'stageAlignment'), selectedRelease, title)
-      ?? arrayStringField(task.releaseIds)
-    changes.push({
-      kind: 'reframe',
-      taskId: id,
-      before: {
-        id,
-        title,
-        status: stringField(task, 'status') ?? 'spec_review',
-      },
-      after: {
-        id,
-        title,
-        description: stringField(task, 'description') ?? title,
-        domain: stringField(task, 'domain') ?? 'harness',
-        projectPath: stringField(task, 'projectPath') ?? projectPath,
-        status: (stringField(task, 'status') as ReintakeTaskDraft['status']) ?? 'spec_review',
-        priority: taskPriorityFromString(stringField(task, 'priority')),
-        dependsOn: arrayStringField(task.dependsOn),
-        acceptanceCriteria: refreshedCriteria,
-        references: arrayStringField(task.references),
-        releaseIds,
-        stageAlignment: selectedRelease?.label ?? stringField(task, 'stageAlignment'),
-        spec: stringField(task, 'spec'),
-        productBrief: task.productBrief as Task['productBrief'],
-        proofPaths: task.proofPaths as Task['proofPaths'],
-        workUnitAnalysis: task.workUnitAnalysis as Task['workUnitAnalysis'],
-        taskReadiness: task.taskReadiness as Task['taskReadiness'],
-        taskKind: task.taskKind as Task['taskKind'],
-        definitionOfDone: task.definitionOfDone as Task['definitionOfDone'],
-        blockerPlans: task.blockerPlans as Task['blockerPlans'],
-        contextBudget: task.contextBudget as Task['contextBudget'],
-      },
-      reason: 'Current source evidence now gives this open task more specific proof criteria.',
-    })
-  }
-  return changes
-}
-
 function releaseIdsForStageAlignment(
   stageAlignment: string | undefined,
   selectedRelease: SelectedRelease | null,
-  title?: string,
 ): string[] | undefined {
   if (!selectedRelease) return undefined
-  if (title && selectedReleaseIncludesTitle(selectedRelease, title)) return [selectedRelease.id]
   if (!stageAlignment?.trim()) return [selectedRelease.id]
   const alignedReleaseId = slugify(stageAlignment)
   if (alignedReleaseId === selectedRelease.id || normalize(stageAlignment) === normalize(selectedRelease.label)) {
@@ -1957,21 +1937,8 @@ function releaseIdsForStageAlignment(
   return undefined
 }
 
-function selectedReleaseIncludesTitle(selectedRelease: SelectedRelease, title: string): boolean {
-  return selectedRelease.scopeDeliverables.some(deliverable => releaseScopeTitleMatch(title, deliverable))
-}
-
-function releaseScopeTitleMatch(title: string, deliverable: string): boolean {
-  const ignored = new Set(['build', 'create', 'define', 'implement', 'recover', 'source', 'backed', 'contract', 'review', 'reviewer', 'lane', 'pipeline', 'loop', 'report', 'proof', 'task', 'input', 'and', 'the', 'for', 'into', 'from'])
-  const titleTokens = new Set(slugify(title).split('-').filter(token => token.length >= 4 && !ignored.has(token)))
-  const deliverableTokens = new Set(slugify(deliverable).split('-').filter(token => token.length >= 4 && !ignored.has(token)))
-  if (titleTokens.size === 0 || deliverableTokens.size === 0) return false
-  const overlap = [...titleTokens].filter(token => deliverableTokens.has(token)).length
-  // An explicit release table is a declared boundary, not a fuzzy keyword
-  // suggestion. Every meaningful word in the deliverable must be present in
-  // the task title so an old "author voice loop" card cannot silently claim
-  // the newer, more specific "author intent and voice input" deliverable.
-  return overlap === deliverableTokens.size
+function normalizeDeliverableIdentity(value: string | undefined): string {
+  return normalize(value ?? '').replace(/\s+/g, ' ').trim()
 }
 
 function repairConflictingSelectedReleaseMemberships(
@@ -2029,7 +1996,7 @@ function restoreSelectedReleaseImportsArchivedByReintake(
         ? task.archivedEvidence as Record<string, unknown>
         : null
       return archivedEvidence?.source === 'project-reintake' &&
-        /weak legacy spec|pre-implementation/i.test(stringField(archivedEvidence, 'reason') ?? '')
+        archivedEvidence?.code === 'unsupported_weak_preimplementation'
     })
     .map(task => {
       const id = stringField(task, 'id') ?? ''
@@ -2071,6 +2038,13 @@ function reintakeDraftFromExistingTask(
     id: stringField(task, 'id') ?? slugify(title),
     title,
     description: stringField(task, 'description') ?? title,
+    ...(stringField(task, 'sourceIdentity') ? { sourceIdentity: stringField(task, 'sourceIdentity') } : {}),
+    ...(stringField(task, 'deliverableName') ? { deliverableName: stringField(task, 'deliverableName') } : {}),
+    ...(stringField(task, 'producedArtifact') ? { producedArtifact: stringField(task, 'producedArtifact') } : {}),
+    ...(stringField(task, 'workShape') ? { workShape: stringField(task, 'workShape') as Task['workShape'] } : {}),
+    ...(stringField(task, 'targetArea') ? { targetArea: stringField(task, 'targetArea') } : {}),
+    ...(arrayStringField(task.buildsOn).length > 0 ? { buildsOn: arrayStringField(task.buildsOn) } : {}),
+    ...(arrayStringField(task.consumerSurfaces).length > 0 ? { consumerSurfaces: arrayStringField(task.consumerSurfaces) } : {}),
     domain: stringField(task, 'domain') ?? 'planning',
     ...(overrides.projectPath ?? stringField(task, 'projectPath') ? { projectPath: overrides.projectPath ?? stringField(task, 'projectPath') } : {}),
     status: overrides.status ?? reintakeDraftStatus(stringField(task, 'status')) ?? 'import_draft',
@@ -2079,18 +2053,14 @@ function reintakeDraftFromExistingTask(
     acceptanceCriteria: Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria as Task['acceptanceCriteria'] : [],
     references: arrayStringField(task.references),
     ...(Array.isArray(task.sourceClaims) ? { sourceClaims: task.sourceClaims as Task['sourceClaims'] } : {}),
+    ...(stringField(task, 'semanticKind') ? { semanticKind: stringField(task, 'semanticKind') } : {}),
+    ...(arrayStringField(task.contractNames).length > 0 ? { contractNames: arrayStringField(task.contractNames) } : {}),
     ...(overrides.releaseIds?.length ? { releaseIds: overrides.releaseIds } : {}),
     ...(stringField(task, 'stageAlignment') ? { stageAlignment: stringField(task, 'stageAlignment') } : {}),
     ...(stringField(task, 'spec') ? { spec: stringField(task, 'spec') } : {}),
     ...(task.productBrief ? { productBrief: task.productBrief as Task['productBrief'] } : {}),
     ...(task.proofPaths ? { proofPaths: task.proofPaths as Task['proofPaths'] } : {}),
   }
-}
-
-function sameCriteriaIds(left: Task['acceptanceCriteria'], right: Task['acceptanceCriteria']): boolean {
-  const leftIds = left.map(criterion => criterion.id).join('\n')
-  const rightIds = right.map(criterion => criterion.id).join('\n')
-  return leftIds === rightIds
 }
 
 function taskPriorityFromString(value: string | undefined): ReintakeTaskDraft['priority'] {
@@ -2130,70 +2100,9 @@ function archiveUnsupportedWeakPreImplementationTasks(
     .map(task => ({
       kind: 'archive' as const,
       taskId: stringField(task, 'id') ?? '',
+      archiveCode: 'unsupported_weak_preimplementation',
       reason: 'Pre-implementation task is unsupported by current evidence and still uses a weak legacy spec shape.',
     }))
-}
-
-function archiveShadowedCurrentMilestoneDeliverableTasks(
-  tasks: Array<Record<string, unknown>>,
-  usedTaskIds: Set<string>,
-  sources: ProjectReintakeSource[],
-): ReintakeChange[] {
-  const shadowedImports = detectShadowedCurrentMilestoneDeliverables(sources)
-  if (shadowedImports.length === 0) return []
-
-  return tasks
-    .filter(task => {
-      const id = stringField(task, 'id')
-      if (!id || usedTaskIds.has(id)) return false
-      if (!isOpenPreImplementationTask(task)) return false
-      const title = stringField(task, 'title')
-      const description = stringField(task, 'description') ?? ''
-      if (!title) return false
-      return shadowedImports.some(candidate =>
-        candidate.title === title &&
-        description.includes(candidate.sourcePath) &&
-        description.includes(': - '),
-      )
-    })
-    .map(task => ({
-      kind: 'archive' as const,
-      taskId: stringField(task, 'id') ?? '',
-      reason: 'Roadmap deliverable bullet was previously imported as a task, but the current milestone now defines a starter-task sequence that supersedes it.',
-    }))
-}
-
-function singleEditChange(sources: ProjectReintakeSource[]): ReintakeChange | null {
-  const text = sources.map(source => source.content).join('\n')
-  if (!/should say/i.test(text) || !/SettingsTab\.svelte/i.test(text)) {
-    return null
-  }
-  return {
-    kind: 'create',
-    task: {
-      id: 'task-update-settings-footer-copy',
-      title: 'Update settings footer copy',
-      description: 'Change the settings footer copy in SettingsTab.svelte.',
-      domain: 'ui',
-      status: 'import_draft',
-      priority: 'normal',
-      dependsOn: [],
-      acceptanceCriteria: [{
-        id: 'copy-updated',
-        description: 'Settings footer uses the requested copy.',
-        verifiedBy: 'review',
-        source: 'documented',
-        met: false,
-      }],
-      proofPaths: [{ kind: 'review', expectedEvidence: [{
-        id: 'settings-tab-copy-changed',
-        kind: 'artifact',
-        description: 'SettingsTab.svelte copy changed.',
-        required: true,
-      }] }],
-    },
-    reason: 'Create one bounded copy-edit task; no source evidence indicates a graph split.',
-  }
 }
 
 function summarize(groups: ReintakeChangeGroup[]): ProjectReintakeDraft['summary'] {

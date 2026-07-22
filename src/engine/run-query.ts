@@ -44,7 +44,11 @@ import { HookEvent, type HookExecutor } from './hooks.js'
 import { PermissionChecker } from './permissions.js'
 import { recordToolCarryover } from './tool-carryover.js'
 import type { AnyTool, ToolExecutionContext, ToolRegistry } from './tools.js'
-import { parseAuthoritativeCommands, reconcileShellCommandWithAuthority } from '@guildhall/core'
+import {
+  extractStructuredSelfCritique,
+  parseAuthoritativeCommands,
+  reconcileShellCommandWithAuthority,
+} from '@guildhall/core'
 import {
   getProjectLocalHistoryDir,
   getProjectSystemStatePath,
@@ -479,6 +483,25 @@ function latestCheckpointNextAction(
   return String(toolMetadata?.['current_task_checkpoint_next_action'] ?? '').trim()
 }
 
+type CheckpointActionKind =
+  | 'continue_work'
+  | 'review_handoff'
+  | 'rerun_verification'
+  | 'escalate'
+  | 'inspect'
+  | 'mutate'
+
+function latestCheckpointActionKind(
+  toolMetadata: Record<string, unknown> | undefined,
+): CheckpointActionKind | null {
+  const value = toolMetadata?.['current_task_checkpoint_next_action_kind']
+  return value === 'continue_work' || value === 'review_handoff' ||
+    value === 'rerun_verification' || value === 'escalate' ||
+    value === 'inspect' || value === 'mutate'
+    ? value
+    : null
+}
+
 function currentTaskId(
   toolMetadata: Record<string, unknown> | undefined,
 ): string {
@@ -497,67 +520,19 @@ function hasStructuredSelfCritiqueInMetadata(
   return toolMetadata?.['current_task_has_review_proof_packet'] === true
 }
 
-function looksLikeStructuredSelfCritiqueContent(content: string): boolean {
-  const normalized = content.trim()
-  if (!/\*\*self-critique:\*\*/i.test(normalized) && !/^self-critique:/im.test(normalized)) {
-    return false
-  }
-  const hasAcceptanceCoverage =
-    /for each acceptance criterion:/i.test(normalized) ||
-    /(?:^|\n)\s*(?:\*\*)?acceptance criteria:?/i.test(normalized) ||
-    /(?:^|\n)\s*(?:-\s*)?(?:\[[^\]]+\]|ac[-\s]?\d+)(?:\s*\([^)\n]+\))?\s*:\s*(met|not met)\b/im.test(normalized)
-  const hasMinimumScope =
-    /(?:^|\n)\s*(?:\*\*)?-?\s*(?:minimum|minimal|mini)-scope check:\s*(?:\*\*)?/i.test(normalized)
-  const hasProofPacket =
-    /(?:^|\n)\s*(?:#{2,3}\s*)?(?:\*\*)?\s*review proof packet\s*:?\s*(?:\*\*)?/i.test(normalized)
-  const hasVerificationProof =
-    /\bverification(?: command| commands| result| results)?\b/i.test(normalized) &&
-    /\b(pass|passed|green|succeed|succeeded)\b/i.test(normalized)
-  const hasDiffScope =
-    /\b(?:changed files|files changed|diff scope|scope of changes)\b/i.test(normalized)
-  return hasAcceptanceCoverage && hasMinimumScope && hasProofPacket && hasVerificationProof && hasDiffScope
-}
-
-function parseJsonShapedNoteContent(value: string): string {
-  const trimmed = value.trim()
-  if (!trimmed.startsWith('{')) return trimmed
-  try {
-    const parsed = JSON.parse(trimmed) as unknown
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const content = (parsed as Record<string, unknown>)['content']
-      if (typeof content === 'string' && content.trim().length > 0) return content.trim()
-    }
-  } catch {
-    const match = /"content"\s*:\s*"([\s\S]*)"\s*}\s*$/.exec(trimmed)
-    if (match?.[1]) {
-      return match[1]
-        .replace(/\\"/g, '"')
-        .replace(/\\n/g, '\n')
-        .replace(/\\t/g, '\t')
-        .replace(/\\\\/g, '\\')
-        .trim()
-    }
-  }
-  return trimmed
-}
-
-function structuredSelfCritiqueContentFromUpdateTaskNote(note: unknown): string {
-  if (!note) return ''
-  if (typeof note === 'string') {
-    const content = parseJsonShapedNoteContent(note)
-    return looksLikeStructuredSelfCritiqueContent(content) ? content : ''
-  }
-  if (typeof note !== 'object' || Array.isArray(note)) return ''
-  const content = (note as Record<string, unknown>)['content']
-  if (typeof content !== 'string') return ''
-  const normalized = parseJsonShapedNoteContent(content)
-  return looksLikeStructuredSelfCritiqueContent(normalized) ? normalized : ''
+function structuredSelfCritiqueFromUpdateTaskNote(note: unknown): string {
+  if (!note || typeof note !== 'object' || Array.isArray(note)) return ''
+  const structured = extractStructuredSelfCritique({
+    content: '',
+    structured: (note as Record<string, unknown>).structured,
+  })
+  return structured ? JSON.stringify(structured) : ''
 }
 
 function structuredSelfCritiqueFromUpdateTaskInput(
   input: Record<string, unknown>,
 ): string {
-  return structuredSelfCritiqueContentFromUpdateTaskNote(input['note'])
+  return structuredSelfCritiqueFromUpdateTaskNote(input['note'])
 }
 
 function checkpointFilesTouched(
@@ -799,63 +774,6 @@ function ownedTaskStatusForAgent(agentId: string): string | null {
 function isLaneExitStatus(agentId: string, status: string): boolean {
   const ownedStatus = ownedTaskStatusForAgent(agentId)
   return ownedStatus !== null && status.trim() !== '' && status !== ownedStatus
-}
-
-function looksExploratoryCheckpointAction(text: string): boolean {
-  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim()
-  if (!normalized) return false
-  if (
-    [
-      /\bself-critique\b/,
-      /\bhandoff\b/,
-      /\bset\b.*\bstatus\b.*\breview\b/,
-      /\bmove .* to review\b/,
-      /\btransition .* to review\b/,
-      /\bstatus .* review\b/,
-      /\bpersist\b.*\bnote\b/,
-      /\bwrite or refresh\b.*\bself-critique\b/,
-    ].some((pattern) => pattern.test(normalized))
-  ) {
-    return false
-  }
-  return [
-    /\bsearch\b/,
-    /\binspect\b/,
-    /\breview\b/,
-    /\blook for\b/,
-    /\bscan\b/,
-    /\btrace\b/,
-    /\baudit\b/,
-    /\bidentify\b/,
-    /\bcheck for\b/,
-    /\bconfirm\b/,
-    /\bverify\b.*\bwhere\b/,
-  ].some((pattern) => pattern.test(normalized))
-}
-
-function looksLikeHandoffCheckpointAction(text: string): boolean {
-  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim()
-  if (!normalized) return false
-  if (
-    [
-      /\brerun the focused verification commands\b/,
-      /\brefresh focused verification\b/,
-      /\bfix whatever still fails\b/,
-      /\bkeep (?:the )?task in implementation\b/,
-      /\bfocused checks are green\b/,
-    ].some((pattern) => pattern.test(normalized))
-  ) {
-    return false
-  }
-  return [
-    /\bself-critique\b/,
-    /\bhandoff\b/,
-    /\bset\b.*\bstatus\b.*\breview\b/,
-    /\bmove .* to review\b/,
-    /\btransition .* to review\b/,
-    /\bstatus .* review\b/,
-    /\bpersist\b.*\bnote\b/,
-  ].some((pattern) => pattern.test(normalized))
 }
 
 function isCheckpointScopedReadOnlyToolCall(
@@ -1134,21 +1052,17 @@ function strictCheckpointFollowThroughNudge(input: {
 
 function strictCheckpointHandoffNudge(input: {
   checkpointNextAction: string
+  checkpointActionKind: CheckpointActionKind | null
   taskId: string
   hasStructuredSelfCritique: boolean
 }): string | null {
   if (!input.taskId.trim()) return null
-  const normalized = input.checkpointNextAction.toLowerCase().replace(/\s+/g, ' ').trim()
-  if (
-    /\bset\b.*\bstatus\b.*\breview\b/.test(normalized) ||
-    /\btransition\b.*\breview\b/.test(normalized) ||
-    /\bmove\b.*\breview\b/.test(normalized)
-  ) {
+  if (input.checkpointActionKind === 'review_handoff') {
     if (!input.hasStructuredSelfCritique) {
       return [
         `The latest checkpoint already told you what to do next: ${input.checkpointNextAction}.`,
         'Your very next response must be exactly one tool call and no prose.',
-        `Call update-task with { taskId: "${input.taskId}", status: "review", note: { agentId: "worker-agent", role: "self-critique", content: "**Self-critique:** ..." } } now.`,
+        `Call update-task with { taskId: "${input.taskId}", status: "review", note: { agentId: "worker-agent", role: "self-critique", content: "Your human-readable explanation.", structured: { acceptanceCriteria: [{ id: "<exact-criterion-id>", status: "met" }], changedFiles: ["<changed-file>"], verificationCommands: [{ command: "<exact-command>", status: "passed" }], proofEvidenceIds: [], handoff: { completed: ["<completed scope>"], knownGaps: [], nextFocus: "<next specialist focus>" } } } } now.`,
         'The note must cover each acceptance criterion and include the minimum-scope check before the review handoff.',
         'If the checkpoint is no longer valid, call raise-escalation instead.',
       ].join(' ')
@@ -1164,7 +1078,7 @@ function strictCheckpointHandoffNudge(input: {
   return [
     `The latest checkpoint already told you what to do next: ${input.checkpointNextAction}.`,
     'Your very next response must be exactly one tool call and no prose.',
-    `Call update-task with { taskId: "${input.taskId}", status: "in_progress", note: { agentId: "worker-agent", role: "self-critique", content: "**Self-critique:** ..." } } to persist the self-critique note first.`,
+    `Call update-task with { taskId: "${input.taskId}", status: "in_progress", note: { agentId: "worker-agent", role: "self-critique", content: "Your human-readable explanation.", structured: { acceptanceCriteria: [{ id: "<exact-criterion-id>", status: "met" }], changedFiles: ["<changed-file>"], verificationCommands: [{ command: "<exact-command>", status: "passed" }], proofEvidenceIds: [], handoff: { completed: ["<completed scope>"], knownGaps: [], nextFocus: "<next specialist focus>" } } } } to persist the self-critique note first.`,
     `After that note exists, you can transition task ${input.taskId} to review.`,
     'If the checkpoint is no longer valid, call raise-escalation instead.',
   ].join(' ')
@@ -1172,6 +1086,7 @@ function strictCheckpointHandoffNudge(input: {
 
 function strictCheckpointMutationNudge(input: {
   checkpointNextAction: string
+  checkpointActionKind: CheckpointActionKind | null
   checkpointTouched: readonly string[]
   checkpointSafeMutationSurface?: readonly string[]
   authoritativeVerificationCommands?: readonly string[]
@@ -1189,8 +1104,7 @@ function strictCheckpointMutationNudge(input: {
     new Set((input.authoritativeVerificationCommands ?? []).map((command) => command.trim()).filter(Boolean)),
   )
   const preferredVerificationCommand = input.preferredVerificationCommand?.trim() || null
-  const checkpointStillNeedsVerificationFirst =
-    /rerun the focused verification commands|refresh focused verification/i.test(input.checkpointNextAction)
+  const checkpointStillNeedsVerificationFirst = input.checkpointActionKind === 'rerun_verification'
   const verificationFirstDirective =
     authoritativeCommands.length > 0 && checkpointStillNeedsVerificationFirst
       ? [
@@ -1218,6 +1132,7 @@ function strictCheckpointMutationNudge(input: {
 
 function strictCheckpointShellNudge(input: {
   checkpointNextAction: string
+  checkpointActionKind: CheckpointActionKind | null
   authoritativeVerificationCommands: readonly string[]
   checkpointTouched: readonly string[]
   checkpointSafeMutationSurface?: readonly string[]
@@ -1229,6 +1144,7 @@ function strictCheckpointShellNudge(input: {
   if (authoritativeCommands.length === 0) return null
   const mutationNudge = strictCheckpointMutationNudge({
     checkpointNextAction: input.checkpointNextAction,
+    checkpointActionKind: input.checkpointActionKind,
     checkpointTouched: input.checkpointTouched,
     checkpointSafeMutationSurface: input.checkpointSafeMutationSurface,
     authoritativeVerificationCommands: authoritativeCommands,
@@ -1243,75 +1159,11 @@ function strictCheckpointShellNudge(input: {
   ].filter(Boolean).join(' ')
 }
 
-function looksLikeReviewReadyHandoff(text: string): boolean {
-  const lower = text.toLowerCase()
-  const hasReviewLanguage =
-    lower.includes('review') ||
-    lower.includes('handoff') ||
-    lower.includes('verified') ||
-    lower.includes('what’s done') ||
-    lower.includes("what's done")
-  const hasCompletionShape =
-    lower.includes('implemented') ||
-    lower.includes('done') ||
-    lower.includes('evidence') ||
-    lower.includes('checkpoint') ||
-    lower.includes('next turn')
-  return hasReviewLanguage && hasCompletionShape
-}
-
-function looksLikeFutureStepNarration(text: string): boolean {
-  const normalized = text
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!normalized) return false
-  const futureStepSignals = [
-    /\bi['’]ll\b/,
-    /\bi will\b/,
-    /\bi'm going to\b/,
-    /\bi am going to\b/,
-    /\bnext i['’]ll\b/,
-    /\bnext i will\b/,
-    /\bthen i['’]ll\b/,
-    /\bthen i will\b/,
-    /\bonce you (?:pick|answer|confirm)\b/,
-  ]
-  const planningActionSignals = [
-    /\bdraft\b/,
-    /\bwrite\b/,
-    /\bmove\b/,
-    /\blog\b/,
-    /\bfinish intake\b/,
-    /\bturn this into\b/,
-    /\bask\b/,
-    /\bupdate\b/,
-  ]
-  return (
-    futureStepSignals.some((pattern) => pattern.test(normalized)) &&
-    planningActionSignals.some((pattern) => pattern.test(normalized))
-  )
-}
-
-function looksLikeVerificationBackedCheckpointAction(text: string): boolean {
-  const normalized = text
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!normalized) return false
-  if (normalized.includes('recorded verification evidence')) return true
-  return (
-    normalized.includes('focused verification command') ||
-    normalized.includes('focused verification commands')
-  ) && normalized.includes('fix whatever still fails')
-}
-
 function advanceCheckpointAfterVerification(
   toolMetadata: Record<string, unknown> | undefined,
 ): void {
   if (!toolMetadata) return
-  const checkpointNextAction = latestCheckpointNextAction(toolMetadata)
-  if (!looksLikeVerificationBackedCheckpointAction(checkpointNextAction)) return
+  if (latestCheckpointActionKind(toolMetadata) !== 'rerun_verification') return
   const authoritative = parseAuthoritativeCommands(toolMetadata) ?? []
   if (authoritative.length > 0) {
     const passed = new Set(
@@ -1328,31 +1180,6 @@ function advanceCheckpointAfterVerification(
   }
   toolMetadata['current_task_checkpoint_next_action'] =
     'Inspect the checkpoint-touched files against the verification result, then fix whatever still fails before you write the structured self-critique.'
-}
-
-function reviewHandoffToolNudge(
-  assistantText: string,
-  toolMetadata: Record<string, unknown> | undefined,
-): string | null {
-  const evidence = reviewHandoffEvidence(toolMetadata)
-  if (!evidence?.changedOrVerified) return null
-  const taskId = evidence.taskId
-  if (taskId && looksLikeStructuredSelfCritiqueContent(assistantText)) {
-    return [
-      'You already wrote the structured self-critique in your last response.',
-      'Your very next response must be exactly one tool call and no prose.',
-      `Call update-task with { taskId: "${taskId}", status: "in_progress", note: { agentId: "worker-agent", role: "self-critique", content: "..." } } and persist that exact self-critique now.`,
-      'Do not write a checkpoint or transition to review until the note is durable in task state.',
-    ].join(' ')
-  }
-  if (!looksLikeReviewReadyHandoff(assistantText)) return null
-  return [
-    'You already have verified implementation evidence and are describing a review handoff.',
-    'Your very next response must be exactly one tool call and no prose.',
-    'Use update-task to append the note and move to review if the task is ready,',
-    'or use write-checkpoint / log-progress if you still need to formalize the handoff before review,',
-    'or raise-escalation if a real blocker still prevents honest handoff.',
-  ].join(' ')
 }
 
 function composeRepairAbortSignal(
@@ -1384,15 +1211,15 @@ export async function* runQuery(
   let noProgressReadOnlyGraceTurns = 0
   let repeatedReadOnlyRefusals = 0
   let repeatedRecoveryToolRefusals = 0
-  let repeatedSelfReportedFileMutationFailures = 0
   const initialCheckpointNextAction = latestCheckpointNextAction(context.toolMetadata)
+  const initialCheckpointActionKind = latestCheckpointActionKind(context.toolMetadata)
   const initialAuthoritativeVerificationCommands = context.toolMetadata
     ? (parseAuthoritativeCommands(context.toolMetadata) ?? [])
     : []
   let checkpointVerificationReadFollowThroughRemaining =
     initialCheckpointNextAction.length > 0 &&
     initialAuthoritativeVerificationCommands.length > 0 &&
-    looksLikeVerificationBackedCheckpointAction(initialCheckpointNextAction)
+    initialCheckpointActionKind === 'rerun_verification'
       ? 2
       : 0
   let checkpointVerificationReadFollowThroughArmed = false
@@ -1549,11 +1376,6 @@ export async function* runQuery(
         return
       }
       noProgressToolTurns = 0
-      const reviewReadyHandoffNudge = reviewHandoffToolNudge(assistantText, context.toolMetadata)
-      const planningOnlyNudge =
-        context.noToolTurnNudge && looksLikeFutureStepNarration(assistantText)
-          ? context.noToolTurnNudge
-          : null
       const missingLikelyTarget = missingLikelyTargetFile(context.toolMetadata)
       const inspectedLikelyTarget = inspectedLikelyTargetFile(context.toolMetadata)
       const likelyTargetFiles = likelyTargetFilesFromMetadata(context.toolMetadata)
@@ -1564,8 +1386,11 @@ export async function* runQuery(
         ? (parseAuthoritativeCommands(context.toolMetadata) ?? [])
         : []
       const preferredVerificationCommand = latestFailedVerificationCommand(context.toolMetadata)
-      const checkpointActionIsExploratory = looksExploratoryCheckpointAction(checkpointNextAction)
-      const checkpointActionIsHandoff = looksLikeHandoffCheckpointAction(checkpointNextAction)
+      const checkpointActionKind = latestCheckpointActionKind(context.toolMetadata)
+      const checkpointActionIsExploratory = checkpointActionKind === 'inspect'
+      const checkpointActionIsHandoff = checkpointActionKind === 'review_handoff'
+      const checkpointActionIsMutation = checkpointActionKind === 'mutate' ||
+        checkpointActionKind === 'continue_work' || checkpointActionKind === 'rerun_verification'
       const checkpointTaskId = currentTaskId(context.toolMetadata)
       const mutationOrEscalationNudge = strictLikelyTargetMutationGuardsEnabled(context.toolMetadata)
         ? strictMutationOrEscalationNudge({
@@ -1576,16 +1401,18 @@ export async function* runQuery(
         : null
       const checkpointSpecificNoToolNudge =
         currentAgentId(context.toolMetadata) === 'worker-agent' &&
-        checkpointNextAction.length > 0
+        checkpointActionKind !== null
           ? checkpointActionIsHandoff
             ? strictCheckpointHandoffNudge({
                 checkpointNextAction,
+                checkpointActionKind,
                 taskId: checkpointTaskId,
                 hasStructuredSelfCritique: hasStructuredSelfCritiqueInMetadata(context.toolMetadata),
               })
-            : !checkpointActionIsExploratory
+            : checkpointActionIsMutation
               ? strictCheckpointMutationNudge({
                   checkpointNextAction,
+                  checkpointActionKind,
                   checkpointTouched,
                   checkpointSafeMutationSurface: checkpointSafeSurface,
                   authoritativeVerificationCommands,
@@ -1594,8 +1421,6 @@ export async function* runQuery(
               : null
           : null
       const nudge =
-        reviewReadyHandoffNudge ??
-        planningOnlyNudge ??
         checkpointSpecificNoToolNudge ??
         ((mutationOrEscalationNudge && noToolTurnNudges > 0)
           ? mutationOrEscalationNudge
@@ -1606,11 +1431,7 @@ export async function* runQuery(
         yield {
           event: {
             type: 'status',
-            message: reviewReadyHandoffNudge
-              ? 'Assistant produced review-ready handoff prose without a task-state tool call; demanding one handoff tool call next.'
-              : planningOnlyNudge
-              ? 'Assistant only narrated future steps without a tool call; demanding a durable tool step next.'
-              : checkpointSpecificNoToolNudge
+            message: checkpointSpecificNoToolNudge
               ? 'Assistant finished without a checkpoint-directed tool call; demanding the exact next mutation, verification, or handoff step now.'
               : mutationOrEscalationNudge
               ? 'Assistant finished without a concrete mutation; demanding one mutation-or-escalation tool call next.'
@@ -1626,6 +1447,7 @@ export async function* runQuery(
             type: 'status',
             message:
               'Assistant kept returning no tool call after checkpoint-directed nudges; ending this turn so the coordinator can treat it as no progress.',
+            statusCode: 'no_progress',
           },
           usage: null,
         }
@@ -1686,6 +1508,7 @@ export async function* runQuery(
           event: {
             type: 'status',
             message: 'Assistant kept trying tools outside the active recovery playbook; ending the turn so the coordinator can treat this as recovery no-progress.',
+            statusCode: 'no_progress',
           },
           usage: null,
         }
@@ -1694,63 +1517,6 @@ export async function* runQuery(
       continue
     }
     repeatedRecoveryToolRefusals = 0
-    const selfReportedFileMutationFailure = fileMutationFailureSelfReport(assistantText)
-    const hasFileMutationToolCall = toolCalls.some((tc) => isFileMutationToolName(tc.name))
-    if (selfReportedFileMutationFailure && hasFileMutationToolCall) {
-      repeatedSelfReportedFileMutationFailures += 1
-      const refusalMessage = [
-        'You just said the previous file mutation was wrong, incomplete, truncated, or targeted at the wrong path.',
-        'Do not immediately try another file mutation.',
-        'First use read-file on the exact target path to ground the current file contents, or use write-checkpoint / raise-escalation if the path or contents are no longer safe.',
-      ].join(' ')
-      for (const tc of toolCalls) {
-        yield {
-          event: { type: 'tool_execution_started', tool_name: tc.name, tool_input: tc.input },
-          usage: null,
-        }
-        yield {
-          event: {
-            type: 'tool_execution_completed',
-            tool_name: tc.name,
-            output: refusalMessage,
-            is_error: true,
-          },
-          usage: null,
-        }
-      }
-      messages.push({
-        role: 'user',
-        content: toolCalls.map((tc) => ({
-          type: 'tool_result',
-          tool_use_id: tc.id,
-          content: refusalMessage,
-          is_error: true,
-        })),
-      })
-      yield {
-        event: {
-          type: 'status',
-          message:
-            'Assistant self-reported a failed file mutation and tried another mutation immediately; requiring a grounded read, checkpoint, or escalation first.',
-        },
-        usage: null,
-      }
-      if (repeatedSelfReportedFileMutationFailures >= 2) {
-        yield {
-          event: {
-            type: 'status',
-            message:
-              'Assistant kept retrying file mutations after self-reporting mutation failure; ending the turn so the orchestrator can treat the work as stalled instead of burning tokens.',
-          },
-          usage: null,
-        }
-        return
-      }
-      continue
-    }
-    if (!selfReportedFileMutationFailure) {
-      repeatedSelfReportedFileMutationFailures = 0
-    }
     const hadProgressToolCall =
       progressToolNames.size > 0 && toolCalls.some((tc) => progressToolNames.has(tc.name))
     if (hadProgressToolCall) {
@@ -1762,16 +1528,19 @@ export async function* runQuery(
     const missingLikelyTarget = missingLikelyTargetFile(context.toolMetadata)
     const likelyTargetFiles = likelyTargetFilesFromMetadata(context.toolMetadata)
     const checkpointNextAction = latestCheckpointNextAction(context.toolMetadata)
+    const checkpointActionKind = latestCheckpointActionKind(context.toolMetadata)
     const checkpointTouched = checkpointFilesTouched(context.toolMetadata)
-    const checkpointActionIsExploratory = looksExploratoryCheckpointAction(checkpointNextAction)
-    const checkpointActionIsHandoff = looksLikeHandoffCheckpointAction(checkpointNextAction)
+    const checkpointActionIsExploratory = checkpointActionKind === 'inspect'
+    const checkpointActionIsHandoff = checkpointActionKind === 'review_handoff'
+    const checkpointActionIsMutation = checkpointActionKind === 'mutate' ||
+      checkpointActionKind === 'continue_work' || checkpointActionKind === 'rerun_verification'
     const checkpointTaskId = currentTaskId(context.toolMetadata)
     const authoritativeVerificationCommands = context.toolMetadata
       ? (parseAuthoritativeCommands(context.toolMetadata) ?? [])
       : []
     const preferredVerificationCommand = latestFailedVerificationCommand(context.toolMetadata)
     const isWorkerCheckpointLane =
-      currentAgentId(context.toolMetadata) === 'worker-agent' && checkpointNextAction.length > 0
+      currentAgentId(context.toolMetadata) === 'worker-agent' && checkpointActionKind !== null
     const workerLikelyTargetSupportReadOnlyAllowed =
       currentAgentId(context.toolMetadata) === 'worker-agent' &&
       likelyTargetFiles.length > 0 &&
@@ -1793,7 +1562,7 @@ export async function* runQuery(
       checkpointVerificationReadFollowThroughRemaining > 0 &&
       (
         checkpointVerificationReadFollowThroughArmed ||
-        looksLikeVerificationBackedCheckpointAction(checkpointNextAction)
+        checkpointActionKind === 'rerun_verification'
       )
     const verificationReadFollowThroughIsPostVerification =
       checkpointVerificationReadFollowThroughActive &&
@@ -1824,7 +1593,7 @@ export async function* runQuery(
         ),
       )
     const verificationEvidenceLikelyTargetReadOnlyAllowed =
-      looksLikeVerificationBackedCheckpointAction(checkpointNextAction) &&
+      checkpointActionKind === 'rerun_verification' &&
       checkpointVerificationReadFollowThroughRemaining > 0 &&
       likelyTargetFiles.length > 0 &&
       checkpointTouched.length > 0 &&
@@ -1840,7 +1609,7 @@ export async function* runQuery(
         ),
       )
     const uninspectedVerificationLikelyTargetReadOnlyAllowed =
-      looksLikeVerificationBackedCheckpointAction(checkpointNextAction) &&
+      checkpointActionKind === 'rerun_verification' &&
       likelyTargetFiles.length > 1 &&
       uninspectedLikelyTargetReadAllowed({
         cwd: context.cwd,
@@ -1860,7 +1629,7 @@ export async function* runQuery(
       })
     const shouldRefusePostVerificationCheckpointBatch =
       isWorkerCheckpointLane &&
-      looksLikeVerificationBackedCheckpointAction(checkpointNextAction) &&
+      checkpointActionKind === 'rerun_verification' &&
       checkpointVerificationReadFollowThroughArmed &&
       checkpointVerificationReadFollowThroughRemaining > 0 &&
       toolCalls.length > 1
@@ -1940,6 +1709,7 @@ export async function* runQuery(
         shouldRefuseAfterCheckpointNextAction && !checkpointActionIsHandoff
           ? strictCheckpointMutationNudge({
               checkpointNextAction,
+              checkpointActionKind,
               checkpointTouched,
               checkpointSafeMutationSurface: checkpointSafeSurface,
               authoritativeVerificationCommands,
@@ -1959,6 +1729,7 @@ export async function* runQuery(
         : shouldRefuseNonAuthoritativeCheckpointShell
           ? (strictCheckpointShellNudge({
               checkpointNextAction,
+              checkpointActionKind,
               authoritativeVerificationCommands,
               checkpointTouched,
               checkpointSafeMutationSurface: checkpointSafeSurface,
@@ -2005,12 +1776,14 @@ export async function* runQuery(
           : shouldRefuseAfterCheckpointNextAction && checkpointActionIsHandoff
             ? strictCheckpointHandoffNudge({
                 checkpointNextAction,
+                checkpointActionKind,
                 taskId: checkpointTaskId,
                 hasStructuredSelfCritique: hasStructuredSelfCritiqueInMetadata(context.toolMetadata),
               })
             : shouldRefuseAfterCheckpointNextAction
               ? strictCheckpointMutationNudge({
                   checkpointNextAction,
+                  checkpointActionKind,
                   checkpointTouched,
                   authoritativeVerificationCommands,
                   preferredVerificationCommand,
@@ -2056,6 +1829,7 @@ export async function* runQuery(
           event: {
             type: 'status',
             message: endingMessage,
+            statusCode: 'no_progress',
           },
           usage: null,
         }
@@ -2079,7 +1853,7 @@ export async function* runQuery(
           )
         ) ||
         (
-          looksLikeVerificationBackedCheckpointAction(checkpointNextAction) &&
+          checkpointActionKind === 'rerun_verification' &&
           likelyTargetFiles.length > 0 &&
           checkpointTouched.length > 0 &&
           toolCalls.length > 0 &&
@@ -2186,6 +1960,7 @@ export async function* runQuery(
               type: 'status',
               message:
                 'The same tool call kept failing; ending this turn so Guildhall can recover the task.',
+              statusCode: 'no_progress',
             },
             usage: null,
           }
@@ -2270,6 +2045,7 @@ export async function* runQuery(
             type: 'status',
             message:
               'The same tool call kept failing; ending this turn so Guildhall can recover the task.',
+            statusCode: 'no_progress',
           },
           usage: null,
         }
@@ -2292,6 +2068,7 @@ export async function* runQuery(
             type: 'status',
             message:
               'Assistant only appended the exploring transcript after a durable-progress nudge; ending the turn so the orchestrator can treat intake as stalled.',
+            statusCode: 'no_progress',
           },
           usage: null,
         }
@@ -2301,25 +2078,26 @@ export async function* runQuery(
         continue
       }
       const checkpointNextAction = latestCheckpointNextAction(context.toolMetadata)
+      const checkpointActionKind = latestCheckpointActionKind(context.toolMetadata)
       const checkpointTouched = checkpointFilesTouched(context.toolMetadata)
       const checkpointSafeSurface = checkpointSafeMutationSurface(context.toolMetadata)
       const checkpointTaskId = currentTaskId(context.toolMetadata)
       const handoffCheckpointNudge =
         currentAgentId(context.toolMetadata) === 'worker-agent' &&
-        looksLikeHandoffCheckpointAction(checkpointNextAction)
+        checkpointActionKind === 'review_handoff'
           ? strictCheckpointHandoffNudge({
               checkpointNextAction,
+              checkpointActionKind,
               taskId: checkpointTaskId,
               hasStructuredSelfCritique: hasStructuredSelfCritiqueInMetadata(context.toolMetadata),
             })
           : null
       const mutationCheckpointNudge =
-        currentAgentId(context.toolMetadata) === 'worker-agent' &&
-        checkpointNextAction.length > 0 &&
-        !looksExploratoryCheckpointAction(checkpointNextAction) &&
-        !looksLikeHandoffCheckpointAction(checkpointNextAction)
+      currentAgentId(context.toolMetadata) === 'worker-agent' &&
+      checkpointActionIsMutation
           ? strictCheckpointMutationNudge({
               checkpointNextAction,
+              checkpointActionKind,
               checkpointTouched,
               checkpointSafeMutationSurface: checkpointSafeSurface,
               authoritativeVerificationCommands,
@@ -2348,6 +2126,7 @@ export async function* runQuery(
           type: 'status',
           message:
             'Assistant kept using non-durable tool steps after repeated durable-progress nudges; ending the turn so the orchestrator can treat intake as stalled.',
+          statusCode: 'no_progress',
         },
         usage: null,
       }
@@ -2472,25 +2251,6 @@ function isMalformedEditFileToolResult(toolName: string, result: ToolResultBlock
   if (toolName !== 'edit-file' || !result.is_error) return false
   const message = result.content
   return message.includes('Invalid input for edit-file')
-}
-
-function fileMutationFailureSelfReport(text: string): boolean {
-  const normalized = text.toLowerCase()
-  if (!normalized) return false
-  if (!/\b(file|edit-file|write-file|path|write|wrote|mutation|content)\b/.test(normalized)) {
-    return false
-  }
-  return (
-    /\bwrong path\b/.test(normalized) ||
-    /\bincorrect path\b/.test(normalized) ||
-    /\bpath mismatch\b/.test(normalized) ||
-    /\bonly wrote\b.*\b(fragment|partial|part)\b/.test(normalized) ||
-    /\b(fragment|partial|truncated)\b/.test(normalized) ||
-    /\bgot truncated\b/.test(normalized) ||
-    /\bwas truncated\b/.test(normalized) ||
-    /\bwrite-file\b.*\b(fragment|partial|truncated|wrong path)\b/.test(normalized) ||
-    /\bedit-file\b.*\b(fragment|partial|truncated|wrong path)\b/.test(normalized)
-  )
 }
 
 function editFileOldStringMissTarget(
@@ -2708,10 +2468,6 @@ function isWriteToolName(name: string): boolean {
 
 function isEditToolName(name: string): boolean {
   return name === 'edit-file' || name === 'Edit'
-}
-
-function isFileMutationToolName(name: string): boolean {
-  return isWriteToolName(name) || isEditToolName(name)
 }
 
 function reviewHandoffEvidence(
@@ -2972,7 +2728,7 @@ function reviewHandoffGuardResult(
       content: [
         'Blocked transition to review: persist a structured self-critique note with a review proof packet via update-task first.',
         'It must cover each acceptance criterion, include the minimum-scope check, list the changed files/diff scope, and name the verification command(s) that passed before handoff.',
-        `Call update-task again for ${taskLabel} with status "in_progress" and note: { agentId: "worker-agent", role: "self-critique", content: "**Self-critique:** ..." }.`,
+        `Call update-task again for ${taskLabel} with status "in_progress" and note: { agentId: "worker-agent", role: "self-critique", content: "Your human-readable explanation.", structured: { acceptanceCriteria: [{ id: "<exact-criterion-id>", status: "met" }], changedFiles: ["<changed-file>"], verificationCommands: [{ command: "<exact-command>", status: "passed" }], proofEvidenceIds: [], handoff: { completed: ["<completed scope>"], knownGaps: [], nextFocus: "<next specialist focus>" } } }.`,
         'After that note is durable in task state, transition to review in a separate update-task call.',
       ].join(' '),
       is_error: true,

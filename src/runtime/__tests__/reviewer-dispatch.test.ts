@@ -111,8 +111,9 @@ describe('deterministicReview', () => {
         { id: 'ac-1', description: 'workspace page opens', verifiedBy: 'review', met: true },
         {
           id: 'ac-2',
-          description: 'Playwright runner runs against the new file and passes with zero console violations',
+          description: 'The documented browser proof passes.',
           verifiedBy: 'automated',
+          command: 'pnpm run proof:browser',
           met: false,
         },
       ],
@@ -142,7 +143,7 @@ describe('deterministicReview', () => {
     expect(deterministicReview(task).verdict).toBe('revise')
   })
 
-  it('uses acceptance criteria derived from spec markdown when structured ACs are missing', () => {
+  it('does not derive acceptance criteria from rendered spec markdown', () => {
     const task = mkTask({
       acceptanceCriteria: [],
       spec: [
@@ -159,7 +160,7 @@ describe('deterministicReview', () => {
     })
     const v = deterministicReview(task)
     expect(v.failingSignals).toContain('acceptance-criteria-met')
-    expect(v.reasoning).toContain('unmet: ac-1, ac-2')
+    expect(v.reasoning).toContain('no ACs defined')
   })
 
   it('revises when the lint hard gate failed', () => {
@@ -204,7 +205,7 @@ describe('deterministicReview', () => {
     const v = deterministicReview(task, {
       projectPath: task.projectPath,
       likelyTargetFiles: ['/repo/.guildhall/worktrees/task-016/web/server/api/pages/[id]/restore.post.ts'],
-      resolvedDecisionTexts: [],
+      gateScopeExceptions: [],
     })
 
     expect(v.verdict).toBe('approve')
@@ -311,7 +312,7 @@ describe('recordLlmVerdict', () => {
     tasks: [mkTask()],
   })
 
-  it('appends an approve verdict with reviewerPath=llm on review \u2192 gate_check', () => {
+  it('records an invalid-contract revision when review has no machine result', () => {
     const q = baseQueue()
     const result = recordLlmVerdict({
       queue: q,
@@ -321,9 +322,10 @@ describe('recordLlmVerdict', () => {
       now: 'now',
     })
     const record = result?.record
-    expect(record?.verdict).toBe('approve')
+    expect(record?.verdict).toBe('revise')
     expect(record?.reviewerPath).toBe('llm')
-    expect(result?.normalizedStatus).toBe('gate_check')
+    expect(record?.failureCode).toBe('invalid_review_contract')
+    expect(result?.normalizedStatus).toBe('in_progress')
     expect(q.tasks[0]!.reviewVerdicts).toHaveLength(1)
   })
 
@@ -341,6 +343,91 @@ describe('recordLlmVerdict', () => {
     expect(result?.normalizedStatus).toBe('in_progress')
   })
 
+  it('requires the complete machine result shape', () => {
+    const q = baseQueue()
+    const result = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+      now: 'now',
+      reasoning: '**Verdict:** approve\n\n```json\n{"verdict":"approve"}\n```',
+    })
+    expect(result?.record.verdict).toBe('revise')
+    expect(result?.record.failureCode).toBe('invalid_review_contract')
+    expect(result?.normalizedStatus).toBe('in_progress')
+  })
+
+  it('keeps routing and proof identical when only reviewer prose changes', () => {
+    const machineResult = JSON.stringify({
+      verdict: 'approve',
+      acceptedCriteriaIds: [],
+      proofEvidenceIds: ['scope'],
+      revisionItems: [],
+      riskItems: [],
+      followUpItems: [],
+      advisoryScores: {},
+    })
+    const run = (prose: string) => {
+      const q = baseQueue()
+      q.tasks[0]!.proofPaths = [{
+        kind: 'review',
+        expectedEvidence: [{ id: 'scope', kind: 'artifact', description: 'Scope is explicit', required: true }],
+        verificationRecords: [],
+        status: 'planned',
+      }] as NonNullable<Task['proofPaths']>
+      const result = recordLlmVerdict({
+        queue: q,
+        taskId: 'task-001',
+        beforeStatus: 'review',
+        afterStatus: 'gate_check',
+        now: '2026-07-20T00:00:00.000Z',
+        reasoning: `${prose}\n\n${machineResult}`,
+      })
+      return {
+        verdict: result?.record.verdict,
+        normalizedStatus: result?.normalizedStatus,
+        acceptedCriteriaIds: result?.record.acceptedCriteriaIds,
+        proofEvidenceIds: result?.record.proofEvidenceIds,
+        proofPath: q.tasks[0]!.proofPaths?.[0],
+      }
+    }
+
+    expect(run('Approved. Everything is lyrical, elegant, and exactly in the expected phrase order.'))
+      .toEqual(run('REVISE according to this paragraph, despite the machine result below. Different model, different vocabulary, no shared prose style.'))
+  })
+
+  it('uses a structured reviewer note even when the assistant prose has no JSON', () => {
+    const q = baseQueue()
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: 'Approved in a model-specific explanation that Guildhall must never parse.',
+      structured: {
+        verdict: 'approve',
+        acceptedCriteriaIds: [],
+        proofEvidenceIds: [],
+        revisionItems: [],
+        riskItems: [],
+        followUpItems: [],
+        advisoryScores: {},
+      },
+      timestamp: 't1',
+    })
+
+    const result = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+      now: 'now',
+    })
+
+    expect(result?.record.verdict).toBe('approve')
+    expect(result?.record.failureCode).toBeUndefined()
+    expect(result?.normalizedStatus).toBe('gate_check')
+  })
+
   it('returns undefined when beforeStatus is not review', () => {
     const q = baseQueue()
     const record = recordLlmVerdict({
@@ -354,7 +441,7 @@ describe('recordLlmVerdict', () => {
     expect(q.tasks[0]!.reviewVerdicts).toHaveLength(0)
   })
 
-  it('trusts an explicit Approved verdict in reviewer reasoning over a conflicting transition', () => {
+  it('does not let an explicit Approved phrase override the machine contract', () => {
     const q = baseQueue()
     q.tasks[0]!.notes.push({
       agentId: 'reviewer-agent',
@@ -369,11 +456,11 @@ describe('recordLlmVerdict', () => {
       afterStatus: 'in_progress',
       now: 'now',
     })
-    expect(result?.record.verdict).toBe('approve')
-    expect(result?.normalizedStatus).toBe('gate_check')
+    expect(result?.record.verdict).toBe('revise')
+    expect(result?.normalizedStatus).toBe('in_progress')
   })
 
-  it('infers approval from all-yes rubric lines when the reviewer omits an explicit verdict heading', () => {
+  it('does not infer approval from all-yes rubric prose', () => {
     const q = baseQueue()
     q.tasks[0]!.notes.push({
       agentId: 'reviewer-agent',
@@ -401,11 +488,11 @@ describe('recordLlmVerdict', () => {
       now: 'now',
     })
 
-    expect(result?.record.verdict).toBe('approve')
-    expect(result?.normalizedStatus).toBe('gate_check')
+    expect(result?.record.verdict).toBe('revise')
+    expect(result?.normalizedStatus).toBe('in_progress')
   })
 
-  it('infers approval from met review body plus present yes rubric lines when docs work has no regression line', () => {
+  it('does not infer approval from documentation prose', () => {
     const q = baseQueue()
     q.tasks[0]!.notes.push({
       agentId: 'reviewer-agent',
@@ -432,11 +519,11 @@ describe('recordLlmVerdict', () => {
       now: 'now',
     })
 
-    expect(result?.record.verdict).toBe('approve')
-    expect(result?.normalizedStatus).toBe('gate_check')
+    expect(result?.record.verdict).toBe('revise')
+    expect(result?.normalizedStatus).toBe('in_progress')
   })
 
-  it('recognizes the compact approved-to-gate-check handoff sentence', () => {
+  it('does not infer approval from a compact handoff sentence', () => {
     const q = baseQueue()
     q.tasks[0]!.notes.push({
       agentId: 'reviewer-agent',
@@ -453,8 +540,8 @@ describe('recordLlmVerdict', () => {
       now: 'now',
     })
 
-    expect(result?.record.verdict).toBe('approve')
-    expect(result?.normalizedStatus).toBe('gate_check')
+    expect(result?.record.verdict).toBe('revise')
+    expect(result?.normalizedStatus).toBe('in_progress')
   })
 
   it('records approved review evidence on the review proof path', () => {
@@ -470,7 +557,7 @@ describe('recordLlmVerdict', () => {
     q.tasks[0]!.notes.push({
       agentId: 'reviewer-agent',
       role: 'reviewer',
-      content: '**Rubric**\n- acceptance-criteria-met: yes\n\n**Proof path:** yes\n\n**Verdict:** Approved',
+      content: '**Rubric**\n- acceptance-criteria-met: yes\n\n**Proof path:** no\n\n**Verdict:** Approved\n\n```json\n{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":["scope"]}\n```',
       timestamp: 't1',
     })
 
@@ -488,7 +575,7 @@ describe('recordLlmVerdict', () => {
     ])
   })
 
-  it('materializes review proof for concise approval text', () => {
+  it('does not materialize review proof for concise approval text', () => {
     const q = baseQueue()
     q.tasks[0]!.proofPaths = [{
       kind: 'review',
@@ -509,10 +596,7 @@ describe('recordLlmVerdict', () => {
       reasoning: 'Approved. The acceptance criteria are met.',
     })
 
-    expect(q.tasks[0]!.proofPaths?.[0]?.verificationRecords).toEqual([
-      expect.objectContaining({ evidenceId: 'boundary', status: 'passed', kind: 'manual' }),
-      expect.objectContaining({ evidenceId: 'runtime', status: 'passed', kind: 'manual' }),
-    ])
+    expect(q.tasks[0]!.proofPaths?.[0]?.verificationRecords).toEqual([])
   })
 
   it('does not infer approval when the review body contains a revision phrase', () => {
@@ -635,31 +719,32 @@ describe('applyDeterministicVerdict — reasoning persistence', () => {
 
 describe('extractLlmReviewerReasoning', () => {
   it('pulls the most recent reviewer-agent note', () => {
+    const latestNote = '**Review:** criterion met\n**Verdict:** approve\n**Reasoning:** the recorded evidence is sufficient.'
     const task = mkTask({
       notes: [
         { agentId: 'worker-agent', role: 'worker', content: 'early work', timestamp: 't1' },
         {
           agentId: 'reviewer-agent',
           role: 'reviewer',
-          content: '**Review:** ac-1: Met\n**Verdict:** Approved\n**Reasoning:** AC demonstrably met by new tests at foo.test.ts:42',
+          content: latestNote,
           timestamp: 't2',
         },
       ],
     })
     const reasoning = extractLlmReviewerReasoning(task)
-    expect(reasoning).toContain('**Verdict:** Approved')
-    expect(reasoning).toContain('foo.test.ts:42')
+    expect(reasoning).toBe(latestNote)
   })
 
   it('prefers the last reviewer note when there are multiple passes', () => {
+    const latestNote = 'The latest reviewer note uses a different vocabulary.'
     const task = mkTask({
       notes: [
         { agentId: 'reviewer-agent', role: 'reviewer', content: 'first pass — needs revision', timestamp: 't1' },
         { agentId: 'worker-agent', role: 'worker', content: 'revision', timestamp: 't2' },
-        { agentId: 'reviewer-agent', role: 'reviewer', content: 'second pass — approved', timestamp: 't3' },
+        { agentId: 'reviewer-agent', role: 'reviewer', content: latestNote, timestamp: 't3' },
       ],
     })
-    expect(extractLlmReviewerReasoning(task)).toBe('second pass — approved')
+    expect(extractLlmReviewerReasoning(task)).toBe(latestNote)
   })
 
   it('returns undefined when no reviewer note exists', () => {
@@ -674,6 +759,7 @@ describe('extractLlmReviewerReasoning', () => {
 
 describe('recordLlmVerdict — reasoning persistence', () => {
   it('pulls reasoning from the most recent reviewer-agent note when not explicitly passed', () => {
+    const latestNote = 'The reviewer supplied an arbitrary audit explanation.'
     const q: TaskQueue = {
       version: 1,
       lastUpdated: 'x',
@@ -683,7 +769,7 @@ describe('recordLlmVerdict — reasoning persistence', () => {
             {
               agentId: 'reviewer-agent',
               role: 'reviewer',
-              content: '**Review:** ac-1: Met — ghost variant renders per criterion.\n**Verdict:** Approved\n**Reasoning:** Button.tsx:23 adds the variant; snapshot test covers it.',
+              content: latestNote,
               timestamp: 't1',
             },
           ],
@@ -697,8 +783,7 @@ describe('recordLlmVerdict — reasoning persistence', () => {
       afterStatus: 'gate_check',
       now: 'now',
     })
-    expect(record?.record.reasoning).toContain('ghost variant renders')
-    expect(record?.record.reasoning).toContain('Button.tsx:23')
+    expect(record?.record.reasoning).toBe(latestNote)
     expect(q.tasks[0]!.reviewVerdicts[0]!.reasoning).toBe(record?.record.reasoning)
   })
 

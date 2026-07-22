@@ -9,6 +9,9 @@ task:
     - src/web/surfaces/Dashboard.svelte
   riskLanes:
     - copy_clarity
+  structuredSignals:
+    acceptanceCriteriaCount: 1
+    contractSurfaceCount: 0
 expected:
   minScore: 2
   action: proceed

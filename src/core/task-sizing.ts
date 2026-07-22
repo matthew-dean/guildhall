@@ -24,10 +24,31 @@ export const TaskSizeFactor = z.object({
 export type TaskSizeFactor = z.infer<typeof TaskSizeFactor>
 
 export const TaskSplitRecommendation = z.object({
+  /** Stable work-unit identity. Display wording is never an identity key. */
+  identity: z.string().min(1).optional(),
   title: z.string(),
   reason: z.string(),
   dependsOn: z.array(z.string()).default([]),
   suggestedDomain: z.string().optional(),
+  /** Explicit child lane; never infer this from the child's title. */
+  suggestedTaskKind: z.enum([
+    'app_spec',
+    'feature_spec',
+    'feature',
+    'implementation',
+    'component',
+    'primitive',
+    'story',
+    'test',
+    'setup',
+    'research',
+    'decision',
+    'spike',
+    'cleanup',
+    'verification',
+    'release',
+    'learning',
+  ]).optional(),
   usesPrimitives: z.array(z.string()).optional(),
   provesPrimitives: z.array(z.string()).optional(),
   proofKind: z.string().optional(),
@@ -41,6 +62,25 @@ export const WorkUnit = z.object({
   deliverable: z.string(),
   rationale: z.string(),
   suggestedDomain: z.string().optional(),
+  /** Explicit child lane; prose remains display-only. */
+  suggestedTaskKind: z.enum([
+    'app_spec',
+    'feature_spec',
+    'feature',
+    'implementation',
+    'component',
+    'primitive',
+    'story',
+    'test',
+    'setup',
+    'research',
+    'decision',
+    'spike',
+    'cleanup',
+    'verification',
+    'release',
+    'learning',
+  ]).optional(),
   dependsOn: z.array(z.string()).default([]),
 })
 export type WorkUnit = z.infer<typeof WorkUnit>
@@ -70,9 +110,22 @@ export const TaskSizePlan = z.object({
 })
 export type TaskSizePlan = z.infer<typeof TaskSizePlan>
 
+/**
+ * Explicit sizing inputs for records that predate a full StructuredSpec.
+ * These are data fields, not a second prose parser. They are useful for
+ * imported work while the migration writes the canonical structured payload.
+ */
+export interface StructuredSizingSignals {
+  acceptanceCriteriaCount?: number
+  contractSurfaceCount?: number
+  splitPolicy?: 'none' | 'conditional' | 'required'
+}
+
 export interface BuildTaskSizePlanInput {
   task: {
     id: string
+    // Kept in the input shape for callers and audit output. Sizing deliberately
+    // ignores title, description, spec, and free-form criterion descriptions.
     title?: string
     description: string
     priority: 'critical' | 'high' | 'normal' | 'low'
@@ -80,6 +133,12 @@ export interface BuildTaskSizePlanInput {
     acceptanceCriteria?: Array<{ description: string; [key: string]: unknown }>
     outOfScope?: string[]
     workUnitAnalysis?: WorkUnitAnalysis
+    structuredSignals?: StructuredSizingSignals
+    structuredSpec?: {
+      acceptanceCriteria?: readonly unknown[]
+      contractSurfaceDeltas?: readonly unknown[]
+      completionBoundary?: { splitPolicy?: string }
+    }
   }
   changedFiles?: readonly string[]
   riskLanes?: readonly string[]
@@ -87,152 +146,127 @@ export interface BuildTaskSizePlanInput {
   createdBy?: string
 }
 
-const UI_PATTERNS = /\b(ui|ux|screen|view|page|drawer|modal|form|button|settings|toolbar|dashboard|copy|docs?|browser)\b/i
-const DATA_PATTERNS = /\b(database|migration|migrate|backfill|schema|subscription|stored|persistence|analytics|telemetry)\b/i
-const API_PATTERNS = /\b(api|endpoint|route|webhook|contract|status code|admin)\b/i
-const RELEASE_PATTERNS = /\b(release|rollout|flag|canary|deploy|launch|fallback)\b/i
-const SECURITY_PATTERNS = /\b(auth|oauth|permission|privacy|pii|token|tenant|csrf|secret)\b/i
+interface SizingSignals {
+  acceptanceCriteriaCount: number
+  contractSurfaceCount: number
+  splitPolicy: StructuredSizingSignals['splitPolicy']
+}
 
 export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
-  const text = inScopeTaskText(input.task)
-  const files = [...new Set((input.changedFiles ?? []).map((file) => file.trim()).filter(Boolean))]
-  const lanes = [...new Set((input.riskLanes ?? []).map((lane) => lane.trim()).filter(Boolean))]
-  const factors: TaskSizeFactor[] = []
+  const files = uniqueNonEmpty(input.changedFiles ?? [])
+  const lanes = uniqueNonEmpty(input.riskLanes ?? [])
+  const signals = sizingSignals(input)
+  // A persisted split boundary is an execution contract. Work-unit analysis
+  // can explain the split, but it must never weaken that contract.
+  if (signals.splitPolicy === 'required') {
+    const createdAt = input.createdAt ?? new Date().toISOString()
+    const semanticChildren = buildDecompositionChildDrafts(input)
+    return TaskSizePlan.parse({
+      taskId: input.task.id,
+      score: 8,
+      band: 'epic',
+      action: 'decompose_before_execution',
+      factors: [{
+        id: 'explicit_split_boundary',
+        label: 'Explicit split boundary',
+        weight: 8,
+        reason: 'The structured completion boundary requires this work to be decomposed before execution.',
+      }],
+      recommendedChildren: semanticChildren,
+      reviewBudgetHint: 'release_critical',
+      reasons: [
+        'Task size score: 8.',
+        'The structured completion boundary requires decomposition before execution.',
+      ],
+      createdAt,
+      createdBy: input.createdBy ?? 'task-sizing',
+    })
+  }
   const semanticPlan = sizePlanFromWorkUnitAnalysis(input)
   if (semanticPlan) return semanticPlan
 
-  const outcomeCount = estimateOutcomeCount(text, input.task.acceptanceCriteria?.length ?? 0)
-  if (isDeterministicSingleFileTask({
-    text,
-    files,
-    acceptanceCount: input.task.acceptanceCriteria?.length ?? 0,
-  })) {
-    const createdAt = input.createdAt ?? new Date().toISOString()
-    return TaskSizePlan.parse({
-      taskId: input.task.id,
-      score: 1,
-      band: 'tiny',
-      action: 'proceed',
-      factors: [{
-        id: 'deterministic_single_file',
-        label: 'Deterministic single file',
-        weight: 0,
-        reason: 'The task creates one file with exact short content and a direct file/content proof.',
-      }],
-      recommendedChildren: [],
-      reviewBudgetHint: 'lean',
-      reasons: [
-        'Task size score: 1.',
-        'The task is deterministic, bounded to one file, and can be proven with a direct content check.',
-      ],
-      createdAt,
-      createdBy: input.createdBy ?? 'task-sizing',
-    })
-  }
-  if (isSingleFileLocalWebAppTask({ text, files })) {
-    const createdAt = input.createdAt ?? new Date().toISOString()
-    return TaskSizePlan.parse({
-      taskId: input.task.id,
-      score: 3,
-      band: 'medium',
-      action: 'proceed_with_warning',
-      factors: [{
-        id: 'single_file_web_app',
-        label: 'Single-file local web app',
-        weight: 1,
-        reason: 'The app is bounded to one index.html file with no install or build step, so splitting would add coordination overhead instead of reducing delivery risk.',
-      }],
-      recommendedChildren: [],
-      reviewBudgetHint: 'balanced',
-      reasons: [
-        'Task size score: 3.',
-        'The task is a bounded single-file local web app. Proceed as one worker pass, with browser and visual review proof.',
-      ],
-      createdAt,
-      createdBy: input.createdBy ?? 'task-sizing',
-    })
-  }
-
-  if (outcomeCount >= 3) {
+  const factors: TaskSizeFactor[] = []
+  if (signals.acceptanceCriteriaCount >= 5) {
     factors.push({
       id: 'multiple_outcomes',
-      label: 'Multiple outcomes',
-      weight: 2,
-      reason: `The task appears to contain ${outcomeCount} distinct outcomes.`,
+      label: 'Multiple acceptance obligations',
+      weight: 1,
+      reason: `${signals.acceptanceCriteriaCount} structured acceptance obligations are in scope.`,
     })
   }
 
   if (files.length >= 5) {
     factors.push({
       id: 'many_surfaces',
-      label: 'Many files or surfaces',
+      label: 'Many changed surfaces',
       weight: 2,
-      reason: `${files.length} likely files or surfaces are in scope.`,
+      reason: `${files.length} changed-file surfaces are recorded in the work evidence.`,
     })
   } else if (files.length >= 3) {
     factors.push({
       id: 'several_surfaces',
-      label: 'Several files or surfaces',
+      label: 'Several changed surfaces',
       weight: 1,
-      reason: `${files.length} likely files or surfaces are in scope.`,
+      reason: `${files.length} changed-file surfaces are recorded in the work evidence.`,
     })
   }
 
   if (lanes.length >= 5) {
     factors.push({
       id: 'many_risk_lanes',
-      label: 'Many risk lanes',
+      label: 'Many review lanes',
       weight: 2,
-      reason: `${lanes.length} review lanes are likely relevant.`,
+      reason: `${lanes.length} structured review lanes are attached to the work.`,
     })
   } else if (lanes.length >= 3) {
     factors.push({
       id: 'several_risk_lanes',
-      label: 'Several risk lanes',
-      weight: 1,
-      reason: `${lanes.length} review lanes are likely relevant.`,
+      label: 'Several review lanes',
+      weight: 2,
+      reason: `${lanes.length} structured review lanes are attached to the work.`,
     })
   }
 
-  if (DATA_PATTERNS.test(text) || RELEASE_PATTERNS.test(text) || files.some((file) => /migration|schema|release|rollout/i.test(file))) {
+  if (signals.contractSurfaceCount >= 3) {
+    factors.push({
+      id: 'many_contract_surfaces',
+      label: 'Many contract surfaces',
+      weight: 2,
+      reason: `${signals.contractSurfaceCount} structured contract-surface deltas are declared.`,
+    })
+  } else if (signals.contractSurfaceCount >= 1) {
+    factors.push({
+      id: 'contract_surface',
+      label: 'Contract surface',
+      weight: 0,
+      reason: `${signals.contractSurfaceCount} structured contract-surface delta is declared.`,
+    })
+  }
+
+  if (hasPersistenceOrReleaseSurface(files)) {
     factors.push({
       id: 'migration_or_release',
-      label: 'Migration or release risk',
-      weight: 2,
-      reason: 'The task mentions migration, persisted state, analytics, rollout, or release behavior.',
+      label: 'Persistence or release surface',
+      weight: 1,
+      reason: 'Changed-file evidence includes a migration, persistence, rollout, or release surface.',
     })
   }
 
-  const domainHits = [
-    UI_PATTERNS.test(text) || files.some((file) => /\.(svelte|tsx|jsx|css)$/.test(file)),
-    DATA_PATTERNS.test(text),
-    API_PATTERNS.test(text) || files.some((file) => /api|route|endpoint/i.test(file)),
-    SECURITY_PATTERNS.test(text),
-  ].filter(Boolean).length
-  if (domainHits >= 3) {
+  if (distinctObservedSurfaceKinds(files) >= 3) {
     factors.push({
       id: 'cross_domain_work',
       label: 'Cross-domain work',
       weight: 2,
-      reason: 'The task crosses UI, API, data, security, or privacy boundaries.',
+      reason: 'Changed-file evidence spans at least three observable surface kinds.',
     })
   }
 
-  if (isBroadImportedProgram(text)) {
-    factors.push({
-      id: 'broad_imported_program',
-      label: 'Broad imported program',
-      weight: 6,
-      reason: 'The task reads like a planning-note program or remaining-work wave, not one independently verifiable implementation unit.',
-    })
-  }
-
-  if ((input.task.acceptanceCriteria?.length ?? 0) <= 1 && files.length <= 1 && lanes.length <= 1) {
+  if (signals.acceptanceCriteriaCount <= 1 && files.length <= 1 && lanes.length <= 1 && signals.contractSurfaceCount <= 1) {
     factors.push({
       id: 'narrow_verification',
       label: 'Narrow verification',
       weight: 1,
-      reason: 'One main acceptance check and one likely surface keeps review focused.',
+      reason: 'The structured contract names at most one acceptance obligation, one changed surface, and one review lane.',
     })
   }
 
@@ -251,16 +285,34 @@ export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
     reasons: [
       `Task size score: ${score}.`,
       action === 'proceed'
-        ? 'The task is small enough to work and review as one coherent unit.'
+        ? 'The structured work contract is small enough to work and review as one coherent unit.'
         : action === 'proceed_with_warning'
-          ? 'The task can proceed, but reviewers should watch for scope creep.'
+          ? 'The structured work contract can proceed, but reviewers should watch the declared risk surfaces.'
           : action === 'decompose_before_execution'
-            ? 'The task is too large for one high-quality agent pass and Guildhall should decompose it before execution.'
+            ? 'The structured work contract is too large for one high-quality agent pass and Guildhall should decompose it before execution.'
             : 'The task needs scope authority before execution can proceed.',
     ],
     createdAt: input.createdAt ?? new Date().toISOString(),
     createdBy: input.createdBy ?? 'task-sizing',
   })
+}
+
+function sizingSignals(input: BuildTaskSizePlanInput): SizingSignals {
+  const explicit = input.task.structuredSignals
+  const spec = input.task.structuredSpec
+  return {
+    acceptanceCriteriaCount: explicit?.acceptanceCriteriaCount ?? spec?.acceptanceCriteria?.length ?? input.task.acceptanceCriteria?.length ?? 0,
+    contractSurfaceCount: explicit?.contractSurfaceCount ?? spec?.contractSurfaceDeltas?.length ?? 0,
+    splitPolicy: explicit?.splitPolicy ?? normalizeSplitPolicy(spec?.completionBoundary?.splitPolicy),
+  }
+}
+
+function normalizeSplitPolicy(value: string | undefined): StructuredSizingSignals['splitPolicy'] {
+  return value === 'none' || value === 'conditional' || value === 'required' ? value : undefined
+}
+
+function uniqueNonEmpty(values: readonly string[]): string[] {
+  return [...new Set(values.map(value => value.trim()).filter(Boolean))]
 }
 
 function sizePlanFromWorkUnitAnalysis(input: BuildTaskSizePlanInput): TaskSizePlan | null {
@@ -317,97 +369,20 @@ function sizePlanFromWorkUnitAnalysis(input: BuildTaskSizePlanInput): TaskSizePl
   })
 }
 
-function isDeterministicSingleFileTask(input: {
-  text: string
-  files: readonly string[]
-  acceptanceCount: number
-}): boolean {
-  if (input.files.length > 1) return false
-  const text = input.text
-  if (!/\b(?:create|write|add)\s+(?:a\s+|one\s+|single\s+)?file\b/i.test(text)) return false
-  if (!/\b(?:named|called|at|path)\s+[`'"]?[\w./-]+\.[\w-]+[`'"]?/i.test(text)) return false
-  if (!/\b(?:containing|content(?:s)?\s+(?:is|are)|with(?:\s+content)?)\s+exactly\b/i.test(text)) return false
-  if (input.acceptanceCount > 3) return false
-  const exactContent = /exactly\s+(?:the\s+string\s+)?[`'"]([^`'"\n]{1,200})[`'"]|exactly\s+([A-Z0-9_./:-]{1,200})(?:[.\s]|$)/i.exec(text)
-  if (!exactContent) return false
-  const domainRiskText = text
-    .split('\n')
-    .filter((line) => !/\b(no|not|without|none|nothing|out of scope)\b/i.test(line))
-    .join('\n')
-  return !(
-    UI_PATTERNS.test(domainRiskText) ||
-    DATA_PATTERNS.test(domainRiskText) ||
-    API_PATTERNS.test(domainRiskText) ||
-    RELEASE_PATTERNS.test(domainRiskText) ||
-    SECURITY_PATTERNS.test(domainRiskText)
-  )
+function hasPersistenceOrReleaseSurface(files: readonly string[]): boolean {
+  return files.some((file) => /(^|\/)(migrations?|persistence|database|db|releases?|rollout)(\/|\.|$)/i.test(file))
 }
 
-function isSingleFileLocalWebAppTask(input: {
-  text: string
-  files: readonly string[]
-}): boolean {
-  if (input.files.length > 1) return false
-  if (input.files.length === 1 && !/(^|\/)index\.html$/i.test(input.files[0] ?? '')) return false
-  const text = input.text
-  const asksForWebApp =
-    /\b(?:build|create|implement|scaffold)\b/i.test(text) &&
-    /\b(?:web app|single-page|browser app|app)\b/i.test(text)
-  const singleFile =
-    /\bsingle file\b/i.test(text) ||
-    /\bindex\.html\b/i.test(text) ||
-    input.files.some(file => /(^|\/)index\.html$/i.test(file))
-  const dependencyFree =
-    /\bdependency-free\b/i.test(text) ||
-    /\bplain html\b/i.test(text) ||
-    /\bno (?:npm|install|build step|dev server)\b/i.test(text) ||
-    /\bdo not require npm install\b/i.test(text)
-  const excludesNativeOrService =
-    !/\b(?:ios|android|react native|swiftui|electron|backend service|api server|database|migration)\b/i.test(text)
-  return asksForWebApp && singleFile && dependencyFree && excludesNativeOrService
-}
-
-function taskText(task: BuildTaskSizePlanInput['task']): string {
-  return [
-    task.title,
-    task.description,
-    task.spec,
-    ...(task.acceptanceCriteria ?? []).map((criterion) => criterion.description),
-    ...(task.outOfScope ?? []),
-  ].filter(Boolean).join('\n')
-}
-
-function inScopeTaskText(task: BuildTaskSizePlanInput['task']): string {
-  return stripOutOfScopeSections([
-    task.title,
-    task.description,
-    task.spec,
-    ...(task.acceptanceCriteria ?? []).map((criterion) => criterion.description),
-  ].filter(Boolean).join('\n'))
-}
-
-function stripOutOfScopeSections(text: string): string {
-  const kept: string[] = []
-  let skippingOutOfScope = false
-  for (const line of text.split('\n')) {
-    if (/^#{2,3}\s+Out of Scope\s*$/i.test(line.trim())) {
-      skippingOutOfScope = true
-      continue
-    }
-    if (skippingOutOfScope && /^#{2,3}\s+/.test(line.trim())) {
-      skippingOutOfScope = false
-    }
-    if (skippingOutOfScope) continue
-    if (/^\s*[-*]\s+(?:no|not|without|out of scope)\b/i.test(line)) continue
-    kept.push(line)
+function distinctObservedSurfaceKinds(files: readonly string[]): number {
+  const kinds = new Set<string>()
+  for (const file of files) {
+    if (/\.(svelte|tsx|jsx|css|html)$/i.test(file)) kinds.add('ui')
+    if (/(^|\/)(api|routes?|endpoints?)(\/|\.|$)/i.test(file)) kinds.add('api')
+    if (/(^|\/)(migrations?|persistence|database|db|schema)(\/|\.|$)/i.test(file)) kinds.add('data')
+    if (/(^|\/)(docs?|internal)(\/|\.|$)/i.test(file)) kinds.add('docs')
+    if (/\.(test|spec)\.[^.]+$/i.test(file) || /(^|\/)(test|tests|fixtures)(\/|\.|$)/i.test(file)) kinds.add('verification')
   }
-  return kept.join('\n')
-}
-
-function estimateOutcomeCount(text: string, acceptanceCount: number): number {
-  const verbs = text.match(/\b(add|create|update|migrate|document|ship|launch|implement|wire|build|remove|replace)\b/gi)?.length ?? 0
-  const connectorSplits = text.split(/\b(?:and|plus|also)\b|[;,]/i).filter((part) => part.trim().length > 12).length
-  return Math.max(acceptanceCount, Math.min(6, Math.max(1, verbs, connectorSplits)))
+  return kinds.size
 }
 
 function scoreForWeight(weight: number, priority: BuildTaskSizePlanInput['task']['priority']): TaskSizePlan['score'] {
@@ -437,19 +412,13 @@ export function buildDecompositionChildDrafts(input: BuildTaskSizePlanInput): Ta
   const analysis = input.task.workUnitAnalysis
   if (analysis?.units.length) {
     return analysis.units.map((unit) => ({
+      identity: unit.id,
       title: unit.title,
       reason: unit.rationale || unit.deliverable,
       dependsOn: unit.dependsOn,
       ...(unit.suggestedDomain ? { suggestedDomain: unit.suggestedDomain } : {}),
+      ...(unit.suggestedTaskKind ? { suggestedTaskKind: unit.suggestedTaskKind } : {}),
     }))
   }
   return []
-}
-
-function isBroadImportedProgram(text: string): boolean {
-  const hasProgramVerb = /\b(finish|complete|continue|replace|migrate|normalize|modernize)\b/i.test(text)
-  const hasProgramNoun = /\b(wave|migration|replacement|remaining|remainder|beyond|inventory|roadmap|program)\b/i.test(text)
-  const hasPriorWorkBoundary = /\b(already[- ]migrated|remaining|beyond|next up|project_state\.md|source intent|planning note)\b/i.test(text)
-  const primitiveProgram = /\bprimitive(?:s)?\b/i.test(text) && /\b(replacement|normalization|migration|wave)\b/i.test(text)
-  return (hasProgramVerb && hasProgramNoun && hasPriorWorkBoundary) || primitiveProgram
 }

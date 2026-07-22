@@ -129,6 +129,7 @@ export const textCorpusSource: TaskSource = {
 
       const hint = domainHint(rel)
       signals.push({
+        signalId: `${abs}:document`,
         source: 'text-corpus',
         kind: 'context',
         title: `Text document (${rel}): ${fileTitle(raw, rel)}`,
@@ -139,7 +140,7 @@ export const textCorpusSource: TaskSource = {
       })
 
       let currentHeading: string | null = null
-      for (const line of raw.split('\n')) {
+      for (const [lineIndex, line] of raw.split('\n').entries()) {
         const heading = /^#{1,6}\s+(.+?)\s*$/.exec(line)
         if (heading) {
           currentHeading = cleanText(heading[1]!)
@@ -154,6 +155,7 @@ export const textCorpusSource: TaskSource = {
         const title = cleanText(checklist[2]!)
         if (!title) continue
         signals.push({
+          signalId: `${abs}:line:${lineIndex + 1}`,
           source: 'text-corpus',
           kind: 'open_work',
           title,

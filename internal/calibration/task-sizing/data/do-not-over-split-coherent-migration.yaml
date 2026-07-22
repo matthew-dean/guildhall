@@ -12,6 +12,9 @@ task:
     - data_integrity
     - migration_safety
     - rollout_safety
+  structuredSignals:
+    acceptanceCriteriaCount: 2
+    contractSurfaceCount: 1
 expected:
   minScore: 3
   action: proceed_with_warning

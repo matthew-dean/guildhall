@@ -5,11 +5,17 @@ import { resolveRuntimePath } from './path-utils.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import { detectGateCommands, detectPackageManager, type PackageManager } from './bootstrap.js'
 import { detectBootstrapHypothesis } from './detect-bootstrap.js'
-import { workspaceProjectNamedInText } from './workspace-project-match.js'
 
 type BootstrapBlock = NonNullable<ResolvedConfig['bootstrap']>
 type WorkspaceProjectBlock = NonNullable<ResolvedConfig['projects']>[number]
 type TaskProjectPathInput = Partial<Pick<Task, 'projectPath' | 'domain' | 'title' | 'description'>>
+
+export interface RecentVerificationResult {
+  kind?: 'command'
+  command: string
+  passed: boolean
+  observedAt?: string
+}
 
 function hasBootstrapSignal(bootstrap: BootstrapBlock | undefined): boolean {
   if (!bootstrap) return false
@@ -679,53 +685,6 @@ function owningPackageForRelativeFile(
   return owners[0] ?? null
 }
 
-function inferCommandFromAutomatedAcceptanceDescription(
-  description: string,
-  projectPath: string,
-): string | null {
-  const normalizedDescription = normalizeCommand(description)
-  if (!normalizedDescription) return null
-
-  const workspacePackages = readWorkspacePackages(projectPath)
-  const fileMatch = description.match(
-    /`([^`]+\.(?:spec|test)\.[a-z0-9]+)`|([A-Za-z0-9_./-]+\.(?:spec|test)\.[A-Za-z0-9]+)/i,
-  )
-  const relativeFile = fileMatch
-    ? resolveRelativeFileFromDescription(projectPath, fileMatch[1] ?? fileMatch[2] ?? '')
-    : null
-
-  if (/\b(?:playwright|e2e|e2e_base_url)\b/i.test(normalizedDescription) && relativeFile) {
-    const owner = owningPackageForRelativeFile(workspacePackages, relativeFile)
-    if (owner) {
-      const relativeToOwner = normalizeCommand(
-        path.relative(owner.dir, path.join(projectPath, relativeFile)),
-      )
-      return normalizeCommand(
-        `pnpm --dir ${owner.relativeDir} exec playwright test ${relativeToOwner}`,
-      )
-    }
-    return normalizeCommand(`pnpm exec playwright test ${relativeFile}`)
-  }
-
-  if (/\btypecheck\b/i.test(normalizedDescription)) {
-    return validateOrNormalizePnpmCommand('pnpm typecheck', projectPath)
-  }
-  if (/\bbuild\b/i.test(normalizedDescription)) {
-    return validateOrNormalizePnpmCommand('pnpm build', projectPath)
-  }
-  if (/\blint\b/i.test(normalizedDescription)) {
-    return validateOrNormalizePnpmCommand('pnpm lint', projectPath)
-  }
-  if (/\b(?:vitest|jest|pytest|test runner|test file|tests?)\b/i.test(normalizedDescription) && relativeFile) {
-    return validateOrNormalizePnpmCommand(
-      `pnpm test -- --run ${path.basename(relativeFile)}`,
-      projectPath,
-    )
-  }
-
-  return null
-}
-
 function validateOrNormalizePnpmCommand(command: string, projectPath: string): string | null {
   const normalized = normalizeCommand(command)
   const rootPackage = readPackageScripts(projectPath)
@@ -891,12 +850,12 @@ function deriveAutomatedAcceptanceCommands(
   for (const criterion of task.acceptanceCriteria ?? []) {
     if (criterion.verifiedBy !== 'automated') continue
     const explicitCommand = typeof criterion.command === 'string' ? criterion.command.trim() : ''
+    // Natural-language acceptance criteria can describe a proof target, but
+    // they cannot manufacture an executable contract. Commands must arrive as
+    // structured data or through an explicit source-backed proof repair.
     const command = explicitCommand.length > 0
       ? validateOrNormalizePnpmCommand(explicitCommand, projectPath)
-      : inferCommandFromAutomatedAcceptanceDescription(
-          criterion.description ?? '',
-          projectPath,
-        )
+      : null
     if (!command) continue
     const kind = classifyGateCommand(command)
     const existing = buckets.get(kind) ?? []
@@ -907,15 +866,6 @@ function deriveAutomatedAcceptanceCommands(
     buckets.set(kind, preferSpecificCommands(commands))
   }
   return buckets
-}
-
-function commandEvidenceFromRecentVerifiedWork(entry: string): { command: string; passed: boolean } | null {
-  const match = entry.trim().match(/^Ran bash command\s+(.+?)\s+\[(PASS|FAIL)\b[^\]]*\]/i)
-  if (!match) return null
-  return {
-    command: normalizeCommand(match[1] ?? ''),
-    passed: /^pass$/i.test(match[2] ?? ''),
-  }
 }
 
 function normalizeCriterionCommand(
@@ -947,20 +897,20 @@ export function normalizeAutomatedAcceptanceCriterionCommands(input: {
   return changed
 }
 
-export function reconcileAutomatedAcceptanceCommandsFromVerifiedWork(input: {
+export function reconcileAutomatedAcceptanceCommandsFromVerificationResults(input: {
   task: Pick<Task, 'projectPath' | 'domain' | 'acceptanceCriteria'>
   workspaceProjectPath: string
   workspaceProjects?: readonly WorkspaceProjectBlock[]
-  recentVerifiedWork: readonly string[] | undefined
+  recentVerificationResults: readonly RecentVerificationResult[] | undefined
 }): boolean {
   const taskProjectPath = resolveEffectiveTaskProjectPath(
     input.task,
     input.workspaceProjectPath,
     { workspaceProjects: input.workspaceProjects },
   )
-  const passedCommands = (input.recentVerifiedWork ?? [])
-    .map(commandEvidenceFromRecentVerifiedWork)
-    .filter((entry): entry is { command: string; passed: boolean } => Boolean(entry?.command))
+  const passedCommands = (input.recentVerificationResults ?? [])
+    .filter((entry) => entry?.kind === undefined || entry.kind === 'command')
+    .filter((entry): entry is RecentVerificationResult => Boolean(entry?.command?.trim()))
     .filter((entry) => entry.passed)
     .map((entry) => normalizeCriterionCommand(entry.command, taskProjectPath))
     .filter((command): command is string => Boolean(command))
@@ -1131,8 +1081,6 @@ function workspaceProjectForTask(
     )
     if (domainMatch) return domainMatch
   }
-  const textMatch = workspaceProjectNamedInTask(task, workspaceProjects)
-  if (textMatch) return textMatch
   const taskProjectPath = typeof task.projectPath === 'string' ? task.projectPath.trim() : ''
   if (!taskProjectPath) return undefined
   const resolvedTaskProjectPath = resolveRuntimePath(taskProjectPath)
@@ -1168,17 +1116,6 @@ export function resolveEffectiveTaskProjectPath(
   }
   if (workspaceProject) return resolveRuntimePath(workspaceProject.path)
   return resolveRuntimePath(workspaceProjectPath)
-}
-
-function workspaceProjectNamedInTask(
-  task: TaskProjectPathInput,
-  workspaceProjects: readonly WorkspaceProjectBlock[],
-): WorkspaceProjectBlock | undefined {
-  return workspaceProjectNamedInText(workspaceProjects, [
-    task.domain,
-    task.title,
-    task.description,
-  ])
 }
 
 export function resolveEffectiveTaskBootstrapBlock(input: {

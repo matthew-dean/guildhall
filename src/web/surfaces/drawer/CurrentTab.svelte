@@ -139,7 +139,7 @@
       return 'The missing acceptance criteria were not written before the pause. Try again from this task, or open the spec if you want to add the checks yourself.'
     }
     if (
-      turn.liveAgent?.lastEventLabel === 'Waiting for the local model to respond.' &&
+      turn.liveAgent?.lastEventKind === 'provider_wait' &&
       (turn.liveAgent.silentMs ?? 0) >= 60_000
     ) {
       return 'Local model is still loading or generating.'
@@ -504,8 +504,8 @@
           </Stack>
         </Card>
       {:else if turn.kind === 'escalation'}
-        {@const guidance = escalationUserGuidance({ summary: turn.summary, details: turn.details, reason: turn.escalationReason, agentId: turn.escalationAgentId })}
-        {@const recoveryAction = escalationPrimaryAction({ reason: turn.escalationReason, agentId: turn.escalationAgentId, summary: turn.summary, details: turn.details })}
+        {@const guidance = escalationUserGuidance({ summary: turn.summary, details: turn.details, reason: turn.escalationReason, agentId: turn.escalationAgentId, handling: turn.escalationHandling, recoveryCode: turn.escalationRecoveryCode })}
+        {@const recoveryAction = escalationPrimaryAction({ reason: turn.escalationReason, agentId: turn.escalationAgentId, handling: turn.escalationHandling, recoveryCode: turn.escalationRecoveryCode, summary: turn.summary, details: turn.details })}
         {@const reasonLabel = escalationReasonLabel(turn.escalationReason)}
         {@const ownerLabel = roleLabel(turn.escalationAgentId)}
         {@const externalChecklist = checklistForEscalation(turn)}

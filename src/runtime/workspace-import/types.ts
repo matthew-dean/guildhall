@@ -18,6 +18,12 @@ export type SignalKind =
   | 'context' // framing/tech-stack/constraints that inform tasks but aren't tasks
 
 export interface WorkspaceSignal {
+  /**
+   * Stable source-owned identity for this signal. This is the only identity
+   * the hypothesis former may use when folding signals into durable records;
+   * title/evidence prose is display evidence, never an identity key.
+   */
+  signalId?: string
   /** Which source produced this (e.g. `git-log`, `readme`, `todo-comments`). */
   source: string
   kind: SignalKind
@@ -69,6 +75,12 @@ export interface WorkspaceSignal {
   releaseLabel?: string
   /** How confident the source is that this signal means what it claims. */
   confidence: 'high' | 'medium' | 'low'
+  /**
+   * Explicit source disposition. Sources may mark a structural note as
+   * context-only or intentionally ignore it; the hypothesis former must not
+   * rediscover that decision from the signal's wording.
+   */
+  taskDisposition?: 'candidate' | 'context_only' | 'ignore'
 }
 
 export interface TaskSourceContext {

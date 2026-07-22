@@ -10,6 +10,8 @@ export interface StructuralTaskContextTask {
   title?: string
   files?: string[]
   text?: string
+  domainId?: string
+  crossCuttingDomainIds?: string[]
 }
 
 export interface StructuralTaskContextRef {
@@ -69,6 +71,8 @@ export function summarizeStructuralTaskContext(input: {
     title: input.task.title ?? input.task.id,
     files: input.task.files,
     text: input.task.text,
+    domainId: input.task.domainId,
+    crossCuttingDomainIds: input.task.crossCuttingDomainIds,
   })
 
   let route = null as ReturnType<typeof routeTaskWithStructuralMap> | null
@@ -80,6 +84,8 @@ export function summarizeStructuralTaskContext(input: {
         title: input.task.title ?? input.task.id,
         files: input.task.files,
         text: input.task.text,
+        domainId: input.task.domainId,
+        crossCuttingDomainIds: input.task.crossCuttingDomainIds,
       },
     })
   } catch {
@@ -105,7 +111,7 @@ export function summarizeStructuralTaskContext(input: {
       summary: 'Guildhall does not have a confident structural match for this task yet.',
       crossCuttingDomains: [],
       checks: [],
-      reasons: ['No package or domain matched the current task text.'],
+      reasons: ["No package or domain matched the task's explicit structural references."],
       omittedCount: slice.omitted.length,
     }
   }
@@ -140,7 +146,7 @@ function isProjectSetupTask(taskId: string): boolean {
 
 export function summarizeStructuralTaskContexts(input: {
   map: StructuralMapDraft | null
-  tasks: Array<StructuralTaskContextTask & { description?: string; spec?: string }>
+  tasks: Array<StructuralTaskContextTask & { description?: string; spec?: string; domain?: string }>
 }): Record<string, StructuralTaskContext> {
   const result: Record<string, StructuralTaskContext> = {}
   for (const task of input.tasks) {
@@ -152,6 +158,8 @@ export function summarizeStructuralTaskContexts(input: {
         title: task.title,
         files: task.files,
         text: task.text ?? [task.description, task.spec].filter(Boolean).join('\n'),
+        domainId: task.domain,
+        crossCuttingDomainIds: task.crossCuttingDomainIds,
       },
     })
   }

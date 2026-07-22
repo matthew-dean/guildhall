@@ -73,6 +73,7 @@ export const todoCommentsSource: TaskSource = {
       const content = line.slice(secondColon + 1).trim()
       const clean = content.replace(/^(\/\/|#|\/\*|\*)\s?/, '').slice(0, 200)
       signals.push({
+        signalId: `${file}:${lineNo}`,
         source: 'todo-comments',
         kind: 'open_work',
         title: clean,

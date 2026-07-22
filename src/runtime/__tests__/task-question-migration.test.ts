@@ -103,7 +103,7 @@ describe('task question migration', () => {
     ])
   })
 
-  it('migrates fallback narration as the actual embedded question plus helper context', async () => {
+  it('preserves a legacy prompt verbatim instead of extracting a question from narration', async () => {
     const root = await projectWithTasks([{
       id: 'task-alert',
       title: 'AlertDialog',
@@ -130,11 +130,13 @@ describe('task question migration', () => {
       'utf8',
     ))
 
-    expect(requests[0]?.prompt).toBe('What variants does AlertDialog need?')
+    expect(requests[0]?.prompt).toBe(
+      'I have enough context. The roadmap lists AlertDialog as missing (P0 gap). The existing `ui-dialog` uses `<dialog>`. The key question I need to ask before drafting: what variants does the user need? Let me write the product brief first, then ask.',
+    )
     expect(session.subObjectives[0]).toMatchObject({
-      prompt: 'What variants does AlertDialog need?',
-      helperText: 'The roadmap lists AlertDialog as missing (P0 gap). The existing `ui-dialog` uses `<dialog>`.',
+      prompt: 'I have enough context. The roadmap lists AlertDialog as missing (P0 gap). The existing `ui-dialog` uses `<dialog>`. The key question I need to ask before drafting: what variants does the user need? Let me write the product brief first, then ask.',
     })
+    expect(session.subObjectives[0].helperText).toBeUndefined()
   })
 
   it('does not inspect or apply legacy questions after SQLite promotion', async () => {

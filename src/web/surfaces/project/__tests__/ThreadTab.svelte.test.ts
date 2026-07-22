@@ -243,6 +243,9 @@ function escalationTurn(overrides: Record<string, unknown> = {}) {
     taskTitle: 'Knit: add link editor controls',
     constructionMode: 'change_order',
     escalationId: 'esc-1',
+    escalationHandling: 'guildhall_recovery',
+    escalationRecoveryCode: 'spec_no_progress',
+    escalationAgentId: 'spec-agent',
     summary: 'Worker is blocked on missing setup.',
     details: 'Install dependencies before continuing.',
     ...overrides,
@@ -2573,8 +2576,10 @@ describe('ThreadTab', () => {
     const { calls } = installFetchFakes(
       [
         escalationTurn({
-          escalationAgentId: 'worker-agent',
-          summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
+        escalationAgentId: 'worker-agent',
+        escalationHandling: 'guildhall_recovery',
+        escalationRecoveryCode: 'self_authored_verification',
+        summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
           details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result (timestamp + exit code) and concrete auth test specs.',
         }),
       ],
@@ -3252,6 +3257,7 @@ describe('ThreadTab', () => {
             name: 'worker-agent',
             startedAt: '2026-05-19T14:58:00.000Z',
             lastEventLabel: 'Waiting for the local model to respond.',
+            lastEventKind: 'provider_wait',
             silentMs: 90_000,
           },
           activity: [

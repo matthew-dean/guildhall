@@ -119,6 +119,7 @@
     startedAt?: string | undefined
     lastEventAt?: string | undefined
     lastEventLabel?: string | undefined
+    lastEventKind?: 'neutral' | 'running' | 'success' | 'failure' | 'durable_progress' | 'provider_wait'
     silentMs?: number | undefined
     stalled?: boolean | undefined
   }
@@ -126,6 +127,7 @@
     at?: string | undefined
     label: string
     tone: 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
+    kind?: 'neutral' | 'running' | 'success' | 'failure' | 'durable_progress' | 'provider_wait'
     detail?: string | undefined
   }
 
@@ -1138,6 +1140,8 @@
         details: t.details,
         reason: t.escalationReason,
         agentId: t.escalationAgentId,
+        handling: t.escalationHandling,
+        recoveryCode: t.escalationRecoveryCode,
       }).actionOwner === 'guildhall'
         ? runStatus === 'running' || runStatus === 'stopping' ? 'Queued' : 'Paused'
         : 'Needs you'
@@ -1240,7 +1244,7 @@
     if (!agent) return 'Model call in progress'
     const sinceActivity = shortElapsed(agent.silentMs)
     const label = agent.lastEventLabel ?? 'Model call in progress'
-    if (label === 'Waiting for the local model to respond.' && (agent.silentMs ?? 0) >= 60_000) {
+    if (agent.lastEventKind === 'provider_wait' && (agent.silentMs ?? 0) >= 60_000) {
       return `Still waiting for the local model${sinceActivity ? ` · ${sinceActivity}` : ''}`
     }
     if (agent.stalled) {
@@ -1355,7 +1359,7 @@
 
   function liveAgentTone(agent: LiveAgent | undefined): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
     if (
-      agent?.lastEventLabel === 'Waiting for the local model to respond.' &&
+      agent?.lastEventKind === 'provider_wait' &&
       (agent.silentMs ?? 0) >= 60_000
     ) {
       return 'warn'
@@ -2141,7 +2145,7 @@
       return 'Partial progress was saved, then the agent failed. Review the durable worktree changes or restart from that recovery point.'
     }
     if (
-      live?.lastEventLabel === 'Waiting for the local model to respond.' &&
+      live?.lastEventKind === 'provider_wait' &&
       (live.silentMs ?? 0) >= 60_000
     ) {
       return 'Local model is still loading or generating.'
@@ -2509,6 +2513,8 @@
     const action = escalationPrimaryAction({
       reason: turn.escalationReason,
       agentId: turn.escalationAgentId,
+      handling: turn.escalationHandling,
+      recoveryCode: turn.escalationRecoveryCode,
       summary: turn.summary,
       details: turn.details,
     })
@@ -2776,6 +2782,8 @@
         details: turn.details,
         reason: turn.escalationReason,
         agentId: turn.escalationAgentId,
+        handling: turn.escalationHandling,
+        recoveryCode: turn.escalationRecoveryCode,
       })
       return guidance.title
     }
@@ -2985,6 +2993,8 @@
         details: turn.details,
         reason: turn.escalationReason,
         agentId: turn.escalationAgentId,
+        handling: turn.escalationHandling,
+        recoveryCode: turn.escalationRecoveryCode,
       })
       return guidance.actionOwner === 'guildhall' ? 'Queued' : 'Needs recovery'
     }
@@ -3009,6 +3019,8 @@
         details: turn.details,
         reason: turn.escalationReason,
         agentId: turn.escalationAgentId,
+        handling: turn.escalationHandling,
+        recoveryCode: turn.escalationRecoveryCode,
       }).title
     }
     if (turn.kind === 'inflight' && (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft')) {
@@ -4597,8 +4609,8 @@
                 {/if}
 
               {:else if t.kind === 'escalation'}
-                {@const guidance = escalationUserGuidance({ summary: t.summary, details: t.details, reason: t.escalationReason, agentId: t.escalationAgentId })}
-                {@const recoveryAction = escalationPrimaryAction({ reason: t.escalationReason, agentId: t.escalationAgentId, summary: t.summary, details: t.details })}
+                {@const guidance = escalationUserGuidance({ summary: t.summary, details: t.details, reason: t.escalationReason, agentId: t.escalationAgentId, handling: t.escalationHandling, recoveryCode: t.escalationRecoveryCode })}
+                {@const recoveryAction = escalationPrimaryAction({ reason: t.escalationReason, agentId: t.escalationAgentId, handling: t.escalationHandling, recoveryCode: t.escalationRecoveryCode, summary: t.summary, details: t.details })}
                 <h3 class="prompt">{guidance.actionOwner === 'guildhall' ? 'Queued' : 'Needs recovery'}</h3>
                 <p class="why">{guidance.title}</p>
                 <p class="detail">{guidance.detail}</p>
@@ -5362,8 +5374,8 @@
                             <p class="error">{runError}</p>
                           {/if}
                         {:else if activeDockTurn.kind === 'escalation'}
-                          {@const guidance = escalationUserGuidance({ summary: activeDockTurn.summary, details: activeDockTurn.details, reason: activeDockTurn.escalationReason, agentId: activeDockTurn.escalationAgentId })}
-                          {@const recoveryAction = escalationPrimaryAction({ reason: activeDockTurn.escalationReason, agentId: activeDockTurn.escalationAgentId, summary: activeDockTurn.summary, details: activeDockTurn.details })}
+                          {@const guidance = escalationUserGuidance({ summary: activeDockTurn.summary, details: activeDockTurn.details, reason: activeDockTurn.escalationReason, agentId: activeDockTurn.escalationAgentId, handling: activeDockTurn.escalationHandling, recoveryCode: activeDockTurn.escalationRecoveryCode })}
+                          {@const recoveryAction = escalationPrimaryAction({ reason: activeDockTurn.escalationReason, agentId: activeDockTurn.escalationAgentId, handling: activeDockTurn.escalationHandling, recoveryCode: activeDockTurn.escalationRecoveryCode, summary: activeDockTurn.summary, details: activeDockTurn.details })}
                           <p class="detail">{guidance.detail}</p>
                           <p class="detail">{guidance.nextStep}</p>
                           {#if guidance.technicalNote}

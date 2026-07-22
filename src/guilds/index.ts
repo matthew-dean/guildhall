@@ -34,6 +34,8 @@ export {
   type TaggedRubricItem,
 } from './registry.js'
 
+export { hasReviewLane, hasStructuredSurface, type StructuredSurface } from './structured-signals.js'
+
 export {
   loadGuildComposition,
   composeGuildRoster,

@@ -130,9 +130,18 @@ export interface GateResult {
 export interface ReviewVerdict {
   verdict?: 'approve' | 'revise'
   reviewerPath?: 'llm' | 'deterministic' | string
+  reviewerId?: string
+  reviewerName?: string
   reason?: string
   reasoning?: string
   failingSignals?: string[]
+  acceptedCriteriaIds?: string[]
+  proofEvidenceIds?: string[]
+  advisoryScores?: {
+    recommendationPriority?: 'low' | 'medium' | 'high'
+    expectedValue?: 'low' | 'medium' | 'high'
+    deferredRisk?: 'low' | 'medium' | 'high'
+  }
   recordedAt?: string
   policyVersion?: string
   llmError?: string
@@ -1088,6 +1097,7 @@ export interface TaskTurnLiveAgent {
   startedAt?: string
   lastEventAt?: string
   lastEventLabel?: string
+  lastEventKind?: 'neutral' | 'running' | 'success' | 'failure' | 'durable_progress' | 'provider_wait'
   silentMs?: number
   stalled?: boolean
 }
@@ -1096,6 +1106,7 @@ export interface TaskTurnLiveActivity {
   at?: string
   label: string
   tone: 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
+  kind?: 'neutral' | 'running' | 'success' | 'failure' | 'durable_progress' | 'provider_wait'
   detail?: string
 }
 
@@ -1174,6 +1185,8 @@ export interface TaskThreadEscalationTurn extends TaskThreadTurnBase {
   escalationId: string
   escalationReason?: string
   escalationAgentId?: string
+  escalationHandling?: 'owner_required' | 'guildhall_recovery' | 'external_dependency'
+  escalationRecoveryCode?: string
   summary: string
   details?: string
   externalChecklist?: ExternalBlockerStep[]

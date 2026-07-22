@@ -7,7 +7,6 @@ import {
   buildDesignDecisionPacket,
   captureOwnerDesignFeedback,
   DESIGN_FEEDBACK_FILE,
-  classifyDesignFinding,
   recordDesignFinding,
   readDesignFeedbackStore,
   routeDesignFinding,
@@ -80,30 +79,24 @@ describe('design feedback loop', () => {
     }
   })
 
-  it('classifies common design misses without requiring owner triage', () => {
-    expect(classifyDesignFinding({
-      summary: 'Radius scale feels inconsistent across generated apps.',
-      dimension: 'radius',
-    })).toBe('token-system-gap')
+  it('fails closed when provider prose has no typed classification', async () => {
+    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-design-feedback-untyped-'))
+    try {
+      const finding = await recordDesignFinding({
+        memoryDir,
+        finding: {
+          id: 'finding-untyped',
+          summary: 'A provider may phrase this in any style.',
+          source: { kind: 'reviewer' },
+          severity: 'medium',
+          dimension: 'anything',
+        },
+      })
 
-    expect(classifyDesignFinding({
-      summary: 'Documented switch focus state fails in Storybook.',
-      dimension: 'state',
-      designSystem: 'foundation',
-      sourceKind: 'automated-visual-check',
-    })).toBe('design-system-defect')
-  })
-
-  it('classifies broader design dependency pivots as architecture opportunities', () => {
-    expect(classifyDesignFinding({
-      summary: 'Replace the bespoke autocomplete dropdown with a tested combobox primitive because keyboard support and async positioning are brittle.',
-      dimension: 'control-architecture',
-    })).toBe('architecture-opportunity')
-
-    expect(classifyDesignFinding({
-      summary: 'Remove the third-party carousel package because its bundle overhead exceeds the simple gallery product need.',
-      dimension: 'dependency-overhead',
-    })).toBe('architecture-opportunity')
+      await expect(routeDesignFinding({ memoryDir, findingId: finding.id })).rejects.toThrow('typed classification')
+    } finally {
+      await fs.rm(memoryDir, { recursive: true, force: true })
+    }
   })
 
   it('captures owner feedback against rendered proof and routes it into a design decision', async () => {

@@ -151,10 +151,32 @@ export const GateResult = z.object({
 })
 export type GateResult = z.infer<typeof GateResult>
 
+/**
+ * Explicit task-scoped gate disposition. Human-readable escalation
+ * resolutions are audit text; they must never decide whether a failed gate is
+ * exempt. A scope exception is therefore a small typed record attached to the
+ * task and keyed to the exact gate it may affect.
+ */
+export const TaskGateScopeException = z.object({
+  id: z.string(),
+  gateId: z.string(),
+  disposition: z.literal('exclude_unrelated_failure'),
+  sourceEscalationId: z.string().optional(),
+  createdAt: z.string(),
+  createdBy: z.string(),
+})
+export type TaskGateScopeException = z.infer<typeof TaskGateScopeException>
+
 export const AgentNote = z.object({
   agentId: z.string(),
   role: z.string(),
   content: z.string(),
+  /**
+   * Machine state extracted from the note at the evidence boundary. This is
+   * deliberately separate from human-facing prose so compact projections can
+   * bound the narrative without deleting routing/proof facts.
+   */
+  structured: z.record(z.string(), z.unknown()).optional(),
   timestamp: z.string(), // ISO timestamp
 })
 export type AgentNote = z.infer<typeof AgentNote>
@@ -162,29 +184,46 @@ export type AgentNote = z.infer<typeof AgentNote>
 // FR-26 / FR-27 / AC-18: every reviewer verdict is persisted on the task so
 // the audit trail shows what was decided, by which path, when, and against
 // which policy version. `reviewerPath` distinguishes LLM-run reviews from
-// deterministic fallbacks — the load-bearing field for AC-18.
+// deterministic fallbacks — the machine-readable field for AC-18.
 export const ReviewVerdict = z.object({
   verdict: z.enum(['approve', 'revise']),
   reviewerPath: z.enum(['llm', 'deterministic']),
+  /** Stable reviewer/persona identity for cross-round attribution. */
+  reviewerId: z.string().optional(),
+  /** Stable display identity for the reviewer/persona; never parsed from reasoning. */
+  reviewerName: z.string().optional(),
   /**
    * One-line headline — what was decided and at a high level why. Suitable
    * for CLI / PROGRESS.md summaries.
    */
   reason: z.string(),
   /**
-   * Full reasoning trace — for LLM reviews this is the per-AC + per-rubric
-   * walk-through the reviewer agent wrote; for deterministic reviews it's
-   * the signal-by-signal score breakdown. Optional because very old verdict
-   * records (pre-reasoning field) won't have it.
-   *
-   * This is the load-bearing field for "reasoning is part of validation":
-   * a coordinator auditing `reviewVerdicts` can reconstruct the *why*
-   * without having to re-read scattered notes.
+   * Optional human-readable audit trace — for LLM reviews this is the
+   * reviewer's explanation; for deterministic reviews it is the signal-by-
+   * signal score breakdown. It is never read as a decision, proof, routing
+   * instruction, or worker mutation input. Optional because old verdict
+   * records may not have it.
    */
   reasoning: z.string().optional(),
   // Deterministic path populates these; LLM path leaves them undefined.
   score: z.number().optional(),
   failingSignals: z.array(z.string()).default([]),
+  /** Structured failure classification; prose is never used for this. */
+  failureCode: z.enum([
+    'provider_unavailable',
+    'provider_timeout',
+    'invalid_review_contract',
+  ]).optional(),
+  /** Stable acceptance-criterion IDs the reviewer explicitly evaluated as met. */
+  acceptedCriteriaIds: z.array(z.string()).optional(),
+  /** Stable proof evidence IDs the reviewer explicitly verified. */
+  proofEvidenceIds: z.array(z.string()).optional(),
+  /** Optional structured advisory dimensions shown in the review UI. */
+  advisoryScores: z.object({
+    recommendationPriority: z.enum(['low', 'medium', 'high']).optional(),
+    expectedValue: z.enum(['low', 'medium', 'high']).optional(),
+    deferredRisk: z.enum(['low', 'medium', 'high']).optional(),
+  }).optional(),
   // Populated when the deterministic path ran as a fallback after an LLM
   // outage — records the LLM error so the human auditing the trail can tell
   // a fallback from a deterministic-only run.
@@ -196,11 +235,11 @@ export type ReviewVerdict = z.infer<typeof ReviewVerdict>
 
 // Reviewer fan-out adjudication. When lever `reviewer_fanout_policy` is
 // `coordinator_adjudicates_on_conflict` and the detector fires (same persona
-// emits `revise` across two consecutive rounds with overlapping revision
-// items), the owning coordinator issues a binding decision that supersedes
-// the dissenting persona verdicts. The worker's next prompt is the scoped
-// instructions only — never the raw conflict — so the worker cannot
-// relitigate the call. See docs/disagreement-and-handoff.md §1.
+// emits `revise` across two consecutive rounds), the owning coordinator issues
+// a binding decision that supersedes the dissenting persona verdicts. The
+// worker's next prompt is the scoped instructions only — never the raw
+// conflict — so the worker cannot relitigate the call. See
+// docs/disagreement-and-handoff.md §1.
 export const AdjudicationRecord = z.object({
   /** Which review round produced the conflict (1-indexed). */
   round: z.number().int().positive(),
@@ -235,6 +274,18 @@ export type AdjudicationRecord = z.infer<typeof AdjudicationRecord>
 // `review`; the orchestrator captures that note onto the completed
 // `HandoffStep`, reverts status to `in_progress`, and picks the next
 // engineer. See docs/disagreement-and-handoff.md §2.
+/**
+ * Machine-readable context passed from one specialist to the next. The
+ * values are explanatory text, but the fields and their presence are
+ * structural; Guildhall never discovers this handoff from worker headings.
+ */
+export const HandoffPayload = z.object({
+  completed: z.array(z.string()).default([]),
+  knownGaps: z.array(z.string()).default([]),
+  nextFocus: z.string().optional(),
+}).strict()
+export type HandoffPayload = z.infer<typeof HandoffPayload>
+
 export const HandoffStep = z.object({
   /** Guild slug (e.g. `frontend-engineer`, `backend-engineer`). */
   agent: z.string(),
@@ -244,7 +295,9 @@ export const HandoffStep = z.object({
   instructions: z.string().optional(),
   /** ISO timestamp captured when the step's worker handed off. */
   completedAt: z.string().optional(),
-  /** Structured handoff note the step's worker left for the next. */
+  /** Structured handoff payload the step's worker left for the next. */
+  handoff: HandoffPayload.optional(),
+  /** Legacy display-only handoff text; current execution never reads it. */
   handoffNote: z.string().optional(),
 })
 export type HandoffStep = z.infer<typeof HandoffStep>
@@ -262,6 +315,62 @@ export const EscalationReason = z.enum([
 ])
 export type EscalationReason = z.infer<typeof EscalationReason>
 
+/**
+ * Escalation routing is a machine decision. Human-readable summary/details
+ * explain the decision but never classify it after the fact.
+ */
+export const EscalationHandling = z.enum([
+  'owner_required',
+  'guildhall_recovery',
+  'external_dependency',
+])
+export type EscalationHandling = z.infer<typeof EscalationHandling>
+
+/**
+ * Stable machine identity for an automation-recoverable escalation. Summary
+ * and details are audit prose; they must never decide whether a task can be
+ * reopened or routed again.
+ */
+export const EscalationRecoveryCode = z.enum([
+  'worker_turn_limit',
+  'worker_timeout_likely_target',
+  'worker_timeout_no_progress',
+  'spec_no_progress',
+  'worker_no_progress',
+  'review_handoff_validator',
+  'stale_review_checkpoint',
+  'blueprint_tooling',
+  'tool_path_mismatch',
+  'target_shape_mismatch',
+  'environment_setup',
+  'stale_gate_failure',
+  'self_authored_verification',
+  'max_revisions_infrastructure',
+  'max_revisions_actionable',
+  'review_worker_handoff_loop',
+  'gate_max_revisions',
+  'reviewer_fanout_max_revisions',
+])
+export type EscalationRecoveryCode = z.infer<typeof EscalationRecoveryCode>
+
+/**
+ * Stable identity for a task-level runtime recovery boundary that does not
+ * need an owner escalation. The visible blocker text is explanatory only.
+ */
+export const TaskRecoveryCode = z.enum([
+  'dirty_checkout',
+  'task_worktree_setup',
+  'task_worktree_exists',
+  'task_worktree_sync',
+  'task_worktree_sync_conflict',
+  'environment_setup',
+  'max_revisions_actionable',
+  'auto_commit_landing',
+  'shared_checkout_checkpoint',
+  'missing_branch_metadata',
+])
+export type TaskRecoveryCode = z.infer<typeof TaskRecoveryCode>
+
 export const ExternalBlockerStep = z.object({
   id: z.string(),
   title: z.string(),
@@ -276,6 +385,9 @@ export const Escalation = z.object({
   taskId: z.string(),
   agentId: z.string(),                        // Who raised it
   reason: EscalationReason,
+  handling: EscalationHandling.optional(),
+  /** Stable recovery identity. Never derive this from summary/details prose. */
+  recoveryCode: EscalationRecoveryCode.optional(),
   summary: z.string(),                        // Human-readable one-liner
   details: z.string().optional(),             // Full context for the human
   externalChecklist: z.array(ExternalBlockerStep).optional(),
@@ -492,6 +604,17 @@ export const Checkpoint = z.object({
   // What the agent plans to do next — consumed by `restart_from_checkpoint`
   // to pick up where we left off.
   nextPlannedAction: z.string(),
+  // Machine-readable routing intent. `nextPlannedAction` is for people and
+  // resume context; orchestration must never infer a state transition from
+  // its wording.
+  nextActionKind: z.enum([
+    'continue_work',
+    'review_handoff',
+    'rerun_verification',
+    'escalate',
+    'inspect',
+    'mutate',
+  ]).optional(),
   // FR-20: link into session persistence so the coordinator can rehydrate
   // engine state (history, tool-use cache, compaction bookmarks). Optional
   // because the first checkpoint may precede the first session snapshot.
@@ -506,6 +629,7 @@ export const Checkpoint = z.object({
       passed: z.boolean(),
       observedAt: z.string(),
       summary: z.string().optional(),
+      files: z.array(z.string()).optional(),
     })).default([]),
     companionFiles: z.array(z.string()).default([]),
     workingHypothesis: z.string().optional(),
@@ -582,12 +706,13 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
   if (typeof verifiedBy !== 'string') return baseCriterion
   if ((ACCEPTANCE_VERIFIERS as readonly string[]).includes(verifiedBy)) return baseCriterion
 
-  const value = verifiedBy.trim()
-  const looksLikeCommand = /\s|\/|^(pnpm|npm|yarn|bun|vitest|tsx|node|tsgo|tsc|cargo|go|pytest|python|make)\b/.test(value)
+  // `verifiedBy` is a typed verifier, not a second command input. Older
+  // snapshots sometimes put a command or free-form prose here; preserve the
+  // text only as invalid legacy data and fail closed to human review. A
+  // command becomes automated proof only through the explicit `command` field.
   return {
     ...baseCriterion,
-    verifiedBy: looksLikeCommand ? 'automated' : 'review',
-    ...(looksLikeCommand && typeof criterion.command !== 'string' ? { command: value } : {}),
+    verifiedBy: 'review',
   }
 }
 
@@ -851,6 +976,10 @@ export const TaskKind = z.enum([
 ])
 export type TaskKind = z.infer<typeof TaskKind>
 
+/** Explicit worker loop selection. Never inferred from task prose. */
+export const WorkerExecutionMode = z.enum(['build', 'diagnose', 'tdd'])
+export type WorkerExecutionMode = z.infer<typeof WorkerExecutionMode>
+
 export const TaskReadinessDimensionId = z.enum([
   'outcome_clarity',
   'size',
@@ -1090,6 +1219,8 @@ export const RequestIntake = z.preprocess(normalizeRequestIntake, z.object({
 export type RequestIntake = z.infer<typeof RequestIntake>
 
 export const TaskSourceClaim = z.object({
+  /** Stable source-owned identity; prose fields are evidence only. */
+  signalId: z.string().min(1).optional(),
   source: z.string(),
   title: z.string(),
   evidence: z.string(),
@@ -1116,6 +1247,27 @@ export type ProjectReleaseSource = z.infer<typeof ProjectReleaseSource>
 export const ProjectReleaseProofStyle = z.enum(['script_only', 'manual', 'mixed', 'unspecified'])
 export type ProjectReleaseProofStyle = z.infer<typeof ProjectReleaseProofStyle>
 
+export const TaskWorkShape = z.enum([
+  'ui-component',
+  'frontend-integration',
+  'backend-api',
+  'cli-tool',
+  'docs',
+  'migration',
+  'bugfix',
+  'single-edit',
+  'generic',
+])
+export type TaskWorkShape = z.infer<typeof TaskWorkShape>
+
+/**
+ * Explicit ownership for a bootstrap failure that belongs inside a task's
+ * implementation boundary. This must be structured task state; task prose is
+ * display/audit content only and cannot change bootstrap routing.
+ */
+export const BootstrapRepairOwnership = z.enum(['task', 'workspace'])
+export type BootstrapRepairOwnership = z.infer<typeof BootstrapRepairOwnership>
+
 export const ProjectRelease = z.object({
   id: z.string(),
   label: z.string(),
@@ -1126,6 +1278,8 @@ export const ProjectRelease = z.object({
   nodeIds: z.array(z.string()).default([]),
   deferredNodeIds: z.array(z.string()).default([]),
   proofStyle: ProjectReleaseProofStyle.default('unspecified'),
+  /** The source release this container supersedes after a plan repair. */
+  supersedesReleaseId: z.string().optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
 })
@@ -1152,6 +1306,18 @@ export const Task = z.object({
   requestIntake: RequestIntake.optional(),
   references: z.array(z.string()).default([]),
   sourceClaims: z.array(TaskSourceClaim).default([]),
+  /** Stable identity of the source work record that created this task. */
+  sourceIdentity: z.string().min(1).optional(),
+  /** Explicit structural identity used by evidence-graph reconciliation. */
+  deliverableName: z.string().min(1).optional(),
+  producedArtifact: z.string().min(1).optional(),
+  /** Explicit import graph metadata; never inferred from title/description prose. */
+  workShape: TaskWorkShape.optional(),
+  /** Explicit bootstrap repair boundary; never inferred from title/description prose. */
+  bootstrapRepairOwnership: BootstrapRepairOwnership.optional(),
+  targetArea: z.string().min(1).optional(),
+  buildsOn: z.array(z.string().min(1)).optional(),
+  consumerSurfaces: z.array(z.string().min(1)).optional(),
 
   status: TaskStatus,
   priority: TaskPriority.default('normal'),
@@ -1182,6 +1348,13 @@ export const Task = z.object({
 
   // Gate results accumulated during gate_check phase
   gateResults: z.array(GateResult).default([]),
+
+  /**
+   * Typed exceptions for failures outside this task's target surface. The
+   * resolution prose on an escalation is explanatory only; this field is the
+   * sole authority for scoped gate disposition.
+   */
+  gateScopeExceptions: z.array(TaskGateScopeException).default([]),
 
   // FR-26 / FR-27: append-only audit trail of reviewer verdicts. Every pass
   // through the `review` status appends one entry — `reviewerPath` records
@@ -1261,6 +1434,17 @@ export const Task = z.object({
   deliverySteps: z.array(DeliveryStep).optional(),
   businessEnvelope: BusinessEnvelope.optional(),
   workKind: WorkKind.optional(),
+  // Explicit intake metadata. This is never inferred from title/description
+  // prose; unknown values fail closed to generic shaping.
+  semanticKind: z.string().min(1).optional(),
+  /** Stable runtime recovery identity; blockReason is display/audit prose. */
+  recoveryCode: z.union([TaskRecoveryCode, EscalationRecoveryCode]).optional(),
+  // Explicit contract surface metadata for imported work. This is never
+  // inferred from title/description prose or broad document scanning.
+  contractNames: z.array(z.string().min(1)).optional(),
+  // Explicit links from a decomposed child to the parent criteria it
+  // satisfies. Recovery must use these ids, never search criterion prose.
+  parentAcceptanceCriterionIds: z.array(z.string().min(1)).optional(),
   releaseIds: z.array(z.string()).default([]),
   // Work containment is represented by hierarchy links, never by task status.
   // Required migration 0.10.0/task-hierarchy-links converts old status: parent
@@ -1268,6 +1452,7 @@ export const Task = z.object({
   hierarchy: WorkHierarchy.optional(),
   completionBoundary: WorkCompletionBoundary.optional(),
   taskKind: TaskKind.optional(),
+  executionMode: WorkerExecutionMode.optional(),
   taskReadiness: TaskReadinessAssessment.optional(),
   reviewRisk: ReviewRiskProfile.optional(),
   definitionOfDone: DefinitionOfDone.optional(),
@@ -1441,13 +1626,15 @@ type TaskAcceptanceCriterion = Omit<ParsedTask['acceptanceCriteria'][number], 's
   met?: boolean
 }
 type TaskHierarchy = Omit<WorkHierarchy, 'order'> & { order?: number }
-export type Task = Omit<ParsedTask, 'hierarchy' | 'releaseIds' | 'references' | 'sourceClaims' | 'acceptanceCriteria'> & {
+export type Task = Omit<ParsedTask, 'hierarchy' | 'releaseIds' | 'references' | 'sourceClaims' | 'acceptanceCriteria' | 'gateScopeExceptions'> & {
   hierarchy?: TaskHierarchy
   releaseIds?: string[]
   acceptanceCriteria: TaskAcceptanceCriterion[]
   /** Defaulted at the parse boundary; legacy fixtures may omit these fields. */
   references?: string[]
   sourceClaims?: TaskSourceClaim[]
+  /** Defaulted at the parse boundary; legacy fixtures may omit this field. */
+  gateScopeExceptions?: TaskGateScopeException[]
   /**
    * @deprecated Legacy pre-0.10 raw field. The normal Task schema no longer
    * accepts or writes task-local owner questions; use OwnerInputRequest records

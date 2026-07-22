@@ -558,6 +558,47 @@ export function createRecentVerifiedWorkAttachment(
   )
 }
 
+interface RecentVerificationResult {
+  kind?: 'command'
+  command: string
+  passed: boolean
+  observedAt?: string
+  outputSummary?: string
+}
+
+/** Preserve the small machine record needed to resume command reconciliation.
+ * The older prose history stays available separately for human context. */
+export function createRecentVerificationResultsAttachment(
+  verificationResults: unknown,
+): CompactAttachment | null {
+  if (!Array.isArray(verificationResults) || verificationResults.length === 0) return null
+  const entries = verificationResults
+    .filter((value): value is RecentVerificationResult => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+      const record = value as Record<string, unknown>
+      return (record.kind === undefined || record.kind === 'command') &&
+        typeof record.command === 'string' && record.command.trim().length > 0 &&
+        typeof record.passed === 'boolean'
+    })
+    .slice(-8)
+    .map((entry) => ({
+      kind: 'command' as const,
+      command: entry.command.trim().slice(0, 240),
+      passed: entry.passed,
+      ...(entry.observedAt?.trim() ? { observedAt: entry.observedAt.trim().slice(0, 64) } : {}),
+    }))
+  if (entries.length === 0) return null
+  return createAttachment(
+    'recent_verification_results',
+    'Recent structured verification results',
+    [
+      'These bounded machine records may be used to resume command verification:',
+      ...entries.map((entry) => `- ${entry.passed ? 'PASS' : 'FAIL'} ${entry.command}`),
+    ],
+    { entries },
+  )
+}
+
 export function createPlanAttachment(
   metadata: Record<string, unknown>,
 ): CompactAttachment | null {
@@ -636,6 +677,7 @@ function buildCompactAttachments(
   const attachmentPaths = extractAttachmentPaths(messages)
   const builders = [
     createTaskFocusAttachment(meta),
+    createRecentVerificationResultsAttachment(meta.recent_verification_results),
     createRecentVerifiedWorkAttachment(meta.recent_verified_work),
     createRecentAttachmentsAttachmentIfNeeded(attachmentPaths),
     createRecentFilesAttachment(meta.read_file_state),

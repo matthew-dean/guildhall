@@ -129,6 +129,39 @@ describe('ensureWorktreeForDispatch', () => {
     })
     expect(r.created).toBe(false)
     expect(driver.state.createdWorktrees).toHaveLength(0)
+    expect(driver.state.worktreeSyncs).toHaveLength(1)
+    expect(driver.state.worktreeSyncs[0]).toMatchObject({
+      worktreePath,
+      baseBranch: 'main',
+    })
+  })
+
+  it('fails closed when a reusable worktree cannot be synchronized with base', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worktree-sync-failure-'))
+    const worktreePath = path.join(tmp, 'abc')
+    await fs.mkdir(worktreePath, { recursive: true })
+    const driver = new InMemoryGitDriver({
+      nextWorktreeSyncResult: {
+        ok: false,
+        conflict: true,
+        detail: 'CONFLICT (content): merge conflict in package.json',
+      },
+    })
+
+    await expect(ensureWorktreeForDispatch({
+      task: task({
+        id: 'abc',
+        worktreePath,
+        branchName: 'guildhall/task-abc',
+        baseBranch: 'main',
+      }),
+      mode: 'per_task',
+      projectId: 'demo-project',
+      projectPath: '/repo',
+      baseBranch: 'main',
+      gitDriver: driver,
+    })).rejects.toThrow(/synchronize task worktree abc with main/i)
+    expect(driver.state.worktreeSyncs).toHaveLength(1)
   })
 
   it('reattaches when a recorded worktree path no longer exists', async () => {
@@ -345,6 +378,7 @@ describe('cleanupWorktreeForTerminal', () => {
     await cleanupWorktreeForTerminal({
       task: task({ worktreePath: '/repo/x' }),
       mode: 'none',
+      projectId: 'demo-project',
       projectPath: '/repo',
       gitDriver: driver,
     })
@@ -356,6 +390,7 @@ describe('cleanupWorktreeForTerminal', () => {
     await cleanupWorktreeForTerminal({
       task: task({ worktreePath: '/repo/x' }),
       mode: 'per_task',
+      projectId: 'demo-project',
       projectPath: '/repo',
       gitDriver: driver,
       preserveForPendingPr: true,
@@ -363,14 +398,27 @@ describe('cleanupWorktreeForTerminal', () => {
     expect(driver.state.removedWorktrees).toHaveLength(0)
   })
 
-  it('removes the worktree when mode is active and task owns one', async () => {
+  it('removes the worktree when mode is active and the task owns a Guildhall checkout', async () => {
     const driver = new InMemoryGitDriver()
+    const worktreePath = path.join(worktreeRootFor('demo-project'), 'x')
     await cleanupWorktreeForTerminal({
-      task: task({ worktreePath: '/repo/x' }),
+      task: task({ worktreePath }),
       mode: 'per_task',
+      projectId: 'demo-project',
       projectPath: '/repo',
       gitDriver: driver,
     })
-    expect(driver.state.removedWorktrees).toEqual(['/repo/x'])
+    expect(driver.state.removedWorktrees).toEqual([worktreePath])
+  })
+
+  it('refuses to remove a path outside the Guildhall worktree root', async () => {
+    const driver = new InMemoryGitDriver()
+    await expect(cleanupWorktreeForTerminal({
+      task: task({ worktreePath: '/repo/user-worktree' }),
+      mode: 'per_task',
+      projectId: 'demo-project',
+      projectPath: '/repo',
+      gitDriver: driver,
+    })).rejects.toThrow('Refusing to remove non-Guildhall worktree')
   })
 })

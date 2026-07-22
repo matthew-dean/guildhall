@@ -142,8 +142,13 @@ export interface ReviewRubricSelection {
 
 function taskTouchesProductSurface(task: Task): boolean {
   if (task.productBrief) return true
-  const text = `${task.title} ${task.description}`.toLowerCase()
-  return /\b(ui|page|screen|button|form|modal|dialog|toast|nav|menu|layout|copy|onboard|wizard|dashboard|empty state)\b/.test(text)
+  if (task.structuredSpec?.userFacingBehavior || task.structuredSpec?.visualInteractionNotes) return true
+  return (task.reviewRisk?.lanes ?? []).some((lane) => (
+    lane === 'ux_comprehension' ||
+    lane === 'visual_design' ||
+    lane === 'accessibility' ||
+    lane === 'copy_clarity'
+  ))
 }
 
 export function selectApplicableReviewRubrics(

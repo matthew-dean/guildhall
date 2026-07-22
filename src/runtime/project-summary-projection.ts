@@ -149,6 +149,7 @@ export interface ProjectSummaryProjection {
   blockers: Array<{
     id: string
     label: string
+    code?: string
     owningTaskId?: string
   }>
   recentWork: Array<{
@@ -194,6 +195,7 @@ export interface ProjectSummaryReleaseSummary {
   blockers: Array<{
     id: string
     label: string
+    code?: string
     owningTaskId?: string
   }>
   updatedAt: string
@@ -239,6 +241,7 @@ function indexedTaskHasCompletionProofGap(
 function indexedTaskCompletionChildren(
   task: ProjectStateDatabaseTask,
   tasksById: ReadonlyMap<string, ProjectStateDatabaseTask>,
+  selectedReleaseId: string | null,
 ): ProjectStateDatabaseTask[] {
   const childIds = new Set(
     [...tasksById.values()]
@@ -255,7 +258,22 @@ function indexedTaskCompletionChildren(
     .map(childId => tasksById.get(childId))
     .filter((child): child is ProjectStateDatabaseTask => Boolean(child))
     .filter(child => indexedIsMaterializedExecutionChild(task, child))
+    .filter(child => indexedProofChildBelongsToSelectedRelease(child, selectedReleaseId))
     .filter(child => !['archived', 'cancelled', 'shelved'].includes(String(child.status ?? '')))
+}
+
+/**
+ * A proof setup child is a release-local execution fact. Parent membership can
+ * legitimately span releases, but an older proof child must not satisfy or
+ * block a later release. This compact rule mirrors the rich scope projection
+ * using only typed semantic kind and normalized release membership.
+ */
+function indexedProofChildBelongsToSelectedRelease(
+  child: ProjectStateDatabaseTask,
+  selectedReleaseId: string | null,
+): boolean {
+  if (!selectedReleaseId || child.semanticKind !== 'proof_setup') return true
+  return child.releaseIds.includes(selectedReleaseId)
 }
 
 function indexedIsMaterializedExecutionChild(
@@ -276,17 +294,18 @@ function indexedTaskCompletionProofSatisfiedByLinkedChildren(
   task: ProjectStateDatabaseTask,
   tasksById: ReadonlyMap<string, ProjectStateDatabaseTask>,
   proofByTaskId: ReadonlyMap<string, IndexedCurrentProof>,
+  selectedReleaseId: string | null,
   visiting = new Set<string>(),
 ): boolean {
   if (visiting.has(task.id)) return false
-  const children = indexedTaskCompletionChildren(task, tasksById)
+  const children = indexedTaskCompletionChildren(task, tasksById, selectedReleaseId)
   if (children.length === 0) return false
   const nextVisiting = new Set(visiting).add(task.id)
   return children.every(child => {
     const status = String(child.status ?? '')
     if (status !== 'done' && status !== 'pending_pr') return false
     if (!indexedTaskHasCompletionProofGap(child, proofByTaskId.get(child.id))) return true
-    return indexedTaskCompletionProofSatisfiedByLinkedChildren(child, tasksById, proofByTaskId, nextVisiting)
+    return indexedTaskCompletionProofSatisfiedByLinkedChildren(child, tasksById, proofByTaskId, selectedReleaseId, nextVisiting)
   })
 }
 
@@ -295,8 +314,9 @@ function indexedTaskProofBlocked(
   proof: IndexedCurrentProof | undefined,
   tasksById: ReadonlyMap<string, ProjectStateDatabaseTask>,
   proofByTaskId: ReadonlyMap<string, IndexedCurrentProof>,
+  selectedReleaseId: string | null,
 ): boolean {
-  if (indexedTaskCompletionProofSatisfiedByLinkedChildren(task, tasksById, proofByTaskId)) return false
+  if (indexedTaskCompletionProofSatisfiedByLinkedChildren(task, tasksById, proofByTaskId, selectedReleaseId)) return false
   return indexedTaskHasCompletionProofGap(task, proof)
 }
 
@@ -722,6 +742,7 @@ function indexedActionTasks(
       updatedAt: task.updatedAt ?? undefined,
       dependsOn: task.dependsOn,
       blockReason: typeof taskRecord.blockReason === 'string' ? taskRecord.blockReason : undefined,
+      recoveryCode: typeof taskRecord.recoveryCode === 'string' ? taskRecord.recoveryCode : undefined,
       hierarchy: task.hierarchy ? {
         parentId: typeof task.hierarchy.parentId === 'string' ? task.hierarchy.parentId : undefined,
         childIds: Array.isArray(task.hierarchy.childIds) ? task.hierarchy.childIds.filter((id): id is string => typeof id === 'string') : undefined,
@@ -809,7 +830,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     const indexedTask = tasksById.get(row.taskId)
     const explicitRow = scopeRowOverrides.get(row.taskId)
     const indexedProofGap = indexedTask
-      ? indexedTaskProofBlocked(indexedTask, currentProofByTaskId.get(row.taskId), tasksById, currentProofByTaskId)
+      ? indexedTaskProofBlocked(indexedTask, currentProofByTaskId.get(row.taskId), tasksById, currentProofByTaskId, selectedReleaseId)
       : false
     const proofBlocked = currentProofByTaskId.has(row.taskId)
       ? indexedProofGap
@@ -1003,6 +1024,7 @@ function synchronizeIndexedOrientationSpine(
   const blockers = input.releaseSummary.blockers.map(blocker => ({
     id: blocker.id,
     label: blocker.label,
+    ...(blocker.code ? { code: blocker.code } : {}),
     ...(blocker.owningTaskId ? { owningNodeId: `work:${blocker.owningTaskId}` } : {}),
   }))
   const releaseId = input.releaseSummary.release?.id ?? spine.selectedRelease?.id ?? null
@@ -1187,7 +1209,7 @@ export function writeProjectSummaryProjectionFromIndexedState(
     .map(row => {
       const task = taskById.get(row.taskId)
       const proof = task ? indexedCurrentProofForTask(task) : undefined
-      const proofBlocked = indexedTaskProofBlocked(task!, proof, taskById, currentProofByTaskId) ||
+      const proofBlocked = indexedTaskProofBlocked(task!, proof, taskById, currentProofByTaskId, indexedState?.queue.selectedReleaseId ?? null) ||
         (!proof && !currentProofByTaskId.has(task!.id) && Boolean(row.proofBlocked))
       const normalized = normalizeProjectScopeRowReadModel({
         ...row,

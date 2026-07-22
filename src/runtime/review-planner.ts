@@ -73,93 +73,6 @@ const EFFORT_BUDGETS: Record<Exclude<ReviewEffort, 'custom'>, ReviewBudget> = {
   },
 }
 
-const LANE_PATTERNS: Array<{
-  lane: ReviewRiskLane
-  pattern: RegExp
-  reason: string
-}> = [
-  {
-    lane: 'ux_comprehension',
-    pattern: /\b(ui|ux|screen|flow|journey|wizard|drawer|modal|button|split button|menu button|form|control|combobox|typeahead|autocomplete|select|dropdown|long list|empty state|onboarding|dashboard|browser|viewport)\b/i,
-    reason: 'The task touches a user-facing interaction or screen.',
-  },
-  {
-    lane: 'copy_clarity',
-    pattern: /\b(copy|labels?|microcopy|message|error text|tooltips?|docs?|readme|guide|public docs|language|wording)\b/i,
-    reason: 'The task changes wording that users or readers may rely on.',
-  },
-  {
-    lane: 'visual_design',
-    pattern: /\b(css|style|layout|spacing|color|icon|responsive|mobile|desktop|component|design system|design-system|ui library|component library|primitive|variant|props?|tokens?|svelte|react|vue|tailwind)\b/i,
-    reason: 'The task changes visual presentation or component layout.',
-  },
-  {
-    lane: 'accessibility',
-    pattern: /\b(a11y|accessibility|aria|keyboard|focus|focus state|screen reader|contrast|tab order|semantic|semantics|tap target|hit target|overlap|overlaps|overlapping|reachable|controls?|combobox|typeahead|autocomplete|select|dropdown|listbox|menu button|split button|disclosure|radio|checkbox|switch|tabs?|segmented)\b/i,
-    reason: 'The task mentions accessibility-sensitive behavior.',
-  },
-  {
-    lane: 'security',
-    pattern: /\b(auth|authenticated|oauth|authorization|authentication|permission|access token|api token|secret|session|csrf|xss|injection|sandbox|capability|tenant|workspace export|tenant boundary|ownership boundary)\b/i,
-    reason: 'The task touches trust, permissions, or attack surface.',
-  },
-  {
-    lane: 'privacy',
-    pattern: /\b(pii|privacy|personal data|email|phone|address|user data|workspace data|tenant data|telemetry|analytics|tracking|consent|redact|redaction|support transcript|transcript snippet)\b/i,
-    reason: 'The task may expose, store, or transmit user-sensitive data.',
-  },
-  {
-    lane: 'api_contract',
-    pattern: /\b(api|endpoint|route|request|response|schema|contract|webhook|graphql|rest|status code|backward compat)\b/i,
-    reason: 'The task changes a boundary another caller may depend on.',
-  },
-  {
-    lane: 'data_integrity',
-    pattern: /\b(database|db|sql|mongo|postgres|redis|transaction|consistency|idempot|dedupe|cache|persist|persistence|stored state|project state|workspace data|tenant data|analytics events|side effects|evidence records|transcript snippets|support transcripts)\b/i,
-    reason: 'The task changes persisted or coordinated state.',
-  },
-  {
-    lane: 'migration_safety',
-    pattern: /\b(migration|migrate|backfill|schema change|roll forward|rollback|upgrade|compatibility)\b/i,
-    reason: 'The task includes migration or compatibility risk.',
-  },
-  {
-    lane: 'performance',
-    pattern: /\b(perf|performance|latency|slow|timeout|memory|cpu|load|scale|concurrency|batch|n\+1|query)\b/i,
-    reason: 'The task may change runtime cost or responsiveness.',
-  },
-  {
-    lane: 'docs_truth',
-    pattern: /\b(docs?|readme|guide|reference|release notes|changelog|help|public copy|vitepress|status code|schema)\b/i,
-    reason: 'The task changes product documentation or help surfaces.',
-  },
-  {
-    lane: 'release_risk',
-    pattern: /\b(deploy|production|publish|package|installer|distribution|upgrade|rollout|launch)\b/i,
-    reason: 'The task affects release, deployment, or distribution behavior.',
-  },
-  {
-    lane: 'evidence_privacy',
-    pattern: /\b(log|trace|audit|archive|evidence|recording|transcript|screenshot|prompt|conversation|telemetry|analytics)\b/i,
-    reason: 'The task records evidence that may need retention and redaction rules.',
-  },
-  {
-    lane: 'calibration_governance',
-    pattern: /\b(calibration|eval|benchmark|reviewer|review plan|review planner|model setting|prompt|rubric|agent)\b/i,
-    reason: 'The task changes review, evaluation, or agent-governance behavior.',
-  },
-  {
-    lane: 'cost_control',
-    pattern: /\b(cost|token|budget|quota|rate limit|model|provider|llm)\b/i,
-    reason: 'The task affects model, provider, or resource spending.',
-  },
-  {
-    lane: 'rollout_safety',
-    pattern: /\b(flag|feature flag|rollout|gradual|canary|beta|experiment|fallback|degrade)\b/i,
-    reason: 'The task needs staged rollout or fallback thinking.',
-  },
-]
-
 const RECIPE_CATALOG: Array<{
   recipeId: string
   lanes: ReviewRiskLane[]
@@ -197,26 +110,10 @@ const RECIPE_CATALOG: Array<{
   },
 ]
 
-const UI_REVIEW_LANES = new Set<ReviewRiskLane>([
-  'ux_comprehension',
-  'visual_design',
-  'accessibility',
-])
-
-const UI_REVIEW_CHECKS = new Set([
-  'browser-or-screenshot-evidence',
-  'design-system-control-reference-check',
-  'style-sprawl-regression-scan',
-  'shared-primitive-opportunity-scan',
-])
-
-const FRONTEND_FILE_RE = /\.(svelte|tsx?|jsx?|css|scss|html)$/
-const HEADLESS_ONLY_RE = /\b(no-ui|no ui|without (?:a )?(?:completed )?(?:product )?ui|without ui|no frontend|without a frontend|do not (?:add|implement|create|build|ship) (?:a |the )?(?:product )?ui|don't (?:add|implement|create|build|ship) (?:a |the )?(?:product )?ui|headless only|script-only|script only|cli-first|command-line only)\b/i
-const HEADLESS_PROOF_RE = /\b(headless|script-only|script only|cli|command-line|no-ui|no ui)\b/i
-const POSITIVE_UI_RE = /\b(ui|ux|screen|flow|journey|wizard|drawer|modal|button|split button|menu button|form|control|combobox|typeahead|autocomplete|select|dropdown|long list|empty state|onboarding|dashboard|browser|viewport)\b/i
+const STRUCTURED_REVIEW_LANES = new Set<ReviewRiskLane>(ALL_LANES)
 
 export interface BuildReviewPlanInput {
-  task: Pick<Task, 'id' | 'title' | 'description' | 'priority' | 'spec' | 'acceptanceCriteria' | 'outOfScope' | 'notes'> & Partial<Pick<Task, 'status' | 'productBrief'>>
+  task: Pick<Task, 'id' | 'title' | 'description' | 'priority' | 'spec' | 'acceptanceCriteria' | 'outOfScope' | 'notes'> & Partial<Pick<Task, 'status' | 'productBrief' | 'requestIntake' | 'taskKind' | 'workKind' | 'reviewRisk'>>
   changedFiles?: readonly string[]
   requestedEffort?: ReviewEffort
   requiredArtifacts?: readonly string[]
@@ -270,7 +167,7 @@ export function buildReviewPlan(input: BuildReviewPlanInput): ReviewPlanRecord {
       .filter((lane) => !selectedLanes.includes(lane))
       .map((lane) => ({
         lane,
-        reason: signals.skippedReasons.get(lane) ?? 'No signal in task text, file hints, or requested effort.',
+        reason: signals.skippedReasons.get(lane) ?? 'No structured review-risk lane or observable changed-file signal selected this lane.',
       })),
     requiredRecipes,
     advisoryLenses,
@@ -397,27 +294,19 @@ function detectReviewSignals(input: BuildReviewPlanInput): {
   skippedReasons: Map<ReviewRiskLane, string>
   text: string
 } {
-  const text = reviewSignalText(input)
   const selected = new Set<ReviewRiskLane>(['test_adequacy', 'plan_completeness'])
   const reasons = [
-    'Always include test adequacy and plan completeness so work-review quality does not depend only on detected keywords.',
+    'Always include test adequacy and plan completeness; model wording cannot change the review baseline.',
   ]
   const skippedReasons = new Map<ReviewRiskLane, string>()
 
-  for (const candidate of LANE_PATTERNS) {
-    if (candidate.pattern.test(text)) {
-      selected.add(candidate.lane)
-      reasons.push(candidate.reason)
-    } else {
-      skippedReasons.set(candidate.lane, 'No matching signal found in task text or changed-file hints.')
-    }
-  }
-
-  if (/\b(design system|design-system|ui library|component library|primitive|split button|menu button|layout control|variant|props?|control choice|when to use|combobox|typeahead|autocomplete|long list|select list|dropdown)\b/i.test(text)) {
-    selected.add('ux_comprehension')
-    selected.add('visual_design')
-    selected.add('accessibility')
-    reasons.push('Design-system control selection needs reviewer context for component intent, variants, layout ownership, anti-sprawl extraction opportunities, findability, and accessible semantics.')
+  const declaredLanes = (input.task.reviewRisk?.lanes ?? [])
+    .filter((lane): lane is ReviewRiskLane => STRUCTURED_REVIEW_LANES.has(lane as ReviewRiskLane))
+  for (const lane of declaredLanes) selected.add(lane)
+  if (declaredLanes.length > 0) {
+    reasons.push(`Review lanes came from the structured review-risk declaration: ${declaredLanes.join(', ')}.`)
+  } else {
+    reasons.push('No structured review-risk lanes were declared; Guildhall will not infer them from prose.')
   }
 
   if ((input.changedFiles ?? []).some((file) => /\.(svelte|tsx?|jsx?|css|scss|html)$/.test(file))) {
@@ -435,117 +324,44 @@ function detectReviewSignals(input: BuildReviewPlanInput): {
     reasons.push('Changed-file hints include API or route-owned code.')
   }
 
-  if (isHeadlessOnlyTask(input, text)) {
-    for (const lane of UI_REVIEW_LANES) selected.delete(lane)
-    for (const lane of UI_REVIEW_LANES) {
-      skippedReasons.set(lane, 'Task declares headless/no-UI proof and has no frontend changed-file hint.')
+  for (const lane of ALL_LANES) {
+    if (!selected.has(lane)) {
+      skippedReasons.set(lane, declaredLanes.length > 0
+        ? 'The structured review-risk declaration did not include this lane.'
+        : 'No structured review-risk declaration or observable changed-file signal selected this lane.')
     }
-    reasons.push('Headless/no-UI proof scope removes product UI review lanes and visual evidence requirements.')
   }
 
   return {
     selectedLanes: ALL_LANES.filter((lane) => selected.has(lane)),
     reasons,
     skippedReasons,
-    text,
+    text: '',
   }
-}
-
-function reviewSignalText(input: BuildReviewPlanInput): string {
-  return [
-    input.task.title,
-    input.task.description,
-    input.task.spec ?? '',
-    input.task.productBrief?.userJob ?? '',
-    input.task.productBrief?.whyItMattersNow ?? '',
-    ...(input.task.productBrief?.nonGoals ?? []),
-    ...(input.task.productBrief?.antiPatterns ?? []),
-    ...(input.task.acceptanceCriteria ?? []).map((criterion) => criterion.description),
-    ...(input.task.outOfScope ?? []),
-    ...(input.task.notes ?? []).map((note) => note.content),
-    ...(input.changedFiles ?? []),
-  ].join('\n')
-}
-
-function hasFrontendChangedFile(input: BuildReviewPlanInput): boolean {
-  return (input.changedFiles ?? []).some((file) => FRONTEND_FILE_RE.test(file))
-}
-
-function isHeadlessOnlyTask(input: BuildReviewPlanInput, text = reviewSignalText(input)): boolean {
-  if (hasFrontendChangedFile(input)) return false
-  if (HEADLESS_ONLY_RE.test(text)) return true
-  if (!HEADLESS_PROOF_RE.test(text)) return false
-  const withoutNegatedUi = text
-    .replace(/\bno-ui\b/gi, '')
-    .replace(/\bno ui\b/gi, '')
-    .replace(/\bwithout (?:a )?(?:completed )?(?:product )?ui\b/gi, '')
-    .replace(/\bwithout ui\b/gi, '')
-    .replace(/\bno frontend\b/gi, '')
-    .replace(/\bwithout a frontend\b/gi, '')
-  return !POSITIVE_UI_RE.test(withoutNegatedUi)
 }
 
 export function normalizeReviewPlanForTask(
   input: BuildReviewPlanInput,
   plan: ReviewPlanRecord,
 ): { changed: boolean; plan: ReviewPlanRecord } {
-  const headless = isHeadlessOnlyTask(input)
-  const selectedLanes = headless
-    ? plan.selectedLanes.filter((lane) => !UI_REVIEW_LANES.has(lane))
-    : plan.selectedLanes
   const deterministicChecks = input.deterministicChecks
     ? [...input.deterministicChecks]
     : plan.deterministicChecks
   const changed =
-    selectedLanes.length !== plan.selectedLanes.length ||
-    (headless && plan.requiredArtifacts.includes('visual-evidence')) ||
     JSON.stringify(deterministicChecks) !== JSON.stringify(plan.deterministicChecks)
   if (!changed) return { changed: false, plan }
-  const aggregation = headless
-    ? Object.fromEntries(
-        Object.entries(plan.aggregation).filter(([lane]) => !UI_REVIEW_LANES.has(lane as ReviewRiskLane)),
-      ) as ReviewPlanRecord['aggregation']
-    : plan.aggregation
   return {
     changed: true,
     plan: {
       ...plan,
-      selectedLanes,
-      skippedLanes: headless
-        ? [
-            ...plan.skippedLanes.filter((entry) => !UI_REVIEW_LANES.has(entry.lane)),
-            ...[...UI_REVIEW_LANES].map((lane) => ({
-              lane,
-              reason: 'Task declares headless/no-UI proof and has no frontend changed-file hint.',
-            })),
-          ]
-        : plan.skippedLanes,
-      requiredRecipes: headless
-        ? plan.requiredRecipes
-            .map((recipe) => ({
-              ...recipe,
-              lanes: recipe.lanes.filter((lane) => !UI_REVIEW_LANES.has(lane)),
-            }))
-            .filter((recipe) => recipe.lanes.length > 0)
-        : plan.requiredRecipes,
-      deterministicChecks: headless
-        ? deterministicChecks.filter((check) => !UI_REVIEW_CHECKS.has(check))
-        : deterministicChecks,
-      requiredArtifacts: headless
-        ? plan.requiredArtifacts.filter((artifact) => artifact !== 'visual-evidence')
-        : plan.requiredArtifacts,
-      aggregation,
-      reasons: [
-        ...plan.reasons,
-        'Headless/no-UI proof scope removes product UI review lanes and visual evidence requirements.',
-      ],
+      deterministicChecks,
     },
   }
 }
 
 function selectAdvisoryLenses(
   input: BuildReviewPlanInput,
-  signals: { text: string },
+  _signals: { text: string },
   lanes: readonly ReviewRiskLane[],
   effort: ReviewEffort,
 ): ReviewAdvisoryLens[] {
@@ -555,20 +371,24 @@ function selectAdvisoryLenses(
     selected.push({ lens, reason, blocking: 'advisory' })
   }
   const laneSet = new Set(lanes)
-  const text = signals.text
   const isSpecShaping = ['exploring', 'spec_review', 'proposed'].includes(input.task.status ?? '')
-  const isAmbiguous = /\b(ambiguous|unclear|rough|shape|spec|boundary|acceptance criteria|proof path|what should|not sure)\b/i.test(text)
+  const intake = input.task.requestIntake
+  const isAmbiguous = Boolean(
+    intake?.ownerDecisionNeeded ||
+    (intake?.missingInformation?.length ?? 0) > 0 ||
+    intake?.recommendedNextAction === 'ask_clarifying_question',
+  )
   const isHighRisk = effort === 'thorough' || effort === 'release_critical'
   const isReaderOrUserFacing =
     laneSet.has('ux_comprehension') ||
     laneSet.has('copy_clarity') ||
     laneSet.has('docs_truth')
-  const asksForFutureOpportunity = /\b(future|follow-up|opportunit|roadmap|explor|later|next phase)\b/i.test(text)
+  const isExploratory = input.task.taskKind === 'research' || input.task.taskKind === 'spike' || input.task.workKind === 'research'
 
-  if (isSpecShaping || isAmbiguous || isReaderOrUserFacing) {
+  if (isSpecShaping || isAmbiguous || isReaderOrUserFacing || isExploratory) {
     add('first_principles', 'Check the real user job, task boundary, and simplest useful shape before implementation.')
   }
-  if (isAmbiguous || isHighRisk) {
+  if (isAmbiguous || isHighRisk || isExploratory) {
     add('contrarian', 'Pressure-test fragile assumptions and false consensus before the plan is accepted.')
   }
 
@@ -577,10 +397,6 @@ function selectAdvisoryLenses(
   if (isReaderOrUserFacing) {
     add('outsider', 'Read the result like a new user or reader who does not know Guildhall internals.')
   }
-  if (asksForFutureOpportunity) {
-    add('expansionist', 'Capture adjacent opportunities as non-blocking follow-up instead of expanding this task.')
-  }
-
   return selected
 }
 

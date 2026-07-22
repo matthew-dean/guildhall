@@ -1,4 +1,4 @@
-import type { ProjectRelease, Task, TaskQueue, TaskStatus } from '@guildhall/core'
+import { explicitTaskStructuralIdentity, type ProjectRelease, type Task, type TaskQueue, type TaskStatus } from '@guildhall/core'
 import { taskDisplayLabel } from '@guildhall/shared'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 import { META_INTAKE_TASK_ID, WORKSPACE_IMPORT_TASK_ID } from './project-reserved-task-ids.js'
@@ -7,7 +7,6 @@ import { effectiveTaskStatus } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { explicitMarkdownSourceRefsFromTask } from './task-source-refs.js'
-import { taskTitleOverlap } from './task-title-overlap.js'
 
 export type ProjectScopeKind = 'release' | 'milestone' | 'proposed_feature_set'
 export type ProjectScopeSource = 'owner_approved' | 'spec' | 'release_plan' | 'inferred'
@@ -32,6 +31,11 @@ export interface ProjectScope {
   nodeIds: string[]
   deferredNodeIds: string[]
   proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
+}
+
+type ProofScope = {
+  id: string
+  kind: string
 }
 
 export interface ProjectScopeRow {
@@ -131,7 +135,7 @@ export interface ProjectScopeProjection {
   }
   release: {
     state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
-    blockers: Array<{ id: string; label: string; owningTaskId?: string }>
+    blockers: Array<{ id: string; label: string; owningTaskId?: string; code?: string }>
   }
 }
 
@@ -168,6 +172,7 @@ export interface ProjectScopeTaskInput {
   id: string
   status?: TaskStatus
   releaseIds?: readonly string[]
+  semanticKind?: string
   hierarchy?: { parentId?: string; childIds?: string[] }
 }
 
@@ -414,6 +419,16 @@ export function taskScopeEligibility(
       : { eligible: true, reason: 'no_scope' }
   }
   const nodeId = taskScopeNodeId(task.id)
+  if (
+    scope.kind === 'release' &&
+    task.semanticKind === 'proof_setup' &&
+    !task.releaseIds?.includes(scope.id)
+  ) {
+    // Proof setup is release-local executable work. A historical proof child
+    // remains readable, but ancestor membership must not make it an active
+    // blocker in a later release.
+    return { eligible: false, reason: 'deferred' }
+  }
   if (scope.nodeIds.includes(nodeId)) return { eligible: true, reason: 'included' }
   if (options.includedDependencyIds?.has(task.id)) return { eligible: true, reason: 'included_prerequisite' }
   if (scope.deferredNodeIds.includes(nodeId)) return { eligible: false, reason: 'deferred' }
@@ -485,6 +500,7 @@ export function taskCompletionProofSatisfiedByLinkedChildren(
   task: Task,
   tasks: readonly Task[],
   proofStyle: 'script_only' | 'manual' | 'mixed' | 'unspecified' | null | undefined,
+  selectedScope?: ProofScope | null,
 ): boolean {
   const tasksById = new Map(tasks.map(candidate => [candidate.id, candidate] as const))
   const childIdsByParent = buildChildMap(tasks)
@@ -493,8 +509,20 @@ export function taskCompletionProofSatisfiedByLinkedChildren(
     tasksById,
     childIdsByParent,
     proofStyle,
+    selectedScope,
     new Set<string>(),
   )
+}
+
+function proofChildBelongsToSelectedScope(
+  child: Task,
+  selectedScope: ProofScope | null | undefined,
+): boolean {
+  // A proof child created for a later release is a new executable boundary;
+  // historical proof children must not keep the current parent blocked (or
+  // satisfy it) through ancestor membership alone.
+  if (!selectedScope || selectedScope.kind !== 'release' || child.semanticKind !== 'proof_setup') return true
+  return child.releaseIds?.includes(selectedScope.id) === true
 }
 
 function currentTaskForProjection(task: Task): Task {
@@ -605,6 +633,7 @@ function buildScopeRow(
     input.requiresScriptProof,
     input.tasksById,
     input.childIdsByParent,
+    input.selectedScope,
   )
   const humanBlocking = proofBlocked ? false : humanBlockingFor(task, handoffState, scope)
   return normalizeProjectScopeRowReadModel({
@@ -683,6 +712,7 @@ function completionProofBlockedForTask(
   requiresScriptProof: boolean,
   tasksById: ReadonlyMap<string, Task>,
   childIdsByParent: ReadonlyMap<string, string[]>,
+  selectedScope: ProjectScope | null,
 ): boolean {
   const status = effectiveTaskStatus(task) ?? task.status
   const proofStyle = requiresScriptProof ? 'script_only' as const : undefined
@@ -694,6 +724,7 @@ function completionProofBlockedForTask(
       tasksById,
       childIdsByParent,
       proofStyle,
+      selectedScope,
       new Set<string>(),
     )
 }
@@ -710,11 +741,11 @@ function duplicateProofMissingTaskIds(
   for (const task of scopedTasks) {
     const status = effectiveTaskStatus(task) ?? task.status
     if (status !== 'done' || !taskDoneButProofMissingForScope(task, requiresScriptProof ? 'script_only' : undefined)) continue
-    if (taskCompletionProofSatisfiedByLinkedChildren(task, tasks, requiresScriptProof ? 'script_only' : undefined)) continue
+    if (taskCompletionProofSatisfiedByLinkedChildren(task, tasks, requiresScriptProof ? 'script_only' : undefined, selectedScope)) continue
     const duplicateOwner = blockedScopedTasks.find(blocked =>
       blocked.id !== task.id &&
-      taskTitleOverlap(taskDisplayLabel(blocked, blocked.id), taskDisplayLabel(task, task.id)) >= 0.8 &&
-      taskDisplayLabel(blocked, blocked.id).length >= taskDisplayLabel(task, task.id).length,
+      explicitTaskStructuralIdentity(blocked) !== null &&
+      explicitTaskStructuralIdentity(blocked) === explicitTaskStructuralIdentity(task),
     )
     if (duplicateOwner) result.add(task.id)
   }
@@ -726,6 +757,7 @@ function taskCompletionProofSatisfiedByLinkedChildrenAtIndex(
   tasksById: ReadonlyMap<string, Task>,
   childIdsByParent: ReadonlyMap<string, string[]>,
   proofStyle: 'script_only' | 'manual' | 'mixed' | 'unspecified' | null | undefined,
+  selectedScope: ProofScope | null | undefined,
   visiting: Set<string>,
 ): boolean {
   if (visiting.has(task.id)) return false
@@ -735,6 +767,7 @@ function taskCompletionProofSatisfiedByLinkedChildrenAtIndex(
     .map(childId => tasksById.get(childId))
     .filter((child): child is Task => Boolean(child))
     .filter(child => isMaterializedExecutionChild(task, child))
+    .filter(child => proofChildBelongsToSelectedScope(child, selectedScope))
     .filter(child => !['archived', 'cancelled'].includes(String(child.status ?? '')))
   if (children.length === 0) return false
   return children.every(child => {
@@ -746,6 +779,7 @@ function taskCompletionProofSatisfiedByLinkedChildrenAtIndex(
       tasksById,
       childIdsByParent,
       proofStyle,
+      selectedScope,
       new Set(visiting),
     )
   })
@@ -1050,6 +1084,7 @@ export function summarizeProjectScopeRelease(rows: readonly ProjectScopeRow[]): 
       id: row.taskId,
       owningTaskId: row.taskId,
       label: blockerLabelFor(row),
+      code: blockerCodeFor(row),
     }))
   if (blockers.length > 0) {
     const shapingOnly = blockers.every(blocker => {
@@ -1076,4 +1111,12 @@ function blockerLabelFor(row: ProjectScopeRow): string {
   if (row.handoffState === 'spec_review') return `${title}: waiting for review before work can start.`
   if (row.handoffState === 'blocked') return `${title}: ${row.blockerSummary ?? 'blocked.'}`
   return `${title}: needs attention.`
+}
+
+function blockerCodeFor(row: ProjectScopeRow): string {
+  if (row.proofBlocked) return 'proof_evidence_missing'
+  if (row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped') return 'imported_scope_shaping'
+  if (row.handoffState === 'spec_review') return 'spec_review_required'
+  if (row.handoffState === 'blocked') return 'blocked'
+  return 'attention'
 }

@@ -1,6 +1,34 @@
 import { AcceptanceCriteria, type AcceptanceCriteria as AcceptanceCriterion } from './task.js'
+import type { StructuredSpec } from './structured-spec.js'
 
-export function parseAcceptanceCriteriaFromSpec(spec: string | undefined): AcceptanceCriterion[] {
+/**
+ * Convert the machine-authored acceptance contract into the legacy task
+ * evidence shape. The structured payload is authoritative; the Markdown
+ * renderer is deliberately not read back to reconstruct this state.
+ */
+export function acceptanceCriteriaFromStructuredSpec(spec: StructuredSpec | undefined): AcceptanceCriterion[] {
+  if (!spec) return []
+  return spec.acceptanceCriteria.map((criterion, index) => AcceptanceCriteria.parse({
+    id: `ac-${index + 1}`,
+    description: `${criterion.scenario} ${criterion.expectation}`.trim(),
+    scenario: criterion.scenario,
+    expectation: criterion.expectation,
+    verifiedBy: criterion.verificationMode,
+    ...(criterion.command ? { command: criterion.command } : {}),
+    ...(criterion.expectedExit ? { expectedExit: criterion.expectedExit } : {}),
+    ...(criterion.expectedOutputIncludes ? { expectedOutputIncludes: criterion.expectedOutputIncludes } : {}),
+    ...(criterion.evidenceHint ? { evidenceHint: criterion.evidenceHint } : {}),
+    ...(criterion.negativeCase ? { negativeCase: criterion.negativeCase } : {}),
+    met: false,
+  }))
+}
+
+/**
+ * One-way migration helper for pre-structured task records. This is not a
+ * planning or execution API: rendered Markdown must never be read back as
+ * authoritative state after migration.
+ */
+export function migrateLegacyAcceptanceCriteriaFromMarkdown(spec: string | undefined): AcceptanceCriterion[] {
   if (typeof spec !== 'string' || spec.trim() === '') return []
 
   const lines = spec.split(/\r?\n/)

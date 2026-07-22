@@ -175,13 +175,15 @@ describe('deriveProjectWorkProgress', () => {
             id: 'review-proof',
             title: 'Reviewer proof',
             kind: 'review',
-            expectedEvidence: ['world-state-reviewer'],
+            expectedEvidence: [{ id: 'review-proof', description: 'The reviewer proof is recorded.' }],
           },
         ],
         reviewVerdicts: [
           {
-            verdict: 'approved',
-            reviewerPath: 'world-state-reviewer',
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            acceptedCriteriaIds: [],
+            proofEvidenceIds: ['review-proof'],
             recordedAt: '2026-07-06T13:35:47.512Z',
           },
         ],
@@ -218,12 +220,12 @@ describe('deriveProjectWorkProgress', () => {
       expect.objectContaining({
         id: 'proof:1',
         title: 'Expected proof: pnpm-test-headless-fixture',
-        status: 'done',
+        status: 'todo',
       }),
     ])
   })
 
-  it('does not label proof steps from imported checklist or filler evidence', () => {
+  it('uses imported evidence wording only as a display label', () => {
     const progress = deriveProjectWorkProgress([
       {
         id: 'db-types',
@@ -253,11 +255,11 @@ describe('deriveProjectWorkProgress', () => {
     ])
 
     expect(progress.byTaskId['db-types']?.deliverySteps[0]).toMatchObject({
-      title: 'Proof needs shaping',
+      title: 'Expected proof: [ ] Unit tests: use-collections, use-presence, subdomain utils',
       status: 'todo',
     })
     expect(progress.byTaskId['deepinfra']?.deliverySteps[0]).toMatchObject({
-      title: 'Gate passed: pnpm-build',
+      title: 'Expected proof: Select and prove a DeepInfra drafting model has a bounded proof plan for harness.',
     })
   })
 

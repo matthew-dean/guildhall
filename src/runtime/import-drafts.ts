@@ -17,7 +17,7 @@ function noteArray(task: Task): Task['notes'] {
 function hasShapingProgress(task: Task): boolean {
   return noteArray(task).some((note) => {
     if (note?.role === 'shaping-request') return true
-    return note?.role === 'state-repair' && /imported draft shaping/i.test(note.content ?? '')
+    return note?.role === 'state-repair' && note.structured?.event === 'imported_draft_shaping'
   })
 }
 

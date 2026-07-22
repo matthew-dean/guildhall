@@ -261,11 +261,11 @@ function lineFromEvent(
   }
 }
 
-function ownerInputTickerMessage(message: string | undefined): string {
-  if (/question|answer/i.test(message ?? '')) return 'Waiting for your answer'
-  if (/spec/i.test(message ?? '')) return 'Spec review pending'
-  if (/brief/i.test(message ?? '')) return 'Brief review pending'
-  if (/recover|blocked|escalation/i.test(message ?? '')) return 'Recovery decision pending'
+function ownerInputTickerMessage(code: string | undefined, focusKind: string | undefined): string {
+  if (focusKind === 'brief_approval' || code === 'brief_approval_required') return 'Brief review pending'
+  if (focusKind === 'spec_review' || code === 'spec_review_required') return 'Spec review pending'
+  if (focusKind === 'question' || code === 'question_answer_required') return 'Waiting for your answer'
+  if (code === 'recovery_decision_required') return 'Recovery decision pending'
   return 'Waiting on your input'
 }
 
@@ -302,7 +302,7 @@ function readinessTicker(detail: ProjectDetail | null | undefined): ProjectActiv
       pulse: false,
       actorLabel: 'Needs you',
       label: 'Needs you',
-      message: ownerInputTickerMessage(readiness.message),
+      message: ownerInputTickerMessage(readiness.code, readiness.focusKind),
       timeLabel: null,
     }
   }

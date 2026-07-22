@@ -320,14 +320,9 @@ function expectedEvidenceLabel(value: unknown): string | undefined {
 
 function usefulExpectedEvidenceLabel(value: unknown): string | undefined {
   const label = stringValue(value)
-  if (!label || importedProofEvidenceLooksGeneric(label)) return undefined
-  return label
-}
-
-function importedProofEvidenceLooksGeneric(value: string): boolean {
-  return /^\[[ x]\]\s+/i.test(value.trim()) ||
-    /\bhas a bounded proof plan for harness\b/i.test(value) ||
-    /\breuses Stage \d+\b/i.test(value)
+  // Evidence wording is display material. Keep it when it is present; the
+  // typed proof kind/status/verification record owns whether it counts.
+  return label || undefined
 }
 
 function proofPathFallbackTitle(proof: TaskRecord, index: number): string {

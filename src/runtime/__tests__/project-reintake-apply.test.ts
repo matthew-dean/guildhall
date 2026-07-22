@@ -45,17 +45,30 @@ function task(overrides: Record<string, unknown>) {
   }
 }
 
-async function makeState(tasks: unknown[]) {
+async function makeState(tasks: unknown[], queueExtras: Record<string, unknown> = {}) {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-reintake-'))
   const memoryDir = path.join(projectRoot, '.guildhall')
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', { version: 1, lastUpdated: now, tasks })
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', {
+    version: 1,
+    lastUpdated: now,
+    tasks,
+    ...queueExtras,
+  })
   await writeProjectStateTextFromMemoryDirAsync(memoryDir, 'PROGRESS.md', '# Progress\n')
   return memoryDir
 }
 
-async function readQueue(memoryDir: string): Promise<{ tasks: Array<Record<string, any>> }> {
+async function readQueue(memoryDir: string): Promise<{
+  tasks: Array<Record<string, any>>
+  releases?: Array<Record<string, any>>
+  selectedReleaseId?: string
+}> {
   const queue = await readProjectTaskQueueForRichMutation(path.dirname(memoryDir))
-  return queue as { tasks: Array<Record<string, any>> }
+  return queue as {
+    tasks: Array<Record<string, any>>
+    releases?: Array<Record<string, any>>
+    selectedReleaseId?: string
+  }
 }
 
 async function writeQueue(memoryDir: string, tasks: unknown[]): Promise<void> {
@@ -70,6 +83,20 @@ const loomaAudit = [
   '| Dialog | shipped as `ui-dialog` | native dialog + overlay manager | Knit BaseDialog already uses it |',
   '| AlertDialog | missing P0 gap | builds on Dialog and Button | Knit destructive confirmation flow |',
 ].join('\n')
+
+const loomaAuditSource = {
+  path: 'looma/docs/component-library-audit.md',
+  content: loomaAudit,
+  unitIdentities: {
+    Dialog: 'looma/component/dialog',
+    AlertDialog: 'looma/component/alert-dialog',
+  },
+  statusHints: { Dialog: 'shipped' as const, AlertDialog: 'missing' as const },
+  workShapes: { Dialog: 'ui-component' as const, AlertDialog: 'ui-component' as const },
+  targetAreas: { Dialog: 'looma', AlertDialog: 'looma' },
+  buildsOn: { AlertDialog: ['Dialog'] },
+  consumerSurfaces: { AlertDialog: ['Knit destructive confirmation flow'] },
+}
 
 const narrativeRoadmap = [
   '# Implementation Roadmap',
@@ -99,6 +126,38 @@ const narrativeRoadmap = [
   '10. Prove world-state continuity review over elapsed-time object and property changes.',
   '11. Prove spatial/geographic continuity review for travel, terrain, walking speed, map consistency, weather, light, and physical plausibility.',
 ].join('\n')
+
+const narrativeRoadmapSemanticKinds = {
+  'Define fixture, expected-record, prototype-run, and evaluation schemas.': 'contract',
+  'Add the first tiny fiction fixture and human-authored expected records.': 'fixture',
+  'Implement a no-UI runner that builds a packet from fixture records.': 'runner',
+  'Add deterministic evaluation output for missing/noisy/stale/useful context.': 'evaluation',
+  'Generate a developer-readable debug report for each run.': 'debug_report',
+  'Use the first run to narrow the MVP story-memory schema.': 'schema_prune',
+  'Select and prove a DeepInfra drafting model for broad-genre chapter writing.': 'drafting_model',
+  'Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.': 'author_intent',
+  'Generate a CLI-first story synopsis, outline, character/voice records, and one chapter draft from the selected model.': 'chapter_draft',
+  'Prove world-state continuity review over elapsed-time object and property changes.': 'world_state_review',
+  'Prove spatial/geographic continuity review for travel, terrain, walking speed, map consistency, weather, light, and physical plausibility.': 'spatial_review',
+} as const
+
+const narrativeRoadmapContractNames = {
+  'Define fixture, expected-record, prototype-run, and evaluation schemas.': [
+    'FixtureManifest',
+    'ExpectedRecordSet',
+    'ExpectedSignal',
+    'PrototypeRun',
+    'RunEvaluation',
+    'PacketQualityScore',
+  ],
+} as const
+
+const narrativeInventorySemanticKinds = {
+  'Implement dialogue-and-character-voice reviewer lane': 'reviewer_lane',
+  'Implement theme-and-meaning-review reviewer lane': 'reviewer_lane',
+  'Build local authoring shell': 'workflow',
+  'Implement author-involvement-modes contract and involvement-dial types': 'contract',
+} as const
 
 const scopedNarrativeRelease = [
   '# Narrative Harness release plan',
@@ -257,6 +316,7 @@ describe('project re-intake apply', () => {
       title: 'Build AlertDialog primitive',
       description: 'Old',
       status: 'blocked',
+      deliverableName: 'AlertDialog',
       taskKind: 'research',
       sizePlan: { score: 5, recommendation: 'split' },
       taskReadiness: { recommendation: 'needs_research_spike' },
@@ -266,7 +326,7 @@ describe('project re-intake apply', () => {
     ])
     const draft = planProjectReintake({
       now,
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      sources: [loomaAuditSource],
       tasks: [existingTask],
     })
     await writeProjectReintakeDraft(memoryDir, draft)
@@ -338,12 +398,16 @@ describe('project re-intake apply', () => {
     })
   })
 
-  it('archives shadowed current-milestone deliverable imports so they stop counting as scoped work', async () => {
+  it('does not archive explicitly shaped work because a roadmap also has starter tasks', async () => {
     const legacyTask = task({
       id: 'task-deliverable',
       title: 'typed fixture and expected-record contracts',
       description: 'docs/harness/implementation-roadmap.md: - typed fixture and expected-record contracts',
       status: 'import_draft',
+      spec: '## Summary\nKeep the typed fixture contract visible.\n\n## Acceptance Criteria\n1. The typed fixture contract is reviewable.',
+      acceptanceCriteria: [{ id: 'typed-fixture', description: 'The typed fixture contract is reviewable.', verifiedBy: 'review' }],
+      productBrief: { userJob: 'Keep the typed fixture contract visible.', successMetric: 'The typed fixture contract is reviewable.' },
+      structuredSpec: { kind: 'implementation', boundary: 'typed fixture contract' },
     })
     const memoryDir = await makeState([legacyTask])
     const draft = planProjectReintake({
@@ -357,12 +421,12 @@ describe('project re-intake apply', () => {
     expect(result.success).toBe(true)
 
     const queue = await readQueue(memoryDir)
-    expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-deliverable')).toMatchObject({
+    expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-deliverable')).not.toMatchObject({
       status: 'archived',
     })
   })
 
-  it('archives wrapped current-milestone deliverable imports when starter tasks now define that milestone', async () => {
+  it('does not archive wrapped explicitly shaped work because a roadmap also has starter tasks', async () => {
     const wrappedRoadmap = [
       '# Implementation Roadmap',
       '',
@@ -384,6 +448,10 @@ describe('project re-intake apply', () => {
       title: 'scripts or tests that ingest a fixture, build records, run a packet, and save the run output',
       description: 'docs/harness/implementation-roadmap.md: - scripts or tests that ingest a fixture, build records, run a packet, and save the run output',
       status: 'import_draft',
+      spec: '## Summary\nKeep the run output contract visible.\n\n## Acceptance Criteria\n1. The run output contract is reviewable.',
+      acceptanceCriteria: [{ id: 'run-output', description: 'The run output contract is reviewable.', verifiedBy: 'review' }],
+      productBrief: { userJob: 'Keep the run output contract visible.', successMetric: 'The run output contract is reviewable.' },
+      structuredSpec: { kind: 'implementation', boundary: 'run output contract' },
     })
     const memoryDir = await makeState([legacyTask])
     const draft = planProjectReintake({
@@ -397,7 +465,7 @@ describe('project re-intake apply', () => {
     expect(result.success).toBe(true)
 
     const queue = await readQueue(memoryDir)
-    expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-wrapped-deliverable')).toMatchObject({
+    expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-wrapped-deliverable')).not.toMatchObject({
       status: 'archived',
     })
   })
@@ -412,7 +480,12 @@ describe('project re-intake apply', () => {
       now,
       projectPath,
       sources: [
-        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap },
+        {
+          path: 'docs/harness/implementation-roadmap.md',
+          content: narrativeRoadmap,
+          semanticKinds: narrativeRoadmapSemanticKinds,
+          contractNames: narrativeRoadmapContractNames,
+        },
         { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventory },
       ],
       tasks: [],
@@ -556,14 +629,7 @@ describe('project re-intake apply', () => {
         expect.objectContaining({ id: 'spatial-finding-shape' }),
       ],
     })
-    expect(laterTask).toMatchObject({
-      status: 'shelved',
-      references: [
-        'docs/harness/remaining-spec-decomposition-inventory.md',
-        'docs/specs/dialogue-and-character-voice.md',
-      ],
-    })
-    expect(laterTask?.releaseIds ?? []).toEqual([])
+    expect(laterTask).toBeUndefined()
 
     const approval = await approveSpec({
       memoryDir,
@@ -588,17 +654,23 @@ describe('project re-intake apply', () => {
         title: 'Build Character voice and dialogue review',
         status: 'spec_review',
         releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+        sourceIdentity: 'docs/harness/headless-mvp-release-plan.md#unit:1',
+        deliverableName: 'Character voice and dialogue review',
       }),
       task({
         id: 'task-out-of-scope',
         title: 'Run unrelated smoke test',
         status: 'spec_review',
-        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+        releaseIds: [],
       }),
     ])
     const draft = planProjectReintake({
       now,
-      sources: [{ path: 'docs/harness/headless-mvp-release-plan.md', content: scopedNarrativeRelease }],
+      sources: [{
+        path: 'docs/harness/headless-mvp-release-plan.md',
+        content: scopedNarrativeRelease,
+        semanticKinds: { 'Character voice and dialogue review': 'reviewer_lane' },
+      }],
       tasks: await readQueue(memoryDir).then(queue => queue.tasks),
     })
     expect(draft.releases?.[0]?.nodeIds).toEqual(['work:task-in-scope'])
@@ -621,6 +693,106 @@ describe('project re-intake apply', () => {
     ])
   })
 
+  it('preserves a shipped release while applying a repaired release envelope', async () => {
+    const planningInstruction = 'You are repairing the project plan from current workspace evidence. First, repair the selected release and create a fresh release boundary. Use only source-backed evidence. Do not wait for approval, manufacture capabilities, or mark a release shipped without proof. The selected release must include author intent and voice input, synopsis generation, story records, context planning, broad-genre drafting model proof, chapter drafting, and review lenses. After repairing the plan, run the selected work and make the release state readable through Guildhall.'
+    const oldReleaseId = 'stage-1-headless-drafting-and-evaluation-mvp'
+    const memoryDir = await makeState([
+      task({
+        id: 'task-real-member',
+        title: 'Build Character voice and dialogue review',
+        status: 'spec_review',
+        releaseIds: [oldReleaseId],
+        sourceIdentity: 'docs/harness/headless-mvp-release-plan.md#unit:1',
+        deliverableName: 'Character voice and dialogue review',
+      }),
+      task({
+        id: 'task-planning-instruction',
+        title: planningInstruction,
+        status: 'spec_review',
+        semanticKind: 'planning_instruction',
+        releaseIds: [oldReleaseId],
+      }),
+    ], {
+      selectedReleaseId: oldReleaseId,
+      releases: [{
+        id: oldReleaseId,
+        label: 'Stage 1: Headless Drafting And Evaluation MVP',
+        kind: 'release',
+        state: 'shipped',
+        source: 'release_plan',
+        nodeIds: ['work:task-real-member', 'work:task-planning-instruction'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+    })
+    const draft = planProjectReintake({
+      now,
+      sources: [{
+        path: 'docs/harness/headless-mvp-release-plan.md',
+        content: scopedNarrativeRelease,
+        unitIdentities: { 'Character voice and dialogue review': 'docs/harness/headless-mvp-release-plan.md#unit:1' },
+        semanticKinds: { 'Character voice and dialogue review': 'reviewer_lane' },
+        workShapes: { 'Character voice and dialogue review': 'generic' },
+        statusHints: { 'Character voice and dialogue review': 'missing' },
+        targetAreas: { 'Character voice and dialogue review': 'harness' },
+        producedArtifacts: { 'Character voice and dialogue review': 'artifact:character-voice-dialogue-review' },
+      }],
+      releases: [{
+        id: oldReleaseId,
+        label: 'Stage 1: Headless Drafting And Evaluation MVP',
+        state: 'shipped',
+        nodeIds: ['work:task-real-member', 'work:task-planning-instruction'],
+        deferredNodeIds: [],
+      }],
+      tasks: [
+        task({
+          id: 'task-real-member',
+          title: 'Build Character voice and dialogue review',
+          status: 'spec_review',
+          releaseIds: [oldReleaseId],
+          sourceIdentity: 'docs/harness/headless-mvp-release-plan.md#unit:1',
+          deliverableName: 'Character voice and dialogue review',
+        }),
+        task({
+          id: 'task-planning-instruction',
+          title: planningInstruction,
+          status: 'spec_review',
+          semanticKind: 'planning_instruction',
+          releaseIds: [oldReleaseId],
+        }),
+      ],
+    })
+    expect(draft.selectedReleaseId).toBe(`${oldReleaseId}-r1`)
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result).toMatchObject({ success: true })
+
+    const queue = await readQueue(memoryDir)
+    expect(queue.selectedReleaseId).toBe(`${oldReleaseId}-r1`)
+    expect(queue.releases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: oldReleaseId,
+        state: 'shipped',
+        nodeIds: ['work:task-real-member', 'work:task-planning-instruction'],
+      }),
+      expect.objectContaining({
+        id: `${oldReleaseId}-r1`,
+        state: 'active',
+        supersedesReleaseId: oldReleaseId,
+        nodeIds: ['work:task-real-member'],
+      }),
+    ]))
+    expect(queue.tasks.find(candidate => candidate.id === 'task-real-member')?.releaseIds).toEqual([
+      oldReleaseId,
+      `${oldReleaseId}-r1`,
+    ])
+    expect(queue.tasks.find(candidate => candidate.id === 'task-planning-instruction')).toMatchObject({
+      status: 'archived',
+      releaseIds: [oldReleaseId],
+    })
+  })
+
   it('respects an explicit current release despite broad near-term proof prose', async () => {
     const memoryDir = await makeState([])
     const projectPath = path.dirname(memoryDir)
@@ -634,7 +806,11 @@ describe('project re-intake apply', () => {
       projectPath,
       sources: [
         { path: 'docs/harness/implementation-roadmap.md', content: narrativeNearTermProofRoadmap },
-        { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventory },
+        {
+          path: 'docs/harness/remaining-spec-decomposition-inventory.md',
+          content: narrativeRemainingInventory,
+          semanticKinds: narrativeInventorySemanticKinds,
+        },
         { path: 'docs/specs/dialogue-and-character-voice.md', content: dialogueAndCharacterVoiceSpec },
       ],
       tasks: [],
@@ -666,26 +842,9 @@ describe('project re-intake apply', () => {
         deferredNodeIds: [],
       }),
     ])
-    expect(dialogueTask).toMatchObject({
-      status: 'shelved',
-      references: [
-        'docs/harness/remaining-spec-decomposition-inventory.md',
-        'docs/specs/dialogue-and-character-voice.md',
-      ],
-    })
-    expect(dialogueTask?.releaseIds ?? []).toEqual([])
-    expect(dialogueTask?.spec ?? '').toContain('Could the line be reassigned to another character without anyone noticing?')
-    expect(dialogueTask?.spec ?? '').not.toContain('exposes the expected public contract')
-    expect(dialogueTask?.decomposition).toBeUndefined()
-    expect(dialogueTask?.sizePlan).toBeUndefined()
-    expect(themeTask).toMatchObject({
-      status: 'shelved',
-    })
-    expect(themeTask?.releaseIds ?? []).toEqual([])
-    expect(shellTask).toMatchObject({
-      status: 'shelved',
-    })
-    expect(shellTask?.releaseIds ?? []).toEqual([])
+    expect(dialogueTask).toBeUndefined()
+    expect(themeTask).toBeUndefined()
+    expect(shellTask).toBeUndefined()
   })
 
   it('keeps source-backed contract tasks in draft when the cited specs do not name concrete contracts', async () => {
@@ -705,7 +864,11 @@ describe('project re-intake apply', () => {
       projectPath,
       sources: [
         { path: 'docs/harness/implementation-roadmap.md', content: narrativeNearTermProofRoadmap },
-        { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: inventory },
+        {
+          path: 'docs/harness/remaining-spec-decomposition-inventory.md',
+          content: inventory,
+          semanticKinds: { 'Implement author-involvement-modes contract and involvement-dial types': 'contract' },
+        },
         { path: 'docs/specs/author-involvement-modes.md', content: authorInvolvementModesSpecWithoutContracts },
       ],
       tasks: [],
@@ -717,19 +880,9 @@ describe('project re-intake apply', () => {
 
     const queue = await readQueue(memoryDir)
     const task = queue.tasks.find(task =>
-      task.title === 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types',
+      task.title === 'Implement author-involvement-modes contract and involvement-dial types',
     )
-    expect(task).toMatchObject({
-      status: 'shelved',
-      projectPath,
-      references: [
-        'docs/harness/remaining-spec-decomposition-inventory.md',
-        'docs/specs/author-involvement-modes.md',
-      ],
-    })
-    expect(task?.productBrief).toBeUndefined()
-    expect(task?.taskReadiness?.recommendation).toBe('needs_research_spike')
-    expect(JSON.stringify(task?.acceptanceCriteria ?? '')).not.toContain('usable in code: .')
+    expect(task).toBeUndefined()
   })
 
   it('archives stale resolved contract recovery tasks instead of keeping them as current blockers', async () => {
@@ -743,6 +896,16 @@ describe('project re-intake apply', () => {
         references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
         releaseIds: ['near-term-proof-scope'],
         spec: '## Verification\n- Define contracts named in the cited docs: .',
+        doneSummaryBundle: {
+          taskId: 'task-resolved-recovery',
+          status: 'done',
+          completedAt: now,
+          summary: { journey: 'Recovered the contract surface.', decision: 'Keep the recovered artifact.', evidence: 'typed completion record', learningCandidates: [], openResidue: '' },
+          retention: { transcriptPrimaryArtifact: false, compactedFullTranscript: true, fullEvidenceAvailable: true },
+          evidenceRefs: [],
+          createdAt: now,
+          createdBy: 'test',
+        },
       }),
     ])
     const projectPath = path.dirname(memoryDir)
@@ -761,6 +924,16 @@ describe('project re-intake apply', () => {
           references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
           releaseIds: ['near-term-proof-scope'],
           spec: '## Verification\n- Define contracts named in the cited docs: .',
+          doneSummaryBundle: {
+            taskId: 'task-resolved-recovery',
+            status: 'done',
+            completedAt: now,
+            summary: { journey: 'Recovered the contract surface.', decision: 'Keep the recovered artifact.', evidence: 'typed completion record', learningCandidates: [], openResidue: '' },
+            retention: { transcriptPrimaryArtifact: false, compactedFullTranscript: true, fullEvidenceAvailable: true },
+            evidenceRefs: [],
+            createdAt: now,
+            createdBy: 'test',
+          },
         }),
       ],
     })
@@ -780,6 +953,7 @@ describe('project re-intake apply', () => {
       task({
         id: 'task-hollow-contract',
         title: 'Implement author-involvement-modes contract and involvement-dial types',
+        semanticKind: 'contract',
         description: 'Imported from Narrative Harness docs.',
         projectPath: '/workspace/docs/harness',
         status: 'spec_review',
@@ -796,6 +970,7 @@ describe('project re-intake apply', () => {
         task({
           id: 'task-hollow-contract',
           title: 'Implement author-involvement-modes contract and involvement-dial types',
+          semanticKind: 'contract',
           description: 'Imported from Narrative Harness docs.',
           projectPath: '/workspace/docs/harness',
           status: 'spec_review',
@@ -821,6 +996,9 @@ describe('project re-intake apply', () => {
     const legacyTask = task({
       id: 'task-import-9s8tkc',
       title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      sourceIdentity: 'docs/harness/implementation-roadmap.md#unit:1',
+      deliverableName: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      semanticKind: 'contract',
       status: 'spec_review',
       spec: [
         '## What this is',
@@ -886,7 +1064,12 @@ describe('project re-intake apply', () => {
     const draft = planProjectReintake({
       now,
       sources: [
-        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap },
+        {
+          path: 'docs/harness/implementation-roadmap.md',
+          content: narrativeRoadmap,
+          semanticKinds: narrativeRoadmapSemanticKinds,
+          contractNames: narrativeRoadmapContractNames,
+        },
         { path: 'docs/specs/schema-contract-roadmap.md', content: narrativeSchemaRoadmap },
       ],
       tasks: [legacyTask, staleChild],
@@ -942,6 +1125,9 @@ describe('project re-intake apply', () => {
     const legacyTask = task({
       id: 'task-import-9s8tkc',
       title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      sourceIdentity: 'docs/harness/implementation-roadmap.md#unit:1',
+      deliverableName: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      semanticKind: 'contract',
       status: 'import_draft',
       spec: '## Stale\nUse `coherence-reviewer-mvp`.',
     })
@@ -949,7 +1135,12 @@ describe('project re-intake apply', () => {
     const draft = planProjectReintake({
       now,
       sources: [
-        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap },
+        {
+          path: 'docs/harness/implementation-roadmap.md',
+          content: narrativeRoadmap,
+          semanticKinds: narrativeRoadmapSemanticKinds,
+          contractNames: narrativeRoadmapContractNames,
+        },
         { path: 'docs/specs/schema-contract-roadmap.md', content: narrativeSchemaRoadmap },
       ],
       tasks: [legacyTask],
@@ -983,7 +1174,7 @@ describe('project re-intake apply', () => {
     const existingTasks = [task({ id: 'task-old', title: 'Retry project discovery update', status: 'blocked' })]
     const draft = planProjectReintake({
       now,
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      sources: [loomaAuditSource],
       tasks: existingTasks,
     })
     await writeProjectReintakeDraft(memoryDir, draft)
@@ -995,8 +1186,9 @@ describe('project re-intake apply', () => {
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-old')).toMatchObject({
       status: 'archived',
     })
-    expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-alert-dialog-integration')).toMatchObject({
-      dependsOn: ['task-alert-dialog'],
+    expect(queue.tasks.find((candidate: { title?: string }) => candidate.title === 'Integrate AlertDialog into Knit destructive confirmation flow')).toMatchObject({
+      sourceIdentity: 'looma/component/alert-dialog:integration',
+      dependsOn: [expect.stringMatching(/^task-/)],
       acceptanceCriteria: expect.arrayContaining([expect.objectContaining({ id: 'integration-regression-test' })]),
       proofPaths: expect.arrayContaining([expect.objectContaining({ kind: 'browser' })]),
     })
@@ -1009,7 +1201,7 @@ describe('project re-intake apply', () => {
     const existingTasks = [task({ id: 'task-old', title: 'Retry project discovery update', status: 'blocked' })]
     const draft = planProjectReintake({
       now,
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      sources: [loomaAuditSource],
       tasks: existingTasks,
     })
     await writeProjectReintakeDraft(memoryDir, draft)

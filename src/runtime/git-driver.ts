@@ -46,7 +46,13 @@ async function execGh(args: readonly string[], opts: { cwd: string; maxBuffer?: 
 }
 
 function errorDetail(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+  if (err && typeof err === 'object') {
+    const message = err instanceof Error ? err.message : String(err)
+    const stderr = 'stderr' in err && typeof err.stderr === 'string' ? err.stderr : ''
+    const stdout = 'stdout' in err && typeof err.stdout === 'string' ? err.stdout : ''
+    return [message, stderr.trim(), stdout.trim()].filter(Boolean).join('\n')
+  }
+  return String(err)
 }
 
 export async function pruneStaleGitIndexLockFromError(
@@ -133,6 +139,16 @@ export interface MergeResult {
   conflict?: boolean
 }
 
+export interface WorktreeSyncResult {
+  ok: boolean
+  /** True when the worktree branch changed or was checkpointed. */
+  changed?: boolean
+  commitSha?: string
+  detail?: string
+  /** True when the base update could not be applied without a conflict. */
+  conflict?: boolean
+}
+
 export interface PushResult {
   ok: boolean
   detail?: string
@@ -186,6 +202,16 @@ export interface GitDriver {
   createWorktree(repoRoot: string, opts: CreateWorktreeOptions): Promise<void>
   /** Attach an existing branch to a worktree path. */
   attachWorktree(repoRoot: string, opts: AttachWorktreeOptions): Promise<void>
+  /**
+   * Bring a reusable task worktree up to the current base branch. Dirty task
+   * edits are checkpointed first; merge conflicts fail closed.
+   */
+  syncWorktreeWithBase(
+    worktreePath: string,
+    baseBranch: string,
+    commitMessage: string,
+    opts?: { conflictStrategy?: 'fail' | 'prefer_task' },
+  ): Promise<WorktreeSyncResult>
   /** Remove a worktree (and its branch ref). Safe to call on missing paths. */
   removeWorktree(repoRoot: string, worktreePath: string): Promise<void>
   /** Package dirty shared-checkout changes into a task branch commit. */
@@ -401,14 +427,77 @@ export class NodeGitDriver implements GitDriver {
     })
   }
 
-  async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
+  async syncWorktreeWithBase(
+    worktreePath: string,
+    baseBranch: string,
+    commitMessage: string,
+    opts: { conflictStrategy?: 'fail' | 'prefer_task' } = {},
+  ): Promise<WorktreeSyncResult> {
+    const resolvedWorktreePath = resolveRuntimePath(worktreePath)
+    let checkpoint: CheckpointResult | undefined
     try {
-      await execGit(['worktree', 'remove', '--force', resolveRuntimePath(worktreePath)], {
-        cwd: resolveRuntimePath(repoRoot),
-      })
-    } catch {
-      // Already gone, or never created — either way, nothing to clean up.
+      const status = await this.statusSummary(resolvedWorktreePath)
+      if (!status.clean) {
+        checkpoint = await this.commitAll(resolvedWorktreePath, commitMessage)
+        if (!checkpoint.ok) return checkpoint
+      }
+      await execGit(['merge', '--no-edit', baseBranch], { cwd: resolvedWorktreePath })
+      const { stdout } = await execGit(['rev-parse', 'HEAD'], { cwd: resolvedWorktreePath })
+      return {
+        ok: true,
+        changed: Boolean(checkpoint?.commitSha),
+        ...(checkpoint?.commitSha ? { commitSha: checkpoint.commitSha } : {}),
+        ...(checkpoint?.detail ? { detail: checkpoint.detail } : {}),
+        ...(stdout.trim() ? { detail: [checkpoint?.detail, `Synchronized with ${baseBranch} at ${stdout.trim()}.`].filter(Boolean).join(' ') } : {}),
+      }
+    } catch (err) {
+      const detail = errorDetail(err)
+      if (opts.conflictStrategy === 'prefer_task' && /conflict|automatic merge failed|not something we can merge/i.test(detail)) {
+        try {
+          const { stdout: conflictedPathsOutput } = await execGit(
+            ['diff', '--name-only', '--diff-filter=U', '-z'],
+            { cwd: resolvedWorktreePath },
+          )
+          const conflictedPaths = conflictedPathsOutput.split('\0').filter(Boolean)
+          if (conflictedPaths.length > 0) {
+            // The task worktree is the authoritative lane for Guildhall-owned
+            // proof artifacts. Resolve only the files Git marked conflicted;
+            // untouched base changes still arrive through the normal merge.
+            await execGit(['checkout', '--ours', '--', ...conflictedPaths], { cwd: resolvedWorktreePath })
+            await execGit(['add', '--', ...conflictedPaths], { cwd: resolvedWorktreePath })
+            await execGit(['commit', '--no-edit'], { cwd: resolvedWorktreePath })
+            const { stdout } = await execGit(['rev-parse', 'HEAD'], { cwd: resolvedWorktreePath })
+            return {
+              ok: true,
+              changed: true,
+              ...(stdout.trim() ? { commitSha: stdout.trim() } : {}),
+              detail: `Resolved ${conflictedPaths.length} Guildhall-owned proof conflict(s) in favor of the task branch.`,
+            }
+          }
+        } catch {
+          // Fall through to the ordinary abort-and-report path.
+        }
+      }
+      try {
+        await execGit(['merge', '--abort'], { cwd: resolvedWorktreePath })
+      } catch {
+        // Best effort: the original task branch remains the authority, but
+        // the caller must still stop because the base was not synchronized.
+      }
+      return {
+        ok: false,
+        detail,
+        conflict: /conflict|automatic merge failed|not something we can merge/i.test(detail),
+      }
     }
+  }
+
+  async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
+    const resolvedWorktreePath = resolveRuntimePath(worktreePath)
+    if (!fsSync.existsSync(resolvedWorktreePath)) return
+    await execGit(['worktree', 'remove', '--force', resolvedWorktreePath], {
+      cwd: resolveRuntimePath(repoRoot),
+    })
   }
 
   async checkpointDirtyWork(
@@ -416,6 +505,9 @@ export class NodeGitDriver implements GitDriver {
     { branch, baseBranch, commitMessage }: CheckpointDirtyWorkOptions,
   ): Promise<CheckpointResult> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
+    let taskBranchCheckedOut = false
+    let sharedChangesStashed = false
+    let sharedChangesApplied = false
     try {
       let branchExists = false
       try {
@@ -426,9 +518,65 @@ export class NodeGitDriver implements GitDriver {
       }
 
       if (branchExists) {
+        const { stdout: currentBranchOutput } = await execGit(['branch', '--show-current'], { cwd: gitRoot })
+        const currentBranch = currentBranchOutput.trim()
+        // An existing task branch may contain an earlier checkpoint. Preserve
+        // the shared checkout before switching to it; otherwise Git correctly
+        // refuses to overwrite newer edits that differ from that checkpoint.
+        if (currentBranch !== branch) {
+          await execGit(
+            ['stash', 'push', '--include-untracked', '--message', `Guildhall checkpoint for ${branch}`],
+            { cwd: gitRoot },
+          )
+          sharedChangesStashed = true
+        }
         await execGit(['checkout', branch], { cwd: gitRoot })
       } else {
         await execGit(['checkout', '-b', branch], { cwd: gitRoot })
+      }
+      taskBranchCheckedOut = true
+
+      if (sharedChangesStashed) {
+        const stashRef = 'stash@{0}'
+        // Apply the shared checkout's final file state, not a three-way merge
+        // against the older task branch. This is a checkpoint operation: the
+        // current shared edits are authoritative and should not be rejected
+        // merely because the reused branch has an earlier version of a file.
+        const { stdout: changedTrackedOutput } = await execGit(
+          ['diff', '--name-only', '-z', `${stashRef}^1`, stashRef, '--'],
+          { cwd: gitRoot },
+        )
+        const changedTrackedPaths = changedTrackedOutput.split('\0').filter(Boolean)
+        const { stdout: deletedTrackedOutput } = await execGit(
+          ['diff', '--diff-filter=D', '--name-only', '-z', `${stashRef}^1`, stashRef, '--'],
+          { cwd: gitRoot },
+        )
+        const deletedTrackedPaths = deletedTrackedOutput.split('\0').filter(Boolean)
+        if (deletedTrackedPaths.length > 0) {
+          await execGit(['rm', '-f', '--', ...deletedTrackedPaths], { cwd: gitRoot })
+        }
+        const restoredTrackedPaths = changedTrackedPaths.filter(pathname => !deletedTrackedPaths.includes(pathname))
+        if (restoredTrackedPaths.length > 0) {
+          await execGit(['checkout', stashRef, '--', ...restoredTrackedPaths], { cwd: gitRoot })
+        }
+        let hasUntrackedParent = false
+        try {
+          await execGit(['rev-parse', '--verify', `${stashRef}^3`], { cwd: gitRoot })
+          const { stdout: untrackedPathsOutput } = await execGit(
+            ['ls-tree', '-r', '--name-only', `${stashRef}^3`],
+            { cwd: gitRoot },
+          )
+          const untrackedPaths = untrackedPathsOutput.split('\n').filter(Boolean)
+          hasUntrackedParent = untrackedPaths.length > 0
+          if (hasUntrackedParent) {
+            await execGit(['checkout', `${stashRef}^3`, '--', ...untrackedPaths], { cwd: gitRoot })
+          }
+        } catch (err) {
+          // Stashes without untracked files have no third parent.
+          if (hasUntrackedParent) throw err
+        }
+        await execGit(['stash', 'drop', stashRef], { cwd: gitRoot })
+        sharedChangesApplied = true
       }
 
       await execGit(['add', '-A'], { cwd: gitRoot })
@@ -455,6 +603,19 @@ export class NodeGitDriver implements GitDriver {
       await execGit(['checkout', baseBranch], { cwd: gitRoot })
       return { ok: true, commitSha: stdout.trim() }
     } catch (err) {
+      // If applying the stash or committing the task branch failed, leave the
+      // shared edits recoverable in a stash before returning to the landing
+      // branch. Never turn a failed checkpoint into data loss.
+      if (taskBranchCheckedOut && sharedChangesApplied) {
+        try {
+          await execGit(
+            ['stash', 'push', '--include-untracked', '--message', `Guildhall failed checkpoint for ${branch}`],
+            { cwd: gitRoot },
+          )
+        } catch {
+          // The original error remains authoritative; checkout below is best effort.
+        }
+      }
       try {
         await execGit(['checkout', baseBranch], { cwd: gitRoot })
       } catch {
@@ -641,6 +802,7 @@ export interface InMemoryGitDriverState {
   commits: Array<{ repoRoot: string; message: string; result: CheckpointResult }>
   createdWorktrees: CreateWorktreeOptions[]
   attachedWorktrees: AttachWorktreeOptions[]
+  worktreeSyncs: Array<{ worktreePath: string; baseBranch: string; commitMessage: string; result: WorktreeSyncResult }>
   checkpoints: Array<CheckpointDirtyWorkOptions & { result: CheckpointResult }>
   removedWorktrees: string[]
   merges: { branch: string; baseBranch: string; result: MergeResult }[]
@@ -658,6 +820,8 @@ export interface InMemoryGitDriverOptions {
   nextPushResult?: PushResult
   /** If set, the next `openPullRequest` call returns this result then clears. */
   nextPrResult?: PullRequestResult
+  /** If set, the next task-worktree synchronization returns this result. */
+  nextWorktreeSyncResult?: WorktreeSyncResult
 }
 
 export class InMemoryGitDriver implements GitDriver {
@@ -666,6 +830,7 @@ export class InMemoryGitDriver implements GitDriver {
   private nextMerge: MergeResult | undefined
   private nextPush: PushResult | undefined
   private nextPr: PullRequestResult | undefined
+  private nextWorktreeSync: WorktreeSyncResult | undefined
 
   constructor(opts: InMemoryGitDriverOptions = {}) {
     this.state = {
@@ -678,6 +843,7 @@ export class InMemoryGitDriver implements GitDriver {
       commits: [],
       createdWorktrees: [],
       attachedWorktrees: [],
+      worktreeSyncs: [],
       checkpoints: [],
       removedWorktrees: [],
       merges: [],
@@ -689,6 +855,7 @@ export class InMemoryGitDriver implements GitDriver {
     this.nextMerge = opts.nextMergeResult
     this.nextPush = opts.nextPushResult
     this.nextPr = opts.nextPrResult
+    this.nextWorktreeSync = opts.nextWorktreeSyncResult
   }
 
   /** Seed the next merge outcome; clears after one call. */
@@ -700,6 +867,9 @@ export class InMemoryGitDriver implements GitDriver {
   }
   setNextPrResult(r: PullRequestResult): void {
     this.nextPr = r
+  }
+  setNextWorktreeSyncResult(r: WorktreeSyncResult): void {
+    this.nextWorktreeSync = r
   }
   setClean(clean: boolean): void {
     this.clean = clean
@@ -801,6 +971,18 @@ export class InMemoryGitDriver implements GitDriver {
     opts: AttachWorktreeOptions,
   ): Promise<void> {
     this.state.attachedWorktrees.push({ ...opts })
+  }
+
+  async syncWorktreeWithBase(
+    worktreePath: string,
+    baseBranch: string,
+    commitMessage: string,
+    _opts?: { conflictStrategy?: 'fail' | 'prefer_task' },
+  ): Promise<WorktreeSyncResult> {
+    const result = this.nextWorktreeSync ?? { ok: true, changed: false }
+    this.nextWorktreeSync = undefined
+    this.state.worktreeSyncs.push({ worktreePath, baseBranch, commitMessage, result })
+    return result
   }
 
   async removeWorktree(_repoRoot: string, worktreePath: string): Promise<void> {

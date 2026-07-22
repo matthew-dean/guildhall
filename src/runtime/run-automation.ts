@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-import { TaskQueue, TERMINAL_TASK_STATUSES, type AgentQuestion, type Task, type TaskStatus } from '@guildhall/core'
+import { acceptanceCriteriaFromStructuredSpec, TaskQueue, TERMINAL_TASK_STATUSES, type AgentQuestion, type Task, type TaskStatus } from '@guildhall/core'
 import {
   appendTaskEvidence,
   getProjectSystemStatePathFromMemoryDir,
@@ -16,9 +16,7 @@ import {
 import { approveSpec, resumeExploring } from './intake.js'
 import { reviewInProcessWorkForGuildhallImprovements } from './improvement-review.js'
 import {
-  extractAcceptanceCriteriaFromSpec,
   productBriefFromSpecCompletionBoundary,
-  specSectionBody,
   validateProductBriefGrounding,
   validateSpecCompletionBoundary,
 } from './spec-quality.js'
@@ -47,6 +45,16 @@ export interface ScopedRunSummary {
   statusSummary: string
 }
 
+function hasTypedAutomationRecovery(task: {
+  escalations?: Array<{ resolvedAt?: unknown; recoveryCode?: unknown; handling?: unknown }>
+}): boolean {
+  return (task.escalations ?? []).some((escalation) =>
+    !escalation.resolvedAt &&
+    escalation.handling === 'guildhall_recovery' &&
+    escalation.recoveryCode !== undefined,
+  )
+}
+
 export async function summarizeScopedRun(input: {
   memoryDir: string
   rootTaskId?: string
@@ -72,14 +80,14 @@ export async function applyRunAutomationPolicy(input: {
   actor?: string
 }): Promise<RunAutomationResult> {
   if (input.policy !== 'fully_automated') return { changed: false, resolutions: [] }
+  // Unattended execution is not delegated ownership. Guildhall may retry a
+  // typed Guildhall-owned recovery for an explicitly selected work subtree,
+  // but it cannot guess answers, approve a spec, or widen into another scope.
+  if (!input.rootTaskId) return { changed: false, resolutions: [] }
   const resolutions: RunAutomationResolution[] = []
-  const answered = await answerScopedQuestions({ ...input, resolutions })
-  const repaired = await repairScopedSpecApprovalInputs({ ...input, resolutions })
-  const improvementReviewed = await reviewScopedWorkForGuildhallImprovements({ ...input, resolutions })
-  const approved = await approveScopedSpecs({ ...input, resolutions })
   const unblocked = await resolveScopedAutomationBlockers({ ...input, resolutions })
   return {
-    changed: answered || repaired || improvementReviewed || approved || unblocked,
+    changed: unblocked,
     resolutions,
   }
 }
@@ -126,7 +134,7 @@ async function answerScopedQuestions(input: {
   let changed = false
   for (const task of queue.tasks) {
     if (scopedIds && !scopedIds.has(task.id)) continue
-    const unanswered = (task.openQuestions ?? []).filter(question => !question.answeredAt)
+  const unanswered = (task.openQuestions ?? []).filter(question => !question.answeredAt)
     if (unanswered.length === 0) continue
     const now = new Date().toISOString()
     task.openQuestions = (task.openQuestions ?? []).map(question => question.answeredAt
@@ -178,8 +186,7 @@ async function repairScopedSpecApprovalInputs(input: {
     if (typeof task.productBrief?.approvedAt === 'string') continue
     const hasUsableBrief =
       task.productBrief?.userJob?.trim() &&
-      task.productBrief?.successMetric?.trim() &&
-      !isPlaceholderNewRequestBrief(task.productBrief)
+      task.productBrief?.successMetric?.trim()
     if (hasUsableBrief) continue
     const brief = inferProductBriefForAutomation(task, input.ownerIntent)
     if (!brief) continue
@@ -225,15 +232,6 @@ async function repairScopedSpecApprovalInputs(input: {
     await writeQueue(input.memoryDir, previousQueue, queue, queueRead.expectedQueueRevision, promotedEvidence)
   }
   return changed
-}
-
-function isPlaceholderNewRequestBrief(
-  brief: { userJob?: string; successMetric?: string } | undefined,
-): boolean {
-  if (!brief) return false
-  const text = `${brief.userJob ?? ''}\n${brief.successMetric ?? ''}`
-  return /\bverify whether .+? is already done\b/i.test(text) ||
-    /\bremaining work for ["']?.+?["']? is described clearly enough/i.test(text)
 }
 
 async function approveScopedSpecs(input: {
@@ -296,20 +294,13 @@ async function resolveScopedAutomationBlockers(input: {
   const promotedEvidence: PromotedTaskEvidence[] = []
   for (const task of queue.tasks) {
     if (scopedIds && !scopedIds.has(task.id)) continue
-    const blockerText = [
-      task.blockReason,
-      ...(task.escalations ?? []).filter(escalation => !escalation.resolvedAt).map(escalation => `${escalation.summary} ${escalation.details ?? ''}`),
-    ].filter(Boolean).join('\n')
-    if (
-      task.status !== 'blocked' ||
-      /worktree|bootstrap|already exists|fatal:|permission denied|missing dependency/i.test(blockerText) ||
-      !/human|approval|question|judgment|ambiguous|turn limit|turn budget/i.test(blockerText)
-    ) {
+    if (task.status !== 'blocked' || !hasTypedAutomationRecovery(task)) {
       continue
     }
     const now = new Date().toISOString()
     task.status = 'exploring'
     task.blockReason = undefined
+    task.recoveryCode = undefined
     task.updatedAt = now
     task.escalations = (task.escalations ?? []).map(escalation => escalation.resolvedAt ? escalation : {
       ...escalation,
@@ -379,15 +370,7 @@ async function resolvePromotedScopedAutomationBlockers(input: {
     if (indexedTask.status !== 'blocked') continue
     const task = promotedTaskDefinition(input.memoryDir, indexedTask.id)
     if (!task) continue
-    const blockerText = [
-      task.blockReason,
-      ...(task.escalations ?? []).filter((escalation: { resolvedAt?: string }) => !escalation.resolvedAt)
-        .map((escalation: { summary: string; details?: string }) => `${escalation.summary} ${escalation.details ?? ''}`),
-    ].filter(Boolean).join('\n')
-    if (
-      /worktree|bootstrap|already exists|fatal:|permission denied|missing dependency/i.test(blockerText) ||
-      !/human|approval|question|judgment|ambiguous|turn limit|turn budget/i.test(blockerText)
-    ) continue
+    if (!hasTypedAutomationRecovery(task)) continue
 
     const now = new Date().toISOString()
     const resolvedEscalations = (task.escalations ?? []).map((escalation: Record<string, any>) => escalation.resolvedAt ? escalation : {
@@ -402,6 +385,7 @@ async function resolvePromotedScopedAutomationBlockers(input: {
       mutate: current => {
         current.status = 'exploring'
         delete current.blockReason
+        delete current.recoveryCode
         if (resolvedEscalations.some((escalation: { resolvedAt?: string }) => !escalation.resolvedAt)) {
           current.openEscalations = resolvedEscalations
             .filter((escalation: { resolvedAt?: string }) => !escalation.resolvedAt)
@@ -652,8 +636,7 @@ async function repairPromotedScopedSpecApprovalInputs(input: {
     if (typeof task.productBrief?.approvedAt === 'string') continue
     const hasUsableBrief =
       task.productBrief?.userJob?.trim() &&
-      task.productBrief?.successMetric?.trim() &&
-      !isPlaceholderNewRequestBrief(task.productBrief)
+      task.productBrief?.successMetric?.trim()
     if (hasUsableBrief) continue
     const brief = inferProductBriefForAutomation(task as TaskQueue['tasks'][number], input.ownerIntent)
     if (!brief) continue
@@ -705,14 +688,21 @@ async function approvePromotedSpec(
   memoryDir: string,
   task: Record<string, any>,
 ): Promise<{ success: boolean; error?: string }> {
-  if (task.status !== 'spec_review' || typeof task.spec !== 'string' || !task.spec.trim()) {
+  if (task.status !== 'spec_review') {
     return { success: false, error: 'task is not ready for promoted spec approval' }
+  }
+  if (!task.structuredSpec) {
+    return {
+      success: false,
+      error: 'task has no structured spec; rendered Markdown cannot be approved as the planning authority',
+    }
   }
   const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.length > 0
     ? task.acceptanceCriteria
-    : extractAcceptanceCriteriaFromSpec(task.spec)
-  const productBrief = task.productBrief ?? productBriefFromSpecCompletionBoundary(task.spec) ?? undefined
-  const candidate = { ...task, acceptanceCriteria, productBrief }
+    : acceptanceCriteriaFromStructuredSpec(task.structuredSpec)
+  const structuredSpec = task.structuredSpec
+  const productBrief = task.productBrief ?? productBriefFromSpecCompletionBoundary({ structuredSpec }) ?? undefined
+  const candidate = { ...task, structuredSpec, acceptanceCriteria, productBrief }
   if (candidate.productBrief) {
     const grounding = validateProductBriefGrounding(candidate as Task, candidate.productBrief)
     if (!grounding.ok) {
@@ -795,90 +785,16 @@ function inferProductBriefForAutomation(
   task: TaskQueue['tasks'][number],
   ownerIntent: string | undefined,
 ): { userJob: string; successMetric: string; antiPatterns: string[]; rolloutPlan?: string } | null {
-  const spec = task.spec ?? ''
-  const productBrief = parseProductBriefSection(spec)
-  if (productBrief?.userJob && productBrief?.successMetric) {
-    return {
-      userJob: productBrief.userJob,
-      successMetric: productBrief.successMetric,
-      antiPatterns: productBrief.antiPatterns,
-      ...(productBrief.rolloutPlan ? { rolloutPlan: productBrief.rolloutPlan } : {}),
-    }
+  // Product-brief repair derives only from the structured completion
+  // boundary. Rendered Markdown and free-form owner/model prose are not a
+  // planning database and must never be parsed back into one.
+  const derived = productBriefFromSpecCompletionBoundary({
+    structuredSpec: task.structuredSpec,
+  })
+  if (!derived) return null
+  return {
+    userJob: derived.userJob,
+    successMetric: derived.successMetric,
+    antiPatterns: derived.antiPatterns ?? [],
   }
-
-  const boundary = specSectionBody(spec, 'Completion Boundary')
-  const outcome = fieldFromSection(boundary, 'Product outcome')
-  const done = fieldFromSection(boundary, 'What counts as done')
-  if (outcome && done) {
-    return {
-      userJob: outcome,
-      successMetric: done,
-      antiPatterns: productBrief?.antiPatterns ?? [],
-      ...(productBrief?.rolloutPlan ? { rolloutPlan: productBrief.rolloutPlan } : {}),
-    }
-  }
-
-  if (isDeterministicFileRequest([task.description, ownerIntent].filter(Boolean).join('\n'))) {
-    return {
-      userJob: 'Complete the deterministic file request exactly as specified.',
-      successMetric: task.description,
-      antiPatterns: ['Do not create or modify unrelated files.'],
-    }
-  }
-
-  return null
-}
-
-function parseProductBriefSection(spec: string): { userJob?: string; successMetric?: string; antiPatterns: string[]; rolloutPlan?: string } | null {
-  const section = specSectionBody(spec, 'Product Brief')
-  if (!section) return null
-  const result: { userJob?: string; successMetric?: string; antiPatterns: string[]; rolloutPlan?: string } = { antiPatterns: [] }
-  for (const rawLine of section.split('\n')) {
-    const line = rawLine.trim().replace(/^[-*]\s+/, '')
-    const match = /^([^:]+):\s*(.+)$/.exec(line)
-    if (!match) continue
-    const field = normalizeBriefField(match[1]!)
-    const value = cleanMarkdownValue(match[2]!)
-    if (!value) continue
-    if (field === 'user job') result.userJob = value
-    if (field === 'success metric') result.successMetric = value
-    if (field === 'anti patterns' || field === 'anti-patterns') result.antiPatterns = [value]
-    if (field === 'rollout plan' && !/^none\.?$/i.test(value)) result.rolloutPlan = value
-  }
-  return result.userJob || result.successMetric ? result : null
-}
-
-function fieldFromSection(section: string, wanted: string): string | null {
-  const wantedField = normalizeBriefField(wanted)
-  for (const rawLine of section.split('\n')) {
-    const line = rawLine.trim().replace(/^[-*]\s+/, '')
-    const match = /^([^:]+):\s*(.+)$/.exec(line)
-    if (!match) continue
-    if (normalizeBriefField(match[1]!) !== wantedField) continue
-    const value = cleanMarkdownValue(match[2]!)
-    return value || null
-  }
-  return null
-}
-
-function normalizeBriefField(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^\*+|\*+$/g, '')
-    .replace(/^_+|_+$/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-}
-
-function cleanMarkdownValue(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^\*+|\*+$/g, '')
-    .replace(/^_+|_+$/g, '')
-    .trim()
-}
-
-function isDeterministicFileRequest(text: string): boolean {
-  return /\b(?:create|write|add)\s+(?:a\s+|one\s+|single\s+)?file\b/i.test(text) &&
-    /\b(?:containing|content(?:s)?\s+(?:is|are)|with(?:\s+content)?)\s+exactly\b/i.test(text)
 }

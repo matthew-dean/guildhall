@@ -188,7 +188,7 @@ describe('updateProductBrief', () => {
     expect(result.error).toMatch(/not found/i)
   })
 
-  it('tool execute infers a best-effort brief from metadata.last_assistant_text when called with {}', async () => {
+  it('rejects an empty brief call instead of inferring durable state from assistant prose', async () => {
     const result = await updateProductBriefTool.execute(
       {},
       {
@@ -208,15 +208,11 @@ describe('updateProductBrief', () => {
         },
       },
     )
-    expect(result.is_error).toBe(false)
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/does not infer durable product briefs from assistant prose/i)
 
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
-    expect(q.tasks[0]?.productBrief).toMatchObject({
-      userJob: 'You want to make the setup flow easier for first-time users so they can reach useful work faster.',
-      successMetric: 'The remaining work for "Build the onboarding screen" is described clearly enough to approve or narrow with one focused question.',
-      antiPatterns: ["Don't add marketing copy."],
-      authoredBy: 'spec-agent',
-    })
+    expect(q.tasks[0]?.productBrief).toBeUndefined()
   })
 
   it('tool execute recovers a nested serialized productBrief payload from a near-miss model call', async () => {
@@ -303,7 +299,7 @@ describe('updateProductBrief', () => {
     ])
   })
 
-  it('rejects product briefs that describe the agent research process instead of the task outcome', async () => {
+  it('stores product language without classifying the model prose style', async () => {
     const result = await updateProductBriefTool.execute(
       {
         userJob: 'Let me explore the Knit codebase to understand the current auth and member management setup before drafting the spec.',
@@ -319,14 +315,13 @@ describe('updateProductBrief', () => {
       },
     )
 
-    expect(result.is_error).toBe(true)
-    expect(result.output).toMatch(/product outcome/i)
+    expect(result.is_error).toBe(false)
 
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
-    expect(q.tasks[0]?.productBrief).toBeUndefined()
+    expect(q.tasks[0]?.productBrief?.userJob).toContain('Let me explore')
   })
 
-  it('rejects recovery and worktree diagnostics inside the current brief boundary', async () => {
+  it('stores boundary prose without keyword-based recovery classification', async () => {
     const result = await updateProductBriefTool.execute(
       {
         userJob: 'I want the current story record slice implemented.',
@@ -343,13 +338,12 @@ describe('updateProductBrief', () => {
       },
     )
 
-    expect(result.is_error).toBe(true)
-    expect(result.output).toMatch(/product outcome and boundary/i)
+    expect(result.is_error).toBe(false)
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
-    expect(q.tasks[0]?.productBrief).toBeUndefined()
+    expect(q.tasks[0]?.productBrief?.nonGoals).toContain('Target directory structure does not match expected paths.')
   })
 
-  it('rejects product briefs that only say the agent has enough context to draft', async () => {
+  it('stores concise and process-shaped prose when the structured fields are present', async () => {
     const result = await updateProductBriefTool.execute(
       {
         userJob: 'I have enough context from the project state and prior task history to draft a best-guess brief and ask the right questions. Let me do that now.',
@@ -365,14 +359,13 @@ describe('updateProductBrief', () => {
       },
     )
 
-    expect(result.is_error).toBe(true)
-    expect(result.output).toMatch(/product outcome/i)
+    expect(result.is_error).toBe(false)
 
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
-    expect(q.tasks[0]?.productBrief).toBeUndefined()
+    expect(q.tasks[0]?.productBrief?.successMetric).toContain('described clearly enough')
   })
 
-  it('rejects product briefs that only recap answers and say the agent needs more decisions', async () => {
+  it('does not reject a brief because it contains first-person or decision language', async () => {
     const result = await updateProductBriefTool.execute(
       {
         userJob: 'Good — the user confirmed auto-add to workspace. I still need two more decisions before I can write the spec. Let me post those now.',
@@ -388,14 +381,13 @@ describe('updateProductBrief', () => {
       },
     )
 
-    expect(result.is_error).toBe(true)
-    expect(result.output).toMatch(/product outcome/i)
+    expect(result.is_error).toBe(false)
 
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
-    expect(q.tasks[0]?.productBrief).toBeUndefined()
+    expect(q.tasks[0]?.productBrief?.userJob).toContain('user confirmed')
   })
 
-  it('rejects product briefs that say the agent has a clear picture and will write the spec', async () => {
+  it('does not reject a brief because its wording mentions drafting', async () => {
     const result = await updateProductBriefTool.execute(
       {
         userJob: 'Now I have a clear picture. Let me write the product brief and spec.',
@@ -411,11 +403,10 @@ describe('updateProductBrief', () => {
       },
     )
 
-    expect(result.is_error).toBe(true)
-    expect(result.output).toMatch(/product outcome/i)
+    expect(result.is_error).toBe(false)
 
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
-    expect(q.tasks[0]?.productBrief).toBeUndefined()
+    expect(q.tasks[0]?.productBrief?.userJob).toContain('clear picture')
   })
 
   it('does not infer a fallback brief that only proves Guildhall showed another brief card', async () => {
@@ -437,13 +428,13 @@ describe('updateProductBrief', () => {
     )
 
     expect(result.is_error).toBe(true)
-    expect(result.output).toMatch(/product outcome/i)
+    expect(result.output).toMatch(/does not infer durable product briefs from assistant prose/i)
 
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
     expect(q.tasks[0]?.productBrief).toBeUndefined()
   })
 
-  it('skips evidence-preamble prose when inferring a fallback brief from assistant text', async () => {
+  it('rejects evidence-preamble prose as a durable brief', async () => {
     const result = await updateProductBriefTool.execute(
       {},
       {
@@ -463,12 +454,10 @@ describe('updateProductBrief', () => {
         },
       },
     )
-    expect(result.is_error).toBe(false)
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/does not infer durable product briefs from assistant prose/i)
 
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
-    expect(q.tasks[0]?.productBrief).toMatchObject({
-      userJob: 'I want to verify whether Build the onboarding screen is already done and, if not, capture only the remaining delta.',
-      authoredBy: 'spec-agent',
-    })
+    expect(q.tasks[0]?.productBrief).toBeUndefined()
   })
 })

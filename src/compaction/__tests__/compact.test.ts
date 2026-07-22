@@ -23,6 +23,7 @@ import {
   createInvokedSkillsAttachment,
   createPlanAttachment,
   createRecentFilesAttachment,
+  createRecentVerificationResultsAttachment,
   createRecentVerifiedWorkAttachment,
   createTaskFocusAttachment,
   createWorkLogAttachment,
@@ -274,6 +275,25 @@ describe('buildPostCompactMessages', () => {
     if (attBlock?.type === 'text') expect(attBlock.text).toContain('x-body')
     const hookBlock = out[5]!.content[0]
     if (hookBlock?.type === 'text') expect(hookBlock.text).toContain('note')
+  })
+})
+
+describe('createRecentVerificationResultsAttachment', () => {
+  it('preserves structured command results without treating prose as evidence', () => {
+    const attachment = createRecentVerificationResultsAttachment([
+      { kind: 'command', command: 'pnpm test', passed: true, outputSummary: 'tests passed' },
+      { kind: 'command', command: 'the model said it passed', passed: false },
+      { command: 'pnpm build', passed: true, observedAt: '2026-07-20T00:00:00.000Z' },
+    ])
+
+    expect(attachment?.metadata).toEqual({
+      entries: [
+        { kind: 'command', command: 'pnpm test', passed: true },
+        { kind: 'command', command: 'the model said it passed', passed: false },
+        { kind: 'command', command: 'pnpm build', passed: true, observedAt: '2026-07-20T00:00:00.000Z' },
+      ],
+    })
+    expect(attachment?.body).toContain('PASS pnpm build')
   })
 })
 

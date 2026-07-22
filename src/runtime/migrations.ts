@@ -46,7 +46,10 @@ import {
   vacuumProjectStateDatabase,
   readProjectStateDatabaseTaskEvidenceAuthority,
   readProjectStateDatabaseTaskOverlayStores,
+  readTaskRuntimeStore,
   replaceProjectStateDatabaseTaskRuntimes,
+  upsertTaskRuntimeState,
+  rewriteProjectStateDatabaseTaskSummaries,
   projectStateDatabaseTaskSummary,
 } from '@guildhall/sessions'
 import type { ProjectStateDatabaseScopeRow } from '@guildhall/sessions'
@@ -87,15 +90,16 @@ import {
   projectSummaryProjectionNeedsBackfill,
   projectSummaryProjectionPath,
   readProjectSummaryProjectionForMigration,
+  writeProjectSummaryProjection,
   writeProjectSummaryProjectionFromIndexedState,
 } from './project-summary-projection.js'
-import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
+import { readProjectCanonicalCurrentState, writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
 import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from './delivery-read-projection.js'
 import { effectiveTaskTitle } from '@guildhall/shared'
-import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
-import { currentPlanProcessLeakage, stripCurrentPlanProcessLeakage } from './spec-quality.js'
-import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
+import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
 import type { Task } from '@guildhall/core'
+import { buildProofSetupTaskContract, isProofSetupTask, materializeProofSetupTask } from '@guildhall/tools'
+import { taskDoneButProofMissing, taskDoneButProofMissingForScope, taskHasScriptProofPath } from './proof-health.js'
 import {
   inspectEmptyMastraDatabase,
   inspectEmptyMastraThreadShells,
@@ -198,7 +202,24 @@ const COMPACT_READ_MODEL_MIGRATION_ID = '0.13.2/compact-task-read-models'
 const CURRENT_PROOF_READ_MODEL_MIGRATION_ID = '0.13.9/current-proof-read-model'
 const IMPORTED_SCRIPT_PROOF_CONTRACT_MIGRATION_ID = '0.13.10/imported-script-proof-contracts'
 const CURRENT_PLAN_RECOVERY_BOUNDARY_MIGRATION_ID = '0.13.11/current-plan-recovery-boundary'
+const MODEL_INDEPENDENT_MACHINE_BOUNDARY_MIGRATION_ID = '0.13.11/model-independent-machine-boundary'
 const MALFORMED_TASK_RUNTIME_OVERLAY_MIGRATION_ID = '0.13.12/repair-malformed-task-runtime-overlays'
+const EFFECTIVE_CURRENT_PROOF_READ_MODEL_MIGRATION_ID = '0.13.12/effective-current-proof-read-model'
+const MODEL_INDEPENDENT_READINESS_BOUNDARY_MIGRATION_ID = '0.13.13/model-independent-readiness-boundary'
+const PROOF_SETUP_TASK_KIND_MIGRATION_ID = '0.13.19/proof-setup-task-kind'
+const PROOF_SETUP_CONTRACT_MIGRATION_ID = '0.13.20/deterministic-proof-setup-contract'
+const RECURSIVE_PROOF_SETUP_MIGRATION_ID = '0.13.21/remove-recursive-proof-setup-tasks'
+const PROOF_COMMAND_IDENTITY_MIGRATION_ID = '0.13.22/proof-command-identity'
+const ACCEPTANCE_COMMAND_PROOF_PATH_RECONCILIATION_MIGRATION_ID = '0.13.27/acceptance-command-proof-path-reconciliation'
+const PROOF_SETUP_COMPLETION_AUTHORITY_MIGRATION_ID = '0.13.30/proof-setup-completion-authority'
+const PROOF_SETUP_HISTORY_FENCE_MIGRATION_ID = '0.13.31/proof-setup-history-fence'
+const PROOF_SETUP_RUNTIME_RECOVERY_MIGRATION_ID = '0.13.32/proof-setup-runtime-recovery-marker'
+const RELEASE_LOCAL_PROOF_SCOPE_MIGRATION_ID = '0.13.33/release-local-proof-child-scope'
+const INDEXED_SEMANTIC_KIND_MIGRATION_ID = '0.13.39/indexed-semantic-kind-boundary'
+const PROOF_SETUP_EXECUTION_BLUEPRINT_MIGRATION_ID = '0.13.41/proof-setup-execution-blueprint'
+const PROOF_SETUP_ACCEPTANCE_CONTRACT_MIGRATION_ID = '0.13.55/proof-setup-acceptance-contract'
+const PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID = '0.13.56/proof-setup-projection-refresh'
+const PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID = '0.13.57/proof-setup-effective-projection'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -237,6 +258,471 @@ function taskNeedsImportedScriptProofRepair(task: Task): boolean {
     !isConcreteProjectProofCommand(criterion.command),
   )
   return genericPath || genericCriterion
+}
+
+function taskNeedsProofSetupKindMigration(task: Task): boolean {
+  return task.workKind === 'verification' &&
+    task.semanticKind !== 'proof_setup' &&
+    task.proposalRationale === 'proof-recovery: establish a concrete project-backed proof command for the containing task'
+}
+
+function migrateProofSetupTaskKind(task: Task): boolean {
+  if (!taskNeedsProofSetupKindMigration(task)) return false
+  task.semanticKind = 'proof_setup'
+  // This phrase was only ever an implementation marker. Once the structured
+  // kind is present it must not remain a second machine-readable authority.
+  delete task.proposalRationale
+  task.updatedAt = new Date().toISOString()
+  return true
+}
+
+function concreteProofCommandForTask(task: Task): string | undefined {
+  const fromCriterion = task.acceptanceCriteria.find((criterion) =>
+    typeof criterion.command === 'string' && isConcreteProjectProofCommand(criterion.command),
+  )?.command
+  if (fromCriterion) return fromCriterion.trim()
+  const fromProofPath = task.proofPaths?.find((path) =>
+    path && typeof path === 'object' && !Array.isArray(path) &&
+    typeof path.command === 'string' && isConcreteProjectProofCommand(path.command),
+  )
+  return fromProofPath && typeof fromProofPath.command === 'string'
+    ? fromProofPath.command.trim()
+    : undefined
+}
+
+function taskNeedsDeterministicProofSetupContract(task: Task): boolean {
+  if (!isProofSetupTask(task)) return false
+  const boundary = task.structuredSpec?.completionBoundary
+  return !task.structuredSpec ||
+    boundary?.splitPolicy !== 'none' ||
+    task.taskKind !== 'verification' ||
+    task.status === 'exploring' ||
+    task.status === 'spec_review' ||
+    task.status === 'in_progress'
+}
+
+function taskNeedsProofSetupExecutionBlueprint(task: Task): boolean {
+  if (!isProofSetupTask(task)) return false
+  return !task.structuredSpec ||
+    !task.structuredSpec.completionBoundary ||
+    task.structuredSpec.completionBoundary.splitPolicy !== 'none' ||
+    task.taskKind !== 'verification' ||
+    task.acceptanceCriteria.length === 0
+}
+
+function repairProofSetupExecutionBlueprint(
+  task: Task,
+  parent: Task,
+  now: string,
+): boolean {
+  if (!taskNeedsProofSetupExecutionBlueprint(task)) return false
+  const command = concreteProofCommandForTask(task)
+  const canonical = buildProofSetupTaskContract(parent, now, {
+    id: task.id,
+    releaseIds: task.releaseIds?.length ? task.releaseIds : parent.releaseIds,
+    ...(command ? { command } : {}),
+  })
+  const previousNotes = Array.isArray(task.notes) ? task.notes : []
+  const previousCreatedAt = task.createdAt
+  const previousProofPaths = task.proofPaths
+  const previousStatus = task.status
+  const previousBlockReason = task.blockReason
+  Object.assign(task, canonical, {
+    createdAt: previousCreatedAt,
+    status: previousStatus,
+    notes: [
+      ...previousNotes,
+      {
+        agentId: 'guildhall-migration',
+        role: 'system',
+        structured: {
+          event: 'proof_setup_execution_blueprint_restored',
+          source: 'deterministic',
+        },
+        content: 'Guildhall restored the canonical proof-setup execution blueprint after recovery cleared the current plan. Provider prose remains display-only.',
+        timestamp: now,
+      },
+    ],
+    ...(previousBlockReason ? { blockReason: previousBlockReason } : {}),
+    ...(previousProofPaths ? { proofPaths: previousProofPaths } : {}),
+    updatedAt: now,
+  })
+  delete task.assignedTo
+  return true
+}
+
+function migrateDeterministicProofSetupContract(
+  task: Task,
+  parent: Task,
+  now: string,
+): boolean {
+  if (!taskNeedsDeterministicProofSetupContract(task)) return false
+  const command = concreteProofCommandForTask(task)
+  const canonical = buildProofSetupTaskContract(parent, now, {
+    id: task.id,
+    releaseIds: task.releaseIds?.length ? task.releaseIds : parent.releaseIds,
+    ...(command ? { command } : {}),
+  })
+  const previousNotes = Array.isArray(task.notes) ? task.notes : []
+  const previousCreatedAt = task.createdAt
+  const previousProofPaths = task.proofPaths
+  const previousStatus = task.status
+  Object.assign(task, canonical, {
+    createdAt: previousCreatedAt,
+    status: command && previousStatus === 'done' ? 'done' : 'ready',
+    notes: [
+      ...previousNotes,
+      {
+        agentId: 'guildhall-migration',
+        role: 'system',
+        structured: {
+          event: 'proof_setup_contract_repaired',
+          source: 'deterministic',
+        },
+        content: 'Guildhall replaced the model-shaped proof-setup draft with the canonical structured proof contract. The exact command remains data, and provider prose cannot settle proof.',
+        timestamp: now,
+      },
+    ],
+    ...(previousProofPaths ? { proofPaths: previousProofPaths } : {}),
+    updatedAt: now,
+  })
+  delete task.assignedTo
+  return true
+}
+
+function proofSetupParentId(task: Task): string | undefined {
+  return task.hierarchy?.parentId ?? task.delivery?.supports?.[0]
+}
+
+function rawProofPathRecords(task: Task): Array<Record<string, unknown>> {
+  return (task.proofPaths ?? [])
+    .filter((proofPath): proofPath is Record<string, unknown> =>
+      Boolean(proofPath) && typeof proofPath === 'object' && !Array.isArray(proofPath),
+    )
+}
+
+function proofSetupNeedsCommandIdentity(task: Task): boolean {
+  if (!isProofSetupTask(task)) return false
+  const parentId = proofSetupParentId(task)
+  if (!parentId) return false
+  const marker = proofIdentityMarkerForTask(parentId)
+  const criterionNeedsIdentity = (task.acceptanceCriteria ?? []).some((criterion) =>
+    (criterion.id === 'ac-1' || typeof criterion.command === 'string') &&
+    (!(criterion.expectedOutputIncludes ?? []).includes(marker) ||
+      (typeof criterion.command === 'string' && !isConcreteProjectProofCommand(criterion.command))),
+  )
+  const pathNeedsIdentity = rawProofPathRecords(task).some((proofPath) => {
+    if (proofPath.kind !== 'command') return false
+    if (typeof proofPath.command !== 'string' || !isConcreteProjectProofCommand(proofPath.command)) return true
+    const expectedEvidence = Array.isArray(proofPath.expectedEvidence)
+      ? proofPath.expectedEvidence.filter((evidence): evidence is Record<string, unknown> =>
+          Boolean(evidence) && typeof evidence === 'object' && !Array.isArray(evidence),
+        )
+      : []
+    return expectedEvidence.some((evidence) =>
+      !(Array.isArray(evidence.expectedOutputIncludes) ? evidence.expectedOutputIncludes : []).includes(marker),
+    )
+  })
+  return criterionNeedsIdentity || pathNeedsIdentity
+}
+
+function taskNeedsAcceptanceCommandProofPathReconciliation(task: Task): boolean {
+  const before = JSON.stringify(task.proofPaths ?? [])
+  const next = ensureCommandProofPathsFromAcceptanceCriteria(task, new Date().toISOString(), 'guildhall-migration')
+  return JSON.stringify(next) !== before
+}
+
+function taskNeedsProofSetupCompletionRepair(
+  task: Task,
+  releases: readonly ProjectRelease[],
+): boolean {
+  if (!isProofSetupTask(task) || task.status !== 'done') return false
+
+  const taskReleaseIds = new Set(task.releaseIds ?? [])
+  const shippedReleaseIds = new Set(
+    [...taskReleaseIds].filter(releaseId => releases.some(release => release.id === releaseId && release.state === 'shipped')),
+  )
+  const activeReleases = releases.filter(release =>
+    release.state !== 'shipped' &&
+    (taskReleaseIds.size === 0 || taskReleaseIds.has(release.id)),
+  )
+
+  // A shipped release is historical. Do not reopen its record merely because
+  // a later migration discovers that an old proof child was weak. An active
+  // or release-less proof boundary, however, must be executable and current.
+  if (activeReleases.length === 0 && taskReleaseIds.size > 0) return false
+  if (shippedReleaseIds.size > 0 && activeReleases.length > 0) return true
+
+  const hasCurrentProofContract = (task.proofPaths?.length ?? 0) > 0 ||
+    task.acceptanceCriteria.some(criterion => typeof criterion.command === 'string' && criterion.command.trim().length > 0)
+  if (!hasCurrentProofContract) return true
+  if (taskDoneButProofMissing(task)) return true
+  return activeReleases.some(release =>
+    taskDoneButProofMissingForScope(task, release.proofStyle) ||
+    (release.proofStyle === 'script_only' && !taskHasScriptProofPath(task)),
+  )
+}
+
+function taskNeedsProofSetupRuntimeRecovery(
+  task: Task,
+  runtime: Awaited<ReturnType<typeof readTaskRuntimeStore>>,
+): boolean {
+  if (!isProofSetupTask(task) || (task.status !== 'done' && task.status !== 'ready')) return false
+  const recovery = runtime.tasks[task.id]?.proofRecovery
+  if (recovery?.kind === 'proof' && typeof recovery.reopenedAt === 'string') return false
+  return taskDoneButProofMissing(task)
+}
+
+function releaseLocalProofSetupRepair(
+  queue: { tasks: Task[]; releases?: ProjectRelease[] },
+  task: Task,
+  releases: readonly ProjectRelease[],
+  now: string,
+): boolean {
+  const taskReleaseIds = new Set(task.releaseIds ?? [])
+  const shippedReleaseIds = [...taskReleaseIds].filter(releaseId =>
+    releases.some(release => release.id === releaseId && release.state === 'shipped'),
+  )
+  const activeReleaseIds = [...taskReleaseIds].filter(releaseId =>
+    releases.some(release => release.id === releaseId && release.state !== 'shipped'),
+  )
+  if (shippedReleaseIds.length === 0 || activeReleaseIds.length === 0) return false
+  const parentId = proofSetupParentId(task)
+  const parent = parentId ? queue.tasks.find(candidate => candidate.id === parentId) : undefined
+  if (!parent || isProofSetupTask(parent)) return false
+
+  // A proof child shared with a shipped release is historical. The active
+  // release gets a new sibling under the containing task; proof setup never
+  // becomes the parent of another proof setup task.
+  materializeProofSetupTask(queue as Parameters<typeof materializeProofSetupTask>[0], parent, now, {
+    releaseIds: activeReleaseIds,
+    linkParent: false,
+  })
+  task.releaseIds = shippedReleaseIds
+  return true
+}
+
+function reopenUnprovenProofSetupTask(task: Task, now: string): void {
+  task.status = 'ready'
+  delete task.assignedTo
+  delete task.completedAt
+  delete task.blockReason
+  if (task.doneSummaryBundle?.status === 'done') {
+    task.doneSummaryBundle = {
+      ...task.doneSummaryBundle,
+      status: 'reopened',
+      reopenedAt: now,
+      reopenReason: 'Current typed proof was missing; the prior completion is historical evidence only.',
+      createdAt: now,
+      createdBy: 'guildhall-migration',
+    }
+  }
+  task.notes = [
+    ...(task.notes ?? []),
+    {
+      agentId: 'guildhall-migration',
+      role: 'system',
+      structured: {
+        event: 'proof_setup_reopened_before_proof',
+        reason: 'done_without_current_typed_proof',
+      },
+      content: 'Guildhall reopened this proof boundary because its current typed proof was not verified. A worker must run the declared command and record machine evidence before the task can be done.',
+      timestamp: now,
+    },
+  ]
+  task.updatedAt = now
+}
+
+function migrateProofSetupCommandIdentity(task: Task, now: string, preserveCompletedStatus: boolean): boolean {
+  if (!proofSetupNeedsCommandIdentity(task)) return false
+  const parentId = proofSetupParentId(task)
+  if (!parentId) return false
+  const marker = proofIdentityMarkerForTask(parentId)
+  const concretePathCommand = rawProofPathRecords(task).find((proofPath) =>
+    proofPath.kind === 'command' &&
+    typeof proofPath.command === 'string' &&
+    isConcreteProjectProofCommand(proofPath.command),
+  )?.command
+  const concreteCommand = typeof concretePathCommand === 'string' ? concretePathCommand : undefined
+  let changed = false
+  for (const criterion of task.acceptanceCriteria ?? []) {
+    if (criterion.id !== 'ac-1' && typeof criterion.command !== 'string') continue
+    let criterionChanged = false
+    if (!criterion.command && concreteCommand) {
+      criterion.command = concreteCommand.trim()
+      criterionChanged = true
+    }
+    if (criterion.command && !isConcreteProjectProofCommand(criterion.command)) {
+      delete criterion.command
+      delete criterion.expectedExit
+      criterionChanged = true
+    }
+    const expectedOutputIncludes = [...new Set([...(criterion.expectedOutputIncludes ?? []), marker])]
+    if (JSON.stringify(expectedOutputIncludes) !== JSON.stringify(criterion.expectedOutputIncludes ?? [])) {
+      criterion.expectedOutputIncludes = expectedOutputIncludes
+      criterionChanged = true
+    }
+    if (criterionChanged) {
+      changed = true
+      criterion.met = false
+      delete criterion.persistedMet
+      delete criterion.verificationState
+      delete criterion.verificationSource
+      delete criterion.staleReason
+      delete criterion.staleGateId
+    }
+  }
+
+  task.proofPaths = rawProofPathRecords(task).filter((proofPath) => {
+    if (proofPath.kind !== 'command') return true
+    if (typeof proofPath.command !== 'string' || !isConcreteProjectProofCommand(proofPath.command)) {
+      changed = true
+      return false
+    }
+    const expectedEvidence = Array.isArray(proofPath.expectedEvidence)
+      ? proofPath.expectedEvidence.filter((evidence): evidence is Record<string, unknown> =>
+          Boolean(evidence) && typeof evidence === 'object' && !Array.isArray(evidence),
+        )
+      : []
+    for (const evidence of expectedEvidence) {
+      const previousOutputIncludes = Array.isArray(evidence.expectedOutputIncludes)
+        ? evidence.expectedOutputIncludes.filter((value): value is string => typeof value === 'string')
+        : []
+      const expectedOutputIncludes = [...new Set([...previousOutputIncludes, marker])]
+      if (JSON.stringify(expectedOutputIncludes) !== JSON.stringify(previousOutputIncludes)) {
+        evidence.expectedOutputIncludes = expectedOutputIncludes
+        changed = true
+      }
+    }
+    if (changed) {
+      proofPath.status = 'planned'
+      proofPath.verificationRecords = []
+      proofPath.updatedAt = now
+      proofPath.updatedBy = 'guildhall-migration'
+    }
+    return true
+  })
+  task.proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(task, now, 'guildhall-migration')
+  if (!changed) return false
+  if (!preserveCompletedStatus) {
+    task.status = 'ready'
+    delete task.assignedTo
+  }
+  task.notes = [
+    ...(task.notes ?? []),
+    {
+      agentId: 'guildhall-migration',
+      role: 'system',
+      structured: {
+        event: 'proof_command_identity_contract_installed',
+        parentTaskId: parentId,
+        proofIdentityMarker: marker,
+      },
+      content: 'Guildhall invalidated proof that did not identify the bounded task in machine evidence. Provider prose remains audit-only.',
+      timestamp: now,
+    },
+  ]
+  task.updatedAt = now
+  return true
+}
+
+function taskNeedsCanonicalProofSetupAcceptanceContract(task: Task): boolean {
+  if (!isProofSetupTask(task)) return false
+  // Proof setup is a Guildhall-owned executable boundary. Its canonical
+  // contract has one command criterion; a generic review/scope criterion is
+  // a leaked parent-task template, not additional proof work.
+  return task.acceptanceCriteria.length !== 1 || task.acceptanceCriteria[0]?.id !== 'ac-1'
+}
+
+function repairCanonicalProofSetupAcceptanceContract(
+  task: Task,
+  parent: Task,
+  now: string,
+): boolean {
+  if (!taskNeedsCanonicalProofSetupAcceptanceContract(task)) return false
+  const command = concreteProofCommandForTask(task)
+  const canonical = buildProofSetupTaskContract(parent, now, {
+    id: task.id,
+    releaseIds: task.releaseIds?.length ? task.releaseIds : parent.releaseIds,
+    ...(command ? { command } : {}),
+  })
+  const previousNotes = Array.isArray(task.notes) ? task.notes : []
+  const previousCreatedAt = task.createdAt
+  const previousStatus = task.status
+  const previousCompletedAt = task.completedAt
+  const previousBlockReason = task.blockReason
+  const nonCommandProofPaths = rawProofPathRecords(task).filter(path => path.kind !== 'command')
+  Object.assign(task, canonical, {
+    createdAt: previousCreatedAt,
+    status: previousStatus,
+    ...(previousCompletedAt ? { completedAt: previousCompletedAt } : {}),
+    ...(previousBlockReason ? { blockReason: previousBlockReason } : {}),
+    proofPaths: [
+      ...nonCommandProofPaths,
+      ...ensureCommandProofPathsFromAcceptanceCriteria(canonical, now, 'guildhall-migration'),
+    ],
+    notes: [
+      ...previousNotes,
+      {
+        agentId: 'guildhall-migration',
+        role: 'system',
+        structured: {
+          event: 'proof_setup_acceptance_contract_canonicalized',
+          source: 'deterministic',
+          removedGenericCriteria: true,
+        },
+        content: 'Guildhall restored the proof-setup task to its single typed command contract. Generic review criteria were not proof work and were removed from the active contract; retained history remains available as evidence.',
+        timestamp: now,
+      },
+    ],
+    updatedAt: now,
+  })
+  return true
+}
+
+function recursiveProofSetupTaskIds(tasks: readonly Task[]): Set<string> {
+  const byId = new Map(tasks.map(task => [task.id, task]))
+  const recursive = new Set<string>()
+  for (const task of tasks) {
+    if (!isProofSetupTask(task)) continue
+    const visited = new Set<string>([task.id])
+    let parentId = task.hierarchy?.parentId
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId)
+      const parent = byId.get(parentId)
+      if (!parent) break
+      if (isProofSetupTask(parent)) {
+        recursive.add(task.id)
+        break
+      }
+      parentId = parent.hierarchy?.parentId
+    }
+  }
+  return recursive
+}
+
+function removeRecursiveProofSetupTasks(queue: { tasks: Task[]; releases?: ProjectRelease[] }): number {
+  const recursiveIds = recursiveProofSetupTaskIds(queue.tasks)
+  if (recursiveIds.size === 0) return 0
+  queue.tasks = queue.tasks
+    .filter(task => !recursiveIds.has(task.id))
+    .map(task => ({
+      ...task,
+      ...(task.hierarchy
+        ? { hierarchy: { ...task.hierarchy, childIds: task.hierarchy.childIds.filter(id => !recursiveIds.has(id)) } }
+        : {}),
+      ...(task.deliverySteps
+        ? { deliverySteps: task.deliverySteps.filter(step => !step.sourceTaskId || !recursiveIds.has(step.sourceTaskId)) }
+        : {}),
+      ...(task.dependsOn
+        ? { dependsOn: task.dependsOn.filter(id => !recursiveIds.has(id)) }
+        : {}),
+    }))
+  for (const release of queue.releases ?? []) {
+    release.nodeIds = release.nodeIds?.filter(id => !recursiveIds.has(id))
+    release.deferredNodeIds = release.deferredNodeIds?.filter(id => !recursiveIds.has(id))
+  }
+  return recursiveIds.size
 }
 
 function malformedTaskRuntimeOverlayIds(projectRoot: string): string[] {
@@ -307,89 +793,6 @@ function repairImportedScriptProofContract(task: Task): boolean {
     changed = true
   }
   return changed
-}
-
-function taskHasCurrentPlanProcessLeakage(task: Task): boolean {
-  const brief = task.productBrief
-  return [
-    task.spec ?? '',
-    ...(task.acceptanceCriteria ?? []).map((criterion) => criterion.description),
-    brief?.userJob ?? '',
-    brief?.whyItMattersNow ?? '',
-    brief?.successMetric ?? '',
-    ...(brief?.nonGoals ?? []),
-    ...(brief?.antiPatterns ?? []),
-  ].some((value) => currentPlanProcessLeakage(value) !== null)
-}
-
-function cleanCurrentPlanBrief(task: Task): boolean {
-  const brief = task.productBrief
-  if (!brief) return false
-  let changed = false
-  const cleanScalar = (value: string | undefined): string | undefined => {
-    if (!value) return value
-    const cleaned = stripCurrentPlanProcessLeakage(value)
-    if (cleaned !== value) changed = true
-    return cleaned || undefined
-  }
-  const cleanList = (values: string[] | undefined): string[] | undefined => {
-    if (!values) return values
-    const cleaned = values.filter((value) => currentPlanProcessLeakage(value) === null)
-    if (cleaned.length !== values.length) changed = true
-    return cleaned.length > 0 ? cleaned : undefined
-  }
-  const nextBrief = {
-    ...brief,
-    userJob: cleanScalar(brief.userJob),
-    whyItMattersNow: cleanScalar(brief.whyItMattersNow),
-    successMetric: cleanScalar(brief.successMetric),
-    nonGoals: cleanList(brief.nonGoals),
-    antiPatterns: cleanList(brief.antiPatterns),
-    audience: cleanScalar(brief.audience),
-    usageContext: cleanScalar(brief.usageContext),
-    rolloutPlan: cleanScalar(brief.rolloutPlan),
-    brandInteractionNotes: cleanScalar(brief.brandInteractionNotes),
-  }
-  if (!nextBrief.userJob || !nextBrief.successMetric) {
-    delete task.productBrief
-  } else {
-    task.productBrief = {
-      ...nextBrief,
-      userJob: nextBrief.userJob,
-      successMetric: nextBrief.successMetric,
-    }
-  }
-  return changed || !task.productBrief
-}
-
-function repairCurrentPlanRecoveryBoundary(task: Task, now: string): boolean {
-  if (!taskHasCurrentPlanProcessLeakage(task)) return false
-  if (currentPlanProcessLeakage(task.spec ?? '') !== null && task.status !== 'done') {
-    task.notes ??= []
-    resetCurrentPlanForProofRecovery(task, {
-      reason: 'The saved current plan contained internal recovery/process history; historical evidence remains in task history while Guildhall re-intakes a clean product boundary.',
-      now,
-      agentId: 'migration:0.13.11/current-plan-recovery-boundary',
-      role: 'plan-boundary-recovery',
-    })
-    task.status = 'exploring'
-    task.assignedTo = undefined
-    task.blockReason = undefined
-    task.updatedAt = now
-    return true
-  }
-  const beforeSpec = task.spec
-  if (beforeSpec) task.spec = stripCurrentPlanProcessLeakage(beforeSpec)
-  const existingCriteria = task.acceptanceCriteria ?? []
-  const criteria = existingCriteria.filter((criterion) => currentPlanProcessLeakage(criterion.description) === null)
-  const criteriaChanged = criteria.length !== existingCriteria.length
-  task.acceptanceCriteria = criteria
-  const briefChanged = cleanCurrentPlanBrief(task)
-  if (task.spec !== beforeSpec || criteriaChanged || briefChanged) {
-    task.updatedAt = now
-    return true
-  }
-  return false
 }
 
 function importedScriptProofRepairTaskIds(projectRoot: string): string[] {
@@ -489,6 +892,11 @@ async function realignPromotedSummaryWithEffectiveState(projectRoot: string): Pr
     throw new Error('The promoted SQLite task index does not match its detail queue; effective-state summary realignment cannot proceed.')
   }
   const effectiveById = new Map(effectiveTasks.map(task => [task.id, task]))
+  const taskSummaries = effectiveTasks.map(task => ({
+    taskId: task.id,
+    summary: projectStateDatabaseTaskSummary(task),
+  }))
+  const taskSummaryRewrite = rewriteProjectStateDatabaseTaskSummaries(projectRoot, taskSummaries)
   const taskOverrides: typeof inventory.tasks = inventory.tasks.map(task => {
     const effective = effectiveById.get(task.id)
     if (!effective) throw new Error(`The promoted SQLite task index is missing effective task ${task.id}.`)
@@ -511,7 +919,7 @@ async function realignPromotedSummaryWithEffectiveState(projectRoot: string): Pr
     sourceQueueLastUpdated: queueRead.definition.lastUpdated ?? null,
     taskOverrides,
     scopeRowOverrides: scopeRows,
-    expectedQueueRevision: queueRead.revision,
+    expectedQueueRevision: taskSummaryRewrite.revision ?? queueRead.revision,
   })
   if (!projection) throw new Error('The promoted project summary could not be realigned from effective task state.')
   return {
@@ -519,6 +927,46 @@ async function realignPromotedSummaryWithEffectiveState(projectRoot: string): Pr
     doneCount: projection.releaseSummary.counts.done,
     includedCount: projection.releaseSummary.counts.total - projection.releaseSummary.counts.deferred,
     deferredCount: projection.releaseSummary.counts.deferred,
+  }
+}
+
+/**
+ * Detect stale proof summaries against the same effective-task boundary used
+ * by runtime reads. The older current-proof migration only compared detail
+ * rows, which allowed runtime overlays and current evidence to leave the
+ * indexed summary with a different answer than the task itself.
+ */
+async function effectiveCurrentProofReadModelStatus(projectRoot: string): Promise<{
+  needed: boolean
+  taskCount: number
+  mismatchedCount: number
+}> {
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const queueRead = readProjectStateDatabaseQueueWithRevision(tasksPath)
+  const inventory = readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })
+  if (!queueRead || !inventory || inventory.total !== queueRead.definition.tasks.length) {
+    return { needed: false, taskCount: inventory?.total ?? 0, mismatchedCount: 0 }
+  }
+  const effectiveTasks = await buildEffectiveTasks(projectRoot, queueRead.definition.tasks as unknown as Task[], {
+    evidence: 'current',
+  })
+  if (effectiveTasks.length !== inventory.tasks.length) {
+    return { needed: false, taskCount: inventory.tasks.length, mismatchedCount: 0 }
+  }
+  const effectiveById = new Map(effectiveTasks.map(task => [task.id, task]))
+  let mismatchedCount = 0
+  for (const indexedTask of inventory.tasks) {
+    const effective = effectiveById.get(indexedTask.id)
+    if (!effective) return { needed: false, taskCount: inventory.tasks.length, mismatchedCount: 0 }
+    const expectedCurrentSummary = projectStateDatabaseTaskSummary(effective).currentSummary as Record<string, unknown> | undefined
+    const expectedProof = expectedCurrentSummary?.proof
+    const actualProof = indexedTask.currentSummary?.proof
+    if (JSON.stringify(actualProof) !== JSON.stringify(expectedProof)) mismatchedCount += 1
+  }
+  return {
+    needed: mismatchedCount > 0,
+    taskCount: inventory.tasks.length,
+    mismatchedCount,
   }
 }
 
@@ -3122,6 +3570,14 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Repairs the owner-facing current-proof state in existing task read models so reopened work cannot inherit historical proof as if it were current evidence.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const effectiveStateRepairApplied = ledger.records.some(record =>
+        record.id === EFFECTIVE_CURRENT_PROOF_READ_MODEL_MIGRATION_ID && record.status === 'applied',
+      )
+      // The effective-state migration supersedes this older detail-only probe.
+      // Once it has run, reopening the old interpretation would recreate two
+      // competing definitions of current proof.
+      if (effectiveStateRepairApplied) return { needed: false, affectedPaths: [] }
       const status = readProjectStateDatabaseCurrentProofReadModelStatus(projectRoot)
       return {
         needed: status.schemaPresent && !status.complete,
@@ -3200,51 +3656,19 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
   },
   {
     id: CURRENT_PLAN_RECOVERY_BOUNDARY_MIGRATION_ID,
-    title: 'Separate recovery history from current task plans',
+    title: 'Retire prose-based current-plan cleanup',
     introducedIn: '0.13.11',
     scope: 'project',
     safety: 'automatic',
     requirement: 'required',
-    summary: 'Removes internal recovery, revision, and worktree diagnostics from current briefs/specs while preserving the evidence in task history; active polluted plans return to clean shaping.',
-    async detect(projectRoot) {
-      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
-      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
-      const taskIds = (queue?.tasks as unknown as Task[] | undefined)?.filter(taskHasCurrentPlanProcessLeakage).map(task => task.id) ?? []
-      return {
-        needed: taskIds.length > 0,
-        affectedPaths: taskIds.length > 0
-          ? [projectStateDatabasePath(projectRoot), `current plans with recovery leakage (${taskIds.length})`]
-          : [],
-      }
+    summary: 'Retires the old phrase matcher. Current plans and historical evidence are no longer classified or rewritten from provider-authored wording; typed task state owns recovery and execution.',
+    async detect() {
+      return { needed: false, affectedPaths: [] }
     },
-    async apply(projectRoot) {
-      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
-      if (!queue) {
-        return {
-          summary: 'Skipped current-plan cleanup because the authoritative task detail store is unavailable.',
-          affectedPaths: [],
-        }
-      }
-      const now = new Date().toISOString()
-      let changed = 0
-      for (const task of queue.tasks as unknown as Task[]) {
-        if (repairCurrentPlanRecoveryBoundary(task, now)) changed += 1
-      }
-      if (changed > 0) {
-        queue.lastUpdated = now
-        writeProjectTaskQueueWithSummary(tasksPath, queue, {
-          projectId: path.basename(projectRoot),
-          projectRoot,
-          compactCompatibility: true,
-        })
-      }
+    async apply() {
       return {
-        summary: changed > 0
-          ? `Separated recovery/process history from ${changed} current task plan${changed === 1 ? '' : 's'}; active polluted plans are ready for clean shaping.`
-          : 'Current task plans already keep recovery/process history out of the product boundary.',
-        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+        summary: 'Prose-based current-plan cleanup is retired; no task text was inspected or rewritten.',
+        affectedPaths: [],
       }
     },
   },
@@ -3280,6 +3704,552 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
         summary: changed > 0
           ? `Repaired ${changed} malformed task runtime overlay${changed === 1 ? '' : 's'}; invalid retry-window fragments were removed while task evidence was preserved.`
           : 'Task runtime overlays already match the canonical runtime-state schema.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: EFFECTIVE_CURRENT_PROOF_READ_MODEL_MIGRATION_ID,
+    title: 'Realign indexed proof summaries from effective task state',
+    introducedIn: '0.13.12',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    // One-time legacy representation repair. New writes can make the compact
+    // proof row temporarily stale while the projection job catches up; that
+    // is a projection obligation, not a new migration and must not block run.
+    summary: 'Rebuilds persisted proof summaries from the effective current task state so runtime overlays, current evidence, and indexed reads cannot report different proof answers.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const status = await effectiveCurrentProofReadModelStatus(projectRoot)
+      return {
+        needed: status.needed,
+        affectedPaths: status.needed
+          ? [projectStateDatabasePath(projectRoot), `indexed proof summaries (${status.mismatchedCount} stale of ${status.taskCount})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const result = await realignPromotedSummaryWithEffectiveState(projectRoot)
+      return {
+        summary: `Realigned effective proof summaries for ${result.taskCount} task${result.taskCount === 1 ? '' : 's'} from the shared current-state boundary.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: MODEL_INDEPENDENT_READINESS_BOUNDARY_MIGRATION_ID,
+    title: 'Retire prose-only readiness authority',
+    introducedIn: '0.13.13',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Marks the structured readiness, split-boundary, and checkpoint fields as the only machine authority without rewriting or promoting historical model prose.',
+    async detect(projectRoot) {
+      const metadata = readProjectStateDatabaseMetadata(projectRoot)
+      if (metadata === null) return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === MODEL_INDEPENDENT_READINESS_BOUNDARY_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), 'structured readiness and checkpoint authority boundary']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      return {
+        summary: 'Published the structured readiness and checkpoint authority boundary; historical prose remains readable audit context and was not promoted into state.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: PROOF_SETUP_TASK_KIND_MIGRATION_ID,
+    title: 'Replace proof-setup rationale markers with task semantics',
+    introducedIn: '0.13.19',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Converts generated proof-setup children from a free-text proposal marker to an explicit semantic task kind so execution never depends on wording.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = (queue?.tasks as unknown as Task[] | undefined)
+        ?.filter(taskNeedsProofSetupKindMigration)
+        .map(task => task.id) ?? []
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `proof-setup tasks using rationale markers (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped proof-setup semantic migration because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      let changed = 0
+      for (const task of queue.tasks as unknown as Task[]) {
+        if (migrateProofSetupTaskKind(task)) changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = new Date().toISOString()
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: changed > 0
+          ? `Converted ${changed} proof-setup task${changed === 1 ? '' : 's'} to the explicit proof_setup semantic kind; rationale text is no longer machine authority.`
+          : 'Proof-setup tasks already use the explicit semantic kind.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: PROOF_SETUP_CONTRACT_MIGRATION_ID,
+    title: 'Install deterministic proof-setup contracts',
+    introducedIn: '0.13.20',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Replaces model-shaped proof-setup drafts with one canonical structured contract so proof discovery is executable work and cannot oscillate on provider wording.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = (queue?.tasks as unknown as Task[] | undefined)
+        ?.filter(taskNeedsDeterministicProofSetupContract)
+        .map(task => task.id) ?? []
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `proof-setup contracts requiring repair (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped proof-setup contract repair because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      let changed = 0
+      for (const task of queue.tasks as unknown as Task[]) {
+        if (!taskNeedsDeterministicProofSetupContract(task)) continue
+        const parentId = task.hierarchy?.parentId ?? task.delivery?.supports?.[0]
+        const parent = parentId
+          ? (queue.tasks as unknown as Task[]).find(candidate => candidate.id === parentId)
+          : undefined
+        if (!parent) continue
+        if (migrateDeterministicProofSetupContract(task, parent, now)) changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: changed > 0
+          ? `Repaired ${changed} model-shaped proof-setup task${changed === 1 ? '' : 's'} with the canonical structured contract.`
+          : 'Proof-setup tasks already use the canonical structured contract.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: RECURSIVE_PROOF_SETUP_MIGRATION_ID,
+    title: 'Remove recursive proof-setup tasks',
+    introducedIn: '0.13.21',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Removes accidental proof-setup descendants and their stale parent links so one proof task remains the executable boundary for each work item.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = recursiveProofSetupTaskIds((queue?.tasks ?? []) as unknown as Task[])
+      return {
+        needed: taskIds.size > 0,
+        affectedPaths: taskIds.size > 0
+          ? [projectStateDatabasePath(projectRoot), `recursive proof-setup tasks (${taskIds.size})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped recursive proof-setup cleanup because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const typedQueue = queue as unknown as { tasks: Task[]; releases?: ProjectRelease[]; lastUpdated?: string }
+      const removed = removeRecursiveProofSetupTasks(typedQueue)
+      if (removed > 0) {
+        const now = new Date().toISOString()
+        typedQueue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, typedQueue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: removed > 0
+          ? `Removed ${removed} recursive proof-setup task${removed === 1 ? '' : 's'} and detached their stale hierarchy and release links.`
+          : 'No recursive proof-setup tasks remained.',
+        affectedPaths: removed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: PROOF_COMMAND_IDENTITY_MIGRATION_ID,
+    title: 'Require task identity in proof commands',
+    introducedIn: '0.13.22',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Invalidates proof setup evidence that does not identify the bounded task in structured command output, removes generic proof commands, and requires a fresh task-specific run.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = (queue?.tasks as unknown as Task[] | undefined)
+        ?.filter(proofSetupNeedsCommandIdentity)
+        .map(task => task.id) ?? []
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `proof setup evidence without task identity (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped proof command identity migration because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      const shippedReleaseIds = new Set(
+        (queue.releases ?? [])
+          .filter(release => release.state === 'shipped')
+          .map(release => release.id),
+      )
+      let changed = 0
+      for (const task of queue.tasks as unknown as Task[]) {
+        const preserveCompletedStatus = (task.releaseIds ?? []).some(releaseId => shippedReleaseIds.has(releaseId))
+        if (migrateProofSetupCommandIdentity(task, now, preserveCompletedStatus)) changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: changed > 0
+          ? `Invalidated and re-shaped ${changed} proof setup task${changed === 1 ? '' : 's'} so command output must identify the bounded task.`
+          : 'Proof setup commands already carry task identity evidence.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: ACCEPTANCE_COMMAND_PROOF_PATH_RECONCILIATION_MIGRATION_ID,
+    title: 'Reconcile generated proof paths with acceptance criteria',
+    introducedIn: '0.13.27',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    recheckAfterApply: true,
+    summary: 'Removes stale generated proof obligations and refreshes their labels and evidence from the current typed acceptance-command contract without mutating authored proof paths.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = (queue?.tasks as unknown as Task[] | undefined)
+        ?.filter(taskNeedsAcceptanceCommandProofPathReconciliation)
+        .map(task => task.id) ?? []
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `generated proof paths (${taskIds.length} task${taskIds.length === 1 ? '' : 's'})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped proof-path reconciliation because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      let changed = 0
+      for (const task of queue.tasks as unknown as Task[]) {
+        const before = JSON.stringify(task.proofPaths ?? [])
+        const next = ensureCommandProofPathsFromAcceptanceCriteria(task, now, 'guildhall-migration')
+        if (JSON.stringify(next) === before) continue
+        task.proofPaths = next
+        task.updatedAt = now
+        changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: changed > 0
+          ? `Reconciled generated proof paths for ${changed} task${changed === 1 ? '' : 's'} from the current typed acceptance criteria.`
+          : 'Generated proof paths already match the current typed acceptance criteria.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: PROOF_SETUP_COMPLETION_AUTHORITY_MIGRATION_ID,
+    title: 'Reopen proof setup that was marked done without current proof',
+    introducedIn: '0.13.30',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    recheckAfterApply: true,
+    summary: 'Restores the executable proof boundary when a proof-setup task was marked done before its current typed command evidence was verified. Historical shipped release records stay closed.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const tasks = (queue?.tasks ?? []) as unknown as Task[]
+      const releases = (queue?.releases ?? []) as unknown as ProjectRelease[]
+      const runtime = await readTaskRuntimeStore(projectRoot)
+      const taskIds = tasks
+        .filter(task => taskNeedsProofSetupRuntimeRecovery(task, runtime))
+        .map(task => task.id)
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `unproven proof-setup tasks (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped proof-setup completion repair because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      const tasks = queue.tasks as unknown as Task[]
+      const releases = (queue.releases ?? []) as unknown as ProjectRelease[]
+      const runtime = await readTaskRuntimeStore(projectRoot)
+      let changed = 0
+      for (const task of tasks) {
+        if (!taskNeedsProofSetupRuntimeRecovery(task, runtime)) continue
+        if (releaseLocalProofSetupRepair({ tasks, releases }, task, releases, now)) {
+          changed += 1
+          continue
+        }
+        reopenUnprovenProofSetupTask(task, now)
+        await upsertTaskRuntimeState(projectRoot, task.id, {
+          assignedTo: null,
+          proofRecovery: {
+            reopenedAt: now,
+            kind: 'proof',
+            reason: 'Current typed proof was missing; historical completion evidence cannot settle the active lifecycle.',
+          },
+          updatedAt: now,
+        })
+        changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: changed > 0
+          ? `Reopened ${changed} proof-setup task${changed === 1 ? '' : 's'} until current typed command evidence is verified.`
+          : 'All active proof-setup tasks already have current completion proof.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: PROOF_SETUP_HISTORY_FENCE_MIGRATION_ID,
+    title: 'Fence historical proof setup completion from the active lifecycle',
+    introducedIn: '0.13.31',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Prevents stale done summaries and merge records from re-closing proof setup after Guildhall reopens it for current verification.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const tasks = (queue?.tasks ?? []) as unknown as Task[]
+      const releases = (queue?.releases ?? []) as unknown as ProjectRelease[]
+      const taskIds = tasks
+        .filter(task => taskNeedsProofSetupCompletionRepair(task, releases))
+        .map(task => task.id)
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), 'proof-setup history fences (' + taskIds.length + ')']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped proof-setup history fencing because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      const tasks = queue.tasks as unknown as Task[]
+      const releases = (queue.releases ?? []) as unknown as ProjectRelease[]
+      let changed = 0
+      for (const task of tasks) {
+        if (!taskNeedsProofSetupCompletionRepair(task, releases)) continue
+        if (releaseLocalProofSetupRepair({ tasks, releases }, task, releases, now)) {
+          changed += 1
+          continue
+        }
+        reopenUnprovenProofSetupTask(task, now)
+        await upsertTaskRuntimeState(projectRoot, task.id, {
+          assignedTo: null,
+          proofRecovery: {
+            reopenedAt: now,
+            kind: 'proof',
+            reason: 'Current typed proof was missing; historical completion evidence cannot settle the active lifecycle.',
+          },
+          updatedAt: now,
+        })
+        changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: changed > 0
+          ? 'Fenced historical completion for ' + changed + ' proof-setup task' + (changed === 1 ? '' : 's') + ' before current verification.'
+          : 'All active proof-setup histories are already fenced from current lifecycle state.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: PROOF_SETUP_RUNTIME_RECOVERY_MIGRATION_ID,
+    title: 'Record the proof recovery marker in the runtime authority',
+    introducedIn: '0.13.32',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Makes reopened proof setup survive landing reconciliation even when historical completion detail is retained outside the compact task definition.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const tasks = (queue?.tasks ?? []) as unknown as Task[]
+      const runtime = await readTaskRuntimeStore(projectRoot)
+      const taskIds = tasks
+        .filter(task => taskNeedsProofSetupRuntimeRecovery(task, runtime))
+        .map(task => task.id)
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), 'proof-setup runtime recovery markers (' + taskIds.length + ')']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped proof-setup runtime recovery markers because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      const tasks = queue.tasks as unknown as Task[]
+      const releases = (queue.releases ?? []) as unknown as ProjectRelease[]
+      const runtime = await readTaskRuntimeStore(projectRoot)
+      let changed = 0
+      for (const task of tasks) {
+        if (!taskNeedsProofSetupRuntimeRecovery(task, runtime)) continue
+        if (releaseLocalProofSetupRepair({ tasks, releases }, task, releases, now)) {
+          changed += 1
+          continue
+        }
+        reopenUnprovenProofSetupTask(task, now)
+        await upsertTaskRuntimeState(projectRoot, task.id, {
+          assignedTo: null,
+          proofRecovery: {
+            reopenedAt: now,
+            kind: 'proof',
+            reason: 'Current typed proof was missing; historical completion evidence cannot settle the active lifecycle.',
+          },
+          updatedAt: now,
+        })
+        changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: changed > 0
+          ? 'Recorded runtime recovery markers for ' + changed + ' proof-setup task' + (changed === 1 ? '' : 's') + ' before current verification.'
+          : 'All active proof-setup tasks already have current runtime recovery authority.',
         affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
       }
     },
@@ -3405,6 +4375,302 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: MODEL_INDEPENDENT_MACHINE_BOUNDARY_MIGRATION_ID,
+    title: 'Reproject model-independent machine evidence',
+    introducedIn: '0.13.11',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds bounded current evidence from retained task history so structured review and self-critique contracts survive the prose compaction boundary without treating model wording as state.',
+    async detect(projectRoot) {
+      const metadata = readProjectStateDatabaseMetadata(projectRoot)
+      if (metadata === null) return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === MODEL_INDEPENDENT_MACHINE_BOUNDARY_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), 'retained task evidence history']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const detail = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = detail?.tasks
+        .flatMap(task => typeof task.id === 'string' ? [task.id] : [])
+        ?? []
+      const result = await backfillTaskEvidenceCurrent(projectRoot, taskIds)
+      return {
+        summary: `Reprojected bounded current evidence for ${result.tasks} task${result.tasks === 1 ? '' : 's'} from ${result.events} retained historical event${result.events === 1 ? '' : 's'}; prose remains display-only and historical records were not rewritten.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: RELEASE_LOCAL_PROOF_SCOPE_MIGRATION_ID,
+    title: 'Reproject release-local proof children',
+    introducedIn: '0.13.33',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds release readiness so a proof child shipped with an older release cannot block or satisfy a later release through ancestor membership alone.',
+    async detect(projectRoot) {
+      const metadata = readProjectStateDatabaseMetadata(projectRoot)
+      if (metadata === null) return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === RELEASE_LOCAL_PROOF_SCOPE_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), 'saved release readiness projection']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = backfillProjectSummaryProjection(tasksPath, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+      })
+      return {
+        summary: projection.freshness === 'current'
+          ? `Reprojected release readiness for ${projection.counts.total} scoped task${projection.counts.total === 1 ? '' : 's'} using the selected release's proof children.`
+          : 'Recorded an unavailable release readiness projection because the authoritative project state could not be read.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: INDEXED_SEMANTIC_KIND_MIGRATION_ID,
+    title: 'Persist semantic task kinds in compact read models',
+    introducedIn: '0.13.39',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Adds typed semantic task kinds to bounded task points so compact projections can make release-local decisions without opening task prose or detail blobs.',
+    async detect(projectRoot) {
+      const metadata = readProjectStateDatabaseMetadata(projectRoot)
+      if (metadata === null) return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === INDEXED_SEMANTIC_KIND_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), 'compact semantic task-kind points']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped semantic task-kind backfill because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const summaries = queue.tasks.map(task => ({
+        taskId: String(task.id),
+        summary: projectStateDatabaseTaskSummary(task),
+      }))
+      const rewritten = rewriteProjectStateDatabaseTaskSummaries(projectRoot, summaries)
+      const projection = backfillProjectSummaryProjection(tasksPath, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+      })
+      return {
+        summary: `Persisted typed semantic kinds for ${rewritten.updatedCount} compact task point${rewritten.updatedCount === 1 ? '' : 's'} and refreshed the shared release projection (${projection.releaseSummary.state}).`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: PROOF_SETUP_EXECUTION_BLUEPRINT_MIGRATION_ID,
+    title: 'Restore proof-setup execution blueprints',
+    introducedIn: '0.13.41',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Restores the canonical Guildhall-owned proof-setup contract when recovery history cleared the current plan, so proof work returns directly to the worker lane instead of generic spec intake.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = (queue?.tasks as unknown as Task[] | undefined)
+        ?.filter(taskNeedsProofSetupExecutionBlueprint)
+        .map(task => task.id) ?? []
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `proof-setup execution blueprints requiring repair (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped proof-setup execution blueprint repair because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      let changed = 0
+      for (const task of queue.tasks as unknown as Task[]) {
+        if (!taskNeedsProofSetupExecutionBlueprint(task)) continue
+        const parentId = task.hierarchy?.parentId ?? task.delivery?.supports?.[0]
+        const parent = parentId
+          ? (queue.tasks as unknown as Task[]).find(candidate => candidate.id === parentId)
+          : undefined
+        if (!parent) continue
+        if (repairProofSetupExecutionBlueprint(task, parent, now)) changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: changed > 0
+          ? `Restored ${changed} proof-setup execution blueprint${changed === 1 ? '' : 's'} without changing release scope or provider history.`
+          : 'Proof-setup tasks already have their canonical execution blueprints.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: PROOF_SETUP_ACCEPTANCE_CONTRACT_MIGRATION_ID,
+    title: 'Canonicalize proof-setup acceptance contracts',
+    introducedIn: '0.13.55',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Removes leaked generic review criteria from Guildhall-owned proof-setup tasks so one typed command, one proof path, and one stable evidence contract determine proof completion.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = (queue?.tasks as unknown as Task[] | undefined)
+        ?.filter(taskNeedsCanonicalProofSetupAcceptanceContract)
+        .map(task => task.id) ?? []
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `proof-setup acceptance contracts requiring repair (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped proof-setup acceptance-contract repair because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      const tasks = queue.tasks as unknown as Task[]
+      let changed = 0
+      for (const task of tasks) {
+        if (!taskNeedsCanonicalProofSetupAcceptanceContract(task)) continue
+        const parentId = proofSetupParentId(task)
+        const parent = parentId ? tasks.find(candidate => candidate.id === parentId) : undefined
+        if (!parent) continue
+        if (repairCanonicalProofSetupAcceptanceContract(task, parent, now)) changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      const projection = backfillProjectSummaryProjection(tasksPath, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+      })
+      return {
+        summary: changed > 0
+          ? `Canonicalized ${changed} proof-setup acceptance contract${changed === 1 ? '' : 's'} to one typed command boundary and refreshed the shared release projection (${projection.releaseSummary.state}) without changing release membership.`
+          : `Proof-setup acceptance contracts already use the canonical single-command shape; refreshed the shared release projection (${projection.releaseSummary.state}).`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID,
+    title: 'Refresh proof-setup release projections',
+    introducedIn: '0.13.56',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the saved proof and release projection after proof-setup contract normalization so task detail, release readiness, and compact project views share the same current answer.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), 'saved proof and release projection']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = backfillProjectSummaryProjection(tasksPath, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+      })
+      return {
+        summary: `Refreshed the shared proof and release projection (${projection.releaseSummary.state}) from the canonical task graph.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID,
+    title: 'Project proof from effective current evidence',
+    introducedIn: '0.13.57',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Reprojects proof and release readiness from the canonical task snapshot with current typed evidence instead of definition-only rows, keeping compact and rich views on one answer.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), 'effective current proof projection']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const current = await readProjectCanonicalCurrentState(projectRoot)
+      const projection = writeProjectSummaryProjection(tasksPath, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+        queue: current.rawQueue as never,
+        projectionTasks: current.tasks as never,
+        currentStateAuthority: 'database',
+      })
+      return {
+        summary: `Reprojected proof and release readiness from current typed evidence (${projection.releaseSummary.state}).`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
 ]
 
 const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
@@ -3476,10 +4742,27 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [IMPORTED_SCRIPT_PROOF_CONTRACT_MIGRATION_ID]: 'migrations.test.ts: converts imported bare test conventions into explicit proof setup in a script-only release',
   [CURRENT_PLAN_RECOVERY_BOUNDARY_MIGRATION_ID]: 'migrations.test.ts: separates recovery/process history from current task plans and reopens polluted active plans for clean shaping',
   [MALFORMED_TASK_RUNTIME_OVERLAY_MIGRATION_ID]: 'migrations.test.ts: repairs an invalid retry-window fragment and leaves a second application unchanged',
+  [EFFECTIVE_CURRENT_PROOF_READ_MODEL_MIGRATION_ID]: 'migrations.test.ts: realigns indexed proof summaries from effective task state and leaves a second application unchanged',
+  [MODEL_INDEPENDENT_READINESS_BOUNDARY_MIGRATION_ID]: 'migrations.test.ts: records the structured readiness authority boundary without rewriting historical prose',
+  [PROOF_SETUP_TASK_KIND_MIGRATION_ID]: 'migrations.test.ts: converts legacy proof-setup rationale markers to an explicit semantic task kind',
+  [PROOF_SETUP_CONTRACT_MIGRATION_ID]: 'migrations.test.ts: replaces model-shaped proof setup with one deterministic structured contract',
+  [RECURSIVE_PROOF_SETUP_MIGRATION_ID]: 'migrations.test.ts: removes recursive proof-setup descendants and leaves the canonical proof boundary unchanged',
+  [PROOF_COMMAND_IDENTITY_MIGRATION_ID]: 'migrations.test.ts: invalidates proof setup without task identity and leaves the second application unchanged',
+  [ACCEPTANCE_COMMAND_PROOF_PATH_RECONCILIATION_MIGRATION_ID]: 'migrations.test.ts: removes stale generated proof evidence and leaves the second application unchanged',
+  [PROOF_SETUP_COMPLETION_AUTHORITY_MIGRATION_ID]: 'migrations.test.ts: reopens an unproven proof setup task and leaves the second application unchanged',
+  [PROOF_SETUP_HISTORY_FENCE_MIGRATION_ID]: 'migrations.test.ts: fences stale proof setup completion history before the coordinator can re-close it',
+  [PROOF_SETUP_RUNTIME_RECOVERY_MIGRATION_ID]: 'migrations.test.ts: records proof recovery in the runtime authority instead of relying on compact task detail',
   [DELIVERY_READ_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: creates the revisioned delivery read projection schema before the async projector populates it',
   [STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID]: 'migrations.test.ts: repairs only provably cropped request titles and leaves ambiguous records unchanged',
   [OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID]: 'migrations.test.ts: promotes the normalized owner-input queue and removes its duplicate summary copy',
   [RELEASE_MEMBERSHIP_CURRENT_AUTHORITY_MIGRATION_ID]: 'migrations.test.ts: retires release membership JSON mirrors after the normalized relation cutover',
+  [MODEL_INDEPENDENT_MACHINE_BOUNDARY_MIGRATION_ID]: 'migrations.test.ts: reprojects retained task evidence into structured current records without changing historical prose',
+  [RELEASE_LOCAL_PROOF_SCOPE_MIGRATION_ID]: 'migrations.test.ts: reprojects release readiness without letting a shipped proof child block a later release',
+  [INDEXED_SEMANTIC_KIND_MIGRATION_ID]: 'migrations.test.ts: backfills typed semantic task kinds into compact points before release-local proof projection',
+  [PROOF_SETUP_EXECUTION_BLUEPRINT_MIGRATION_ID]: 'migrations.test.ts: restores cleared proof-setup execution blueprints without returning them to generic spec intake',
+  [PROOF_SETUP_ACCEPTANCE_CONTRACT_MIGRATION_ID]: 'migrations.test.ts: canonicalizes proof-setup acceptance criteria without changing release membership',
+  [PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID]: 'migrations.test.ts: refreshes release readiness after proof-setup contract normalization',
+  [PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: projects proof from the canonical task snapshot and current typed evidence',
   '0.11.0/project-summary-projection': 'migrations.test.ts: project summary backfill is idempotent and preserves task history',
   '0.11.1/project-summary-projection-v2': 'migrations.test.ts: project summary shape refresh is idempotent and preserves task history',
   '0.11.2/project-summary-projection-setup-state': 'migrations.test.ts: project summary setup-state refresh is idempotent and preserves task history',
@@ -3606,9 +4889,32 @@ export async function applyProjectMigrations(input: {
   for (const migration of BUILT_IN_PROJECT_MIGRATIONS) {
     if (input.only && input.only.length > 0 && !input.only.includes(migration.id)) continue
     const appliedRecord = ledger.records.find(record => record.id === migration.id && record.status === 'applied')
+    const failedRecord = ledger.records.find(record => record.id === migration.id && record.status === 'failed')
     if (appliedRecord && !migration.recheckAfterApply) continue
     const detected = await migration.detect(input.projectRoot)
-    if (!detected.needed) continue
+    if (!detected.needed) {
+      // A failed migration may have completed its durable writes before a
+      // later invariant check rejected the aggregate write. If detection now
+      // proves that no work remains, close that historical attempt as applied
+      // while retaining the failed record for auditability.
+      if (failedRecord) {
+        const resolvedItem = toStatusItem(migration, detected.affectedPaths ?? failedRecord.affectedPaths ?? [], failedRecord)
+        const resolvedSummary = `Previously failed migration verified complete; no remaining work for ${migration.title.toLowerCase()} was detected.`
+        applied.push(resolvedItem)
+        await appendLedgerRecord(input.projectRoot, {
+          id: migration.id,
+          introducedIn: migration.introducedIn,
+          scope: migration.scope,
+          safety: migration.safety,
+          status: 'applied',
+          appliedAt: now().toISOString(),
+          appliedByVersion: input.appVersion ?? migration.introducedIn,
+          summary: resolvedSummary,
+          affectedPaths: detected.affectedPaths ?? failedRecord.affectedPaths ?? [],
+        })
+      }
+      continue
+    }
     const item = toStatusItem(migration, detected.affectedPaths ?? [], appliedRecord)
     if (!shouldApplyMigration(migration, input)) {
       skipped.push(item)

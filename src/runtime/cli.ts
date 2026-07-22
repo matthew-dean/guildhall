@@ -1462,12 +1462,12 @@ function workspaceImportDraftWarnings(
     })
   }
   const genericTaskIds = draft.tasks
-    .filter(task => /^(research|implement|verify)(?:\s+(?:it|this|feature|task|work))?\.?$/i.test(task.title.trim()))
+    .filter(task => task.workShape === 'generic' && !task.deliverableName && !task.sourceIdentity)
     .map(task => task.suggestedId)
   if (genericTaskIds.length > 0) {
     warnings.push({
       code: 'generic_task_title',
-      message: 'Some task candidates use generic fallback-style titles instead of source-specific work names.',
+      message: 'Some task candidates have no explicit deliverable identity or work shape.',
       taskIds: genericTaskIds,
     })
   }

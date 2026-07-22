@@ -67,43 +67,28 @@ correct task-local work just because you can imagine a broader renovation.
    that exact command. If it only asks for a "local proof command", judge the
    command actually recorded in the worker proof packet or gate results.
 
-## Your review note is your reasoning trace (load-bearing — don't shortcut)
+## Your review note is an optional audit trace
 
-The note you attach via the update-task tool (role: 'reviewer', agentId:
-'reviewer-agent') is captured verbatim on the task's ReviewVerdict.reasoning
-field. A coordinator or human auditing the task later reads that note to
-understand WHY you approved or asked for revision. If you skip the rubric
-walkthrough or write a one-liner, the audit trail loses the "why".
+If you provide a note via the update-task tool (role: 'reviewer', agentId:
+'reviewer-agent'), Guildhall may retain it as a human-readable audit trace.
+Write enough to help a later reader understand your judgment, but do not put
+any state transition, proof claim, routing instruction, or required action
+only in prose. The machine result below is the sole authority for those facts.
 
-Write a review note with this exact structure:
+Write a concise human-readable review note if useful. It may use any prose,
+markdown, headings, or ordering that helps a person understand the decision;
+Guildhall must never require a particular writing style for this explanation.
+The only required output shape is the machine JSON object below:
 
-**Review:**
-[criterion id]: Met / Not met — [one sentence justification tied to concrete evidence]
-...
+\`\`\`json
+{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[],"revisionItems":[],"riskItems":[],"followUpItems":[],"advisoryScores":{}}
+\`\`\`
 
-**Request fit:** yes / no — [whether the blueprint matches what was actually asked for, the current documented requirements, and the real user cases surfaced during intake]
-
-**Rubric** (one line per item from EVERY selected rubric block in your context):
-- <lens>:<item-id>: yes / no / n-a — [one-line justification]
-...
-
-**Corpus fit:** yes / no / n-a — [whether the diff reused the mapped abstraction or why no mapped abstraction applied]
-
-**Contract / governance fit:** yes / no / n-a — [when "## Design Governance" or another surface contract packet is present, whether the diff followed it or recorded the required contract delta]
-
-**Design hierarchy fit:** yes / no / n-a — [for UI work, whether text treatments follow a semantic text hierarchy and any new token or variant budget is justified]
-
-**Abstraction fit:** right-sized / too narrow / too generic / n-a — [for schemas, API routes, MCP resources, persistence records, event types, or public packets, explain why the semantic category will scale without erasing useful domain meaning]
-
-**Proof path:** yes / no — [whether the task has a task-scoped proof path and the completion handoff does not overclaim automated, manual, browser, provider, or external evidence]
-
-**Verdict:** Approved / Needs revision
-
-**Reasoning:** 2-5 sentences summarizing the *load-bearing* findings — which
-AC or rubric item was decisive, and what concrete evidence (file:line, gate
-result, missing test) drove the call. This is what a human reading the
-audit trail three weeks later needs to reconstruct your thinking without
-reloading your full context.
+The machine result is the only part Guildhall uses to advance review state,
+settle proof, or route actionable reviewer feedback. Use exact persisted
+criterion and evidence IDs. Put revision items in the revisionItems field; put risks
+and non-blocking follow-ups in their arrays. The prose above is an audit
+explanation only; changing its wording must not change the decision.
 
 If needs revision: explain exactly what must change. Be specific — "the Button component
 is missing the ghost variant described in criterion 2" not "the implementation is incomplete".

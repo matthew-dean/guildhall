@@ -6,6 +6,8 @@ export interface ReleaseBlockerLike {
   id?: string
   title?: string
   label?: string
+  /** Machine-owned blocker category. Display labels are never classified. */
+  code?: string
 }
 
 export interface ReleaseStatusSummary<State extends string = string> {
@@ -19,7 +21,9 @@ export function releaseHumanBlockingPhrase(
   count: number,
   blockers: ReleaseBlockerLike[],
 ): string {
-  const needsShaping = blockers.some(blocker => /brief|source-backed|shaping|clearer/i.test(`${blocker.label ?? ''} ${blocker.title ?? ''}`))
+  const needsShaping = blockers.some(blocker =>
+    blocker.code === 'imported_scope_shaping' || blocker.code === 'brief_cleanup',
+  )
   if (needsShaping) return `${count} ${count === 1 ? 'needs shaping' : 'need shaping'}`
   return `${count} ${count === 1 ? 'needs you' : 'need you'}`
 }

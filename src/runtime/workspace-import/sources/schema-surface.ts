@@ -85,6 +85,7 @@ export const schemaSurfaceSource: TaskSource = {
     if (tableList.length === 0 && functionList.length === 0) return []
 
     const signals: WorkspaceSignal[] = [{
+      signalId: `${projectPath}:schema-surface`,
       source: 'schema-surface',
       kind: 'context',
       title: 'Database schema surface',
@@ -96,6 +97,7 @@ export const schemaSurfaceSource: TaskSource = {
 
     if (tables.has('software') && tables.has('projects')) {
       signals.push({
+        signalId: `${projectPath}:schema-surface:software-projects`,
         source: 'schema-surface',
         kind: 'open_work',
         title: 'Resolve software/projects schema naming split',
@@ -111,6 +113,7 @@ export const schemaSurfaceSource: TaskSource = {
 
     if (tables.has('transactions') && tables.has('payments')) {
       signals.push({
+        signalId: `${projectPath}:schema-surface:transactions-payments`,
         source: 'schema-surface',
         kind: 'open_work',
         title: 'Resolve transactions/payments schema split',
@@ -123,6 +126,7 @@ export const schemaSurfaceSource: TaskSource = {
 
     if (tables.has('eligibility_checks') || functions.has('check_user_eligibility')) {
       signals.push({
+        signalId: `${projectPath}:schema-surface:eligibility`,
         source: 'schema-surface',
         kind: 'open_work',
         title: 'Wire eligibility checks through the application flow',

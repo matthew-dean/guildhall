@@ -47,7 +47,8 @@ export function assessTaskReadiness(task: Task, opts: { now?: string } = {}): Ta
 }
 
 export function definitionOfDoneForTask(task: Task, opts: { now?: string } = {}): DefinitionOfDone {
-  const explicit = explicitDoneLine(task.spec)
+  const explicit = task.structuredSpec?.completionBoundary.whatCountsAsDone ??
+    task.definitionOfDone?.items?.[0]
   const kind = taskKindFor(task)
   const items = unique([
     explicit,
@@ -110,11 +111,28 @@ export function ifThenBlockerPlansForTask(task: Task): IfThenBlockerPlan[] {
 }
 
 export function contextBudgetEstimate(task: Task): ContextBudgetEstimate {
-  const text = taskText(task)
-  const estimatedTokens = Math.ceil(text.length / 4)
+  // Context risk is a property of the structured contract, not of how much
+  // prose a model chose to emit. Rendered Markdown and free-form descriptions
+  // are display context and must not change dispatch readiness.
+  const structuredSpec = task.structuredSpec
+  const acceptanceCount = task.acceptanceCriteria?.length ?? 0
+  const contractSurfaceCount = structuredSpec?.contractSurfaceDeltas?.length ?? 0
+  const goalCount = structuredSpec?.goals.length ?? 0
+  const nonGoalCount = structuredSpec?.nonGoals.length ?? 0
+  const verificationCount = structuredSpec?.verification.length ?? 0
+  const handoffCount = structuredSpec?.handoffSequence?.length ?? 0
+  const referenceCount = task.references?.length ?? 0
+  const estimatedTokens = 200 +
+    acceptanceCount * 180 +
+    contractSurfaceCount * 260 +
+    goalCount * 80 +
+    nonGoalCount * 60 +
+    verificationCount * 100 +
+    handoffCount * 80 +
+    referenceCount * 60
   const reasons: string[] = []
-  const surfaceCount = surfaceKeywords(text)
-  if (estimatedTokens > 3500) reasons.push('The task text is large enough to crowd one worker brief.')
+  const surfaceCount = contractSurfaceCount + acceptanceCount
+  if (estimatedTokens > 3500) reasons.push('The structured task contract is large enough to crowd one worker brief.')
   if (surfaceCount >= 5) reasons.push('The task appears to span many project surfaces.')
   const risk: ContextBudgetEstimate['risk'] =
     estimatedTokens > 5000 || surfaceCount >= 6 ? 'high'
@@ -136,11 +154,10 @@ function readinessDimensions(
     contextBudget: ContextBudgetEstimate
   },
 ): TaskReadinessDimension[] {
-  const text = taskText(task)
   const hasOutcome = hasClearOutcome(task, input.definitionOfDone)
   const proofable = hasProof(task, input.definitionOfDone)
   const mixedResearch = mixesResearchAndImplementation(task)
-  const needsOwner = needsProductJudgment(text)
+  const needsOwner = needsProductJudgment(task)
   return [
     dimension(
       'outcome_clarity',
@@ -174,8 +191,8 @@ function readinessDimensions(
     ),
     dimension(
       'uncertainty',
-      mixedResearch ? 'blocked' : uncertaintyWarning(text, input.taskKind) ? 'warn' : 'ok',
-      mixedResearch ? 'Research and implementation are mixed in one task.' : uncertaintyWarning(text, input.taskKind) ? 'Uncertainty should be named before dispatch.' : 'Uncertainty is bounded for this task kind.',
+      mixedResearch ? 'blocked' : uncertaintyWarning(task) ? 'warn' : 'ok',
+      mixedResearch ? 'Research and implementation are mixed in one task.' : uncertaintyWarning(task) ? 'Uncertainty should be named before dispatch.' : 'Uncertainty is bounded for this task kind.',
       mixedResearch ? ['research and implementation language both appear'] : [],
     ),
     dimension(
@@ -240,12 +257,6 @@ function kindDefinitionItems(kind: TaskKind): string[] {
   }
 }
 
-function explicitDoneLine(spec: string | undefined): string | null {
-  if (!spec) return null
-  const match = /what counts as done:\s*([^\n]+)/i.exec(spec)
-  return match?.[1]?.replace(/^[-:\s]+/, '').trim() || null
-}
-
 function dimension(
   id: TaskReadinessDimension['id'],
   status: TaskReadinessDimension['status'],
@@ -257,8 +268,8 @@ function dimension(
 
 function hasClearOutcome(task: Task, definitionOfDone: DefinitionOfDone): boolean {
   if ((task.acceptanceCriteria?.length ?? 0) > 0) return true
-  if (definitionOfDone.items.some(item => item.length > 20 && !/^Implementation satisfies/.test(item))) return true
-  return /\b(done|success|outcome|user can|what counts as done|completion boundary)\b/i.test(taskText(task))
+  if (task.structuredSpec?.completionBoundary.whatCountsAsDone?.trim()) return true
+  return (task.definitionOfDone?.items?.length ?? 0) > 0
 }
 
 function hasProof(task: Task, definitionOfDone: DefinitionOfDone): boolean {
@@ -270,16 +281,15 @@ function hasProof(task: Task, definitionOfDone: DefinitionOfDone): boolean {
   }
   if ((task.proofPaths?.length ?? 0) > 0) return true
   if ((task.acceptanceCriteria ?? []).some(ac => Boolean(ac.verifiedBy))) return true
-  return definitionOfDone.evidenceRequired.length > 0 || /\b(test|typecheck|browser|proof|verify|screenshot|gate)\b/i.test(taskText(task))
+  return definitionOfDone.evidenceRequired.length > 0
 }
 
 export function hasImportedExecutionBlueprint(task: Task): boolean {
-  const spec = task.spec?.trim() ?? ''
+  const spec = task.structuredSpec
   if (!spec) return false
-  if (!/##\s*Verification\b/i.test(spec)) return false
-  if (!/##\s*Completion Boundary\b/i.test(spec)) return false
-  if (!/What counts as done:/i.test(spec)) return false
-  if (!/Owner-only setup:\s*None/i.test(spec)) return false
+  if (spec.verification.length === 0) return false
+  const boundary = spec.completionBoundary
+  if (!boundary.productOutcome || !boundary.whatCountsAsDone || !boundary.verificationEnvironment) return false
   return (task.acceptanceCriteria ?? []).some(ac => Boolean(ac.verifiedBy)) &&
     (task.proofPaths ?? []).some(path => {
       const expectedEvidence = path && typeof path === 'object' && !Array.isArray(path)
@@ -291,18 +301,13 @@ export function hasImportedExecutionBlueprint(task: Task): boolean {
 
 function mixesResearchAndImplementation(task: Task): boolean {
   if (hasSettledFixedSpecBoundary(task)) return false
-  const text = taskText(task)
-  // Evaluation is often the proof/output of an implementation (for example,
-  // generate and evaluate a synopsis). Only explicit discovery language should
-  // create a research/implementation split signal.
-  return /\b(research|investigate|compare)\b/i.test(text) &&
-    /\b(implement|build|wire|add|change|migrate)\b/i.test(text)
+  return task.taskKind === 'research' && task.workKind === 'implementation'
 }
 
 export function hasSettledFixedSpecBoundary(task: Task): boolean {
   if (task.sizePlan?.action !== 'proceed_with_warning') return false
   if ((task.sizePlan.recommendedChildren?.length ?? 0) > 0) return false
-  return hasExplicitNoSplitBoundary(task.spec)
+  return hasExplicitNoSplitBoundary(task)
 }
 
 /**
@@ -310,25 +315,21 @@ export function hasSettledFixedSpecBoundary(task: Task): boolean {
  * without making the current task a split parent. Keep this interpretation
  * content-neutral so project names and intake origins do not control readiness.
  */
-export function hasExplicitNoSplitBoundary(spec: string | undefined): boolean {
-  const splitBoundary = spec?.match(/what must be split or blocked\s*:\s*([^\n]+)/i)?.[1] ?? ''
-  const normalizedBoundary = splitBoundary.trim()
-  if (!normalizedBoundary) return false
-  const explicitlyNoSplit = /^(none|nothing|not required|nothing to split)/i.test(normalizedBoundary)
-  const downstreamWorkSeparated =
-    /\bseparate tasks?\b/i.test(normalizedBoundary) &&
-    /\b(?:none|nothing)\b[\s\S]*\b(?:block\w*|split\w*|absorb\w*)\b/i.test(normalizedBoundary)
-  if (!explicitlyNoSplit && !downstreamWorkSeparated) return false
-  return !(/\b(?:must|needs? to|required to|requires?)\s+split\b|\bsplit required\b|\bblocked before execution\b/i.test(normalizedBoundary))
+export function hasExplicitNoSplitBoundary(task: Pick<Task, 'structuredSpec'> | undefined): boolean {
+  return task?.structuredSpec?.completionBoundary.splitPolicy === 'none'
 }
 
-function uncertaintyWarning(text: string, kind: TaskKind): boolean {
+function uncertaintyWarning(task: Task): boolean {
+  const kind = task.taskKind ?? taskKindFor(task)
   if (kind === 'research' || kind === 'spike' || kind === 'decision') return false
-  return /\b(tbd|unknown|unclear|maybe|choose|decide|best)\b/i.test(text)
+  return (task.requestIntake?.missingInformation.length ?? 0) > 0 ||
+    (task.openQuestions?.some(question => !question.answeredAt) ?? false)
 }
 
-function needsProductJudgment(text: string): boolean {
-  return /\b(better|best|policy|taste|risk|rollout|pricing|business|should we|choose|decide)\b/i.test(text)
+function needsProductJudgment(task: Task): boolean {
+  return task.taskKind === 'decision' ||
+    Boolean(task.requestIntake?.ownerDecisionNeeded?.trim()) ||
+    Boolean(task.humanJudgment?.trim())
 }
 
 function isLargeTask(task: Task, contextBudget: ContextBudgetEstimate): boolean {
@@ -337,24 +338,9 @@ function isLargeTask(task: Task, contextBudget: ContextBudgetEstimate): boolean 
     task.sizePlan?.action === 'split_recommended' ||
     task.sizePlan?.action === 'decompose_before_execution'
   ) return true
-  return contextBudget.risk === 'high' || surfaceKeywords(taskText(task)) >= 6
-}
-
-function surfaceKeywords(text: string): number {
-  const keywords = ['ui', 'screen', 'api', 'database', 'migration', 'docs', 'release', 'verification', 'provider', 'settings', 'onboarding', 'runtime']
-  return keywords.filter(keyword => new RegExp(`\\b${keyword}\\b`, 'i').test(text)).length
-}
-
-function taskText(task: Task): string {
-  return [
-    task.title,
-    task.description,
-    task.spec,
-    task.productBrief?.userJob,
-    task.productBrief?.successMetric,
-    ...(task.acceptanceCriteria ?? []).map(ac => ac.description),
-    ...(task.outOfScope ?? []),
-  ].filter(Boolean).join('\n')
+  return contextBudget.risk === 'high' ||
+    (task.structuredSpec?.contractSurfaceDeltas?.length ?? 0) >= 6 ||
+    (task.acceptanceCriteria?.length ?? 0) >= 8
 }
 
 function unique(values: Array<string | null | undefined>): string[] {

@@ -2466,7 +2466,7 @@ describe('buildThread', () => {
                   id: 'q-1',
                   askedBy: 'spec-agent',
                   askedAt: new Date(Date.now() - 20_000).toISOString(),
-                  prompt: 'Pick one',
+                  prompt: 'Which option should we pick?',
                   choices: ['A', 'B'],
                   selectionMode: 'single',
                 },
@@ -2475,7 +2475,7 @@ describe('buildThread', () => {
                   id: 'q-2',
                   askedBy: 'spec-agent',
                   askedAt: new Date(Date.now() - 10_000).toISOString(),
-                  prompt: 'Pick one',
+                  prompt: 'Which option should we pick?',
                   choices: ['A', 'B'],
                   selectionMode: 'single',
                 },
@@ -2510,7 +2510,7 @@ describe('buildThread', () => {
       expect(questionTurns).toHaveLength(1)
       const questionTurn = questionTurns[0]
       if (!questionTurn || questionTurn.kind !== 'agent_question') throw new Error('expected question turn')
-      expect(questionTurn.question.prompt).toBe('Pick one')
+      expect(questionTurn.question.prompt).toBe('Which option should we pick?')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -2769,6 +2769,7 @@ describe('buildThread', () => {
                 {
                   agentId: 'coordinator-recovery',
                   role: 'system',
+                  structured: { event: 'recovery_spec_seed', source: 'deterministic' },
                   content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane, so the task has durable progress instead of returning to a read-only shaping loop.',
                   timestamp: now,
                 },
@@ -2863,12 +2864,14 @@ describe('buildThread', () => {
                 {
                   agentId: 'coordinator',
                   role: 'recovery',
+                  structured: { event: 'stale_spec_claim_cleared', source: 'runtime' },
                   content: 'Runtime cleared a stale spec-agent claim so this draft waits in the shaping queue instead of pretending an agent is actively working on it.',
                   timestamp: '2026-05-31T16:53:00.658Z',
                 },
                 {
                   agentId: 'coordinator-recovery',
                   role: 'system',
+                  structured: { event: 'recovery_spec_seed', source: 'deterministic' },
                   content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane, so the task has durable progress instead of returning to a read-only shaping loop.',
                   timestamp: latestRecoveryAt,
                 },
@@ -3157,7 +3160,7 @@ coordinators:
     }
   })
 
-  it('ignores a stale starter-task focus question once a concrete spec draft already exists', async () => {
+  it('keeps an explicit owner question until an explicit mutation supersedes it', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(statePath(projectPath), { recursive: true })
@@ -3219,12 +3222,11 @@ coordinators:
         recentEvents: [],
       })
 
-      expect(thread.turns.find(turn => turn.id === 'q:task-003:q-1')).toBeUndefined()
-      expect(thread.turns.find(turn => turn.id === 'spec:task-003')).toMatchObject({
-        kind: 'spec_review',
-        status: 'pending',
-        phase: 'intake',
+      expect(thread.turns.find(turn => turn.id === 'q:task-003:q-1')).toMatchObject({
+        kind: 'agent_question',
+        question: { id: 'q-1', prompt: 'What should this first starter task focus on?' },
       })
+      expect(thread.turns.find(turn => turn.id === 'spec:task-003')).toBeUndefined()
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -3482,7 +3484,7 @@ coordinators:
     }
   })
 
-  it('suppresses expected research-budget refusals from live activity', async () => {
+  it('keeps research-budget prose as activity detail instead of suppressing it', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(statePath(projectPath), { recursive: true })
@@ -3552,9 +3554,10 @@ coordinators:
 
       const turn = thread.turns.find(t => t.kind === 'inflight')
       if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
-      expect(turn.liveAgent?.lastEventLabel).not.toBe('Failed glob')
-      expect(turn.activity?.some(item => item.label === 'Failed glob')).toBe(false)
-      expect(turn.activity?.some(item => item.label.includes('paused after gathering enough context'))).toBe(true)
+      expect(turn.liveAgent?.lastEventLabel).toContain('Assistant kept researching')
+      expect(turn.activity?.some(item => item.label === 'Failed glob')).toBe(true)
+      expect(JSON.stringify(turn.activity ?? [])).toContain('Research budget exhausted')
+      expect(turn.activity?.some(item => item.kind === 'running')).toBe(true)
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -3637,7 +3640,7 @@ coordinators:
     }
   })
 
-  it('rewrites internal target-file guard language before it reaches Thread', async () => {
+  it('preserves agent activity prose without classifying it in Thread', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(statePath(projectPath), { recursive: true })
@@ -3709,16 +3712,16 @@ coordinators:
       const turn = thread.turns.find(t => t.kind === 'inflight')
       if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
       const rendered = JSON.stringify(turn.activity ?? [])
-      expect(rendered).toContain('make a concrete change')
-      expect(rendered).toContain('save concrete progress')
-      expect(rendered).not.toMatch(/authoritative likely target|read-only exploration|refusing further read-only/i)
-      expect(rendered).not.toMatch(/non-durable steps|mutate, verify, checkpoint, or escalate/i)
+      expect(rendered).toContain('authoritative likely target')
+      expect(rendered).toContain('non-durable steps')
+      expect(rendered).not.toContain('make a concrete change')
+      expect(rendered).not.toContain('save concrete progress')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
   })
 
-  it('rewrites acceptance-criteria verification jargon before it reaches Thread', async () => {
+  it('preserves provider review prose without deriving a verification state from it', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(statePath(projectPath), { recursive: true })
@@ -3779,8 +3782,10 @@ coordinators:
       const turn = thread.turns.find(t => t.kind === 'inflight')
       if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
       const rendered = JSON.stringify(turn.activity ?? [])
-      expect(rendered).toContain('one verification check still needs a project test command')
-      expect(rendered).not.toMatch(/\bAC-\d+\b|acceptance criteria except|self-critique/i)
+      expect(rendered).toContain('AC-8')
+      expect(rendered).toContain('AC-9')
+      expect(rendered).toContain('self-critique')
+      expect(rendered).not.toContain('one verification check still needs a project test command')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -3856,7 +3861,7 @@ coordinators:
     }
   })
 
-  it('surfaces blocked tasks even when only blockReason was persisted', async () => {
+  it('does not invent an escalation when only blockReason was persisted', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(statePath(projectPath), { recursive: true })
@@ -3896,11 +3901,7 @@ coordinators:
         recentEvents: [],
       })
 
-      const turn = thread.turns.find(t => t.kind === 'escalation')
-      if (!turn || turn.kind !== 'escalation') throw new Error('expected blockReason escalation turn')
-      expect(turn.phase).toBe('blocked')
-      expect(turn.taskTitle).toBe('Fix local bootstrap')
-      expect(turn.summary).toContain('pixi install')
+      expect(thread.turns.some(t => t.kind === 'escalation')).toBe(false)
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

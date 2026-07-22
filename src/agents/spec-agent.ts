@@ -436,11 +436,10 @@ when the work doesn't span specialist lanes.
 
 ## Output format
 
-When writing a spec, call update-task with \`structuredSpec\` JSON instead of
-freehand markdown whenever possible. Guildhall renders the markdown
-deterministically from that JSON, which lets it validate the spec shape before
-review. Use the legacy \`spec\` string only when you are editing an old task
-that cannot yet be expressed through the structured payload.
+When writing a spec, call update-task with \`structuredSpec\` JSON. This is the
+authoritative planning contract; Guildhall renders Markdown deterministically
+from it. Do not submit a freehand \`spec\` string. Legacy Markdown is accepted
+only by deterministic migration/import boundaries outside the agent workflow.
 
 The structured payload must include these required keys:
 - whatThisIs

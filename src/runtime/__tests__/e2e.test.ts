@@ -326,7 +326,11 @@ function stubAgent(
     async generate(prompt: string) {
       calls.push({ prompt })
       if (sideEffect) await sideEffect(prompt)
-      return { text: 'ok' }
+      return {
+        text: name === 'reviewer-agent'
+          ? '{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[],"revisionItems":[],"riskItems":[],"followUpItems":[],"advisoryScores":{}}'
+          : 'ok',
+      }
     },
   }
 }

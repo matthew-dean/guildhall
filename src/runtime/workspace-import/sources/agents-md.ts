@@ -22,6 +22,7 @@ export const agentsMdSource: TaskSource = {
       const raw = readFileSync(p, 'utf-8').trim()
       if (!raw) continue
       signals.push({
+        signalId: `${p}:document`,
         source: 'agents-md',
         kind: 'context',
         title: `Agent conventions (${name})`,

@@ -95,7 +95,7 @@ describe('owner input requests', () => {
       actor: 'migration',
       source: { kind: 'task', taskId: 'task-1', questionId: 'q1' },
       target: { kind: 'thread' },
-      question: { prompt: 'Which proof should run?' },
+      question: { kind: 'text', prompt: 'Which proof should run?' },
       objective: {
         kind: 'task_shaping',
         label: 'Choose proof',
@@ -160,7 +160,7 @@ describe('owner input requests', () => {
       target: { kind: 'thread' },
       question: {
         kind: 'choice',
-        prompt: 'This is a meta-intake task — I need to:',
+        prompt: 'Which setup items should apply to this meta-intake task?',
         choices: [
           'Infer the project routing slices',
           'Bootstrap verification',
@@ -178,7 +178,7 @@ describe('owner input requests', () => {
     expect(result.request.selectionMode).toBe('multiple')
     const sessions = listBoundedChatSessions(path.join(root, '.guildhall'))
     expect(sessions[0]?.subObjectives[0]).toMatchObject({
-      prompt: 'This is a meta-intake task — I need to:',
+      prompt: 'Which setup items should apply to this meta-intake task?',
       selectionMode: 'multiple',
     })
   })
@@ -193,7 +193,7 @@ describe('owner input requests', () => {
       actor: 'spec-agent',
       source: { kind: 'task', taskId: 'task-alert', questionId: 'q1' },
       target: { kind: 'thread' },
-      prompt: 'I have enough context. The roadmap lists AlertDialog as missing (P0 gap).\n\nThe key question I need to ask before drafting: what variants does the user need? Let me write the product brief first, then ask.',
+      prompt: 'I have enough context. The roadmap lists AlertDialog as missing (P0 gap). Let me write the product brief first, then ask.',
       objective: {
         kind: 'task_shaping',
         label: 'Clarify AlertDialog',
@@ -220,7 +220,7 @@ describe('owner input requests', () => {
       actor: 'test',
       source,
       target: { kind: 'thread' },
-      question: { prompt: 'What should Guildhall do next?' },
+      question: { kind: 'text', prompt: 'What should Guildhall do next?' },
       objective: {
         kind: 'task_shaping',
         label: 'Owner decision',

@@ -585,6 +585,7 @@ describe('ProjectView', () => {
         code: 'owner_input_required',
         message: 'Review the waiting spec before Guildhall can continue',
         actionHref: '/thread',
+        focusKind: 'spec_review',
       },
     } as Partial<ProjectDetail>)
     installFetchFakes(projectPayload)
@@ -1312,6 +1313,7 @@ describe('ProjectView', () => {
         code: 'owner_input_required',
         message: 'Choose a recovery path for the blocked task',
         actionHref: '/task/task-blocked',
+        focusKind: 'blocked_work',
       },
     })
     installFetchFakes(recoveryDetail)

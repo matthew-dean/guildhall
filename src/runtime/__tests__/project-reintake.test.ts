@@ -41,6 +41,20 @@ const loomaAudit = [
   '',
 ].join('\n')
 
+const loomaAuditSource = {
+  path: 'looma/docs/component-library-audit.md',
+  content: loomaAudit,
+  unitIdentities: {
+    Dialog: 'looma/component/dialog',
+    AlertDialog: 'looma/component/alert-dialog',
+  },
+  statusHints: { Dialog: 'shipped' as const, AlertDialog: 'missing' as const },
+  workShapes: { Dialog: 'ui-component' as const, AlertDialog: 'ui-component' as const },
+  targetAreas: { Dialog: 'looma', AlertDialog: 'looma' },
+  buildsOn: { AlertDialog: ['Dialog'] },
+  consumerSurfaces: { AlertDialog: ['Knit destructive confirmation flow'] },
+}
+
 const narrativeRoadmap = [
   '# Implementation Roadmap',
   '',
@@ -71,6 +85,7 @@ const knitSelectedReleaseSource = [
   '## Stage 1: V1 Release Hardening',
   '',
   'Goal: make the current V1 feature set releasable.',
+  'Proof style: script-only',
   '',
   '## Current Next Milestone',
   '',
@@ -97,6 +112,7 @@ const scopedNarrativeRelease = [
   '## Current Next Milestone',
   '',
   'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+  'Proof style: script-only',
   '',
   '## Deliverables',
   '',
@@ -109,13 +125,14 @@ describe('project re-intake planner', () => {
   it('treats stale task state as evidence instead of gospel by proposing a reframe', () => {
     const draft = planProjectReintake({
       now,
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      sources: [loomaAuditSource],
       tasks: [
         task({
           id: 'task-039',
           title: 'Build AlertDialog primitive',
           description: 'Build the Looma AlertDialog primitive.',
           status: 'blocked',
+          deliverableName: 'AlertDialog',
         }),
       ],
     })
@@ -136,7 +153,7 @@ describe('project re-intake planner', () => {
   it('repairs archived prerequisites without rewriting the current task', () => {
     const draft = planProjectReintake({
       now,
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      sources: [loomaAuditSource],
       tasks: [
         task({
           id: 'task-dialog-history',
@@ -166,13 +183,14 @@ describe('project re-intake planner', () => {
   it('reframes weak legacy pre-implementation specs when current evidence still supports the task', () => {
     const draft = planProjectReintake({
       now,
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      sources: [loomaAuditSource],
       tasks: [
         task({
           id: 'task-039',
           title: 'Build AlertDialog primitive',
           description: 'Build the Looma AlertDialog primitive.',
           status: 'spec_review',
+          deliverableName: 'AlertDialog',
           productBrief: {
             userJob: 'Ship AlertDialog.',
             successMetric: 'The task has a reviewable spec and acceptance criteria.',
@@ -201,6 +219,8 @@ describe('project re-intake planner', () => {
           id: 'task-import-9s8tkc',
           title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
           description: '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          sourceIdentity: 'docs/harness/implementation-roadmap.md#unit:1',
+          deliverableName: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
           status: 'import_draft',
         }),
       ],
@@ -256,26 +276,14 @@ describe('project re-intake planner', () => {
     const selected = draft.groups.flatMap(group => group.changes).find(change =>
       change.kind === 'create' && change.task.title === 'Run the V1 release hardening gate',
     )
-    expect(selected).toMatchObject({
-      kind: 'create',
-      task: {
-        releaseIds: ['stage-1-v1-release-hardening'],
-      },
-    })
+    expect(selected).toBeUndefined()
     const created = draft.groups.flatMap(group => group.changes).find(change =>
       change.kind === 'create' && change.task.title === 'Continue the Knit primitive replacement wave',
     )
-    expect(created).toMatchObject({
-      kind: 'create',
-      task: {
-        stageAlignment: 'stage 1: finish knit primitive replacement wave',
-      },
-    })
-    if (!created || created.kind !== 'create') throw new Error('Expected a create change for the later task')
-    expect(created.task.releaseIds).toBeUndefined()
+    expect(created).toBeUndefined()
   })
 
-  it('lets an explicit current release scope override a stale later-stage inventory label', () => {
+  it('keeps explicit current release membership separate from later inventory work', () => {
     const inventory = [
       '# Remaining Spec Decomposition Inventory',
       '',
@@ -288,7 +296,11 @@ describe('project re-intake planner', () => {
     const draft = planProjectReintake({
       now,
       sources: [
-        { path: 'docs/harness/headless-mvp-release-plan.md', content: scopedNarrativeRelease },
+        {
+          path: 'docs/harness/headless-mvp-release-plan.md',
+          content: scopedNarrativeRelease,
+          semanticKinds: { 'Character voice and dialogue review': 'reviewer_lane' },
+        },
         { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: inventory },
       ],
       tasks: [],
@@ -311,6 +323,68 @@ describe('project re-intake planner', () => {
         task: expect.objectContaining({ title: 'Implement dialogue-and-character-voice reviewer lane' }),
       }),
     ]))
+    const later = changes.find(change =>
+      change.kind === 'create' && change.task.title === 'Implement dialogue-and-character-voice reviewer lane',
+    )
+    expect(later).toBeUndefined()
+  })
+
+  it('does not let a long planning instruction claim release scope by repeating deliverable vocabulary', () => {
+    const planningInstruction = [
+      'You are repairing the project plan from current workspace evidence. First, repair the selected release and create a fresh release boundary.',
+      'Use only source-backed evidence. Do not wait for approval, manufacture capabilities, or mark a release shipped without proof.',
+      'The selected release must include author intent and voice input, synopsis generation, story records, context planning, broad-genre drafting model proof, chapter drafting, and review lenses.',
+      'After repairing the plan, run the selected work and make the release state readable through Guildhall.',
+    ].join(' ')
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'docs/harness/headless-mvp-release-plan.md', content: scopedNarrativeRelease }],
+      tasks: [task({
+        id: 'task-instruction-shaped-like-work',
+        title: planningInstruction,
+        status: 'spec_review',
+        semanticKind: 'planning_instruction',
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      })],
+    })
+
+    const changes = draft.groups.flatMap(group => group.changes)
+    expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'archive',
+        taskId: 'task-instruction-shaped-like-work',
+      }),
+    ]))
+    expect(draft.releases?.[0]?.nodeIds).not.toContain('work:task-instruction-shaped-like-work')
+  })
+
+  it('supersedes a shipped release with a deterministic reconciled release when current work remains', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'docs/harness/headless-mvp-release-plan.md', content: scopedNarrativeRelease }],
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1: Headless Drafting And Evaluation MVP',
+        state: 'shipped',
+        nodeIds: ['work:task-instruction-shaped-like-work'],
+        deferredNodeIds: [],
+      }],
+      tasks: [task({
+        id: 'task-instruction-shaped-like-work',
+        title: 'You are repairing the project plan from current workspace evidence. First, repair the selected release and create a fresh release boundary. Use only source-backed evidence. Do not wait for approval, manufacture capabilities, or mark a release shipped without proof. The selected release must include author intent and voice input, synopsis generation, story records, context planning, broad-genre drafting model proof, chapter drafting, and review lenses. After repairing the plan, run the selected work and make the release state readable through Guildhall.',
+        status: 'spec_review',
+        semanticKind: 'planning_instruction',
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      })],
+    })
+
+    expect(draft.selectedReleaseId).toBe('stage-1-headless-drafting-and-evaluation-mvp-r1')
+    expect(draft.releases?.[0]).toMatchObject({
+      id: 'stage-1-headless-drafting-and-evaluation-mvp-r1',
+      label: 'Stage 1: Headless Drafting And Evaluation MVP (reconciled plan)',
+      supersedesReleaseId: 'stage-1-headless-drafting-and-evaluation-mvp',
+      nodeIds: expect.not.arrayContaining(['work:task-instruction-shaped-like-work']),
+    })
   })
 
   it('keeps a broad release-table row in shaping until it has concrete proof evidence', () => {
@@ -470,6 +544,7 @@ describe('project re-intake planner', () => {
           releaseIds: ['stage-1-v1-release-hardening'],
           archivedEvidence: {
             source: 'project-reintake',
+            code: 'unsupported_weak_preimplementation',
             reason: 'Pre-implementation task is unsupported by current evidence and still uses a weak legacy spec shape.',
           },
           spec: '## Summary\nImported draft awaiting shaping.',
@@ -489,6 +564,31 @@ describe('project re-intake planner', () => {
         releaseIds: ['stage-1-v1-release-hardening'],
       },
     })
+  })
+
+  it('does not restore an archived task from a prose-only archive reason', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'knit/docs/release-plan.md', content: knitReleasePlanWithoutCurrentMarker }],
+      tasks: [
+        task({
+          id: 'task-import-unit-tests',
+          title: 'Unit tests: use-collections, use-presence, subdomain utils',
+          status: 'archived',
+          releaseIds: ['stage-1-v1-release-hardening'],
+          archivedEvidence: {
+            source: 'project-reintake',
+            reason: 'Pre-implementation task is unsupported by current evidence and still uses a weak legacy spec shape.',
+          },
+          spec: '## Summary\nImported draft awaiting shaping.',
+        }),
+      ],
+    })
+
+    const restore = draft.groups.flatMap(group => group.changes).find(change =>
+      change.kind === 'reframe' && change.taskId === 'task-import-unit-tests',
+    )
+    expect(restore).toBeUndefined()
   })
 
   it('repairs imported tasks that were assigned to both selected and later release boundaries', () => {
@@ -524,7 +624,7 @@ describe('project re-intake planner', () => {
   it('preserves completed work as progress evidence instead of recreating it', () => {
     const draft = planProjectReintake({
       now,
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      sources: [loomaAuditSource],
       tasks: [
         task({
           id: 'task-dialog',
@@ -558,7 +658,7 @@ describe('project re-intake planner', () => {
   it('preserves started implementation work instead of reframing it during re-intake', () => {
     const draft = planProjectReintake({
       now,
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      sources: [loomaAuditSource],
       tasks: [
         task({
           id: 'task-drawer',
@@ -609,6 +709,7 @@ describe('project re-intake planner', () => {
         task({
           id: 'task-import-author-involvement',
           title: 'Implement author-involvement-modes contract and involvement-dial types',
+          semanticKind: 'contract',
           description: 'Source-backed task from remaining spec inventory.',
           status: 'in_progress',
           references: [
@@ -668,6 +769,7 @@ describe('project re-intake planner', () => {
         taskId: 'task-import-author-involvement',
         after: expect.objectContaining({
           title: 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types',
+          semanticKind: 'contract',
           status: 'shelved',
         }),
       }),
@@ -731,16 +833,20 @@ describe('project re-intake planner', () => {
     ])
   })
 
-  it('archives old current-milestone deliverable imports when starter tasks now define that milestone', () => {
+  it('does not archive an explicitly shaped task because a roadmap also has starter tasks', () => {
     const draft = planProjectReintake({
       now,
       sources: [{ path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap }],
       tasks: [
-        task({
+      task({
           id: 'task-deliverable',
           title: 'typed fixture and expected-record contracts',
           description: 'docs/harness/implementation-roadmap.md: - typed fixture and expected-record contracts',
-          status: 'import_draft',
+        status: 'import_draft',
+        spec: '## Summary\nKeep the typed fixture contract visible.\n\n## Acceptance Criteria\n1. The typed fixture contract is reviewable.',
+        acceptanceCriteria: [{ id: 'typed-fixture', description: 'The typed fixture contract is reviewable.', verifiedBy: 'review' }],
+        productBrief: { userJob: 'Keep the typed fixture contract visible.', successMetric: 'The typed fixture contract is reviewable.' },
+        structuredSpec: { kind: 'implementation', boundary: 'typed fixture contract' },
         }),
         task({
           id: 'task-later',
@@ -751,12 +857,8 @@ describe('project re-intake planner', () => {
       ],
     })
 
-    expect(draft.groups.flatMap(group => group.changes)).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'archive',
-        taskId: 'task-deliverable',
-        reason: expect.stringContaining('starter-task sequence'),
-      }),
+    expect(draft.groups.flatMap(group => group.changes)).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'archive', taskId: 'task-deliverable' }),
     ]))
     expect(draft.groups.flatMap(group => group.changes)).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -766,13 +868,13 @@ describe('project re-intake planner', () => {
     ]))
   })
 
-  it('merges duplicate blocked recovery cards into one survivor', () => {
+  it('merges duplicate blocked recovery cards only with explicit identity', () => {
     const draft = planProjectReintake({
       now,
       sources: [],
       tasks: [
-        task({ id: 'task-a', title: 'Review project discovery update', status: 'blocked' }),
-        task({ id: 'task-b', title: 'Review project discovery update', status: 'blocked' }),
+        task({ id: 'task-a', title: 'Review project discovery update', sourceIdentity: 'docs/discovery/review', status: 'blocked' }),
+        task({ id: 'task-b', title: 'A differently worded discovery review', sourceIdentity: 'docs/discovery/review', status: 'blocked' }),
       ],
     })
 
@@ -785,31 +887,27 @@ describe('project re-intake planner', () => {
     ])
   })
 
-  it('creates integration work when evidence names a consuming surface', () => {
+  it('creates integration work from explicit consuming-surface metadata', () => {
     const draft = planProjectReintake({
       now,
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      sources: [loomaAuditSource],
       tasks: [],
     })
 
     const changes = draft.groups.flatMap(group => group.changes)
-    expect(changes).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'create',
-        task: expect.objectContaining({ id: 'task-alert-dialog', title: 'Build AlertDialog' }),
-      }),
-      expect.objectContaining({
-        kind: 'create',
-        task: expect.objectContaining({
-          id: 'task-alert-dialog-integration',
-          title: 'Integrate AlertDialog into Knit destructive confirmation flow',
-          dependsOn: ['task-alert-dialog'],
-        }),
-      }),
-    ]))
+    const implementation = changes.find(change => change.kind === 'create' && change.task.title === 'Build AlertDialog')
+    const integration = changes.find(change => change.kind === 'create' && change.task.title === 'Integrate AlertDialog into Knit destructive confirmation flow')
+    expect(implementation).toMatchObject({ kind: 'create', task: { sourceIdentity: 'looma/component/alert-dialog' } })
+    expect(integration).toMatchObject({
+      kind: 'create',
+      task: {
+        sourceIdentity: 'looma/component/alert-dialog:integration',
+        dependsOn: [implementation && implementation.kind === 'create' ? implementation.task.id : 'missing'],
+      },
+    })
   })
 
-  it('does not split a single bounded edit into child or integration work', () => {
+  it('does not manufacture a task from an untyped prose bug note', () => {
     const draft = planProjectReintake({
       now,
       sources: [{
@@ -824,13 +922,6 @@ describe('project re-intake planner', () => {
     })
 
     const changes = draft.groups.flatMap(group => group.changes)
-    expect(changes).toHaveLength(1)
-    expect(changes[0]).toMatchObject({
-      kind: 'create',
-      task: expect.objectContaining({
-        title: 'Update settings footer copy',
-        dependsOn: [],
-      }),
-    })
+    expect(changes).toEqual([])
   })
 })

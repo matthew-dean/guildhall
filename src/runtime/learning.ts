@@ -695,14 +695,22 @@ function taskReflectionCandidates(task: Task): LearningCandidate[] {
   }
   for (const verdict of task.reviewVerdicts) {
     if (verdict.verdict === 'revise') {
+      const reviewer = verdict.reviewerId ?? verdict.reviewerPath
+      const criteria = verdict.acceptedCriteriaIds?.length
+        ? `; accepted criteria: ${verdict.acceptedCriteriaIds.join(', ')}`
+        : ''
+      const proof = verdict.proofEvidenceIds?.length
+        ? `; proof: ${verdict.proofEvidenceIds.join(', ')}`
+        : ''
+      const structuredSummary = `Reviewer ${reviewer} returned revise${criteria}${proof}.`
       candidates.push({
         id: `task-${task.id}-review-miss-${verdict.recordedAt.replace(/[^0-9A-Za-z_-]+/g, '-')}`,
         source: 'review',
-        summary: `Reviewer found a gap worth checking next time: ${verdict.reason}`,
+        summary: structuredSummary,
         evidence: [
           {
             kind: 'review',
-            summary: verdict.reason,
+            summary: structuredSummary,
             ref: verdict.recordedAt,
           },
         ],
@@ -721,8 +729,8 @@ function taskReflectionCandidates(task: Task): LearningCandidate[] {
       evidence: [
         {
           kind: 'review',
-          summary: verdict.reason,
-          ref: verdict.recordedAt,
+          summary: `Reviewer ${verdict.reviewerId ?? verdict.reviewerPath} reported ${verdict.failureCode ?? 'a model-lane failure'}.`,
+          ref: verdict.failureCode ?? verdict.recordedAt,
         },
       ],
       proposedScope: 'user_global',

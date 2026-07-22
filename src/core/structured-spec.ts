@@ -83,6 +83,7 @@ export const StructuredSpecCompletionBoundary = z.object({
   verificationEnvironment: cleanedString('Completion Boundary verificationEnvironment'),
   whatCountsAsDone: cleanedString('Completion Boundary whatCountsAsDone'),
   whatMustBeSplitOrBlocked: cleanedString('Completion Boundary whatMustBeSplitOrBlocked'),
+  splitPolicy: z.enum(['none', 'conditional', 'required']).optional(),
 }).strict()
 export type StructuredSpecCompletionBoundary = z.infer<typeof StructuredSpecCompletionBoundary>
 
@@ -113,6 +114,8 @@ export const StructuredSpec = z.object({
   nonGoals: cleanedStringList('nonGoals'),
   proposedDesign: cleanedString('proposedDesign'),
   keyDecisions: cleanedStringList('keyDecisions'),
+  /** Explicit implementation surfaces; never inferred from rendered prose. */
+  targetFiles: z.array(cleanedString('targetFile')).optional(),
   contractSurfaceDeltas: z.array(StructuredSpecContractSurfaceDelta).optional(),
   acceptanceCriteria: z.array(StructuredAcceptanceCriterion)
     .refine((values) => values.length > 0, { message: 'acceptanceCriteria must include at least one item.' }),
@@ -187,6 +190,7 @@ export function renderStructuredSpecMarkdown(spec: StructuredSpec): string {
   if (spec.userFacingBehavior) appendSection(parts, 'User-facing behavior', [spec.userFacingBehavior])
   if (spec.visualInteractionNotes) appendSection(parts, 'Visual / Interaction Notes', [spec.visualInteractionNotes])
   appendSection(parts, 'Proposed Design', [spec.proposedDesign])
+  if (spec.targetFiles?.length) appendSection(parts, 'Target Files', renderBulletList(spec.targetFiles))
   if (spec.componentApiShape) appendSection(parts, 'Component / API Shape', [spec.componentApiShape])
   if (spec.dataModelSchemaChanges) appendSection(parts, 'Data Model / Schema Changes', [spec.dataModelSchemaChanges])
   appendSection(parts, 'Key Decisions', renderBulletList(spec.keyDecisions))
@@ -207,6 +211,7 @@ export function renderStructuredSpecMarkdown(spec: StructuredSpec): string {
     `- Verification environment: ${spec.completionBoundary.verificationEnvironment}`,
     `- What counts as done: ${spec.completionBoundary.whatCountsAsDone}`,
     `- What must be split or blocked: ${spec.completionBoundary.whatMustBeSplitOrBlocked}`,
+    `- Split policy: ${spec.completionBoundary.splitPolicy ?? 'conditional'}`,
   ])
   return parts.join('\n').trim()
 }

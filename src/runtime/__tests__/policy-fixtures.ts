@@ -56,6 +56,7 @@ export function checkpointEvidence(
         passed: entry.passed,
         observedAt: entry.observedAt ?? '2026-05-18T20:00:00.000Z',
         ...(entry.summary ? { summary: entry.summary } : {}),
+        ...(entry.files ? { files: [...entry.files] } : {}),
       })),
       companionFiles,
       ...(workingHypothesis ? { workingHypothesis } : {}),

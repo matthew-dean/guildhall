@@ -153,7 +153,7 @@ async function setFanoutPolicy(
 }
 
 describe('Orchestrator — coordinator adjudication on recurrent dissent', () => {
-  it('records an approving adjudication verdict when procedural-only dissent advances to gates', async () => {
+  it('does not let procedural prose override a structured revise verdict', async () => {
     await writeTask(mkTask())
 
     const runner: ReviewerFanoutRunner = async ({ personas }) => {
@@ -188,17 +188,12 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     await orch.tick()
 
     const after = (await readQueue()).tasks[0]!
-    expect(after.status).toBe('gate_check')
+    expect(after.status).toBe('in_progress')
     expect(after.notes.some((n) => n.agentId === 'reviewer-fanout')).toBe(true)
-    expect(after.reviewVerdicts.at(-1)).toMatchObject({
-      verdict: 'approve',
-      reviewerPath: 'deterministic',
-      failingSignals: [],
-    })
-    expect(after.reviewVerdicts.at(-1)?.reason).toContain('procedural-only dissent')
+    expect(after.reviewVerdicts.some((verdict) => verdict.verdict === 'revise')).toBe(true)
   })
 
-  it('does not bounce completed work for Guildhall checkpoint or audit bookkeeping requests', async () => {
+  it('keeps checkpoint and audit requests blocking when the machine verdict says revise', async () => {
     await writeTask(mkTask())
 
     const runner: ReviewerFanoutRunner = async ({ personas }) => {
@@ -236,10 +231,10 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     await orch.tick()
 
     const after = (await readQueue()).tasks[0]!
-    expect(after.status).toBe('gate_check')
-    expect(after.revisionCount).toBe(0)
-    expect(after.notes.at(-1)?.content).toContain('procedural-only')
-    expect(after.notes.at(-1)?.content).toContain('persisted audit trail')
+    expect(after.status).toBe('in_progress')
+    expect(after.revisionCount).toBe(1)
+    expect(after.notes.at(-1)?.content).toContain('Insert an audit entry in a product file')
+    expect(after.notes.at(-1)?.content).not.toContain('persisted audit trail')
   })
 
   it('bounces normally on first round of dissent even under the adjudication policy', async () => {
@@ -372,7 +367,7 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     expect(decisions).toContain('security-engineer')
   })
 
-  it('advances when the latest worker proof satisfies the adjudicated concrete artifact request', async () => {
+  it('does not auto-approve from prose that claims an adjudicated artifact is complete', async () => {
     await setFanoutPolicy('coordinator_adjudicates_on_conflict')
     const priorTs = '2026-04-23T10:00:00.000Z'
     await writeTask(
@@ -452,14 +447,10 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     await orch.tick()
 
     const after = (await readQueue()).tasks[0]!
-    expect(after.status).toBe('gate_check')
-    expect(after.reviewVerdicts.at(-1)).toMatchObject({
-      verdict: 'approve',
-      reviewerPath: 'deterministic',
-      failingSignals: [],
-    })
-    expect(after.reviewVerdicts.at(-1)?.reason).toContain('Coordinator adjudication scope satisfied')
-    expect(after.notes.at(-1)?.content).toContain('latest worker proof satisfies')
+    expect(after.status).toBe('in_progress')
+    expect(after.reviewVerdicts.at(-1)?.verdict).toBe('revise')
+    expect(after.reviewVerdicts.at(-1)?.reviewerPath).toBe('llm')
+    expect(after.reviewVerdicts.at(-1)?.reasoning).not.toContain('latest worker proof satisfies')
   })
 
   it('routes repeated same-persona dissent through coordinator inspection under strict policy', async () => {

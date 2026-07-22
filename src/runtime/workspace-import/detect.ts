@@ -82,7 +82,13 @@ export async function detectWorkspaceSignals(
   for (const r of results) {
     bySource[r.source.id] = r.signals
     if (r.error) failed.push({ id: r.source.id, error: r.error })
-    flat.push(...r.signals)
+    flat.push(...r.signals.map((signal, index) => ({
+      ...signal,
+      // Source adapters may provide a stronger identity. The ordinal is a
+      // deterministic structural boundary for older adapters and does not
+      // depend on model-authored wording.
+      signalId: signal.signalId?.trim() || `${r.source.id}:${index}`,
+    })))
   }
 
   return {

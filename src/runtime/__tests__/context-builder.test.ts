@@ -11,7 +11,7 @@ import {
   draftStructuralMap,
   submitStructuralMapForReview,
 } from '../structural-map.js'
-import type { Task } from '@guildhall/core'
+import { StructuredSpec, type Task } from '@guildhall/core'
 import { writeCheckpoint } from '@guildhall/tools'
 import { proposeProjectSkill, activateProjectSkillProposal } from '@guildhall/skills'
 import { loadCodebaseMap, saveCodebaseMap, type CodebaseMap } from '@guildhall/corpus-map'
@@ -19,8 +19,8 @@ import { getProjectSystemStatePath, getProjectTaskLocalHistoryDir, getProjectTra
 
 // ---------------------------------------------------------------------------
 // Context builder tests (AC-04)
-// Verifies JIT context assembly: keyword ranking, cap enforcement, and
-// correct injection of task summary, memory, progress, and decisions.
+// Verifies JIT context assembly and the typed memory boundary. Legacy
+// Markdown history must not become an implicit routing input.
 // ---------------------------------------------------------------------------
 
 const execFileP = promisify(execFile)
@@ -35,6 +35,7 @@ const baseTask: Task = {
   description: 'Add a ghost variant to ui-button in @looma/core for toolbar use',
   domain: 'looma',
   projectPath: '/projects/looma',
+  workShape: 'ui-component',
   status: 'in_progress',
   priority: 'normal',
   dependsOn: [],
@@ -55,6 +56,34 @@ const baseTask: Task = {
   createdAt: '2026-04-11T00:00:00Z',
   updatedAt: '2026-04-11T00:00:00Z',
   spec: '## Summary\nAdd ghost button variant.\n## Acceptance Criteria\n1. Ghost variant exists.',
+}
+
+function structuredSpecWithTargetFiles(targetFiles: string[]): Task['structuredSpec'] {
+  return StructuredSpec.parse({
+    whatThisIs: 'A bounded implementation task.',
+    problemContext: 'The explicit implementation surface needs a focused change.',
+    goals: ['Implement the requested behavior on the named surfaces.'],
+    nonGoals: ['Unrelated refactors.'],
+    proposedDesign: 'Use the existing implementation patterns on the explicit target files.',
+    keyDecisions: ['Keep execution scope in structured task data.'],
+    targetFiles,
+    acceptanceCriteria: [{
+      scenario: 'Given the task is executed, when the target files are changed, then the requested behavior is verifiable',
+      expectation: 'The explicit target files contain the bounded implementation.',
+      verificationMode: 'review',
+    }],
+    verification: ['Review the explicit target files.'],
+    completionBoundary: {
+      productOutcome: 'The bounded implementation is present.',
+      whatGuildhallCanCompleteInCode: 'Edit the explicit target files.',
+      externalDependencies: 'None.',
+      ownerOnlySetup: 'None.',
+      verificationEnvironment: 'Local checkout.',
+      whatCountsAsDone: 'The target files are verified.',
+      whatMustBeSplitOrBlocked: 'Unrelated work.',
+      splitPolicy: 'conditional',
+    },
+  })
 }
 
 beforeEach(async () => {
@@ -479,7 +508,7 @@ describe('buildContext — task summary', () => {
         id: 'invite-route-skill',
         name: 'invite-route-skill',
         description: 'Repair invite routes',
-        triggerKeywords: ['invite', 'workspace'],
+        routingKeys: ['domain:looma'],
         content: 'Use the existing workspace route helpers before adding new utilities.',
         risk: 'low',
         requiresApproval: false,
@@ -500,8 +529,15 @@ describe('buildContext — task summary', () => {
     expect(enabled.taskSummary).toContain('invite-route-skill')
     expect(enabled.taskSummary).toContain('Use the existing workspace route helpers')
 
+    const proseVariant = await buildContext(
+      { ...baseTask, title: 'A completely different provider phrased this task tersely.', description: 'The same typed task contract with different wording.' },
+      tmpDir,
+      { projectSkillsEnabled: true },
+    )
+    expect(proseVariant.taskSummary).toContain('invite-route-skill')
+
     const unrelated = await buildContext(
-      { ...baseTask, title: 'Fix billing report', description: 'Repair invoice export.' },
+      { ...baseTask, domain: 'billing', title: 'Looma invite route', description: 'The prose mentions every old trigger word.' },
       tmpDir,
       { projectSkillsEnabled: true },
     )
@@ -515,6 +551,9 @@ describe('buildContext — task summary', () => {
       projectPath: '/projects/knit',
       worktreePath: '/projects/knit/.guildhall/worktrees/task-001',
       spec: 'Edit `web/app/composables/use-presence.ts` and verify `tests/unit/composables/use-presence.test.ts`.',
+      structuredSpec: structuredSpecWithTargetFiles([
+        'web/app/composables/use-presence.ts',
+      ]),
       acceptanceCriteria: [
         {
           id: 'ac-1',
@@ -658,7 +697,7 @@ describe('buildContext — task summary', () => {
     expect(map?.files['src/feature.ts']?.summary).toContain('feature.ts')
   })
 
-  it('does not duplicate the project folder when an imported source path is workspace-relative', async () => {
+  it('does not infer executable targets from imported source notes', async () => {
     const projectRoot = path.join(tmpDir, 'looma-knit', 'looma')
     await fs.mkdir(path.join(projectRoot, 'docs'), { recursive: true })
     await fs.writeFile(path.join(projectRoot, 'docs', 'editor-roadmap.md'), '# Roadmap\n', 'utf8')
@@ -679,11 +718,10 @@ describe('buildContext — task summary', () => {
     }
 
     const files = resolveLikelyTaskFiles(taskWithImportedSource)
-    expect(files).toContain(path.join(projectRoot, 'docs', 'editor-roadmap.md'))
-    expect(files).not.toContain(path.join(projectRoot, 'looma', 'docs', 'editor-roadmap.md'))
+    expect(files).toEqual([])
   })
 
-  it('strips stale imported project prefixes when the current worktree has the deprojected file', async () => {
+  it('does not infer executable targets from stale imported source prose', async () => {
     const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'task-context-menu')
     await fs.mkdir(path.join(worktree, 'docs'), { recursive: true })
     await fs.writeFile(path.join(worktree, 'docs', 'component-roadmap.md'), '# Components\n', 'utf8')
@@ -705,8 +743,7 @@ describe('buildContext — task summary', () => {
     }
 
     const files = resolveLikelyTaskFiles(taskWithStaleImportedSource)
-    expect(files).toContain(path.join(worktree, 'docs', 'component-roadmap.md'))
-    expect(files).not.toContain(path.join(worktree, 'looma', 'docs', 'component-roadmap.md'))
+    expect(files).toEqual([])
   })
 
   it('resolves Nuxt server hints under web/server when the task root is the app project', async () => {
@@ -722,6 +759,9 @@ describe('buildContext — task summary', () => {
       projectPath: path.join(tmpDir, 'knit'),
       worktreePath: worktree,
       spec: 'Create `server/api/workspaces/[id]/invite.post.ts` using the pattern in `web/server/api/workspaces/members.get.ts`.',
+      structuredSpec: structuredSpecWithTargetFiles([
+        'server/api/workspaces/[id]/invite.post.ts',
+      ]),
     }
 
     const ctx = await buildContext(taskWithTargets, tmpDir)
@@ -743,6 +783,10 @@ describe('buildContext — task summary', () => {
         '## Acceptance Criteria',
         '1. Given the unit suite runs, when `pnpm --filter @knit-app test -- tests/unit/composables/use-collections*.test.ts` executes in `knit/web`, then all targeted tests pass.',
       ].join('\n'),
+      structuredSpec: structuredSpecWithTargetFiles([
+        'web/app/composables/use-collections.ts',
+        'web/tests/unit/composables/use-collections-auth.test.ts',
+      ]),
       acceptanceCriteria: [
         {
           id: 'ac-7',
@@ -775,6 +819,9 @@ describe('buildContext — task summary', () => {
         '- `docs/harness/remaining-spec-decomposition-inventory.md` exists.',
         '- Sibling task notes are updated through Guildhall task state, not by editing `TASKS.json` in the worktree.',
       ].join('\n'),
+      structuredSpec: structuredSpecWithTargetFiles([
+        'docs/harness/remaining-spec-decomposition-inventory.md',
+      ]),
     }
 
     expect(resolveLikelyTaskFiles(taskWithTaskStateReferences)).toEqual([
@@ -782,7 +829,7 @@ describe('buildContext — task summary', () => {
     ])
   })
 
-  it('falls back to backticked spec file paths when no stronger likely-target hints exist', () => {
+  it('uses explicit structured target files instead of backticked spec paths', () => {
     const taskWithBacktickedSpec: Task = {
       ...baseTask,
       projectPath: '/projects/knit',
@@ -794,6 +841,10 @@ describe('buildContext — task summary', () => {
         'The generated `Database` interface already exists at `web/app/types/supabase.ts` and is imported by `web/app/composables/use-workspace.ts`.',
         'This task is about verifying the generation flow works end-to-end and wiring types into the smallest useful consumer set.',
       ].join('\n'),
+      structuredSpec: structuredSpecWithTargetFiles([
+        'web/app/types/supabase.ts',
+        'web/app/composables/use-workspace.ts',
+      ]),
       acceptanceCriteria: [
         {
           id: 'ac-1',
@@ -811,7 +862,7 @@ describe('buildContext — task summary', () => {
     ])
   })
 
-  it('infers starter files for empty local-web app implementation specs', () => {
+  it('does not infer starter files from local-web prose without explicit paths', () => {
     const taskWithLocalWebAppSpec: Task = {
       ...baseTask,
       projectPath: '/projects/pantry-pulse',
@@ -826,15 +877,10 @@ describe('buildContext — task summary', () => {
       ].join('\n'),
     }
 
-    expect(resolveLikelyTaskFiles(taskWithLocalWebAppSpec)).toEqual([
-      '/projects/pantry-pulse/package.json',
-      '/projects/pantry-pulse/index.html',
-      '/projects/pantry-pulse/src/main.js',
-      '/projects/pantry-pulse/src/styles.css',
-    ])
+    expect(resolveLikelyTaskFiles(taskWithLocalWebAppSpec)).toEqual([])
   })
 
-  it('infers only index.html for fixed single-file dependency-free web specs', () => {
+  it('does not infer index.html from single-file web prose without an explicit file contract', () => {
     const taskWithSingleFileSpec: Task = {
       ...baseTask,
       projectPath: '/projects/pantry-pulse',
@@ -846,7 +892,7 @@ describe('buildContext — task summary', () => {
         'Use plain HTML, CSS, and JavaScript only; do not require npm install or a dev server.',
         '',
         '## File Structure',
-        'Single file: `index.html` in the project root. Contains all HTML, CSS, and JavaScript.',
+        '- Create `index.html` in the project root. It contains all HTML, CSS, and JavaScript.',
         '',
         '## Completion Boundary',
         '- What Guildhall can complete in code: The single `index.html` file with all HTML, CSS, and JS.',
@@ -855,9 +901,7 @@ describe('buildContext — task summary', () => {
       ].join('\n'),
     }
 
-    expect(resolveLikelyTaskFiles(taskWithSingleFileSpec)).toEqual([
-      '/projects/pantry-pulse/index.html',
-    ])
+    expect(resolveLikelyTaskFiles(taskWithSingleFileSpec)).toEqual([])
   })
 
   it('injects raw draft design-system YAML for UI work even when the schema is not normalized yet', async () => {
@@ -890,7 +934,7 @@ describe('buildContext — task summary', () => {
     expect(ctx.formatted).toContain('## Design System')
   })
 
-  it('omits stale generic New request product briefs when a concrete UI spec supersedes them', async () => {
+  it('preserves a product brief without classifying its prose as stale', async () => {
     const ctx = await buildContext({
       ...baseTask,
       title: 'Build Pantry Pulse app',
@@ -905,8 +949,8 @@ describe('buildContext — task summary', () => {
       spec: '## Summary\nBuild Pantry Pulse as a polished single-page pantry tracker.',
     }, tmpDir)
 
-    expect(ctx.taskSummary).not.toContain('verify whether New request is already done')
-    expect(ctx.taskSummary).not.toContain('remaining work for "New request"')
+    expect(ctx.taskSummary).toContain('verify whether New request is already done')
+    expect(ctx.taskSummary).toContain('remaining work for "New request"')
     expect(ctx.taskSummary).toContain('Build Pantry Pulse')
   })
 
@@ -916,6 +960,7 @@ describe('buildContext — task summary', () => {
       title: 'Build Pantry Pulse app',
       description: 'Build a frontend UI that should feel app-store-caliber.',
       spec: '## Summary\nBuild a polished Pantry Pulse browser app.',
+      workShape: 'ui-component',
     }, tmpDir)
 
     expect(ctx.taskSummary).toContain('### Frontend/UI Design Quality Bar')
@@ -923,7 +968,27 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('shippable product surface')
   })
 
-  it('uses recent reviewer feedback when deriving likely target files for revision work', () => {
+  it('does not infer frontend context from model-authored prose', async () => {
+    const terse = await buildContext({
+      ...baseTask,
+      title: 'Shape the reader-facing surface',
+      description: 'A completely different model used this wording.',
+      spec: '## Summary\nCompose the experience for the reader.',
+      workShape: undefined,
+    }, tmpDir)
+    const ornate = await buildContext({
+      ...baseTask,
+      title: 'Build a lyrical browser interface',
+      description: 'Use elegant visual hierarchy and polished interaction design.',
+      spec: '## Summary\nCreate a beautiful screen with responsive components.',
+      workShape: undefined,
+    }, tmpDir)
+
+    expect(terse.taskSummary).not.toContain('### Frontend/UI Design Quality Bar')
+    expect(ornate.taskSummary).not.toContain('### Frontend/UI Design Quality Bar')
+  })
+
+  it('does not derive executable target files from reviewer prose', () => {
     const taskWithReviewerFeedback: Task = {
       ...baseTask,
       projectPath: '/projects/fll/frontend',
@@ -940,9 +1005,7 @@ describe('buildContext — task summary', () => {
       ],
     }
 
-    expect(resolveLikelyTaskFiles(taskWithReviewerFeedback)).toEqual([
-      '/projects/fll/.guildhall/worktrees/task-003/frontend/app/pages/dashboard.vue',
-    ])
+    expect(resolveLikelyTaskFiles(taskWithReviewerFeedback)).toEqual([])
   })
 
   it('resolves ambiguous spec paths against the real repo tree and includes success-metric test files', async () => {
@@ -972,6 +1035,14 @@ describe('buildContext — task summary', () => {
         authoredBy: 'spec-agent',
         authoredAt: '2026-05-12T00:00:00Z',
       },
+      structuredSpec: structuredSpecWithTargetFiles([
+        'src/typescriptToJsdoc.ts',
+        'src/features/functionDeclaration.ts',
+        'src/jsdocToTypescript.ts',
+        'src/features/variableDeclaration.ts',
+        'test/ts-to-jsdoc.test.ts',
+        'test/jsdoc-to-ts.test.ts',
+      ]),
     }
 
     expect(resolveLikelyTaskFiles(task)).toEqual([
@@ -1043,7 +1114,7 @@ describe('buildContext — task summary', () => {
 
     expect(ctx.taskSummary).toContain('### Latest Checkpoint')
     expect(ctx.taskSummary).toContain('Regenerated supabase types')
-    expect(ctx.taskSummary).toContain('Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.')
+    expect(ctx.taskSummary).toContain('Resume from the active worktree diff, refresh focused verification, and keep the task in implementation until the focused checks are green.')
     expect(ctx.taskSummary).toContain('Latest authoritative verification: pnpm -F web typecheck (failed)')
     expect(ctx.taskSummary).toContain('Cannot find name WorkspaceSummary')
     expect(ctx.taskSummary).toContain('Companion files: web/tests/unit/composables/use-workspace.test.ts')
@@ -1085,7 +1156,7 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).not.toContain('Only edit PROJECT_STATE.md')
   })
 
-  it('treats remove-style spec instructions as actionable file hints for likely target inference', () => {
+  it('uses structured target files for remove-style implementation work', () => {
     const task: Task = {
       ...baseTask,
       projectPath: tmpDir,
@@ -1094,6 +1165,7 @@ describe('buildContext — task summary', () => {
         '- Remove the unused `deleteTrashRes` binding in `web/server/api/pages/[id]/restore.post.ts`.',
         '- Keep restore behavior unchanged.',
       ].join('\n'),
+      structuredSpec: structuredSpecWithTargetFiles(['web/server/api/pages/[id]/restore.post.ts']),
     }
 
     const likely = resolveLikelyTaskFiles(task)
@@ -1114,7 +1186,16 @@ describe('buildContext — task summary', () => {
         {
           agentId: 'reviewer-fanout',
           role: 'reviewer',
-          content: 'What must change:\n- Add the missing login redirect tests.',
+          content: 'A reviewer can phrase this explanation however it likes.',
+          structured: {
+            verdict: 'revise',
+            acceptedCriteriaIds: [],
+            proofEvidenceIds: [],
+            revisionItems: ['Add the missing login redirect tests.'],
+            riskItems: [],
+            followUpItems: [],
+            advisoryScores: {},
+          },
           timestamp: '2026-04-11T01:00:00Z',
         },
       ],
@@ -1124,8 +1205,8 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('Add the missing login redirect tests')
   })
 
-  it('hides invented proof command demands from latest reviewer feedback', async () => {
-    const taskWithInventedProofCommand: Task = {
+  it('renders latest reviewer feedback from machine fields instead of parsing its prose', async () => {
+    const taskWithProseOnlyCommandClaim: Task = {
       ...baseTask,
       status: 'in_progress',
       revisionCount: 4,
@@ -1143,27 +1224,32 @@ describe('buildContext — task summary', () => {
         {
           agentId: 'worker-agent',
           role: 'worker',
-          content: [
-            '**Self-critique:**',
-            '- AC4: Met — The proof command `npx guildhall run --task=made-up-task` was executed.',
-            '- Fixture data is represented in the repo-local JSON surface.',
-          ].join('\n'),
+          content: 'Fixture data is represented in the repo-local JSON surface.',
           timestamp: '2026-04-11T00:45:00Z',
         },
         {
-          agentId: 'reviewer-fanout',
+          agentId: 'reviewer-agent',
           role: 'reviewer',
           content: [
-            'What must change:',
-            '- Execute the proof command `npx guildhall run --task=made-up-task` and capture its output.',
-            '- Keep the fixture manifest aligned with expected records.',
+            'The explanation may mention `npx guildhall run --task=made-up-task`, but it is not machine state.',
+            '```json',
+            JSON.stringify({
+              verdict: 'revise',
+              acceptedCriteriaIds: [],
+              proofEvidenceIds: [],
+              revisionItems: ['Keep the fixture manifest aligned with expected records.'],
+              riskItems: [],
+              followUpItems: [],
+              advisoryScores: {},
+            }),
+            '```',
           ].join('\n'),
           timestamp: '2026-04-11T01:00:00Z',
         },
       ],
     }
 
-    const ctx = await buildContext(taskWithInventedProofCommand, tmpDir)
+    const ctx = await buildContext(taskWithProseOnlyCommandClaim, tmpDir)
 
     expect(ctx.taskSummary).toContain('### Latest Required Revisions')
     expect(ctx.taskSummary).not.toContain('npx guildhall run')
@@ -1177,6 +1263,7 @@ describe('buildContext — task summary', () => {
       title: 'Set FLL overhead charge policy',
       description: 'Create the public fee policy page and author dashboard fee breakdown.',
       revisionCount: 6,
+      structuredSpec: structuredSpecWithTargetFiles(['frontend/app/pages/dashboard.vue']),
       notes: [
         {
           agentId: 'reviewer-agent',
@@ -1203,6 +1290,7 @@ describe('buildContext — task summary', () => {
           resolvedBy: 'system',
           resolution:
             'Resolved as Guildhall-owned implementation recovery: failed exact-string/template edits are not a product/spec decision for the owner.',
+          recoveryCode: 'tool_path_mismatch',
         },
       ],
     }
@@ -1216,7 +1304,7 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('frontend/app/pages/dashboard.vue')
   })
 
-  it('does not duplicate reviewer feedback inside the generic agent-notes section', async () => {
+  it('does not duplicate structured reviewer feedback inside generic agent notes', async () => {
     const taskWithReviewNote: Task = {
       ...baseTask,
       notes: [
@@ -1229,7 +1317,16 @@ describe('buildContext — task summary', () => {
         {
           agentId: 'reviewer-fanout',
           role: 'reviewer',
-          content: 'What must change:\n- Remove the placeholder files.\n- Re-run the targeted tests.',
+          content: 'Different reviewer prose that must remain audit-only.',
+          structured: {
+            verdict: 'revise',
+            acceptedCriteriaIds: [],
+            proofEvidenceIds: [],
+            revisionItems: ['Remove the placeholder files.', 'Re-run the targeted tests.'],
+            riskItems: [],
+            followUpItems: [],
+            advisoryScores: {},
+          },
           timestamp: '2026-04-11T01:00:00Z',
         },
       ],
@@ -1303,7 +1400,7 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('### Resolved Human Decisions To Honor')
   })
 
-  it('upgrades stale checkpoint self-critique instructions when a worker persona-role note already contains the self-critique', async () => {
+  it('preserves checkpoint display text when a worker persona-role note already contains the self-critique', async () => {
     const taskWithPersonaSelfCritique: Task = {
       ...baseTask,
       status: 'in_progress',
@@ -1334,69 +1431,33 @@ describe('buildContext — task summary', () => {
     })
 
     const ctx = await buildContext(taskWithPersonaSelfCritique, tmpDir)
-    expect(ctx.taskSummary).toContain('Resume from the latest self-critique and recorded verification evidence, then hand off to review.')
-    expect(ctx.taskSummary).not.toContain('write or refresh the self-critique note')
+    expect(ctx.taskSummary).toContain('Resume from the recorded verification evidence, write or refresh the self-critique note, then hand off to review.')
+    expect(ctx.taskSummary).toContain('Focused restore handler verification passed.')
   })
 })
 
-describe('buildContext — memory extraction', () => {
-  it('returns empty string when MEMORY.md does not exist', async () => {
-    const ctx = await buildContext(baseTask, tmpDir)
-    expect(ctx.projectMemory).toBe('')
-  })
-
-  it('extracts sections relevant to the task domain', async () => {
+describe('buildContext — memory boundary', () => {
+  it('does not inject legacy MEMORY.md prose into the worker packet', async () => {
     await writeMemory([
       '## Looma conventions',
-      'Use data-variant for button styles.',
-      '',
-      '## Knit routing',
-      'Knit uses Nuxt 4 file-based routing.',
+      'A provider could describe this section in any prose style.',
       '',
       '## Unrelated section',
-      'Nothing to do with this task.',
+      'The words in this section must not change routing.',
     ].join('\n'))
 
     const ctx = await buildContext(baseTask, tmpDir)
-    expect(ctx.projectMemory).toContain('Looma conventions')
-    expect(ctx.projectMemory).toContain('data-variant')
+    expect(ctx.projectMemory).toBe('')
+    expect(ctx.formatted).not.toContain('## Effective Memory')
+    expect(ctx.formatted).not.toContain('## Relevant Project Memory')
   })
 
-  it('ranks sections by keyword relevance — domain keyword scores highest', async () => {
-    await writeMemory([
-      '## Unrelated topic',
-      'Something about databases.',
-      '',
-      '## Looma button API',
-      'Buttons use data-variant attribute.',
-      '',
-      '## Ghost rendering',
-      'Ghost elements have transparent backgrounds.',
-    ].join('\n'))
+  it('does not read or size legacy memory as an implicit second context source', async () => {
+    await writeMemory(`## Provider prose\n${'x'.repeat(10_000)}`)
 
     const ctx = await buildContext(baseTask, tmpDir)
-    // Looma + button + ghost should all score — unrelated should not appear or appear last
-    expect(ctx.projectMemory).toContain('Looma button API')
-    expect(ctx.projectMemory).toContain('Ghost rendering')
-  })
-
-  it('caps memory injection at 4000 chars', async () => {
-    // Write a very large MEMORY.md
-    const hugeSection = '## Looma section\n' + 'x'.repeat(10_000)
-    await writeMemory(hugeSection)
-
-    const ctx = await buildContext(baseTask, tmpDir)
-    expect(ctx.projectMemory.length).toBeLessThanOrEqual(4000)
-  })
-
-  it('excludes sections with no keyword overlap', async () => {
-    await writeMemory([
-      '## Completely unrelated topic',
-      'This is about PostgreSQL indexing strategies.',
-    ].join('\n'))
-
-    const ctx = await buildContext(baseTask, tmpDir)
-    expect(ctx.projectMemory).not.toContain('PostgreSQL')
+    expect(ctx.projectMemory).toBe('')
+    expect(ctx.formatted).not.toContain('## Relevant Project Memory')
   })
 })
 

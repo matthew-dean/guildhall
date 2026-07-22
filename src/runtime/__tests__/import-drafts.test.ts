@@ -25,6 +25,9 @@ describe('imported draft state', () => {
         agentId: 'system',
         role: 'state-repair',
         content: 'Cleared stale execution state from imported draft shaping.',
+        structured: {
+          event: 'imported_draft_shaping',
+        },
         timestamp: '2026-07-13T20:00:00.000Z',
       },
     ])
@@ -32,6 +35,19 @@ describe('imported draft state', () => {
     expect(shouldUseImportDraftState(task)).toBe(false)
     expect(normalizeImportedDraftTask(task)).toBe(false)
     expect(task.status).toBe('exploring')
+  })
+
+  it('does not let a model-written phrase count as shaping progress', () => {
+    const task = importedExploringTask([
+      {
+        agentId: 'model',
+        role: 'state-repair',
+        content: 'This imported draft shaping is complete.',
+        timestamp: '2026-07-13T20:00:00.000Z',
+      },
+    ])
+
+    expect(shouldUseImportDraftState(task)).toBe(true)
   })
 
   it('still normalizes an unmarked legacy imported exploration into a draft', () => {

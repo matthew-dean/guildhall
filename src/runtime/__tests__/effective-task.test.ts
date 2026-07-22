@@ -595,8 +595,18 @@ describe('effective task projection', () => {
       status: 'done',
       acceptanceCriteria: [{ id: 'ac-1', description: 'Chapter draft exists.', verifiedBy: 'review', met: true }],
       proofPaths: [{
+        id: 'chapter-draft-proof',
+        kind: 'review',
         title: 'Chapter draft proof',
-        expectedEvidence: ['chapter draft exists'],
+        expectedEvidence: [{ id: 'chapter-draft-exists', description: 'Chapter draft exists.' }],
+      }],
+      reviewVerdicts: [{
+        verdict: 'approve',
+        reviewerPath: 'llm',
+        acceptedCriteriaIds: ['ac-1'],
+        proofEvidenceIds: ['chapter-draft-exists'],
+        reasoning: 'The review explanation can vary freely.',
+        recordedAt: '2026-07-04T09:16:19.780Z',
       }],
       doneSummaryBundle: {
         taskId: 'task-auth-complete',

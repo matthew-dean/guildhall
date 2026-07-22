@@ -6,7 +6,7 @@ All gates passed; accepted work landed per lever `landing_strategy`. The task is
 
 - **Milestone entry in PROGRESS.md** (FR-09) naming the task id, goal id, and key outcome.
 - **Merge record persisted** on the task (from-branch, to-branch, strategy, commit sha, timestamp — FR-25).
-- **Worktree cleanup per policy.** `worktree_isolation: per_task` cleans up on terminal; `per_attempt` may have already cleaned. The coordinator's retention call (keep / archive / delete) is per-incident, not on a lever.
+- **Worktree cleanup per policy.** Once a task has durable merged landing evidence, `worktree_isolation: per_task` removes its disposable checkout; `per_attempt` may have already cleaned. Pending PR and recovery work stay retained until they are safely resolved.
 - **Follow-ups are new tasks.** If the work surfaced a latent bug or doc gap, create a new `proposed` task with rationale. Do not reopen a `done` task.
 
 ## How this stage is evaluated

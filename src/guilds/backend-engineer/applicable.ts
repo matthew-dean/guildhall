@@ -1,13 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { GuildSignals } from '../types.js'
-
-const BACKEND_KEYWORDS =
-  /\b(api|endpoint|handler|controller|server|backend|db|database|query|migration|schema|model|orm|sql|mongo|postgres|mysql|redis|queue|worker|cron|job|webhook|route)\b/i
+import { hasStructuredSurface } from '../structured-signals.js'
 
 /**
- * Heuristic: the project has a backend if `package.json` declares
- * server-ish dependencies OR the task text mentions backend concerns.
+ * A backend dependency is a project fact, but it does not make every task a
+ * backend task. The task still needs an explicit domain or structured
+ * contract/data signal.
  */
 const BACKEND_DEP_MARKERS = [
   'express',
@@ -44,12 +43,5 @@ function projectHasBackendDeps(projectPath: string): boolean {
 }
 
 export function applicable(signals: GuildSignals): boolean {
-  if (projectHasBackendDeps(signals.projectPath)) {
-    return BACKEND_KEYWORDS.test(
-      `${signals.task.title} ${signals.task.description}`,
-    )
-  }
-  return BACKEND_KEYWORDS.test(
-    `${signals.task.title} ${signals.task.description}`,
-  )
+  return projectHasBackendDeps(signals.projectPath) && hasStructuredSurface(signals.task, 'api')
 }

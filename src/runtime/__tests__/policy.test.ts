@@ -30,6 +30,7 @@ describe('policy failure classifier', () => {
           command: 'cd web && pnpm typecheck',
           passed: false,
           summary: 'web/app/composables/use-presence.ts(12,7): Cannot find name PresenceState.',
+          files: ['web/app/composables/use-presence.ts'],
         }),
       ],
     })
@@ -81,6 +82,7 @@ describe('policy failure classifier', () => {
       reason: 'Reviewer model timed out before producing a substantive verdict.',
       failingSignals: ['reviewer_timeout'],
       llmError: 'HTTP 429 provider throttle',
+      failureCode: 'provider_timeout',
     })
 
     const classification = classifyAgentFailure({
@@ -98,8 +100,23 @@ describe('policy failure classifier', () => {
     expect(classification.evidence).toContainEqual({
       kind: 'review',
       summary: 'Reviewer verdict contains infrastructure failure evidence.',
-      ref: 'Reviewer model timed out before producing a substantive verdict.',
+      ref: 'provider_timeout',
     })
+  })
+
+  it('ignores infrastructure-looking reviewer prose without the machine failure code', () => {
+    const verdict = reviewVerdict({
+      verdict: 'revise',
+      reason: 'The reviewer describes a provider timeout, but this is a substantive revision.',
+      reasoning: 'The word provider appears here only as part of the model explanation.',
+      failingSignals: ['substantive-review-finding'],
+      llmError: 'The model mentioned a timeout in its explanation.',
+    })
+
+    expect(classifyAgentFailure({
+      taskId: 'task-review-prose',
+      reviewVerdicts: [verdict],
+    }).class).toBe('human_product_decision')
   })
 
   it('renders a compact user-facing classification reason', () => {
@@ -111,6 +128,7 @@ describe('policy failure classifier', () => {
           command: 'cd web && pnpm typecheck',
           passed: false,
           summary: 'web/app/composables/use-presence.ts(12,7): Cannot find name PresenceState.',
+          files: ['web/app/composables/use-presence.ts'],
         }),
       ],
     })
@@ -133,6 +151,7 @@ describe('policy failure classifier', () => {
           command: 'cd web && pnpm typecheck',
           passed: false,
           summary: 'web/app/composables/use-presence.ts(12,7): Cannot find name PresenceState.',
+          files: ['web/app/composables/use-presence.ts'],
         }),
       ],
     })
@@ -172,6 +191,7 @@ describe('policy failure classifier', () => {
           command: 'cd web && pnpm typecheck',
           passed: false,
           summary: 'web/app/composables/use-presence.ts(12,7): Cannot find name PresenceState.',
+          files: ['web/app/composables/use-presence.ts'],
         }),
       ],
     })
@@ -185,6 +205,7 @@ describe('policy failure classifier', () => {
           command: 'cd web && pnpm typecheck',
           passed: false,
           summary: 'web/app/composables/use-presence.ts(12,7): Cannot find name PresenceState.',
+          files: ['web/app/composables/use-presence.ts'],
         }),
       ],
     })
@@ -219,6 +240,7 @@ describe('policy failure classifier', () => {
           command: 'cd web && pnpm typecheck',
           passed: false,
           summary: 'web/app/composables/use-presence.ts(12,7): Cannot find name PresenceState.',
+          files: ['web/app/composables/use-presence.ts'],
         }),
       ],
     })
@@ -265,6 +287,7 @@ describe('policy failure classifier', () => {
             command: 'cd web && pnpm typecheck',
             passed: false,
             summary: 'web/app/composables/use-presence.ts(12,7): Cannot find name PresenceState.',
+            files: ['web/app/composables/use-presence.ts'],
           }),
         ],
       }),

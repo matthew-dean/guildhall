@@ -40,15 +40,42 @@ function task(overrides: Partial<Task> = {}): Task {
   }
 }
 
+function importedExecutionBlueprintSpec(): NonNullable<Task['structuredSpec']> {
+  return {
+    whatThisIs: 'A bounded imported execution blueprint.',
+    problemContext: 'The imported work needs a concrete proof boundary.',
+    goals: ['Preserve the named task outcome.'],
+    nonGoals: ['Do not expand the task beyond its cited source.'],
+    proposedDesign: 'Implement the smallest source-backed change.',
+    keyDecisions: ['Keep proof attached to the task.'],
+    acceptanceCriteria: [{
+      scenario: 'Given the task source, when the work is complete',
+      expectation: 'Then the bounded outcome is recorded.',
+      verificationMode: 'review',
+    }],
+    verification: ['Run the task-specific proof path.'],
+    completionBoundary: {
+      productOutcome: 'The bounded task outcome is available.',
+      whatGuildhallCanCompleteInCode: 'Implement the source-backed change.',
+      externalDependencies: 'None known.',
+      ownerOnlySetup: 'None known.',
+      verificationEnvironment: 'The registered local project.',
+      whatCountsAsDone: 'The task proof is recorded.',
+      whatMustBeSplitOrBlocked: 'Split only if independent deliverables appear.',
+    },
+  }
+}
+
 describe('taskKindFor', () => {
   it('honors explicit workKind and maps setup work to implementation readiness', () => {
     expect(taskKindFor(task({ workKind: 'verification' }))).toBe('verification')
     expect(taskKindFor(task({ workKind: 'setup' }))).toBe('implementation')
   })
 
-  it('infers research and decision work from task language when no kind is stored', () => {
-    expect(taskKindFor(task({ title: 'Research auth provider options' }))).toBe('research')
-    expect(taskKindFor(task({ title: 'Decide billing rollout policy' }))).toBe('decision')
+  it('does not infer task kind from model-shaped task language', () => {
+    expect(taskKindFor(task({ title: 'Research auth provider options' }))).toBe('implementation')
+    expect(taskKindFor(task({ title: 'Decide billing rollout policy' }))).toBe('implementation')
+    expect(taskKindFor(task({ taskKind: 'research', title: 'A terse unrelated label' }))).toBe('research')
   })
 
   it('keeps concrete app builds as implementation even when the spec mentions design decisions', () => {
@@ -73,6 +100,14 @@ describe('assessTaskReadiness', () => {
   it('marks a proofable implementation task ready and persists finishability artifacts', () => {
     const readyTask = task({
       workKind: 'implementation',
+      structuredSpec: {
+        ...importedExecutionBlueprintSpec(),
+        completionBoundary: {
+          ...importedExecutionBlueprintSpec().completionBoundary,
+          whatCountsAsDone: 'Browser proof and tests pass.',
+          splitPolicy: 'none',
+        },
+      },
       spec: [
         '## Summary',
         'Add Google and Apple buttons.',
@@ -117,6 +152,7 @@ describe('assessTaskReadiness', () => {
       description: 'Make auth better.',
       spec: 'Improve auth.',
       acceptanceCriteria: [],
+      humanJudgment: 'The owner must define the intended authentication outcome.',
     }))
 
     expect(assessment.recommendation).toBe('needs_one_question')
@@ -130,6 +166,8 @@ describe('assessTaskReadiness', () => {
       title: 'Research and implement the best editor library',
       description: 'Compare editor libraries and wire the best one into the app.',
       spec: 'Research options, choose a library, implement it, and update UI.',
+      taskKind: 'research',
+      workKind: 'implementation',
       acceptanceCriteria: [
         { id: 'AC-1', description: 'The chosen editor works in the app.', verifiedBy: 'review', met: false },
       ],
@@ -153,6 +191,13 @@ describe('assessTaskReadiness', () => {
         '- What counts as done: The lane emits actionable findings and proof is recorded.',
         '- What must be split or blocked: Nothing to split before this source-backed task runs.',
       ].join('\n'),
+      structuredSpec: {
+        ...importedExecutionBlueprintSpec(),
+        completionBoundary: {
+          ...importedExecutionBlueprintSpec().completionBoundary,
+          splitPolicy: 'none',
+        },
+      },
       acceptanceCriteria: [
         {
           id: 'ac-1',
@@ -191,11 +236,44 @@ describe('assessTaskReadiness', () => {
       acceptanceCriteria: [
         { id: 'AC-1', description: 'All affected flows work.', verifiedBy: 'automated', command: 'pnpm test', met: false },
       ],
+      structuredSpec: {
+        ...importedExecutionBlueprintSpec(),
+        contractSurfaceDeltas: Array.from({ length: 6 }, (_, index) => ({
+          relation: 'extends' as const,
+          summary: `Surface ${index + 1} is bounded.`,
+          proofObligations: [`Proof ${index + 1} is recorded.`],
+        })),
+      },
     }))
 
     expect(assessment.recommendation).toBe('requires_child_work')
     expect(assessment.contextBudget.fitsInOneWorkerBrief).toBe(false)
     expect(assessment.dimensions.find(dimension => dimension.id === 'context_load')?.status).toBe('blocked')
+  })
+
+  it('keeps readiness invariant when only the rendered prose changes', () => {
+    const structuredSpec = importedExecutionBlueprintSpec()
+    const terse = assessTaskReadiness(task({
+      title: 'Short label',
+      description: 'Short description.',
+      spec: 'Short rendered display.',
+      structuredSpec,
+    }))
+    const verbose = assessTaskReadiness(task({
+      title: 'A lyrical title with model-specific vocabulary and ornamental phrasing',
+      description: 'A much longer explanation that repeats itself but does not change the structured contract.',
+      spec: Array.from({ length: 200 }, () => 'Verbose display prose that is not a planning signal.').join('\n'),
+      structuredSpec: {
+        ...structuredSpec,
+        proposedDesign: 'A different display explanation with the same typed contract.',
+      },
+    }))
+
+    expect(verbose.recommendation).toBe(terse.recommendation)
+    expect(verbose.contextBudget).toEqual(terse.contextBudget)
+    expect(verbose.dimensions.map(dimension => dimension.status)).toEqual(
+      terse.dimensions.map(dimension => dimension.status),
+    )
   })
 
   it('does not treat inferred workspace-import proof as execution-ready evidence', () => {
@@ -284,6 +362,7 @@ describe('assessTaskReadiness', () => {
         createdAt: now,
         createdBy: 'workspace-importer',
       },
+      structuredSpec: importedExecutionBlueprintSpec(),
       spec: [
         '## What this is',
         'Add the first tiny fiction fixture and human-authored expected records.',
@@ -514,6 +593,7 @@ describe('dispatch readiness guard', () => {
         createdAt: now,
         createdBy: 'workspace-importer',
       },
+      structuredSpec: importedExecutionBlueprintSpec(),
       spec: [
         '## Verification',
         '- Review recorded evidence.',

@@ -21,8 +21,6 @@
  *     so vendored upstream tools or test doubles still populate carryover.
  *   - `time.time()` (float seconds) → `Date.now() / 1000` to match the
  *     upstream numeric shape (seconds since epoch as a float).
- *   - Regex port: `r"Spawned agent (.+?) \(task_id=(\S+?)(?:[,)]|$)"` →
- *     the same pattern as a JS RegExp literal.
  */
 
 export const MAX_TRACKED_READ_FILES = 6
@@ -33,6 +31,14 @@ export const MAX_TRACKED_WORK_LOG = 10
 export const MAX_TRACKED_USER_GOALS = 5
 export const MAX_TRACKED_ACTIVE_ARTIFACTS = 8
 export const MAX_TRACKED_VERIFIED_WORK = 10
+
+export interface RecentVerificationResult {
+  kind: 'command'
+  command: string
+  passed: boolean
+  observedAt: string
+  outputSummary?: string
+}
 
 // ---------------------------------------------------------------------------
 // Low-level helpers
@@ -141,6 +147,25 @@ export function rememberVerifiedWork(
   appendCappedUnique(state.verified_state, normalized.slice(0, 320), MAX_TRACKED_VERIFIED_WORK)
 }
 
+export function rememberVerificationResult(
+  toolMetadata: Record<string, unknown> | undefined | null,
+  result: RecentVerificationResult,
+): void {
+  const command = result.command.trim()
+  if (!command) return
+  const bucket = metadataBucket(toolMetadata, 'recent_verification_results') as RecentVerificationResult[]
+  const next = {
+    ...result,
+    command: command.slice(0, 240),
+    ...(result.outputSummary?.trim()
+      ? { outputSummary: result.outputSummary.trim().slice(0, 240) }
+      : {}),
+  }
+  const withoutCommand = bucket.filter((entry) => entry?.command !== next.command)
+  withoutCommand.push(next)
+  bucket.splice(0, bucket.length, ...withoutCommand.slice(-MAX_TRACKED_VERIFIED_WORK))
+}
+
 export interface ReadFileEntry {
   path: string
   span: string
@@ -215,10 +240,7 @@ export function rememberAsyncAgentActivity(
   }
 }
 
-const SPAWNED_AGENT_RE = /Spawned agent (.+?) \(task_id=(\S+?)(?:[,)]|$)/
-
-function parseSpawnedAgentIdentity(
-  output: string,
+function readTypedAgentIdentity(
   metadata: Record<string, unknown> | null | undefined,
 ): [string, string] | null {
   if (metadata != null && typeof metadata === 'object') {
@@ -226,9 +248,9 @@ function parseSpawnedAgentIdentity(
     const taskId = String(metadata['task_id'] ?? '').trim()
     if (agentId && taskId) return [agentId, taskId]
   }
-  const m = SPAWNED_AGENT_RE.exec(output.trim())
-  if (m === null) return null
-  return [m[1]!.trim(), m[2]!.trim()]
+  // Tool output is model/provider prose and is audit context only. A missing
+  // result contract must not create an executable async-agent identity.
+  return null
 }
 
 export interface AsyncAgentTaskEntry {
@@ -252,7 +274,7 @@ export function rememberAsyncAgentTask(
   if (params.toolName !== 'agent' && params.toolName !== 'Task' && params.toolName !== 'Agent') {
     return
   }
-  const identity = parseSpawnedAgentIdentity(params.output, params.resultMetadata ?? null)
+  const identity = readTypedAgentIdentity(params.resultMetadata ?? null)
   if (identity === null) return
   const [agentId, taskId] = identity
   const bucket = metadataBucket(toolMetadata, 'async_agent_tasks') as AsyncAgentTaskEntry[]
@@ -431,6 +453,13 @@ export function recordToolCarryover(params: RecordToolCarryoverParams): void {
   } else if (isBashTool(toolName)) {
     const command = String(toolInput['command'] ?? '').trim()
     const firstLine = toolOutput.trim() ? toolOutput.split('\n')[0]!.trim() : 'no output'
+    rememberVerificationResult(toolMetadata, {
+      kind: 'command',
+      command,
+      passed: !isError,
+      observedAt: new Date().toISOString(),
+      outputSummary: firstLine,
+    })
     rememberVerifiedWork(
       toolMetadata,
       `Ran bash command ${command.slice(0, 160)} [${firstLine.slice(0, 120)}]`,

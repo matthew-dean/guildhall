@@ -4,11 +4,54 @@ import {
   ProofPath,
   buildProofPathContext,
   buildTaskProofPath,
+  commandResultSatisfiesProofContract,
   ensureCommandProofPathsFromAcceptanceCriteria,
+  recordCommandProofPathResults,
   recordProofPath,
 } from '../proof-paths.js'
 
 describe('proof paths', () => {
+  it('fails a clean command when output does not identify the bounded task', () => {
+    const task = {
+      proofPaths: [ProofPath.parse({
+        id: 'task-world-proof',
+        scope: { type: 'task', id: 'task-world-proof' },
+        title: 'Run world proof',
+        summary: 'The bounded world proof.',
+        kind: 'command',
+        command: 'pnpm proof:world-object-state',
+        status: 'planned',
+        expectedEvidence: [{
+          id: 'ac-1',
+          kind: 'automated',
+          description: 'The world proof identifies its task.',
+          required: true,
+          expectedOutputIncludes: ['guildhall-proof:task-world'],
+        }],
+        verificationRecords: [],
+        launchSteps: [],
+        relatedTaskIds: ['task-world-proof'],
+        createdAt: '2026-07-21T00:00:00.000Z',
+        updatedAt: '2026-07-21T00:00:00.000Z',
+        createdBy: 'test',
+      })],
+    }
+    const result = {
+      gateId: 'ac-1',
+      type: 'hard' as const,
+      passed: true,
+      output: 'World/object-state proof completed.',
+      checkedAt: '2026-07-21T00:01:00.000Z',
+    }
+
+    expect(commandResultSatisfiesProofContract(task, [{ id: 'ac-1', command: 'pnpm proof:world-object-state' }], result)).toBe(false)
+    recordCommandProofPathResults(task, [{ id: 'ac-1', command: 'pnpm proof:world-object-state' }], [result])
+    expect(task.proofPaths[0]).toMatchObject({
+      status: 'blocked',
+      verificationRecords: [{ status: 'failed' }],
+    })
+  })
+
   it('refreshes an existing command path when its acceptance expectation changes', () => {
     const task = {
       id: 'task-negative-fixture',
@@ -30,6 +73,11 @@ describe('proof paths', () => {
         source: 'documented',
         status: 'blocked',
         expectedEvidence: [{
+          id: 'ac-3',
+          kind: 'automated',
+          description: 'The old criterion should disappear.',
+          required: true,
+        }, {
           id: 'ac-missing',
           kind: 'automated',
           description: 'Missing files produce a clear error.',
@@ -53,11 +101,29 @@ describe('proof paths', () => {
       })],
     } as Parameters<typeof ensureCommandProofPathsFromAcceptanceCriteria>[0]
 
+    task.proofPaths![0]!.title = 'Run ac-3'
+    task.proofPaths![0]!.summary = 'The old criterion should disappear.'
+    task.proofPaths![0]!.launchSteps = [{
+      id: 'old-launch',
+      kind: 'copy_command',
+      title: 'Run ac-3',
+      command: 'pnpm exec node scripts/validate-fixture.mjs fixtures/missing',
+      expectedOutcome: 'The old criterion should disappear.',
+    }]
+
     ensureCommandProofPathsFromAcceptanceCriteria(task, '2026-07-18T01:00:00.000Z', 'test')
 
     expect(task.proofPaths?.[0]).toMatchObject({
       status: 'planned',
+      title: 'Run ac-missing',
+      summary: 'Missing files produce a clear error.',
       expectedEvidence: [{ id: 'ac-missing', expectedExit: 'non_zero' }],
+      launchSteps: [{
+        id: 'old-launch',
+        title: 'Run ac-missing',
+        command: 'pnpm exec node scripts/validate-fixture.mjs fixtures/missing',
+        expectedOutcome: 'Missing files produce a clear error.',
+      }],
       verificationRecords: [],
       updatedAt: '2026-07-18T01:00:00.000Z',
       updatedBy: 'test',
@@ -201,7 +267,43 @@ describe('proof paths', () => {
         expect.objectContaining({ id: 'ac-2', description: 'Snapshot tests pass.' }),
       ],
     })
+    expect(proofPath.expectedEvidence.map((evidence) => evidence.kind)).toEqual(['manual', 'automated'])
     expect(proofPath.launchSteps.map((step) => step.kind)).not.toContain('run_server')
+  })
+
+  it('does not infer evidence kind from criterion ids or descriptions', () => {
+    const proofPath = buildTaskProofPath({
+      task: {
+        id: 'task-prose-independent-proof',
+        title: 'Preserve the proof contract',
+        description: 'The provider may use any wording.',
+        status: 'ready',
+        domain: 'core',
+        projectPath: '/repo/guildhall',
+        priority: 'normal',
+        acceptanceCriteria: [{
+          id: 'automated-regression-test',
+          description: 'A provider called this a test, but the typed verifier is review.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        outOfScope: [],
+        dependsOn: [],
+        notes: [],
+        gateResults: [],
+        reviewVerdicts: [],
+        adjudications: [],
+        escalations: [],
+        agentIssues: [],
+        revisionCount: 0,
+        remediationAttempts: 0,
+        origination: 'human',
+        createdAt: '2026-05-27T11:00:00.000Z',
+        updatedAt: '2026-05-27T11:00:00.000Z',
+      },
+    })
+
+    expect(proofPath.expectedEvidence.map((evidence) => evidence.kind)).toEqual(['manual'])
   })
 
   it('records proof paths as committed user-visible project records', async () => {

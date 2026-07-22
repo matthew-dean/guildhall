@@ -326,8 +326,15 @@ function archivedTaskHasPositiveDoneEvidence(task: Record<string, unknown>): boo
   }
   const handoff = isRecord(task.completionHandoff) ? task.completionHandoff : null
   if (handoff && (
-    (Array.isArray(handoff.verified) && handoff.verified.length > 0) ||
-    (Array.isArray(handoff.evidenceRefs) && handoff.evidenceRefs.length > 0)
+    (Array.isArray(handoff.automatedProof) && handoff.automatedProof.some(item =>
+      isRecord(item) && (item.status === 'passed' || item.status === 'pass')
+    )) ||
+    (Array.isArray(handoff.manualProof) && handoff.manualProof.some(item =>
+      isRecord(item) && (item.status === 'passed' || item.status === 'pass')
+    )) ||
+    (Array.isArray(handoff.providerProof) && handoff.providerProof.some(item =>
+      isRecord(item) && (item.status === 'passed' || item.status === 'pass')
+    ))
   )) {
     return true
   }

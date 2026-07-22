@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { withProjectStateWriteLock } from '../project-state-write-lock.js'
+import { projectStateWriteLockHeld, withProjectStateWriteLock } from '../project-state-write-lock.js'
 
 describe('project-state write lock', () => {
   it('serializes async read-modify-write operations and permits re-entry', async () => {
@@ -36,5 +36,14 @@ describe('project-state write lock', () => {
     })
     await Promise.all([first, second])
     expect(order).toEqual(['a', 'b'])
+  })
+
+  it('reports ownership only inside the current async lock scope', async () => {
+    expect(projectStateWriteLockHeld('project-a')).toBe(false)
+    await withProjectStateWriteLock('project-a', async () => {
+      expect(projectStateWriteLockHeld('project-a')).toBe(true)
+      expect(projectStateWriteLockHeld('project-b')).toBe(false)
+    })
+    expect(projectStateWriteLockHeld('project-a')).toBe(false)
   })
 })

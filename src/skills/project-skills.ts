@@ -8,7 +8,8 @@ export const ProjectSkillProposalSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   description: z.string().min(1),
-  triggerKeywords: z.array(z.string().min(1)).default([]),
+  /** Exact machine routing keys. Free-form task prose is never consulted. */
+  routingKeys: z.array(z.string().min(1)).default([]),
   content: z.string().min(1),
   status: z.enum(['suggested', 'active', 'dismissed']).default('suggested'),
   risk: z.enum(['low', 'medium', 'high']).default('low'),
@@ -30,7 +31,7 @@ export interface ProjectSkillProposalInput {
   id: string
   name: string
   description: string
-  triggerKeywords?: string[]
+  routingKeys?: string[]
   content: string
   risk?: 'low' | 'medium' | 'high'
   requiresApproval?: boolean
@@ -76,7 +77,7 @@ export async function proposeProjectSkill(input: {
   const next = ProjectSkillProposalSchema.parse({
     ...existing,
     ...input.proposal,
-    triggerKeywords: input.proposal.triggerKeywords ?? existing?.triggerKeywords ?? [],
+    routingKeys: input.proposal.routingKeys ?? existing?.routingKeys ?? [],
     status: existing?.status ?? 'suggested',
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -139,19 +140,19 @@ export async function resetProjectSkillProposals(memoryDir: string): Promise<voi
   writeProjectSkillStore(memoryDir, { version: 1, proposals: [] })
 }
 
-function matchesTrigger(proposal: ProjectSkillProposal, text: string): boolean {
-  const haystack = text.toLowerCase()
-  return proposal.triggerKeywords.some((keyword) => haystack.includes(keyword.toLowerCase()))
+function matchesRoutingKey(proposal: ProjectSkillProposal, routingKeys: readonly string[]): boolean {
+  const available = new Set(routingKeys.map((key) => key.trim().toLowerCase()).filter(Boolean))
+  return proposal.routingKeys.some((key) => available.has(key.trim().toLowerCase()))
 }
 
 export function selectRelevantProjectSkills(
   proposals: readonly ProjectSkillProposal[],
-  text: string,
+  routingKeys: readonly string[],
 ): SkillDefinition[] {
   return proposals
     .filter((proposal) => proposal.status === 'active')
-    .filter((proposal) => proposal.triggerKeywords.length > 0)
-    .filter((proposal) => matchesTrigger(proposal, text))
+    .filter((proposal) => proposal.routingKeys.length > 0)
+    .filter((proposal) => matchesRoutingKey(proposal, routingKeys))
     .map((proposal) => ({
       name: proposal.name,
       description: proposal.description,

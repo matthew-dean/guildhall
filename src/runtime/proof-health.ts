@@ -1,6 +1,8 @@
 import type { Task } from '@guildhall/core'
-import { recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
-import { comparableCommand } from './proof-paths.js'
+import { commandProofGateMatches, isCurrentProofPathProven } from '@guildhall/shared'
+import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
+import { comparableCommand, proofSetupHasTaskIdentity } from './proof-paths.js'
+import { reviewVerdictIsNonSubstantiveFailure } from './review-contract.js'
 
 export interface ProofMissingDoneTask {
   id: string
@@ -18,10 +20,6 @@ function nonEmptyStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
     : []
-}
-
-function nonEmptyArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value.filter(Boolean) : []
 }
 
 function passedVerificationRecords(value: unknown): unknown[] {
@@ -48,7 +46,7 @@ function hasAcceptanceCriteria(task: unknown): boolean {
   return acceptanceCriteria.length > 0
 }
 
-function latestApprovingReviewReasoning(task: unknown): string | null {
+function latestApprovingReviewCriteria(task: unknown): Set<string> | null {
   if (!task || typeof task !== 'object') return null
   const reviewVerdicts = evidencePayloads(task, 'review_verdict') ?? (
     Array.isArray((task as { reviewVerdicts?: unknown }).reviewVerdicts)
@@ -61,11 +59,10 @@ function latestApprovingReviewReasoning(task: unknown): string | null {
     const record = verdict as Record<string, unknown>
     if (record.verdict === 'revise' || record.decision === 'revise') return null
     if (record.verdict !== 'approve' && record.verdict !== 'approved' && record.decision !== 'approve' && record.decision !== 'approved') continue
-    return [
-      typeof record.reason === 'string' ? record.reason : '',
-      typeof record.reasoning === 'string' ? record.reasoning : '',
-      typeof record.summary === 'string' ? record.summary : '',
-    ].filter(Boolean).join('\n')
+    const ids = Array.isArray(record.acceptedCriteriaIds)
+      ? record.acceptedCriteriaIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+      : []
+    return new Set(ids)
   }
   return null
 }
@@ -90,18 +87,17 @@ function proofEvidenceRecordedAfterRecovery(task: Record<string, unknown>, reope
   const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
   const gateResults = evidencePayloads(task, 'gate_result') ?? (Array.isArray(task.gateResults) ? task.gateResults : [])
   const passedGateForPath = (path: Record<string, unknown>): boolean => {
-    const command = typeof path.command === 'string' ? path.command.trim() : ''
-    if (!command || path.kind !== 'command' || path.source !== 'documented') return false
+    if (path.kind !== 'command' || path.source !== 'documented') return false
     return gateResults.some((gate): gate is Record<string, unknown> => {
       if (!gate || typeof gate !== 'object' || Array.isArray(gate)) return false
       if (!(gate.passed === true || gate.status === 'pass' || gate.status === 'passed')) return false
       const checkedAt = Date.parse(String(gate.checkedAt ?? gate.recordedAt ?? ''))
       if (!Number.isFinite(checkedAt) || checkedAt <= reopenedAt) return false
-      return [gate.command, gate.gateId, gate.name, gate.output]
-        .filter((value): value is string => typeof value === 'string')
-        .map(value => value.trim())
-        .filter(Boolean)
-        .some(candidate => candidate === command || candidate.includes(command))
+      // Gate identity is structured. A gate name or captured output is
+      // explanatory text and must never satisfy a command proof by containing
+      // the expected words. The shared matcher accepts either the exact
+      // normalized command or the stable expected-evidence ID.
+      return commandProofGateMatches(path, gate)
     })
   }
 
@@ -162,7 +158,7 @@ function latestFailedHardGate(task: Record<string, unknown>): Record<string, unk
   const latestByGate = new Map<string, Record<string, unknown>>()
   for (const gate of gates) {
     if (gate.type !== 'hard') continue
-    const identity = String(gate.gateId ?? gate.command ?? gate.name ?? 'hard-gate')
+    const identity = String(gate.gateId ?? gate.command ?? 'hard-gate')
     const previous = latestByGate.get(identity)
     const previousAt = Date.parse(String(previous?.checkedAt ?? previous?.recordedAt ?? ''))
     const currentAt = Date.parse(String(gate.checkedAt ?? gate.recordedAt ?? ''))
@@ -253,33 +249,39 @@ export function normalizeAcceptanceCriteriaForCurrentProof(task: Record<string, 
       verificationSource: 'passed-command-proof',
     }
   })
-  const currentCriteria = proofSettledCriteria.map(criterion => {
-    if (criterion.met !== true || criterion.verificationState !== 'stale') return criterion
-    const {
-      persistedMet: _persistedMet,
-      staleReason: _staleReason,
-      staleGateId: _staleGateId,
-      ...settledCriterion
-    } = criterion
-    return {
-      ...settledCriterion,
-      met: true,
-      verificationState: 'verified',
-    }
-  })
+  const currentProofPathMissing = Array.isArray(projectedTask.proofPaths) &&
+    projectedTask.proofPaths.some(proofPath => proofPathMissingEvidence(proofPath, projectedTask))
+  const failedHardGate = latestFailedHardGate(projectedTask)
+  const proofReason = activeProofRecoveryReason(projectedTask) ||
+    failedHardGateReason(failedHardGate) ||
+    (currentProofPathMissing ? 'Current proof evidence is missing.' : '')
+  const currentCriteria = proofReason
+    ? proofSettledCriteria
+    : proofSettledCriteria.map(criterion => {
+        if (criterion.met !== true || criterion.verificationState !== 'stale') return criterion
+        const {
+          persistedMet: _persistedMet,
+          staleReason: _staleReason,
+          staleGateId: _staleGateId,
+          ...settledCriterion
+        } = criterion
+        return {
+          ...settledCriterion,
+          met: true,
+          verificationState: 'verified',
+        }
+      })
   const criteriaChanged = currentCriteria.some((criterion, index) => criterion !== projectedCriteria[index])
   const projectedWithProof = criteriaChanged
     ? { ...projectedTask, acceptanceCriteria: currentCriteria }
     : projectedTask
-  const failedHardGate = latestFailedHardGate(projectedWithProof)
-  const proofReason = activeProofRecoveryReason(projectedWithProof) || failedHardGateReason(failedHardGate)
   const existingProofState = projectedWithProof.acceptanceCriteriaProofState &&
     typeof projectedWithProof.acceptanceCriteriaProofState === 'object' &&
     !Array.isArray(projectedWithProof.acceptanceCriteriaProofState)
     ? projectedWithProof.acceptanceCriteriaProofState as Record<string, unknown>
     : null
   if (!proofReason) {
-    if (!existingProofState || existingProofState.state === 'verified') return projectedWithProof
+    if (!existingProofState) return projectedWithProof
     const {
       reason: _reason,
       gateId: _gateId,
@@ -358,15 +360,15 @@ export function completionProofCanSettleUnmetAcceptanceCriteria(task: unknown): 
   if (observedCommandCriteria.length !== observedProofCriteria.length ||
     observedCommandCriteria.some(criterion => !commandProofSatisfiedByTask(recordValue(criterion)!, task))) return false
   if (observedProofCriteria.length === unmetCriteria.length) return true
-  // Historical approval cannot settle criteria after a newer proof recovery or
-  // failed hard gate has reopened the task's completion claim.
-  const reviewText = latestApprovingReviewReasoning(task)
-  if (!reviewText) return false
-  return (
-    /\bacceptance-criteria-met\s*:\s*yes\b/i.test(reviewText) ||
-    /\ball acceptance criteria (?:are |were )?(?:met|satisfied)\b/i.test(reviewText) ||
-    /\bacceptance criteria are satisfied\b/i.test(reviewText)
-  )
+  // Review text is explanatory only. A review can settle review-owned
+  // criteria only when the verdict carries the exact criterion IDs it
+  // evaluated. This keeps a model's Markdown style out of completion state.
+  const acceptedCriteriaIds = latestApprovingReviewCriteria(task)
+  if (!acceptedCriteriaIds) return false
+  return unmetCriteria.every(criterion => {
+    const id = recordValue(criterion)?.id
+    return typeof id === 'string' && id.trim().length > 0 && acceptedCriteriaIds.has(id.trim())
+  })
 }
 
 function criterionRequiresObservedProof(criterion: unknown): boolean {
@@ -416,78 +418,6 @@ function normalizedText(value: unknown): string {
   return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
 }
 
-const evidenceStopWords = new Set([
-  'about',
-  'after',
-  'before',
-  'bounded',
-  'checking',
-  'concrete',
-  'could',
-  'draft',
-  'during',
-  'evidence',
-  'exists',
-  'first',
-  'from',
-  'have',
-  'into',
-  'local',
-  'needed',
-  'path',
-  'proof',
-  'real',
-  'records',
-  'required',
-  'review',
-  'should',
-  'task',
-  'that',
-  'this',
-  'using',
-  'whether',
-  'with',
-])
-
-function evidenceTokens(value: string): string[] {
-  return normalizedText(value)
-    .toLowerCase()
-    .split(/[^a-z0-9]+/i)
-    .map(token => token.trim())
-    .filter(token => token.length >= 4 && !evidenceStopWords.has(token))
-}
-
-function tokenStem(token: string): string {
-  if (token.length > 6 && token.endsWith('ing')) return token.slice(0, -3)
-  if (token.length > 5 && token.endsWith('ed')) return token.slice(0, -2)
-  if (token.length > 5 && token.endsWith('es')) return token.slice(0, -2)
-  if (token.length > 4 && token.endsWith('s')) return token.slice(0, -1)
-  return token
-}
-
-function tokenCovered(expected: string, evidence: readonly string[]): boolean {
-  const expectedStem = tokenStem(expected)
-  return evidence.some(candidate => {
-    const candidateStem = tokenStem(candidate)
-    return candidate === expected ||
-      candidateStem === expectedStem ||
-      (expected.length >= 5 && candidate.startsWith(expected)) ||
-      (candidate.length >= 5 && expected.startsWith(candidate))
-  })
-}
-
-function expectedEvidenceSemanticallySatisfied(expected: string, evidenceText: string): boolean {
-  const expectedTokens = Array.from(new Set(evidenceTokens(expected)))
-  if (expectedTokens.length === 0) return false
-  const completionTokens = Array.from(new Set(evidenceTokens(evidenceText)))
-  if (completionTokens.length === 0) return false
-  const covered = expectedTokens.filter(token => tokenCovered(token, completionTokens)).length
-  const required = expectedTokens.length <= 4
-    ? expectedTokens.length
-    : Math.max(3, Math.ceil(expectedTokens.length * 0.55))
-  return covered >= required
-}
-
 function passedGateResultsForTask(task: unknown): Array<Record<string, unknown>> {
   const fromEvidence = evidencePayloads(task, 'gate_result')
   const gateResults = fromEvidence && fromEvidence.length > 0
@@ -499,31 +429,24 @@ function passedGateResultsForTask(task: unknown): Array<Record<string, unknown>>
     Boolean(
       gate &&
       typeof gate === 'object' &&
-      ((gate as { passed?: unknown }).passed === true || (gate as { status?: unknown }).status === 'passed'),
+      ((gate as { passed?: unknown }).passed === true ||
+        (gate as { status?: unknown }).status === 'pass' ||
+        (gate as { status?: unknown }).status === 'passed'),
     ),
   )
 }
 
 function commandProofSatisfiedByTask(proofPath: Record<string, unknown>, task: unknown): boolean {
-  const command = normalizedText(proofPath.command)
+  const command = comparableCommand(proofPath.command)
   if (!command) return false
   if (passedGateResultsForTask(task).some((gate) => {
-    const candidates = [
-      normalizedText(gate.command),
-      normalizedText(gate.gateId),
-      normalizedText(gate.name),
-      normalizedText(gate.output),
-    ].filter(Boolean)
-    return candidates.some(candidate => candidate === command || candidate.includes(command))
+    return gate.gateId === proofPath.id || commandProofGateMatches(proofPath, gate) || comparableCommand(gate.command) === command
   })) return true
   return (Array.isArray(proofPath.verificationRecords) ? proofPath.verificationRecords : [])
     .some(record => {
       if (!record || typeof record !== 'object' || Array.isArray(record) || (record as { status?: unknown }).status !== 'passed') return false
       const verification = record as Record<string, unknown>
-      return [verification.command, verification.summary].some(value => {
-        const candidate = normalizedText(value)
-        return candidate === command || candidate.includes(command)
-      })
+      return comparableCommand(verification.command) === command
     })
 }
 
@@ -549,6 +472,7 @@ type ReviewVerdictRecord = {
   reviewerPath?: unknown
   reasoning?: unknown
   llmError?: unknown
+  failureCode?: unknown
   recordedAt?: unknown
 }
 
@@ -565,12 +489,9 @@ function reviewVerdictsForTask(task: unknown): ReviewVerdictRecord[] {
   return [...reviewVerdicts].sort((left, right) => String(left.recordedAt ?? '').localeCompare(String(right.recordedAt ?? '')))
 }
 
-/** Infrastructure fallback must not erase a substantive reviewer finding. */
-export function reviewVerdictLooksInfrastructureOnly(verdict: ReviewVerdictRecord): boolean {
-  if (verdict.verdict !== 'revise') return false
-  const text = typeof verdict.reasoning === 'string' ? verdict.reasoning : ''
-  if (!/failed to produce a verdict|no \*\*Reasoning:\*\* block found/i.test(text)) return false
-  return /HTTP 429|Too Many Requests|rate limit|provider timeout|connection refused|Exceeded maximum turn limit \(\d+\)|temporarily unavailable|service unavailable|timed out after \d+ms|raw output retained/i.test(text)
+/** Recovery must not erase a structured reviewer finding. */
+export function reviewVerdictLooksNonSubstantive(verdict: ReviewVerdictRecord): boolean {
+  return reviewVerdictIsNonSubstantiveFailure(verdict)
 }
 
 export function latestFallbackApprovalHasUnresolvedSubstantiveRevision(task: unknown): boolean {
@@ -590,7 +511,7 @@ export function latestFallbackApprovalHasUnresolvedSubstantiveRevision(task: unk
     const verdict = verdicts[index]
     if (!verdict) continue
     if (verdict.verdict === 'approve') return false
-    if (verdict.verdict === 'revise' && !reviewVerdictLooksInfrastructureOnly(verdict)) return true
+    if (verdict.verdict === 'revise' && !reviewVerdictLooksNonSubstantive(verdict)) return true
   }
   return false
 }
@@ -600,64 +521,12 @@ export function taskDoneButReviewConflict(task: unknown): boolean {
   return record?.status === 'done' && latestFallbackApprovalHasUnresolvedSubstantiveRevision(task)
 }
 
-function completionEvidenceTextForTask(task: unknown): string {
-  const record = recordValue(task)
-  if (!record) return ''
-  const chunks: string[] = [...recordedCompletionProofForTask(task).verified]
-  const doneSummary = recordValue(record.doneSummaryBundle)
-  const doneSummarySummary = recordValue(doneSummary?.summary)
-  for (const value of Object.values(doneSummarySummary ?? {})) {
-    if (typeof value === 'string') chunks.push(value)
-  }
-  for (const gate of evidencePayloads(task, 'gate_result') ?? (Array.isArray(record.gateResults) ? record.gateResults : [])) {
-    const gateRecord = recordValue(gate)
-    if (!gateRecord) continue
-    for (const key of ['command', 'gateId', 'name', 'output']) {
-      const value = gateRecord[key]
-      if (typeof value === 'string') chunks.push(value)
-    }
-  }
-  for (const verdict of evidencePayloads(task, 'review_verdict') ?? (Array.isArray(record.reviewVerdicts) ? record.reviewVerdicts : [])) {
-    const verdictRecord = recordValue(verdict)
-    if (!verdictRecord) continue
-    for (const key of ['reason', 'reasoning', 'summary']) {
-      const value = verdictRecord[key]
-      if (typeof value === 'string') chunks.push(value)
-    }
-  }
-  for (const key of ['latestReviewerSummary', 'latestSelfCritique']) {
-    const value = record[key]
-    if (typeof value === 'string') chunks.push(value)
-  }
-  return normalizedText(chunks.join('\n')).toLowerCase()
-}
-
 export function taskHasNonReviewCommandBackedProof(task: unknown): boolean {
-  const record = recordValue(task)
-  if (!record) return false
-  const doneSummary = recordValue(record.doneSummaryBundle)
-  const doneSummarySummary = recordValue(doneSummary?.summary)
-  const doneSummaryEvidence = typeof doneSummarySummary?.evidence === 'string'
-    ? doneSummarySummary.evidence
-    : ''
-  if (
-    doneSummary?.status === 'done' &&
-    /\b(?:pnpm|npm|node|test|script|command|api|deepinfra|model|telemetry|latency|cost|refusal|repetition)\b/i.test(doneSummaryEvidence) &&
-    !/\bcontent\.no-truncated-data\b/i.test(doneSummaryEvidence)
-  ) {
-    return true
-  }
   return passedGateResultsForTask(task).some((gate) => {
     const type = normalizedText(gate.type).toLowerCase()
-    const text = [
-      normalizedText(gate.command),
-      normalizedText(gate.gateId),
-      normalizedText(gate.name),
-      normalizedText(gate.output),
-    ].filter(Boolean).join(' ')
-    if (!text || /\bcontent\.no-truncated-data\b/i.test(text)) return false
-    if (type === 'soft') return false
-    return /\b(?:pnpm|npm|node|test|script|command|api|deepinfra|model|telemetry|latency|cost|refusal|repetition|build)\b/i.test(text)
+    // A gate is command-backed because it carries a command field, not
+    // because its free-form name or output happens to contain a keyword.
+    return type !== 'soft' && normalizedText(gate.command).length > 0
   })
 }
 
@@ -666,7 +535,6 @@ function proofPathIsScriptRunnable(proofPath: unknown): boolean {
   if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
   const record = proofPath as Record<string, unknown>
   if (typeof record.command === 'string' && record.command.trim().length > 0) return true
-  if (record.kind === 'command' || record.kind === 'script') return true
   const launchSteps = Array.isArray(record.launchSteps) ? record.launchSteps : []
   return launchSteps.some((step) =>
     step &&
@@ -687,22 +555,9 @@ export function taskHasScriptProofPath(task: unknown): boolean {
   if (currentProof?.hasExecutablePath === true) return true
   if (!Array.isArray(record.proofPaths)) return false
   if (record.proofPaths.some(proofPathIsScriptRunnable)) return true
-  if (!taskHasNonReviewCommandBackedProof(task)) return false
-  if (!taskDoneButProofMissing(task)) {
-    return record.proofPaths.some((proofPath) =>
-      Boolean(proofPath && typeof proofPath === 'object' && !Array.isArray(proofPath)),
-    )
-  }
-  return record.proofPaths.some((proofPath) => {
-    if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
-    const proof = proofPath as { kind?: unknown; expectedEvidence?: unknown }
-    if (proof.kind !== 'review') return false
-    const expectedEvidence = Array.isArray(proof.expectedEvidence) ? proof.expectedEvidence : []
-    return expectedEvidence.some(item =>
-      typeof item === 'string' &&
-      /\b(?:pnpm|npm|node|script|command|cli|command-line|no-ui|no ui|headless)\b/i.test(item),
-    )
-  })
+  // A review description cannot turn a non-executable path into script proof.
+  // Script-only releases require an actual command or script path in data.
+  return false
 }
 
 /** A review contract is enough to reopen executable work without re-intaking its scope. */
@@ -712,91 +567,14 @@ export function taskHasReviewProofPath(task: unknown): boolean {
   return record.proofPaths.some(path => recordValue(path)?.kind === 'review')
 }
 
-function requiresCommandBackedProofText(value: string): boolean {
-  return /\b(?:DeepInfra|OpenAI-compatible|provider|model|telemetry|latency|cost|refusal|repetition|pnpm|npm|node|script|command|api)\b/i.test(value)
-}
-
-function expectedEvidenceStringsSatisfied(expectedEvidence: unknown[], task: unknown): boolean {
-  const expectedStrings = expectedEvidence
-    .flatMap(item => {
-      if (typeof item === 'string' && item.trim().length > 0) return [item]
-      const record = recordValue(item)
-      const text = typeof record?.description === 'string' && record.description.trim().length > 0
-        ? record.description
-        : typeof record?.summary === 'string' && record.summary.trim().length > 0
-          ? record.summary
-          : typeof record?.title === 'string' && record.title.trim().length > 0
-            ? record.title
-            : null
-      return text ? [text] : []
-    })
-    .map(item => normalizedText(item).toLowerCase())
-  if (expectedStrings.length === 0) return true
-  if (expectedStrings.some(requiresCommandBackedProofText) && !taskHasNonReviewCommandBackedProof(task)) {
-    return false
-  }
-  const evidenceText = completionEvidenceTextForTask(task)
-  if (!evidenceText) return false
-  return expectedStrings.every(expected =>
-    evidenceText.includes(expected) ||
-    expectedEvidenceSemanticallySatisfied(expected, evidenceText),
-  )
-}
-
-function requiresProviderProofText(value: string): boolean {
-  return /\b(?:DeepInfra|OpenAI-compatible|provider|telemetry|latency|cost|refusal|repetition)\b/i.test(value)
-}
-
-function expectedEvidenceRequiresNonReviewVerification(expectedEvidence: unknown[]): boolean {
-  return expectedEvidence.some(item => {
-    const record = recordValue(item)
-    const text = typeof item === 'string'
-      ? item
-      : typeof record?.description === 'string'
-        ? record.description
-        : typeof record?.summary === 'string'
-          ? record.summary
-          : typeof record?.title === 'string'
-            ? record.title
-            : ''
-    const kind = normalizedText(record?.kind).toLowerCase()
-    return requiresProviderProofText(text) ||
-      requiresCommandBackedProofText(text) ||
-      ['automated', 'command', 'provider', 'script'].includes(kind)
-  })
-}
-
-function reviewProofCanSettleStringEvidenceHint(proofPath: Record<string, unknown>, task: unknown): boolean {
-  if (proofPath.kind !== 'review') return false
-  const expectedEvidence = Array.isArray(proofPath.expectedEvidence) ? proofPath.expectedEvidence : []
-  const expectedStrings = expectedEvidence.flatMap(item => {
-    if (typeof item === 'string' && item.trim().length > 0) return [item]
-    const record = recordValue(item)
-    const text = typeof record?.description === 'string' && record.description.trim().length > 0
-      ? record.description
-      : typeof record?.summary === 'string' && record.summary.trim().length > 0
-        ? record.summary
-        : typeof record?.title === 'string' && record.title.trim().length > 0
-          ? record.title
-          : null
-    return text ? [text] : []
-  })
-  if (expectedStrings.length === 0) return false
-  if (expectedStrings.some(requiresProviderProofText)) return false
-  if (expectedEvidenceStringsSatisfied(expectedStrings, task)) return true
-  const reviewReasoning = latestApprovingReviewReasoning(task)
-  if (!reviewReasoning || !taskHasRecordedCompletionProof(task)) return false
-  const normalizedReviewReasoning = normalizedText(reviewReasoning).toLowerCase()
-  const reviewDeclaresProofPath = /\bproof\s+path\s*:\s*(?:yes|verified|complete|passed)\b/i.test(reviewReasoning)
-  return expectedStrings.every(expected => {
-    const normalizedExpected = normalizedText(expected).toLowerCase()
-    return normalizedReviewReasoning.includes(normalizedExpected) ||
-      expectedEvidenceSemanticallySatisfied(expected, reviewReasoning) ||
-      reviewDeclaresProofPath
-  })
-}
-
 function proofPathMissingEvidence(proofPath: unknown, task: unknown): boolean {
+  const pathRecord = proofPath && typeof proofPath === 'object' && !Array.isArray(proofPath)
+    ? proofPath as Record<string, unknown>
+    : null
+  const taskRecord = task && typeof task === 'object' && !Array.isArray(task)
+    ? task as Record<string, unknown>
+    : null
+  if (pathRecord && taskRecord && isCurrentProofPathProven(pathRecord, taskRecord)) return false
   if (typeof proofPath === 'string' && proofPath.trim().length > 0) {
     return !taskHasRecordedCompletionProof(task)
   }
@@ -808,56 +586,43 @@ function proofPathMissingEvidence(proofPath: unknown, task: unknown): boolean {
   const expectedEvidence = Array.isArray(record.expectedEvidence) ? record.expectedEvidence : []
   const verificationRecords = Array.isArray(record.verificationRecords) ? record.verificationRecords : []
   const passedEvidence = new Set(
-    verificationRecords
-      .filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
-      .map(item => (item as { evidenceId?: unknown }).evidenceId)
-      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+    [
+      ...verificationRecords
+        .filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
+        .map(item => (item as { evidenceId?: unknown }).evidenceId),
+      ...reviewVerdictsForTask(task).flatMap(verdict => {
+        if (verdict.verdict !== 'approve') return []
+        const proofEvidenceIds = (verdict as { proofEvidenceIds?: unknown }).proofEvidenceIds
+        return Array.isArray(proofEvidenceIds) ? proofEvidenceIds : []
+      }),
+    ].filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
   )
   const requiredEvidenceIds = expectedEvidence
     .filter(item => Boolean(item && typeof item === 'object' && (item as { required?: unknown }).required !== false))
     .map(item => (item as { id?: unknown }).id)
     .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
   if (requiredEvidenceIds.length > 0) {
-    // Imported review paths often carry generated evidence ids without
-    // inline verification records. A recorded command gate, completion
-    // summary, or approved review is the durable evidence for that path; the
-    // absence of the importer's inline bookkeeping must not erase it.
-    if (
-      record.kind === 'review' &&
-      (
-        expectedEvidenceStringsSatisfied(expectedEvidence, task) ||
-        reviewProofCanSettleStringEvidenceHint(record, task)
-      )
-    ) return false
-    const requiresNonReviewVerification = expectedEvidenceRequiresNonReviewVerification(expectedEvidence)
-    if (requiresNonReviewVerification) {
-      const nonReviewPassed = new Set(
-        verificationRecords
-          .filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
-          .filter(item => {
-            const kind = normalizedText((item as { kind?: unknown }).kind).toLowerCase()
-            return kind !== 'manual' && kind !== 'review'
-          })
-          .map(item => (item as { evidenceId?: unknown }).evidenceId)
-          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
-      )
-      return requiredEvidenceIds.some(id => !nonReviewPassed.has(id))
-    }
-    if (reviewProofCanSettleStringEvidenceHint(record, task)) return false
     return requiredEvidenceIds.some(id => !passedEvidence.has(id))
   }
-  const expectedEvidenceStringCount = expectedEvidence.filter(item => typeof item === 'string' && item.trim().length > 0).length
-  if (expectedEvidenceStringCount > 0) {
-    return !(
-      expectedEvidenceStringsSatisfied(expectedEvidence, task) ||
-      reviewProofCanSettleStringEvidenceHint(record, task)
-    )
-  }
-  return verificationRecords.every(item => !Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
+  // Legacy string-only expectations have no stable identity and therefore
+  // cannot be proven. They remain visible for migration/intake repair, but
+  // never become complete because a model happened to use similar wording.
+  return expectedEvidence.some(item => typeof item === 'string' && item.trim().length > 0) ||
+    verificationRecords.every(item => !Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
 }
 
 export function taskDoneButProofMissing(task: unknown): boolean {
   if (!task || typeof task !== 'object') return false
+  const record = task as Record<string, unknown>
+  // A proof-setup task is an executable boundary, not a review checkbox.
+  // Its acceptance criterion cannot settle completion until it names the
+  // containing task, stores a concrete command, and exposes a runnable proof
+  // path. Provider narration and stale `met: true` values stay outside the
+  // completion authority.
+  if (record.semanticKind === 'proof_setup' && (
+    !proofSetupHasTaskIdentity(record as Pick<Task, 'hierarchy' | 'delivery' | 'acceptanceCriteria'>) ||
+    !taskHasScriptProofPath(task)
+  )) return true
   // A reopened proof lane is current work even when an older acceptance
   // criterion or review approval still looks complete. Recovery must be
   // represented in every readiness projection, not only in task detail.
@@ -873,11 +638,11 @@ export function taskDoneButProofMissing(task: unknown): boolean {
     ? handoff as Record<string, unknown>
     : null
 
-  const handoffVerified = nonEmptyStringArray(handoffObject?.verified).length > 0 ||
-    passedVerificationRecords(handoffObject?.automatedProof).length > 0 ||
+  // Handoff prose and bare references are explanatory metadata, not proof.
+  // Only structured verification records can settle a current task contract.
+  const handoffVerified = passedVerificationRecords(handoffObject?.automatedProof).length > 0 ||
     passedVerificationRecords(handoffObject?.manualProof).length > 0 ||
-    passedVerificationRecords(handoffObject?.providerProof).length > 0 ||
-    nonEmptyArray(handoffObject?.evidenceRefs).length > 0
+    passedVerificationRecords(handoffObject?.providerProof).length > 0
   const handoffMissing = nonEmptyStringArray(handoffObject?.notVerified).length > 0 ||
     nonEmptyStringArray(handoffObject?.remainingRisks).length > 0
 
@@ -893,6 +658,10 @@ export function taskDoneButProofMissing(task: unknown): boolean {
   if (commandProofMissing) return true
   if (proofPaths.length === 0) {
     if (taskHasRecordedCompletionProof(task)) return false
+    // A task with no explicit proof contract is complete when every persisted
+    // acceptance criterion is already met. Do not make a prose completion
+    // summary mandatory just because the task has no separate proof path.
+    if (hasAcceptanceCriteria(task) && unmetAcceptanceCriteriaCount(task) === 0) return false
     if (hasAcceptanceCriteria(task) && !handoffVerified) return true
     return handoffMissing && !handoffVerified
   }

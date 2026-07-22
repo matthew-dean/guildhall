@@ -5,11 +5,33 @@ import {
   aggregateFanout,
   personaVerdictToReviewRecord,
   buildPersonaOutputHints,
-  sanitizeInventedProofCommandFeedback,
 } from '../reviewer-fanout.js'
 
 const componentDesigner = BUILTIN_GUILDS.find((g) => g.slug === 'component-designer')!
 const a11y = BUILTIN_GUILDS.find((g) => g.slug === 'accessibility-specialist')!
+
+function withMachineResult(
+  prose: string,
+  verdict: 'approve' | 'revise',
+  acceptedCriteriaIds: string[] = [],
+  proofEvidenceIds: string[] = [],
+  extras: {
+    revisionItems?: string[]
+    riskItems?: string[]
+    followUpItems?: string[]
+    advisoryScores?: Record<string, string>
+  } = {},
+): string {
+  return `${prose}\n\n**Machine result:**\n\`\`\`json\n${JSON.stringify({
+    verdict,
+    acceptedCriteriaIds,
+    proofEvidenceIds,
+    revisionItems: extras.revisionItems ?? [],
+    riskItems: extras.riskItems ?? [],
+    followUpItems: extras.followUpItems ?? [],
+    advisoryScores: extras.advisoryScores ?? {},
+  })}\n\`\`\``
+}
 
 describe('parsePersonaOutput', () => {
   it('parses a clean approve output', () => {
@@ -25,9 +47,9 @@ describe('parsePersonaOutput', () => {
 **Optional follow-up ideas (non-blocking):**
 - (none)
 `
-    const v = parsePersonaOutput(componentDesigner, raw)
+    const v = parsePersonaOutput(componentDesigner, withMachineResult(raw, 'approve'))
     expect(v.verdict).toBe('approve')
-    expect(v.reasoning).toContain('Ghost variant')
+    expect(v.reasoning).toBe(v.rawOutput.trim())
     expect(v.revisionItems).toEqual([])
     expect(v.followUpItems).toEqual([])
     expect(v.guildSlug).toBe('component-designer')
@@ -58,7 +80,15 @@ describe('parsePersonaOutput', () => {
 **Optional follow-up ideas (non-blocking):**
 - Consider adding a token-level contrast snapshot for the broader surface palette.
 `
-    const v = parsePersonaOutput(a11y, raw)
+    const v = parsePersonaOutput(a11y, withMachineResult(raw, 'revise', [], [], {
+      revisionItems: [
+        'Bump color.text.muted to #5c5c5c so it clears 4.5:1 on bg.subtle.',
+        "Add a visual regression test covering Card's secondary label contrast.",
+      ],
+      riskItems: ['Secondary labels will remain below WCAG AA on subtle surfaces.'],
+      followUpItems: ['Consider adding a token-level contrast snapshot for the broader surface palette.'],
+      advisoryScores: { recommendationPriority: 'high', expectedValue: 'medium', deferredRisk: 'medium' },
+    }))
     expect(v.verdict).toBe('revise')
     expect(v.revisionItems).toHaveLength(2)
     expect(v.revisionItems[0]).toContain('color.text.muted')
@@ -68,23 +98,25 @@ describe('parsePersonaOutput', () => {
     expect(v.recommendationPriority).toBe('high')
     expect(v.expectedValue).toBe('medium')
     expect(v.deferredRisk).toBe('medium')
-    expect(v.reasoning).toContain('WCAG AA')
+    expect(v.reasoning).toBe(v.rawOutput.trim())
     expect(v.followUpItems).toEqual([
       'Consider adding a token-level contrast snapshot for the broader surface palette.',
     ])
   })
 
-  it('accepts "Approved" as approve and "Needs revision" as revise', () => {
+  it('does not infer a decision from prose labels', () => {
     const a = parsePersonaOutput(componentDesigner, '**Verdict:** approved\n**Reasoning:** fine.')
     const b = parsePersonaOutput(componentDesigner, '**Verdict:** needs revision\n**Reasoning:** nope.')
-    expect(a.verdict).toBe('approve')
+    expect(a.verdict).toBe('revise')
+    expect(a.failureCode).toBe('invalid_review_contract')
     expect(b.verdict).toBe('revise')
+    expect(b.failureCode).toBe('invalid_review_contract')
   })
 
   it('defaults to revise when no verdict keyword is present', () => {
     const v = parsePersonaOutput(componentDesigner, 'some rambling text without the magic word')
     expect(v.verdict).toBe('revise')
-    expect(v.reasoning).toContain('no **Reasoning:** block')
+    expect(v.reasoning).toBe('some rambling text without the magic word')
   })
 
   it('preserves raw output for audit', () => {
@@ -93,7 +125,22 @@ describe('parsePersonaOutput', () => {
     expect(v.rawOutput).toBe(raw)
   })
 
-  it('demotes broad standards spillover to follow-up ideas when the task already meets the functional ask', () => {
+  it('uses structured data rather than model prose for the decision', () => {
+    const first = parsePersonaOutput(
+      componentDesigner,
+      withMachineResult('**Verdict:** revise\n**Reasoning:** lyrical but unconvinced.', 'approve', ['ac-1'], ['scope']),
+    )
+    const second = parsePersonaOutput(
+      componentDesigner,
+      withMachineResult('I would approve this after a very different explanation.', 'approve', ['ac-1'], ['scope']),
+    )
+    expect(first.verdict).toBe('approve')
+    expect(second.verdict).toBe('approve')
+    expect(first.acceptedCriteriaIds).toEqual(['ac-1'])
+    expect(second.proofEvidenceIds).toEqual(['scope'])
+  })
+
+  it('keeps the machine verdict authoritative when prose says the work is otherwise acceptable', () => {
     const raw = `
 **Verdict:** revise
 
@@ -110,17 +157,23 @@ describe('parsePersonaOutput', () => {
 **Optional follow-up ideas (non-blocking):**
 - (none)
 `
-    const v = parsePersonaOutput(componentDesigner, raw)
-    expect(v.verdict).toBe('approve')
-    expect(v.revisionItems).toEqual([])
-    expect(v.followUpItems).toEqual([
+    const v = parsePersonaOutput(componentDesigner, withMachineResult(raw, 'revise', [], [], {
+      revisionItems: [
+        'Add a versioned prefix to the route (e.g., /v1/...).',
+        'Introduce an Idempotency-Key header for the POST operation.',
+        'Add observability to the handler with trace spans and metric counters.',
+      ],
+    }))
+    expect(v.verdict).toBe('revise')
+    expect(v.revisionItems).toEqual([
       'Add a versioned prefix to the route (e.g., /v1/...).',
       'Introduce an Idempotency-Key header for the POST operation.',
       'Add observability to the handler with trace spans and metric counters.',
     ])
+    expect(v.followUpItems).toEqual([])
   })
 
-  it('demotes broad standards spillover on narrow cleanup tasks even when the reviewer does not admit the task already passed', () => {
+  it('does not use task-text heuristics to override a revise result', () => {
     const hints = buildPersonaOutputHints({
       title: 'Clean unused restore handler binding',
       description:
@@ -147,18 +200,25 @@ describe('parsePersonaOutput', () => {
 **Optional follow-up ideas (non-blocking):**
 - (none)
 `
-    const v = parsePersonaOutput(componentDesigner, raw, hints)
-    expect(v.verdict).toBe('approve')
-    expect(v.revisionItems).toEqual([])
-    expect(v.followUpItems).toEqual([
+    const v = parsePersonaOutput(componentDesigner, withMachineResult(raw, 'revise', [], [], {
+      revisionItems: [
+        'Add a versioned prefix to the route (e.g., /v1/...).',
+        'Introduce an Idempotency-Key header for the POST operation.',
+        'Add schema validation for the id router parameter.',
+        'Add observability to the handler with trace spans and metric counters.',
+      ],
+    }), hints)
+    expect(v.verdict).toBe('revise')
+    expect(v.revisionItems).toEqual([
       'Add a versioned prefix to the route (e.g., /v1/...).',
       'Introduce an Idempotency-Key header for the POST operation.',
       'Add schema validation for the id router parameter.',
       'Add observability to the handler with trace spans and metric counters.',
     ])
+    expect(v.followUpItems).toEqual([])
   })
 
-  it('demotes boundary-validation doctrine on narrow cleanup tasks even when the task text mentions route ids', () => {
+  it('does not infer task scope from prose when parsing a revise result', () => {
     const hints = buildPersonaOutputHints({
       title: 'Clean unused restore handler binding',
       description:
@@ -182,15 +242,17 @@ describe('parsePersonaOutput', () => {
 **Optional follow-up ideas (non-blocking):**
 - (none)
 `
-    const v = parsePersonaOutput(componentDesigner, raw, hints)
-    expect(v.verdict).toBe('approve')
-    expect(v.revisionItems).toEqual([])
-    expect(v.followUpItems).toEqual([
+    const v = parsePersonaOutput(componentDesigner, withMachineResult(raw, 'revise', [], [], {
+      revisionItems: ['Add a schema validation step for the id router parameter before it is used in Supabase queries.'],
+    }), hints)
+    expect(v.verdict).toBe('revise')
+    expect(v.revisionItems).toEqual([
       'Add a schema validation step for the id router parameter before it is used in Supabase queries.',
     ])
+    expect(v.followUpItems).toEqual([])
   })
 
-  it('demotes invented proof command demands when the task only asks for recorded local proof', () => {
+  it('does not demote a revision because a proof command appears in prose', () => {
     const hints = buildPersonaOutputHints({
       title: 'Shape fixture and expected-record ground truth',
       description: 'Define the fixture and expected-record ground truth surface.',
@@ -221,29 +283,14 @@ describe('parsePersonaOutput', () => {
 **Optional follow-up ideas (non-blocking):**
 - (none)
 `
-    const v = parsePersonaOutput(componentDesigner, raw, hints)
-    expect(v.verdict).toBe('approve')
-    expect(v.revisionItems).toEqual([])
-    expect(v.followUpItems).toEqual([
+    const v = parsePersonaOutput(componentDesigner, withMachineResult(raw, 'revise', [], [], {
+      revisionItems: ['Execute the proof command `npx guildhall run --task=task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat` and capture its output.'],
+    }), hints)
+    expect(v.verdict).toBe('revise')
+    expect(v.revisionItems).toEqual([
       'Execute the proof command `npx guildhall run --task=task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat` and capture its output.',
     ])
-  })
-
-  it('sanitizes stale invented proof command feedback before retry coaching reuses it', () => {
-    const taskText = [
-      'Shape fixture and expected-record ground truth',
-      'Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result.',
-    ].join('\n')
-    const feedback = [
-      '**Required revisions:**',
-      '- Execute the proof command `npx guildhall run --task=made-up-task` and capture its output.',
-      '- Keep the fixture manifest aligned with the expected records.',
-    ].join('\n')
-
-    expect(sanitizeInventedProofCommandFeedback(feedback, taskText)).toBe([
-      '**Required revisions:**',
-      '- Keep the fixture manifest aligned with the expected records.',
-    ].join('\n'))
+    expect(v.followUpItems).toEqual([])
   })
 
   it('keeps direct task-overlap fixes blocking on narrow cleanup tasks while demoting unrelated doctrine', () => {
@@ -271,22 +318,60 @@ describe('parsePersonaOutput', () => {
 **Optional follow-up ideas (non-blocking):**
 - (none)
 `
-    const v = parsePersonaOutput(componentDesigner, raw, hints)
+    const v = parsePersonaOutput(componentDesigner, withMachineResult(raw, 'revise', [], [], {
+      revisionItems: [
+        'Remove the deleteTrashRes variable from the destructuring assignment.',
+        'Add a versioned prefix to the route (e.g., /v1/...).',
+      ],
+    }), hints)
     expect(v.verdict).toBe('revise')
     expect(v.revisionItems).toEqual([
       'Remove the deleteTrashRes variable from the destructuring assignment.',
-    ])
-    expect(v.followUpItems).toEqual([
       'Add a versioned prefix to the route (e.g., /v1/...).',
     ])
+    expect(v.followUpItems).toEqual([])
   })
 })
 
 describe('aggregateFanout', () => {
+  it('keeps worker feedback identical when only reviewer prose changes', () => {
+    const machineFields = {
+      guildSlug: 'component-designer',
+      guildName: 'Component Designer',
+      verdict: 'revise' as const,
+      revisionItems: ['Use the shared button primitive.'],
+      riskItems: ['A local variant would drift from the design system.'],
+      followUpItems: ['Audit adjacent surfaces later.'],
+      acceptedCriteriaIds: ['ac-1'],
+      proofEvidenceIds: ['proof-1'],
+      rawOutput: '',
+    }
+
+    const first = aggregateFanout([{
+      ...machineFields,
+      reasoning: 'The work is lyrical and elegant, but revise it.',
+    }])
+    const second = aggregateFanout([{
+      ...machineFields,
+      reasoning: 'REVISE. Different model, different vocabulary, different paragraph order.',
+    }])
+
+    expect(second.verdict).toBe(first.verdict)
+    expect(second.combinedFeedback).toBe(first.combinedFeedback)
+    expect(second.dissenting.map(value => value.guildSlug)).toEqual(
+      first.dissenting.map(value => value.guildSlug),
+    )
+    expect(first.combinedFeedback).not.toContain('lyrical')
+    expect(first.combinedFeedback).not.toContain('Different model')
+    expect(first.combinedFeedback).toContain('Use the shared button primitive.')
+    expect(first.combinedFeedback).toContain('ac-1')
+    expect(first.combinedFeedback).toContain('proof-1')
+  })
+
   it('approves when every persona approves', () => {
     const agg = aggregateFanout([
-      parsePersonaOutput(componentDesigner, '**Verdict:** approve\n**Reasoning:** lgtm.'),
-      parsePersonaOutput(a11y, '**Verdict:** approve\n**Reasoning:** contrast fine.'),
+      parsePersonaOutput(componentDesigner, withMachineResult('**Reasoning:** lgtm.', 'approve')),
+      parsePersonaOutput(a11y, withMachineResult('**Reasoning:** contrast fine.', 'approve')),
     ])
     expect(agg.verdict).toBe('approve')
     expect(agg.dissenting).toHaveLength(0)
@@ -295,10 +380,15 @@ describe('aggregateFanout', () => {
 
   it('revises when any persona revises', () => {
     const agg = aggregateFanout([
-      parsePersonaOutput(componentDesigner, '**Verdict:** approve\n**Reasoning:** fine.'),
+      parsePersonaOutput(componentDesigner, withMachineResult('**Reasoning:** fine.', 'approve')),
       parsePersonaOutput(
         a11y,
-        '**Verdict:** revise\n**Reasoning:** contrast fails.\n**If revise, recommended task-local revisions:**\n- Fix color.text.muted.\n**Risk if accepted as-is:**\n- Contrast remains below threshold.\n**Advisory scoring (from your perspective):**\n- Recommendation priority: high\n- Expected value if taken: medium\n- Risk if deferred: medium\n**Optional follow-up ideas (non-blocking):**\n- Consider auditing muted text tokens globally.',
+        withMachineResult('**Reasoning:** contrast fails.', 'revise', [], [], {
+          revisionItems: ['Fix color.text.muted.'],
+          riskItems: ['Contrast remains below threshold.'],
+          followUpItems: ['Consider auditing muted text tokens globally.'],
+          advisoryScores: { recommendationPriority: 'high', expectedValue: 'medium', deferredRisk: 'medium' },
+        }),
       ),
     ])
     expect(agg.verdict).toBe('revise')
@@ -319,11 +409,15 @@ describe('aggregateFanout', () => {
     const agg = aggregateFanout([
       parsePersonaOutput(
         componentDesigner,
-        '**Verdict:** revise\n**Reasoning:** margin leak.\n**If revise, recommended task-local revisions:**\n- Remove mt-4 from Button root.',
+        withMachineResult('**Reasoning:** margin leak.', 'revise', [], [], {
+          revisionItems: ['Remove mt-4 from Button root.'],
+        }),
       ),
       parsePersonaOutput(
         a11y,
-        '**Verdict:** revise\n**Reasoning:** no focus ring.\n**If revise, recommended task-local revisions:**\n- Add focus-visible style.',
+        withMachineResult('**Reasoning:** no focus ring.', 'revise', [], [], {
+          revisionItems: ['Add focus-visible style.'],
+        }),
       ),
     ])
     expect(agg.verdict).toBe('revise')
@@ -338,11 +432,15 @@ describe('aggregateFanout', () => {
     const agg = aggregateFanout([
       parsePersonaOutput(
         componentDesigner,
-        '**Verdict:** revise\n**Reasoning:** margin leak.\n**If revise, recommended task-local revisions:**\n- Remove mt-4 from Button root.',
+        withMachineResult('**Reasoning:** margin leak.', 'revise', [], [], {
+          revisionItems: ['Remove mt-4 from Button root.'],
+        }),
       ),
       parsePersonaOutput(
         a11y,
-        '**Verdict:** revise\n**Reasoning:** The Accessibility Specialist failed to produce a verdict (persona review timed out after 60000ms). Treating as revise per strict-all policy.',
+        withMachineResult('**Reasoning:** The Accessibility Specialist failed to produce a verdict (persona review timed out after 60000ms). Treating as revise per strict-all policy.', 'revise'),
+        {},
+        { failureCode: 'provider_timeout' },
       ),
     ])
     expect(agg.verdict).toBe('revise')
@@ -350,7 +448,8 @@ describe('aggregateFanout', () => {
     expect(agg.combinedFeedback).toContain('Aggregated revisions from 1 persona')
     expect(agg.combinedFeedback).toContain('Reviewer availability notes')
     expect(agg.combinedFeedback).toContain('The Accessibility Specialist')
-    expect(agg.combinedFeedback).toContain('timed out after 60000ms')
+    expect(agg.combinedFeedback).toContain('provider_timeout')
+    expect(agg.combinedFeedback).not.toContain('timed out after 60000ms')
     expect(agg.combinedFeedback).toContain('Remove mt-4 from Button root')
   })
 
@@ -358,15 +457,19 @@ describe('aggregateFanout', () => {
     const agg = aggregateFanout([
       parsePersonaOutput(
         componentDesigner,
-        '**Verdict:** revise\n**Reasoning:** The Component Designer failed to produce a verdict (Exceeded maximum turn limit (3)). Treating as revise per strict-all policy.',
+        withMachineResult('**Reasoning:** The Component Designer failed to produce a verdict (Exceeded maximum turn limit (3)). Treating as revise per strict-all policy.', 'revise'),
+        {},
+        { failureCode: 'provider_unavailable' },
       ),
       parsePersonaOutput(
         a11y,
-        '**Verdict:** revise\n**Reasoning:** The Accessibility Specialist failed to produce a verdict (persona review timed out after 60000ms). Treating as revise per strict-all policy.',
+        withMachineResult('**Reasoning:** The Accessibility Specialist failed to produce a verdict (persona review timed out after 60000ms). Treating as revise per strict-all policy.', 'revise'),
+        {},
+        { failureCode: 'provider_timeout' },
       ),
       parsePersonaOutput(
         componentDesigner,
-        '**Verdict:** approve\n**Reasoning:** Copy is clear and user-facing.',
+        withMachineResult('**Reasoning:** Copy is clear and user-facing.', 'approve'),
       ),
     ])
 
@@ -382,7 +485,9 @@ describe('personaVerdictToReviewRecord', () => {
   it('tags failing signals with the guild slug on revise', () => {
     const v = parsePersonaOutput(
       a11y,
-      '**Verdict:** revise\n**Reasoning:** contrast fails.\n**Optional follow-up ideas (non-blocking):**\n- Consider a shared contrast helper.',
+      withMachineResult('**Reasoning:** contrast fails.', 'revise', [], [], {
+        followUpItems: ['Consider a shared contrast helper.'],
+      }),
     )
     const record = personaVerdictToReviewRecord(v, { now: '2026-04-23T00:00:00Z' })
     expect(record.verdict).toBe('revise')
@@ -393,9 +498,39 @@ describe('personaVerdictToReviewRecord', () => {
   })
 
   it('leaves failingSignals empty on approve', () => {
-    const v = parsePersonaOutput(componentDesigner, '**Verdict:** approve\n**Reasoning:** lgtm.')
+    const v = parsePersonaOutput(componentDesigner, withMachineResult('**Reasoning:** lgtm.', 'approve'))
     const record = personaVerdictToReviewRecord(v, { now: '2026-04-23T00:00:00Z' })
     expect(record.verdict).toBe('approve')
     expect(record.failingSignals).toEqual([])
+  })
+
+  it('does not persist a contract failure as a product finding', () => {
+    const v = parsePersonaOutput(componentDesigner, 'The prose is persuasive but has no machine result.')
+    const record = personaVerdictToReviewRecord(v, { now: '2026-04-23T00:00:00Z' })
+    expect(record.failureCode).toBe('invalid_review_contract')
+    expect(record.reason).toContain('no product finding was inferred')
+    expect(record.failingSignals).toEqual([])
+  })
+
+  it('persists advisory scores as structured verdict data', () => {
+    const v = parsePersonaOutput(
+      a11y,
+      withMachineResult('The explanation can be any prose at all.', 'revise', [], [], {
+        advisoryScores: {
+          recommendationPriority: 'high',
+          expectedValue: 'medium',
+          deferredRisk: 'low',
+        },
+      }),
+    )
+    expect(personaVerdictToReviewRecord(v, { now: '2026-04-23T00:00:00Z' })).toMatchObject({
+      reviewerId: 'accessibility-specialist',
+      reviewerName: 'The Accessibility Specialist',
+      advisoryScores: {
+        recommendationPriority: 'high',
+        expectedValue: 'medium',
+        deferredRisk: 'low',
+      },
+    })
   })
 })

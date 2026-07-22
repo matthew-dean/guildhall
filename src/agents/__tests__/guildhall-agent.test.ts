@@ -467,12 +467,11 @@ describe('agent factories', () => {
 
     expect(specPrompt).toContain('task-scoped proof path')
     expect(specPrompt).toContain('Do not create executable')
-    expect(workerPrompt).toContain('Proof path updates')
-    expect(workerPrompt).toContain('separate automated proof from manual/provider proof')
+    expect(workerPrompt).toContain('machine object')
+    expect(workerPrompt).toContain('proofEvidenceIds')
     expect(workerPrompt).toContain('Reviewer feedback cannot invent a proof command')
-    expect(workerPrompt).toContain('delegates back to')
-    expect(reviewerPrompt).toContain('task-scoped proof path is missing')
-    expect(reviewerPrompt).toContain('manual/provider proof')
+    expect(reviewerPrompt).toContain('machine JSON object')
+    expect(reviewerPrompt).toContain('proofEvidenceIds')
     expect(reviewerPrompt).toContain('Do not invent a proof command')
     expect(gatePrompt).toContain('update only the automated verification')
     expect(gatePrompt).toContain('Do not mark manual, provider')
@@ -504,10 +503,10 @@ describe('agent factories', () => {
   it('createWorkerAgent requires a minimum-scope self-review before handoff', async () => {
     const a = createWorkerAgent(llm)
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
-    expect(prompt).toContain('Minimum-scope check:')
-    expect(prompt).toContain('Smallest useful change?')
-    expect(prompt).toContain('Corpus fit:')
-    expect(prompt).toContain('Anything to revert before review?')
+    expect(prompt).toContain('## Self-critique (required before handoff)')
+    expect(prompt).toContain('machine object')
+    expect(prompt).toContain('verificationCommands')
+    expect(prompt).toContain('proofEvidenceIds')
   })
 
   it('createWorkerAgent treats Corpus Map guidance as a pre-flight reuse check', async () => {
@@ -524,7 +523,7 @@ describe('agent factories', () => {
     expect(prompt).toContain('Abstraction fit')
     expect(prompt).toContain('schema, API route, MCP resource')
     expect(prompt).toContain('generic shell with typed domain payloads')
-    expect(prompt).toContain('right-sized')
+    expect(prompt).toContain('Do not refactor, rename, or improve things outside the task scope')
   })
 
   it('createWorkerAgent uses design-governance packets before local UI choices', async () => {
@@ -607,13 +606,13 @@ describe('agent factories', () => {
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
     expect(prompt).toContain('## Corpus Map')
     expect(prompt).toContain('check corpus fit')
-    expect(prompt).toContain('**Corpus fit:**')
+    expect(prompt).toContain('check corpus fit')
   })
 
   it('createReviewerAgent checks abstraction fit for schema/API/MCP contract surfaces', () => {
     const a = createReviewerAgent(llm)
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
-    expect(prompt).toContain('**Abstraction fit:**')
+    expect(prompt).toContain('schema, API route, MCP resource')
     expect(prompt).toContain('too narrow')
     expect(prompt).toContain('too generic')
     expect(prompt).toContain('schema, API route, MCP resource')
@@ -624,7 +623,7 @@ describe('agent factories', () => {
     const a = createReviewerAgent(llm)
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
     expect(prompt).toContain('## Design Governance')
-    expect(prompt).toContain('**Contract / governance fit:**')
+    expect(prompt).toContain('load-bearing project contract')
     expect(prompt).toContain('require revision')
     expect(prompt).toContain('contract delta')
     expect(prompt).toContain('semantic text hierarchy')
@@ -637,7 +636,7 @@ describe('agent factories', () => {
     expect(prompt).toContain('semantic intake fit')
     expect(prompt).toContain('match what was actually asked for')
     expect(prompt).toContain('real user cases revealed')
-    expect(prompt).toContain('**Request fit:** yes / no')
+    expect(prompt).toContain('semantic intake fit')
   })
 
   it('createGateCheckerAgent', () => {

@@ -492,8 +492,9 @@ describe('buildInbox', () => {
             payload: {
               verdict: 'approve',
               reviewerPath: 'llm',
+              acceptedCriteriaIds: ['voice'],
               reason: 'Reviewer approved.',
-              reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+              reasoning: 'The reviewer explanation can vary freely.',
               failingSignals: [],
               recordedAt: '2026-07-04T10:07:21.557Z',
             },

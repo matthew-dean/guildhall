@@ -40,6 +40,30 @@ const VALID_SPEC = [
   '1. Thing is done.',
 ].join('\n')
 
+const VALID_STRUCTURED_SPEC = {
+  whatThisIs: 'A bounded implementation contract.',
+  problemContext: 'The current project needs one verifiable outcome.',
+  goals: ['Implement the bounded outcome.'],
+  nonGoals: ['Do not expand scope.'],
+  proposedDesign: 'Use the existing project surface.',
+  keyDecisions: ['Keep proof attached to the task.'],
+  acceptanceCriteria: [{
+    scenario: 'Given the task boundary, when the work is complete',
+    expectation: 'Then the bounded outcome is available.',
+    verificationMode: 'review',
+  }],
+  verification: ['Review the changed surface and recorded evidence.'],
+  completionBoundary: {
+    productOutcome: 'The bounded outcome is available.',
+    whatGuildhallCanCompleteInCode: 'Implement the bounded project work.',
+    externalDependencies: 'None known.',
+    ownerOnlySetup: 'None known.',
+    verificationEnvironment: 'The registered local project.',
+    whatCountsAsDone: 'The acceptance criterion is satisfied.',
+    whatMustBeSplitOrBlocked: 'New product decisions remain separate.',
+  },
+}
+
 async function makeMemoryDir(): Promise<string> {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-automation-'))
   const memoryDir = path.join(projectRoot, '.guildhall')
@@ -61,7 +85,7 @@ async function readQueue(memoryDir: string): Promise<{ tasks: Array<Record<strin
 }
 
 describe('run automation policy', () => {
-  it('fully automated runs approve scoped specs in runtime policy', async () => {
+  it('fully automated runs preserve explicit spec approval for the owner', async () => {
     const memoryDir = await makeMemoryDir()
     await writeQueue(memoryDir, {
       version: 1,
@@ -93,17 +117,15 @@ describe('run automation policy', () => {
       ownerIntent: 'Create a tiny local app.',
     })
 
-    expect(result.changed).toBe(true)
-    expect(result.resolutions.map(resolution => resolution.kind)).toEqual([
-      'approve_spec',
-    ])
+    expect(result.changed).toBe(false)
+    expect(result.resolutions).toEqual([])
     const queue = await readQueue(memoryDir)
-    expect(queue.tasks.find((candidate) => candidate.id === 'task-child')!.status).toBe('ready')
+    expect(queue.tasks.find((candidate) => candidate.id === 'task-child')!.status).toBe('spec_review')
     expect(aggregateWriter).not.toHaveBeenCalled()
     await expect(fs.access(path.join(memoryDir, 'transcripts', 'exploring', 'task-child.md'))).rejects.toThrow()
   })
 
-  it('fully automated runs repair an obvious product brief gap before approving a tiny deterministic task', async () => {
+  it('fully automated runs do not manufacture or approve a product brief', async () => {
     const memoryDir = await makeMemoryDir()
     await writeQueue(memoryDir, {
       version: 1,
@@ -112,6 +134,15 @@ describe('run automation policy', () => {
         task({
           id: 'task-smoke',
           status: 'spec_review',
+          structuredSpec: {
+            ...VALID_STRUCTURED_SPEC,
+            completionBoundary: {
+              ...VALID_STRUCTURED_SPEC.completionBoundary,
+              productOutcome: 'Verify the Guildhall pipeline can complete a deterministic marker-file task.',
+              whatGuildhallCanCompleteInCode: 'Create the marker file with exact content.',
+              whatCountsAsDone: '`guildhall_smoke.txt` exists at the project root with exactly `GUILDHALL_SMOKE_OK`.',
+            },
+          },
           description: 'Create a file named guildhall_smoke.txt in the project root containing exactly GUILDHALL_SMOKE_OK.',
           spec: [
             '## Summary',
@@ -153,21 +184,14 @@ describe('run automation policy', () => {
       ownerIntent: 'Create the marker file.',
     })
 
-    expect(result.resolutions.map(resolution => resolution.kind)).toEqual([
-      'repair_product_brief',
-      'approve_spec',
-    ])
+    expect(result.resolutions).toEqual([])
     const queue = await readQueue(memoryDir)
     const smoke = queue.tasks[0]!
-    expect(smoke.status).toBe('ready')
-    expect(smoke.productBrief).toMatchObject({
-      userJob: 'Verify the Guildhall pipeline can complete a deterministic marker-file task.',
-      successMetric: '`guildhall_smoke.txt` exists at the project root with exactly `GUILDHALL_SMOKE_OK`.',
-      authoredBy: 'run-automation',
-    })
+    expect(smoke.status).toBe('spec_review')
+    expect(smoke.productBrief).toBeUndefined()
   })
 
-  it('does not repair an imported brief with an unsupported executable success metric', async () => {
+  it('leaves imported spec revisions for explicit review', async () => {
     const memoryDir = await makeMemoryDir()
     await writeQueue(memoryDir, {
       version: 1,
@@ -175,6 +199,7 @@ describe('run automation policy', () => {
       tasks: [task({
         id: 'task-imported-proof',
         status: 'spec_review',
+        structuredSpec: undefined,
         spec: [
           '## Completion Boundary',
           '- Product outcome: Evaluate the documented drafting boundary.',
@@ -214,11 +239,11 @@ describe('run automation policy', () => {
       rootTaskId: 'task-imported-proof',
     })
 
-    expect(result.resolutions).not.toContainEqual(expect.objectContaining({ kind: 'repair_product_brief' }))
+    expect(result.resolutions).toEqual([])
     expect((await readQueue(memoryDir)).tasks[0]!.productBrief).toBeUndefined()
   })
 
-  it('fully automated runs replace placeholder New request product briefs from the spec', async () => {
+  it('fully automated runs leave an existing structured product brief awaiting approval', async () => {
     const memoryDir = await makeMemoryDir()
     await writeQueue(memoryDir, {
       version: 1,
@@ -229,6 +254,15 @@ describe('run automation policy', () => {
           title: 'Build Pantry Pulse web app',
           description: 'Build a dependency-free Pantry Pulse web app.',
           status: 'spec_review',
+          structuredSpec: {
+            ...VALID_STRUCTURED_SPEC,
+            problemContext: 'Build Pantry Pulse as a dependency-free single-page pantry tracker.',
+            completionBoundary: {
+              ...VALID_STRUCTURED_SPEC.completionBoundary,
+              productOutcome: 'Track pantry items and use expiring food first.',
+              whatCountsAsDone: 'The browser app shows seeded items, filters expiring items, and updates count when an item is marked used.',
+            },
+          },
           spec: [
             '## Summary',
             'Build Pantry Pulse as a dependency-free single-page pantry tracker.',
@@ -250,8 +284,8 @@ describe('run automation policy', () => {
             '1. Pantry Pulse heading is visible.',
           ].join('\n'),
           productBrief: {
-            userJob: 'I want to verify whether New request is already done and, if not, capture only the remaining delta.',
-            successMetric: 'The remaining work for "New request" is described clearly enough to approve or narrow with one focused question.',
+            userJob: 'A provider wrote this user job in an entirely different style.',
+            successMetric: 'A different provider used different words for the same observable outcome.',
             antiPatterns: [],
           },
           acceptanceCriteria: [
@@ -268,18 +302,13 @@ describe('run automation policy', () => {
       ownerIntent: 'Build the Pantry Pulse app.',
     })
 
-    expect(result.resolutions.map(resolution => resolution.kind)).toEqual([
-      'repair_product_brief',
-      'record_design_lens_review',
-      'approve_spec',
-    ])
+    expect(result.resolutions).toEqual([])
     const queue = await readQueue(memoryDir)
     const pantry = queue.tasks[0]!
-    expect(pantry.status).toBe('ready')
+    expect(pantry.status).toBe('spec_review')
     expect(pantry.productBrief).toMatchObject({
-      userJob: 'Track pantry items and use expiring food first.',
-      successMetric: 'The browser app shows seeded items, filters expiring items, and updates count when an item is marked used.',
-      authoredBy: 'run-automation',
+      userJob: 'A provider wrote this user job in an entirely different style.',
+      successMetric: 'A different provider used different words for the same observable outcome.',
     })
   })
 
@@ -316,7 +345,7 @@ describe('run automation policy', () => {
     expect(await readTaskEvidence(path.dirname(memoryDir), 'task-root', { kind: 'note' })).toEqual([])
   })
 
-  it('uses the promoted task point mutation for one definition-only automation update', async () => {
+  it('does not clear a task-level recovery marker without a typed Guildhall-owned escalation', async () => {
     const memoryDir = await makeMemoryDir()
     const projectRoot = path.dirname(memoryDir)
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
@@ -328,6 +357,7 @@ describe('run automation policy', () => {
           id: 'task-root',
           status: 'blocked',
           blockReason: 'Human approval is required before the task can continue.',
+          recoveryCode: 'worker_turn_limit',
         }),
         task({ id: 'task-other', title: 'Untouched task' }),
       ],
@@ -345,22 +375,38 @@ describe('run automation policy', () => {
       ownerIntent: 'Continue the requested work.',
     })
 
-    expect(result.resolutions.map(resolution => resolution.kind)).toContain('resolve_automation_blocker')
+    expect(result.resolutions).toEqual([])
     const promotedTask = readProjectStateDatabaseTaskPointWithRevision(tasksPath, 'task-root')?.task.definition
-    expect(promotedTask).toMatchObject({ status: 'exploring' })
-    expect(promotedTask).not.toHaveProperty('blockReason')
-    expect(await readTaskEvidence(projectRoot, 'task-root', { kind: 'note' })).toEqual([
-      expect.objectContaining({
-        kind: 'note',
-        payload: expect.objectContaining({
-          content: expect.stringContaining('Resolved retryable blocker'),
-        }),
-      }),
-    ])
+    expect(promotedTask).toMatchObject({ status: 'blocked' })
+    expect(promotedTask).toHaveProperty('blockReason')
+    expect(await readTaskEvidence(projectRoot, 'task-root', { kind: 'note' })).toEqual([])
     const afterDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
     const untouchedAfter = afterDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-other') as { payload_gzip: Uint8Array }
     expect(Buffer.from(untouchedAfter.payload_gzip)).toEqual(Buffer.from(untouchedBefore.payload_gzip))
     afterDatabase.close()
+  })
+
+  it('does not turn a prose-only blocker into automation recovery', async () => {
+    const memoryDir = await makeMemoryDir()
+    await writeQueue(memoryDir, {
+      version: 1,
+      lastUpdated: '2026-05-29T10:00:00.000Z',
+      tasks: [task({
+        id: 'task-prose-only',
+        status: 'blocked',
+        blockReason: 'Human approval is required before the task can continue.',
+      })],
+    })
+
+    const result = await applyRunAutomationPolicy({
+      memoryDir,
+      policy: 'fully_automated',
+      rootTaskId: 'task-prose-only',
+      ownerIntent: 'Continue the requested work.',
+    })
+
+    expect(result.resolutions).not.toContainEqual(expect.objectContaining({ kind: 'resolve_automation_blocker' }))
+    expect((await readQueue(memoryDir)).tasks[0]?.status).toBe('blocked')
   })
 })
 
@@ -376,6 +422,7 @@ function task(overrides: Record<string, unknown> = {}) {
     dependsOn: [],
     outOfScope: [],
     acceptanceCriteria: [],
+    structuredSpec: VALID_STRUCTURED_SPEC,
     notes: [],
     gateResults: [],
     reviewVerdicts: [],

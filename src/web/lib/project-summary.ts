@@ -333,17 +333,16 @@ function providerIdentity(status: ProviderStatus | null | undefined): string | n
 }
 
 function gitStoryTitle(state: string, reason: string | undefined): string {
-  const text = `${state}\n${reason ?? ''}`.toLowerCase()
-  if (text.includes('no upstream')) {
-    return 'This branch needs a sharing decision: push it, open a PR, or mark the work local-only/deferred.'
+  switch (state) {
+    case 'no_upstream':
+      return 'This branch needs a sharing decision: push it, open a PR, or mark the work local-only/deferred.'
+    case 'dirty_uncommitted':
+      return 'This checkout has uncommitted work. Review the diff, then commit it or mark it local-only/deferred.'
+    case 'no_repository':
+      return 'Guildhall could not inspect the configured repository boundary with git.'
+    default:
+      return reason ?? 'Repository follow-up.'
   }
-  if (text.includes('dirty') || text.includes('uncommitted')) {
-    return 'This checkout has uncommitted work. Review the diff, then commit it or mark it local-only/deferred.'
-  }
-  if (text.includes('fatal: not a git repository') || text.includes('spawn git enoent')) {
-    return 'Guildhall could not inspect the configured repository boundary with git.'
-  }
-  return reason ?? 'Repository follow-up.'
 }
 
 export function summarizeProjectCard(

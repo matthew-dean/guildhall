@@ -94,7 +94,7 @@ describe('aggregateFanout — coordinator_adjudicates_on_conflict', () => {
     expect(agg.needsAdjudication).toBeUndefined()
   })
 
-  it('flags adjudication when same persona dissents two rounds in a row with overlapping items', () => {
+  it('flags adjudication when the same persona dissents two rounds in a row', () => {
     const priorRound = [
       pv('security-engineer', 'revise', [
         'Require email verification before any posting action',
@@ -124,14 +124,15 @@ describe('aggregateFanout — coordinator_adjudicates_on_conflict', () => {
     expect(agg.needsAdjudication).toBeUndefined()
   })
 
-  it('does not flag when the same persona dissents but revision items changed materially', () => {
+  it('does not depend on whether the same persona changed its prose', () => {
     const prior = [pv('a', 'revise', ['Fix the focus ring on the primary button'])]
     const current = [pv('a', 'revise', ['Update error copy for empty-state variant'])]
     const agg = aggregateFanout(current, {
       policy: 'coordinator_adjudicates_on_conflict',
       priorRounds: [prior],
     })
-    expect(agg.needsAdjudication).toBeUndefined()
+    expect(agg.needsAdjudication).toBe(true)
+    expect(agg.adjudicationTrigger).toBe('same_persona_repeat_dissent')
   })
 })
 
@@ -142,18 +143,18 @@ describe('findRecurrentDissent', () => {
     ).toEqual([])
   })
 
-  it('identifies the persona whose dissent overlaps ≥50% with its prior round', () => {
+  it('identifies a persona whose dissent repeats across rounds by identity', () => {
     const prior = [pv('a', 'revise', ['verify user email before post'])]
     const current = [pv('a', 'revise', ['verify the user email before posting'])]
     expect(findRecurrentDissent(current, [prior])).toEqual(['a'])
   })
 
-  it('ignores personas whose dissent does not overlap with prior', () => {
+  it('still identifies the persona when its wording changes', () => {
     const prior = [pv('a', 'revise', ['fix button focus ring color'])]
     const current = [
       pv('a', 'revise', ['switch from rem to px throughout stylesheet']),
     ]
-    expect(findRecurrentDissent(current, [prior])).toEqual([])
+    expect(findRecurrentDissent(current, [prior])).toEqual(['a'])
   })
 
   it('compares against the most recent prior round only', () => {

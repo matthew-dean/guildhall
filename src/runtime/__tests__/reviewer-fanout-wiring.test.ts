@@ -11,7 +11,7 @@ import {
 } from '../orchestrator.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, DesignSystem } from '@guildhall/core'
-import type { PersonaVerdict } from '../reviewer-fanout.js'
+import { parsePersonaOutput, type PersonaVerdict } from '../reviewer-fanout.js'
 import { defineTool } from '@guildhall/engine'
 import type {
   ApiMessageRequest,
@@ -146,6 +146,22 @@ function statePath(relativePath: string): string {
   return projectStatePathFromMemoryDir(memoryDir, relativePath)
 }
 
+async function writeReviewerMode(
+  position: 'llm_only' | 'deterministic_only' | 'llm_with_deterministic_fallback',
+): Promise<void> {
+  const settings = makeDefaultSettings(new Date('2026-04-01T00:00:00.000Z'))
+  settings.domains.default.reviewer_mode = {
+    position,
+    rationale: 'Test the reviewer contract boundary explicitly.',
+    setAt: '2026-04-01T00:00:00.000Z',
+    setBy: 'user-direct',
+  }
+  await saveLeverSettings({
+    path: statePath(AGENT_SETTINGS_FILENAME),
+    settings,
+  })
+}
+
 function stubAgent(name: string) {
   const calls: { prompt: string }[] = []
   return {
@@ -153,7 +169,9 @@ function stubAgent(name: string) {
     calls,
     async generate(prompt: string) {
       calls.push({ prompt })
-      return { text: 'ok' }
+      return {
+        text: '**Reasoning:** All recorded review evidence is satisfied.\n\n**Machine result:**\n```json\n{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[]}\n```',
+      }
     },
   }
 }
@@ -347,6 +365,11 @@ describe('Orchestrator — reviewer fan-out at review', () => {
             '- review: yes - checked',
             '',
             '**Verdict:** approve',
+            '',
+            '**Machine result:**',
+            '```json',
+            '{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[]}',
+            '```',
             '',
             '**Reasoning:** Project path was readable.',
           ].join('\n'),
@@ -1048,7 +1071,7 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     // Combined feedback note is attached for the worker.
     const fanoutNote = after.notes.find((n) => n.agentId === 'reviewer-fanout')
     expect(fanoutNote).toBeDefined()
-    expect(fanoutNote!.content).toContain('load-bearing issue')
+    expect(fanoutNote!.content).not.toContain('load-bearing issue')
     expect(fanoutNote!.content).toContain('Fix the problem')
   })
 
@@ -1069,13 +1092,13 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect((agents.reviewer as ReturnType<typeof stubAgent>).calls.length).toBeGreaterThan(0)
     const q = await readQueue()
     const after = q.tasks[0]!
-    // Legacy reviewer fell back to the deterministic review path when the
-    // stub returned prose without a task-state mutation.
-    expect(after.status).toBe('in_progress')
+    // The legacy reviewer now also has to emit the structured review contract.
+    expect(after.status).toBe('gate_check')
   })
 
-  it('falls through to the legacy single reviewer when fanout only produces infra failures', async () => {
+  it('does not turn an all-failed fanout into a second generic reviewer pass', async () => {
     await writeDesignSystem(minimalDS)
+    await writeReviewerMode('llm_only')
     const task = mkTask()
     await writeQueue([task])
     const approvingReviewer = stubAgent('reviewer-agent')
@@ -1083,6 +1106,12 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       this.calls.push({ prompt })
       const q = await readQueue()
       q.tasks[0]!.status = 'gate_check'
+      q.tasks[0]!.notes.push({
+        agentId: 'reviewer-agent',
+        role: 'reviewer',
+        content: '**Reasoning:** All recorded review evidence is satisfied.\n\n**Machine result:**\n```json\n{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[]}\n```',
+        timestamp: '2026-04-01T00:00:02Z',
+      })
       q.tasks[0]!.updatedAt = '2026-04-01T00:00:02Z'
       q.lastUpdated = '2026-04-01T00:00:02Z'
       await writeProjectTaskQueueAtCurrentStateBoundary(
@@ -1090,7 +1119,9 @@ describe('Orchestrator — reviewer fan-out at review', () => {
         q,
         { projectRoot: tmpDir },
       )
-      return { text: 'ok' }
+      return {
+        text: '**Reasoning:** All recorded review evidence is satisfied.\n\n**Machine result:**\n```json\n{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[]}\n```',
+      }
     }
     const agents = {
       ...agentSet(),
@@ -1107,6 +1138,7 @@ describe('Orchestrator — reviewer fan-out at review', () => {
             `${persona.name} failed to produce a verdict (API error: OpenAI-compatible API HTTP 429: {"status":429,"title":"Too Many Requests"}). Treating as revise per strict-all policy.`,
           revisionItems: [],
           rawOutput: '**Verdict:** revise',
+          failureCode: 'provider_unavailable',
         }),
       )
 
@@ -1116,15 +1148,43 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       reviewerFanout: runner,
       gitDriver: memoryGitDriver(),
     })
-    await orch.tick()
+    const out = await orch.tick()
 
-    expect(approvingReviewer.calls).toHaveLength(1)
+    expect(out.kind).toBe('agent-error')
+    expect(approvingReviewer.calls).toHaveLength(0)
     const q = await readQueue()
     const after = q.tasks[0]!
-    expect(after.status).toBe('gate_check')
-    expect(after.reviewVerdicts).toHaveLength(1)
-    expect(after.reviewVerdicts[0]!.reviewerPath).toBe('llm')
-    expect(after.reviewVerdicts[0]!.verdict).toBe('approve')
+    expect(after.status).toBe('review')
+    expect(after.reviewVerdicts.length).toBeGreaterThan(0)
+    expect(after.reviewVerdicts.every((verdict) => verdict.failureCode === 'provider_unavailable')).toBe(true)
+    expect(after.notes.at(-1)?.content).toContain('no product finding was inferred')
+  })
+
+  it('treats prose-only persona output as a contract failure, never as worker feedback', async () => {
+    await writeDesignSystem(minimalDS)
+    await writeReviewerMode('llm_only')
+    await writeQueue([mkTask()])
+    const reviewer = stubAgent('reviewer-agent')
+    const runner: ReviewerFanoutRunner = async ({ personas }) => personas.map((persona) =>
+      parsePersonaOutput(persona, 'The writing is elegant and should be revised for a stronger voice.')
+    )
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: { ...agentSet(), reviewer },
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('agent-error')
+    expect(reviewer.calls).toHaveLength(0)
+    const task = (await readQueue()).tasks[0]!
+    expect(task.status).toBe('review')
+    expect(task.reviewVerdicts.length).toBeGreaterThan(0)
+    expect(task.reviewVerdicts.every((verdict) => verdict.failureCode === 'invalid_review_contract')).toBe(true)
+    expect(task.notes.at(-1)?.content).not.toContain('elegant')
+    expect(task.notes.at(-1)?.content).toContain('no product finding was inferred')
   })
 
   it('raises escalation when fan-out keeps rejecting past maxRevisions', async () => {

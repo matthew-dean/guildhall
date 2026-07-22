@@ -1,25 +1,10 @@
 import type { Task } from '@guildhall/core'
+import type { ImportSemanticKind } from './import-semantic-kind.js'
 
 type RecordLike = Record<string, unknown>
 
-export function titleLooksContractShaped(title: unknown): boolean {
-  if (typeof title !== 'string') return false
-  if (generatedTypeArtifactTitle(title)) return false
-  return /\b(schema|schemas|contract|contracts|typed?\b|types)\b/i.test(title)
-}
-
-export function titleRequiresConcreteContractNames(title: unknown): boolean {
-  if (typeof title !== 'string') return false
-  if (generatedTypeArtifactTitle(title)) return false
-  return /\b(contract|contracts|typed?\b|types)\b/i.test(title)
-}
-
-function generatedTypeArtifactTitle(title: string): boolean {
-  return /\b(?:generate|regenerate|update|refresh)\b[\s\S]*\btypes?\b[\s\S]*\b(?:from|using|in|into)\b/i.test(title)
-}
-
 export function taskLooksContractShaped(task: Pick<Task, 'title'> | RecordLike): boolean {
-  return titleLooksContractShaped((task as { title?: unknown }).title)
+  return (task as RecordLike).semanticKind === 'contract'
 }
 
 export function taskHasConcreteContractNames(task: RecordLike): boolean {
@@ -47,11 +32,7 @@ export function taskHasHollowContractClaim(task: RecordLike): boolean {
 }
 
 export function importedContractWorkIsStructurallyIncomplete(task: RecordLike): boolean {
-  if (!taskLooksContractShaped(task)) return false
-  if (taskHasConcreteContractNames(task)) return false
-  if (taskHasHollowContractClaim(task)) return true
-  if (!titleRequiresConcreteContractNames(task.title)) return false
-
+  if (task.semanticKind !== 'contract') return false
   const createdBy = textField((task.requestIntake as RecordLike | undefined)?.createdBy)
   const references = arrayText(task.references)
   const refs = references.join('\n')
@@ -61,7 +42,7 @@ export function importedContractWorkIsStructurallyIncomplete(task: RecordLike): 
     references.some(ref => /(^|\/)docs\/(?:harness|specs)\//i.test(ref)) ||
     /remaining-spec-decomposition-inventory\.md/i.test(refs)
 
-  return sourceBacked
+  return sourceBacked && taskHasHollowContractClaim(task) && !taskHasConcreteContractNames(task)
 }
 
 export function importedContractStructuralRepairReadiness(
@@ -141,7 +122,9 @@ export function importedContractStructuralRepairReadiness(
       },
     ],
     contextBudget: {
-      estimatedTokens: Math.max(250, textField(task.spec).length + textField(task.description).length),
+      // This repair state is about a missing structural contract, not the
+      // amount of prose an importer or model happened to write.
+      estimatedTokens: 250,
       risk: 'medium',
       fitsInOneWorkerBrief: true,
       reasons: ['The task needs source repair before implementation context matters.'],
@@ -152,12 +135,12 @@ export function importedContractStructuralRepairReadiness(
 }
 
 export function contractShapedImportHasNoConcreteContracts(input: {
-  title: unknown
+  semanticKind?: ImportSemanticKind
   contractNames?: readonly string[]
   hasAlternativeStructuralEvidence?: boolean
 }): boolean {
   if (input.hasAlternativeStructuralEvidence) return false
-  return titleRequiresConcreteContractNames(input.title) && (input.contractNames?.length ?? 0) === 0
+  return input.semanticKind === 'contract' && (input.contractNames?.length ?? 0) === 0
 }
 
 function extractConcreteContractNames(text: string): string[] {

@@ -311,4 +311,20 @@ describe('buildThreadPhaseGroups', () => {
       },
     ])
   })
+
+  it('uses typed activity state instead of activity wording for recovery', () => {
+    const groups = buildThreadPhaseGroups([
+      {
+        phase: 'inflight',
+        kind: 'inflight',
+        taskStatus: 'in_progress',
+        activity: [
+          { label: 'A completely different failure explanation', tone: 'danger', kind: 'failure' },
+          { label: 'A completely different progress explanation', tone: 'ok', kind: 'durable_progress' },
+        ],
+      },
+    ])
+
+    expect(groups[0]?.label).toBe('Needs recovery')
+  })
 })

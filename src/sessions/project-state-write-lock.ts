@@ -6,6 +6,15 @@ const activeLocks = new AsyncLocalStorage<WriteLockStore>()
 const tails = new Map<string, Promise<void>>()
 
 /**
+ * Report whether the current async call chain already owns a project-state
+ * lock. Higher-level aggregate writers use this to avoid appending a second
+ * queue tail to the promise that is currently executing.
+ */
+export function projectStateWriteLockHeld(projectStateKey: string): boolean {
+  return activeLocks.getStore()?.has(projectStateKey) === true
+}
+
+/**
  * Serialize project-state read/modify/write operations within this process.
  * SQLite still provides the durable transaction boundary; this lock keeps
  * async callers from reading one revision and writing another before their

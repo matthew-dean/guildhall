@@ -19,7 +19,7 @@ export interface ThreadPhaseLike {
   skippable?: boolean
   liveAgent?: unknown
   taskStatus?: string
-  activity?: Array<{ label?: string; tone?: string }>
+  activity?: Array<{ label?: string; tone?: string; kind?: string }>
 }
 
 export interface ThreadPhaseGroup<T extends ThreadPhaseLike> {
@@ -52,12 +52,10 @@ function isRecoveryTurnLike(turn: ThreadPhaseLike): boolean {
   if (turn.kind !== 'inflight' || turn.liveAgent || turn.taskStatus !== 'in_progress') return false
   const activity = turn.activity ?? []
   const hasFailure = activity.some(item =>
-    item.tone === 'danger' ||
-    /failed|timed out|empty assistant|error/i.test(item.label ?? ''),
+    item.kind === 'failure' || item.tone === 'danger',
   )
   const hasDurableProgress = activity.some(item =>
-    item.tone === 'ok' ||
-    /write file|wrote |checkpoint|committed|changed/i.test(item.label ?? ''),
+    item.kind === 'durable_progress' || item.tone === 'ok',
   )
   return hasFailure && hasDurableProgress
 }

@@ -20,7 +20,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { constructionModeForTask, type ConstructionMode, type Task, type TaskRequest } from '@guildhall/core'
+import { constructionBlockerKindForEscalationReason, constructionModeForTask, type ConstructionMode, type EscalationHandling, type EscalationRecoveryCode, type Task, type TaskRequest } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
 import {
   buildSnapshot,
@@ -62,6 +62,7 @@ export interface LiveActivity {
   at?: string | undefined
   label: string
   tone: 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
+  kind?: 'neutral' | 'running' | 'success' | 'failure' | 'durable_progress' | 'provider_wait'
   detail?: string | undefined
 }
 
@@ -185,6 +186,8 @@ export interface EscalationTurn extends TurnBase {
   escalationId: string
   escalationReason?: string | undefined
   escalationAgentId?: string | undefined
+  escalationHandling?: EscalationHandling | undefined
+  escalationRecoveryCode?: EscalationRecoveryCode | undefined
   summary: string
   details?: string | undefined
   externalChecklist?: unknown[] | undefined
@@ -358,6 +361,7 @@ export interface BuildThreadOptions {
       task_id?: string | null | undefined
       agent_name?: string | null | undefined
       tool_name?: string | null | undefined
+      code?: string | null | undefined
       message?: string | null | undefined
       output?: string | null | undefined
       reason?: string | null | undefined
@@ -639,13 +643,18 @@ function classifyRecoveryNote(note: Record<string, unknown>): { label: string; s
   const content = noteContent(note)
   if (!content) return null
 
-  if (role === 'recovery' && /stale .*claim/i.test(content)) {
+  const structured = note['structured']
+  const event = structured && typeof structured === 'object' && !Array.isArray(structured)
+    ? (structured as Record<string, unknown>)['event']
+    : undefined
+
+  if (role === 'recovery' && event === 'stale_spec_claim_cleared') {
     return {
       label: 'Cleared stale spec-agent claim',
       summary: 'A stale active claim was cleared so this task could wait in the shaping queue honestly.',
     }
   }
-  if ((role === 'system' || agentId === 'coordinator-recovery') && /deterministic recovery spec seed/i.test(content)) {
+  if ((role === 'system' || agentId === 'coordinator-recovery') && event === 'recovery_spec_seed') {
     return {
       label: 'Saved deterministic recovery spec seed',
       summary: 'A durable recovery spec seed was saved before retrying the spec lane.',
@@ -1176,7 +1185,7 @@ function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): 
         prompt: active.prompt,
         why: active.helperText ?? 'Guildhall needs one clear answer before it shapes future work.',
         choices: active.choices,
-        selectionMode: active.selectionMode ?? inferredLegacyBoundedChatSelectionMode(active),
+        ...(active.selectionMode ? { selectionMode: active.selectionMode } : {}),
         evidence: session.acceptedState.facts.map(fact => fact.fact),
       },
       answerEndpoint: `/api/project/bounded-chat/${encodeURIComponent(session.id)}/answer`,
@@ -1187,20 +1196,6 @@ function boundedChatTurns(projectPath: string, sessions: BoundedChatSession[]): 
     })
   }
   return turns
-}
-
-function inferredLegacyBoundedChatSelectionMode(
-  active: Pick<BoundedChatSession['subObjectives'][number], 'prompt' | 'choices'>,
-): 'multiple' | undefined {
-  const choices = active.choices ?? []
-  if (
-    /meta-intake task\s+—\s+i need to:?/i.test(active.prompt) &&
-    choices.length > 1 &&
-    choices.every(choice => /\b(infer|bootstrap|draft|verify|verification|task|tasks|routing|lever)\b/i.test(choice))
-  ) {
-    return 'multiple'
-  }
-  return undefined
 }
 
 function boundedChatActionHref(sessionId: string): string {
@@ -1293,6 +1288,7 @@ function liveAgentsByTask(
   lastEventAt?: string | undefined
   lastEventType?: string | undefined
   lastEventLabel?: string | undefined
+  lastEventKind?: LiveActivity['kind']
   silentMs?: number | undefined
   stalled?: boolean | undefined
 }> {
@@ -1306,9 +1302,10 @@ function liveAgentsByTask(
   const live = new Map<string, {
     name: string
     startedAt?: string | undefined
-    lastEventAt?: string | undefined
-    lastEventType?: string | undefined
-    lastEventLabel?: string | undefined
+  lastEventAt?: string | undefined
+  lastEventType?: string | undefined
+  lastEventLabel?: string | undefined
+  lastEventKind?: LiveActivity['kind']
   }>()
   for (const envelope of events ?? []) {
     const ev = envelope.event
@@ -1323,6 +1320,7 @@ function liveAgentsByTask(
         lastEventAt: envelope.at,
         lastEventType: ev.type,
         lastEventLabel: 'Started working',
+        lastEventKind: 'running',
       })
     } else if (
       ev?.type === 'agent_finished' ||
@@ -1331,7 +1329,7 @@ function liveAgentsByTask(
       ev?.type === 'error'
     ) {
       live.delete(taskId)
-    } else if (isExpectedResearchBudgetRefusal(ev)) {
+    } else if (ev?.code === 'no_progress') {
       continue
     } else if (live.has(taskId)) {
       const current = live.get(taskId)!
@@ -1340,6 +1338,7 @@ function liveAgentsByTask(
         lastEventAt: envelope.at ?? current.lastEventAt,
         lastEventType: ev?.type,
         lastEventLabel: liveEventLabel(ev),
+        lastEventKind: liveEventKind(ev),
       })
     } else if (ev?.type && activityTypes.has(ev.type)) {
       live.set(taskId, {
@@ -1348,6 +1347,7 @@ function liveAgentsByTask(
         lastEventAt: envelope.at,
         lastEventType: ev.type,
         lastEventLabel: liveEventLabel(ev),
+        lastEventKind: liveEventKind(ev),
       })
     }
   }
@@ -1387,31 +1387,27 @@ function liveEventLabel(
   return type ? type.replace(/_/g, ' ') : 'Working'
 }
 
+function liveEventKind(
+  ev: NonNullable<BuildThreadOptions['recentEvents']>[number]['event'],
+): LiveActivity['kind'] {
+  const type = ev?.type ?? ''
+  const tool = typeof ev?.tool_name === 'string' ? ev.tool_name : ''
+  if ((type === 'line_complete' || type === 'error') && isProviderCapacityMessage(String(ev?.message ?? ''))) {
+    return 'provider_wait'
+  }
+  if (type === 'error' || (type === 'tool_completed' && ev?.is_error)) return 'failure'
+  if (type === 'tool_completed' && ['edit-file', 'write-file', 'update-task', 'apply-patch'].includes(tool)) {
+    return 'durable_progress'
+  }
+  if (type === 'tool_started' || type === 'assistant_delta' || type === 'line_complete') return 'running'
+  if (type === 'tool_completed' || type === 'assistant_complete') return 'success'
+  return 'neutral'
+}
+
 function friendlyActivityText(value: string): string {
   const friendly = userFacingText(value, value)
   if (friendly !== value.trim()) return friendly
   if (isProviderCapacityMessage(value)) return providerCapacityActivityLabel(value)
-  if (/posted (choice|freeform)?\s*question|yield now|wait for the user's answer|q-\d/i.test(value)) {
-    return 'Guildhall asked a question and is waiting for the answer.'
-  }
-  if (/authoritative likely target file|read-only exploration|refusing further read-only|concrete progress or escalates/i.test(value)) {
-    return 'Guildhall is nudging the worker to make a concrete change before reading more files.'
-  }
-  if (/non-durable steps|moving the implementation forward|mutate, verify, checkpoint, or escalate/i.test(value)) {
-    return 'Guildhall is asking the worker to save concrete progress before doing more exploration.'
-  }
-  if (/research budget exhausted|refusing more read-only tool calls|do not call more read-only tools now/i.test(value)) {
-    return 'Guildhall is keeping the worker focused after enough context gathering.'
-  }
-  if (/\bAC-\d+\b|acceptance criteria except|missing test infrastructure|self-critique has been documented/i.test(value)) {
-    return 'Guildhall saved progress, but one verification check still needs a project test command or a manual note before review can finish.'
-  }
-  if (/routine verification evidence|task proof pack|proof packet|proof packe/i.test(value)) {
-    return 'Guildhall needs to save the verification result itself instead of asking you to handle routine test evidence.'
-  }
-  if (/Shell command succeeded|Treat this command as PASSED|required verification/i.test(value)) {
-    return 'Command passed. Guildhall can use it as verification if this task needs it.'
-  }
   return value
 }
 
@@ -1434,14 +1430,6 @@ function providerCapacityDetail(value: string): string {
     return 'The remote model provider reported overloaded capacity. This is infrastructure noise, not a task or spec decision.'
   }
   return 'The remote model provider throttled the request. Guildhall can retry when capacity returns.'
-}
-
-function isExpectedResearchBudgetRefusal(
-  ev: NonNullable<BuildThreadOptions['recentEvents']>[number]['event'],
-): boolean {
-  if (ev?.type !== 'tool_completed' || !ev.is_error) return false
-  const output = String(ev.output ?? ev.message ?? '')
-  return /research budget exhausted|refusing more read-only tool calls|do not call more read-only tools now/i.test(output)
 }
 
 function friendlyToolName(tool: string): string {
@@ -1590,7 +1578,7 @@ function activityByTask(
     const ev = envelope.event
     const taskId = typeof ev?.task_id === 'string' ? ev.task_id : null
     if (!taskId) continue
-    if (isExpectedResearchBudgetRefusal(ev)) continue
+    if (ev?.code === 'no_progress') continue
     const cutoff = cutoffs.get(taskId)
     if (cutoff && envelope.at && Date.parse(envelope.at) < cutoff) continue
     const type = ev?.type ?? ''
@@ -1618,6 +1606,7 @@ function activityByTask(
         at: envelope.at,
         label: liveEventLabel(ev),
         tone: liveEventTone(ev),
+        kind: liveEventKind(ev),
         ...(type === 'assistant_delta'
           ? { detail: rollingDetail(deltaTextByTask.get(taskId) ?? '') }
           : {}),
@@ -1634,7 +1623,7 @@ function activityByTask(
 
 function latestSupervisorActivity(
   events: BuildThreadOptions['recentEvents'],
-): { at: string; label: string; tone: LiveActivity['tone']; message: string } | null {
+): { at: string; label: string; tone: LiveActivity['tone']; kind: LiveActivity['kind']; message: string } | null {
   const latest = [...(events ?? [])].reverse().find(envelope =>
     ['supervisor_started', 'supervisor_stopped', 'supervisor_error'].includes(String(envelope.event?.type ?? '')),
   )
@@ -1662,6 +1651,7 @@ function latestSupervisorActivity(
     at: latest.at ?? new Date().toISOString(),
     label,
     tone,
+    kind: type === 'supervisor_error' ? 'failure' : type === 'supervisor_started' ? 'running' : 'success',
     message,
   }
 }
@@ -1785,7 +1775,13 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const requestStage = requestStageForTask(t, taskStatus)
     const requestKind = t.request?.kind
     const routingSummary = t.request ? requestRoutingSummary(t.request, requestStage) : undefined
-    const constructionMode = constructionModeForTask(t)
+    const openEscalation = t.escalations?.find(escalation => !escalation.resolvedAt)
+    const constructionMode = constructionModeForTask({
+      status: t.status,
+      blockerKind: openEscalation
+        ? constructionBlockerKindForEscalationReason(openEscalation.reason)
+        : undefined,
+    })
     const createdAt =
       typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString()
     const requestTurn = taskRequestTurn(t, taskId, taskStatus, createdAt, requestStage)
@@ -2231,21 +2227,42 @@ export function buildThread(opts: BuildThreadOptions): Thread {
 
     // Open escalations
     const openEscalations = activeEscalations(t)
-    const hasEscalationHistory = Array.isArray(t.escalations) && t.escalations.length > 0
-    const fallbackBlockedEscalations = !hasEscalationHistory && openEscalations.length === 0 && t.status === 'blocked' && typeof t.blockReason === 'string' && t.blockReason.trim()
-      ? [{
-          id: 'block-reason',
-          summary: t.blockReason.trim(),
-          details: undefined,
-          raisedAt: typeof t.updatedAt === 'string' ? t.updatedAt : createdAt,
-        }]
-      : []
-    for (const esc of [...openEscalations, ...fallbackBlockedEscalations]) {
+    if (openEscalations.length === 0 && taskStatus === 'blocked') {
+      const summary = typeof t.blockReason === 'string' && t.blockReason.trim()
+        ? t.blockReason.trim()
+        : 'This work is blocked and needs a recovery decision.'
+      const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
+      if (status === 'active') activeAssigned = true
+      turns.push({
+        kind: 'escalation',
+        id: `blocked:${taskId}`,
+        at: typeof t.updatedAt === 'string' ? t.updatedAt : createdAt,
+        persona: 'worker',
+        status,
+        phase: 'blocked',
+        taskId,
+        taskTitle,
+        constructionMode,
+        escalationId: `blocked:${taskId}`,
+        escalationHandling: 'owner_required',
+        summary,
+        details: summary,
+        activity: liveActivity.get(taskId),
+      })
+    }
+    for (const esc of openEscalations) {
       const escId = typeof esc.id === 'string' ? esc.id : ''
       const at = typeof esc.raisedAt === 'string' ? esc.raisedAt : createdAt
       const reason = 'reason' in esc && typeof esc.reason === 'string' ? esc.reason : ''
       const escalationAgentId = 'agentId' in esc && typeof esc.agentId === 'string'
         ? esc.agentId
+        : undefined
+      const escalationHandling = 'handling' in esc &&
+        (esc.handling === 'owner_required' || esc.handling === 'guildhall_recovery' || esc.handling === 'external_dependency')
+        ? esc.handling
+        : undefined
+      const escalationRecoveryCode = 'recoveryCode' in esc && typeof esc.recoveryCode === 'string'
+        ? esc.recoveryCode as EscalationRecoveryCode
         : undefined
       const summary =
         typeof esc.summary === 'string' && esc.summary.trim()
@@ -2268,6 +2285,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         escalationId: escId,
         escalationReason: reason || undefined,
         escalationAgentId,
+        escalationHandling,
+        escalationRecoveryCode,
         summary,
         details: compactEscalationDetailsWithPolicy(
           typeof esc.details === 'string' ? esc.details : undefined,
@@ -2300,6 +2319,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         at: latestRunActivity.at,
         label: latestRunActivity.label,
         tone: latestRunActivity.tone,
+        kind: latestRunActivity.kind,
         detail: latestRunActivity.message,
       }],
     })

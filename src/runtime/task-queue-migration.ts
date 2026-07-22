@@ -32,16 +32,8 @@ function importedReferencesFromRequestIntake(task: RecordLike): string[] {
 }
 
 function taskText(task: RecordLike): string {
-  const criteria = Array.isArray(task.acceptanceCriteria)
-    ? task.acceptanceCriteria
-      .map(criterion => isRecord(criterion) && typeof criterion.description === 'string' ? criterion.description : '')
-    : []
-  return [
-    task.title,
-    task.description,
-    task.spec,
-    ...criteria,
-  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join('\n')
+  const values = [task.title, task.description, task.spec]
+  return values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join('\n')
 }
 
 function fallbackTaskKind(task: RecordLike, readiness: RecordLike): TaskKind {
@@ -49,11 +41,6 @@ function fallbackTaskKind(task: RecordLike, readiness: RecordLike): TaskKind {
   if (readinessKind.success) return readinessKind.data
   const taskKind = TaskKindSchema.safeParse(task.taskKind)
   if (taskKind.success) return taskKind.data
-  const text = taskText(task)
-  if (/\b(research|compare|investigate)\b/i.test(text)) return 'research'
-  if (/\b(decide|decision|choose)\b/i.test(text)) return 'decision'
-  if (/\b(verify|test|proof)\b/i.test(text)) return 'verification'
-  if (/\b(cleanup|remove|simplify|deduplicate|reduce)\b/i.test(text)) return 'cleanup'
   return 'implementation'
 }
 
@@ -117,8 +104,16 @@ function normalizeDefinitionOfDone(value: unknown, task: RecordLike, taskKind: T
 }
 
 function normalizeContextBudget(value: unknown, task: RecordLike, recommendation: TaskReadinessRecommendation): RecordLike {
-  const text = taskText(task)
-  const estimatedTokens = Math.max(0, Math.ceil(text.length / 4))
+  const structuredSpec = isRecord(task.structuredSpec) ? task.structuredSpec : {}
+  const acceptanceCount = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria.length : 0
+  const referenceCount = Array.isArray(task.references) ? task.references.length : 0
+  const estimatedTokens = 200 +
+    acceptanceCount * 180 +
+    (Array.isArray(structuredSpec.contractSurfaceDeltas) ? structuredSpec.contractSurfaceDeltas.length : 0) * 260 +
+    (Array.isArray(structuredSpec.goals) ? structuredSpec.goals.length : 0) * 80 +
+    (Array.isArray(structuredSpec.nonGoals) ? structuredSpec.nonGoals.length : 0) * 60 +
+    (Array.isArray(structuredSpec.verification) ? structuredSpec.verification.length : 0) * 100 +
+    referenceCount * 60
   const fallbackRisk = recommendation === 'requires_child_work' ? 'high' : estimatedTokens > 2500 ? 'medium' : 'low'
   const fallbackFits = recommendation !== 'requires_child_work' && fallbackRisk !== 'high'
   if (!isRecord(value)) {

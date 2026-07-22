@@ -7,6 +7,18 @@ The reviewer-agent runs this against every task in `review`. Each row is verifia
 - [ ] Lint passes with zero errors and zero new warnings.
 - [ ] Test suite passes. No skipped or `.only` tests.
 
+## Model independence
+- [ ] Human-readable model prose is never a contract. It may explain a result,
+      but it must not decide routing, sizing, decomposition, readiness, proof,
+      release scope, approval, or completion.
+- [ ] A test or runtime path that matches a model's adjective, phrase, heading,
+      sentence order, verbosity, or explanation is an immediate release blocker.
+      Remove it and replace it with typed fields, stable IDs, enums, numeric
+      metrics, or evidence references; fail closed when those are absent.
+- [ ] Model-output tests vary arbitrary prose while holding structured data
+      constant. Exact prose assertions are allowed only for system-authored
+      display copy, never for provider output.
+
 ## Tests
 - [ ] New or changed behavior has a test. Failing-first was demonstrated.
 - [ ] No mocks introduced for code we own.

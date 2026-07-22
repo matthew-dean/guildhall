@@ -1,4 +1,5 @@
 import path from 'node:path'
+import type { TaskGateScopeException } from '@guildhall/core'
 
 export interface ScopedGateResultLike {
   gateId: string
@@ -12,7 +13,7 @@ export interface ScopedGateResultLike {
 export interface ScopedGateContext {
   projectPath: string
   likelyTargetFiles: readonly string[]
-  resolvedDecisionTexts: readonly string[]
+  gateScopeExceptions: readonly TaskGateScopeException[]
 }
 
 type ScopedGateKind = 'typecheck' | 'build' | 'test' | 'lint' | 'other'
@@ -72,13 +73,6 @@ export function extractGateFailurePaths(
   return out
 }
 
-function hasScopedVerificationException(decisionTexts: readonly string[]): boolean {
-  return decisionTexts.some((text) =>
-    /typecheck|repo-red|unrelated file/i.test(text) &&
-    /out of scope|same file set|changed target|scoped to/i.test(text),
-  )
-}
-
 function classifyGateKind(gate: ScopedGateResultLike): ScopedGateKind {
   const haystack = `${gate.gateId}\n${gate.output ?? ''}`.toLowerCase()
   if (/\b(typecheck|tsc(?:\s|$)|tsgo\b)/.test(haystack)) return 'typecheck'
@@ -117,7 +111,10 @@ export function isScopedGateFailureExempt(
   const touchesTaskFiles = failureTouchesLikelyTaskFiles(context.likelyTargetFiles, failurePaths)
   if (touchesTaskFiles) return false
   if (classifyGateKind(gate) === 'typecheck') {
-    return hasScopedVerificationException(context.resolvedDecisionTexts)
+    return context.gateScopeExceptions.some((exception) =>
+      exception.gateId === gate.gateId &&
+      exception.disposition === 'exclude_unrelated_failure',
+    )
   }
   return canAutoExemptScopedRepoRed(gate)
 }

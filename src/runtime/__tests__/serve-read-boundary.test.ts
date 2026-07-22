@@ -735,7 +735,9 @@ describe('GET route read boundaries', () => {
     expect(body.detailPayload).toBeUndefined()
     expect(timing).not.toContain('readiness')
     expect(serviceProject).toBeDefined()
-    expect(body.startReadiness).toEqual(serviceProject.startReadiness)
+    const { focusTaskTitle: _focusTaskTitle, ...boundedDetailReadiness } = body.startReadiness
+    expect(boundedDetailReadiness).toEqual(serviceProject.startReadiness)
+    expect(body.startReadiness.focusTaskTitle).toBe('A task with a read-time ownership mismatch')
     expect(body.actionModel).toEqual(serviceProject.actionModel)
   })
 

@@ -653,6 +653,7 @@ describe('structural context and project graph handoffs', () => {
         title: 'Fix css parser fixture parity',
         files: ['packages/css-parser/src/index.ts'],
         text: 'Keep parser parity with Less and SCSS fixtures.',
+        crossCuttingDomainIds: ['cross-cutting:parser-parity'],
       },
       coordinators: [
         {

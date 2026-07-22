@@ -177,9 +177,9 @@ describe('effective memory packet', () => {
         status: 'active',
         summary: 'JourneyTab is the drawer surface for proof handoffs.',
         content: 'Use JourneyTab.svelte for proof-path and completion-handoff rendering.',
-        tags: ['proof', 'ui'],
+        tags: [],
         domains: ['frontend'],
-        taskKinds: ['ui'],
+        taskKinds: [],
         fileAreas: ['src/web/surfaces/drawer'],
         confidence: 'high',
         risk: 'low',
@@ -199,9 +199,9 @@ describe('effective memory packet', () => {
         status: 'proposed',
         summary: 'Replace Journey with a dashboard.',
         content: 'Do not inject before approval.',
-        tags: ['ui'],
+        tags: [],
         domains: ['frontend'],
-        taskKinds: ['ui'],
+        taskKinds: [],
         fileAreas: ['src/web'],
         confidence: 'low',
         risk: 'high',
@@ -229,6 +229,134 @@ describe('effective memory packet', () => {
     expect(packet.rendered).toContain('## Effective Memory')
     expect(packet.rendered).toContain('JourneyTab is the drawer surface')
     expect(packet.rendered).not.toContain('Replace Journey')
+  })
+
+  it('keeps memory selection invariant when summaries change and ignores summary-only matches', async () => {
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'typed-memory',
+        scope: 'project',
+        type: 'codebase_knowledge',
+        status: 'active',
+        summary: 'A completely different provider paragraph.',
+        content: 'Use the typed proof lane.',
+        tags: ['implementation'],
+        domains: ['frontend'],
+        taskKinds: [],
+        fileAreas: [],
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-05-28T00:00:00.000Z',
+        updatedAt: '2026-05-28T00:00:00.000Z',
+        source: 'test',
+      },
+    })
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'summary-only-memory',
+        scope: 'project',
+        type: 'codebase_knowledge',
+        status: 'active',
+        summary: 'proof',
+        content: 'This record has no typed selector.',
+        tags: ['research'],
+        domains: ['frontend'],
+        taskKinds: [],
+        fileAreas: [],
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-05-28T00:00:00.000Z',
+        updatedAt: '2026-05-28T00:00:00.000Z',
+        source: 'test',
+      },
+    })
+
+    const packet = await buildEffectiveMemoryPacket({
+      memoryDir,
+      task: task({
+        title: 'A terse task with no summary vocabulary.',
+        description: 'Run proof.',
+        domain: 'frontend',
+        taskKind: 'implementation',
+      }),
+      maxRecords: 6,
+    })
+
+    expect(packet.included.map((record) => record.id)).toEqual(['typed-memory'])
+    expect(packet.included.map((record) => record.summary)).toEqual(['A completely different provider paragraph.'])
+    expect(packet.included.map((record) => record.id)).not.toContain('summary-only-memory')
+  })
+
+  it('withholds a structurally unrelated memory even when its prose matches the task', async () => {
+    const projectRoot = path.dirname(memoryDir)
+    await fs.writeFile(path.join(projectRoot, 'package.json'), `${JSON.stringify({
+      name: '@fixture/root',
+      private: true,
+      packageManager: 'pnpm@10.0.0',
+    }, null, 2)}\n`)
+    await fs.writeFile(path.join(projectRoot, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n')
+    await fs.mkdir(path.join(projectRoot, 'packages', 'core'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'packages', 'core', 'package.json'), `${JSON.stringify({
+      name: '@fixture/core',
+    }, null, 2)}\n`)
+    const draft = await draftStructuralMap({
+      projectId: 'fixture',
+      projectRoot,
+      now: '2026-06-01T12:00:00.000Z',
+    })
+    await submitStructuralMapForReview({
+      projectRoot,
+      mapId: draft.id,
+      actor: 'coordinator:fixture',
+      now: '2026-06-01T12:01:00.000Z',
+    })
+    await acceptStructuralMap({
+      projectRoot,
+      mapId: draft.id,
+      actor: 'owner',
+      now: '2026-06-01T12:02:00.000Z',
+    })
+    await recordMemoryObservation({
+      memoryDir,
+      record: {
+        id: 'wrong-scope',
+        scope: 'project',
+        type: 'codebase_knowledge',
+        status: 'active',
+        summary: 'Core runtime proof is exactly what this task needs.',
+        content: 'This prose must not override the structural scope.',
+        tags: [],
+        domains: [],
+        structuralScopes: ['package:other-package'],
+        taskKinds: [],
+        fileAreas: [],
+        confidence: 'high',
+        risk: 'low',
+        freshness: 'fresh',
+        evidenceRefs: [],
+        createdAt: '2026-05-28T00:00:00.000Z',
+        updatedAt: '2026-05-28T00:00:00.000Z',
+        source: 'test',
+      },
+    })
+
+    const packet = await buildEffectiveMemoryPacket({
+      memoryDir,
+      task: task({ title: 'Core runtime proof', description: 'Update packages/core/src/index.ts.', domain: 'runtime' }),
+      maxRecords: 6,
+    })
+
+    expect(packet.included.map((record) => record.id)).not.toContain('wrong-scope')
+    expect(packet.withheld).toContainEqual(expect.objectContaining({
+      id: 'wrong-scope',
+      reason: 'structural-scope:mismatch',
+    }))
   })
 
   it('includes system-local memory-core candidates in the effective memory rendering', async () => {
@@ -330,9 +458,9 @@ describe('effective memory packet', () => {
         status: 'active',
         summary: 'Do not dual-write legacy formats when a migration exists.',
         content: 'Use migrations to carry old state forward; new writes should use the canonical store.',
-        tags: ['migration'],
+        tags: [],
         domains: ['runtime'],
-        taskKinds: ['migration'],
+        taskKinds: [],
         fileAreas: ['src/runtime'],
         confidence: 'high',
         risk: 'low',
@@ -352,9 +480,9 @@ describe('effective memory packet', () => {
         status: 'proposed',
         summary: 'Unaccepted idea should not be injected.',
         content: 'This should remain withheld.',
-        tags: ['migration'],
+        tags: [],
         domains: ['runtime'],
-        taskKinds: ['migration'],
+        taskKinds: [],
         fileAreas: ['src/runtime'],
         confidence: 'medium',
         risk: 'low',
@@ -388,9 +516,9 @@ describe('effective memory packet', () => {
         status: 'active',
         summary: 'Use Journey for proof rendering.',
         content: 'Journey is the proof rendering surface.',
-        tags: ['ui'],
+        tags: [],
         domains: ['frontend'],
-        taskKinds: ['ui'],
+        taskKinds: [],
         fileAreas: ['src/web/surfaces/drawer'],
         confidence: 'high',
         risk: 'low',

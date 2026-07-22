@@ -26,8 +26,18 @@ function projectBody(body) {
 function releaseIdentity(value) {
   const release = value?.release ?? null
   return release
-    ? { id: release.id ?? null, label: release.label ?? null, state: release.state ?? null }
+    ? {
+        id: release.id ?? null,
+        label: release.label ?? null,
+        state: release.state ?? null,
+        ...(typeof release.supersedesReleaseId === 'string' ? { supersedesReleaseId: release.supersedesReleaseId } : {}),
+      }
     : null
+}
+
+function isExpectedRelease(release, expectedId) {
+  const id = release?.id
+  return typeof id === 'string' && (id === expectedId || id.startsWith(`${expectedId}-r`))
 }
 
 function releaseCounts(value) {
@@ -152,7 +162,7 @@ async function main() {
   const overview = projectBody(surfaceReads.overview.value)
   const expectedRelease = releaseIdentity(overview.releaseSummary)
   const expectedCounts = releaseCounts(overview.releaseSummary)
-  check('Narrative Harness has the expected selected release', expectedRelease?.id === expectedReleaseId, expectedRelease)
+  check('Narrative Harness has the expected selected release', isExpectedRelease(expectedRelease, expectedReleaseId), expectedRelease)
   check('selected release is durably shipped', expectedRelease?.state === 'shipped', expectedRelease)
   check('selected release has complete current scope', same(expectedCounts, {
     total: 15,

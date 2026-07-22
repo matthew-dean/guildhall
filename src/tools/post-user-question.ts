@@ -131,86 +131,14 @@ interface InferredQuestion {
   selectionMode?: 'single' | 'multiple'
 }
 
-const MAX_INFERRED_QUESTIONS = 3
-
-function cleanInferredOptionLabel(raw: string): string {
-  const trimmed = raw.trim()
-  const boldHeading = trimmed.match(/^\*\*(.+?)\*\*(?:\s*[—-]\s*.*)?$/)
-  if (boldHeading) return boldHeading[1]!.trim()
-  return trimmed
-}
-
-function parseStructuredOptionLine(line: string): string | null {
-  const trimmed = line.trim()
-  if (/^-\s+/.test(trimmed)) {
-    return trimmed.replace(/^-\s+/, '').replace(/^[A-Z][.)]\s*/, '').trim().replace(/\?$/, '')
-  }
-  if (/^[A-Z][.)]\s+/.test(trimmed)) {
-    return trimmed.replace(/^[A-Z][.)]\s+/, '').trim().replace(/\?$/, '')
-  }
-  return null
-}
-
-function isPlanningPrompt(promptBody: string): boolean {
-  const normalized = promptBody
-    .replace(/^#{1,6}\s*/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase()
-  return (
-    /^(?:and\s+)?then i['’]ll\b/.test(normalized) ||
-    /^i['’]m going to\b/.test(normalized) ||
-    /^i am going to\b/.test(normalized) ||
-    /^next i['’]ll\b/.test(normalized) ||
-    /^next up\b/.test(normalized) ||
-    /^here['’]s what i['’]ll\b/.test(normalized) ||
-    /once you (?:pick|answer).+i['’]ll draft\b/.test(normalized)
-  )
-}
-
-function isQuestionListPrompt(promptBody: string): boolean {
-  const normalized = promptBody
-    .replace(/^#{1,6}\s*/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase()
-  return (
-    /\b(?:two|three|four|five|\d+)\s+questions?\s+remain\b/.test(normalized) ||
-    /\bquestions?\s+remain\b/.test(normalized) ||
-    /\bposted\s+(?:two|three|four|five|\d+)\s+questions?\b/.test(normalized) ||
-    /\bquestions?\s+to\s+help\b/.test(normalized)
-  )
-}
-
-function isEvidenceSummaryPrompt(promptBody: string): boolean {
-  const normalized = promptBody
-    .replace(/^#{1,6}\s*/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase()
-  return (
-    /^i have enough\b/.test(normalized) ||
-    /^ok,\s*i['’]ve hit the research budget\b/.test(normalized) ||
-    /^i['’]ve hit the research budget\b/.test(normalized) ||
-    /^let me (?:piece|synthesize|summarize|recap)\b/.test(normalized) ||
-    /^here'?s what i (?:found|know|learned|asked)\b/.test(normalized) ||
-    /^what i (?:found|know|learned)\b/.test(normalized)
-  )
-}
-
 function validateQuestionShape(input: {
   kind?: string
   body?: string
   choices?: string[]
 }): string | null {
-  if (input.body && /^what must .+ get right first\b/i.test(input.body.trim())) {
-    return 'question prompt appears to interpolate a title as grammar; write a complete human-readable question instead'
-  }
-  if (input.kind === 'choice' && input.body && isQuestionListPrompt(input.body)) {
-    return 'choice question choices must be answers to one prompt, not labels for separate questions'
-  }
-  if (input.kind === 'choice' && input.body && isEvidenceSummaryPrompt(input.body)) {
-    return 'choice question prompt is research narration, not a user question; ask the decision directly and put notes in description'
+  if (!input.body?.trim()) return 'question body is required'
+  if (input.kind === 'choice' && (!input.choices || input.choices.length < 2)) {
+    return 'choice questions require at least two answers'
   }
   return null
 }
@@ -260,56 +188,6 @@ function validateAutonomyBoundary(input: {
   return null
 }
 
-function normalizeWhitespace(value: string): string {
-  return value.replace(/\s+/g, ' ').trim()
-}
-
-function sentenceCaseQuestion(value: string): string {
-  const trimmed = normalizeWhitespace(value).replace(/\s+\?/g, '?')
-  if (!trimmed) return trimmed
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1)
-}
-
-function inferSubjectFromContext(context: string, question: string): string | undefined {
-  const ignored = new Set(['The', 'This', 'That', 'I'])
-  const component = [...context.matchAll(/\b([A-Z][A-Za-z0-9]+)\b/g)]
-    .map((match) => match[1])
-    .find((value): value is string => Boolean(value && !ignored.has(value)))
-  if (!component || ignored.has(component)) return undefined
-  if (/\bvariants?\b/i.test(question)) return `${component} variants`
-  return component
-}
-
-function rewriteQuestionWithSubject(question: string, subject: string | undefined): string {
-  const normalized = sentenceCaseQuestion(question)
-  if (!subject) return normalized
-  const component = subject.replace(/\s+variants?$/i, '').trim()
-  if (!component) return normalized
-  return normalized
-    .replace(/\bthe user\b/i, component)
-    .replace(/\buser\b/i, component)
-}
-
-function extractEmbeddedQuestion(text: string): InferredQuestion | null {
-  const trimmed = text.trim()
-  const match = trimmed.match(
-    /\b(?:the\s+)?(?:key|main|top|only|focused)?\s*question(?:\s+i\s+need\s+to\s+ask|\s+we\s+need\s+to\s+answer|\s+to\s+answer)?(?:\s+before\s+[^:\n]+)?\s*(?:is|:)\s*([\s\S]*?\?)/i,
-  )
-  if (!match || match.index === undefined) return null
-  const rawQuestion = match[1]?.trim() ?? ''
-  if (!rawQuestion) return null
-  const context = normalizeWhitespace(trimmed.slice(0, match.index))
-    .replace(/^i have enough context\.?\s*/i, '')
-  const subject = inferSubjectFromContext(context, rawQuestion)
-  const body = rewriteQuestionWithSubject(rawQuestion, subject)
-  return {
-    kind: 'text',
-    body,
-    ...(subject ? { subject } : {}),
-    ...(context ? { description: context } : {}),
-  }
-}
-
 function resolveQuestionDefaults(
   input: Pick<PostUserQuestionInput, 'tasksPath' | 'taskId' | 'askedBy'>,
   metadata: Record<string, unknown>,
@@ -323,130 +201,8 @@ function resolveQuestionDefaults(
   return { tasksPath, taskId, askedBy }
 }
 
-function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
-  const trimmed = text.trim()
-  if (!trimmed) return []
-
-  const embeddedQuestion = extractEmbeddedQuestion(trimmed)
-  if (embeddedQuestion) return [embeddedQuestion]
-
-  const simplePickOne = trimmed.match(/^pick one:\s*(.+)$/im)
-  if (simplePickOne) {
-    const body = simplePickOne[1]?.trim() ?? ''
-    const split = body.match(/^(.+?),\s*or\s+(.+?)\??$/i)
-    if (split) {
-      return [{
-        kind: 'choice',
-        body: 'Pick one',
-        choices: [split[1]!.trim(), split[2]!.trim().replace(/\?$/, '')],
-        selectionMode: 'single',
-      }]
-    }
-  }
-
-  const lines = trimmed.split('\n')
-  const inlinePromptQuestions: InferredQuestion[] = []
-  for (let i = 0; i < lines.length; i += 1) {
-    const promptLine = lines[i]?.trim() ?? ''
-    if (!promptLine) continue
-    const normalizedPromptLine = promptLine.replace(/^#{1,6}\s*/, '').trim()
-    const headingPrompt = normalizedPromptLine.match(/^\d+[.)]\s+(?:\*\*(.+?)\*\*|(.+))$/)
-    const promptBody = (headingPrompt?.[1] ?? headingPrompt?.[2] ?? normalizedPromptLine).trim()
-    const promptLike = /pick one\b|choose one\b|select one\b|\?$|:\s*$|success look like/i.test(promptBody)
-    if (!promptLike) continue
-    if (isPlanningPrompt(promptBody)) continue
-    if (isQuestionListPrompt(promptBody)) continue
-    if (isEvidenceSummaryPrompt(promptBody)) continue
-    const summaryLike =
-      /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
-        .test(promptBody)
-    if (summaryLike) continue
-
-    const choices: string[] = []
-    let mode: 'numbered' | 'bullets' | null = null
-    let invalidInlineGroup = false
-    for (let j = i + 1; j < lines.length; j += 1) {
-      const optionLine = lines[j]?.trim() ?? ''
-      if (!optionLine) {
-        if (choices.length > 0) break
-        continue
-      }
-      const numberedOption = optionLine.match(/^\d+[.)]\s+(?:\*\*(.+?)\*\*|(.+))$/)
-      if (numberedOption) {
-        if (mode === 'bullets') break
-        mode = 'numbered'
-        choices.push(cleanInferredOptionLabel((numberedOption[1] ?? numberedOption[2] ?? '').trim()))
-        continue
-      }
-      const structuredOption = parseStructuredOptionLine(optionLine)
-      if (structuredOption) {
-        if (mode === 'numbered') {
-          invalidInlineGroup = true
-          break
-        }
-        mode = 'bullets'
-        choices.push(structuredOption)
-        continue
-      }
-      if (choices.length > 0) break
-    }
-
-    if (!invalidInlineGroup && choices.length >= 2 && choices.length <= 6) {
-      inlinePromptQuestions.push({
-        kind: 'choice',
-        body: promptBody.replace(/\s+/g, ' ').trim(),
-        choices,
-        selectionMode: /pick all|all that apply|select all|choose all/i.test(promptBody)
-          ? 'multiple'
-          : 'single',
-      })
-    }
-  }
-  if (inlinePromptQuestions.length > 0) return inlinePromptQuestions.slice(0, MAX_INFERRED_QUESTIONS)
-
-  const sections: Array<{ heading: string; lines: string[] }> = []
-  let current: { heading: string; lines: string[] } | null = null
-  for (const rawLine of lines) {
-    const line = rawLine.trim()
-    const headingMatch = line.match(/^\d+[.)]\s+(?:\*\*(.+?)\*\*|(.+))$/)
-    if (headingMatch) {
-      if (current) sections.push(current)
-      current = { heading: (headingMatch[1] ?? headingMatch[2] ?? '').trim(), lines: [] }
-      continue
-    }
-    if (current) current.lines.push(rawLine)
-  }
-  if (current) sections.push(current)
-
-  const sectionQuestions = sections
-    .map<InferredQuestion | null>((section) => {
-      if (isPlanningPrompt(section.heading)) return null
-      if (isQuestionListPrompt(section.heading)) return null
-      const choices = section.lines
-        .map((line) => parseStructuredOptionLine(line))
-        .filter(Boolean)
-        .map((line) => line as string)
-      if (choices.length < 2 || choices.length > 6) return null
-      const combined = [section.heading, ...section.lines.map((line) => line.trim())].join('\n')
-      return {
-        kind: 'choice',
-        body: section.heading,
-        choices,
-        selectionMode: /pick all|all that apply|select all|choose all/i.test(combined)
-          ? 'multiple'
-          : 'single',
-      }
-    })
-    .filter((question): question is InferredQuestion => question !== null)
-  if (sectionQuestions.length > 0) return sectionQuestions.slice(0, MAX_INFERRED_QUESTIONS)
-
-  if (trimmed.includes('?')) return [{ kind: 'text', body: trimmed }]
-  return []
-}
-
 function resolveQuestionPayload(
   input: Pick<PostUserQuestionInput, 'kind' | 'body' | 'prompt' | 'restatement' | 'subject' | 'description' | 'choices' | 'selectionMode' | 'assumptionIfNotAsked' | 'confidenceIfProceeding' | 'impactIfWrong' | 'gitContainment' | 'blockingReason'>,
-  metadata: Record<string, unknown>,
 ): InferredQuestion | { error: string } {
   const resolvedBody = input.body
     ?? (input.kind === 'confirm' ? input.restatement : input.prompt)
@@ -464,23 +220,10 @@ function resolveQuestionPayload(
     const autonomyError = validateAutonomyBoundary(input)
     return validationError || autonomyError ? { error: validationError ?? autonomyError! } : payload
   }
-
-  const bucketKey = 'inferred_post_user_questions'
-  const sourceKey = 'inferred_post_user_questions_source'
-  const assistantText = String(metadata['last_assistant_text'] ?? '').trim()
-  const existing = metadata[bucketKey]
-  const existingSource = String(metadata[sourceKey] ?? '')
-  let queue = Array.isArray(existing) ? [...existing] as InferredQuestion[] : []
-  if (!Array.isArray(existing) || existingSource !== assistantText) {
-    queue = inferQuestionsFromAssistantText(assistantText)
-    metadata[sourceKey] = assistantText
+  return {
+    error:
+      'Missing kind/body. Guildhall does not infer owner questions from assistant prose; call post-user-question with the structured question fields.',
   }
-  const next = queue.shift()
-  metadata[bucketKey] = queue
-  if (!next) {
-    return { error: 'Missing kind/body and could not infer a question from metadata.last_assistant_text' }
-  }
-  return next
 }
 
 export async function postUserQuestion(
@@ -603,7 +346,7 @@ export const postUserQuestionTool = defineTool({
   isReadOnly: () => false,
   execute: async (input, ctx) => {
     const resolved = resolveQuestionDefaults(input, ctx.metadata)
-    const payload = resolveQuestionPayload(input, ctx.metadata)
+    const payload = resolveQuestionPayload(input)
     if ('error' in resolved || 'error' in payload) {
       const error = 'error' in resolved ? resolved.error : ('error' in payload ? payload.error : 'Unknown question error')
       return {

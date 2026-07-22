@@ -173,7 +173,9 @@ describe('BUILTIN_GUILDS', () => {
         title: 'Pantry Pulse app spec',
         description: 'Build a polished web app page with item cards, filters, and expiry status.',
         domain: 'product',
+        workKind: 'component',
       },
+      designSystem: designSystemWithFailingPair,
       memoryDir: '/tmp',
       projectPath: '/nonexistent-directory-should-not-be-a-ts-project',
     })
@@ -274,6 +276,47 @@ describe('selectApplicableGuilds', () => {
       projectPath: '/nonexistent-directory-should-not-be-a-ts-project',
     })
     expect(sel.some((g) => g.slug === 'typescript-engineer')).toBe(false)
+  })
+
+  it('keeps persona selection stable when only model prose changes', () => {
+    const terse = selectApplicableGuilds({
+      task: {
+        ...baseTask,
+        title: 'Build combobox',
+        description: 'Implement it.',
+        workKind: 'component',
+        reviewRisk: {
+          lanes: ['visual_design', 'accessibility'],
+          recipes: [],
+          requiredArtifacts: [],
+          artifactPolicy: 'advisory',
+          assessedAt: '2026-07-20T00:00:00Z',
+          assessedBy: 'test',
+        },
+      },
+      memoryDir: '/tmp',
+      projectPath: '/nonexistent-directory-should-not-be-a-ts-project',
+    }).map(g => g.slug)
+    const lyrical = selectApplicableGuilds({
+      task: {
+        ...baseTask,
+        title: 'Shape a luminous account-selection experience for the patient rhythm of everyday work',
+        description: 'Craft an expansive, humane interaction whose many contextual details invite the reader into a considered journey through selection, confirmation, and return.',
+        workKind: 'component',
+        reviewRisk: {
+          lanes: ['visual_design', 'accessibility'],
+          recipes: [],
+          requiredArtifacts: [],
+          artifactPolicy: 'advisory',
+          assessedAt: '2026-07-20T00:00:00Z',
+          assessedBy: 'test',
+        },
+      },
+      memoryDir: '/tmp',
+      projectPath: '/nonexistent-directory-should-not-be-a-ts-project',
+    }).map(g => g.slug)
+
+    expect(lyrical).toEqual(terse)
   })
 })
 

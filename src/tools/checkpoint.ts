@@ -61,6 +61,9 @@ const writeCheckpointInputSchema = z.object({
   agentId: z.string(),
   intent: z.string(),
   nextPlannedAction: z.string(),
+  nextActionKind: Checkpoint.shape.nextActionKind.describe(
+    'Machine routing intent. Use inspect for bounded reads, mutate for a file change, rerun_verification for an authoritative proof command, review_handoff only when structured proof is complete, or escalate for a real blocker. Never encode routing only in prose.',
+  ),
   filesTouched: z.array(z.string()).default([]),
   lastCommittedSha: z.string().optional(),
   engineSessionId: z.string().optional(),
@@ -116,6 +119,9 @@ export async function writeCheckpoint(
       intent: parsed.intent,
       filesTouched: parsed.filesTouched,
       nextPlannedAction: parsed.nextPlannedAction,
+      ...(parsed.nextActionKind !== undefined
+        ? { nextActionKind: parsed.nextActionKind }
+        : {}),
       writtenAt: new Date().toISOString(),
       ...(parsed.lastCommittedSha !== undefined
         ? { lastCommittedSha: parsed.lastCommittedSha }
@@ -144,7 +150,7 @@ export async function writeCheckpoint(
 export const writeCheckpointTool = defineTool({
   name: 'write-checkpoint',
   description:
-    "Write a durable checkpoint for the current task. Call this at tool boundaries: before destructive filesystem changes, after subprocess success, on explicit checkpoint markers in the spec, and immediately before engine compaction. One checkpoint per task is persisted (overwritten on each call); the step counter auto-increments. On crash, the orchestrator uses this as input to the FR-32 remediation loop's restart_from_checkpoint decision.",
+    "Write a durable checkpoint for the current task. Call this at tool boundaries: before destructive filesystem changes, after subprocess success, on explicit checkpoint markers in the spec, and immediately before engine compaction. One checkpoint per task is persisted (overwritten on each call); the step counter auto-increments. Set nextActionKind to the machine-readable routing intent; nextPlannedAction is human-readable context only and is never interpreted for state transitions. On crash, the orchestrator uses this as input to the FR-32 remediation loop's restart_from_checkpoint decision.",
   inputSchema: writeCheckpointInputSchema,
   jsonSchema: {
     type: 'object',
@@ -155,6 +161,11 @@ export const writeCheckpointTool = defineTool({
       agentId: { type: 'string' },
       intent: { type: 'string' },
       nextPlannedAction: { type: 'string' },
+      nextActionKind: {
+        type: 'string',
+        enum: ['continue_work', 'review_handoff', 'rerun_verification', 'escalate', 'inspect', 'mutate'],
+        description: 'Routing intent. State transitions use this enum, never the wording of nextPlannedAction.',
+      },
       filesTouched: { type: 'array', items: { type: 'string' } },
       lastCommittedSha: { type: 'string' },
       engineSessionId: { type: 'string' },

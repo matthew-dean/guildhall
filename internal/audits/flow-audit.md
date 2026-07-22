@@ -5,6 +5,562 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+## 2026-07-22 Typed proof handoff stalls remain delegated
+
+- Work id: `0.13.54/typed-proof-handoff-no-progress`
+- User job: A proof task whose current command has failed must remain
+  executable repair work. Provider prose cannot settle the proof, and a
+  missing or malformed typed handoff must not become a human-owner blocker.
+- Finding: The shared worker no-progress threshold had a one-time autonomous
+  remediation, then sent every later stall through generic human-judgment
+  escalation. That was wrong for typed proof setup work: the failure was still
+  inside the declared proof boundary and needed another delegated repair pass.
+- Change: When the task is typed `proof_setup`, the durable checkpoint records
+  a current failed verification, and no structured review proof packet exists,
+  the coordinator continues the existing non-destructive worker reset path on
+  every threshold crossing. Ordinary implementation stalls retain their
+  normal escalation policy. No worker explanation, title, adjective, or
+  command output prose participates in this routing decision.
+- Verification: Added a lifecycle regression with ten repeated no-progress
+  proof passes; it remains `in_progress`, records two coordinator remediations,
+  and creates no owner escalation. The older checkpoint-remediation fixture
+  now emits its typed `statusCode` and passes with the same behavior.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/typed-proof-handoff-no-progress`
+- Touched contracts: typed proof-setup recovery routing, worker no-progress
+  escalation boundary, and delegated remediation ownership.
+- Contracts considered but not touched: provider prose, acceptance criterion
+  wording, proof evidence schema, release membership, owner-input schema, and
+  UI presentation.
+- Required follow-up: replay a real Narrative Harness proof task and verify
+  current failed command state, delegated ownership, and no owner blocker on
+  every surface.
+- Proof required/provided: focused orchestrator lifecycle tests provided;
+  typecheck, model-independence gate, build, and installed NH replay remain
+  required before this audit item is closed.
+- Waivers: none.
+- Owner-review items: none; the task is already inside a typed delegated proof
+  boundary.
+- Apply/revert: revert the proof-specific branch and regression together. Do
+  not restore generic human escalation for current proof bookkeeping failures.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope: runtime interpretation of existing `semanticKind`, checkpoint
+  verification records, and proof-packet presence.
+- Change class: shared lifecycle routing correction.
+- Existing data impact: none; failed checkpoints and historical prose remain
+  audit evidence, while current routing stays worker-owned.
+- Migration id: none required.
+- Safety: only typed proof setup tasks with current failed verification and no
+  structured review proof qualify; unrelated stalls still escalate normally.
+- Compatibility reader: none added.
+- Fixtures/tests: repeated proof-handoff no-progress lifecycle fixture.
+- Owner-facing plan text: none.
+- Rollback/revert: no data rollback is required.
+
+## 2026-07-22 Terminal child history no longer masquerades as current blockage
+
+- Work id: `0.13.54/terminal-child-history-boundary`
+- User job: A completed parent with completed proof work must not appear blocked
+  or carry a missing-proof count merely because a child retained the historical
+  reason that explained an earlier recovery.
+- Finding: `deriveWorkExecutionState` correctly stopped terminal children from
+  blocking current dispatch, but its internal proof count still treated any
+  retained child `blockReason` as current. That let one shared state builder
+  disagree with itself and could leak stale failure history into release
+  readiness.
+- Change: Historical blocker text on terminal descendants is now evidence only;
+  current blocker and missing-proof counts are restricted to non-terminal child
+  work. No prose is parsed and no terminal task is rewritten to erase history.
+- Verification: Focused work-execution and project-scope tests pass; the
+  regression asserts both current blocker IDs and missing-proof count stay zero;
+  typecheck passes. Installed-service verification follows the rebuild below.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/terminal-child-history-boundary`
+- Touched contracts: shared execution summary, current child-blocker set, and
+  internal proof-count projection.
+- Contracts considered but not touched: task persistence, proof evidence schema,
+  release membership, provider output, and UI-specific status logic.
+- Required follow-up: Keep terminal-history fixtures in future lifecycle tests;
+  historical diagnostics must remain available without becoming current state.
+- Proof required/provided: focused behavior tests, typecheck, and installed
+  Narrative Harness readiness/API verification.
+- Waivers: none.
+- Owner-review items: none; this is a shared state invariant.
+- Apply/revert: revert the non-terminal boundary and regression together; do
+  not restore historical blocker text as a live readiness signal.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope: read-time interpretation of existing typed task state.
+- Change class: shared summary correctness fix.
+- Existing data impact: none; historical `blockReason` values remain stored.
+- Migration id: none required.
+- Safety: non-terminal blocked work remains visible; only terminal history is
+  excluded from current counts.
+- Compatibility reader: none added.
+- Fixtures/tests: terminal child with retained blocker reason and completed
+  proof status.
+- Owner-facing plan text: none.
+- Rollback/revert: no data rollback is required.
+
+## 2026-07-22 Failed proof handoffs stay delegated
+
+- Work id: `0.13.54/proof-command-repair-routing`
+- User job: When a proof command fails, Guildhall must tell the delegated
+  worker to repair the project proof and rerun it. A malformed self-critique
+  or missing proof ID must not turn routine proof repair into an owner blocker.
+- Finding: Narrative Harness produced exit-zero process output whose typed proof
+  marker said the proof failed. The worker then raised `spec_ambiguous` because
+  the handoff contract was rejected, and Guildhall surfaced `owner_required`
+  even though the saved task had a stale proof criterion and no external
+  decision was needed.
+- Change: The shared escalation recovery boundary recognizes a proof setup's
+  typed stale criterion or latest failed hard command as worker-owned repair.
+  It accepts both the runtime worker identity and the worker tool's persisted
+  identity, clears the false blocker, and redispatches the worker. It does not
+  use the worker's explanation, output adjectives, or success wording.
+- Verification: Added an orchestrator regression with a failed exact command,
+  malformed handoff, no file mutation, and `spec_ambiguous`; focused lifecycle
+  tests pass. In the installed Narrative Harness run, Character Voice proof
+  completed with a fresh verified `ac-1` and no owner blocker. The next
+  Temporal/Spatial/Geographic proof exposed a real non-zero command failure;
+  Guildhall kept it in the worker repair lane and rejected repeated prose-only
+  “passed” handoffs instead of accepting false completion.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/proof-command-repair-routing`
+- Touched contracts: proof-setup escalation recovery, typed stale acceptance
+  state, failed hard-gate interpretation, and delegated worker ownership.
+- Contracts considered but not touched: provider prose, owner approval,
+  release membership, command marker semantics, and evidence retention.
+- Required follow-up: Keep a regression where the process exits zero but the
+  typed proof result fails; the output wording must be freely variable.
+- Proof required/provided: focused orchestrator lifecycle suite, typecheck,
+  model-independence suite, and installed NH task verification.
+- Waivers: none.
+- Owner-review items: none; this is explicitly Guildhall-owned proof repair.
+- Apply/revert: revert the typed recovery predicate and regression together;
+  do not restore owner escalation for proof bookkeeping or command failures.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope: runtime interpretation of existing typed criterion/gate state.
+- Change class: shared escalation routing correction.
+- Existing data impact: existing stale criteria and failed gates remain audit
+  evidence; their next action changes from owner blocker to worker repair.
+- Migration id: none required.
+- Safety: only proof-setup tasks with an exact command and typed stale/failing
+  proof qualify; unrelated `spec_ambiguous` escalations retain their existing
+  behavior.
+- Compatibility reader: none added.
+- Fixtures/tests: malformed proof handoff with stale criterion and failed gate.
+- Owner-facing plan text: none.
+- Rollback/revert: no data rollback is required.
+
+## 2026-07-22 Proof retries ignore historical gates
+
+- Work id: `0.13.54/proof-recovery-gate-freshness`
+- User job: When a delegated proof retry is started, Guildhall must run the
+  current saved proof command, record current evidence, and either complete or
+  explain the current failure. A passing gate from before the retry must never
+  make the retry look complete or send it through an endless loop.
+- Finding: The coordinator correctly reopened a stale proof task, but the
+  recorded-hard-gates path still treated the old passing gate ID as current.
+  That let a historical `ac-1` suppress the new command run and repeatedly
+  bounce the task between `in_progress` and `gate_check`.
+- Change: The shared coordinator lifecycle now compares hard-gate `checkedAt`
+  to the typed proof-recovery `reopenedAt`. Historical gates remain evidence,
+  but only gates recorded after the current recovery can settle the active
+  proof lifecycle. The same freshness rule governs command execution and
+  recorded-gate completion.
+- Verification: Focused proof-health/current-proof tests pass (41 tests),
+  typecheck passes, the installed service reports `stale:false`, and the live
+  Narrative Harness retry reran `ac-1` and exposed the real next defect: its
+  saved script is absent from the registered checkout. That failure is now
+  visible as current repair work instead of a false completion.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/proof-recovery-gate-freshness`
+- Touched contracts: proof-recovery lifecycle, hard-gate freshness, command
+  execution suppression, and recorded-gate completion.
+- Contracts considered but not touched: acceptance criterion prose,
+  provider output, release membership, owner approval, and historical evidence
+  retention.
+- Required follow-up: Keep retry tests with a pre-recovery passing gate and a
+  post-recovery current gate; do not make gate IDs alone authoritative.
+- Proof required/provided: focused lifecycle tests, typecheck, model-
+  independence audit, installed service stale-build check, and live NH retry.
+- Waivers: none.
+- Owner-review items: none; this is an execution invariant.
+- Apply/revert: revert the freshness helper and both call-site changes as one
+  lifecycle contract change. Do not restore ID-only reuse.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none; existing typed `proofRecovery.reopenedAt`
+  and gate `checkedAt` fields are used as intended.
+- Scope: runtime lifecycle interpretation only.
+- Change class: shared behavioral contract hardening.
+- Existing data impact: historical gate evidence remains intact; it simply no
+  longer settles a newer retry.
+- Migration id: none required.
+- Safety: an absent or malformed timestamp fails closed and cannot establish
+  current proof.
+- Compatibility reader: none added.
+- Fixtures/tests: add/retain a recovery fixture with an old passing gate and a
+  fresh gate before changing this rule again.
+- Owner-facing plan text: none.
+- Rollback/revert: no data rollback is required.
+
+## 2026-07-22 Proof-owned bootstrap repair stays agent-owned
+
+- Work id: `0.13.54/proof-bootstrap-repair-ownership`
+- User job: A proof task must be able to repair a visible project bootstrap
+  failure through the delegated worker. Guildhall must not stop and tell the
+  delegated Codex worker that a human must fix a project-owned setup problem.
+- Finding: Narrative Harness exposed a TypeScript bootstrap failure before
+  the worker could run. The coordinator only handed that failure back when a
+  dirty worktree or an explicit repair flag happened to be present; otherwise
+  repeated setup failure became a human blocker even for Guildhall-created
+  proof work.
+- Change: Proof-setup tasks and typed proof-recovery tasks now own their
+  bootstrap repair lane by semantic state. A failed bootstrap gate is recorded
+  as current worker evidence and dispatched for repair; the generic human
+  environment blocker remains for genuinely external setup work.
+- Verification: Added a behavior-level ownership regression beside the
+  bootstrap lifecycle tests; typecheck and the model-independence suite pass.
+  Live NH verification exposed the unsupported TypeScript `moduleResolution`
+  configuration as repair work instead of hiding it behind a false completion.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/proof-bootstrap-repair-ownership`
+- Touched contracts: task-owned bootstrap repair routing and proof-task
+  semantic ownership.
+- Contracts considered but not touched: provider prose, task titles, release
+  membership, command output parsing, and owner approval.
+- Required follow-up: Keep the bootstrap regression typed around proof setup or
+  proof recovery; do not classify ownership from explanatory prose.
+- Proof required/provided: focused ownership test, typecheck, model-
+  independence audit, and installed NH task run.
+- Waivers: none.
+- Owner-review items: none; delegated proof work is explicitly in scope.
+- Apply/revert: revert the typed ownership predicate and its test together;
+  preserve the generic blocker for non-proof external setup failures.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none; existing semantic task and proof-recovery
+  fields are interpreted more completely.
+- Scope: runtime dispatch only.
+- Change class: lifecycle routing correction.
+- Existing data impact: no task data is rewritten; prior bootstrap evidence
+  remains historical/current evidence as recorded.
+- Migration id: none required.
+- Safety: only proof-owned typed work receives this repair route; unrelated
+  tasks retain the existing environment-blocker behavior.
+- Compatibility reader: none added.
+- Fixtures/tests: bootstrap ownership regression in the orchestrator suite.
+- Owner-facing plan text: none.
+- Rollback/revert: no data rollback is required.
+
+## 2026-07-22 Compact task rows fail closed in proof health
+
+- Work id: `0.13.54/compact-proof-health-boundary`
+- User job: A project Overview, Work, or Map read must remain usable when it
+  loads compact task points. A compact row may omit mutable acceptance
+  criteria, but that omission must mean “proof is not established,” not crash
+  the entire project response.
+- Finding: Compact database rows intentionally carry identity, status, scope,
+  and current proof summaries without full task definitions. The shared
+  `taskDoneButProofMissing` path passed one of those rows to
+  `proofSetupHasTaskIdentity`, which unconditionally called
+  `acceptanceCriteria.some()`. Narrative Harness therefore returned HTTP 500
+  from all three compact project surfaces.
+- Change: `proofSetupHasTaskIdentity` now treats a missing acceptance-criteria
+  array as an unestablished proof identity and returns false. It does not
+  manufacture criteria, parse prose, or widen a compact read into a full task
+  read. The resulting proof state is conservatively incomplete and remains
+  visible to the release summary.
+- Verification: Rebuilt and installed Guildhall, restarted the service, and
+  confirmed `stale:false`; Narrative Harness Overview, Work, and Map each
+  return HTTP 200. Response sizes were approximately 46 KB, 145 KB, and 95 KB
+  respectively. The focused proof-health suite passes (28 tests).
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/compact-proof-health-boundary`
+- Touched contracts: compact task projection shape and proof-health
+  interpretation of absent full task fields.
+- Contracts considered but not touched: task schema, acceptance criterion
+  persistence, release membership, provider output, and route-specific UI
+  payloads.
+- Required follow-up: Add a compact-row fixture to every future proof-health
+  change and keep compact routes on the shared projection boundary.
+- Proof required/provided: focused proof-health regression plus installed
+  Overview/Work/Map API checks and stale-build check.
+- Waivers: none.
+- Owner-review items: none; fail-closed proof health is an execution invariant.
+- Apply/revert: revert the helper behavior and its regression together; do not
+  add a compatibility parser or silently load full task definitions.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope: read-time compact projection handling only.
+- Change class: contract hardening and malformed-shape tolerance.
+- Existing data impact: none; compact rows remain compact and unproven rows
+  remain release blockers until typed proof is recorded.
+- Migration id: none required.
+- Safety: missing acceptance criteria cannot settle proof and cannot throw from
+  a project read.
+- Compatibility reader: none added.
+- Fixtures/tests: `src/runtime/__tests__/proof-health.test.ts` compact
+  proof-setup row regression.
+- Owner-facing plan text: none.
+- Rollback/revert: no data rollback is required.
+
+## 2026-07-22 Model prose overfit is an instant release blocker
+
+- Work id: `0.13.54/model-prose-authority-nuke`
+- User job: A provider may change adjectives, synonyms, sentence order,
+  headings, verbosity, or explanation style without changing Guildhall's
+  routing, decomposition, readiness, proof, release counts, or completion.
+- Finding: Direct model-output matchers had already been removed, but a guard
+  that only searched the original variable name could miss a matcher hidden
+  behind a local alias. That would let a future agent reintroduce prose
+  authority by renaming `rawOutput` to `explanation`.
+- Change: `scripts/model-independence-audit.mjs` now uses the TypeScript parser
+  to track provider-text aliases within their lexical function scope, helper
+  functions that pass model prose through neutral parameter names, destructured
+  provider response text, retained assistant-text metadata, and common
+  provider response-envelope `.text` values. It scans operational TypeScript,
+  JavaScript, Svelte, package, and CLI script surfaces with no source-file
+  exemption. The audit remains limited to operational authority; retaining
+  prose for audit/display and extracting declared structured JSON fields is
+  allowed. It is part of `pnpm model:independence` and therefore blocks the
+  release immediately when it finds a new authority path.
+- Verification: The suite includes adversarial alias, helper, destructuring,
+  assistant-text metadata, and response-envelope fixtures plus arbitrary
+  prose-variation tests for task sizing, proof requirements, reviewer
+  decisions, handoffs, routing, and provider proof. `pnpm model:independence`
+  passes with 123 tests in the full gate; the focused guard suite passes 17
+  tests. `pnpm typecheck` and `git diff --check` pass.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/model-prose-authority-nuke`
+- Touched contract: model-output authority audit and release gate.
+- Contracts considered but not touched: provider response schemas, task
+  schema, review result keys, proof evidence records, and user-facing audit
+  prose. Structured keys remain the operational boundary.
+- Required follow-up: keep adding a structured adversarial case whenever a
+  model-dependent failure is found; never weaken the audit to preserve a prose
+  matcher.
+- Proof required/provided: AST-based alias/helper/destructuring detector across
+  operational source surfaces, adversarial regressions, and
+  `pnpm model:independence`.
+- Waivers: none.
+- Owner-review items: none; this is a release-blocking invariant.
+- Apply/revert: revert the detector and regression together; do not restore
+  phrase-based compatibility behavior.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope: source audit and test gate only.
+- Change class: release guardrail strengthening.
+- Existing data impact: none; prose remains stored only where it is already
+  explicitly audit/display material.
+- Migration id: none required.
+- Safety: the detector fails closed on provider-text aliases while allowing
+  typed JSON extraction and display-only retention.
+- Compatibility reader: none added.
+- Fixtures/tests: `src/runtime/__tests__/model-independence.test.ts` and the
+  existing model-independence suites.
+- Owner-facing plan text: none.
+- Rollback/revert: revert the audit and test together; no data rollback is
+  required.
+
+## 2026-07-22 Command and provider proof share one evidence identity
+
+- Work id: `0.13.54/command-provider-proof-identity`
+- User job: When a task has a documented provider proof command, Guildhall
+  should recognize one observed command result everywhere: the provider
+  integrity gate, acceptance criteria, proof path, and final release state.
+  An expected non-zero command must remain a valid proof when its output and
+  exit contract pass.
+- Finding: The command gate collapsed the raw process exit into its interpreted
+  contract result, so an expected non-zero proof was recorded as zero. Provider
+  proof reconciliation also replaced a richer typed provider evidence contract
+  with a generated acceptance criterion, and later gate execution keyed the
+  same command only by criterion id. Those separate interpretations could
+  rerun a valid proof or reopen it after it passed.
+- Change: Command results now retain `observedPassed` separately from the
+  contract-level `passed` value. Existing documented provider proof paths keep
+  their typed evidence contract and tolerate absent optional launch steps.
+  Hard-gate matching now recognizes the shared normalized command identity and
+  uses it to settle automated criteria; the provider gate does not require
+  unrelated review-owned criteria to be complete before it stays settled.
+  Provider fixtures declare `kind: provider` explicitly.
+- Verification: Focused orchestrator proof tests pass for expected non-zero
+  commands, blocked provider artifacts, and passing provider artifacts. Run
+  the broader proof-health and orchestrator suites after the remaining typed
+  fixture cleanup.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/command-provider-proof-identity`
+- Touched contracts: acceptance command result shape, command proof-path
+  verification records, provider-proof path evidence kind, hard-gate-to-
+  criterion identity.
+- Contracts considered but not touched: task hierarchy, release membership,
+  provider response prose, model selection, and owner-input contracts.
+- Required follow-up: keep all provider proof fixtures typed and replay the
+  Narrative Harness provider bakeoff through the installed runtime.
+- Proof required/provided: three focused orchestrator tests plus typecheck,
+  contract lint, and model-independence lint at the end of this change set.
+- Waivers: none.
+- Owner-review items: none; this is shared proof authority.
+- Apply/revert: revert the command identity changes and their regressions
+  together; do not restore command/prose or criterion-id-only authority.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing proof-path verification records gain an
+  optional in-memory `observedPassed` input while persisted records retain
+  their existing `status`, `command`, and evidence fields; no new persisted
+  field is required.
+- Scope: proof execution and projection only.
+- Change class: authority reconciliation and malformed-shape tolerance.
+- Existing data impact: existing provider paths retain their evidence kind;
+  existing hard gates remain readable through normalized command identity.
+- Migration id: none required.
+- Safety: no prose is consulted; missing launch steps are treated as an empty
+  presentation list, while missing typed proof evidence remains incomplete.
+- Compatibility reader: existing command and provider path records continue to
+  be read through the shared proof-path boundary.
+- Fixtures/tests: focused orchestrator proof tests and existing proof-path
+  suites.
+- Owner-facing plan text: none.
+- Rollback/revert: revert the projection change; no data rollback is needed.
+
+## 2026-07-22 Typed worker verification commands now become proof state
+
+- Work id: `0.13.54/typed-proof-command-projection`
+- User job: When Guildhall asks an agent to establish release proof, the agent should be able to report the exact command once and Guildhall should carry that command through the acceptance contract, proof path, gate, and release summary without repeated handoff work.
+- Finding: Workers were already returning structured `verificationCommands`, but the task mutation boundary only recorded the note. The proof child therefore still had no typed `acceptanceCriteria.command`, and the coordinator rejected the same handoff forever even though the command existed in structured state.
+- Change: For `semanticKind: proof_setup`, the shared task write boundary projects the first passed, concrete worker verification command onto the existing proof criterion, adds the stable parent-scoped `guildhall-proof:<parent-id>` marker, and keeps `met: false` until an observed hard gate settles it. No provider prose is read or copied into operational state.
+- Verification: Added a task-queue regression with arbitrary handoff prose and typed command data; the regression proves the command persists while the checkbox remains unmet. Re-run the installed Narrative Harness proof child after rebuilding.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/typed-proof-command-projection`
+- Touched contracts: worker self-critique structured handoff, proof-setup acceptance criterion, command proof-path projection.
+- Contracts considered but not touched: provider prose, task title/description, release labels, owner-input state, reviewer narrative.
+- Required follow-up: the command still needs a real hard-gate verification record before proof setup can enter `done`.
+- Proof required/provided: task-queue regression with arbitrary prose plus focused proof-setup tests.
+- Waiver: none.
+- Owner-review items: none; this is typed Guildhall execution bookkeeping.
+- Apply/revert behavior: revert the projection and its regression together; no prose compatibility path is retained.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing task acceptance criterion fields (`command`, `expectedExit`, `expectedOutputIncludes`, `met`) and generated command proof paths; no new fields.
+- Scope: proof-setup task handoff writes only.
+- Change class: authoritative projection repair, not a new parallel model.
+- Existing data impact: no bulk rewrite; future valid structured handoffs repair their own incomplete proof criterion at the write boundary.
+- Migration id: none required.
+- Safety: only concrete passed commands from a typed worker field are eligible; broad workspace commands and prose remain rejected.
+- Compatibility reader: none added.
+- Fixtures/tests: `src/tools/__tests__/task-queue.test.ts` and existing proof-health/task-queue suites.
+- Owner-facing plan text: none.
+- Rollback/revert: revert the projection and regression; existing invalid proof rows remain blocked and are not falsely completed.
+
+## 2026-07-22 Guildhall-owned proof work survives reused branch conflicts
+
+- Work id: `0.13.54/proof-checkpoint-reuse`
+- User job: When Guildhall owns generated proof work and a previous task branch already exists, the run should preserve the latest shared-checkout edits, reuse the branch safely, and continue without asking the owner to resolve Guildhall's own branch bookkeeping.
+- Finding: Dirty-checkpoint classification correctly recognized proof work as Guildhall-owned, but checkpointing could not switch to an existing task branch with newer edits; after that was fixed, the reusable worktree could still fail on generated proof-artifact merge conflicts.
+- Change: The Git authority now checkpoints reused branches by applying the shared checkout's final changed-file state, preserves untracked files, and supports an explicit `prefer_task` conflict strategy only for typed proof-setup worktrees. Ordinary product tasks retain fail-closed synchronization conflicts.
+- Verification: Added real-Git integration coverage for reused dirty branches and typed proof conflict resolution; the installed Narrative Harness run reached worker execution after checkpoint and worktree synchronization.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/proof-checkpoint-reuse`
+- Touched contracts: Git checkpoint/synchronization interface, proof-setup worktree conflict strategy.
+- Contracts considered but not touched: task status model, release membership, provider/model response schema.
+- Required follow-up: verify the final proof command and hard-gate record in the live release.
+- Proof required/provided: NodeGitDriver integration tests and installed Narrative Harness run.
+- Waiver: none.
+- Owner-review items: none; the typed semantic kind supplies the ownership boundary.
+- Apply/revert behavior: revert the Git interface change and its integration tests together.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope: runtime Git/worktree behavior only.
+- Change class: execution policy refinement.
+- Existing data impact: existing task branches and worktrees are reused; no task records are rewritten.
+- Migration id: none required.
+- Safety: `prefer_task` is passed only for `proof_setup`; ordinary tasks still abort on conflict.
+- Compatibility reader: existing GitDriver implementations accept the optional strategy.
+- Fixtures/tests: `src/runtime/__tests__/node-git-driver.integration.test.ts`.
+- Owner-facing plan text: none.
+- Rollback/revert: revert the optional strategy and its call-site; no persisted rollback is needed.
+
+## 2026-07-22 Proof-setup completion is now a typed executable boundary
+
+- Work id: `0.13.54/proof-setup-terminal-contract`
+- User job: When Guildhall creates proof setup for an active release, the user must be able to see that the work is still executable, know the exact command that proves it, and trust that a provider's completion prose or a checked acceptance box cannot close the release without machine evidence.
+- Finding: A proof-setup child could be persisted as `done` when its acceptance criterion had `met: true` but no concrete task-specific command, marker, or runnable proof path. This left the parent release blocked while the child appeared complete.
+- Change: The shared proof authority now treats every `semanticKind: proof_setup` task without a concrete command, stable task marker, or runnable proof path as proof-missing. The task write boundary rejects `done` for the same invalid contract, and the existing completion repair migration re-checks after new state arrives so it repairs children created after its first application.
+- Verification: Added model-independent proof-health and task-write regression tests; run `pnpm model:independence`, the focused proof-health/task-queue suites, `pnpm typecheck`, and `pnpm build`.
+
+### Schema Migration Decision
+
+- Work id: `0.13.54/proof-setup-terminal-contract`
+- Persisted schema touched: no new persisted fields; existing proof-setup task/acceptance/proof-path fields receive a stricter terminal invariant.
+- Scope: project task definitions, current proof projection, and migration ledger re-check behavior.
+- Change class: invariant tightening and reconciliation behavior.
+- Existing data impact: active proof-setup rows marked done without current typed proof are reopened by the existing completion-authority migration; shipped release history remains closed.
+- Migration id: `0.13.30/proof-setup-completion-authority` re-check enabled; no new parallel proof model.
+- Compatibility reader: none added. Invalid terminal state fails closed.
+- Fixtures/tests: `src/runtime/__tests__/proof-health.test.ts`, `src/tools/__tests__/task-queue.test.ts`, and the existing migration suite.
+- Owner-facing plan text: none; this is Guildhall-owned executable proof work, not an owner approval checkpoint.
+- Rollback/revert: revert the invariant change and migration re-check flag together; no destructive data rewrite is required.
+
+## 2026-07-22 Proof work no longer becomes a human commit/stash blocker
+
+- Work id: `0.13.54/proof-setup-dirty-checkout-ownership`
+- User job: When Guildhall is responsible for establishing a proof command, a dirty project checkout must not stop the run with “commit or stash this” if the dirt belongs to the proof lane; Guildhall should checkpoint it into the task branch and continue.
+- Finding: Compact task rows can omit the historical note trail used by dirty-checkout ownership classification. A generated `semanticKind: proof_setup` task therefore fell into the external-checkout playbook and blocked the Narrative Harness release.
+- Change: Typed proof-setup work is now explicitly Guildhall-owned for dirty-checkpoint recovery. Ordinary tasks still require an ownership trail before Guildhall packages changes, so this does not turn arbitrary user edits into automatic commits.
+- Verification: Added an orchestrator regression for a proof task with no historical notes; run the focused orchestrator suite and the installed Narrative Harness proof flow.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/proof-setup-dirty-checkout-ownership`
+- Touched contract: shared dirty-checkout ownership classification and recovery playbook selection.
+- Contracts considered but not touched: task status schema, release membership, owner-input requests, provider/model response contracts.
+- Required follow-up: verify real proof setup checkpoints into an isolated branch and reaches worker execution.
+- Proof required/provided: focused orchestrator regression plus installed Narrative Harness run.
+- Waiver: none.
+- Owner-review items: none; this is Guildhall-owned execution bookkeeping.
+- Apply/revert behavior: revert the semantic proof-setup ownership branch and its regression together; no persisted data migration is required.
+
+
 2026-07-18T22:20:00Z - Release shaping is no longer reported as owner blocking.
 
 User job:
@@ -7312,6 +7868,104 @@ therefore needs fresh live browser proof per project state, not just fixture
 coverage.
 
 ## Current Follow-Ups
+
+- [x] Make model-style overfit an immediate replacement condition. 2026-07-21
+  removed the remaining provider-specific wording assertions from reviewer
+  audit tests. They now verify raw-audit preservation and typed fields without
+  requiring a particular model's adjectives, headings, sentence order, or
+  explanation. The runtime already fails closed when its structured contract
+  is absent; the publish gate runs `pnpm model:independence`, and this rule now
+  explicitly stops the affected loop instead of tuning prompts or adding a
+  fixture exception. The Narrative Harness bakeoff uses the same boundary:
+  draft prose is free-form, while only JSON shape, stable `sourceRef` keys,
+  review lens IDs, statuses, evidence references, and numeric contract scores
+  are evaluated. Literary quality remains a separate semantic/provider review,
+  never a word-match score.
+
+- [x] Remove contradictory proof diagnostics from the shared projection.
+  The installed synopsis proof replay exposed a persisted shape with
+  `acceptanceCriteriaProofState.state === "verified"` while retaining the old
+  blocked reason, gate ID, and timestamp. The shared normalizer now clears
+  those diagnostics whenever the current typed proof is settled, including
+  when the stored state already says `verified`; the endpoint no longer asks
+  the UI to interpret “verified but blocked.” Added a regression for that
+  exact migrated shape and verified it through the installed app after rebuild,
+  restart, and `stale:false`.
+
+- [x] Keep prose-only review failures out of substantive revision state.
+  The live proof replay exposed an older `invalid_review_contract` record with
+  only provider narration. The coordinator was incorrectly preserving that as
+  a substantive revision during provider recovery, causing a loop even though
+  the worker's typed self-critique and project proof were complete. Recovery
+  now classifies provider-unavailable, timeout, and invalid-contract records as
+  non-substantive failures; only structured reviewer findings can block
+  deterministic recovery. Prose-only reviews still fail closed and cannot
+  approve or satisfy evidence. Added an adversarial model-independence case.
+  The installed replay then proved the boundary operationally: the worker's
+  prose claimed both proof commands passed, but the task received no new
+  verification record and did not become done because the reviewer provider
+  timed out without a structured result. The selected release stayed at
+  `9/15`, with six proof blockers; no prose was promoted into completion.
+
+- [x] Enforce model-independent Guildhall semantics. 2026-07-21 removed the
+  last recovery path that parsed numbered task/spec prose to manufacture child
+  work or select a child requirement. Recovery now uses explicit references,
+  parent acceptance IDs, semantic task kinds, readiness codes, and structured
+  work-unit records; a split verdict without structured child data remains a
+  coordinator decision instead of becoming a prose-derived fallback. Added
+  `src/runtime/__tests__/model-independence.test.ts` with adversarial prose
+  pairs for sizing, reviewer decisions, and recovery decomposition, plus the
+  release-blocking `pnpm model:independence` gate in the publish flow.
+  The Hermes quality comparison now grades completion from exit status and
+  artifact evidence rather than provider words such as "done" or "complete".
+  Verification: `pnpm model:independence`, the focused recovery tests,
+  `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm lint:data-layer` passed.
+  The installed Narrative Harness release remains honestly blocked on six
+  missing proof records; this change does not manufacture completion.
+
+- [x] Make implementation targets structured instead of prose-derived.
+  2026-07-21 removed target-file inference from rendered task/spec Markdown,
+  reviewer notes, and imported-source notes. Runtime routing now reads only
+  `StructuredSpec.targetFiles`, structured acceptance commands, and explicit
+  checkpoint file lists. A model may rewrite every human-readable sentence
+  without changing the worker's target scope. The old context-builder tests
+  were converted from “scrape these paths” fixtures into explicit contract
+  fixtures; prose-only cases now prove that no target is invented.
+
+  ### Contract Touch Decision
+
+  - Work id: `codex:model-independent-target-routing-2026-07-21`.
+  - Touched contracts: `StructuredSpec` implementation-surface data and the
+    shared likely-target context packet consumed by worker/reviewer lanes.
+  - Considered but not touched: task title/description/spec Markdown,
+    reviewer note prose, imported-source note format, task status values, and
+    acceptance-command schemas.
+  - Proof required: adversarial model-independence cases, context-builder
+    regressions, typecheck, contract detector, and installed release replay.
+  - Apply/revert: keep the structured field, resolver, and fixture changes
+    together; reverting the resolver would reintroduce model-dependent worker
+    scope.
+
+  ### Schema Migration Decision
+
+  - Persisted schema touched: additive optional `StructuredSpec.targetFiles`.
+  - Scope/change class: `0.13.0/structured-target-files`; new execution
+    metadata, not a replacement for existing task titles, descriptions, or
+    rendered Markdown.
+  - Existing data impact: existing structured specs remain readable, but
+    tasks without explicit target files no longer receive targets from prose;
+    workers must discover bounded files through their normal project-inspection
+    tools or a later structured revision.
+  - Migration id: `0.13.0/structured-target-files`.
+  - Compatibility reader: none. Markdown remains a human renderer and an
+    explicit one-time migration source only.
+  - Fixtures/tests: context-builder target-routing tests and
+    `src/runtime/__tests__/model-independence.test.ts`.
+  - Owner-facing plan text: a different model can change wording, but cannot
+    change Guildhall's scope, routing, decomposition, readiness, proof, or
+    release state.
+  - Rollback/revert: remove the optional field and its renderer/resolver
+    usage together; no destructive rewrite of existing task data is required.
 
 - [x] Move the web app build to SvelteKit/Vite static output with real chunk
   splitting. 2026-06-14 proof: committed a clean checkpoint first
@@ -48746,6 +49400,145 @@ The release has therefore been prepared but not published, tagged, or pushed.
 The product acceptance verdict remains green; publication readiness is pending
 the repository static gate and npm authentication.
 
+## 2026-07-21 model-independent proof state boundary
+
+### User job
+
+When Guildhall advances a proof task, the owner must be able to trust that
+status, completion, routing, and release readiness came from typed task state
+and executable evidence, regardless of how a provider worded its explanation.
+
+### Finding and repair
+
+- [x] A proof child now gets one canonical structured contract: a concrete
+      task-specific command, a named proof path, an explicit completion
+      boundary, and the parent/release linkage. It starts `ready` and follows
+      the normal work lifecycle instead of being an underspecified draft.
+- [x] Live orchestration reads only `note.structured` for self-critique and
+      review packets. Exact acceptance-criterion IDs are required; prose,
+      fenced JSON, labels such as “done,” or provider-specific wording cannot
+      satisfy a criterion or trigger a handoff.
+- [x] Legacy recovery is isolated to the one-time evidence migration boundary.
+      It can preserve old audit history without reopening prose parsing in
+      current writes or runtime nudges.
+- [x] Active selected releases can materialize linked proof work for completed
+      feature tasks. Proof for later work attached to a shipped release remains
+      release-local and does not reopen the shipped task.
+
+### Evidence
+
+- [x] TypeScript, contract-touch, data-layer, focused model-independence,
+      task-queue, migration, and endpoint checks pass.
+- [x] Installed Narrative Harness proof replay recorded and ran the exact
+      `pnpm test --watchAll=false -t "Synopsis Generation Pipeline"` command,
+      then settled the proof child through review and gate check to `done`.
+- [ ] Narrative Harness is not release-ready yet: six named feature tasks have
+      completed work but still need current proof evidence. The release
+      projection correctly reports this distinction and remains the next live
+      acceptance surface.
+
+### Contract Touch Decision
+
+- Work id: `model-independent-proof-state-2026-07-21`.
+- Touched contracts: structured task evidence, proof-child lifecycle,
+      coordinator self-critique/review handoff, active-release proof recovery,
+      and their tests.
+- Considered but not touched: provider-specific prose formats, release
+      eligibility semantics, raw transcript retention, and UI-only summaries.
+- Required follow-up: finish the six current Narrative Harness proof paths and
+      rerun the installed release audit.
+- Proof required/provided: adversarial prose-variation tests, typed-payload
+      tests, migration idempotence, endpoint tests, and one installed proof
+      replay; remaining release proof is explicitly recorded above.
+- Apply/revert: source changes are reversible; the deterministic proof
+      migration is idempotent and must be reverted through the migration/data
+      repair path rather than by editing generated task JSON.
+
+### Schema Migration Decision
+
+- Persisted schema touched: proof setup task contract and task evidence
+      interpretation; no new competing storage authority was introduced.
+- Scope/change class: additive structured contract plus one-time legacy
+      recovery boundary; existing active proof child state was migrated.
+- Existing data impact: old proof children can be normalized; current prose
+      is no longer promoted into authoritative state.
+- Migration id: `0.13.20/deterministic-proof-setup-contract`.
+- Compatibility reader: only the explicit historical evidence backfill uses
+      legacy content parsing; live runtime reads do not.
+- Fixtures/tests: migration, queue, endpoint, task-runtime, review-contract,
+      and model-independence coverage.
+- Owner-facing plan text: this audit entry and the 0.13 release-cycle plan.
+- Rollback/revert: revert source and apply a data repair for normalized proof
+      children; do not restore prose-driven live state.
+
+## 2026-07-21 model-independent reviewer context boundary
+
+### User job
+
+When a reviewer sends work back, the worker must receive the concrete typed
+revision data that was emitted, while a different model's tone, headings,
+sentence order, verbosity, or explanation format must not change the files it
+is routed to or the state it is allowed to advance.
+
+### Finding and repair
+
+- [x] Single-reviewer context already rendered structured review fields, but
+      the fan-out path still copied its aggregate note content directly into
+      the worker packet. That left a prose-shaped input boundary for one
+      reviewer path even though fan-out aggregation itself used typed fields.
+- [x] Fan-out revision notes now persist the aggregate machine fields in
+      `note.structured` and the worker context renders both reviewer paths
+      through `renderStructuredReviewFeedback`.
+- [x] Prose-only reviewer notes now produce no executable revision context.
+      The prose remains available on task detail and evidence surfaces as an
+      audit trace, but it cannot name files, assert completion, or route work.
+- [x] Reviewer prose that contains a path is no longer a likely-target source;
+      target routing requires acceptance-command data or `structuredSpec` target
+      files.
+
+### Evidence
+
+- [x] Focused context-builder, reviewer fan-out, reviewer-dispatch, and model
+      independence suites pass (`137` tests in the focused run).
+- [x] Adversarial cases cover contradictory approval prose, different model
+      vocabulary, prose-only reviewer notes, and structured feedback with
+      arbitrary surrounding explanations.
+- [ ] The installed Narrative Harness release remains a separate acceptance
+      gate: its selected release is work-complete but still has four completed
+      feature lanes without current proof. This repair does not claim release
+      shipment.
+
+### Contract Touch Decision
+
+- Work id: `model-independent-reviewer-context-2026-07-21`.
+- Touched contracts: reviewer-note structured feedback, worker context
+      assembly, and executable target-file routing.
+- Considered but not touched: provider APIs, human-facing audit prose,
+      release membership, and the task/release lifecycle schema.
+- Required follow-up: rebuild/install, replay the four remaining Narrative
+      Harness proof lanes, and rerun the release acceptance audit.
+- Proof required/provided: focused model-independence/context tests are
+      provided; installed-runtime proof is pending the rebuild.
+- Apply/revert: source-only revert is safe; no persisted records need rollback.
+
+### Schema Migration Decision
+
+- Persisted schema touched: `AgentNote.structured` is now populated for new
+      fan-out revision notes; no new authority or parallel store was added.
+- Scope/change class: additive structured projection of an existing reviewer
+      note; historical prose remains display-only and is not rewritten.
+- Existing data impact: old fan-out notes without structured fields fail closed
+      for worker revision context but remain visible in audit/detail history.
+- Migration id: none required; the live boundary is forward-only and does not
+      reinterpret old prose as current executable state.
+- Compatibility reader: structured JSON-in-text remains limited to explicit
+      review-contract compatibility parsing; live persisted handoff state still
+      requires `note.structured`.
+- Fixtures/tests: context-builder, reviewer fan-out, reviewer-dispatch, and
+      model-independence suites.
+- Owner-facing plan text: this audit entry and the 0.13 release-cycle plan.
+- Rollback/revert: revert source only; do not restore prose-driven routing.
+
 ### Contract Touch Decision
 
 - Work id: `release-preparation-0.11.0-2026-07-19`.
@@ -48771,3 +49564,1800 @@ the repository static gate and npm authentication.
 - Migration id: none. Compatibility reader: none.
 - Rollback/revert: revert the release-preparation commit before publication;
   no data rollback is required.
+
+## 2026-07-21 model-independent proof identity boundary
+
+### User job
+
+When Guildhall says a release feature is proven, the command result must prove
+that exact feature. A model may change vocabulary, tone, headings, sentence
+order, verbosity, or narrative polish without changing which work is selected,
+which evidence is accepted, or whether a release can ship.
+
+### Finding and repair
+
+- [x] A world/object-state proof child was accepted with `pnpm proof:context`.
+      The command exited successfully, but its visible output proved the
+      context plan rather than the named world/object-state review. Exit zero
+      was being mistaken for feature identity.
+- [x] Generic namespaced conventions such as `pnpm proof:context` are no
+      longer concrete task proof commands.
+- [x] Every generated proof-setup acceptance criterion now requires the stable
+      machine marker `guildhall-proof:<parent-task-id>` in command output.
+      This marker is structured evidence, not prose to imitate.
+- [x] Worker handoff, coordinator recovery, and proof-path preparation all use
+      the same typed identity check.
+- [x] Migration `0.13.22/proof-command-identity` invalidates old proof records
+      without the marker, removes generic proof paths, and preserves shipped
+      work as historical state. A follow-up release gets a fresh proof child
+      rather than reopening a shipped child that happens to share membership.
+- [ ] Narrative Harness still needs the affected proof lanes replayed against
+      the new contract; no release claim is made until the command output and
+      feature-specific artifact both agree.
+
+### Evidence
+
+- [x] Focused proof-health, proof-path, migration, task-queue, and model
+      independence suites pass (`162` tests before the shipped-release replay
+      extension; the new release-local-child case is pending its next run).
+- [x] Typecheck, contract detector, data-layer guardrails, and diff checks
+      pass.
+- [ ] Installed-runtime migration and release replay are pending after the
+      shipped-release preservation adjustment.
+
+### Contract Touch Decision
+
+- Work id: `model-independent-proof-identity-2026-07-21`.
+- Touched contracts: proof command concreteness, acceptance output evidence,
+      proof-path verification, worker handoff, and release-local recovery.
+- Considered but not touched: provider APIs, reviewer prose display, release
+      labels, and historical event bodies.
+- Required follow-up: rebuild/install, apply `0.13.22`, verify stale-server
+      status, then replay every selected-release proof lane.
+- Proof required/provided: focused tests and typecheck are provided; live
+      migration and feature-specific proof remain pending.
+- Apply/revert: revert source before migration to avoid installing the new
+      proof contract; once applied, rollback requires a deliberate data repair,
+      not restoration of prose-derived completion.
+
+### Schema Migration Decision
+
+- Persisted schema touched: acceptance `expectedOutputIncludes`, command proof
+      `expectedEvidence.expectedOutputIncludes`, current proof status, and
+      proof-setup task status when it is not part of a shipped release.
+- Scope/change class: additive machine evidence plus invalidation of current
+      proof that cannot identify its bounded task; historical shipped tasks keep
+      their terminal status and receive release-local follow-up proof.
+- Existing data impact: current proof without task identity is stale; raw
+      prose and historical event records remain audit-only.
+- Migration id: `0.13.22/proof-command-identity`.
+- Compatibility reader: none for generic proof completion; old records fail
+      closed until a task-specific command emits the stable marker.
+- Fixtures/tests: migration idempotence, generic-command rejection, generated
+      marker, release-local proof-child materialization, and live Narrative
+      Harness replay.
+- Owner-facing plan text: the 0.13 release-cycle goal and this audit entry.
+- Rollback/revert: do not restore false proof. If source is reverted after
+      applying the migration, use a targeted migration repair to re-establish
+      the prior contract only with explicit owner approval.
+
+## 2026-07-21 model-independent specialist handoff boundary
+
+### User job
+
+When one specialist hands work to another, the next specialist must receive
+the actual bounded handoff without Guildhall depending on a model's Markdown
+headings, vocabulary, sentence order, or narrative style.
+
+### Finding and repair
+
+- [x] Sequential handoffs no longer extract `## Handoff note` from worker
+      prose or fall back to the entire note body.
+- [x] The self-critique contract now accepts a typed `handoff` object with
+      `completed`, `knownGaps`, and optional `nextFocus` fields.
+- [x] Non-final specialist handoffs cannot enter review without that typed
+      payload; prose-only handoffs fail closed.
+- [x] The next specialist receives only the typed handoff fields. Legacy
+      `handoffNote` text remains display-only and is ignored by execution
+      context.
+- [ ] Rebuild/install and replay the Narrative Harness proof lane after this
+      boundary is installed; no completion claim is made from the old run.
+
+### Evidence
+
+- [x] Focused handoff and model-independence suites pass after the schema and
+      runtime changes (`182` tests).
+- [x] The rebuilt installed runtime reports `stale:false` with zero startup
+      errors. The real task record also fails closed because its current proof
+      evidence is missing, despite a stale historical gate result.
+- [ ] The installed runtime has not yet replayed a prose-only specialist
+      handoff through the real update-task endpoint.
+
+### Contract Touch Decision
+
+- Work id: `model-independent-specialist-handoff-2026-07-21`.
+- Touched contracts: `StructuredSelfCritique`, `HandoffStep`, worker handoff
+      validation, sequential context construction, and worker prompts.
+- Considered but not touched: release membership, proof identity, reviewer
+      verdict schema, and historical audit display.
+- Required follow-up: add any migration only if active persisted handoff
+      records need a current structured payload; do not reinterpret legacy
+      prose as executable handoff state.
+- Proof required/provided: focused schema, handoff, and prose-variation tests;
+      installed runtime replay remains pending.
+- Apply/revert: source-only revert is safe before installation; after install,
+      preserve the rule that prose-only handoffs fail closed.
+
+### Schema Migration Decision
+
+- Persisted schema touched: additive `HandoffStep.handoff`; legacy
+      `HandoffStep.handoffNote` is retained as display-only historical text.
+- Scope/change class: additive machine contract and forward-only writer/read
+      boundary; no old prose is promoted into current execution state.
+- Existing data impact: old handoff notes remain visible but are not included
+      in specialist context. Active multi-step work must emit the new packet
+      before its next handoff.
+- Migration id: none required for safety; a later cleanup may remove legacy
+      `handoffNote` after active records are drained.
+- Compatibility reader: none in execution; no Markdown-heading parser remains.
+- Fixtures/tests: handoff sequence, task-queue validation, context-builder,
+      and model-independence cases.
+- Owner-facing plan text: the 0.13 release-cycle goal and this audit entry.
+- Rollback/revert: do not restore prose-driven handoff routing; repair active
+      records by rerunning the bounded specialist handoff.
+
+## 2026-07-21 model-independent checkpoint routing boundary
+
+### User job
+
+When an agent resumes work from a checkpoint, Guildhall must follow the
+checkpoint's typed next-action kind. Changing the checkpoint's human-readable
+sentence must never change whether Guildhall asks for a handoff, reruns proof,
+mutates a target, or escalates.
+
+### Finding and repair
+
+- [x] Checkpoint nudges no longer search `nextPlannedAction` for phrases such as
+      “move to review” or “rerun verification.”
+- [x] Review handoff and verification-first behavior now use
+      `Checkpoint.nextActionKind` exclusively.
+- [x] No-progress stream events carry `statusCode: no_progress`; the
+      orchestrator no longer classifies model/runtime status from display
+      message wording.
+- [x] Engine tests now use the typed checkpoint action and no longer encode a
+      particular self-critique or checkpoint prose template.
+- [ ] Rebuild/install and replay the Narrative Harness proof lane after this
+      boundary is installed; no completion claim is made from the old run.
+
+### Evidence
+
+- [x] Focused run-query, task-queue, handoff, and model-independence suites pass
+      (`182` tests).
+- [x] Typecheck, contract detector, data-layer guardrails, and diff checks pass.
+- [x] Installed runtime reports `stale:false` with zero startup errors.
+- [ ] The live release replay has recorded the new typed status and handoff
+      behavior.
+
+### Contract Touch Decision
+
+- Work id: `model-independent-checkpoint-routing-2026-07-21`.
+- Touched contracts: internal stream status events, checkpoint action routing,
+      worker recovery nudges, and their regression fixtures.
+- Considered but not touched: task titles, descriptions, reviewer prose, and
+      human-readable checkpoint summaries; those remain display/context only.
+- Required follow-up: rebuild/install, verify stale-server status, and replay
+      the selected Narrative Harness release lane.
+- Proof required/provided: focused tests and typecheck are provided; installed
+      runtime proof remains pending.
+- Apply/revert: source-only revert is safe before installation; do not restore
+      prose-based checkpoint routing after installation.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. `statusCode` is an internal stream event
+      field and `Checkpoint.nextActionKind` already exists as the durable
+      routing field.
+- Scope/change class: behavior correction from phrase matching to existing
+      typed state; no historical checkpoint prose is rewritten.
+- Existing data impact: old checkpoints with no action kind remain eligible
+      only for generic recovery behavior; they are not interpreted by wording.
+- Migration id: none.
+- Compatibility reader: no prose classifier; display text remains visible.
+- Fixtures/tests: run-query checkpoint/no-progress cases and model-independence
+      cases.
+- Rollback/revert: preserve typed action routing; repair any incomplete legacy
+      checkpoint by writing its explicit action kind rather than restoring a
+      phrase parser.
+
+## 2026-07-21 model-independent provider-output boundary
+
+### User job
+
+When Guildhall compares or routes model work, changing the provider, genre,
+voice, vocabulary, sentence order, or explanatory prose must not change the
+result unless a declared machine contract field changes. Model prose may be
+shown as audit context, but it cannot become a refusal, quality score,
+completion claim, proof token, or routing signal by phrase matching.
+
+### Finding and repair
+
+- [x] Narrative Harness bakeoff quality is keyed to JSON shape, stable source
+      reference IDs, reviewer-lens IDs, statuses, evidence references, and
+      bounded numeric scores; it does not compare adjectives, phrases, prose
+      order, or vocabulary.
+- [x] Narrative Harness provider refusal is now accepted only from the
+      provider's structured `message.refusal` field. Ordinary content such as
+      “I cannot prove this was supernatural” remains content and is not a
+      refusal signal.
+- [x] The bakeoff producer now emits per-job structured evaluations and
+      candidate quality scores with stable IDs, and bumps its artifact schema
+      to `0.2.0` / producer version `stage1-model-bakeoff-v5`; old artifacts
+      are historical and cannot satisfy the current release contract.
+- [x] Live pricing is recorded per candidate, and a candidate with incomplete
+      cost evidence cannot become eligible for promotion.
+- [x] Guildhall review, handoff, checkpoint, and proof paths use structured
+      IDs/statuses/action kinds and fail closed when those contracts are absent
+      or malformed.
+- [x] Model-independence regressions cover prose variants for sizing, review
+      decisions, self-critique, routing, proof, checkpoint recovery, and the
+      Narrative Harness bakeoff; async-agent identity also requires typed
+      tool-result metadata and ignores provider wording.
+
+### Evidence
+
+- [x] Narrative Harness model-bakeoff suite passes (`15` tests), including
+      refusal-shaped prose and arbitrary drafting/review language.
+- [x] Guildhall model-independence suite passes (`8` tests), and the focused
+      handoff, checkpoint, review-contract, reviewer-fanout, and carryover
+      suites pass (`79` tests in the final focused run).
+- [x] Fresh live provider attempts after this boundary change are preserved:
+      DeepInfra recorded 20/20 HTTP 401 failures, and a Kimi K2.6 one-fixture
+      probe recorded provider-reported truncation at a deliberately tiny
+      128-token draft budget. Both artifacts carry the current structured
+      contract and per-candidate pricing; neither produces quality evidence.
+- [ ] A current cross-genre live candidate has not yet completed the release
+      bakeoff; old artifacts remain evidence only for their recorded run and
+      cannot establish the new source state.
+
+### Contract Touch Decision
+
+- Work id: `0.13.23/model-independent-provider-output`.
+- Touched contracts: Narrative Harness provider-response classification and
+      Guildhall's model-output authority boundary.
+- Considered but not touched: free-form draft prose, reviewer explanations,
+      task titles, and audit text; these remain intentionally unconstrained.
+- Required follow-up: rerun the full cross-genre live bakeoff with a provider
+      configuration that completes the structured output contract, then replay
+      the selected release proof lane.
+- Proof required/provided: structured-contract and wording-variation tests are
+      provided; fresh live provider and installed release replay remain
+      pending.
+- Apply/revert: keep the fail-closed rule. Reverting would reintroduce a
+      provider-style phrase classifier and invalidate the release boundary.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. The provider refusal field is an
+      upstream-response boundary; existing job artifacts retain their recorded
+      status as historical evidence.
+- Scope/change class: behavior correction from free-text refusal detection to
+      structured transport metadata.
+- Existing data impact: no historical artifact is rewritten or silently
+      re-scored; a new bakeoff must be run to produce current evidence. The
+      old `0.1.0` shape has no compatibility reader.
+- Migration id: none required.
+- Compatibility reader: no phrase-based refusal reader is permitted.
+- Fixtures/tests: bakeoff natural-language invariance, refusal-shaped prose,
+      Guildhall model-independence, and proof-contract tests.
+- Owner-facing plan text: the 0.13 release-cycle goal and this audit entry.
+- Rollback/revert: do not restore prose classification; if a provider cannot
+      emit structured refusal metadata, record ordinary output and let the
+      declared JSON contract decide whether the job is eligible.
+
+## 2026-07-21 model-independent async-agent carryover boundary
+
+### User job
+
+When an agent tool creates an async worker, Guildhall must know that worker's
+identity regardless of how the provider phrases the tool result. A changed
+summary sentence must never create, replace, or remove an executable agent
+record.
+
+### Finding and repair
+
+- [x] Removed the `Spawned agent ... (task_id=...)` prose parser from async
+      carryover.
+- [x] Async-agent identity now comes only from typed tool-result metadata
+      containing `agent_id` and `task_id`.
+- [x] Arbitrary provider output remains audit context and cannot populate
+      `async_agent_tasks`.
+- [x] Added the same adversarial case to the central model-independence suite.
+
+### Evidence
+
+- [x] Model-independence suite passes (`8` tests).
+- [x] Tool-carryover suite passes (`40` tests).
+- [ ] Rebuild/install and replay an actual async-agent tool result through the
+      installed runtime; the source boundary is fixed, but live release replay
+      remains pending.
+
+### Contract Touch Decision
+
+- Work id: `0.13.24/model-independent-async-agent-carryover`.
+- Touched contracts: async-agent tool-result metadata and ephemeral
+      carryover state.
+- Considered but not touched: agent descriptions, tool output prose, task
+      titles, and user-facing activity text; these remain audit/display data.
+- Required follow-up: confirm every first-party async-agent tool emits typed
+      result metadata, then replay the installed runtime.
+- Proof required/provided: prose-variation regression and typed-metadata
+      regression are provided; installed replay remains pending.
+- Apply/revert: preserve fail-closed behavior. Missing metadata means no
+      executable identity is created; do not restore prose scraping.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none; carryover is ephemeral runtime metadata.
+- Scope/change class: behavior correction from prose-derived identity to typed
+      tool-result identity.
+- Existing data impact: old carryover entries are bounded session context and
+      are not reinterpreted; a new tool result must supply metadata.
+- Migration id: none required.
+- Compatibility reader: none; provider prose is not a compatibility format.
+- Fixtures/tests: tool-carryover and model-independence adversarial cases.
+- Owner-facing plan text: the 0.13 release-cycle goal and this audit entry.
+- Rollback/revert: do not restore the phrase parser; repair the emitting tool
+      contract if metadata is absent.
+
+## 2026-07-21 model-independent lifecycle boundary
+
+### User job
+
+When a spec is promoted, its lifecycle must depend on the structured task/spec
+contract and explicit owner-input records. A model changing Markdown headings,
+question marks, or the wording inside an explanatory section must not change
+whether the task enters `spec_review`.
+
+### Finding and repair
+
+- [x] Removed the live `## Open Questions` Markdown scanner from `update-task`.
+      It previously treated question-shaped prose as an owner-input gate.
+- [x] Kept structured owner questions as the only supported question path;
+      `post-user-question` persists the typed request and bounded session.
+- [x] Left Markdown section readers only in explicit one-way legacy migration
+      paths. Rendered Markdown is not read back as current lifecycle authority.
+- [x] Made the invalid-review fallback record its typed deterministic verdict
+      whether provider prose is empty or non-empty. Provider output presence
+      cannot alter the durable review trail.
+
+### Evidence
+
+- [x] Task-queue suite passes (`70` tests), including a regression that a
+      Markdown `Open Questions` section no longer changes spec-review
+      promotion.
+- [x] Model-independence, reviewer-dispatch, and task-queue focused suites pass
+      (`115` tests).
+- [ ] Fresh installed-runtime replay of the review fallback remains part of
+      the Narrative Harness release replay; source proof is current, but the
+      selected release is still blocked on its missing task proofs.
+
+### Contract Touch Decision
+
+- Work id: `0.13.25/model-independent-lifecycle-text-boundary`.
+- Touched contracts: `update-task` lifecycle promotion and deterministic review
+      fallback recording.
+- Considered but not touched: Markdown legacy migration readers and human
+      explanatory text; they remain explicit migration/display inputs only.
+- Required follow-up: rebuild/install and replay the selected Narrative
+      Harness release lane after the current proof gaps are repaired.
+- Proof required/provided: lifecycle wording-variation regression and focused
+      review tests are provided; installed replay remains pending.
+- Apply/revert: retain the typed-only lifecycle boundary. Reverting would
+      restore model-style-dependent task promotion.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. Existing task/spec fields and owner-input
+      records remain unchanged.
+- Scope/change class: behavior correction; remove a live Markdown compatibility
+      reader from lifecycle execution.
+- Existing data impact: a legacy spec with an `Open Questions` heading is no
+      longer treated as a current owner-input record. It must use the explicit
+      owner-input request contract if it truly needs an answer.
+- Migration id: none required.
+- Compatibility reader: Markdown readers remain available only to named
+      one-time migrations; no current runtime path may use them for state.
+- Fixtures/tests: task-queue lifecycle variation, model-independence, and
+      deterministic reviewer fallback coverage.
+- Owner-facing plan text: the 0.13 release-cycle goal and this audit entry.
+- Rollback/revert: do not restore the Markdown lifecycle scanner; repair the
+      structured owner-input write if a question is missing.
+
+## 2026-07-21 model-independent gate-disposition boundary
+
+### User job
+
+When a failed typecheck is outside the task's target files, Guildhall must
+either fail closed or use one explicit, typed owner disposition keyed to that
+exact gate. Rewording an escalation resolution must never change whether the
+gate, review, or release passes.
+
+### Finding and repair
+
+- [x] Removed `resolvedDecisionTexts` from gate-disposition context. A
+      resolution's human-readable explanation is audit text only.
+- [x] Added `Task.gateScopeExceptions`, keyed by `gateId` and an explicit
+      `exclude_unrelated_failure` disposition.
+- [x] `resolve-escalation` creates that record only when the caller supplies
+      the typed field and `resolvedBy` is `human`; prose-only and agent-authored
+      exceptions fail closed.
+- [x] The gate runner, reviewer dispatch, and orchestrator consume the same
+      typed task field through metadata/explicit context. The duplicate
+      runtime gate-exception module was removed.
+- [x] Promoted point mutations preserve the field through the shared detail
+      writer; a database roundtrip now proves it survives a real read.
+
+### Evidence
+
+- [x] Focused escalation, gate, runner, and reviewer suites pass (`88` tests).
+- [x] Central model-independence suite includes prose-only versus typed
+      exception parity and must pass under `pnpm model:independence`.
+- [x] Rebuilt/installed/restarted the selected Narrative Harness release lane;
+      the live proof-setup task completed through the deterministic command path
+      and the release remains blocked only by the other 14 missing proof records.
+
+### Contract Touch Decision
+
+- Work id: `0.13.26/model-independent-gate-scope-exception`.
+- Touched contracts: persisted task gate disposition, escalation resolution
+      input, gate-disposition context, and promoted task-detail mutation.
+- Considered but not touched: escalation resolution prose, gate command output,
+      task titles, and reviewer explanations; these remain display/evidence
+      material and cannot grant a disposition.
+- Required follow-up: rebuild/install and replay one typed owner disposition
+      through the installed runtime; then verify every gate surface agrees.
+- Proof required/provided: prose-only negative, agent-authored negative, typed
+      positive, persistence roundtrip, and central prose-variation cases are
+      provided; installed replay remains pending.
+- Apply/revert: preserve fail-closed behavior. If a typed field is absent,
+      repair the writer or owner action; never restore prose matching.
+
+### Schema Migration Decision
+
+- Persisted schema touched: additive `Task.gateScopeExceptions` in per-task
+      detail state.
+- Scope/change class: authority correction; a typed owner disposition becomes
+      the only source of a scoped typecheck exception.
+- Existing data impact: old resolution prose remains audit-only and no longer
+      grants an exception. An owner must explicitly record the typed field.
+- Migration id: none; fail-closed behavior is intentional and no prose
+      backfill is permitted.
+- Compatibility reader: none. The normal promoted detail writer carries the
+      additive field; old records simply have an empty array.
+- Fixtures/tests: gate-scope, escalation, run-gates, reviewer-dispatch, and
+      model-independence suites.
+- Owner-facing plan text: the 0.13 release-cycle goal and this audit entry.
+- Rollback/revert: do not restore prose-derived exemptions. Remove a typed
+      exception explicitly if it was recorded incorrectly.
+
+## 2026-07-21 acceptance-command proof-path reconciliation
+
+### User job
+
+When a task's typed acceptance criteria change, its visible proof path must
+describe the current contract exactly. A release must never remain blocked by
+an obsolete criterion ID or stale generated launch label from an earlier plan
+revision.
+
+### Finding and repair
+
+- [x] Found a live Narrative Harness mismatch: the proof-setup task's current
+      acceptance criterion was `ac-1`, while its generated proof path still
+      carried an old `ac-3` evidence requirement and `Run ac-3` label.
+- [x] Changed command-proof reconciliation to group criteria by exact command,
+      so one command can satisfy multiple current criteria without losing or
+      accumulating phantom evidence.
+- [x] Generated command paths now project from the current typed criteria:
+      stale criterion evidence is removed, current evidence is exact, and the
+      generated title, summary, and launch step follow the live IDs.
+- [x] Generated paths whose command is no longer present in the current
+      acceptance contract are removed from the projection; authored non-
+      generated proof paths remain intact.
+
+### Evidence
+
+- [x] Regression covers stale `ac-3` evidence and launch metadata becoming the
+      current `ac-missing` contract.
+- [x] Proof-path and model-independence suites pass; typecheck passes.
+- [x] Rebuilt/installed/restarted the live app, applied the reconciliation
+      migration, and reran the exact visible command. The current `ac-1` gate
+      and proof path are verified; the old `ac-3` run remains historical.
+
+### Contract Touch Decision
+
+- Work id: `0.13.27/acceptance-command-proof-path-reconciliation`.
+- Touched contracts: acceptance-criterion-to-proof-path projection and the
+      user-visible generated proof-path launch metadata.
+- Considered but not touched: authored proof paths without generated identity,
+      command output prose, and criterion descriptions; those remain evidence
+      or display inputs and do not become lifecycle authority.
+- Required follow-up: verify the installed projection and cross-surface release
+      counts after the migration.
+- Proof required/provided: stale-criterion regression and typecheck are
+      provided; installed replay and command evidence remain pending.
+- Apply/revert: retain exact current-contract reconciliation. Reverting would
+      reintroduce phantom proof requirements after plan revisions.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new field. Existing generated proof-path rows
+      are reconciled from the existing typed acceptance and proof-path fields.
+- Scope/change class: projection repair; remove stale generated evidence without
+      interpreting provider prose or mutating authored proof paths.
+- Existing data impact: old generated criterion evidence can be removed when it
+      is no longer named by the current acceptance command. Historical run
+      records are not treated as current proof once their expectation changes.
+- Migration id: startup reconciliation via the existing proof-path migration;
+      no prose-based backfill.
+- Compatibility reader: none beyond the existing typed proof-path parser.
+- Fixtures/tests: proof-path reconciliation regression and installed NH replay.
+- Owner-facing plan text: the 0.13 release-cycle goal and this audit entry.
+- Rollback/revert: do not restore stale evidence. If a criterion was removed by
+      mistake, restore the typed acceptance criterion and let reconciliation
+      derive the proof path again.
+
+## 2026-07-21 deterministic proof-setup review lane
+
+### User job
+
+When a verification task has a complete typed command contract, Guildhall must
+run that command and evaluate its machine evidence without asking a language
+model to approve the task in prose first. A provider timeout or malformed review
+sentence must not obscure a runnable proof or manufacture an owner blocker.
+
+### Finding and repair
+
+- [x] Narrative Harness proof setup reached review even though its only
+      acceptance criterion was command-backed. The worker claimed the command
+      passed, but the review contract timed out before the authoritative gate
+      could settle it.
+- [x] Extended the existing lean command-backed review lane to all typed
+      `proof_setup` tasks whose acceptance criteria are fully command-backed.
+- [x] These tasks now transition directly from review to command gate check;
+      the command exit and typed output contract remain the only completion
+      authority.
+- [x] Added a regression that fails if the qualitative reviewer is invoked for
+      this task kind.
+
+### Evidence
+
+- [x] Orchestrator proof-setup and lean command-backed tests pass.
+- [x] Rebuilt/installed/restarted the repaired Narrative Harness proof task;
+      the bounded run reached `review -> gate_check -> done` via
+      `lean-command-review` and `acceptance-command-gates`, with a fresh
+      passing `ac-1` record and a merged task commit.
+
+### Contract Touch Decision
+
+- Work id: `0.13.28/deterministic-proof-setup-review-lane`.
+- Touched contracts: review-to-gate dispatch for typed proof-setup tasks.
+- Considered but not touched: general qualitative review tasks and command
+      output interpretation; those retain their existing boundaries.
+- Required follow-up: installed NH replay and cross-surface release proof.
+- Proof required/provided: no-review dispatch regression is provided; installed
+      replay is pending.
+- Apply/revert: retain the typed proof-setup fast path. Reverting would make
+      deterministic proof depend on provider prose and availability again.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none; this is a runtime dispatch correction over the
+      existing `semanticKind` and acceptance-command fields.
+- Scope/change class: behavior correction; no data rewrite or compatibility
+      reader is needed.
+- Existing data impact: proof-setup tasks already in review become eligible for
+      command gates on the next coordinator tick. Historical review text remains
+      audit-only.
+- Migration id: none required.
+- Compatibility reader: existing typed task parser only.
+- Fixtures/tests: orchestrator command-backed review regression and installed
+      Narrative Harness replay.
+- Owner-facing plan text: the 0.13 release-cycle goal and this audit entry.
+- Rollback/revert: do not restore prose-dependent review for a fully typed
+      proof-setup contract.
+
+## 2026-07-21 current completion proof excludes stale contract evidence
+
+### User job
+
+When a task's proof contract changes, the user must see exactly what proves the
+current contract, while still being able to inspect older runs. A historical
+passing gate must never inflate the current verified count or make an obsolete
+criterion look live.
+
+### Finding and repair
+
+- [x] Found the installed Narrative Harness task reporting `expectedCount: 1`
+      and `verifiedCount: 2` because a prior `ac-3` gate was counted beside the
+      current `ac-1` proof.
+- [x] Centralized current-versus-historical classification in the shared
+      completion-proof projection. Current gate IDs, proof-path IDs, commands,
+      and typed review evidence IDs are the only records that count now.
+- [x] Unmatched gate records remain available as compact historical evidence;
+      approval prose without typed proof IDs is explanatory history, not proof.
+
+### Evidence
+
+- [x] Regression proves an old `ac-3` gate becomes historical while `ac-1`
+      remains the sole current proof; a prose-only approval cannot satisfy a
+      review path.
+- [x] Installed API now reports `expectedCount: 1`, `verifiedCount: 1`,
+      `verified: ["Gate passed: ac-1"]`, and `historical: ["Gate passed: ac-3"]`.
+- [x] `/api/stale-server` reports `stale: false` after rebuild, install, and
+      restart; the release API still reports 15/15 tasks done but 14 proof
+      records missing, so no false release completion was created.
+
+### Contract Touch Decision
+
+- Work id: `0.13.29/current-completion-proof-projection`.
+- Touched contracts: shared completion-proof summary and its current/history
+      classification consumed by task detail and release-facing surfaces.
+- Considered but not touched: gate output prose, reviewer reasoning, and raw
+      historical records; they remain audit material only.
+- Required follow-up: apply the same current-contract audit to the remaining
+      Narrative Harness proof tasks before declaring the release complete.
+- Proof required/provided: shared regression, typecheck, model-independence
+      suite, installed API, release status, and stale-server checks provided.
+- Apply/revert: keep historical records, but never let an unmatched record
+      return to the current verified projection.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none; this is a read/projection correction over
+      existing typed proof paths, acceptance criteria, gates, and review IDs.
+- Scope/change class: authority correction; current contract identity is
+      computed from structured fields rather than record order or prose.
+- Existing data impact: no history is deleted. Old evidence is classified as
+      historical when it no longer matches the current proof contract.
+- Migration id: none required.
+- Compatibility reader: existing typed task/evidence reader only.
+- Fixtures/tests: task completion proof regression plus installed NH replay.
+- Owner-facing plan text: the 0.13 release-cycle goal and this audit entry.
+- Rollback/revert: do not restore all-gates-count-as-current behavior; repair
+      the typed proof path or gate identity instead.
+
+## 2026-07-21 proof-setup completion authority
+
+### User job
+
+When Guildhall creates a proof-setup task, the user must be able to trust that
+`done` means the current executable proof actually ran and produced typed
+evidence. A worker pass that merely ended, an old completion timestamp, or a
+provider's explanation must not strand the release in a false terminal state.
+
+### Finding and repair
+
+- [x] Found the installed Narrative Harness proof queue with every parent task
+      marked `done`, while proof-setup children also appeared `done` even though
+      their current command proof paths were still `planned` with no verification
+      records.
+- [x] Added the `0.13.30/proof-setup-completion-authority` migration. It reopens
+      active or release-less proof boundaries to `ready`, clears the stale
+      completion timestamp/assignment, and preserves the old run as history.
+      Shipped release records remain historical and are not reopened by this
+      repair.
+- [x] Fixed retry-work so a proof-setup task reopens itself for proof recovery;
+      it cannot recursively create another proof child beneath itself.
+- [x] Kept completion display aligned with the shared current-proof projection
+      when compact task reads omit the evidence ledger. The projection may
+      provide generated display entries, but no worker/reviewer prose can settle
+      the task.
+
+### Evidence
+
+- [x] Migration regression proves an unproven active proof setup becomes
+      `ready`, clears `completedAt`, records a typed repair event, and is
+      idempotent.
+- [x] Endpoint regression proves retrying a `done` proof setup becomes
+      `in_progress` without creating a child task.
+- [x] Full focused proof/endpoint/migration suite passes after the shared
+      completion projection repair; model-independence, typecheck, contracts,
+      and data-layer guardrails pass.
+- [x] Installed NH proof replay completed honestly. After the first gate
+      observed exit zero but a missing task-identity marker, the worker repaired
+      the project-owned proof command and the same command reached `verified`
+      `1/1`. The parent release rollup moved from 5 to 8 done, with 7 current
+      deliverables remaining and 6 proof blockers.
+- [x] The installed replay exposed and repaired two persistence edges: a
+      compact task-definition write did not fence detail-owned completion
+      history, and proof children shared by shipped and active releases needed
+      release-local siblings. Migrations `0.13.31/proof-setup-history-fence`
+      and `0.13.32/proof-setup-runtime-recovery-marker` preserve the typed
+      runtime recovery authority and historical release boundary.
+
+### Contract Touch Decision
+
+- Work id: `0.13.30/proof-setup-completion-authority`.
+- Touched contracts: proof-setup task terminal status, retry-work recovery, and
+      current completion-proof display.
+- Considered but not touched: shipped historical release records, provider
+      explanations, and raw transcript history; these remain audit material.
+- Required follow-up: continue the active release proof queue and verify each
+      newly completed boundary across API, CLI, and the shared current-proof
+      projection.
+- Proof required/provided: migration, retry, shared projection, installed
+      migration/restart, failed-marker gate, worker repair, and verified
+      `1/1` current proof evidence provided.
+- Apply/revert: preserve the typed current proof boundary. Reverting would make
+      `done` ambiguous again and return the release to the same false terminal
+      state.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing task status, completion timestamp,
+      assignment, notes, proof paths, and release membership only; no new
+      persisted field.
+- Scope/change class: required data repair plus lifecycle authority correction.
+- Existing data impact: active false-terminal proof tasks reopen; historical
+      evidence and shipped-release records remain retained.
+- Migration ids: `0.13.30/proof-setup-completion-authority`,
+      `0.13.31/proof-setup-history-fence`, and
+      `0.13.32/proof-setup-runtime-recovery-marker`.
+- Compatibility reader: none; the repair reads canonical SQLite task
+      definitions, normalized runtime overlays, release membership, and typed
+      proof fields.
+- Fixtures/tests: migration idempotence, shipped/active release split,
+      retry-work recovery, current proof projection, and installed NH replay.
+- Owner-facing plan text: the 0.13 release-cycle goal and this audit entry.
+- Rollback/revert: do not restore false `done` states; repair the current typed
+      command/evidence contract instead.
+
+## 2026-07-21 Model-prose overfit nuke
+
+### Finding
+
+- [x] Narrative Harness's bakeoff provider boundary classified assistant
+      content as a refusal by matching model wording such as `I cannot help`.
+      That made a particular model's prose style an operational contract.
+- [x] The bakeoff also emitted a dimension-oriented quality shape while the
+      Guildhall release auditor required structured job checks and candidate
+      quality evidence. A valid run could therefore fail to prove itself at
+      the product boundary.
+
+### Repair
+
+- [x] Refusal classification now accepts only the provider's typed
+      `message.refusal` field. Refusal-shaped `message.content` is ordinary
+      content and fails closed as `invalid_contract` when it is not valid JSON.
+- [x] Bakeoff artifacts now declare schema `0.2.0`, script `v5`,
+      `evaluationMode: structured_contract`, and `prosePolicy: audit_only` in
+      the reproducibility contract, with structured checks on every job and
+      stable check IDs/scores on every candidate.
+- [x] Historical artifacts were not rewritten; they remain snapshots and do
+      not silently become proof for the new producer contract.
+
+### Evidence
+
+- [x] Narrative Harness's dependency-free model-bakeoff suite passes 14/14,
+      including prose-variation scoring, refusal-shaped prose negative proof,
+      typed refusal proof, and artifact-contract assertions.
+- [x] A generated offline artifact reports schema `0.2.0`, the structured
+      evaluation mode, audit-only prose policy, job checks, and candidate
+      quality evidence without inspecting literary vocabulary.
+
+### Contract Touch Decision
+
+- Work id: `0.13.34/model-independent-bakeoff-provider-boundary`.
+- Touched contracts: Narrative Harness provider response classification and
+      bakeoff artifact schema/evidence fields.
+- Considered but not touched: draft prose, reviewer claims, fixture wording,
+      task titles, and human-readable audit explanations; these remain free-
+      form display or audit material.
+- Required follow-up: run a fresh live bakeoff using the new artifact schema;
+      old live artifacts cannot satisfy the current release gate.
+- Proof required/provided: typed-refusal versus prose-only adversarial tests,
+      14/14 bakeoff suite, generated artifact inspection, and Guildhall's
+      structured release-auditor contract.
+- Apply/revert: do not restore the prose matcher or add a phrase exception.
+      If a provider omits typed refusal or structured output, preserve the
+      failure and repair the provider contract/configuration.
+
+## 2026-07-21 Reviewer contract-failure boundary
+
+### Finding
+
+- [x] Reviewer fan-out represented malformed or prose-only persona output as
+      `revise`, which could make a model-format failure look like a product
+      defect and could trigger a second generic reviewer pass.
+- [x] Mixed fan-out results also treated an approval plus an unavailable
+      persona as inconclusive instead of preserving the structured approval
+      and recording the availability issue separately.
+
+### Repair
+
+- [x] `invalid_review_contract`, `provider_timeout`, and
+      `provider_unavailable` are now one shared non-substantive failure class.
+      They cannot generate worker revision instructions.
+- [x] All-failed fan-out records typed failure evidence once. It does not
+      fall through to a second reviewer. `llm_only` returns an honest
+      provider/contract error; fallback mode may use deterministic review and
+      hard gates, never model prose, to continue.
+- [x] Mixed approval plus availability results aggregate the structured
+      approval while retaining availability telemetry.
+- [x] Deterministic-only reviewer mode bypasses the LLM fan-out entirely.
+
+### Evidence
+
+- [x] `pnpm model:independence`: 10/10.
+- [x] Reviewer contract, proof-health, fan-out, and model-independence tests:
+      55/55; focused fan-out regressions include prose-only output and
+      no-second-reviewer behavior.
+- [x] `pnpm lint:contracts` passes with decision evidence.
+
+### Contract Touch Decision
+
+- Work id: `0.13.35/model-independent-reviewer-fanout`.
+- Touched contracts: structured reviewer failure classification, fan-out
+      aggregation, reviewer-mode routing, and persisted review evidence.
+- Considered but not touched: reviewer explanation prose and persona wording;
+      they remain audit-only and are never used for state transitions.
+- Required follow-up: replay the installed Narrative Harness proof queue after
+      the new build and verify that any remaining review failures are typed
+      contract/provider failures or substantive structured findings.
+- Proof required/provided: adversarial prose-only fan-out test, typed failure
+      persistence, no generic second reviewer, deterministic fallback boundary,
+      54 passing focused tests, and contract-touch audit.
+- Apply/revert: do not restore prose-derived revision routing or generic
+     fallback. Missing structured output must remain an explicit failure.
+
+## 2026-07-22 Installed proof replay after model-prose contract repair
+
+### Finding
+
+- [x] A command-backed proof task could be reopened by stale worker
+      self-critique recovery while it was already at `review` or
+      `gate_check`, allowing old narration to delay the authoritative command
+      proof and preserve stale gate evidence.
+- [x] A persisted non-substantive reviewer failure could still look like a
+      persona product finding through its reason and `failingSignals` fields.
+
+### Repair
+
+- [x] Lean command-backed proof tasks now bypass stale self-critique recovery
+      at the review/gate boundary; their exact command gate owns the next
+      transition and can replace stale evidence.
+- [x] Persisted reviewer contract/provider failures use a typed failure reason,
+      omit product `failingSignals`, and remain excluded from revision
+      instructions. The classification is centralized and named
+      `non-substantive`, not `infrastructure-only`, because malformed model
+      output is not necessarily an infrastructure outage.
+
+### Evidence
+
+- [x] `pnpm typecheck` passes.
+- [x] Focused lifecycle, fan-out, proof-health, and model-independence tests
+      pass: 17 selected tests; the full model-independence/reviewer/proof
+      suite passes 55/55, including the persisted-contract-failure assertion.
+- [x] Installed runtime reports `/api/stale-server` with `stale:false`,
+      `projectCount:7`, `refreshedProjectCount:0`, and `errorCount:0`.
+- [x] Real Narrative Harness replay moved
+      `task-character-voice-and-dialogue-review-proof-setup` from stale
+      `gate_check` to `done` through the exact
+      `pnpm proof:character-voice-dialogue` command. The recorded gate passed,
+      emitted the stable task marker, and completion proof is now
+      `verified`.
+- [ ] Narrative Harness release completion is not yet proven: the selected
+      release reports `10 / 15 done`, with five unfinished items and six
+      proof-evidence blockers. This replay proves the lifecycle boundary, not
+      the MVP release.
+
+### Contract Touch Decision
+
+- Work id: `0.13.36/model-independent-proof-lifecycle-replay`.
+- Touched contracts: persisted reviewer verdict semantics and command-backed
+      proof task lifecycle ordering.
+- Considered but not touched: free-form reviewer prose, task titles,
+      human-readable summaries, and historical transcript snapshots.
+- Required follow-up: continue the selected Narrative Harness release from
+      its typed proof blockers; do not convert any model wording into a test
+      oracle.
+- Proof required/provided: typecheck, focused structured-review/lifecycle
+      tests, installed stale-server check, and a real command-gate replay.
+- Apply/revert: retain the typed failure boundary and command-gate ordering;
+     reverting either would reintroduce model-style coupling or permit stale
+     narration to override executable proof.
+
+## 2026-07-22 Worker review handoff cannot bypass typed proof contracts
+
+### Finding
+
+- [x] The Narrative Harness broad-genre proof child reached `review` with a
+      prose-only claim, no task-specific command criterion, and no stable
+      `guildhall-proof:<parent-task>` output marker. This was not a model-style
+      mismatch in the prose; it was a lifecycle validation hole that allowed a
+      worker status mutation to omit the typed handoff packet entirely.
+
+### Repair
+
+- [x] Worker requests to enter `review` now require a self-critique note before
+      any handoff-specific validation can be skipped. The existing structured
+      acceptance-ID, proof-command, identity-marker, and specialist-handoff
+      checks remain authoritative.
+- [x] Added a regression test proving that a proof setup task remains
+      `in_progress` when a worker omits the self-critique packet.
+
+### Evidence
+
+- [x] Focused task-queue handoff tests pass: 3/3.
+- [ ] Installed runtime replay must repair the already-invalid broad-genre
+      proof child and establish a real task-specific command before it can
+      enter review again.
+
+### Contract Touch Decision
+
+- Work id: `0.13.37/typed-worker-review-handoff-boundary`.
+- Touched contracts: worker `review` status transition and proof-setup
+      handoff validation.
+- Considered but not touched: reviewer prose, task titles, and model-specific
+      wording; none may settle lifecycle state.
+- Required follow-up: replay the installed NH proof child, then continue the
+      release only from typed command evidence and stable markers.
+- Proof required/provided: focused task-queue regression plus installed
+      runtime replay and API state comparison.
+- Apply/revert: retain the unconditional worker handoff boundary; reverting
+     it would reopen a path for prose-only or omitted machine facts to enter
+     `review`.
+
+## 2026-07-22 Release-local proof children do not reuse shipped proof state
+
+### Finding
+
+- [x] After the broad-genre proof child passed in the active NH release, the
+      release still reported its parent as proof-blocked because an older proof
+      child from the shipped predecessor release was still treated as current
+      work through ancestor membership. The durable task graph had two proof
+      children, but the scope projection did not distinguish their release
+      boundaries.
+
+### Repair
+
+- [x] Release scope eligibility now treats `proof_setup` children as
+      release-local: a child whose `releaseIds` do not include the selected
+      release is deferred for that release, even when its parent is included.
+- [x] Linked-parent proof satisfaction now ignores historical proof children
+      when evaluating a selected release, while retaining them as readable
+      history. The parent can be satisfied by the current release's typed proof
+      child without rewriting parent acceptance prose or mutating shipped
+      proof history.
+
+### Evidence
+
+- [x] Added a regression fixture with one shipped proof child and one active
+      release proof child; the active release is ready only when the current
+      child's command proof passes.
+- [x] Focused scope/proof and worker-handoff tests pass: 5/5.
+- [x] Rebuilt/reinstalled the installed runtime, applied
+      `0.13.39/indexed-semantic-kind-boundary`, and replayed the installed NH
+      release projection. The selected release now reports `12/15 done`, `3`
+      ready, `0` active, `0` owner-blocked, and `6` typed proof blockers; the
+      broad-genre parent is no longer blocked by its shipped predecessor child.
+
+### Contract Touch Decision
+
+- Work id: `0.13.38/release-local-proof-child-scope`.
+- Touched contracts: selected-release eligibility, linked-child completion
+      proof aggregation, and proof-setup history boundaries.
+- Considered but not touched: parent acceptance prose, model wording, and
+      shipped-release evidence; those remain durable records and are not
+      rewritten to make a later release look complete.
+- Required follow-up: verify that the installed NH release drops the broad
+      parent blocker after projection refresh, then continue with the next
+      typed proof boundary.
+- Proof required/provided: regression fixture, focused runtime tests,
+      typecheck, diff check, and contract decision lint.
+- Apply/revert: retain release-local filtering; reverting it would let a
+      historical proof child block or satisfy the wrong release.
+
+## 2026-07-22 Model prose is never a runtime discriminator
+
+### Finding
+
+- [x] Phantom-worker recovery still identified a deterministic claim by
+      matching the system note text `Claimed ready task for worker-agent`.
+      Although Guildhall authored that note today, the persisted text was an
+      accidental operational contract and could be changed by a model-shaped
+      or historical note without changing the underlying claim fact.
+- [x] The indexed release projection had enough normalized release membership
+      to distinguish proof children, but compact task points did not retain the
+      typed `semanticKind` needed to apply that distinction without reopening
+      detail prose.
+
+### Repair
+
+- [x] Ready-task claims now persist a typed `structured.event = task_claim`
+      packet with the task ID, deterministic source, and assigned worker. Stale
+      claim recovery accepts only that packet; note copy is display-only.
+- [x] Compact task summaries now retain `semanticKind`. Release-local proof
+      aggregation uses only `semanticKind === proof_setup` plus normalized
+      `releaseIds`, so an old proof child cannot block or satisfy a later
+      release.
+- [x] Added required migration `0.13.39/indexed-semantic-kind-boundary` to
+      backfill the bounded point summaries from authoritative task detail once,
+      then refresh the shared release projection. Ordinary reads remain
+      index-only.
+
+### Evidence
+
+- [x] Prose-independent model suite: 10/10.
+- [x] Typed phantom-claim and fresh-claim endpoint tests: 2/2.
+- [x] Current-release proof-child scope tests: 2/2.
+- [x] Compact task read-model test proves `semanticKind` survives without
+      acceptance detail or evidence payloads: 1/1.
+- [x] `pnpm typecheck`, `git diff --check`, and `pnpm lint:contracts` pass.
+- [x] Rebuilt/reinstalled and applied `0.13.39/indexed-semantic-kind-boundary`
+      in Narrative Harness. The installed compact task point exposes
+      `semanticKind: proof_setup` and current release membership, and the
+      release projection no longer lists the shipped proof child as a blocker.
+
+### Contract Touch Decision
+
+- Work id: `0.13.39/model-independent-compact-proof-boundary`.
+- Touched contracts: task-point summary shape, deterministic claim event,
+      stale-claim recovery, and selected-release proof aggregation.
+- Considered but not touched: model explanation prose, system note wording,
+      task titles, and reviewer vocabulary; none is allowed to settle state.
+- Required follow-up: installed migration/replay and the next typed Narrative
+      Harness release proof boundary.
+- Proof required/provided: arbitrary-prose model tests, typed claim fixture,
+      compact point fixture, release-child projection regression, typecheck,
+      and contract-touch lint.
+- Schema migration decision: existing `work_items.summary_json` is extended
+      additively with the bounded `semanticKind` field; existing task detail and
+      history remain unchanged; migration ID `0.13.39/indexed-semantic-kind-boundary`
+      backfills current points from canonical detail; no compatibility reader
+      or prose inference is permitted; rollback leaves the detail authority
+      intact and removes only the new compact field on a deliberate revert.
+- Apply/revert: retain fail-closed typed contracts. Never restore the prose
+      matcher or add a phrase-specific exception.
+
+## 2026-07-22 Proof-setup recovery stays at one boundary
+
+### Finding
+
+- [x] A blocked proof-setup task inside an active script release could be
+      mistaken for a completed parent missing a proof child. The retry action
+      returned an "already exists" response without reopening the actual proof
+      task, leaving the selected release blocked even after a delegated retry.
+
+### Repair
+
+- [x] Release-local proof materialization now explicitly excludes
+      `semanticKind: proof_setup`. The proof-setup task itself is reopened and
+      remains the only executable proof boundary; it can never generate a
+      second proof child beneath itself.
+- [x] Added an active script-release endpoint regression alongside the existing
+      shipped-release and done-proof-setup cases.
+
+### Evidence
+
+- [x] Proof-setup endpoint cases: 3/3.
+- [x] Model-independence suite: 10/10.
+- [x] `pnpm typecheck`, `git diff --check`, and `pnpm lint:contracts` pass.
+
+### Contract Touch Decision
+
+- Work id: `0.13.40/proof-setup-recovery-boundary`.
+- Touched contracts: retry-work release-local proof materialization and
+      proof-setup task lifecycle.
+- Considered but not touched: task titles, proof descriptions, provider prose,
+      and release labels; none is used to identify a proof boundary.
+- Required follow-up: replay the installed runtime, reopen the Narrative
+      Harness reader-proof task, and verify the worker can reach the exact
+      typed command handoff.
+- Proof required/provided: active-release regression, existing shipped-release
+      regression, done-proof-setup regression, model-independence suite,
+      typecheck, and contract-touch lint.
+- Apply/revert: retain the single-boundary rule. Reverting it would permit
+      recursive proof-child creation and would strand retries at a false
+      materialization response.
+
+## 2026-07-22 Proof recovery preserves the worker lane
+
+### Finding
+
+- [x] Recovery could clear a proof-setup task's current contract and then
+      route the task through generic spec intake. The task still had a typed
+      `proof_setup` identity, but its durable blueprint and acceptance marker
+      were gone, so the provider could spend its turn budget re-intaking work
+      that Guildhall itself had already defined.
+- [x] Retry assignment was also being copied into promoted task definitions,
+      where runtime ownership is forbidden. That made the correct recovery
+      mutation fail as "task not found" rather than recording the worker lane.
+
+### Repair
+
+- [x] Added required migration
+      `0.13.41/proof-setup-execution-blueprint`, reusing the canonical proof
+      contract builder to restore the structured spec, acceptance marker, and
+      verification boundary after a cleared plan. It preserves status,
+      release membership, and historical notes.
+- [x] Proof-setup retries now bypass release-local child materialization and
+      generic spec re-intake, and assign the task to the worker through the
+      runtime overlay. Promoted definitions remain free of runtime assignment
+      fields.
+- [x] Added endpoint and migration regressions for the active release path;
+      the migration is idempotent.
+
+### Evidence
+
+- [x] Proof-setup lifecycle tests pass: done boundary, active blocked boundary,
+      shipped-parent release-local child, and blueprint migration.
+- [x] Model-independence suite remains 10/10.
+
+### Contract Touch Decision
+
+- Work id: `0.13.41/proof-setup-execution-blueprint`.
+- Touched contracts: proof-setup current blueprint, retry routing, and
+      promoted runtime assignment ownership.
+- Considered but not touched: provider prose, task title wording, and generic
+      spec prompts; none is used to determine proof-task routing.
+- Required follow-up: apply the migration in installed Narrative Harness,
+      verify the reader-proof task exposes its restored typed contract, then
+      run the worker lane.
+- Proof required/provided: migration idempotence, active retry endpoint,
+      existing release-local proof cases, typecheck, and contract lint.
+- Apply/revert: retain the canonical proof boundary. Reverting would allow
+      proof tasks to lose their contract and re-enter an unrelated planning
+      lane.
+
+## 2026-07-22 Model prose overfit is a release-blocking defect
+
+### Finding
+
+- [x] The Narrative Harness reader-proof worker reported, in several
+      self-critique notes, that `pnpm run test:reader-review` passed. The
+      authoritative command gate exited zero but captured no required task
+      identity marker, so the proof path correctly remained `blocked` and the
+      task did not complete. This is the exact failure mode we want: provider
+      wording cannot manufacture proof.
+- [x] A reviewer or coordinator must not recover from this by matching
+      reassuring words such as "verified", "passed", or a preferred heading.
+      The only acceptable recovery is a new typed command result containing
+      the saved marker and evidence identity.
+
+### Repair
+
+- [x] Strengthened the shared proof-setup worker contract: the marker must be
+      present in captured command output; a test runner's internal summary and
+      self-critique prose are explicitly insufficient. The prompt gives the
+      bounded package-script wrapper option without requiring a particular
+      provider or prose style.
+- [x] Added a recovery guard so a `semanticKind: proof_setup` task preserves
+      its executable blueprint when a proof recovery path is triggered. It
+      cannot be erased into generic spec intake or create a recursive proof
+      child.
+- [x] Added a behavior regression proving that proof-setup recovery preserves
+      the acceptance command, proof path, and structured blueprint.
+
+### Evidence
+
+- [x] Prose-independence suite: 10/10.
+- [x] Proof-setup recovery behavior and focused endpoint cases pass.
+- [x] `pnpm typecheck` and `pnpm lint:contracts` pass.
+- [x] Rebuilt/reinstalled the installed runtime and replayed the NH task. The
+      first two worker handoffs still claimed success without emitting the
+      marker and were rejected. Codex then used the explicit delegated command
+      binding surface to retain the visible focused command and add a bounded
+      `&& printf` machine-marker wrapper. The installed API now reports the
+      task `done`, proof `proven`, and one durable `passed` verification record
+      whose command output satisfied the exact marker contract.
+
+### Contract Touch Decision
+
+- Work id: `0.13.42/model-prose-release-blocker`.
+- Touched contracts: proof-command output identity, worker proof handoff
+      instructions, and proof-setup recovery preservation.
+- Considered but not touched: provider names, model-specific phrasing,
+      reviewer headings, self-critique copy, and human-readable task prose.
+      They remain display/audit material only.
+- Required follow-up: continue the same release replay on the next ready
+      proof boundary; every provider/model handoff must pass the same typed
+      output test.
+- Proof required/provided: arbitrary-prose model tests, live failed-marker
+      calibration, recovery behavior test, typecheck, and contract lint.
+- Apply/revert: retain the fail-closed behavior. Any matcher on model
+      adjectives, phrase order, headings, or explanation is an immediate
+      release-blocking defect and must be removed, not tuned.
+
+## 2026-07-22 Bootstrap lockfile repair stays deterministic
+
+### Finding
+
+- [x] The next NH proof boundary could not reach its worker because the
+      isolated worktree's `pnpm install` failed with
+      `ERR_PNPM_OUTDATED_LOCKFILE`. That was package-manager bookkeeping in a
+      task worktree, not a product decision, credential problem, or owner
+      action. Blocking the task here contradicted the delegated execution
+      contract.
+
+### Repair
+
+- [x] Bootstrap now retries only this exact pnpm install failure with
+      `--no-frozen-lockfile` inside the isolated worktree. The repaired command
+      and both outputs remain in the bootstrap evidence; unrelated install
+      failures still fail closed.
+- [x] Added a regression for the retry and retained the model-prose proof
+      boundary: a successful install does not make a task's acceptance proof
+      pass.
+
+### Evidence
+
+- [x] Bootstrap repair test plus model-independence and proof-recovery tests:
+      25/25 focused tests.
+- [x] `pnpm typecheck` and `pnpm lint:contracts` pass.
+- [x] Installed runtime was rebuilt/reinstalled and restarted with
+      `stale:false` before replaying the NH proof lane. The lockfile repair
+      allowed the deterministic proof task to reach worker execution and the
+      task ended `done` with `proof: proven`.
+
+### Contract Touch Decision
+
+- Work id: `0.13.43/deterministic-pnpm-lockfile-repair`.
+- Touched contracts: isolated task-worktree bootstrap command execution and
+      recorded bootstrap step identity.
+- Considered but not touched: project task scope, acceptance criteria,
+      provider prose, and owner-input classification.
+- Required follow-up: install the runtime and replay the blocked NH proof
+      boundary; confirm the task reaches worker execution without human input.
+- Proof required/provided: exact error-gated fallback test, full focused suite,
+      typecheck, and contract lint.
+- Apply/revert: retain the narrow retry. Other bootstrap errors must remain
+      visible and fail closed rather than being broadly retried.
+
+## 2026-07-22 Provider prose and stale task worktrees are not authorities
+
+### Finding
+
+- [x] A broad-genre NH proof task reported a successful bakeoff while its
+      captured output emitted `guildhall-proof:task-broad-genre-drafting-model`
+      instead of the typed task identity
+      `guildhall-proof:task-broad-genre-drafting-model-proof`. The gate
+      correctly rejected the near-match; the worker's prose saying it had
+      verified the marker was irrelevant.
+- [x] The same task's reusable worktree was `dirty_uncommitted` and had been
+      created from an older branch head even though the project `main` branch
+      already contained related landed proof commits. Guildhall reused the
+      path without checking the branch against the current base, so a proof
+      script could exist in one task worktree and disappear on the next retry.
+
+### Repair
+
+- [x] Added `GitDriver.syncWorktreeWithBase` and made reusable task worktrees
+      synchronize before worker dispatch. Task-owned dirty edits are
+      checkpointed first; merge conflicts fail closed with typed recovery codes
+      `task_worktree_sync` or `task_worktree_sync_conflict`.
+- [x] Removed phrase authorities that discarded imported proof labels or
+      classified current-plan pollution from canned English. Expected
+      evidence wording remains display material; typed proof paths, acceptance
+      contracts, status, and verification records own behavior.
+- [x] Retired the old current-plan phrase-matching migration. It now performs
+      no text scan or rewrite, and its migration regression preserves the
+      original prose while proving no state change.
+
+### Contract Touch Decision
+
+- Work id: `0.13.44/model-prose-and-worktree-authority-boundary`.
+- Touched contracts: task worktree dispatch freshness, typed task recovery
+      codes, proof evidence display, and the historical current-plan migration.
+- Considered but not touched: provider/model names, task titles, task
+      descriptions, reviewer explanations, and expected-evidence prose. None
+      may determine routing, proof, readiness, decomposition, or completion.
+- Required follow-up: rebuild the installed runtime, replay the broad-genre
+      proof, and verify both the exact marker and the worker worktree's landed
+      project state.
+- Proof required/provided: real-git synchronization tests, reusable-worktree
+      failure test, migration regression, 10-case arbitrary-prose suite,
+      typecheck, contract lint, and diff check.
+- Apply/revert: keep the synchronization boundary and fail-closed typed
+      conflict path. Reverting would restore two authorities: stale task
+      worktrees and model-shaped prose.
+
+## 2026-07-22 Provider proof cannot be activated by model prose
+
+### Finding
+
+- [x] Provider-proof integrity used to scan arbitrary task prose to decide
+      whether provider evidence was required.
+- [x] It also scanned scripts and JSON artifacts for phrases such as
+      “simulated API call” or “fake model”. A provider could therefore change
+      Guildhall state by changing explanation wording, even when the
+      machine-readable result was unchanged.
+- [x] Narrative Harness had the same shape in its live test double: it chose
+      synopsis, story-record, chapter, or review behavior by matching English
+      request sentences.
+
+### Repair
+
+- [x] Provider proof is now an explicit \`provider\` proof path or
+      \`expectedEvidence.kind\` in \`provider-proof-contract.ts\`. No model,
+      title, description, summary, or explanation text can activate it.
+- [x] Simulation rejection now requires a typed \`simulated: true\` or
+      \`executionMode: "simulated"\` field in a JSON proof artifact. Prose
+      mentioning simulation is retained as audit material and ignored by the
+      gate.
+- [x] Narrative Harness request doubles now route on a typed \`operation\` and
+      \`responseFormat\` field. The task sentence remains prompt content only.
+
+### Evidence
+
+- [x] Model-independence tests cover provider-proof activation and artifact
+      prose variation.
+- [x] Typed provider-proof gate regression passes.
+- [x] Narrative Harness MVP live mock suite passes 9/9.
+- [x] \`pnpm typecheck\` passes.
+
+### Contract Touch Decision
+
+- Work id: \`0.13.45/model-independent-provider-proof-contract\`.
+- Touched contracts: proof-path kind, provider evidence metadata, proof artifact
+      simulation metadata, and Narrative Harness model-call envelope.
+- Considered but not touched: literary prose, model names, provider-specific
+      prompt wording, and human-readable audit summaries.
+- Required follow-up: audit remaining production predicates that inspect
+      model-authored text; each must be display-only or replaced with typed
+      state, with arbitrary-prose regression coverage.
+- Proof required/provided: focused model-independence tests, typed provider
+      gate test, Narrative Harness live mock suite, and typecheck.
+- Apply/revert: keep the typed contract. Reverting would reintroduce
+      provider/model prose as an operational authority.
+
+## 2026-07-22 Project-question planning is vocabulary-neutral
+
+### Finding
+
+- [x] The project-question planner had a Narrative Harness-specific detector
+      keyed to phrases such as “fiction-writing software,” “coherent novel,”
+      “quiet UI,” and “author voice.”
+- [x] That detector selected bespoke follow-up questions from document
+      vocabulary. A differently worded document or model could silently change
+      the intake path.
+
+### Repair
+
+- [x] Source sentences are now retained as evidence only.
+- [x] The planner no longer classifies a project from hardcoded prose terms or
+      has a Narrative Harness branch. Without an explicit typed fork, it asks
+      one generic direction question and does not invent a second vocabulary-
+      specific question.
+- [x] Existing evidence extraction and answer handling remain covered; the
+      planner regression now proves the generic path.
+
+### Contract Touch Decision
+
+- Work id: \`0.13.46/vocabulary-neutral-project-question-planning\`.
+- Touched contracts: project-question candidate selection and inferred-memory
+      evidence projection.
+- Considered but not touched: source text, user answer text, and display copy;
+      those remain explanatory evidence.
+- Required follow-up: replace future project-specific question branches with
+      explicit typed project facets or release/task metadata, never keyword
+      detectors.
+- Proof required/provided: project-question planner 10/10, model-independence
+      12/12, and typecheck.
+- Apply/revert: keep the generic typed path until a durable facet contract
+      exists.
+
+## 2026-07-22 Recovery and review ignore provider prose
+
+### Finding
+
+- [x] Spec recovery was still classifying resolved escalation text with
+      phrases such as “out of scope,” “separate,” and “superseded.” That made
+      a provider's explanation wording an input to the next structured spec.
+- [x] Review dispatch could run a deterministic approval before recording a
+      non-empty but malformed reviewer response. The resulting audit trail
+      could contain a deterministic approval beside a prose-only revision,
+      even though the provider never returned a machine verdict.
+- [x] A worker self-critique fixture encoded its machine state only inside
+      Markdown. The test therefore rewarded the exact format of the prose
+      instead of the structured note contract.
+
+### Repair
+
+- [x] Recovery now carries all resolved escalation text as context and uses
+      only typed `gateScopeExceptions` for scope-boundary non-goals. No
+      escalation phrase is classified.
+- [x] Deterministic reviewer fallback runs only when the review response is
+      empty and no typed reviewer state was recorded. Any non-empty provider
+      response is preserved as audit text and receives exactly one structured
+      contract parse; malformed prose becomes `invalid_review_contract` and
+      cannot approve, revise acceptance criteria, or create a product finding.
+- [x] Worker proof reconciliation now requires the persisted structured note
+      payload. The rendered self-critique remains readable evidence only.
+- [x] The project-question planner no longer creates a follow-up from
+      Narrative Harness vocabulary in a free-form answer.
+
+### Evidence
+
+- [x] Recovery status-code and typed-scope tests pass.
+- [x] Prose-only reviewer tests pass, including the case where a reviewer
+      claims approval in prose while the lifecycle records a typed revision.
+- [x] Model-independence suite: 12/12.
+- [x] Project-question planner suite: 10/10.
+
+### Contract Touch Decision
+
+- Work id: `0.13.47/recovery-review-prose-authority-boundary`.
+- Touched contracts: stream `statusCode`, typed gate-scope exceptions,
+      reviewer response persistence, structured self-critique notes, and
+      recovery-spec construction.
+- Considered but not touched: provider response wording, task titles,
+      escalation summaries, reviewer explanations, and Markdown headings;
+      they remain display/audit material only.
+- Required follow-up: run the installed runtime proof after rebuild, then
+      continue the Narrative Harness release replay with the same arbitrary-
+      prose invariance checks.
+- Proof required/provided: focused orchestrator recovery/reviewer tests,
+      model-independence tests, project-question tests, typecheck, contract
+      lint, and a diff check.
+- Apply/revert: retain the fail-closed typed boundary. Any new operational
+      matcher over model-authored prose is an immediate release blocker.
+
+## 2026-07-22 Model prose is an immediate nuke-and-replace boundary
+
+### Finding
+
+- [x] A re-intake repair path still decided that an imported contract task was
+      resolved by looking for strikethrough Markdown plus words such as
+      "done", "shipped", or "recovered" in its title, description, or spec.
+      A model or document author could therefore remove current work by
+      changing prose while leaving the typed task state unchanged.
+- [x] Thread tests still encoded the inverse behavior: they expected Guildhall
+      to rewrite agent sentences about target files, research budgets, and
+      acceptance criteria into canned summaries. That made a particular
+      Guildhall vocabulary look like a contract and hid the actual activity
+      from the user.
+- [x] Re-intake could produce a reviewable Markdown spec without persisting the
+      typed `structuredSpec` required by approval. The UI could therefore say
+      “ready for review” while the authoritative planning contract was absent.
+
+### Repair
+
+- [x] Removed the prose-based resolved-artifact detector. Re-intake now leaves
+      the task in the repair path unless typed completion evidence exists in a
+      `doneSummaryBundle` or merged `mergeRecord`.
+- [x] Thread now preserves arbitrary provider/agent activity as audit/display
+      detail. It does not rewrite, suppress, or derive a verification,
+      progress, or completion state from that wording. The no-progress event
+      is carried by a typed backend `code`, not by a sentence.
+- [x] Imported/re-intaken reviewable work now builds one `StructuredSpec`
+      object first and renders the visible Markdown through the canonical core
+      renderer. Approval and display consequently read the same contract.
+- [x] Split idempotency now belongs to the typed execution-plan action record;
+      the human-readable split note is audit-only. Recovery notes and related
+      runtime events carry typed event identifiers instead of requiring note
+      text to be recognized later.
+- [x] Removed remaining importer classifiers that promoted ordinary document
+      sentences into verification or question state. Verification requires an
+      explicit source section, and an open question must actually end in `?`.
+
+### Evidence
+
+- [x] Focused model/import/thread/re-intake/UI suite: 244/244 tests passed.
+- [x] `pnpm typecheck` passed, including UI typecheck.
+- [x] `pnpm lint:contracts` passed.
+- [x] `git diff --check` passed.
+- [x] Model-independence coverage varies arbitrary prose while holding typed
+      review, proof, sizing, routing, self-critique, and recovery state fixed;
+      prose-only provider results fail closed.
+
+### Contract Touch Decision
+
+- Work id: `0.13.48/model-prose-zero-authority-and-typed-import-spec`.
+- Touched contracts: typed reviewer/recovery event metadata, imported
+      `StructuredSpec` persistence, re-intake completion evidence, split
+      execution-plan idempotency, and Thread activity projection.
+- Considered but not touched: model/provider names, titles, explanations,
+      headings, literary output, reviewer prose, and source-document wording.
+      None is an operational authority.
+- Required follow-up: keep auditing production predicates for any new
+      provider-output phrase matcher; rebuild the installed runtime and replay
+      the Narrative Harness release proof after this boundary lands.
+- Proof required/provided: arbitrary-prose invariance tests, typed import
+      approval test, Thread display tests, focused regression suite, typecheck,
+      contract lint, and diff check.
+- Apply/revert: retain the nuke-and-replace rule. A matcher over model prose
+      is not a calibration problem, prompt problem, or fixture exception. It is
+      a release-blocking defect that must be replaced with a typed field,
+      stable ID, enum, numeric metric, or evidence reference.
+
+### Schema Migration Decision
+
+- Persisted schema touched: task `structuredSpec` for source-backed imported
+      and re-intaken work; structured note/event metadata for runtime recovery
+      and split application.
+- Change class: additive canonical write path with removal of prose-based live
+      readers. Existing records without `structuredSpec` remain visibly
+      unapproved and must be reshaped; no compatibility reader is added that
+      reconstructs authority from Markdown.
+- Migration id: `0.13.48/model-prose-zero-authority-and-typed-import-spec`.
+- Safety/rollback: old prose remains retained as audit text; live state can be
+      re-shaped from source evidence into the typed contract. Reverting to
+      prose readers is prohibited because it restores the authority split.
+
+## 2026-07-22 Memory retrieval is prose-independent
+
+### Finding
+
+- [x] The effective-memory packet used words from a memory record's summary as
+      a relevance signal. A provider could therefore change which memory a
+      worker received by changing its explanation, even when all typed task
+      and memory metadata stayed fixed.
+- [x] Memory records with incompatible structural scopes were intentionally
+      retained for the withheld view, but the predicate was indistinguishable
+      from a positive relevance match. The include path had to remain the sole
+      authority for scope admission.
+- [x] The model-independence gate did not run the effective-memory regression,
+      so the central publish check could pass while retrieval still depended on
+      prose vocabulary.
+
+### Repair
+
+- [x] Memory selection now uses only explicit domains, task kinds, semantic
+      kinds, contract names, file areas, structural scope ids, and explicit
+      memory tags matched against those typed keys. Task and memory prose are
+      display/context only.
+- [x] Structural mismatches remain visible as withheld evidence but can never
+      enter the included worker packet.
+- [x] Added adversarial tests that change summaries completely, add a
+      summary-only keyword collision, and present a structurally unrelated
+      record with perfectly matching prose. None changes inclusion.
+- [x] Expanded `pnpm model:independence` to run the effective-memory suite as
+      part of the release-blocking model-independence gate.
+
+### Evidence
+
+- [x] Model-independence plus effective-memory suites: 20/20 tests passed.
+- [x] `pnpm lint:contracts` passed.
+- [x] `git diff --check` passed.
+
+### Contract Touch Decision
+
+- Work id: `0.13.49/prose-independent-memory-routing`.
+- Touched contracts: effective-memory inclusion predicate and the
+      model-independence publish gate.
+- Considered but not touched: memory summaries, record content, evidence
+      explanations, and task prose. They remain renderable context only.
+- Required follow-up: continue the same audit for every retrieval adapter and
+      re-run the Narrative Harness release proof after the installed runtime is
+      rebuilt.
+- Proof required/provided: typed-selector invariance, scope-mismatch
+      withholding, model-independence gate, and focused memory tests.
+- Apply/revert: retain the typed-only selector boundary. Restoring summary
+      word overlap is an immediate release blocker.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. Existing memory records remain readable;
+      records without typed selectors are treated as broad-scope records, while
+      tagged records require a matching typed task key.
+- Change class: runtime read-authority correction, no compatibility reader or
+      data rewrite.
+- Migration id: `0.13.49/prose-independent-memory-routing`.
+- Safety/rollback: summaries and content are retained for display and audit;
+      no state is deleted. Reverting the selector boundary would restore
+      model-shaped retrieval and is prohibited.
+
+## 2026-07-22 Design routing requires typed classification
+
+### Finding
+
+- [x] Design-finding routing classified a reviewer/owner summary and dimension
+      with keyword buckets when no classification was stored. Different model
+      vocabulary could therefore route the same finding to a project decision,
+      reusable pattern, token gap, or architecture work.
+- [x] Reusable findings also inferred their target design-system package from
+      summary prose. A wording change could move work between core, tokens,
+      layout, docs, or rubric packages without any data change.
+
+### Repair
+
+- [x] Removed the live prose classifier and the prose-derived target-package
+      inference. Routing now requires `suggestedClassification` or
+      `classification`; reusable findings additionally require the typed
+      `targetPackage`.
+- [x] Missing typed fields fail closed with an actionable routing error. The
+      finding remains stored and reviewable; it is not silently guessed.
+- [x] Design-lens-created findings now persist their target package from the
+      typed lens classification, and API/tests provide the same explicit field.
+
+### Evidence
+
+- [x] Design feedback, design-lens, serve endpoint, memory, and model
+      independence suites: 32/32 tests passed.
+- [x] The untyped reviewer finding regression proves arbitrary provider prose
+      cannot route work.
+
+### Contract Touch Decision
+
+- Work id: `0.13.50/typed-design-routing-boundary`.
+- Touched contracts: design finding routing, design-system improvement target,
+      design-lens output, and design-feedback API input.
+- Considered but not touched: finding summaries, dimensions, explanations,
+      owner copy, and reviewer prose. They remain evidence/display text.
+- Required follow-up: inspect other reviewer-derived routing/classification
+      paths under the same typed-only rule during the Narrative Harness replay.
+- Proof required/provided: missing-field fail-closed test, explicit API target,
+      design-lens regression, model-independence suite, and typecheck.
+- Apply/revert: keep fail-closed typed routing. Restoring keyword classification
+      is an immediate release blocker.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new fields; existing optional classification and
+      target-package fields become required for the relevant routing operation.
+- Change class: live reader authority correction. Existing untyped findings are
+      retained as unclassified records and must be reshaped before routing.
+- Migration id: `0.13.50/typed-design-routing-boundary`.
+- Safety/rollback: no findings are deleted or rewritten from prose. Reverting
+      would restore model-shaped routing and is prohibited.
+
+## 2026-07-22 Model-prose zero-authority boundary extended
+
+### Finding
+
+- [x] Worker context had a second memory authority: it keyword-ranked legacy
+      `MEMORY.md` sections against task titles and descriptions while the
+      effective-memory packet selected records separately. A wording change
+      could therefore change context, and legacy headings were being promoted
+      into typed tags/domains by the memory adapter before selection.
+- [x] Proof-path construction classified acceptance criteria by matching words
+      in `verifiedBy`, and imported reintake additionally treated criterion ids
+      containing `automated` or `regression` as executable proof.
+- [x] Automation and context rendering recognized placeholder/stale product
+      briefs by matching canned `New request` prose. Legacy delivery-channel
+      labels were likewise classified from words such as `npm`, `spec`, and
+      `release` when no typed descriptor existed.
+
+### Repair
+
+- [x] Removed legacy `MEMORY.md` from live `listMemoryRecords` retrieval and
+      removed the context-builder keyword-ranking path. `MEMORY.md` remains
+      available only to explicit one-time migration/evacuation flows; live
+      worker memory comes from typed memory records and the effective packet.
+- [x] Proof evidence now maps only the typed verifier enum: `automated` to
+      automated evidence and `review`/`human` to manual evidence. Missing or
+      invalid verifier data fails closed; criterion ids and descriptions have
+      no authority.
+- [x] Removed stale/placeholder product-brief phrase matchers. A brief is
+      accepted or repaired from typed fields and structured completion-boundary
+      grounding, never from wording. Missing delivery descriptors now retain a
+      visible label but use the generic remote-reference kind rather than
+      guessing from channel prose.
+
+### Evidence
+
+- [x] Release-blocking `pnpm model:independence`: 102/102 tests passed,
+      including typed-memory, context, design-routing, proof-path, and
+      adversarial prose-variation cases.
+- [x] Focused memory, effective-memory, context, project-graph, importer, and
+      reintake suites: 146/146 tests passed.
+- [x] `pnpm typecheck`, `pnpm lint:contracts`, `pnpm lint:data-layer`, and
+      `git diff --check` passed.
+- [x] Regression cases prove a provider can change summary, criterion id,
+      product-brief wording, or delivery label without changing operational
+      classification when the typed state is unchanged.
+
+### Contract Touch Decision
+
+- Work id: `0.13.51/model-prose-zero-authority-runtime-boundary`.
+- Touched contracts: effective-memory retrieval, memory-store live sources,
+      proof-path evidence mapping, imported acceptance normalization, product
+      brief context/automation checks, and project-graph delivery presentation.
+- Considered but not touched: human-readable summaries, descriptions, source
+      excerpts, product-brief prose, channel labels, and evidence explanations.
+      They remain display/audit material only.
+- Required follow-up: replay Narrative Harness intake and release proof through
+      the installed runtime, and continue auditing source adapters for places
+      where prose is still promoted into typed task metadata.
+- Proof required/provided: typed invariance tests, legacy-memory exclusion,
+      fail-closed proof mapping, project-graph regression coverage, focused
+      lifecycle tests, typecheck, contract/data-layer lint, and diff check.
+- Apply/revert: retain typed-only operational authority. Reintroducing a
+      model/prose matcher is an immediate release blocker.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new persisted fields. The live reader no longer
+      treats `MEMORY.md` as a current memory-record source; existing JSON memory
+      records and explicit migration evacuation remain intact.
+- Change class: remove historical compatibility read path and replace prose
+      classification with typed contracts/fail-closed display behavior.
+- Migration id: `0.13.51/model-prose-zero-authority-runtime-boundary`.
+- Existing data impact: legacy Markdown memory is no longer operationally
+      retrieved. It is preserved for explicit migration/evacuation and must be
+      converted into reviewed `memory-store.json` records before becoming live
+      memory again.
+- Safety/rollback: no data is deleted. Re-enabling the legacy adapter or prose
+      classifier would restore a second authority and is prohibited.
+
+## 2026-07-22 Project-skill routing is typed
+
+### Finding
+
+- [x] Active project skills were selected by searching task titles,
+      descriptions, specs, product briefs, and acceptance prose for persisted
+      `triggerKeywords`. A provider could change wording and inject or remove
+      a skill without changing the task contract.
+
+### Repair
+
+- [x] Replaced keyword-trigger selection with exact `routingKeys` matching.
+      Context assembly supplies only typed keys derived from domain,
+      task-kind, work-kind, semantic-kind, and contract names.
+- [x] Legacy `triggerKeywords` are no longer part of the live proposal schema
+      or memory adapter. Existing proposals must be reshaped with explicit
+      routing keys before they can affect worker context.
+- [x] Added adversarial context coverage: changing all task prose while
+      holding `domain:looma` fixed still selects the skill, while mentioning
+      every old trigger word with `domain:billing` does not.
+
+### Evidence
+
+- [x] Expanded `pnpm model:independence` to include project-skill tests;
+      118/118 tests passed.
+- [x] Context-builder, memory-store, and skills suites passed after the
+      routing-key migration. Typecheck, contract/data-layer lint, and diff
+      checks passed before the serve-settings suite was run.
+- [x] The broader serve-settings suite completed with 208/221 passing and 13
+      failures in existing coordinator/reintake scenarios; its output shows
+      repeated invalid Anthropic-key 401s and unrelated readiness/import
+      expectations. Those failures are recorded as verification debt, not
+      attributed to the routing-key change.
+
+### Contract Touch Decision
+
+- Work id: `0.13.52/typed-project-skill-routing`.
+- Touched contracts: project-skill proposal routing metadata, skill selector
+      input, memory skill adapter, and worker context assembly.
+- Considered but not touched: skill names, descriptions, content, and task
+      prose. They remain human/model-authored guidance and cannot route work.
+- Required follow-up: migrate or explicitly retire existing Narrative Harness
+      skill proposals before the release replay; inspect other proposal/skill
+      selectors for the same boundary.
+- Proof required/provided: typed-key selector invariance, legacy-key absence,
+      context injection tests, model-independence gate, and typecheck.
+- Apply/revert: retain exact typed routing. Restoring substring matching on
+      task prose or `triggerKeywords` is an immediate release blocker.
+
+### Schema Migration Decision
+
+- Persisted schema touched: `project-skills.json` proposal records changed from
+      `triggerKeywords` to `routingKeys`.
+- Change class: intentional incompatible read-shape removal; old proposals
+      remain readable as inactive records with no routing authority and need a
+      deliberate re-intake/reshaping action to become active context.
+- Migration id: `0.13.52/typed-project-skill-routing`.
+- Existing data impact: active legacy keyword proposals stop auto-injecting
+      into worker context. Skill content is preserved for inspection.
+- Safety/rollback: no proposal content is deleted. Re-enabling keyword-based
+      context injection would restore model-shaped routing and is prohibited.
+## 2026-07-22 Model prose is now a release-blocking authority violation
+
+Work id: `0.13.53/model-prose-static-tripwire`
+
+User job: an agent or provider may explain a result in any words, but Guildhall must make the same operational decision from the same typed result. A model that changes adjectives, headings, phrase order, or explanation length must never change routing, decomposition, readiness, proof, memory selection, or completion.
+
+Change: added `scripts/model-independence-audit.mjs` and made it the first step of `pnpm model:independence`. It scans runtime source for direct matching or normalization of named model-output values and fails the release gate with the exact file and line. The existing behavioral invariance suite remains the authority for cases that require execution rather than static detection. Audit-only display and typed JSON envelope extraction remain allowed; the resulting typed fields, not surrounding prose, are authoritative.
+
+Contract Touch Decision
+
+- Work id: `0.13.53/model-prose-static-tripwire`
+- Touched contracts: release gate `model:independence`; agent/provider output boundary; internal audit protocol.
+- Considered but not touched: Task, ReviewVerdict, provider API, persistence schema, public API, UI copy.
+- Required follow-up: apply the same typed-output boundary to any newly introduced agent role before it enters the release gate.
+- Proof required: static audit must pass; behavioral model-independence cases must pass; typecheck and build must pass.
+- Proof provided: pending verification in this release-cycle run.
+- Waivers: none.
+- Owner-review items: none; this is an invariant-preserving release guard.
+- Apply/revert: keep the guard and remove any newly detected prose authority by replacing it with typed data.

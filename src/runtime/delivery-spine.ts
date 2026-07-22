@@ -287,6 +287,7 @@ export interface SuggestedPrimitiveProofTask {
 }
 
 export interface TaskSplitChildPlan {
+  identity?: string
   title: string
   reason: string
   plannedTaskId: string
@@ -822,25 +823,33 @@ export function planTaskSplit(input: {
       warnings,
     }
   }
-  const workUnits = task.workUnitAnalysis?.units ?? []
+  if (recommendations.some(recommendation => !recommendation.identity && !recommendation.createdTaskId)) {
+    return {
+      parentTaskId: task.id,
+      action: sizePlan.action,
+      children: [],
+      errors: [issue(
+        `tasks.${task.id}.sizePlan.recommendedChildren`,
+        'missing_child_identity',
+        `Task ${task.id} has split work without explicit child identity. Guildhall will not derive identity from prose or list position.`,
+      )],
+      warnings,
+    }
+  }
   for (const [index, recommendation] of recommendations.entries()) {
-    const plannedTaskId = recommendation.createdTaskId ?? `${task.id}-split-${slugForId(recommendation.title)}`
-    recommendationToPlannedId.set(normalizeKey(recommendation.title), plannedTaskId)
-    const matchingUnit =
-      workUnits[index]?.title === recommendation.title
-        ? workUnits[index]
-        : workUnits.find(unit => normalizeKey(unit.title) === normalizeKey(recommendation.title))
-    if (matchingUnit?.id) workUnitIdToPlannedId.set(matchingUnit.id, plannedTaskId)
-    const explicitUses = recommendation.usesPrimitives ?? []
-    const inferredUses = explicitUses.length > 0
-      ? explicitUses
-      : inferPrimitiveRefsFromText({
-        text: `${recommendation.title}\n${recommendation.reason}`,
-        candidates: task.delivery?.usesPrimitives ?? [],
-        model: input.model,
-      })
+    const identity = recommendation.identity ?? recommendation.createdTaskId!
+    const plannedTaskId = recommendation.createdTaskId ?? `${task.id}-split-${slugForId(identity)}`
+    recommendationToPlannedId.set(identity, plannedTaskId)
+    if (recommendation.identity) workUnitIdToPlannedId.set(recommendation.identity, plannedTaskId)
+    // Primitive relationships are structured plan data. A child title or
+    // reason may explain the relationship to a person, but wording must not
+    // silently change the delivery graph.
+    const inferredUses = recommendation.usesPrimitives ?? []
     const provesPrimitives = recommendation.provesPrimitives ?? []
-    const proofKind = recommendation.proofKind ?? inferProofKind(`${recommendation.title}\n${recommendation.reason}`)
+    // Proof classification is a structured contract. A child title or reason
+    // may explain the proof to a person, but changing its wording must not
+    // change persisted delivery behavior.
+    const proofKind = recommendation.proofKind
     for (const [primitiveIndex, primitiveId] of [...inferredUses, ...provesPrimitives].entries()) {
       if (!primitiveIds.has(primitiveId)) {
         errors.push(issue(
@@ -866,6 +875,7 @@ export function planTaskSplit(input: {
       ))
     }
     children.push({
+      identity: recommendation.identity,
       title: recommendation.title,
       reason: recommendation.reason,
       plannedTaskId,
@@ -904,7 +914,7 @@ export function planTaskSplit(input: {
       ...child,
       dependsOn: child.dependsOn.map(dependency =>
         workUnitIdToPlannedId.get(dependency) ??
-        recommendationToPlannedId.get(normalizeKey(dependency)) ??
+        recommendationToPlannedId.get(dependency) ??
         dependency,
       ),
     })),
@@ -1938,41 +1948,6 @@ function isLocalRelativePath(value: string): boolean {
   return value.startsWith('./') && !value.includes('..') && !path.isAbsolute(value)
 }
 
-function inferPrimitiveRefsFromText(input: {
-  text: string
-  candidates: string[]
-  model: ProjectDeliveryModel
-}): string[] {
-  return input.candidates.filter((primitiveId) => {
-    const primitive = input.model.primitives.find(candidate => candidate.id === primitiveId)
-    const needles = [
-      primitiveId,
-      primitive?.label,
-      ...(primitive?.aliases ?? []),
-    ].filter((value): value is string => Boolean(value && value.trim()))
-    return needles.some(needle => textContainsNeedle(input.text, needle))
-  })
-}
-
-function textContainsNeedle(text: string, needle: string): boolean {
-  const normalizedNeedle = needle.toLowerCase().replace(/[^a-z0-9]+/g, '')
-  if (!normalizedNeedle) return false
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean)
-    .some(token => token === normalizedNeedle)
-}
-
-function inferProofKind(text: string): string | undefined {
-  if (/\bstorybook|visual proof|screenshot\b/i.test(text)) return 'storybook'
-  if (/\binteraction|keyboard|focus|hover\b/i.test(text)) return 'interaction'
-  if (/\be2e|end[- ]to[- ]end|browser\b/i.test(text)) return 'e2e'
-  if (/\bunit\b/i.test(text)) return 'unit'
-  if (/\bbuild|typecheck|compile\b/i.test(text)) return 'build'
-  return undefined
-}
-
 function slugForId(value: string): string {
   const slug = value
     .trim()
@@ -1982,9 +1957,6 @@ function slugForId(value: string): string {
   return slug || 'child'
 }
 
-function normalizeKey(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ')
-}
 
 function unique<T>(values: T[]): T[] {
   return [...new Set(values)]

@@ -156,6 +156,20 @@ describe('Orchestrator — handoff sequence', () => {
           role: 'worker',
           content:
             '## Self-critique\n- ac-1: met\n- ac-2: met\n\n## Handoff note\nForm renders; Submit button fires POST stub. FormState is `any` in two places — TS Engineer to resolve. Button labels are placeholder, Copywriter may replace.',
+          structured: {
+            acceptanceCriteria: [
+              { id: 'ac-1', status: 'met' },
+              { id: 'ac-2', status: 'met' },
+            ],
+            changedFiles: ['src/signup.tsx'],
+            verificationCommands: [{ command: 'pnpm test:signup', status: 'passed' }],
+            proofEvidenceIds: [],
+            handoff: {
+              completed: ['Form renders and the submit action reaches the POST stub.'],
+              knownGaps: ['FormState remains any in two places.', 'Button labels are placeholders.'],
+              nextFocus: 'Tighten FormState types and review copy.',
+            },
+          },
           timestamp: '2026-04-23T10:00:00Z',
         },
       ],
@@ -172,8 +186,8 @@ describe('Orchestrator — handoff sequence', () => {
     // Step 1 captured its handoff note and completedAt.
     const step1 = after.handoffSequence![0]!
     expect(step1.completedAt).toBeTruthy()
-    expect(step1.handoffNote).toContain('Form renders')
-    expect(step1.handoffNote).toContain('TS Engineer to resolve')
+    expect(step1.handoff?.completed).toContain('Form renders and the submit action reaches the POST stub.')
+    expect(step1.handoff?.knownGaps).toContain('FormState remains any in two places.')
     // Step 2 untouched.
     const step2 = after.handoffSequence![1]!
     expect(step2.completedAt).toBeUndefined()
@@ -263,7 +277,12 @@ describe('context-builder — handoff-aware persona selection', () => {
     const task = mkTask({
       status: 'in_progress',
       handoffSequence: [
-        { agent: 'frontend-engineer', scope: [], handoffNote: 'skeleton done' },
+        {
+          agent: 'frontend-engineer',
+          scope: [],
+          handoffNote: 'A prose-only note that must never become specialist context.',
+          handoff: { completed: ['skeleton done'], knownGaps: [] },
+        },
         { agent: 'backend-engineer', scope: ['ac-3'] },
       ],
       handoffStep: 1,
@@ -274,6 +293,7 @@ describe('context-builder — handoff-aware persona selection', () => {
     expect(ctx.personaPrompt).toContain('Handoff sequence — step 2 of 2')
     // Prior step's handoff note appears.
     expect(ctx.personaPrompt).toContain('From step 1 (frontend-engineer)')
-    expect(ctx.personaPrompt).toContain('skeleton done')
+    expect(ctx.personaPrompt).toContain('Completed: skeleton done')
+    expect(ctx.personaPrompt).not.toContain('prose-only note')
   })
 })

@@ -33,10 +33,11 @@ export const roadmapSource: TaskSource = {
       if (seen.has(key)) continue
       seen.add(key)
       const raw = readFileSync(p, 'utf-8')
-      for (const line of raw.split('\n')) {
+      for (const [lineIndex, line] of raw.split('\n').entries()) {
         const checked = /^\s*[-*]\s*\[[xX]\]\s+(.+?)\s*$/.exec(line)
         if (checked) {
           signals.push({
+            signalId: `${p}:line:${lineIndex + 1}`,
             source: 'roadmap',
             kind: 'milestone',
             title: checked[1]!,
@@ -49,6 +50,7 @@ export const roadmapSource: TaskSource = {
         const unchecked = /^\s*[-*]\s*\[\s?\]\s+(.+?)\s*$/.exec(line)
         if (unchecked) {
           signals.push({
+            signalId: `${p}:line:${lineIndex + 1}`,
             source: 'roadmap',
             kind: 'open_work',
             title: unchecked[1]!,
@@ -61,6 +63,7 @@ export const roadmapSource: TaskSource = {
         const plainTop = /^[-*]\s+(.+?)\s*$/.exec(line)
         if (plainTop) {
           signals.push({
+            signalId: `${p}:line:${lineIndex + 1}`,
             source: 'roadmap',
             kind: 'open_work',
             title: plainTop[1]!,

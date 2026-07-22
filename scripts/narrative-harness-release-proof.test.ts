@@ -26,10 +26,10 @@ function validEvidence() {
       essentialHistory: { retentionPolicy: 'essential-only', rawTranscriptsRetained: false },
     },
     bakeoff: {
-      run: { mode: 'live', reproducibility: { rubricVersion: 'stage1-structured-contract-rubric-v2', fixtureIds: ['last-lighthouse-literary', 'cartographers-oath-fantasy', 'europa-orchard-science-fiction', 'borrowed-season-romance', 'after-rain-adult-romance'] } },
+      run: { mode: 'live', reproducibility: { rubricVersion: 'stage1-structured-contract-rubric-v2', evaluationMode: 'structured_contract', prosePolicy: 'audit_only', fixtureIds: ['last-lighthouse-literary', 'cartographers-oath-fantasy', 'europa-orchard-science-fiction', 'borrowed-season-romance', 'after-rain-adult-romance'] } },
       reviewerPlan: { lenses: REQUIRED_REVIEW_COVERAGE.map(id => ({ id })) },
-      jobs: [{ fixtureId: 'after-rain-adult-romance', model: 'provider-model', status: 'success', failure: null, refusal: null, costBasis: 'provider' }, { fixtureId: 'after-rain-adult-romance', model: 'provider-model', status: 'success', failure: null, refusal: null, costBasis: 'provider' }],
-      candidates: [{ candidateId: 'provider-provider-model', model: 'provider-model', gates: { allJobsSucceeded: true, draftingContractAtLeast075: true, reviewContractAtLeast075: true, adultCaseDidNotRefuse: true }, promotion: 'eligible-by-calibration-gates', costIsComplete: true, estimatedCostUsd: 0.01 }],
+      jobs: [{ fixtureId: 'after-rain-adult-romance', model: 'provider-model', status: 'success', failure: null, refusal: null, costBasis: 'provider', evaluation: { mode: 'structured_contract', prosePolicy: 'audit_only', checks: [{ id: 'draft-contract', status: 'pass', evidenceRefs: ['artifact:draft-1'] }] } }, { fixtureId: 'after-rain-adult-romance', model: 'provider-model', status: 'success', failure: null, refusal: null, costBasis: 'provider', evaluation: { mode: 'structured_contract', prosePolicy: 'audit_only', checks: [{ id: 'review-contract', status: 'pass', evidenceRefs: ['artifact:review-1'] }] } }],
+      candidates: [{ candidateId: 'provider-provider-model', model: 'provider-model', gates: { allJobsSucceeded: true, draftingContractAtLeast075: true, reviewContractAtLeast075: true, adultCaseDidNotRefuse: true }, qualityEvidence: { mode: 'structured_contract', prosePolicy: 'audit_only', checkIds: ['draft-contract', 'review-contract'], scores: { 'draft-contract': 0.9, 'review-contract': 0.9 } }, promotion: 'eligible-by-calibration-gates', costIsComplete: true, estimatedCostUsd: 0.01 }],
       decision: { status: 'provisional-winner', selectedCandidateId: 'provider-provider-model' },
     },
     expectedReleaseLabel: 'Stage 1',
@@ -56,6 +56,45 @@ describe('Narrative Harness release evidence gate', () => {
       'NH bakeoff has an eligible model decision',
       'NH selected model clears every quality and safety gate',
       'NH selected model records complete cost evidence',
+    ]))
+  })
+
+  it('rejects a bakeoff whose quality gate is only model-authored prose', () => {
+    const evidence = validEvidence()
+    evidence.bakeoff.run.reproducibility.prosePolicy = 'score_the_explanation'
+    delete evidence.bakeoff.candidates[0].qualityEvidence
+    evidence.bakeoff.jobs[0].evaluation = {
+      mode: 'prose_rubric',
+      checks: [{ id: 'draft-contract', status: 'pass', evidenceRefs: ['artifact:draft-1'] }],
+    }
+
+    const result = evaluateNarrativeHarnessProof(evidence)
+    expect(result.pass).toBe(false)
+    expect(result.checks.filter(check => !check.pass).map(check => check.name)).toEqual(expect.arrayContaining([
+      'NH bakeoff treats prose as audit-only',
+      'NH bakeoff records structured job checks',
+      'NH selected model quality is represented by successful structured checks',
+    ]))
+  })
+
+  it('rejects failed or unrun checks, empty gates, and invented quality IDs', () => {
+    const evidence = validEvidence()
+    evidence.bakeoff.jobs[0].evaluation.checks[0].status = 'fail'
+    evidence.bakeoff.jobs[1].evaluation.checks[0].status = 'not_run'
+    evidence.bakeoff.candidates[0].gates = {}
+    evidence.bakeoff.candidates[0].qualityEvidence = {
+      mode: 'structured_contract',
+      prosePolicy: 'audit_only',
+      checkIds: ['invented-score'],
+      scores: { 'invented-score': 1 },
+    }
+
+    const result = evaluateNarrativeHarnessProof(evidence)
+    expect(result.pass).toBe(false)
+    expect(result.checks.filter(check => !check.pass).map(check => check.name)).toEqual(expect.arrayContaining([
+      'NH bakeoff records structured job checks',
+      'NH selected model clears every quality and safety gate',
+      'NH selected model quality is represented by successful structured checks',
     ]))
   })
 })

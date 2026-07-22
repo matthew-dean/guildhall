@@ -38,11 +38,12 @@ import {
 } from '@guildhall/sessions'
 import { readTaskRuntimeStore, readTaskWorkspaceStore, writeTaskRuntimeStore } from './task-state-store.js'
 import { classifyCompletionProof, latestRecordedCompletionProofAt, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
-import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing, taskDoneButProofMissingForScope, taskDoneButReviewConflict, taskHasNonReviewCommandBackedProof, taskHasReviewProofPath, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
+import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing, taskDoneButProofMissingForScope, taskDoneButReviewConflict, taskHasNonReviewCommandBackedProof, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
 import { closeReleaseIfReady } from './release-lifecycle.js'
 import { comparableCommand, ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand } from './proof-paths.js'
 import { normalizeReviewPlanForTask } from './review-planner.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
+import { readPersistedStructuredSelfCritique, reviewVerdictHasStructuredApproval } from './review-contract.js'
 import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
@@ -58,7 +59,6 @@ import {
   readFleetSummaryProjectionPageAtBoundary,
 } from './fleet-summary-projection.js'
 import { ProjectStateRevisionMismatchError, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
-import { taskTitleOverlap } from './task-title-overlap.js'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -125,9 +125,11 @@ import {
   materializeSplitChildren,
   settleAlreadyRepresentedSplitRecommendations,
   settleMaterializedSplitReadiness,
+  isProofSetupTask,
+  materializeProofSetupTask,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { DesignSystem, parseAcceptanceCriteriaFromSpec, summarizeDesignSystem, Task as TaskSchema, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
+import { acceptanceCriteriaFromStructuredSpec, DesignSystem, explicitTaskStructuralIdentity, renderStructuredSpecMarkdown, StructuredSpec, summarizeDesignSystem, Task as TaskSchema, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -404,6 +406,7 @@ import { NodeGitDriver } from './git-driver.js'
 import {
   GitStoryClosureState,
   GitStorySnapshot,
+  gitStoryFollowupIsActive,
   inspectGitStory,
   summarizeGitStories,
   type GitStorySummary,
@@ -1138,7 +1141,7 @@ function savedProofEvidenceStartBlocker(
   if (count <= 0) return null
 
   const proofTaskIds = summary.releaseSummary.blockers
-    .filter(blocker => /proof evidence|verification evidence|completion proof|proof is missing|proof is stale/i.test(blocker.label))
+    .filter(blocker => blocker.code === 'proof_evidence_missing')
     .map(blocker => blocker.owningTaskId ?? blocker.id)
     .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
   const focusTaskId = summary.nextAction.focusTaskId ?? proofTaskIds[0]
@@ -1502,7 +1505,13 @@ async function writeProjectReleaseEnvelope(
     const state = release.id === releaseId && (candidateState === 'planned' || candidateState === 'deferred')
       ? 'active'
       : candidateState
-    releasesById.set(release.id, { ...persisted, state })
+    const immutableShippedMembership = options.preserveExistingLifecycleState && existing?.state === 'shipped'
+      ? {
+          nodeIds: [...existing.nodeIds],
+          deferredNodeIds: [...existing.deferredNodeIds],
+        }
+      : {}
+    releasesById.set(release.id, { ...persisted, ...immutableShippedMembership, state })
   }
   const releases = [...releasesById.values()]
   const release = releases.find(candidate => candidate.id === releaseId)
@@ -1667,41 +1676,47 @@ function seedSpecFromApprovedBrief(task: Record<string, unknown>, now: string): 
   const nonGoals = [...briefList(brief.nonGoals), ...briefList(brief.antiPatterns)]
   const uniqueNonGoals = [...new Set(nonGoals)]
 
-  const spec = [
-    '## Summary',
-    `Complete ${title} from the approved product brief and current task evidence.`,
-    '',
-    '## Source Evidence',
-    `- Approved user job: ${userJob}`,
-    `- Why it matters now: ${whyItMattersNow}`,
-    `- Success metric: ${successMetric}`,
-    `- Existing task description: ${description}`,
-    '',
-    '## Acceptance Criteria',
-    `1. Given the approved brief, when ${title} is completed, then the delivered work satisfies the approved user job without asking the owner to repeat answered intake.`,
-    `2. Given the current task evidence, when the task is reviewed, then Guildhall records which existing artifacts, docs, tasks, or implementation changes satisfy the remaining delta.`,
-    '3. Given the work is complete, when verification runs, then Guildhall records review or command proof sufficient to explain why the task can move to done.',
-    '',
-    '## Out of Scope',
-    ...(uniqueNonGoals.length > 0
-      ? uniqueNonGoals.map((item) => `- ${item}`)
-      : ['- Work not implied by the approved brief or current task evidence.']),
-    '',
-    '## Open Questions',
-    '- None. The owner-approved brief is enough to continue; only newly discovered product decisions should return this task to exploring.',
-    '',
-    '## Completion Boundary',
-    `- Product outcome: ${successMetric}`,
-    '- What Guildhall can complete in code: the repo-local docs, artifacts, task records, implementation, tests, or proof needed by this approved brief.',
-    '- External dependencies: None known from the approved brief.',
-    '- Owner-only setup: None known after approval.',
-    '- Verification environment: the current registered project and its existing proof surfaces.',
-    '- What counts as done: the remaining delta is implemented or proven already satisfied, reviewed, and backed by recorded verification.',
-    '- What must be split or blocked: only newly discovered work that cannot be resolved from the approved brief and current task evidence.',
-  ].join('\n')
+  const structuredSpec = StructuredSpec.parse({
+    whatThisIs: `Complete ${title} from the approved product brief and current task evidence.`,
+    problemContext: [
+      `Approved user job: ${userJob}`,
+      `Why it matters now: ${whyItMattersNow}`,
+      `Success metric: ${successMetric}`,
+      `Existing task description: ${description}`,
+    ].join(' '),
+    goals: [
+      'Satisfy the approved user job without asking the owner to repeat answered intake.',
+      'Record which existing artifacts, docs, tasks, or implementation changes satisfy the remaining delta.',
+    ],
+    nonGoals: uniqueNonGoals.length > 0
+      ? uniqueNonGoals
+      : ['Work not implied by the approved brief or current task evidence.'],
+    proposedDesign: 'Use the project surfaces named by the approved brief and current task evidence, recording implementation and proof in their existing durable contracts.',
+    keyDecisions: ['The owner-approved brief is the current scope boundary; newly discovered product decisions remain separate work.'],
+    acceptanceCriteria: [
+      `Given the approved brief, when ${title} is completed, then the delivered work satisfies the approved user job without asking the owner to repeat answered intake.`,
+      `Given the current task evidence, when the task is reviewed, then Guildhall records which existing artifacts, docs, tasks, or implementation changes satisfy the remaining delta.`,
+      'Given the work is complete, when verification runs, then Guildhall records review or command proof sufficient to explain why the task can move to done.',
+    ],
+    verification: [
+      'Review the changed project surfaces against the approved brief and current task evidence.',
+      'Record the observed implementation or proof result against this task.',
+    ],
+    completionBoundary: {
+      productOutcome: successMetric,
+      whatGuildhallCanCompleteInCode: 'The repo-local docs, artifacts, task records, implementation, tests, or proof needed by this approved brief.',
+      externalDependencies: 'None known from the approved brief.',
+      ownerOnlySetup: 'None known after approval.',
+      verificationEnvironment: 'The current registered project and its existing proof surfaces.',
+      whatCountsAsDone: 'The remaining delta is implemented or proven already satisfied, reviewed, and backed by recorded verification.',
+      whatMustBeSplitOrBlocked: 'Only newly discovered work that cannot be resolved from the approved brief and current task evidence.',
+      splitPolicy: 'conditional',
+    },
+  })
 
-  task.spec = spec
-  task.acceptanceCriteria = parseAcceptanceCriteriaFromSpec(spec)
+  task.structuredSpec = structuredSpec
+  task.spec = renderStructuredSpecMarkdown(structuredSpec)
+  task.acceptanceCriteria = acceptanceCriteriaFromStructuredSpec(structuredSpec)
   const quality = validateSpecCompletionBoundary(task as unknown as Task)
   if (!quality.ok) {
     delete task.spec
@@ -1763,9 +1778,15 @@ function isPhantomWorkerClaimAfterStoppedRun(task: Record<string, unknown>, nowM
   const last = lastTaskNote(task)
   const claimTimestampMs = noteTimestampMs(last)
   if (claimTimestampMs == null || nowMs - claimTimestampMs < PHANTOM_WORKER_CLAIM_MIN_AGE_MS) return false
+  const structured = last?.structured
+  if (!structured || typeof structured !== 'object' || Array.isArray(structured)) return false
+  const claim = structured as Record<string, unknown>
   return (
     last?.agentId === 'task-claimer' &&
-    /Claimed ready task for worker-agent/i.test(String(last.content ?? ''))
+    claim.event === 'task_claim' &&
+    claim.source === 'deterministic' &&
+    claim.taskId === task.id &&
+    claim.assignedTo === 'worker-agent'
   )
 }
 
@@ -1782,26 +1803,28 @@ async function repairSpecTimeoutBlockedTask(projectPath: string, requestedTaskId
     : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
   const task = queue.tasks.find(candidate => String(candidate.id ?? '') === requestedTaskId)
   if (!task || task.status !== 'blocked') return false
-  const blockReason = String(task.blockReason ?? '')
-  if (!/human_judgment_required:\s*Spec shaping timed out before saving durable progress/i.test(blockReason)) return false
+  const taskForRecovery = databaseAuthority
+    ? await buildEffectiveTask(projectPath, task as Task) as unknown as Record<string, unknown>
+    : task
+  if (taskForRecovery.recoveryCode !== 'spec_no_progress') return false
   const now = new Date().toISOString()
   if (databaseAuthority) {
-    const effectiveTask = await buildEffectiveTask(projectPath, task as Task) as unknown as Record<string, unknown>
-    const resolvedEscalations = (Array.isArray(effectiveTask.escalations) ? effectiveTask.escalations : [])
+    const resolvedEscalations = (Array.isArray(taskForRecovery.escalations) ? taskForRecovery.escalations : [])
       .filter(escalation => (
         escalation && typeof escalation === 'object' &&
         !('resolvedAt' in escalation) &&
-        /Spec shaping timed out before saving durable progress/i.test(String((escalation as Record<string, unknown>).summary ?? ''))
+        (escalation as Record<string, unknown>).recoveryCode === 'spec_no_progress'
       )) as Array<Record<string, unknown>>
     const promoted = writePromotedTaskDetailMutation(tasksPath, requestedTaskId, {
       projectId: basename(projectPath),
       projectRoot: projectPath,
       mutate: current => {
-        if (current.status !== 'blocked' || !/human_judgment_required:\s*Spec shaping timed out before saving durable progress/i.test(String(current.blockReason ?? ''))) {
+        if (current.status !== 'blocked' || current.recoveryCode !== 'spec_no_progress') {
           return null
         }
         current.status = 'exploring'
         delete current.blockReason
+        delete current.recoveryCode
         current.updatedAt = now
         return current
       },
@@ -1841,12 +1864,12 @@ async function repairSpecTimeoutBlockedTask(projectPath: string, requestedTaskId
   task.status = 'exploring'
   task.assignedTo = null
   delete task.blockReason
+  delete task.recoveryCode
   task.updatedAt = now
   if (Array.isArray(task.escalations)) {
     task.escalations = task.escalations.map((escalation) => {
       if (!escalation || typeof escalation !== 'object') return escalation
-      const summary = String((escalation as { summary?: unknown }).summary ?? '')
-      if (!/Spec shaping timed out before saving durable progress/i.test(summary)) return escalation
+      if ((escalation as { recoveryCode?: unknown }).recoveryCode !== 'spec_no_progress') return escalation
       return {
         ...escalation,
         resolvedAt: (escalation as { resolvedAt?: unknown }).resolvedAt ?? now,
@@ -2168,7 +2191,11 @@ async function refreshProjectProjections(
       }
       if (!attentionOnly) {
       const compactRefreshDomains = new Set([
-        'queue', 'scope', 'release', 'delivery', 'attention', 'reconciliation', 'thread', 'diagnostics', 'memory',
+        // Current evidence is already reduced into work_items.summary_json by
+        // the authoritative evidence transaction. Re-projecting from those
+        // points keeps proof/readiness cheap without reopening task detail or
+        // treating evidence prose as a second source of truth.
+        'queue', 'scope', 'release', 'delivery', 'evidence', 'attention', 'reconciliation', 'thread', 'diagnostics', 'memory',
       ])
       // A stale or newly-versioned summary is still a compact projection
       // concern. Rebuild it from indexed rows first; summary freshness must
@@ -2201,9 +2228,11 @@ async function refreshProjectProjections(
           })
         }
       } else {
-        // Evidence/runtime/legacy invalidations can change scoped readiness
-        // and proof blockers. Rebuild those facts in the asynchronous write
-        // projector, never in the request that is serving a card.
+        // Runtime/legacy invalidations can change scoped readiness and proof
+        // blockers. Rebuild those facts in the asynchronous write projector,
+        // never in the request that is serving a card. Evidence stays on the
+        // compact path above because its current proof point is materialized
+        // in the same authoritative transaction that records the event.
         const queueRead = databaseAuthority ? readProjectTaskQueueAtBoundaryWithRevision(tasksPath) : null
         const queue = queueRead?.definition ?? await readProjectTaskQueue(tasksPath)
         if (queue !== null && queue !== undefined) {
@@ -3040,26 +3069,17 @@ function scopedWorkNeedsDesignSystem(
   release: { proofStyle?: string | null } | null | undefined,
 ): boolean {
   if (release?.proofStyle === 'script_only') return false
-  return tasks.some((task) => {
-    const text = [
-      task.title,
-      task.description,
-      task.spec,
-      typeof task.productBrief === 'object' && task.productBrief
-        ? Object.values(task.productBrief as Record<string, unknown>).join(' ')
-        : '',
-    ].join(' ').toLowerCase()
-    if (/\b(no-ui|no ui|headless|script-only|script only|cli|command-line|without a frontend)\b|do not add ui\b|do not add .*?\bui\b|without ui\b/.test(text)) {
-      return false
-    }
-    return /\b(ui|frontend|front-end|screen|view|layout|component|design system|design-system|visual|palette|responsive|mobile|browser)\b/.test(text)
-  })
+  // Design-system gating belongs to the structured work contract. Task
+  // titles, descriptions, specs, and briefs are model-authored display prose;
+  // changing their vocabulary must not change whether a release is blocked.
+  return tasks.some(task => task.workShape === 'ui-component' || task.workShape === 'frontend-integration')
 }
 
 type ReleaseBlockerSummary = {
   id: string
   title: string
   label: string
+  code?: string
   reason?: string
   nextAction?: string
   state?: string
@@ -3099,7 +3119,7 @@ function summarizeScopedReleaseWork(
     !taskHasScriptProofPath(task)
   const scopeProofStyle = options.proofStyle ?? (options.commandProofRequired === true ? 'script_only' : undefined)
   const proofSatisfiedByLinkedChildren = (task: Task): boolean =>
-    taskCompletionProofSatisfiedByLinkedChildren(task, tasks, scopeProofStyle)
+    taskCompletionProofSatisfiedByLinkedChildren(task, tasks, scopeProofStyle, scope)
   const completionProofSupersedesEscalation = (
     task: Task,
     escalation: { raisedAt?: string },
@@ -3113,10 +3133,8 @@ function summarizeScopedReleaseWork(
     escalation: { reason?: string },
   ): boolean => {
     if (escalation.reason !== 'max_revisions_exceeded') return false
-    const blockReason = String((task as { blockReason?: string }).blockReason ?? '')
-    if (!/max_revisions_exceeded:/i.test(blockReason)) return false
-    const currentReason = taskBlockerSummary(task)
-    return Boolean(currentReason) && !/max_revisions_exceeded:/i.test(currentReason)
+    const proofRecovery = (task as Task & { proofRecovery?: { kind?: unknown } }).proofRecovery
+    return proofRecovery?.kind === 'proof' && task.recoveryCode !== 'max_revisions_actionable'
   }
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const scopeProjection = options.scopeRows
@@ -3203,8 +3221,12 @@ function summarizeScopedReleaseWork(
   )
   const proofMissingTaskIsDuplicateOfBlockedWork = (task: Task): boolean => blockedScopedTasks.some(blocked => {
     if (blocked.id === task.id) return false
-    if (taskTitleOverlap(blocked.title, task.title) < 0.8) return false
-    return String(blocked.title ?? '').length >= String(task.title ?? '').length
+    const blockedIdentity = explicitTaskStructuralIdentity(blocked)
+    const taskIdentity = explicitTaskStructuralIdentity(task)
+    // Proof suppression is a state decision. A rewritten title must not make
+    // two work records look like duplicates; only an explicit source-owned
+    // identity can establish that relationship.
+    return Boolean(blockedIdentity && taskIdentity && blockedIdentity === taskIdentity)
   })
   for (const t of scopedTasks) {
     const status = effectiveReleaseStatus(t)
@@ -3235,7 +3257,7 @@ function summarizeScopedReleaseWork(
     ) {
       const reason = shapingBlockers[0]?.summary ?? 'Current work needs shaping before Guildhall can build unattended.'
       incompleteBriefs.push({ id, title, reason })
-      addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs shaping before unattended work can start.` })
+      addReleaseBlocker({ id, title, code: 'imported_scope_shaping', label: `${blockerSubject(title)} needs shaping before unattended work can start.` })
       continue
     }
     if (
@@ -3245,7 +3267,7 @@ function summarizeScopedReleaseWork(
     ) {
       if (!proofMissingTaskIsDuplicateOfBlockedWork(t)) {
         proofMissingDoneTasks.push({ id, title })
-        addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs proof evidence before the release is complete.` })
+        addReleaseBlocker({ id, title, code: 'proof_evidence_missing', label: `${blockerSubject(title)} needs proof evidence before the release is complete.` })
       }
     }
     if (
@@ -3259,16 +3281,16 @@ function summarizeScopedReleaseWork(
     ) {
       if (hasCompleteProductBriefRecord(t)) {
         unapprovedBriefs.push({ id, title })
-        addReleaseBlocker({ id, title, label: `${blockerSubject(title)} is waiting for brief approval.` })
+        addReleaseBlocker({ id, title, code: 'brief_approval_required', label: `${blockerSubject(title)} is waiting for brief approval.` })
       } else {
         const reason = 'Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.'
         incompleteBriefs.push({ id, title, reason })
-        addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs brief cleanup before approval.` })
+        addReleaseBlocker({ id, title, code: 'brief_cleanup', label: `${blockerSubject(title)} needs brief cleanup before approval.` })
       }
     }
     if (status === 'spec_review') {
       unapprovedSpecs.push({ id, title })
-      addReleaseBlocker({ id, title, label: `${blockerSubject(title)} is waiting for spec review.` })
+      addReleaseBlocker({ id, title, code: 'spec_review_required', label: `${blockerSubject(title)} is waiting for spec review.` })
     }
     if (status === 'shelved') {
       const reason = (t as { shelveReason?: { detail?: string } }).shelveReason
@@ -3277,7 +3299,7 @@ function summarizeScopedReleaseWork(
     if (status === 'blocked') {
       const reason = taskBlockerSummary(t)
       blockedByAgent.push({ id, title, ...(reason ? { reason } : {}) })
-      addReleaseBlocker({ id, title, label: reason?.trim() || `${blockerSubject(title)} is blocked.` })
+      addReleaseBlocker({ id, title, code: 'blocked', label: reason?.trim() || `${blockerSubject(title)} is blocked.` })
     }
     for (const e of activeEscalations(t).filter(e =>
       !completionProofSupersedesEscalation(t, e) &&
@@ -3293,7 +3315,7 @@ function summarizeScopedReleaseWork(
         reason: e.reason ?? '',
         summary: e.summary ?? '',
       })
-      addReleaseBlocker({ id, title, label: e.summary?.trim() || `${blockerSubject(title)} has an open escalation.` })
+      addReleaseBlocker({ id, title, code: 'escalation', label: e.summary?.trim() || `${blockerSubject(title)} has an open escalation.` })
     }
   }
 
@@ -3315,6 +3337,15 @@ function summarizeScopedReleaseWork(
         return {
           id: row.taskId,
           title: task?.title ?? row.taskId,
+          code: row.proofBlocked
+            ? 'proof_evidence_missing'
+            : row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped'
+              ? 'imported_scope_shaping'
+              : row.handoffState === 'spec_review'
+                ? 'spec_review_required'
+                : row.handoffState === 'blocked'
+                  ? 'blocked'
+                  : 'attention',
           label: row.blockerSummary?.trim() || taskBlockerSummary(task!) || `${task?.title ?? row.taskId} blocks release readiness.`,
         }
       })
@@ -3329,6 +3360,7 @@ function summarizeScopedReleaseWork(
           id: blocker.id,
           title: task?.title ?? blocker.id,
           label: blocker.label,
+          ...(blocker.code ? { code: blocker.code } : {}),
         }
       })
   const projectionOwnerBlockingCount = executionScopeRows(currentScopeRows)
@@ -3364,8 +3396,9 @@ function proofStyleForScope(
 }
 
 function gitStoryBlocksUnattendedStart(blocker: { state?: unknown; reason?: unknown }): boolean {
-  if (blocker.state === 'no_upstream') return false
-  return !/has no upstream branch/i.test(typeof blocker.reason === 'string' ? blocker.reason : '')
+  // Git Story owns the machine state. Its explanation is audit/display text;
+  // a wording change must not alter release readiness.
+  return blocker.state !== 'no_upstream'
 }
 
 function buildOrientationSpineWithScopedReleaseTruth(
@@ -3458,6 +3491,51 @@ function orientationReleaseTruthFromSummary(
   }
 }
 
+function orientationReleaseTruthFromReadinessPayload(
+  payload: Record<string, unknown>,
+  summary: ProjectSummaryProjection['releaseSummary'] | null | undefined,
+  queue?: {
+    releases?: readonly unknown[]
+    selectedReleaseId?: string | null
+  },
+) {
+  const saved = orientationReleaseTruthFromSummary(summary, queue)
+  const totals = isRecord(payload.totals) ? payload.totals : {}
+  const blockers = Array.isArray(payload.releaseBlockers)
+    ? payload.releaseBlockers
+      .filter(isRecord)
+      .map(blocker => ({
+        id: typeof blocker.id === 'string' ? blocker.id : undefined,
+        label: typeof blocker.label === 'string'
+          ? blocker.label
+          : typeof blocker.title === 'string' ? blocker.title : undefined,
+        code: typeof blocker.code === 'string' ? blocker.code : undefined,
+      }))
+    : saved.blockers
+  const total = typeof totals.tasks === 'number' ? totals.tasks : saved.counts.total
+  const done = typeof totals.done === 'number' ? totals.done : saved.counts.done
+  const unfinished = typeof totals.unfinishedCount === 'number' ? totals.unfinishedCount : saved.counts.unfinished
+  const proofBlocked = typeof totals.proofEvidenceBlockingCount === 'number'
+    ? totals.proofEvidenceBlockingCount
+    : saved.counts.proofBlocked
+  return {
+    ...saved,
+    state: payload.ready === true
+      ? 'ready' as const
+      : blockers.length > 0
+        ? 'blocked' as const
+        : saved.state,
+    counts: {
+      ...saved.counts,
+      total,
+      done,
+      unfinished,
+      proofBlocked,
+    },
+    blockers,
+  }
+}
+
 /**
  * Lift a normalized task row into the orientation builder's input shape.
  * Identity, hierarchy, status, scope membership, and release membership come
@@ -3515,12 +3593,13 @@ function orientationReleaseReadinessFromPayload(
   return {
     verdict: payload.ready === true ? 'clear' : 'blocked',
     blockers: releaseBlockers
-      .filter((blocker): blocker is { id?: string; label?: string; title?: string; nextAction?: string } => Boolean(blocker && typeof blocker === 'object'))
+      .filter((blocker): blocker is { id?: string; label?: string; title?: string; nextAction?: string; code?: string } => Boolean(blocker && typeof blocker === 'object'))
       .map(blocker => ({
         id: typeof blocker.id === 'string' ? blocker.id : undefined,
         label: typeof blocker.label === 'string' ? blocker.label : undefined,
         title: typeof blocker.title === 'string' ? blocker.title : undefined,
         nextAction: typeof blocker.nextAction === 'string' ? blocker.nextAction : undefined,
+        code: typeof blocker.code === 'string' ? blocker.code : undefined,
       })),
   }
 }
@@ -3839,17 +3918,15 @@ function noteMatchesCanonicalAcceptance(
 }
 
 function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, unknown> {
-  const rawBlockReason = typeof task.blockReason === 'string' ? task.blockReason.trim() : ''
   const visibleBlockReason = taskBlockerSummary(task as Task).trim()
-  let normalized = task
-  if (rawBlockReason && visibleBlockReason && rawBlockReason !== visibleBlockReason) {
-    normalized = {
-      ...normalized,
-      blockReason: visibleBlockReason,
-      persistedBlockReason: rawBlockReason,
-    }
-  }
-  normalized = normalizeRuntimeOpenEscalationsForCurrentBlocker(normalized, rawBlockReason, visibleBlockReason)
+  const persistedBlockReason = typeof task.blockReason === 'string' ? task.blockReason.trim() : ''
+  let normalized = visibleBlockReason && visibleBlockReason !== persistedBlockReason
+    ? {
+        ...task,
+        blockReason: visibleBlockReason,
+        ...(persistedBlockReason ? { persistedBlockReason } : {}),
+      }
+    : task
   normalized = normalizeAcceptanceCriteriaForCurrentProof(normalized)
   const canonicalDescriptions = new Set(
     Array.isArray(normalized.acceptanceCriteria)
@@ -3879,40 +3956,6 @@ function compactTaskForInitialDrawer(task: Record<string, unknown>): Record<stri
   return compact
 }
 
-function normalizeRuntimeOpenEscalationsForCurrentBlocker(
-  task: Record<string, unknown>,
-  rawBlockReason: string,
-  visibleBlockReason: string,
-): Record<string, unknown> {
-  if (!/max_revisions_exceeded:/i.test(rawBlockReason)) return task
-  if (!visibleBlockReason || /max_revisions_exceeded:/i.test(visibleBlockReason)) return task
-  const runtime = task.runtime && typeof task.runtime === 'object' && !Array.isArray(task.runtime)
-    ? task.runtime as Record<string, unknown>
-    : null
-  if (!runtime || !Array.isArray(runtime.openEscalationIds)) return task
-  const staleIds = new Set(
-    Array.isArray(task.escalations)
-      ? task.escalations
-          .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
-          .filter(entry => String(entry.reason ?? '') === 'max_revisions_exceeded')
-          .map(entry => String(entry.id ?? '').trim())
-          .filter(Boolean)
-      : [],
-  )
-  if (staleIds.size === 0) return task
-  const openEscalationIds = runtime.openEscalationIds.filter((id) =>
-    typeof id === 'string' && id.trim().length > 0 && !staleIds.has(id),
-  )
-  if (openEscalationIds.length === runtime.openEscalationIds.length) return task
-  return {
-    ...task,
-    runtime: {
-      ...runtime,
-      openEscalationIds,
-    },
-  }
-}
-
 function latestTaskNoteContent(
   task: Record<string, unknown>,
   predicate: (note: Record<string, unknown>) => boolean,
@@ -3936,41 +3979,21 @@ function latestTaskNote(
 }
 
 function isWorkerSelfCritiqueNote(note: Record<string, unknown>): boolean {
-  const role = typeof note.role === 'string' ? note.role.trim().toLowerCase() : ''
   const agentId = typeof note.agentId === 'string' ? note.agentId.trim().toLowerCase() : ''
   const content = typeof note.content === 'string' ? note.content : ''
-  if (content.trim().length === 0 || !/self-critique/i.test(content)) return false
-  if (role === 'self-critique') return true
-  if (agentId === 'worker-agent') return true
-  return role === 'implementation' || role === 'implementer' || role === 'worker'
-}
-
-function taskHasWorkerSelfCritique(task: Record<string, unknown>): boolean {
-  const notes = Array.isArray(task.notes) ? (task.notes as Array<Record<string, unknown>>) : []
-  return [...notes].reverse().some((note) => isWorkerSelfCritiqueNote(note))
+  if (agentId !== 'worker-agent' || content.trim().length === 0) return false
+  return readPersistedStructuredSelfCritique(note.structured) !== null
 }
 
 function normalizedCheckpointNextPlannedAction(
-  task: Record<string, unknown>,
+  _task: Record<string, unknown>,
   checkpoint: Checkpoint | null,
 ): string | null {
   const nextAction = checkpoint?.nextPlannedAction?.trim() ?? ''
   if (!nextAction) return null
   if (/^(?:none|null|n\/a|na|nothing)$/i.test(nextAction)) return null
-  const hasSelfCritique = taskHasWorkerSelfCritique(task)
-  if (
-    hasSelfCritique &&
-    /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction)
-  ) {
-    return "Resume from the latest self-critique and recorded verification evidence, then hand off to review."
-  }
-  if (
-    !hasSelfCritique &&
-    /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction) &&
-    /hand off to review|handoff to review|transition to review/i.test(nextAction)
-  ) {
-    return 'Resume from the active worktree diff, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
-  }
+  // `nextPlannedAction` is display text. State/routing decisions use the
+  // structured Checkpoint.nextActionKind field.
   return nextAction
 }
 
@@ -4054,10 +4077,14 @@ function taskHasExplicitGitStoryFollowup(task: Record<string, unknown>): boolean
     task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
       ? task.mergeRecord as { result?: string }
       : undefined
-  return Boolean(taskGitStoryOverride(task)) ||
-    mergeRecord?.result === 'skipped' ||
-    mergeRecord?.result === 'conflict' ||
-    task.status === 'pending_pr'
+  const hasTaskWorktree = typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
+  return gitStoryFollowupIsActive({
+    status: typeof task.status === 'string' ? task.status : undefined,
+    mergeRecordResult: mergeRecord?.result,
+    hasCompletionProof: taskHasRecordedCompletionProof(task as Task),
+    hasTaskWorktree,
+    hasOverride: Boolean(taskGitStoryOverride(task)),
+  })
 }
 
 function taskNeedsTaskGitStory(
@@ -4073,10 +4100,11 @@ function taskNeedsTaskGitStory(
     (task.proofRecovery && typeof task.proofRecovery === 'object' && !Array.isArray(task.proofRecovery)) ||
     (runtime?.proofRecovery && typeof runtime.proofRecovery === 'object' && !Array.isArray(runtime.proofRecovery)),
   )
+  const hasTaskWorktree = typeof workspace?.worktreePath === 'string' ||
+    typeof task.worktreePath === 'string'
   if (taskHasRecordedCompletionProof(task as Task) && !hasExplicitFollowup && !hasActiveProofRecovery) return false
   return Boolean(childProject) ||
-    typeof workspace?.worktreePath === 'string' ||
-    typeof task.worktreePath === 'string' ||
+    hasTaskWorktree ||
     hasExplicitFollowup
 }
 
@@ -4561,6 +4589,7 @@ async function enrichTaskForServe(
             agentId: checkpoint.agentId,
             intent: checkpoint.intent,
             nextPlannedAction: normalizedCheckpointNextPlannedAction(normalized, checkpoint),
+            ...(checkpoint.nextActionKind ? { nextActionKind: checkpoint.nextActionKind } : {}),
             filesTouched: checkpoint.filesTouched,
             writtenAt: checkpoint.writtenAt,
           },
@@ -4600,6 +4629,7 @@ async function enrichTaskForWorkSurface(
       ...buildTaskEvidenceSummary(normalized),
       latestCheckpoint: {
         nextPlannedAction,
+        ...(checkpoint?.nextActionKind ? { nextActionKind: checkpoint.nextActionKind } : {}),
       },
     }
   }
@@ -4937,6 +4967,9 @@ function compactTaskForProjectSummary(task: Record<string, unknown>): Record<str
     'releaseIds',
     'sourceRefs',
     'references',
+    'semanticKind',
+    'contractNames',
+    'parentAcceptanceCriterionIds',
     'acceptanceCriteria',
     'acceptanceCriteriaProofState',
     'definitionOfDone',
@@ -5130,8 +5163,12 @@ function compactLatestCheckpointForWorkSurface(checkpoint: unknown): Record<stri
   if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) return undefined
   const raw = checkpoint as Record<string, unknown>
   const nextPlannedAction = raw.nextPlannedAction
+  const nextActionKind = raw.nextActionKind
   return typeof nextPlannedAction === 'string' && nextPlannedAction.trim().length > 0
-    ? { nextPlannedAction }
+    ? {
+        nextPlannedAction,
+        ...(typeof nextActionKind === 'string' ? { nextActionKind } : {}),
+      }
     : undefined
 }
 
@@ -5575,6 +5612,7 @@ function buildOverviewOrientationPreviewSpine(input: {
       blockers: projection.release.blockers.map(blocker => ({
         id: blocker.id,
         label: blocker.label,
+        ...(blocker.code ? { code: blocker.code } : {}),
         ...(blocker.owningTaskId ? { owningNodeId: taskScopeNodeId(blocker.owningTaskId) } : {}),
       })),
     }),
@@ -7591,6 +7629,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 title: typeof task.title === 'string' ? task.title : task.id,
                 description: typeof task.description === 'string' ? task.description : undefined,
                 spec: typeof task.spec === 'string' ? task.spec : undefined,
+                domain: typeof task.domain === 'string' ? task.domain : undefined,
               })) as never,
       })
       endAncillary()
@@ -7630,9 +7669,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         project.id,
       ) as unknown as ReturnType<typeof buildOrientationSpineWithScopedReleaseTruth>['orientationSpine']
       const savedReleaseSummary = currentState.summary?.releaseSummary
+      const orientationReleaseTruth = diagnosticRequested && releaseReadiness && isRecord(releaseReadiness)
+        ? orientationReleaseTruthFromReadinessPayload(releaseReadiness, savedReleaseSummary, rawQueue)
+        : orientationReleaseTruthFromSummary(savedReleaseSummary, rawQueue)
       const reconciledOrientationSpine = reconcileOrientationSpineWithReleaseTruth(
         fullOrientationSpine,
-        orientationReleaseTruthFromSummary(savedReleaseSummary, rawQueue),
+        orientationReleaseTruth,
       )
       const currentOrientationPreview = buildOverviewOrientationPreviewSpine({
         projectId: project.id,
@@ -8000,7 +8042,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const body = await c.req.json().catch(() => ({})) as { releaseId?: unknown }
-      const state = await readProjectReleaseState(project.path)
+      // Shipping is a mutating boundary, so it must inspect the same current
+      // readiness truth that an explicit live release read exposes. A saved
+      // projection is intentionally sufficient for ordinary reads, but it is
+      // not sufficient to authorize an irreversible lifecycle transition.
+      const state = await readProjectReleaseState(project.path, { liveDiagnostics: true })
       const releaseId = typeof body.releaseId === 'string' && body.releaseId.trim()
         ? body.releaseId.trim()
         : state.rawQueue.selectedReleaseId
@@ -8010,9 +8056,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const release = state.rawQueue.releases.find(candidate => candidate.id === releaseId)
       if (!release) return c.json({ error: 'Release not found in this project.' }, 404)
+      const liveReadiness = await buildProjectReleaseReadinessPayload({
+        state,
+        liveDiagnostics: true,
+      })
+      const liveVerdict = isRecord(liveReadiness.verdict) ? liveReadiness.verdict : null
+      const liveTotals = isRecord(liveReadiness.totals) ? liveReadiness.totals : null
       const result = closeReleaseIfReady(
         release,
-        state.summary?.releaseSummary ?? null,
+        {
+          state: typeof liveVerdict?.state === 'string' ? liveVerdict.state : null,
+          counts: {
+            total: typeof liveTotals?.tasks === 'number' ? liveTotals.tasks : 0,
+            done: typeof liveTotals?.done === 'number' ? liveTotals.done : 0,
+            unfinished: typeof liveTotals?.unfinishedCount === 'number' ? liveTotals.unfinishedCount : 0,
+            blocked: typeof liveTotals?.blockingCount === 'number' ? liveTotals.blockingCount : 0,
+            proofBlocked: typeof liveTotals?.proofEvidenceBlockingCount === 'number'
+              ? liveTotals.proofEvidenceBlockingCount
+              : 0,
+          },
+        },
         new Date().toISOString(),
       )
       if (!result.ok) {
@@ -9721,7 +9784,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         terminal += 1
 	        if (
           taskDoneButProofMissingForScope(task, selectedScopeProofStyle) &&
-          !taskCompletionProofSatisfiedByLinkedChildren(task, effectiveTasks, selectedScopeProofStyle)
+          !taskCompletionProofSatisfiedByLinkedChildren(task, effectiveTasks, selectedScopeProofStyle, selectedReleaseScope)
         ) {
           const id = typeof (task as { id?: unknown }).id === 'string' && (task as { id: string }).id.trim()
             ? (task as { id: string }).id.trim()
@@ -9942,24 +10005,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	    const candidate = task as {
 	      id?: unknown
 	      status?: unknown
-	      blockReason?: unknown
+	      recoveryCode?: unknown
 	      worktreePath?: unknown
 	      branchName?: unknown
 	      reviewVerdicts?: unknown
 	    }
 	    if (candidate.id !== requestedTaskId) return false
 	    if (candidate.status !== 'blocked') return false
-	    const blockReason = typeof candidate.blockReason === 'string' ? candidate.blockReason : ''
-	    if (/max_revisions_exceeded:/i.test(blockReason) && hasPriorAllClearLlmStartReview(candidate.reviewVerdicts)) {
+	    const activeRecoveryCode = candidate.recoveryCode
+	    const hasTypedMaxRevisionRecovery = activeRecoveryCode === 'max_revisions_actionable' ||
+	      (Array.isArray((candidate as { escalations?: unknown }).escalations) &&
+        (candidate as { escalations: unknown[] }).escalations.some((entry) =>
+          entry && typeof entry === 'object' &&
+          !(entry as { resolvedAt?: unknown }).resolvedAt &&
+          (entry as { recoveryCode?: unknown }).recoveryCode === 'max_revisions_actionable'))
+	    if (hasTypedMaxRevisionRecovery && hasPriorAllClearLlmStartReview(candidate.reviewVerdicts)) {
 	      return true
 	    }
-	    if (
-	      !blockReason.includes('Guildhall could not create a task worktree:') ||
-	      !/already exists/i.test(blockReason)
-	    ) {
-	      return false
-	    }
-	    return true
+	    return activeRecoveryCode === 'task_worktree_exists'
 	  }
 
 	  function hasPriorAllClearLlmStartReview(reviewVerdicts: unknown): boolean {
@@ -9968,18 +10031,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	      if (!raw || typeof raw !== 'object') return false
 	      const verdict = raw as {
 	        reviewerPath?: unknown
-	        failingSignals?: unknown
-	        reasoning?: unknown
+	        acceptedCriteriaIds?: unknown
+	        verdict?: unknown
 	      }
-	      if (verdict.reviewerPath !== 'llm') return false
-	      if (Array.isArray(verdict.failingSignals) && verdict.failingSignals.length > 0) return false
-	      const reasoning = typeof verdict.reasoning === 'string' ? verdict.reasoning : ''
-	      return [
-	        'acceptance-criteria-met',
-	        'no-scope-creep',
-	        'conventions-followed',
-	        'no-regressions',
-	      ].every((key) => new RegExp(`${key}\\s*:\\s*yes\\b`, 'i').test(reasoning))
+	      return reviewVerdictHasStructuredApproval(verdict, [])
 	    })
 	  }
 
@@ -10087,16 +10142,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
     actionHref: string
   } | null> {
     const workspaceGoalsState = await readWorkspaceGoalsState(getProjectStateDir(projectPath))
-    const normalizeImportTitle = (value: string): string =>
-      value
-        .trim()
-        .toLowerCase()
-        .replace(/[`*_~]/g, '')
-        .replace(/[^a-z0-9\s-]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
     const normalizeImportRef = (value: string): string =>
       value.replaceAll('\\', '/').trim()
+    const importIdentityKeys = (value: unknown): string[] => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+      const record = value as Record<string, unknown>
+      const keys: string[] = []
+      const id = ['id', 'suggestedId']
+        .map(field => record[field])
+        .find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0)
+      if (id) keys.push(`id:${id.trim()}`)
+      const structuralIdentity = explicitTaskStructuralIdentity({
+        sourceIdentity: typeof record.sourceIdentity === 'string' ? record.sourceIdentity : undefined,
+        deliverableName: typeof record.deliverableName === 'string' ? record.deliverableName : undefined,
+        producedArtifact: typeof record.producedArtifact === 'string' ? record.producedArtifact : undefined,
+      })
+      if (structuralIdentity) keys.push(structuralIdentity)
+      return keys
+    }
+    const addImportIdentityKeys = (target: Set<string>, value: unknown): void => {
+      for (const key of importIdentityKeys(value)) target.add(key)
+    }
+    const importIdentitiesIntersect = (value: unknown, target: ReadonlySet<string>): boolean =>
+      importIdentityKeys(value).some(key => target.has(key))
     const refsFromRecord = (value: unknown): string[] => {
       if (!value || typeof value !== 'object') return []
       const refs = (value as { references?: unknown }).references
@@ -10158,44 +10226,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : ''
       return status !== 'archived' && status !== 'cancelled'
     })
-    const liveNonImporterTaskById = new Map(
-      liveNonImporterTasks
-        .map(task => {
-          const id = typeof (task as { id?: unknown }).id === 'string'
-            ? (task as { id: string }).id.trim()
-            : ''
-          return id ? [id, task] as const : null
-        })
-        .filter((entry): entry is readonly [string, Record<string, unknown>] => entry !== null),
-    )
-    const approvedTaskEffectiveTitle = (task: { id?: unknown; title?: unknown }): string => {
-      const id = typeof task.id === 'string' ? task.id.trim() : ''
-      const liveTask = id ? liveNonImporterTaskById.get(id) : null
-      const liveTitle = typeof liveTask?.title === 'string' ? liveTask.title.trim() : ''
-      if (liveTitle) return liveTitle
-      return typeof task.title === 'string' ? task.title.trim() : ''
-    }
-    const approvedCurrentTitles = parsed.tasks
+    const approvedCurrentLabels = parsed.tasks
       .filter(task => task.scope !== 'later')
       .map(task => task.title.trim())
       .filter(title => title.length > 0)
-    const fallbackApprovedTitles = approvedCurrentTitles.length > 0
-      ? []
-      : Array.from(spec.matchAll(/^\s*title:\s*(.+?)\s*$/gm))
-        .map(match => match[1]?.trim() ?? '')
-        .filter(title => title.length > 0)
-    const detectedCurrentTitlesList = detected.tasks
+    const detectedCurrentLabels = detected.tasks
       .filter(task => task.scope !== 'later')
       .map(task => task.title.trim())
       .filter(title => title.length > 0)
-    const currentApprovedOrDetectedTitles = [
-      ...approvedCurrentTitles,
-      ...fallbackApprovedTitles,
-      ...detectedCurrentTitlesList,
+    const currentApprovedOrDetectedLabels = [
+      ...approvedCurrentLabels,
+      ...detectedCurrentLabels,
     ]
     if (detected.tasks.length === 0) {
-      if (currentApprovedOrDetectedTitles.length > 0 && liveNonImporterTasks.length === 0) {
-        const first = currentApprovedOrDetectedTitles[0] || 'the first approved current-scope task'
+      if (currentApprovedOrDetectedLabels.length > 0 && liveNonImporterTasks.length === 0) {
+        const first = currentApprovedOrDetectedLabels[0] || 'the first approved current-scope task'
         return {
           canStart: false,
           code: 'workspace_import_refresh_needed',
@@ -10208,16 +10253,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return null
     }
 
-    const coveredTitles = new Set<string>()
-    const currentScopeCoveredTitles = new Set<string>()
+    const coveredIdentities = new Set<string>()
+    const currentScopeCoveredIdentities = new Set<string>()
     const coveredRefs = new Set<string>()
     const activeTaskHints = new Set<string>()
     for (const task of parsed.tasks) {
-      if (typeof task.title === 'string' && task.title.trim().length > 0) {
-        const normalized = normalizeImportTitle(task.title)
-        coveredTitles.add(normalized)
-        if (task.scope !== 'later') currentScopeCoveredTitles.add(normalized)
-      }
+      addImportIdentityKeys(coveredIdentities, task)
+      if (task.scope !== 'later') addImportIdentityKeys(currentScopeCoveredIdentities, task)
       for (const ref of refsFromRecord(task)) coveredRefs.add(ref)
     }
     for (const milestone of parsed.milestones) {
@@ -10233,15 +10275,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const id = typeof (task as { id?: unknown }).id === 'string'
         ? (task as { id: string }).id
         : ''
-      if (id.trim()) activeTaskHints.add(normalizeImportTitle(id))
-      const title = typeof (task as { title?: unknown }).title === 'string'
-        ? (task as { title: string }).title
-        : ''
-      if (!title.trim()) continue
-      const normalized = normalizeImportTitle(title)
-      activeTaskHints.add(normalized)
-      coveredTitles.add(normalized)
-      if (status !== 'shelved') currentScopeCoveredTitles.add(normalized)
+      if (id.trim()) activeTaskHints.add(`id:${id.trim()}`)
+      for (const field of ['sourceIdentity', 'deliverableName', 'producedArtifact'] as const) {
+        const value = (task as Record<string, unknown>)[field]
+        if (typeof value === 'string' && value.trim()) activeTaskHints.add(`${field}:${value.trim()}`)
+      }
+      addImportIdentityKeys(coveredIdentities, task)
+      if (status !== 'shelved') addImportIdentityKeys(currentScopeCoveredIdentities, task)
       for (const ref of refsFromRecord(task)) coveredRefs.add(ref)
     }
     for (const context of detected.context) {
@@ -10249,7 +10289,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const linkedTaskHints = Array.isArray(context.linkedTaskHints)
         ? context.linkedTaskHints
             .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-            .map(normalizeImportTitle)
+            .flatMap(hint => [`id:${hint}`, `sourceIdentity:${hint}`])
         : []
       if (linkedTaskHints.length === 0) continue
       if (!linkedTaskHints.some(hint => activeTaskHints.has(hint))) continue
@@ -10257,30 +10297,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
 
     const missing = detected.tasks.filter(task => {
-      const title = typeof task.title === 'string' ? task.title : ''
-      return title.trim().length > 0 && !coveredTitles.has(normalizeImportTitle(title))
+      return importIdentityKeys(task).length === 0 || !importIdentitiesIntersect(task, coveredIdentities)
     })
     const currentScopeMissing = detected.tasks.filter(task => {
       if (task.scope === 'later') return false
-      const title = typeof task.title === 'string' ? task.title : ''
-      return title.trim().length > 0 && !currentScopeCoveredTitles.has(normalizeImportTitle(title))
+      return importIdentityKeys(task).length === 0 || !importIdentitiesIntersect(task, currentScopeCoveredIdentities)
     })
-    const detectedCurrentTitles = new Set(
-      detected.tasks
-        .filter(task => task.scope !== 'later')
-        .map(task => normalizeImportTitle(typeof task.title === 'string' ? task.title : ''))
-        .filter(Boolean),
-    )
+    const detectedCurrentIdentities = new Set<string>()
+    for (const task of detected.tasks) {
+      if (task.scope !== 'later') addImportIdentityKeys(detectedCurrentIdentities, task)
+    }
     const staleApprovedCurrent = parsed.tasks.filter(task => {
       if (task.scope === 'later') return false
-      const normalized = normalizeImportTitle(approvedTaskEffectiveTitle(task))
-      return normalized.length > 0 && !detectedCurrentTitles.has(normalized)
+      return importIdentityKeys(task).length === 0 || !importIdentitiesIntersect(task, detectedCurrentIdentities)
     })
-    const detectedTaskTitles = new Set(
-      detected.tasks
-        .map(task => normalizeImportTitle(typeof task.title === 'string' ? task.title : ''))
-        .filter(Boolean),
-    )
+    const detectedTaskIdentities = new Set<string>()
+    for (const task of detected.tasks) addImportIdentityKeys(detectedTaskIdentities, task)
     const contextOnlyImportedGhosts = tasks.filter(task => {
       if (!task || typeof task !== 'object') return false
       if ((task as { id?: unknown }).id === WORKSPACE_IMPORT_TASK_ID) return false
@@ -10296,15 +10328,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? (task as { requestIntake: { createdBy: string } }).requestIntake.createdBy
         : ''
       if (createdBy !== 'workspace-importer') return false
-      const title = typeof (task as { title?: unknown }).title === 'string'
-        ? (task as { title: string }).title
-        : ''
-      const normalizedTitle = normalizeImportTitle(title)
-      if (!normalizedTitle || detectedTaskTitles.has(normalizedTitle)) return false
+      if (importIdentitiesIntersect(task, detectedTaskIdentities)) return false
       return detected.context.some(context => {
         if (context.role !== 'capability' && context.role !== 'brief_input') return false
-        const contextTitle = normalizeImportTitle(context.label)
-        return contextTitle === normalizedTitle
+        return (context.linkedTaskHints ?? []).some(hint =>
+          activeTaskHints.has(`id:${hint}`) || activeTaskHints.has(`sourceIdentity:${hint}`),
+        )
       })
     })
     const hasExplicitDeferredScope =
@@ -10380,10 +10409,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
 
     if (
-      currentApprovedOrDetectedTitles.length > 0 &&
+      currentApprovedOrDetectedLabels.length > 0 &&
       liveNonImporterTasks.length === 0
     ) {
-      const first = currentApprovedOrDetectedTitles[0] || 'the first approved current-scope task'
+      const first = currentApprovedOrDetectedLabels[0] || 'the first approved current-scope task'
       return {
         canStart: false,
         code: 'workspace_import_refresh_needed',
@@ -10865,7 +10894,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
     const startBlockingReleaseBlockers = releaseTruth.releaseBlockers.filter(blocker =>
-      !/proof evidence|verification evidence|brief|shaping|clearer brief/i.test(blocker.label),
+      !['proof_evidence_missing', 'imported_scope_shaping', 'brief_cleanup', 'brief_approval_required', 'spec_review_required'].includes(blocker.code ?? ''),
     )
     if (releaseTruth.unapprovedSpecs.length === 0 && startBlockingReleaseBlockers.length === 0) return null
 
@@ -10891,9 +10920,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
     const focusTitle = blocker.title?.trim() || 'the first blocker'
-    const focusKind = /waiting for (spec )?review|review before work/i.test(blocker.label)
+    const focusKind = blocker.code === 'spec_review_required'
       ? 'spec_review'
-      : /brief|shaping/i.test(blocker.label)
+      : blocker.code === 'imported_scope_shaping' || blocker.code === 'brief_cleanup'
         ? 'brief_cleanup'
         : 'blocked_work'
     const specReviewMessage = focusKind === 'spec_review'
@@ -12289,9 +12318,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const memoryDir = getProjectStateDir(project.path)
-      const tasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
+      const queue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
       const sources = await collectProjectReintakeSources(project.path)
-      const draft = planProjectReintake({ projectPath: project.path, sources, tasks })
+      const draft = planProjectReintake({
+        projectPath: project.path,
+        sources,
+        tasks: queue.tasks,
+        releases: queue.releases,
+      })
       await writeProjectReintakeDraft(memoryDir, draft)
       return c.json({ ok: true, draft })
     } catch (err) {
@@ -14297,32 +14331,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
       const applicableSlugs = new Set(applicable.map(g => g.slug))
 
-      // Group review verdicts by guild slug. Each PersonaVerdict is persisted
-      // with `failingSignals: [guildSlug]` on revise; on approve we
-      // attribute by matching `reason` prefix ("The Accessibility Specialist
-      // approved"). Keep the mapping robust — unknown attribution falls into
-      // a generic bucket.
+      // Group review verdicts by guild slug. Persona fan-out persists the
+      // stable reviewer id, and older revision records may carry the
+      // structured guild slug in `failingSignals`. Human-readable `reason`
+      // text is deliberately never used for attribution: changing a model's
+      // wording must not move a verdict between reviewer lanes.
       const verdicts = Array.isArray(task.reviewVerdicts)
         ? task.reviewVerdicts.filter(isRecord)
         : []
       const verdictsBySlug: Record<string, Array<Record<string, unknown>>> = {}
-      const nameToSlug = new Map<string, string>()
-      for (const g of roster) nameToSlug.set(g.name, g.slug)
       for (const v of verdicts) {
         let slug: string | null = null
+        const reviewerId = v.reviewerId
+        if (typeof reviewerId === 'string' && applicableSlugs.has(reviewerId)) {
+          slug = reviewerId
+        }
         const failingSignals = v.failingSignals
-        if (Array.isArray(failingSignals) && failingSignals.length > 0) {
+        if (!slug && Array.isArray(failingSignals) && failingSignals.length > 0) {
           const candidate = failingSignals[0]
           if (typeof candidate === 'string' && applicableSlugs.has(candidate)) {
             slug = candidate
-          }
-        }
-        if (!slug && typeof v.reason === 'string') {
-          for (const [name, s] of nameToSlug) {
-            if (v.reason.includes(name)) {
-              slug = s
-              break
-            }
           }
         }
         const bucket = slug ?? 'unattributed'
@@ -14589,11 +14617,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (action === 'reframe-task') {
         const body = await c.req.json().catch(() => ({})) as {
           reason?: string
+          recoveryKind?: 'proof'
         }
         const result = await reframeTask({
           memoryDir,
           taskId: id,
           ...(body.reason ? { reason: body.reason } : {}),
+          ...(body.recoveryKind === 'proof' ? { recoveryKind: 'proof' } : {}),
         })
         if (!result.success) return c.json({ error: result.error ?? 'reframe failed' }, 400)
         return c.json({ ok: true, status: result.newStatus })
@@ -14718,11 +14748,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         let queueRead = readProjectTaskQueueForMutationSync(tasksPath)
         let expectedQueueRevision = queueRead.expectedQueueRevision
         let parsed = queueRead.queue as
-          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string; version?: number; lastUpdated?: string }
           | Array<Record<string, unknown>>
         let queue = Array.isArray(parsed)
-          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed, releases: [] as ProjectRelease[] }
+          : {
+              version: parsed.version ?? 1,
+              lastUpdated: parsed.lastUpdated ?? new Date().toISOString(),
+              tasks: parsed.tasks ?? [],
+              releases: parsed.releases ?? [],
+              ...(parsed.selectedReleaseId ? { selectedReleaseId: parsed.selectedReleaseId } : {}),
+            }
         let task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
         if (!task) return c.json({ error: 'task not found' }, 404)
         // Recovery consumes the same saved release boundary as readiness and
@@ -14751,6 +14787,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         // the effective task for recovery decisions so a settled proof path
         // from SQLite cannot be mistaken for a missing proof on the compact
         // queue row.
+        // A proof-setup task is itself the executable proof boundary. Its
+        // recovery resumes that task; it must never materialize another proof
+        // child beneath itself.
+        const isProofSetupRecovery = isProofSetupTask(effectiveTask)
         const isProofRecovery = taskDoneButProofMissingForScope(effectiveTask, selectedProofStyle)
         const isReviewRecovery = taskDoneButReviewConflict(effectiveTask)
         const effectiveStatus = typeof effectiveTask.status === 'string' ? effectiveTask.status : String(task.status ?? '')
@@ -14758,6 +14798,51 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return c.json({ error: `task is ${effectiveStatus}` }, 400)
         }
         const now = new Date().toISOString()
+        const taskReleaseIds = Array.isArray(effectiveTask.releaseIds)
+          ? effectiveTask.releaseIds.filter((releaseId): releaseId is string => typeof releaseId === 'string')
+          : []
+        const hasShippedReleaseMembership = taskReleaseIds.some(releaseId =>
+          releaseState.rawQueue.releases.some(release => release.id === releaseId && release.state === 'shipped'),
+        )
+        // A proof-setup task is already the release-local proof boundary. It
+        // must be reopened as work, never treated as a parent that needs a
+        // second proof child.
+        const canMaterializeReleaseLocalProof = !isProofSetupRecovery &&
+          isProofRecovery &&
+          selectedProofStyle === 'script_only' &&
+          Boolean(selectedRelease?.id) &&
+          selectedRelease?.state !== 'shipped'
+        if (canMaterializeReleaseLocalProof) {
+          const proofQueue = TaskQueue.parse(queue)
+          const proofParent = proofQueue.tasks.find(candidate => candidate.id === id)
+          if (!proofParent || !selectedRelease?.id) {
+            return c.json({ error: 'Could not materialize release-local proof work from the current task boundary.' }, 409)
+          }
+          const proofSetup = materializeProofSetupTask(proofQueue, proofParent, now, {
+            releaseIds: [selectedRelease.id],
+            // Active-release proof is part of the parent task's current
+            // completion boundary. A later release proving a shipped parent
+            // stays detached so reopening follow-up work cannot mutate the
+            // historical release.
+            linkParent: !hasShippedReleaseMembership,
+          })
+          if (proofSetup.status === 'materialized') {
+            await writeTaskQueueFilePreservingQueue(tasksPath, {
+              tasks: proofQueue.tasks as unknown as Array<Record<string, unknown>>,
+              releases: proofQueue.releases,
+              ...(proofQueue.selectedReleaseId ? { selectedReleaseId: proofQueue.selectedReleaseId } : {}),
+            }, project.path)
+          }
+          return c.json({
+            ok: true,
+            status: 'exploring',
+            nextAction: 'source_backed_spec',
+            proofSetupTaskId: proofSetup.childTaskId,
+            reason: proofSetup.status === 'materialized'
+              ? 'The shipped implementation stays closed; Guildhall created release-local proof work in the selected follow-up release.'
+              : 'Release-local proof work already exists in the selected follow-up release.',
+          })
+        }
         const recoveredProofPaths = isProofRecovery && selectedProofStyle === 'script_only'
           ? ensureCommandProofPathsFromAcceptanceCriteria(effectiveTask, now)
           : undefined
@@ -14799,11 +14884,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
           queueRead = readProjectTaskQueueForMutationSync(tasksPath)
           expectedQueueRevision = queueRead.expectedQueueRevision
           parsed = queueRead.queue as
-            | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+            | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string; version?: number; lastUpdated?: string }
             | Array<Record<string, unknown>>
           queue = Array.isArray(parsed)
-            ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-            : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+            ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed, releases: [] as ProjectRelease[] }
+            : {
+                version: parsed.version ?? 1,
+                lastUpdated: parsed.lastUpdated ?? new Date().toISOString(),
+                tasks: parsed.tasks ?? [],
+                releases: parsed.releases ?? [],
+                ...(parsed.selectedReleaseId ? { selectedReleaseId: parsed.selectedReleaseId } : {}),
+              }
           task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
           if (!task) return c.json({ error: 'task not found after escalation resolution' }, 404)
         }
@@ -14825,7 +14916,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
             reason: 'Guildhall refused to resume work without a current implementation blueprint and reopened source-backed shaping.',
           })
         }
-        if (isProofRecovery && selectedProofStyle === 'script_only' && !hasExecutableRecoveredProof && !taskHasReviewProofPath(effectiveTask)) {
+        // A historical review path is audit history, not executable proof for
+        // the selected script-only release. It must never suppress recovery
+        // merely because its prose says the task was approved.
+        if (isProofRecovery && selectedProofStyle === 'script_only' && !hasExecutableRecoveredProof && !isProofSetupRecovery) {
           const result = await rerunTaskStage({
             memoryDir,
             taskId: id,
@@ -14860,7 +14954,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
         task.notes = notes
         task.status = 'in_progress'
-        task.assignedTo = null
+        // Proof-setup recovery already has a Guildhall-owned blueprint. Keep
+        // it on the worker lane instead of clearing assignment and letting
+        // the coordinator route it back through generic spec intake.
+        task.assignedTo = isProofSetupRecovery ? 'worker-agent' : null
         if (proofPathsForRecovery) task.proofPaths = proofPathsForRecovery
         delete task.blockReason
         delete task.openEscalations
@@ -14868,12 +14965,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         queue.lastUpdated = now
         if (shouldClearRuntimeEscalations || isProofRecovery || isReviewRecovery) {
           await upsertTaskRuntimeState(project.path, id, {
-            assignedTo: null,
+            assignedTo: isProofSetupRecovery ? 'worker-agent' : null,
             ...(shouldClearRuntimeEscalations ? { openEscalationIds: [] } : {}),
             ...(isProofRecovery
               ? {
                   proofRecovery: {
                     reopenedAt: now,
+                    kind: 'proof',
                     reason: instruction || 'Missing release proof evidence.',
                   },
                 }
@@ -14887,10 +14985,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
             projectRoot: project.path,
             mutate: current => {
               current.status = task.status
-              if (typeof task.assignedTo === 'string' && task.assignedTo.trim().length > 0) {
-                current.assignedTo = task.assignedTo
-              } else {
-                delete current.assignedTo
+              // Assignment is runtime-owned for promoted projects. The
+              // recovery overlay above records the worker lane; copying it
+              // into the task definition would make the point mutation fail
+              // its evidence/runtime ownership guard.
+              if (!isProofSetupRecovery) {
+                if (typeof task.assignedTo === 'string' && task.assignedTo.trim().length > 0) {
+                  current.assignedTo = task.assignedTo
+                } else {
+                  delete current.assignedTo
+                }
               }
               if (proofPathsForRecovery) current.proofPaths = proofPathsForRecovery
               delete current.blockReason
@@ -16968,9 +17072,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
 
-    // The saved summary is the current-state answer. The detail route may
-    // inspect live proof, Git, and design signals, but those observations are
-    // diagnostics and never replace the saved release/scope/count/action.
+    // An explicit live query is an inspection of the same current state, not
+    // a second diagnostic universe. Keep release identity and membership on
+    // the saved boundary, but return the live readiness answer consistently
+    // at the top level and under `diagnostics`. Otherwise one response can
+    // claim both "ready" and "proof is missing", depending on which field a
+    // consumer happens to read.
     const diagnosticCurrentState = input.liveDiagnostics ? await readProjectCanonicalCurrentState(projectPath) : null
     const tasks = diagnosticCurrentState?.tasks ?? []
     const diagnosticScope = savedScope ?? (diagnosticCurrentState ? releaseReadinessDiagnosticScope(diagnosticCurrentState) : null)
@@ -17046,7 +17153,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ? scopedTasks
         .filter(task => String(task.status ?? '') === 'done')
         .filter(task => !taskHasScriptProofPath(task))
-        .filter(task => !taskCompletionProofSatisfiedByLinkedChildren(task, tasks, savedRelease?.proofStyle))
+        .filter(task => !taskCompletionProofSatisfiedByLinkedChildren(task, tasks, savedRelease?.proofStyle, diagnosticScope))
         .map(task => ({ id: task.id, title: task.title }))
       : []
     const scopedTaskIds = new Set(scopedTasks.map(task => task.id))
@@ -17183,11 +17290,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
       },
     }
 
+    const dynamicReleaseBlockers = diagnostics.releaseBlockers
+    const dynamicNextAction = diagnosticReady
+      ? {
+          code: 'all_terminal',
+          label: 'Review',
+          message: 'The selected release has completed work and current proof. Review it before shipping.',
+        }
+      : effectiveProofMissingDoneTasks[0]
+        ? {
+            code: 'proof_evidence_missing',
+            label: 'Complete proof',
+            message: `${effectiveProofMissingDoneTasks.length} completed work item${effectiveProofMissingDoneTasks.length === 1 ? '' : 's'} still need current proof evidence.`,
+            focusTaskId: effectiveProofMissingDoneTasks[0].id,
+            focusTaskTitle: effectiveProofMissingDoneTasks[0].title,
+            focusKind: 'proof',
+          }
+        : scopedTasks.find(task => String(task.status ?? '') !== 'done')
+          ? {
+              code: 'continue_work',
+              label: 'Continue work',
+              message: 'Continue the first unfinished work item in the selected release.',
+              focusTaskId: scopedTasks.find(task => String(task.status ?? '') !== 'done')?.id,
+              focusTaskTitle: scopedTasks.find(task => String(task.status ?? '') !== 'done')?.title,
+              focusKind: 'work',
+            }
+          : {
+              code: 'review_release',
+              label: 'Review release',
+              message: dynamicReleaseBlockers[0]?.label ?? 'Review the selected release blockers.',
+            }
+
     return {
       checksLoaded: true,
       release: savedRelease,
       scope: savedScope,
-      ready: savedReady,
+      ready: diagnosticReady,
       summaryFreshness,
       currentStateAuthority: state.authority,
       queueRevision: state.queueRevision,
@@ -17196,25 +17334,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ...(summaryFreshness !== 'current' && savedReleaseSummary
         ? { notReadyReason: 'The saved project summary is refreshing.' }
         : savedCounts.total === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
-      completion: savedCompletion,
-      verdict: savedVerdict,
-      nextAction: state.summary?.nextAction ?? {
-        label: 'Review project state',
-        message: 'Review the saved project summary.',
-      },
-      statusCounts: savedStatusCounts,
-      releaseBlockers: savedBlockers,
-      ...(state.diagnostics?.git
-        ? {
-            gitStory: {
-              ready: state.diagnostics.git.ready,
-              state: state.diagnostics.git.state,
-              blockers: state.diagnostics.git.blockers,
-              snapshots: [],
-            },
-          }
-        : {}),
-      totals: savedTotals,
+      completion: diagnosticCompletion,
+      verdict: diagnosticVerdict,
+      nextAction: dynamicNextAction,
+      statusCounts,
+      releaseBlockers: dynamicReleaseBlockers,
+      gitStory,
+      totals: diagnostics.totals,
       diagnostics,
     }
   }
@@ -17248,6 +17374,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           label: typeof blocker.label === 'string'
             ? blocker.label
             : typeof blocker.title === 'string' ? blocker.title : 'Release blocker',
+          ...(typeof blocker.code === 'string' ? { code: blocker.code } : {}),
           ...(typeof blocker.state === 'string' ? { state: blocker.state } : {}),
           ...(typeof blocker.reason === 'string' ? { reason: blocker.reason } : {}),
           ...(typeof blocker.nextAction === 'string' ? { nextAction: blocker.nextAction } : {}),

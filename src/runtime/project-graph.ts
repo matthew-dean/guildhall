@@ -1209,21 +1209,14 @@ function deliveryChannelView(
     }
   }
   return {
-    kind: inferDeliveryChannelKind(channel),
+    // A legacy edge may have a free-form channel label without the typed
+    // descriptor. Keep the label visible, but never classify that prose into
+    // a delivery kind. The caller must persist `deliveryChannel.kind` when
+    // the distinction matters.
+    kind: 'remote_authority_ref',
     label: channel,
     coordinates: fallbackCoordinates,
   }
-}
-
-function inferDeliveryChannelKind(channel: string): DeliveryChannelKind {
-  const normalized = channel.toLowerCase()
-  if (/npm|pnpm|yarn|bun|package/.test(normalized)) return 'package_manager'
-  if (/mcp|artifact id/.test(normalized)) return 'mcp_artifact'
-  if (/path|file|local/.test(normalized)) return 'local_path_artifact'
-  if (/doc|spec/.test(normalized)) return 'docs_spec_artifact'
-  if (/patch|diff/.test(normalized)) return 'patch'
-  if (/release|tag/.test(normalized)) return 'release'
-  return 'remote_authority_ref'
 }
 
 async function writeProviderRequestPacket(

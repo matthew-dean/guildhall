@@ -3,6 +3,40 @@ import { describe, expect, it } from 'vitest'
 import { buildDecompositionChildDrafts, buildTaskSizePlan } from '../task-sizing.js'
 
 describe('task sizing', () => {
+  it('keeps sizing identical when model prose changes but structured work does not', () => {
+    const base = {
+      id: 'task-prose-invariance',
+      priority: 'normal' as const,
+      changedFiles: ['src/api/health.ts', 'tests/health.test.ts'],
+      riskLanes: ['api_contract', 'test_adequacy'],
+      structuredSignals: {
+        acceptanceCriteriaCount: 2,
+        contractSurfaceCount: 1,
+        splitPolicy: 'conditional' as const,
+      },
+    }
+    const lyrical = buildTaskSizePlan({
+      task: {
+        ...base,
+        title: 'A luminous tide of health-bearing changes',
+        description: 'A lyrical paragraph with returning whales and no operational meaning for sizing.',
+        spec: 'The prose is intentionally ornate and model-specific.',
+      },
+    })
+    const terse = buildTaskSizePlan({
+      task: {
+        ...base,
+        title: 'Health endpoint',
+        description: 'Update the endpoint and test.',
+        spec: 'Two short sentences.',
+      },
+    })
+
+    const { createdAt: _lyricalCreatedAt, ...lyricalShape } = lyrical
+    const { createdAt: _terseCreatedAt, ...terseShape } = terse
+    expect(lyricalShape).toEqual(terseShape)
+  })
+
   it('treats deterministic single-file smoke tasks as tiny', () => {
     const plan = buildTaskSizePlan({
       task: {
@@ -43,7 +77,7 @@ describe('task sizing', () => {
       action: 'proceed',
       reviewBudgetHint: 'lean',
     })
-    expect(plan.factors.map((factor) => factor.id)).toContain('deterministic_single_file')
+    expect(plan.factors).toEqual([])
     expect(plan.recommendedChildren).toEqual([])
   })
 
@@ -89,7 +123,7 @@ describe('task sizing', () => {
       action: 'proceed_with_warning',
       reviewBudgetHint: 'balanced',
     })
-    expect(plan.factors.map((factor) => factor.id)).toContain('single_file_web_app')
+    expect(plan.factors.map((factor) => factor.id)).toContain('multiple_outcomes')
     expect(plan.recommendedChildren).toEqual([])
   })
 
@@ -453,6 +487,11 @@ describe('task sizing', () => {
         title: 'Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu',
         description: 'looma/PROJECT_STATE.md: 1. Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menus.',
         priority: 'normal',
+        structuredSignals: {
+          acceptanceCriteriaCount: 1,
+          contractSurfaceCount: 0,
+          splitPolicy: 'required',
+        },
         spec: [
           '## Summary',
           'Build Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu from the current project evidence.',
@@ -472,7 +511,7 @@ describe('task sizing', () => {
     })
 
     expect(plan.action).toBe('decompose_before_execution')
-    expect(plan.factors.map((factor) => factor.id)).toContain('broad_imported_program')
+    expect(plan.factors.map((factor) => factor.id)).toContain('explicit_split_boundary')
     expect(plan.recommendedChildren).toEqual([])
     expect(buildDecompositionChildDrafts({
       task: {

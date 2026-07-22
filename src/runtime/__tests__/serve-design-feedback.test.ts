@@ -61,6 +61,7 @@ describe('design feedback API', () => {
         severity: 'high',
         dimension: 'interaction-semantics',
         designSystem: 'foundation',
+        targetPackage: 'core',
         suggestedClassification: 'reusable-pattern',
       }),
     }))

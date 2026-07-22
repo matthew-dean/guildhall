@@ -22,79 +22,9 @@ const SUCCESS_GATES_LABEL_RE = /^success gates:\s*$/i
 const DONE_GATE_LABEL_RE = /^done gate(?:\s+for\s+.+?)?:\s*$/i
 const DO_NOT_START_LABEL_RE = /^do not start yet:\s*$/i
 const GOAL_LABEL_RE = /^goal:\s*(.+?)\s*$/i
-const RECOMMENDED_TASK_TITLE_RE = /^-\s+\*\*recommended first task title:\*\*\s+(.+?)\s*$/i
-const RECOMMENDED_DOMAIN_RE = /^-\s+\*\*recommended domain:\*\*\s+(.+?)\s*$/i
 const CORE_LOOP_HEADING_RE = /^core loop$/i
 const SYSTEM_RECORDS_HEADING_RE = /^system records$/i
 const MARKDOWN_TABLE_ROW_RE = /^\|.+\|\s*$/
-
-function coreLoopRole(title: string): WorkspaceSignal['role'] {
-  const normalized = cleanHeading(title).toLowerCase()
-  if (
-    /^author defines\b/.test(normalized) ||
-    /^author builds a house\b/.test(normalized) ||
-    (/\bauthor\b/.test(normalized) &&
-      /\b(intent|genre|form|theme|themes|voice|audience|premise|world|cast|outline|chapter goals|review standards)\b/.test(normalized))
-  ) {
-    return 'brief_input'
-  }
-  return 'capability'
-}
-
-function recordRole(title: string): WorkspaceSignal['role'] {
-  const normalized = cleanHeading(title).toLowerCase()
-  if (
-    /^(book brief|author voice profile|project author notes|global author database|author profile)$/.test(normalized)
-  ) {
-    return 'brief_input'
-  }
-  return 'capability'
-}
-
-function normalizeKey(text: string): string {
-  return cleanHeading(text).toLowerCase()
-}
-
-function mergeCoreLoopStructuralContext(signals: WorkspaceSignal[]): WorkspaceSignal[] {
-  const next: WorkspaceSignal[] = []
-  const bookBriefRecordByRef = new Map<string, number>()
-
-  for (const signal of signals) {
-    if (
-      signal.kind === 'context' &&
-      signal.role === 'brief_input' &&
-      signal.structure === 'record' &&
-      normalizeKey(signal.title) === 'book brief'
-    ) {
-      const ref = signal.references?.[0]
-      if (ref) bookBriefRecordByRef.set(ref, next.length)
-    }
-    next.push(signal)
-  }
-
-  return next.filter((signal) => {
-    const ref = signal.references?.[0]
-    if (
-      signal.kind === 'context' &&
-      signal.role === 'brief_input' &&
-      !signal.structure &&
-      /^author defines book intent\b/i.test(signal.title) &&
-      ref &&
-      bookBriefRecordByRef.has(ref)
-    ) {
-      const recordIndex = bookBriefRecordByRef.get(ref)!
-      const record = next[recordIndex]
-      if (record) {
-        const supporting = cleanHeading(signal.title)
-        if (supporting && !record.evidence.includes(supporting)) {
-          record.evidence = `${record.evidence} Also described as: ${supporting}`.slice(0, 240)
-        }
-      }
-      return false
-    }
-    return true
-  })
-}
 
 function likelyRelevantFile(rel: string): boolean {
   return MARKDOWN_FILE_RE.test(rel) && !IGNORE_PATH_RE.test(rel)
@@ -205,10 +135,6 @@ function relatedSpecReference(
       return rightScore - leftScore || left.localeCompare(right)
     })
   return basenameMatches[0] ? join(projectPath, basenameMatches[0]) : null
-}
-
-function isDecompositionInventoryFile(rel: string): boolean {
-  return /(^|\/)remaining-spec-decomposition-inventory\.md$/i.test(rel.replaceAll('\\', '/'))
 }
 
 function logicalMarkdownLines(raw: string): string[] {
@@ -370,6 +296,48 @@ function specCoverageSignalsForFile(input: {
   return signals
 }
 
+function decompositionInventoryContextSignals(input: {
+  projectPath: string
+  sourceRel: string
+  sourceAbs: string
+  raw: string
+  availableFiles: ReadonlySet<string>
+  currentMilestoneStage: string | null
+  unknownStageScope: WorkspaceSignal['scopeHint']
+}): WorkspaceSignal[] {
+  if (!/(^|\/)remaining-spec-decomposition-inventory\.md$/i.test(input.sourceRel.replaceAll('\\', '/'))) {
+    return []
+  }
+  const signals: WorkspaceSignal[] = []
+  const headings = [...input.raw.matchAll(/^#{2,6}\s+(.+?)\s*$/gim)]
+  for (let index = 0; index < headings.length; index += 1) {
+    const heading = headings[index]?.[1]?.trim()
+    if (!heading) continue
+    const relatedSpec = relatedSpecReference(input.projectPath, input.sourceRel, heading, input.availableFiles)
+    if (!relatedSpec) continue
+    const start = (headings[index]?.index ?? 0) + (headings[index]?.[0]?.length ?? 0)
+    const end = headings[index + 1]?.index ?? input.raw.length
+    const body = input.raw.slice(start, end)
+    const stageAlignment = /^\s*-\s+\*\*stage alignment:\*\*\s+(.+?)\s*$/im.exec(body)?.[1]
+    const scopeHint = scopeHintForStage(stageAlignment, input.currentMilestoneStage, input.unknownStageScope)
+    const domain = /^\s*-\s+\*\*recommended domain:\*\*\s+(.+?)\s*$/im.exec(body)?.[1]?.trim()
+    const fileName = path.basename(relatedSpec)
+    signals.push({
+      signalId: `${input.sourceRel}:spec:${fileName}`,
+      source: 'planning-docs',
+      kind: 'context',
+      title: `Spec: ${humanizeSpecStem(fileName)}`,
+      evidence: `${input.sourceRel}: ${cleanHeading(heading)}`.slice(0, 240),
+      references: [relatedSpec, input.sourceAbs],
+      role: 'capability',
+      ...(domain ? { domainHint: domain } : {}),
+      ...(scopeHint ? { scopeHint } : {}),
+      confidence: 'high',
+    })
+  }
+  return signals
+}
+
 function fileLooksLikeTaskList(fileBase: string, rel: string): boolean {
   if (/^PROJECT_STATE\.md$/i.test(fileBase)) return true
   if (/\/specs\/[^/]+\.md$/i.test(rel)) return false
@@ -443,19 +411,12 @@ function scopeHintForOpenWorkSection(
   return undefined
 }
 
-function scopeHintForOpenWorkTitle(
-  title: string | null | undefined,
-): WorkspaceSignal['scopeHint'] | undefined {
-  if (!title) return undefined
-  if (/\b(deferred|post[-\s]?launch|later|v2)\b/i.test(title)) return 'later'
-  return undefined
-}
-
 function scopeHintForOpenWork(
   sectionHeading: string | null | undefined,
-  title: string | null | undefined,
 ): WorkspaceSignal['scopeHint'] | undefined {
-  return scopeHintForOpenWorkSection(sectionHeading) ?? scopeHintForOpenWorkTitle(title)
+  // Scope is a structural document fact. A title such as "(deferred)" is
+  // display prose and must not move work between releases.
+  return scopeHintForOpenWorkSection(sectionHeading)
 }
 
 function explicitReleaseLabelForHeading(heading: string): string | null {
@@ -592,74 +553,13 @@ export const planningDocsSource: TaskSource = {
       const defaultOpenWorkScopeHint: WorkspaceSignal['scopeHint'] | undefined =
         multiProjectRoots.size > 1 && primaryDomain && domainHint && domainHint !== primaryDomain ? 'later' : undefined
       let currentSection: string | null = null
-      let currentSectionRaw: string | null = null
       let currentLabel: 'deliverables' | 'scope' | 'success_gates' | 'done_gate' | 'do_not_start' | null = null
-      let pendingRecommendedTaskTitle: string | null = null
-      let pendingRecommendedTaskSection: string | null = null
-      let pendingRecommendedTaskSectionRaw: string | null = null
-      let currentRecommendedStageAlignment: string | null = null
-      let currentRecommendedDomain: string | null = null
       let currentReleaseId: string | null = null
       let currentReleaseLabel: string | null = null
       let currentReleaseDepth: number | null = null
       const bulletStack: Array<{ indent: number; title: string; grouping: boolean }> = []
       let pendingTableHeaders: string[] | null = null
       let activeTableHeaders: string[] | null = null
-
-      const flushPendingRecommendedTask = () => {
-        if (!pendingRecommendedTaskTitle) return
-        const title = pendingRecommendedTaskTitle
-        if (!/^\(?none\b/i.test(title)) {
-          const references = [abs]
-          const relatedSpec = relatedSpecReference(
-            projectPath,
-            rel,
-            pendingRecommendedTaskSectionRaw,
-            availableFiles,
-          )
-          if (relatedSpec && !references.includes(relatedSpec)) {
-            references.push(relatedSpec)
-          }
-          const scopeHint = scopeHintInsideExplicitRelease(
-            currentReleaseId,
-            scopeHintForStage(currentRecommendedStageAlignment, currentMilestoneStage, unknownStageScope),
-          )
-          const domain = currentRecommendedDomain ?? domainHint
-          const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
-          const releaseLabel = releaseId ? currentReleaseLabel : null
-          if (isDecompositionInventoryFile(rel) && scopeHint === 'later' && relatedSpec) {
-            signals.push({
-              source: 'planning-docs',
-              kind: 'context',
-              role: 'capability',
-              title: `Spec: ${humanizeSpecStem(path.basename(relatedSpec))}`,
-              evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
-              references: [relatedSpec, abs],
-              linkedTaskHints: [title],
-              ...(domain ? { domainHint: domain } : {}),
-              scopeHint,
-              confidence: 'high',
-            })
-          } else {
-            signals.push({
-              source: 'planning-docs',
-              kind: 'open_work',
-              title,
-              evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
-              references,
-              ...(domain ? { domainHint: domain } : {}),
-              scopeHint,
-              ...(releaseId ? { releaseId } : {}),
-              ...(releaseLabel ? { releaseLabel } : {}),
-              confidence: 'high',
-            })
-          }
-        }
-        pendingRecommendedTaskTitle = null
-        pendingRecommendedTaskSection = null
-        currentRecommendedStageAlignment = null
-        currentRecommendedDomain = null
-      }
 
       // Treat spec files as framing even if they have no checklists.
       if (/\/specs\/[^/]+\.md$/i.test(rel)) {
@@ -687,11 +587,19 @@ export const planningDocsSource: TaskSource = {
         availableFiles,
         ...(domainHint ? { domainHint } : {}),
       }))
+      signals.push(...decompositionInventoryContextSignals({
+        projectPath,
+        sourceRel: rel,
+        sourceAbs: abs,
+        raw,
+        availableFiles,
+        currentMilestoneStage,
+        unknownStageScope,
+      }))
 
       for (const line of logicalMarkdownLines(raw)) {
         const heading = /^(#{2,4})\s+(.+?)\s*$/.exec(line)
         if (heading) {
-          flushPendingRecommendedTask()
           const headingDepth = heading[1]!.length
           if (currentReleaseDepth != null && headingDepth <= currentReleaseDepth) {
             currentReleaseId = null
@@ -699,7 +607,6 @@ export const planningDocsSource: TaskSource = {
             currentReleaseDepth = null
           }
           currentSection = cleanHeading(heading[2]!)
-          currentSectionRaw = heading[2]!.trim()
           const releaseLabel = explicitReleaseLabelForHeading(currentSection)
           if (releaseLabel) {
             currentReleaseId = releaseIdFromLabel(releaseLabel)
@@ -797,7 +704,7 @@ export const planningDocsSource: TaskSource = {
                 title: recordTitle,
                 evidence: `${rel}: ${recordPurpose}`.slice(0, 240),
                 references: [abs],
-                role: recordRole(recordTitle),
+                role: 'capability',
                 structure: 'record',
                 ...(domainHint ? { domainHint } : {}),
                 confidence: 'high',
@@ -836,26 +743,6 @@ export const planningDocsSource: TaskSource = {
           }
         }
 
-        const stageAlignment = /^-\s+\*\*stage alignment:\*\*\s+(.+?)\s*$/i.exec(trimmedLine)
-        if (stageAlignment) {
-          currentRecommendedStageAlignment = cleanHeading(stageAlignment[1]!)
-          continue
-        }
-
-        const recommendedDomain = RECOMMENDED_DOMAIN_RE.exec(trimmedLine)
-        if (recommendedDomain) {
-          currentRecommendedDomain = cleanHeading(recommendedDomain[1]!)
-          continue
-        }
-
-        const recommendedTask = RECOMMENDED_TASK_TITLE_RE.exec(trimmedLine)
-        if (recommendedTask && currentSection) {
-          pendingRecommendedTaskTitle = cleanHeading(recommendedTask[1]!)
-          pendingRecommendedTaskSection = currentSection
-          pendingRecommendedTaskSectionRaw = currentSectionRaw
-          continue
-        }
-
         const checked = /^\s*[-*]\s*\[[xX]\]\s+(.+?)\s*$/.exec(line)
         if (
           checked &&
@@ -882,7 +769,7 @@ export const planningDocsSource: TaskSource = {
           bulletStack.length = 0
           const scopeHint = scopeHintInsideExplicitRelease(
             currentReleaseId,
-            scopeHintForOpenWork(currentSection, unchecked[1]) ?? defaultOpenWorkScopeHint,
+            scopeHintForOpenWork(currentSection) ?? defaultOpenWorkScopeHint,
           )
           const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
           const releaseLabel = releaseId ? currentReleaseLabel : null
@@ -926,7 +813,7 @@ export const planningDocsSource: TaskSource = {
           if (evidenceStatusBullet) {
             const scopeHint = scopeHintInsideExplicitRelease(
               currentReleaseId,
-              scopeHintForOpenWork(currentSection, title) ?? defaultOpenWorkScopeHint,
+              scopeHintForOpenWork(currentSection) ?? defaultOpenWorkScopeHint,
             )
             const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
             const releaseLabel = releaseId ? currentReleaseLabel : null
@@ -945,7 +832,7 @@ export const planningDocsSource: TaskSource = {
           } else if (grouping && !groupingChildrenAreTasks) {
             const scopeHint = scopeHintInsideExplicitRelease(
               currentReleaseId,
-              scopeHintForOpenWork(currentSection, title) ?? defaultOpenWorkScopeHint,
+              scopeHintForOpenWork(currentSection) ?? defaultOpenWorkScopeHint,
             )
             const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
             const releaseLabel = releaseId ? currentReleaseLabel : null
@@ -992,7 +879,7 @@ export const planningDocsSource: TaskSource = {
             )
             const scopeHint = scopeHintInsideExplicitRelease(
               currentReleaseId,
-              stageScopedSignal?.scopeHint ?? scopeHintForOpenWork(currentSection, title) ?? defaultOpenWorkScopeHint,
+              stageScopedSignal?.scopeHint ?? scopeHintForOpenWork(currentSection) ?? defaultOpenWorkScopeHint,
             )
             const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
             const releaseLabel = releaseId ? currentReleaseLabel : null
@@ -1026,7 +913,7 @@ export const planningDocsSource: TaskSource = {
             title: cleanHeading(numbered[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
-            role: coreLoopRole(numbered[1]!),
+            role: 'capability',
             ...(domainHint ? { domainHint } : {}),
             confidence: 'high',
           })
@@ -1038,7 +925,7 @@ export const planningDocsSource: TaskSource = {
             : 'open_work'
           const scopeHint = scopeHintInsideExplicitRelease(
             currentReleaseId,
-            scopeHintForOpenWork(currentSection, numbered[1]) ?? defaultOpenWorkScopeHint,
+            scopeHintForOpenWork(currentSection) ?? defaultOpenWorkScopeHint,
           )
           const releaseId = kind === 'open_work'
             ? currentReleaseIdForScope(currentReleaseId, scopeHint)
@@ -1059,10 +946,9 @@ export const planningDocsSource: TaskSource = {
         }
       }
 
-      flushPendingRecommendedTask()
     }
 
-    return mergeCoreLoopStructuralContext(signals).map(signal =>
+    return signals.map(signal =>
       signal.kind === 'context' &&
       !signal.role &&
       signal.scopeHint &&

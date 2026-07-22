@@ -21,6 +21,10 @@ describe('task sizing calibration', () => {
         priority: 'high' as const,
         changedFiles: ['src/web/Billing.svelte', 'src/api/admin/subscriptions.ts', 'migrations/subscriptions.sql'],
         riskLanes: ['ux_comprehension', 'api_contract', 'data_integrity', 'migration_safety', 'release_risk'],
+        structuredSignals: {
+          acceptanceCriteriaCount: 5,
+          contractSurfaceCount: 0,
+        },
       },
       expected: {
         minScore: 8 as const,
@@ -42,9 +46,13 @@ describe('task sizing calibration', () => {
         priority: sizingCase.task.priority,
         acceptanceCriteria: [],
         outOfScope: [],
+        structuredSignals: {
+          acceptanceCriteriaCount: 5,
+          contractSurfaceCount: 0,
+        },
       },
-      changedFiles: sizingCase.task.changedFiles,
-      riskLanes: sizingCase.task.riskLanes,
+        changedFiles: sizingCase.task.changedFiles,
+        riskLanes: sizingCase.task.riskLanes,
       createdAt: '2026-05-25T12:00:00.000Z',
     })
 

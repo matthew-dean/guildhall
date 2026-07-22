@@ -1,9 +1,35 @@
 import { genericWorkGraphDomainAdapter } from './work-graph-domain-adapters.js'
+import type { ImportSemanticKind } from './import-semantic-kind.js'
 
 export type EvidenceSource = {
   path: string
   content: string
+  /** Source-owned identity for extracted units, keyed by explicit deliverable identity. */
+  unitIdentities?: Record<string, string>
+  /** Optional structured meaning supplied by the source adapter. */
+  semanticKinds?: Record<string, ImportSemanticKind>
+  /** Optional source-adapter-owned contract membership by deliverable identity. */
+  contractNames?: Record<string, readonly string[]>
+  workShapes?: Record<string, EvidenceUnit['workShape']>
+  statusHints?: Record<string, EvidenceUnit['statusHint']>
+  targetAreas?: Record<string, string>
+  producedArtifacts?: Record<string, string>
+  buildsOn?: Record<string, readonly string[]>
+  consumerSurfaces?: Record<string, readonly string[]>
 }
+
+export type EvidenceWorkShape =
+  | 'ui-component'
+  | 'frontend-integration'
+  | 'backend-api'
+  | 'cli-tool'
+  | 'docs'
+  | 'migration'
+  | 'bugfix'
+  | 'single-edit'
+  | 'generic'
+
+export type EvidenceStatusHint = 'missing' | 'shipped' | 'unknown'
 
 export type EvidenceWorkGraphInput = {
   sources: EvidenceSource[]
@@ -12,13 +38,16 @@ export type EvidenceWorkGraphInput = {
 }
 
 export type EvidenceUnit = {
+  sourceIdentity: string
   name: string
   taskTitle?: string
   need: string
   targetArea: string
   producedArtifact: string
-  workShape: 'ui-component' | 'frontend-integration' | 'backend-api' | 'cli-tool' | 'docs' | 'migration' | 'bugfix' | 'single-edit' | 'generic'
-  statusHint: 'missing' | 'shipped' | 'unknown'
+  workShape: EvidenceWorkShape
+  statusHint: EvidenceStatusHint
+  semanticKind?: ImportSemanticKind
+  contractNames?: readonly string[]
   buildsOn: string[]
   sharedFoundations: string[]
   consumerSurfaces: string[]
@@ -29,9 +58,15 @@ export type EvidenceUnit = {
 }
 
 export type EvidenceTask = {
+  sourceIdentity: string
   id: string
   title: string
   kind: 'implementation' | 'integration'
+  semanticKind?: ImportSemanticKind
+  contractNames?: readonly string[]
+  workShape: EvidenceWorkShape
+  statusHint: EvidenceStatusHint
+  parentAcceptanceCriterionIds?: readonly string[]
   deliverableName: string
   targetArea: string
   producedArtifact?: string
@@ -56,6 +91,7 @@ export type EvidenceWorkGraphPlan = {
 }
 
 type UnitSeed = {
+  sourceIdentity?: string
   path: string
   deliverable: string
   need: string
@@ -95,9 +131,19 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
   const tasks: EvidenceTask[] = []
   const reconciliations: EvidenceWorkGraphPlan['reconciliations'] = []
   const implementationByDeliverable = new Map<string, EvidenceTask>()
+  const consumedExistingTaskIds = new Set<string>()
 
   for (const unit of units) {
-    const existingMatch = findExistingTaskForUnit(unit, existingTasks)
+    const existingMatch = findExistingTaskForUnit(
+      unit,
+      existingTasks.filter(task => {
+        const id = typeof task.id === 'string' ? task.id : ''
+        return id.length === 0 || !consumedExistingTaskIds.has(id)
+      }),
+    )
+    if (existingMatch) {
+      consumedExistingTaskIds.add(existingMatch.id)
+    }
     const isAlreadyShipped = unit.statusHint === 'shipped' || isExistingDone(existingMatch)
 
     if (isAlreadyShipped && (!existingMatch || isExistingNonBlockingDependency(existingMatch))) {
@@ -149,25 +195,30 @@ function extractUnits(
   currentMilestoneStage: string | null,
   options: { suppressRoadmapStageDeliverables: boolean },
 ): EvidenceUnit[] {
-  return extractSeeds(source, currentMilestoneStage, options).map(seed => {
-    const statusHint = inferStatusHint(seed.need)
-    const workShape = inferWorkShape(seed)
-    const targetArea = inferTargetArea(seed)
-    const producedArtifact = inferProducedArtifact(seed.deliverable, seed.need)
-    const buildsOn = parseFoundations(seed.foundation)
+  return extractSeeds(source, currentMilestoneStage, options).map((seed, index) => {
+    const sourceIdentity = seed.sourceIdentity ?? sourceMetadataValue(source.unitIdentities, seed.deliverable) ?? `${source.path}#unit:${index + 1}`
+    const statusHint = sourceMetadataValue(source.statusHints, seed.deliverable) ?? 'unknown'
+    const workShape = sourceMetadataValue(source.workShapes, seed.deliverable) ?? 'generic'
+    const targetArea = sourceMetadataValue(source.targetAreas, seed.deliverable) ?? inferTargetArea(seed)
+    const producedArtifact = sourceMetadataValue(source.producedArtifacts, seed.deliverable) ?? `artifact:${sourceIdentity}`
+    const buildsOn = sourceMetadataList(source.buildsOn, seed.deliverable)
     const sharedFoundations = buildsOn.map(foundationToArtifact)
+    const consumerSurfaces = sourceMetadataList(source.consumerSurfaces, seed.deliverable)
 
     return {
+      sourceIdentity,
       name: seed.deliverable,
       ...(seed.titleMode === 'verbatim' ? { taskTitle: seed.deliverable } : {}),
       need: seed.need,
       targetArea,
       producedArtifact,
       workShape,
+      ...(semanticKindForSource(source, seed.deliverable) ? { semanticKind: semanticKindForSource(source, seed.deliverable) } : {}),
+      ...(contractNamesForSource(source, seed.deliverable) ? { contractNames: contractNamesForSource(source, seed.deliverable) } : {}),
       statusHint,
       buildsOn,
       sharedFoundations,
-      consumerSurfaces: parseConsumers(seed.consumer),
+      consumerSurfaces,
       sourceRefs: [{ path: seed.path, snippet: seed.row }],
       ...(seed.sequenceGroup ? { sequenceGroup: seed.sequenceGroup } : {}),
       ...(typeof seed.sequenceIndex === 'number' ? { sequenceIndex: seed.sequenceIndex } : {}),
@@ -185,8 +236,32 @@ function extractSeeds(
     ...extractTableSeeds(source),
     ...extractRoadmapMilestoneSeeds(source),
     ...(options.suppressRoadmapStageDeliverables ? [] : extractRoadmapStageDeliverableSeeds(source)),
-    ...extractRecommendedTaskSeeds(source),
   ]
+}
+
+function semanticKindForSource(source: EvidenceSource, deliverable: string): ImportSemanticKind | undefined {
+  const semanticKinds = source.semanticKinds
+  if (!semanticKinds) return undefined
+  const exact = semanticKinds[deliverable]
+  if (exact) return exact
+  const normalizedDeliverable = normalizeDeliverableName(deliverable)
+  return Object.entries(semanticKinds).find(([candidate]) =>
+    normalizeDeliverableName(candidate) === normalizedDeliverable,
+  )?.[1]
+}
+
+function contractNamesForSource(source: EvidenceSource, deliverable: string): readonly string[] | undefined {
+  const contractNames = source.contractNames
+  if (!contractNames) return undefined
+  const exact = contractNames[deliverable]
+  if (exact?.length) return [...new Set(exact.map(name => name.trim()).filter(Boolean))]
+  const normalizedDeliverable = normalizeDeliverableName(deliverable)
+  const matched = Object.entries(contractNames).find(([candidate]) =>
+    normalizeDeliverableName(candidate) === normalizedDeliverable,
+  )?.[1]
+  return matched?.length
+    ? [...new Set(matched.map(name => name.trim()).filter(Boolean))]
+    : undefined
 }
 
 function extractTableSeeds(source: EvidenceSource): UnitSeed[] {
@@ -344,81 +419,6 @@ function extractRoadmapStageDeliverableSeeds(source: EvidenceSource): UnitSeed[]
   return seeds
 }
 
-function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
-  const lines = logicalMarkdownLines(source.content)
-  const seeds: UnitSeed[] = []
-  let currentEntry = ''
-  let currentStageAlignment = ''
-  let currentDomain = ''
-  let currentRecommendedTitle = ''
-
-  const flush = () => {
-    const title = stripInlineCode(currentRecommendedTitle.trim())
-    const normalizedTitle = title
-      .toLowerCase()
-      .replace(/[`*_~]/g, '')
-      .trim()
-    if (!normalizedTitle || /^\(?none\b/i.test(normalizedTitle) || isResolvedRecommendedTaskTitle(currentRecommendedTitle)) {
-      currentRecommendedTitle = ''
-      return
-    }
-    seeds.push({
-      path: source.path,
-      deliverable: title,
-      need: currentStageAlignment
-        ? `${currentStageAlignment}. Recommended first implementation task for ${currentEntry || 'this spec'}.`
-        : `Recommended first implementation task for ${currentEntry || 'this spec'}.`,
-      foundation: currentEntry || 'spec inventory',
-      consumer: '',
-      row: `Recommended first task title: ${title}`,
-      titleMode: 'verbatim',
-      explicitTargetArea: currentDomain && !/^\*?\(none/i.test(currentDomain) ? currentDomain : undefined,
-      ...(currentStageAlignment ? { stageAlignment: normalizeStageLabel(currentStageAlignment) } : {}),
-    })
-    currentRecommendedTitle = ''
-  }
-
-  for (const line of lines) {
-    const heading = /^###\s+(.+?)\s*$/.exec(line)
-    if (heading) {
-      flush()
-      currentEntry = heading[1]!.trim()
-      currentStageAlignment = ''
-      currentDomain = ''
-      continue
-    }
-
-    const stageAlignment = /^-\s+\*\*stage alignment:\*\*\s+(.+?)\s*$/i.exec(line.trim())
-    if (stageAlignment) {
-      currentStageAlignment = stripInlineCode(stageAlignment[1]!.trim())
-      continue
-    }
-
-    const domain = /^-\s+\*\*recommended domain:\*\*\s+(.+?)\s*$/i.exec(line.trim())
-    if (domain) {
-      currentDomain = stripInlineCode(domain[1]!.trim())
-      continue
-    }
-
-    const recommended = /^-\s+\*\*recommended first task title:\*\*\s+(.+?)\s*$/i.exec(line.trim())
-    if (!recommended) {
-      continue
-    }
-    currentRecommendedTitle = recommended[1]!.trim()
-  }
-
-  flush()
-
-  return seeds
-}
-
-function isResolvedRecommendedTaskTitle(value: string): boolean {
-  return (
-    /~~.+?~~/.test(value) &&
-    /\b(done|resolved|complete|completed|shipped|recovered)\b/i.test(value)
-  )
-}
-
 function detectCurrentMilestoneStage(sources: readonly EvidenceSource[]): string | null {
   for (const source of sources) {
     const match = source.content.match(/##\s+Current Next Milestone[\s\S]{0,400}?The next milestone is\s+(Stage\s+\d+)/i)
@@ -489,13 +489,18 @@ function isListCompletionAnnotation(trimmed: string): boolean {
 }
 
 function buildImplementationTask(unit: EvidenceUnit, existingMatch?: ExistingTaskMatch): EvidenceTask {
-  const id = existingMatch?.id ?? `task-${slugify(unit.name)}`
+  const id = existingMatch?.id ?? `task-${stableIdentityHash(unit.sourceIdentity)}`
   const supersedesVagueIntake = existingMatch ? !existingMatch.structuredEnough : undefined
 
   return {
+    sourceIdentity: unit.sourceIdentity,
     id,
     title: unit.taskTitle ?? `Build ${unit.name}`,
     kind: 'implementation',
+    workShape: unit.workShape,
+    statusHint: unit.statusHint,
+    ...(unit.semanticKind ? { semanticKind: unit.semanticKind } : {}),
+    ...(unit.contractNames?.length ? { contractNames: [...unit.contractNames] } : {}),
     deliverableName: unit.name,
     targetArea: unit.targetArea,
     producedArtifact: unit.producedArtifact,
@@ -539,9 +544,14 @@ function buildIntegrationTask(
   }
 
   return {
-    id: `task-${slugify(unit.name)}-integration`,
+    sourceIdentity: `${unit.sourceIdentity}:integration`,
+    id: `task-${stableIdentityHash(`${unit.sourceIdentity}:integration`)}`,
     title: integrationTitle(unit, consumerSurface),
     kind: 'integration',
+    workShape: 'frontend-integration',
+    statusHint: unit.statusHint,
+    ...(unit.semanticKind ? { semanticKind: unit.semanticKind } : {}),
+    ...(unit.contractNames?.length ? { contractNames: [...unit.contractNames] } : {}),
     deliverableName: unit.name,
     targetArea: integrationTargetArea(unit, consumerSurface),
     buildsOn: unit.buildsOn,
@@ -747,21 +757,11 @@ function integrationProofPaths(unit: EvidenceUnit): EvidenceTask['proofPaths'] {
   ]
 }
 
-function inferStatusHint(need: string): EvidenceUnit['statusHint'] {
-  if (/\b(shipped|complete|done|already)\b/i.test(need)) {
-    return 'shipped'
-  }
-  if (/\b(missing|gap|add|allow|expose|needs?|build|replace|clarify|rename|fix|migration|migrate)\b/i.test(need)) {
-    return 'missing'
-  }
-  return 'unknown'
-}
-
 function inferTargetArea(seed: UnitSeed): string {
   if (seed.explicitTargetArea?.trim()) {
     return normalizeTargetArea(seed.explicitTargetArea.trim())
   }
-  const { path, deliverable } = seed
+  const { path } = seed
   const releaseFixture = path.match(/(?:^|\/)release-proof-matrix\/([^/]+)/)
   if (releaseFixture?.[1]) {
     return releaseFixture[1]
@@ -774,9 +774,6 @@ function inferTargetArea(seed: UnitSeed): string {
   const documentArea = pathSegments[1]
   if (documentArea && !['docs', 'internal'].includes(documentArea)) {
     return documentArea
-  }
-  if (/dashboard integration/i.test(deliverable)) {
-    return 'Admin settings page'
   }
   return documentArea ?? firstPathSegment ?? 'project'
 }
@@ -795,60 +792,17 @@ function inferRoadmapTargetArea(path: string): string {
   return 'project'
 }
 
-function inferWorkShape(seed: UnitSeed): EvidenceUnit['workShape'] {
-  const text = `${seed.deliverable} ${seed.need} ${seed.foundation} ${seed.consumer}`.toLowerCase()
-  if (/\b(rename|wording|copy)\b/.test(seed.need) || /\bsettings footer\b/.test(text)) {
-    return 'single-edit'
-  }
-  if (/\b(fix|duplicate|regression)\b/.test(seed.need)) {
-    return 'bugfix'
-  }
-  if (/\b(data-migration|migration|rollback|archived_at|schema)\b/.test(text)) {
-    return 'migration'
-  }
-  if (/\b(cli|command|--json|inspect)\b/.test(text)) {
-    return 'cli-tool'
-  }
-  if (/\b(backend-api|api|endpoint|membership checks?|tenant|permission)\b/.test(text)) {
-    return 'backend-api'
-  }
-  if (/\bdashboard integration\b/i.test(seed.deliverable)) {
-    return 'frontend-integration'
-  }
-  if (/\b(component|component-library|ui-library|primitive|design-system|confirmation|navigation)\b/.test(`${seed.path} ${text}`)) {
-    return 'ui-component'
-  }
-  if (/\b(docs-only|docs|quick start|documentation|install warning|clarify)\b/.test(text)) {
-    return 'docs'
-  }
-  return 'generic'
+function sourceMetadataValue<T>(metadata: Record<string, T> | undefined, deliverable: string): T | undefined {
+  if (!metadata) return undefined
+  const exact = metadata[deliverable]
+  if (exact !== undefined) return exact
+  const normalized = normalizeDeliverableName(deliverable)
+  return Object.entries(metadata).find(([candidate]) => normalizeDeliverableName(candidate) === normalized)?.[1]
 }
 
-function inferProducedArtifact(deliverable: string, need: string): string {
-  const shippedArtifact = need.match(/`([^`]+)`/)
-  if (shippedArtifact?.[1]) {
-    return shippedArtifact[1]
-  }
-  if (/^[A-Z][A-Za-z]+$/.test(deliverable)) {
-    return `ui-${splitCamelCase(deliverable).toLowerCase().replaceAll(' ', '-')}`
-  }
-  return slugify(deliverable)
-}
-
-function parseFoundations(value: string): string[] {
-  const withoutPrefix = value.replace(/^builds on\s+/i, '')
-  return unique(withoutPrefix
-    .split(/\s+\+\s+|\s+and\s+|,\s*/)
-    .map(part => part.replace(/\s+status$/i, '').trim())
-    .filter(Boolean)
-    .map(normalizeDeliverableName))
-}
-
-function parseConsumers(value: string): string[] {
-  return unique(value
-    .split(/\s+and\s+|,\s*/)
-    .map(part => part.trim())
-    .filter(Boolean))
+function sourceMetadataList(metadata: Record<string, readonly string[]> | undefined, deliverable: string): string[] {
+  const value = sourceMetadataValue(metadata, deliverable)
+  return value ? unique(value.map(item => item.trim()).filter(Boolean)) : []
 }
 
 function primaryConsumerSurface(unit: EvidenceUnit): string {
@@ -868,12 +822,13 @@ function integrationTargetArea(unit: EvidenceUnit, consumerSurface: string): str
 }
 
 function findExistingTaskForUnit(unit: EvidenceUnit, existingTasks: Array<Record<string, unknown>>): ExistingTaskMatch | undefined {
+  const exactIdentity = existingTasks.find(task => task.sourceIdentity === unit.sourceIdentity)
+  if (exactIdentity) return existingTaskMatch(exactIdentity)
   return findExistingTaskByDeliverable(unit.name, existingTasks)
 }
 
 function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array<Record<string, unknown>>): ExistingTaskMatch | undefined {
   const normalized = normalizeForMatch(deliverable)
-  const deliverablePattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(deliverable.toLowerCase())}([^a-z0-9]|$)`, 'i')
   for (const task of existingTasks) {
     const id = typeof task.id === 'string' ? task.id : undefined
     if (!id) {
@@ -884,19 +839,23 @@ function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array
       task.deliverableName,
       task.producedArtifact,
     ].filter((value): value is string => typeof value === 'string')
-
-    const textFields = [
-      task.title,
-      task.description,
-    ].filter((value): value is string => typeof value === 'string')
-
-    const matches = exactFields.some(value => normalizeForMatch(value) === normalized)
-      || textFields.some(value => deliverablePattern.test(value.toLowerCase()))
-    if (!matches && !similarSourceTitleMatch(deliverable, textFields)) {
+    // Task title and description are model-authored prose. They are never an
+    // identity join. Only explicit structural fields may reconcile a source
+    // deliverable with an existing task.
+    if (!exactFields.some(value => normalizeForMatch(value) === normalized)) {
       continue
     }
 
-    const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : []
+    return existingTaskMatch(task)
+  }
+
+  return undefined
+}
+
+function existingTaskMatch(task: Record<string, unknown>): ExistingTaskMatch | undefined {
+  const id = typeof task.id === 'string' ? task.id : undefined
+  if (!id) return undefined
+  const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : []
     const dependsOn = Array.isArray(task.dependsOn) ? task.dependsOn : []
     const references = Array.isArray(task.references) ? task.references : []
     const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
@@ -929,27 +888,6 @@ function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array
       producedArtifact: typeof task.producedArtifact === 'string' ? task.producedArtifact : undefined,
       structuredEnough,
     }
-  }
-
-  return undefined
-}
-
-function similarSourceTitleMatch(deliverable: string, textFields: string[]): boolean {
-  const sourceTokens = meaningfulTitleTokens(deliverable)
-  if (sourceTokens.length < 4) return false
-  return textFields.some((value) => {
-    const candidateTokens = meaningfulTitleTokens(value)
-    if (candidateTokens.length < sourceTokens.length) return false
-    if (candidateTokens.length > Math.ceil(sourceTokens.length * 1.6)) return false
-    return sourceTokens.every(token => candidateTokens.includes(token))
-  })
-}
-
-function meaningfulTitleTokens(value: string): string[] {
-  const stopWords = new Set(['add', 'build', 'create', 'define', 'implement', 'the', 'a', 'an', 'and', 'for', 'from', 'into', 'one'])
-  return [...new Set(slugify(value)
-    .split('-')
-    .filter(token => token.length >= 4 && !stopWords.has(token)))]
 }
 
 function isExistingDone(task: ExistingTaskMatch | undefined): boolean {
@@ -981,32 +919,26 @@ function markdownLooksLikeModernSpec(spec: string): boolean {
 
 function foundationToArtifact(foundation: string): string {
   if (/^[A-Z][A-Za-z]+$/.test(foundation)) {
-    return `ui-${splitCamelCase(foundation).toLowerCase().replaceAll(' ', '-')}`
+    return `ui-${foundation.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}`
   }
   return foundation
 }
 
-function slugify(value: string): string {
-  return splitCamelCase(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-}
-
-function splitCamelCase(value: string): string {
-  return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+function stableIdentityHash(value: string): string {
+  let hash = 0x811c9dc5
+  for (const character of value) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(36).slice(0, 8)
 }
 
 function normalizeForMatch(value: string): string {
-  return slugify(value).replaceAll('-', '')
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '')
 }
 
 function stripInlineCode(value: string): string {
   return value.replace(/`([^`]+)`/g, '$1')
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function unique<T>(values: T[]): T[] {

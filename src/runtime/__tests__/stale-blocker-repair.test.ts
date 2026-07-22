@@ -72,6 +72,7 @@ describe('repairStaleBlockersInQueue', () => {
             taskId: 'task-stripe-integration',
             agentId: 'spec-agent',
             reason: 'scope_boundary',
+            recoveryCode: 'tool_path_mismatch',
             summary: 'Blocked by cross-task guardrail forcing unrelated useAuth.ts file creation.',
             details: 'Current task is Stripe Connect, but tooling is forcing action on frontend/app/composables/useAuth.ts.',
             raisedAt: '2026-05-22T16:30:07.240Z',
@@ -121,6 +122,70 @@ describe('repairStaleBlockersInQueue', () => {
     expect(q.tasks[0]?.escalations[0]?.resolvedAt).toBeUndefined()
   })
 
+  it('does not classify model-shaped prose without a typed recovery fact', () => {
+    const q = queue([
+      task({
+        id: 'task-prose-only-recovery',
+        blockReason: 'human_judgment_required: Worker stopped after hitting its turn limit.',
+        notes: [{
+          agentId: 'coordinator',
+          role: 'policy-classification',
+          timestamp: '2026-05-23T00:00:00.000Z',
+          content: JSON.stringify({
+            class: 'model_tool_use_failure',
+            needsHuman: true,
+            summary: 'The model failed to produce a usable tool call.',
+          }),
+        }],
+        escalations: [{
+          id: 'esc-prose-only-recovery',
+          taskId: 'task-prose-only-recovery',
+          agentId: 'worker-agent',
+          reason: 'human_judgment_required',
+          summary: 'Worker stopped after hitting its turn limit.',
+          details: 'The model failed to produce a usable tool call.',
+          raisedAt: '2026-05-23T00:00:00.000Z',
+        }],
+      }),
+    ])
+
+    const result = repairStaleBlockersInQueue(q, '2026-05-23T12:00:00.000Z')
+
+    expect(result.changed).toBe(false)
+    expect(q.tasks[0]?.status).toBe('blocked')
+    expect(q.tasks[0]?.blockReason).toContain('turn limit')
+    expect(q.tasks[0]?.escalations[0]?.resolvedAt).toBeUndefined()
+  })
+
+  it('preserves typed recovery boundaries when the orchestrator owns the transition', () => {
+    const q = queue([
+      task({
+        id: 'task-typed-recovery',
+        blockReason: 'scope_boundary: The worker needs a typed recovery route.',
+        recoveryCode: 'target_shape_mismatch',
+        escalations: [{
+          id: 'esc-typed-recovery',
+          taskId: 'task-typed-recovery',
+          agentId: 'worker-agent',
+          reason: 'scope_boundary',
+          recoveryCode: 'target_shape_mismatch',
+          summary: 'The target shape needs the specialized recovery handler.',
+          details: 'Do not let generic stale repair consume this state.',
+          raisedAt: '2026-05-23T00:00:00.000Z',
+        }],
+      }),
+    ])
+
+    const result = repairStaleBlockersInQueue(q, '2026-05-23T12:00:00.000Z', {
+      preserveTypedRecoveries: true,
+    })
+
+    expect(result.changed).toBe(false)
+    expect(q.tasks[0]?.status).toBe('blocked')
+    expect(q.tasks[0]?.recoveryCode).toBe('target_shape_mismatch')
+    expect(q.tasks[0]?.escalations[0]?.resolvedAt).toBeUndefined()
+  })
+
   it('reopens model/tool-use failures instead of preserving them as human blockers', () => {
     const q = queue([
       task({
@@ -143,6 +208,15 @@ describe('repairStaleBlockersInQueue', () => {
             }),
           },
         ],
+        escalations: [{
+          id: 'esc-model-failure',
+          taskId: 'task-model-failure',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          recoveryCode: 'worker_turn_limit',
+          summary: 'The model failed to produce a usable tool call, so Guildhall should use a bounded repair prompt.',
+          raisedAt: '2026-05-23T00:00:00.000Z',
+        }],
       }),
     ])
 
@@ -184,6 +258,15 @@ describe('repairStaleBlockersInQueue', () => {
             }),
           },
         ],
+        escalations: [{
+          id: 'esc-dirty-worker-timeout',
+          taskId: 'task-dirty-worker-timeout',
+          agentId: 'worker-agent',
+          reason: 'human_judgment_required',
+          recoveryCode: 'worker_timeout_likely_target',
+          summary: 'The model failed to produce a usable tool call, so Guildhall should use a bounded repair prompt.',
+          raisedAt: '2026-05-23T00:00:00.000Z',
+        }],
       }),
     ])
 
@@ -210,6 +293,15 @@ describe('repairStaleBlockersInQueue', () => {
         id: 'task-compact-dirty-worker-timeout',
         blockReason: 'human_judgment_required: Worker repeatedly hit its turn budget after saving partial work.',
         notes: [],
+        escalations: [{
+          id: 'esc-compact-dirty-worker-timeout',
+          taskId: 'task-compact-dirty-worker-timeout',
+          agentId: 'worker-agent',
+          reason: 'human_judgment_required',
+          recoveryCode: 'worker_timeout_likely_target',
+          summary: 'A compact runtime record requires recovery.',
+          raisedAt: '2026-05-23T00:00:00.000Z',
+        }],
       }),
     ])
 
@@ -315,6 +407,15 @@ describe('repairStaleBlockersInQueue', () => {
           assessedBy: 'test',
         },
         blockReason: 'human_judgment_required: Spec author stopped after hitting its turn limit.',
+        escalations: [{
+          id: 'esc-hollow-contract',
+          taskId: 'task-hollow-contract',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          recoveryCode: 'spec_no_progress',
+          summary: 'The planning lane needs another durable pass.',
+          raisedAt: '2026-05-23T00:00:00.000Z',
+        }],
         notes: [
           {
             agentId: 'coordinator',
@@ -430,8 +531,9 @@ describe('repairCompletionProofCriteriaInQueue', () => {
           payload: {
             verdict: 'approve',
             reviewerPath: 'llm',
+            acceptedCriteriaIds: ['ac1', 'ac2'],
             reason: 'Reviewer approved.',
-            reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+            reasoning: 'Approval explanation may use any wording.',
             failingSignals: [],
             recordedAt: '2026-07-04T10:07:21.557Z',
           },
@@ -464,6 +566,7 @@ describe('repairCompletionProofCriteriaInQueue', () => {
         reviewVerdicts: [{
           verdict: 'approve',
           reviewerPath: 'llm',
+          acceptedCriteriaIds: ['ac1'],
           reason: 'Reviewer approved.',
           reasoning: 'Reviewed the implementation.',
           failingSignals: [],
@@ -534,6 +637,7 @@ describe('repairStaleBlockersForProject', () => {
             taskId: 'task-stale',
             agentId: 'spec-agent',
             reason: 'scope_boundary',
+            recoveryCode: 'tool_path_mismatch',
             summary: 'Blocked by cross-task guardrail forcing unrelated useAuth.ts file creation.',
             details: 'Current task is Stripe Connect, but tooling is forcing action on frontend/app/composables/useAuth.ts.',
             raisedAt: '2026-05-22T16:30:07.240Z',
@@ -576,8 +680,9 @@ describe('repairStaleBlockersForProject', () => {
           reviewVerdicts: [{
             verdict: 'approve',
             reviewerPath: 'llm',
+            acceptedCriteriaIds: ['ac1'],
             reason: 'Reviewer approved.',
-            reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+            reasoning: 'Approval explanation may use any wording.',
             failingSignals: [],
             recordedAt: '2026-07-04T10:07:21.557Z',
           }],
@@ -629,8 +734,9 @@ describe('repairStaleBlockersForProject', () => {
         payload: {
           verdict: 'approve',
           reviewerPath: 'llm',
+          acceptedCriteriaIds: ['ac1'],
           reason: 'Reviewer approved.',
-          reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+          reasoning: 'Approval explanation may use any wording.',
           failingSignals: [],
           recordedAt: '2026-07-04T10:07:21.557Z',
         },

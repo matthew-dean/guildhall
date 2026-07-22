@@ -158,13 +158,6 @@ export const DesignFeedbackStore = z.object({
 })
 export type DesignFeedbackStore = z.infer<typeof DesignFeedbackStore>
 
-export interface DesignFindingClassificationInput {
-  summary: string
-  dimension: string
-  designSystem?: string
-  sourceKind?: DesignFindingSource['kind']
-}
-
 export interface RouteDesignFindingResult {
   finding: DesignFinding
   decision?: DesignDecision
@@ -207,12 +200,10 @@ export async function routeDesignFinding(input: {
   const found = store.findings.find((finding) => finding.id === input.findingId)
   if (!found) throw new Error(`Design finding not found: ${input.findingId}`)
 
-  const classification = found.suggestedClassification ?? found.classification ?? classifyDesignFinding({
-    summary: found.summary,
-    dimension: found.dimension,
-    designSystem: found.designSystem,
-    sourceKind: found.source.kind,
-  })
+  const classification = found.suggestedClassification ?? found.classification
+  if (!classification) {
+    throw new Error(`Design finding ${found.id} requires a typed classification before routing.`)
+  }
   const finding = DesignFinding.parse({
     ...found,
     classification,
@@ -253,7 +244,7 @@ export async function routeDesignFinding(input: {
     candidateId: candidate.id,
     findingIds: [finding.id],
     targetDesignSystem: candidate.targetDesignSystem,
-    targetPackage: normalizeDesignSystemTargetPackage(finding),
+    targetPackage: normalizeDesignSystemTargetPackage(finding.targetPackage),
     summary: finding.summary,
     status: 'queued',
     createdAt: finding.updatedAt,
@@ -348,26 +339,6 @@ export async function buildDesignDecisionPacket(input: {
   return packet
 }
 
-export function classifyDesignFinding(input: DesignFindingClassificationInput): DesignFindingClassification {
-  const text = `${input.dimension} ${input.summary}`.toLowerCase()
-  if (input.designSystem && /fail|broken|defect|story|storybook|documented|does not/.test(text)) {
-    return 'design-system-defect'
-  }
-  if (/radius|token|semantic lever|scale|density|spacing|motion|contrast/.test(text)) {
-    return 'token-system-gap'
-  }
-  if (/rubric|guidance|taste|palette guidance|example|fashion|trend/.test(text)) {
-    return 'taste-guidance-gap'
-  }
-  if (/third[- ]party|dependency|package|library|bespoke|replace|remove|overhead|bundle|virtuali[sz]ation|positioning|combobox|autocomplete|typeahead|architecture|pivot/.test(text)) {
-    return 'architecture-opportunity'
-  }
-  if (/component|recipe|primitive|segmented|filter|button|toggle|control|pattern|state/.test(text)) {
-    return 'reusable-pattern'
-  }
-  return 'project-specific'
-}
-
 function ownerFeedbackEvidenceRefs(feedback: OwnerDesignFeedback): DesignEvidenceRef[] {
   const refs: DesignEvidenceRef[] = []
   if (feedback.target.artifactId) refs.push({ kind: 'artifact', ref: feedback.target.artifactId, summary: 'Rendered direction or proof artifact' })
@@ -442,18 +413,11 @@ function upsert<T extends { id: string }>(items: T[], item: T): T[] {
     .sort((left, right) => left.id.localeCompare(right.id))
 }
 
-function normalizeDesignSystemTargetPackage(finding: DesignFinding): DesignSystemImprovement['targetPackage'] {
-  const target = finding.targetPackage?.toLowerCase()
+function normalizeDesignSystemTargetPackage(value: string | undefined): DesignSystemImprovement['targetPackage'] {
+  const target = value?.trim().toLowerCase()
   if (target === 'tokens' || target === 'core' || target === 'layout' || target === 'storybook' || target === 'docs' || target === 'rubric') {
     return target
   }
   if (target === 'react' || target === 'vue' || target === 'svelte' || target === 'adapter') return 'adapter'
-  const text = `${finding.dimension} ${finding.summary}`.toLowerCase()
-  if (/interaction|component|recipe|primitive|segmented|filter|button|toggle|control|state/.test(text)) return 'core'
-  if (/token|radius|color|palette|spacing|motion|contrast/.test(text)) return 'tokens'
-  if (/story|storybook|state matrix/.test(text)) return 'storybook'
-  if (/doc|guidance/.test(text)) return 'docs'
-  if (/rubric|review/.test(text)) return 'rubric'
-  if (/layout|grid|stack|cluster/.test(text)) return 'layout'
-  return 'core'
+  throw new Error('Reusable design-system findings require a typed targetPackage.')
 }

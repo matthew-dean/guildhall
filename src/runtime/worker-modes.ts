@@ -8,14 +8,13 @@ export interface SelectedWorkerMode {
 }
 
 export function selectWorkerMode(task: Task): SelectedWorkerMode {
-  const text = `${task.title}\n${task.description}\n${task.spec ?? ''}`.toLowerCase()
-  if (/\b(tdd|test[- ]first|red[- ]green|failing test first)\b/.test(text)) {
-    return { id: 'tdd', reason: 'Selected TDD because the task asks for test-first work.' }
+  const mode = task.executionMode ?? 'build'
+  return {
+    id: mode,
+    reason: task.executionMode
+      ? `Selected ${mode} from the structured task execution mode.`
+      : 'Selected build because no alternate structured execution mode is declared.',
   }
-  if (/\b(fail|failing|failure|broken|debug|diagnose|triage|regression|timeout)\b/.test(text)) {
-    return { id: 'diagnose', reason: 'Selected diagnose because the task is framed around a failure.' }
-  }
-  return { id: 'build', reason: 'Selected build for ordinary implementation work.' }
 }
 
 export function renderWorkerMode(mode: SelectedWorkerMode): string {

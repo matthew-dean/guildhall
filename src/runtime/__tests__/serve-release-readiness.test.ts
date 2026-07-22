@@ -355,6 +355,19 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.diagnostics.releaseBlockers).toEqual([
       expect.objectContaining({ id: 'repository-followup:repo:0' }),
     ])
+
+    const liveUrl = new URL(savedUrl)
+    liveUrl.searchParams.set('live', 'true')
+    const liveBody = await (await app.fetch(new Request(liveUrl))).json() as any
+
+    // An explicit live inspection must not expose saved readiness beside a
+    // fresher diagnostic answer. Every consumer gets the same current truth.
+    expect(liveBody.ready).toBe(false)
+    expect(liveBody.ready).toBe(liveBody.diagnostics.ready)
+    expect(liveBody.gitStory).toMatchObject({ ready: false })
+    expect(liveBody.gitStory).toEqual(liveBody.diagnostics.gitStory)
+    expect(liveBody.releaseBlockers).toEqual(liveBody.diagnostics.releaseBlockers)
+    expect(liveBody.totals).toEqual(liveBody.diagnostics.totals)
   })
 
   it('does not turn rich project detail into an implicit repository scan', async () => {
@@ -825,6 +838,7 @@ describe('GET /api/project/release-readiness', () => {
           id: 'task-toolbar',
           title: 'Build the responsive toolbar UI',
           description: 'Manual browser proof is expected for the toolbar layout.',
+          workShape: 'ui-component',
           status: 'done',
           completedAt: '2026-05-08T00:00:00Z',
           releaseIds: ['ui-proof'],
@@ -861,6 +875,7 @@ describe('GET /api/project/release-readiness', () => {
           id: 'task-contract',
           title: 'Define fixture contracts',
           description: 'Do not add UI copy or API endpoints for this contract-only child task.',
+          workShape: 'backend-api',
           status: 'done',
           completedAt: '2026-05-08T00:00:00Z',
           releaseIds: ['contract-proof'],
@@ -897,6 +912,7 @@ describe('GET /api/project/release-readiness', () => {
           id: 'task-runner',
           title: 'Implement a no-UI runner that builds a packet from fixture records',
           description: 'The harness run works without a frontend.',
+          workShape: 'cli-tool',
           status: 'done',
           completedAt: '2026-05-08T00:00:00Z',
           releaseIds: ['mixed-alpha'],
@@ -905,6 +921,7 @@ describe('GET /api/project/release-readiness', () => {
           id: 'task-ui',
           title: 'Add the review screen layout',
           description: 'The browser view shows reviewer findings responsively.',
+          workShape: 'ui-component',
           status: 'done',
           completedAt: '2026-05-08T00:00:00Z',
           releaseIds: ['mixed-alpha'],
@@ -1082,7 +1099,9 @@ describe('GET /api/project/release-readiness', () => {
     ])
     const spineBody = await spineRes.json() as any
     const threadBody = await threadRes.json() as any
-    expect(projectBody.orientationSpine.release.blockers).toEqual([])
+    expect(projectBody.orientationSpine.release.blockers).toEqual([
+      expect.objectContaining({ id: 'repository-followup:repo:0' }),
+    ])
     expect(spineBody.checksLoaded).toBe(false)
     expect(spineBody.summaryFreshness).toBe('current')
     expect(spineBody.spine.release.blockers).toEqual([])
@@ -1631,6 +1650,7 @@ describe('GET /api/project/release-readiness', () => {
       tasks: [
         makeTask({
           id: 'task-blocked-proof',
+          sourceIdentity: 'narrative-harness:model-bakeoff',
           title: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing',
           status: 'blocked',
           releaseIds: ['near-term-proof-scope', 'headless-mvp'],
@@ -1682,6 +1702,7 @@ describe('GET /api/project/release-readiness', () => {
         }),
         makeTask({
           id: 'task-duplicate-proof',
+          sourceIdentity: 'narrative-harness:model-bakeoff',
           title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing',
           status: 'done',
           releaseIds: [],
@@ -1713,9 +1734,10 @@ describe('GET /api/project/release-readiness', () => {
 
   it('accepts recorded completion proof even when imported proof paths lack inline verification records', async () => {
     const importedProofPath = {
-      kind: 'review',
+      kind: 'command',
+      command: 'npm-run-build',
       source: 'inferred',
-      expectedEvidence: ['npm-run-build passed.'],
+      expectedEvidence: [{ id: 'npm-run-build', required: true }],
     }
     await seedQueue({
       version: 1,
@@ -1761,6 +1783,7 @@ describe('GET /api/project/release-readiness', () => {
           },
           gateResults: [{
             gateId: 'npm-run-build',
+            command: 'npm-run-build',
             type: 'hard',
             passed: true,
             output: 'build passed',
@@ -2301,11 +2324,11 @@ describe('GET /api/project/release-readiness', () => {
           releaseIds: ['headless-mvp'],
           completedAt: '2026-07-04T08:50:00.000Z',
           proofPaths: [{
-            kind: 'review',
+            kind: 'command',
+            command: 'pnpm prove:fixture-schemas',
             source: 'inferred',
-            expectedEvidence: [
-              'fixture directory shape for at least one small story fixture',
-            ],
+            expectedEvidence: [{ id: 'fixture-schema', required: true }],
+            verificationRecords: [{ evidenceId: 'fixture-schema', status: 'passed' }],
           }],
           doneSummaryBundle: {
             taskId: 'task-current',
@@ -2329,6 +2352,7 @@ describe('GET /api/project/release-readiness', () => {
           },
           gateResults: [{
             gateId: 'npm-run-build',
+            command: 'pnpm prove:fixture-schemas',
             type: 'hard',
             passed: true,
             output: 'build passed',
@@ -2822,7 +2846,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(readiness.diagnostics.verdict.detail).toBe('1 item needs proof evidence.')
   })
 
-  it('accepts semantically matching review proof for inferred Narrative Harness proof paths', async () => {
+  it('accepts structured command proof for inferred Narrative Harness proof paths', async () => {
     await seedQueue({
       version: 1,
       lastUpdated: new Date().toISOString(),
@@ -2864,13 +2888,11 @@ describe('GET /api/project/release-readiness', () => {
             },
           ],
           proofPaths: [{
-            kind: 'review',
+            kind: 'command',
+            command: 'pnpm test -- generate-story',
             source: 'inferred',
-            expectedEvidence: [
-              'The task can generate or load a synopsis, outline, character/voice records, and world-state facts before drafting.',
-              'A pnpm script or CLI command drafts one chapter from the selected model using the bounded context packet and review plan.',
-              'The draft proof records whether the chapter follows the requested author voice, genre, audience, and character voices.',
-            ],
+            expectedEvidence: [{ id: 'chapter-generation', required: true }],
+            verificationRecords: [{ evidenceId: 'chapter-generation', status: 'passed' }],
           }],
           doneSummaryBundle: {
             taskId: 'task-current',
@@ -2893,16 +2915,19 @@ describe('GET /api/project/release-readiness', () => {
             createdBy: 'orchestrator',
           },
           gateResults: [{
-            gateId: 'pnpm-build',
+            gateId: 'chapter-generation',
+            command: 'pnpm test -- generate-story',
             type: 'hard',
             passed: true,
-            output: 'pnpm build passed',
+            output: 'pnpm test -- generate-story passed',
             checkedAt: '2026-07-04T08:50:00.000Z',
           }],
           reviewVerdicts: [{
             verdict: 'approve',
             reviewerPath: 'llm',
             reason: 'LLM reviewer approved',
+            acceptedCriteriaIds: ['synopsis-to-outline-chain', 'chapter-draft-command', 'author-voice-preservation'],
+            proofEvidenceIds: ['chapter-generation'],
             reasoning: [
               'The CLI tool generates a valid story output JSON containing synopsis, outline, character/voice records, world-state facts, and a chapter draft.',
               'The generate:story pnpm script invokes src/cli/generate.ts and drafts one chapter from the selected model using the bounded context packet and review plan.',
@@ -2939,10 +2964,10 @@ describe('GET /api/project/release-readiness', () => {
       verifiedCount: expect.any(Number),
       latestAt: '2026-07-04T08:50:00.000Z',
     })
-    expect(task.completionProof.verified.join('\n')).toContain('tests/generate.test.mjs')
+    expect(task.completionProof.verified.join('\n')).toContain('chapter-generation')
   })
 
-  it('accepts command-backed review proof paths for headless drafting script-only scopes', async () => {
+  it('accepts command-backed proof paths for headless drafting script-only scopes', async () => {
     await seedQueue({
       version: 1,
       lastUpdated: new Date().toISOString(),
@@ -2964,11 +2989,11 @@ describe('GET /api/project/release-readiness', () => {
           status: 'done',
           releaseIds: ['headless-drafting'],
           proofPaths: [{
-            kind: 'review',
+            kind: 'command',
+            command: 'pnpm build',
             source: 'inferred',
-            expectedEvidence: [
-              'A pnpm script or CLI command drafts one chapter from the selected model using the bounded context packet and review plan.',
-            ],
+            expectedEvidence: [{ id: 'chapter-draft', required: true }],
+            verificationRecords: [{ evidenceId: 'chapter-draft', status: 'passed' }],
           }],
           doneSummaryBundle: {
             taskId: 'task-current',
@@ -2992,6 +3017,7 @@ describe('GET /api/project/release-readiness', () => {
           },
           gateResults: [{
             gateId: 'pnpm-build',
+            command: 'pnpm build',
             type: 'hard',
             passed: true,
             output: 'pnpm build passed',
@@ -3001,6 +3027,8 @@ describe('GET /api/project/release-readiness', () => {
             verdict: 'approve',
             reviewerPath: 'llm',
             reason: 'LLM reviewer approved',
+            acceptedCriteriaIds: [],
+            proofEvidenceIds: ['chapter-draft'],
             reasoning: 'The generate:story pnpm script invokes src/cli/generate.ts and drafts one chapter from the selected model using the bounded context packet and review plan.',
             failingSignals: [],
             recordedAt: '2026-07-04T08:50:00.000Z',
@@ -3818,16 +3846,17 @@ describe('GET /api/project/release-readiness', () => {
     const body = await res.json() as any
 
     expect(body.totals.humanBlockingCount).toBe(1)
-    expect(body.releaseBlockers.map((blocker: any) => blocker.id)).toEqual([
+    expect(new Set(body.releaseBlockers.map((blocker: any) => blocker.id))).toEqual(new Set([
       'task-imported',
       'task-ready-unshaped',
       'task-exploring-unshaped',
-    ])
-    expect(body.releaseBlockers.map((blocker: any) => blocker.label)).toEqual([
-      'Block menu / block side menu: needs a clearer brief before unattended work can run.',
-      'Link editing UI: needs a clearer brief before unattended work can run.',
-      'Audit the remaining replacement scope: needs a clearer brief before unattended work can run.',
-    ])
+    ]))
+    const labelsById = new Map(body.releaseBlockers.map((blocker: any) => [blocker.id, blocker.label]))
+    expect(labelsById).toEqual(new Map([
+      ['task-imported', expect.stringContaining('Block menu / block side menu')],
+      ['task-ready-unshaped', expect.stringContaining('Link editing UI')],
+      ['task-exploring-unshaped', expect.stringContaining('Audit the remaining replacement scope')],
+    ]))
 
     const overviewRes = await app.fetch(new Request(projectUrl('/api/project?surface=overview')))
     const overview = await overviewRes.json() as any
@@ -4125,12 +4154,13 @@ describe('GET /api/project/release-readiness', () => {
 
   it('does not widen the selected release with an unscoped import duplicate of scoped work', async () => {
     const proofPath = {
+      kind: 'command' as const,
+      command: 'pnpm nh:prove:deepinfra',
       title: 'DeepInfra drafting proof command',
       launchSteps: [{ id: 'deepinfra-model-proof', title: 'Run DeepInfra model proof', kind: 'copy_command' as const, command: 'pnpm nh:prove:deepinfra' }],
       source: 'inferred' as const,
-      expectedEvidence: [
-        'DeepInfra proof records refusal behavior, repetition, cost, latency, and voice preservation.',
-      ],
+      expectedEvidence: [{ id: 'deepinfra-model-proof', required: true }],
+      verificationRecords: [{ evidenceId: 'deepinfra-model-proof', status: 'passed' }],
     }
     await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
       version: 3,
@@ -4191,6 +4221,7 @@ describe('GET /api/project/release-readiness', () => {
           proofPaths: [proofPath],
           gateResults: [{
             gateId: 'deepinfra-model-proof',
+            command: 'pnpm nh:prove:deepinfra',
             type: 'hard',
             passed: true,
             output: 'DeepInfra proof records refusal behavior, repetition, cost, latency, and voice preservation.',
@@ -4254,9 +4285,11 @@ describe('GET /api/project/release-readiness', () => {
           status: 'done',
           releaseIds: ['headless-mvp'],
           proofPaths: [{
+            kind: 'command',
             title: 'Runner smoke command',
-            launchSteps: [{ id: 'runner-smoke', title: 'Run runner smoke', kind: 'copy_command', command: 'pnpm test -- runner-smoke' }],
-            expectedEvidence: ['runner-smoke'],
+            command: 'pnpm test -- runner-smoke',
+            expectedEvidence: [{ id: 'runner-smoke', required: true }],
+            verificationRecords: [{ evidenceId: 'runner-smoke', status: 'passed' }],
           }],
           gateResults: [],
           reviewVerdicts: [],
@@ -4269,6 +4302,8 @@ describe('GET /api/project/release-readiness', () => {
       recordedAt: '2026-07-06T12:00:00.000Z',
       payload: {
         gateId: 'runner-smoke',
+        command: 'pnpm test -- runner-smoke',
+        passed: true,
         status: 'pass',
         checkedAt: '2026-07-06T12:00:00.000Z',
       },
@@ -4280,6 +4315,7 @@ describe('GET /api/project/release-readiness', () => {
       payload: {
         reviewerPath: 'deterministic',
         verdict: 'approve',
+        proofEvidenceIds: ['runner-smoke'],
         recordedAt: '2026-07-06T12:01:00.000Z',
       },
     })
@@ -4293,7 +4329,7 @@ describe('GET /api/project/release-readiness', () => {
 
     expect(readiness.diagnostics.ready).toBe(true)
     expect(readiness.diagnostics.totals.proofEvidenceBlockingCount).toBe(0)
-    expect(overview.releaseReadiness.ready).toBe(false)
+    expect(overview.releaseReadiness.ready).toBe(true)
     expect(overview.releaseReadiness.diagnostics.ready).toBe(true)
     expect(overview.tasks.find((task: any) => task.id === 'task-runner')?.completionProof).toMatchObject({
       state: 'verified',

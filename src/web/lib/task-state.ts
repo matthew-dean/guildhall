@@ -27,15 +27,13 @@ type TaskSpecLike = Pick<Task, 'spec' | 'acceptanceCriteria' | 'productBrief'> &
 
 export function hasFailureActivity(turn: Pick<TaskStateLike, 'activity'>): boolean {
   return (turn.activity ?? []).some(item =>
-    item.tone === 'danger' ||
-    /failed|timed out|empty assistant|error/i.test(item.label),
+    item.kind === 'failure' || item.tone === 'danger',
   )
 }
 
 export function hasDurableProgressActivity(turn: Pick<TaskStateLike, 'activity'>): boolean {
   return (turn.activity ?? []).some(item =>
-    item.tone === 'ok' ||
-    /write file|wrote |checkpoint|committed|changed/i.test(item.label),
+    item.kind === 'durable_progress' || item.tone === 'ok',
   )
 }
 

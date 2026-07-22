@@ -3,6 +3,8 @@ export type CompletionProofSource = 'done_summary' | 'gate' | 'review' | 'note'
 export interface RecordedCompletionProofEntry {
   text: string
   source: CompletionProofSource
+  /** False when the record belongs to an older proof contract. */
+  current?: boolean
 }
 
 export interface RecordedCompletionProof {
@@ -37,37 +39,9 @@ function evidencePayloads(task: unknown, kind: string): unknown[] | null {
   })
 }
 
-function approvedReviewerProofSummary(value: unknown): string | null {
-  const text = stringValue(value)
-  if (!text) return null
-  const normalized = text.replace(/\*\*/g, '')
-  if (!/\b(?:verdict|review)\s*:\s*(?:approved|approve)\b/i.test(normalized)) return null
-  const lines = text
-    .split(/\r?\n/)
-    .map(line => line.replace(/^\s*[-*]\s*/, '').replace(/\*\*/g, '').trim())
-    .filter(Boolean)
-    .filter(line => !/\b(?:verdict|review)\s*:\s*(?:approved|approve)\b/i.test(line))
-  const proofLine = lines.find(line => /\b(?:proof|command|script|pnpm|npm|node|test|fixture|reviewer|model|output|evidence)\b/i.test(line))
-  return proofLine ? `Reviewer proof: ${proofLine}` : 'Reviewer proof: approved completion evidence.'
-}
-
-function reviewerProofFromVerdict(value: Record<string, unknown>): string | null {
-  const reasoning = stringValue(value.reasoning)
-  if (!reasoning) return null
-  const lines = reasoning
-    .split(/\r?\n/)
-    .map(line => line.replace(/^\s*[-*]\s*/, '').trim())
-  const proofLine = lines.find(line => /\b(?:tests?\/|fixtures?\/)/i.test(line)) ??
-    lines.find(line => /\b(?:pnpm|npm|node)\b/i.test(line)) ??
-    lines.find(line => /\b(?:model|chapter|synopsis|outline|character|voice)\b/i.test(line))
-  return proofLine ? `Reviewer proof: ${proofLine}` : null
-}
-
 function proofEvidenceRank(value: string): number {
-  if (value.startsWith('Reviewer proof:')) return 0
   if (/^Gate passed: (?!content\.no-truncated-data\b)/i.test(value)) return 1
-  if (/^Done summary:/i.test(value) && !/\bcontent\.no-truncated-data\b/i.test(value)) return 2
-  if (/^Review approved:/i.test(value)) return 3
+  if (/^Review evidence:/i.test(value)) return 2
   if (/\bcontent\.no-truncated-data\b/i.test(value)) return 5
   return 4
 }
@@ -80,15 +54,15 @@ export function classifyCompletionProof(
   recorded: RecordedCompletionProof,
   proofIsStale: boolean,
 ): ClassifiedCompletionProof {
-  const currentEntries = proofIsStale
-    ? recorded.entries.filter((entry) => entry.source !== 'review')
-    : recorded.entries
-  const historicalEntries = proofIsStale
-    ? recorded.entries.filter((entry) => entry.source === 'review')
-    : []
+  const currentEntries = recorded.entries.filter((entry) =>
+    entry.current !== false && (!proofIsStale || entry.source !== 'review'),
+  )
+  const historicalEntries = recorded.entries.filter((entry) =>
+    entry.current === false || (proofIsStale && entry.source === 'review'),
+  )
   return {
     current: currentEntries.map((entry) => entry.text),
-    historical: historicalEntries.map((entry) => entry.text),
+    historical: [...new Set(historicalEntries.map((entry) => entry.text))],
   }
 }
 
@@ -96,9 +70,62 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
   const record = recordValue(task)
   if (!record) return { verified: [], entries: [], latestAt: null }
 
+  const proofPaths = Array.isArray(record.proofPaths)
+    ? record.proofPaths.map(recordValue).filter((path): path is Record<string, unknown> => path !== null)
+    : []
+  const currentEvidenceIds = new Set(
+    proofPaths.flatMap(path => Array.isArray(path.expectedEvidence)
+      ? path.expectedEvidence
+        .map(recordValue)
+        .filter((evidence): evidence is Record<string, unknown> => evidence !== null)
+        .map(evidence => stringValue(evidence.id))
+        .filter((id): id is string => id !== null)
+      : []),
+  )
+  const currentPathIds = new Set(
+    proofPaths
+      .map(path => stringValue(path.id))
+      .filter((id): id is string => id !== null),
+  )
+  const currentCommands = proofPaths
+    .map(path => stringValue(path.command))
+    .filter((command): command is string => command !== null)
+    .map(command => command.replace(/\s+/g, ' ').trim().toLowerCase())
+  const currentVerifiedEvidenceIds = new Set(
+    proofPaths.flatMap(path => Array.isArray(path.verificationRecords)
+      ? path.verificationRecords
+        .map(recordValue)
+        .filter((verification): verification is Record<string, unknown> =>
+          verification !== null && verification.status === 'passed',
+        )
+        .map(verification => stringValue(verification.evidenceId))
+        .filter((id): id is string => id !== null)
+      : []),
+  )
+  const hasProofContract = proofPaths.length > 0
+  const gateIsCurrent = (gate: Record<string, unknown>): boolean => {
+    if (!hasProofContract) return true
+    const gateId = stringValue(gate.gateId)
+    if (gateId && currentPathIds.has(gateId)) return true
+    if (gateId && currentEvidenceIds.has(gateId)) return currentVerifiedEvidenceIds.has(gateId)
+    const command = stringValue(gate.command)?.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (command && currentCommands.includes(command)) return true
+    // A legacy gate may carry only the criterion id. It counts as current
+    // only when the current proof path also recorded a passed evidence row;
+    // the id alone cannot resurrect an old run after the path was refreshed.
+    return Boolean(gateId && currentVerifiedEvidenceIds.has(gateId))
+  }
+  const reviewEvidenceIsCurrent = (verdict: Record<string, unknown>): boolean => {
+    if (!hasProofContract) return true
+    const evidenceIds = Array.isArray(verdict.proofEvidenceIds)
+      ? verdict.proofEvidenceIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+      : []
+    return evidenceIds.some(id => currentEvidenceIds.has(id.trim()))
+  }
+
   const entries: RecordedCompletionProofEntry[] = []
-  const addEntry = (text: string, source: CompletionProofSource) => {
-    entries.push({ text, source })
+  const addEntry = (text: string, source: CompletionProofSource, current = true) => {
+    entries.push({ text, source, current })
   }
   const proofDates: string[] = []
   const addProofDate = (value: unknown) => {
@@ -106,22 +133,17 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
     if (!text || Number.isNaN(Date.parse(text))) return
     proofDates.push(text)
   }
-  const doneSummary = recordValue(record.doneSummaryBundle)
-  const doneSummarySummary = recordValue(doneSummary?.summary)
-  const doneSummaryEvidence = stringValue(doneSummarySummary?.evidence)
-  if (doneSummary?.status === 'done' && doneSummaryEvidence) {
-    addEntry(`Done summary: ${doneSummaryEvidence}`, 'done_summary')
-    addProofDate(doneSummary.completedAt)
-    addProofDate(doneSummary.createdAt)
-  }
-
   const gateResults = evidencePayloads(task, 'gate_result') ?? (Array.isArray(record.gateResults) ? record.gateResults : [])
   for (const item of gateResults) {
     const gate = recordValue(item)
     if (!gate) continue
     const passed = gate.passed === true || gate.status === 'pass' || gate.status === 'passed'
     if (!passed) continue
-    addEntry(`Gate passed: ${stringValue(gate.gateId) ?? stringValue(gate.command) ?? stringValue(gate.name) ?? 'recorded gate'}`, 'gate')
+    addEntry(
+      `Gate passed: ${stringValue(gate.gateId) ?? stringValue(gate.command) ?? stringValue(gate.name) ?? 'recorded gate'}`,
+      'gate',
+      gateIsCurrent(gate),
+    )
     addProofDate(gate.checkedAt)
     addProofDate(gate.recordedAt)
   }
@@ -133,25 +155,36 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
     const approved = verdict.verdict === 'approve' || verdict.verdict === 'approved' ||
       verdict.decision === 'approve' || verdict.decision === 'approved'
     if (!approved) continue
-    addEntry(
-      reviewerProofFromVerdict(verdict) ?? `Review approved: ${stringValue(verdict.reviewerPath) ?? stringValue(verdict.reviewer) ?? 'recorded review'}`,
-      'review',
-    )
+    const proofEvidenceIds = Array.isArray(verdict.proofEvidenceIds)
+      ? verdict.proofEvidenceIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+      : []
+    if (proofEvidenceIds.length > 0) {
+      for (const evidenceId of proofEvidenceIds) {
+        addEntry(`Review evidence: ${evidenceId}`, 'review', reviewEvidenceIsCurrent(verdict))
+      }
+    } else {
+      // Keep a compact audit marker for an approval without treating its prose
+      // as proof. Explicit proof paths still require stable evidence IDs.
+      addEntry(
+        `Review approved: ${stringValue(verdict.reviewerPath) ?? 'recorded review'}`,
+        'review',
+        !hasProofContract,
+      )
+    }
     addProofDate(verdict.recordedAt)
   }
 
-  const notes = evidencePayloads(task, 'note') ?? (Array.isArray(record.notes) ? record.notes : [])
-  for (const item of notes) {
-    const note = recordValue(item)
-    if (!note) continue
-    const content = stringValue(note.content)
-    if (!content || !/^Closed containing work after linked child tasks completed:/i.test(content)) continue
-    addEntry('Containing work closed after linked child tasks completed', 'note')
-    addProofDate(note.timestamp)
+  // Compact task reads may intentionally omit the evidence ledger. In that
+  // shape, the shared current-proof projection is the authority for the
+  // display entries. It is derived from typed path/evidence state; it is not
+  // a license to recover completion from reviewer or worker prose.
+  const currentProof = recordValue(recordValue(record.currentSummary)?.proof)
+  if (entries.every(entry => entry.current !== true) && currentProof?.state === 'proven') {
+    const verified = Array.isArray(currentProof.verified)
+      ? currentProof.verified.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : []
+    for (const text of verified) addEntry(text, 'gate', true)
   }
-
-  const latestReviewerSummary = approvedReviewerProofSummary(record.latestReviewerSummary)
-  if (latestReviewerSummary) addEntry(latestReviewerSummary, 'review')
 
   const latestAt = proofDates
     .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null

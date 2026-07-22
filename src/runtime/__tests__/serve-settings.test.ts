@@ -64,6 +64,7 @@ let previousObservationalMemory: string | undefined
 let previousEngineGate: string | undefined
 let previousSubstrate: string | undefined
 let systemDir: string
+let remoteDir: string
 const PROJECT_ID = 'settings-test'
 
 function scoped(pathname: string): string {
@@ -340,6 +341,8 @@ beforeEach(async () => {
   previousSubstrate = process.env.GUILDHALL_MEMORY_SUBSTRATE
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-'))
   systemDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-system-'))
+  remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-remote-'))
+  await fs.rm(remoteDir, { recursive: true, force: true })
   process.env.HOME = tmpDir
   process.env.GUILDHALL_CONFIG_DIR = systemDir
   bootstrapWorkspace(tmpDir, { name: 'Settings Test' })
@@ -365,6 +368,7 @@ afterEach(async () => {
   else process.env.GUILDHALL_MEMORY_SUBSTRATE = previousSubstrate
   await fs.rm(tmpDir, { recursive: true, force: true })
   await fs.rm(systemDir, { recursive: true, force: true })
+  await fs.rm(remoteDir, { recursive: true, force: true })
 })
 
 describe('GET /api/config/levers', () => {
@@ -1833,9 +1837,12 @@ describe('POST /api/project/start', () => {
           status: 'done',
           releaseIds: ['headless-mvp'],
           proofPaths: [{
+            kind: 'command',
+            command: 'pnpm test:schema',
             title: 'Run schema proof',
             launchSteps: [{ id: 'schema-proof', title: 'Run schema proof', kind: 'copy_command', command: 'pnpm test:schema' }],
-            expectedEvidence: ['pnpm test:schema passed.'],
+            expectedEvidence: [{ id: 'schema-proof', description: 'Schema proof command passed.' }],
+            verificationRecords: [{ evidenceId: 'schema-proof', status: 'passed' }],
           }],
           gateResults: [{
             gateId: 'schema-proof',
@@ -7911,7 +7918,7 @@ describe('GET/POST /api/project/learning', () => {
         id: 'invite-route-skill',
         name: 'invite-route-skill',
         description: 'Repair invite routes',
-        triggerKeywords: ['invite'],
+        routingKeys: ['domain:looma'],
         content: 'Use existing workspace route helpers before adding utilities.',
         risk: 'medium',
         requiresApproval: true,
@@ -9075,8 +9082,12 @@ describe('GET /api/project — bootstrap status', () => {
         releaseIds: ['release-1'],
         proofPaths: [{ kind: 'command', source: 'documented', command: 'pnpm test' }],
         gateResults: [{ status: 'passed', command: 'pnpm test', checkedAt: '2026-06-01T12:00:00.000Z' }],
+        gitStory: { override: 'local_only', reason: 'The fixture deliberately has no remote release target.' },
       }],
     })
+    await execFileP('git', ['init', '--bare', remoteDir])
+    await execFileP('git', ['remote', 'add', 'origin', remoteDir], { cwd: tmpDir })
+    await execFileP('git', ['push', '--set-upstream', 'origin', 'main'], { cwd: tmpDir })
     await applyCanonicalMigrations()
     const { app } = buildServeApp({ projectPath: tmpDir })
 

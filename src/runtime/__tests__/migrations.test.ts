@@ -217,6 +217,35 @@ describe('applyProjectMigrations', () => {
     await expect(fs.access(projectStateDatabasePath(projectRoot))).resolves.toBeUndefined()
   })
 
+  it('closes a failed migration as applied when its invariant is already satisfied', async () => {
+    await writeProjectMigrationLedger(projectRoot, {
+      version: 1,
+      records: [{
+        id: '0.13.30/proof-setup-completion-authority',
+        introducedIn: '0.13.30',
+        scope: 'project',
+        safety: 'automatic',
+        status: 'failed',
+        appliedAt: '2026-07-21T00:00:00.000Z',
+        appliedByVersion: '0.13.30',
+        summary: 'Historical failed attempt.',
+        error: 'Aggregate write failed after durable runtime repair.',
+      }],
+    })
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.30/proof-setup-completion-authority'],
+      appVersion: 'migration-retry-test',
+    })
+
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.30/proof-setup-completion-authority'])
+    const ledger = await readProjectMigrationLedger(projectRoot)
+    expect(ledger.records.filter(record => record.id === '0.13.30/proof-setup-completion-authority').map(record => record.status))
+      .toEqual(['failed', 'applied'])
+  })
+
   it('repairs malformed task runtime overlays without making readers tolerant of bad state', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     const now = '2026-07-18T12:00:00.000Z'
@@ -522,6 +551,76 @@ describe('applyProjectMigrations', () => {
     })).applied).toEqual([])
   })
 
+  it('realigns indexed proof summaries when current evidence changes effective task state', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-19T12:00:00.000Z',
+        tasks: [{
+          id: 'task-effective-proof',
+          title: 'Reproject effective proof',
+          status: 'done',
+          proofPaths: [{
+            kind: 'command',
+            command: 'pnpm test -- current',
+            expectedEvidence: [{ id: 'current-proof', required: true }],
+            verificationRecords: [],
+          }],
+        }],
+        releases: [],
+      },
+      summary: { projectId: 'migration-test', generatedAt: '2026-07-19T12:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const beforeEvidence = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const initialSummary = beforeEvidence.prepare('SELECT summary_json FROM work_items WHERE id = ?').get('task-effective-proof') as { summary_json: string }
+    beforeEvidence.close()
+    await appendTaskEvidence(projectRoot, 'task-effective-proof', {
+      id: 'current-proof-gate',
+      kind: 'gate_result',
+      recordedAt: '2026-07-19T12:01:00.000Z',
+      payload: { gateId: 'pnpm test -- current', command: 'pnpm test -- current', passed: true },
+    })
+    const stale = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    stale.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?').run(initialSummary.summary_json, 'task-effective-proof')
+    stale.close()
+
+    const before = await getProjectMigrationStatus({
+      projectRoot,
+      only: ['0.13.12/effective-current-proof-read-model'],
+    })
+    expect(before.blocked).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: '0.13.12/effective-current-proof-read-model' }),
+    ]))
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.12/effective-current-proof-read-model'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.12/effective-current-proof-read-model'])
+    expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks[0]?.currentSummary).toMatchObject({
+      proof: {
+        state: 'proven',
+        missing: [],
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.12/effective-current-proof-read-model'],
+    })).applied).toEqual([])
+    const after = await getProjectMigrationStatus({
+      projectRoot,
+      only: ['0.13.12/effective-current-proof-read-model'],
+    })
+    expect(after.blocked).toEqual([])
+    expect(after.applied).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: '0.13.12/effective-current-proof-read-model' }),
+    ]))
+  })
+
   it('normalizes imported bare test conventions into proof setup for a script-only release', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     writeProjectStateDatabaseSnapshot(tasksPath, {
@@ -603,6 +702,547 @@ describe('applyProjectMigrations', () => {
     })).applied).toEqual([])
   })
 
+  it('replaces legacy proof-setup rationale markers with an explicit task kind', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-19T12:00:00.000Z',
+        tasks: [{
+          id: 'legacy-proof-setup',
+          title: 'Establish concrete proof for the drafting task',
+          status: 'exploring',
+          workKind: 'verification',
+          proposalRationale: 'proof-recovery: establish a concrete project-backed proof command for the containing task',
+        }],
+        releases: [],
+      },
+      summary: { projectId: 'migration-test', generatedAt: '2026-07-19T12:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.19/proof-setup-task-kind'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.19/proof-setup-task-kind'])
+    const task = readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks.find(candidate => candidate.id === 'legacy-proof-setup') as Record<string, unknown> | undefined
+    expect(task).toMatchObject({ semanticKind: 'proof_setup' })
+    expect(task).not.toHaveProperty('proposalRationale')
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.19/proof-setup-task-kind'],
+    })).applied).toEqual([])
+  })
+
+  it('replaces model-shaped proof setup with the canonical structured contract', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-20T12:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          nodeIds: ['parent-task', 'proof-child'],
+          deferredNodeIds: [],
+          proofStyle: 'script_only',
+        }],
+        tasks: [{
+          id: 'parent-task',
+          title: 'Build the bounded capability',
+          description: 'The parent capability from registered project evidence.',
+          projectPath: projectRoot,
+          status: 'done',
+          releaseIds: ['release-current'],
+          references: ['docs/release-plan.md'],
+          hierarchy: { childIds: ['proof-child'], order: 0, relation: 'contains' },
+        }, {
+          id: 'proof-child',
+          title: 'Establish concrete proof for Build the bounded capability',
+          description: 'A model-shaped proof setup draft.',
+          projectPath: projectRoot,
+          status: 'in_progress',
+          releaseIds: ['release-current'],
+          semanticKind: 'proof_setup',
+          workKind: 'verification',
+          hierarchy: { parentId: 'parent-task', childIds: [], order: 0, relation: 'decomposes' },
+          acceptanceCriteria: [{
+            id: 'old-criterion',
+            description: 'The model-shaped proof draft is complete.',
+            verifiedBy: 'review',
+            source: 'inferred',
+          }],
+        }],
+      },
+      summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.20/deterministic-proof-setup-contract'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.20/deterministic-proof-setup-contract'])
+    const task = readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks.find(candidate => candidate.id === 'proof-child')
+    expect(task).toMatchObject({
+      status: 'ready',
+      projectPath: projectRoot,
+      taskKind: 'verification',
+      semanticKind: 'proof_setup',
+      structuredSpec: { completionBoundary: { splitPolicy: 'none' } },
+    })
+    expect(task?.spec).toContain('The command result, not provider narration, settles proof.')
+    expect(task?.acceptanceCriteria).toEqual([
+      expect.objectContaining({ id: 'ac-1', met: false }),
+    ])
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.20/deterministic-proof-setup-contract'],
+    })).applied).toEqual([])
+  })
+
+  it('removes recursive proof-setup descendants and preserves the canonical proof boundary', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-21T20:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          proofStyle: 'script_only',
+          nodeIds: ['parent-proof', 'nested-proof'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'parent-proof',
+          title: 'Establish concrete proof for the capability',
+          description: 'The canonical executable proof boundary.',
+          projectPath: projectRoot,
+          status: 'ready',
+          semanticKind: 'proof_setup',
+          workKind: 'verification',
+          releaseIds: ['release-current'],
+          hierarchy: { childIds: ['nested-proof'], order: 0, relation: 'decomposes' },
+          deliverySteps: [{ sourceTaskId: 'nested-proof', kind: 'verify', required: true, blocksCompletion: true }],
+        }, {
+          id: 'nested-proof',
+          title: 'Establish concrete proof for Establish concrete proof for the capability',
+          description: 'An accidental recursive child.',
+          projectPath: projectRoot,
+          status: 'shelved',
+          semanticKind: 'proof_setup',
+          workKind: 'verification',
+          releaseIds: ['release-current'],
+          hierarchy: { parentId: 'parent-proof', childIds: [], order: 0, relation: 'decomposes' },
+        }, {
+          id: 'dependent-work',
+          title: 'Use the canonical proof boundary',
+          description: 'A sibling that must not retain a dependency on removed work.',
+          projectPath: projectRoot,
+          status: 'ready',
+          dependsOn: ['nested-proof'],
+          releaseIds: ['release-current'],
+        }],
+      },
+      summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.21/remove-recursive-proof-setup-tasks'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.21/remove-recursive-proof-setup-tasks'])
+    const queue = readProjectStateDatabaseQueueDefinition(tasksPath)
+    expect(queue?.tasks.map(task => task.id)).toEqual(['parent-proof', 'dependent-work'])
+    expect((queue?.tasks[0]?.hierarchy as { childIds?: string[] } | undefined)?.childIds).toEqual([])
+    expect(queue?.tasks[0]?.deliverySteps).toEqual([])
+    expect(queue?.tasks[1]?.dependsOn).toEqual([])
+    expect(queue?.releases?.[0]?.nodeIds).toEqual(['work:parent-proof'])
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.21/remove-recursive-proof-setup-tasks'],
+    })).applied).toEqual([])
+  })
+
+  it('invalidates proof setup that lacks task identity and removes generic proof commands', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-21T20:30:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          proofStyle: 'script_only',
+          nodeIds: ['parent-world', 'proof-world'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'parent-world',
+          title: 'Build world-state review',
+          description: 'The bounded review lane.',
+          projectPath: projectRoot,
+          status: 'done',
+          releaseIds: ['release-current'],
+          hierarchy: { childIds: ['proof-world'], order: 0, relation: 'contains' },
+        }, {
+          id: 'proof-world',
+          title: 'Establish concrete proof for Build world-state review',
+          description: 'The old generic proof child.',
+          projectPath: projectRoot,
+          status: 'done',
+          releaseIds: ['release-current'],
+          semanticKind: 'proof_setup',
+          workKind: 'verification',
+          taskKind: 'verification',
+          hierarchy: { parentId: 'parent-world', childIds: [], order: 0, relation: 'decomposes' },
+          acceptanceCriteria: [{
+            id: 'ac-1',
+            description: 'The world-state proof passes.',
+            verifiedBy: 'review',
+            command: 'pnpm proof:context',
+            met: true,
+          }],
+          proofPaths: [{
+            id: 'proof-world-ac-1-command-proof',
+            scope: { type: 'task', id: 'proof-world' },
+            title: 'Run ac-1',
+            summary: 'The old generic proof.',
+            kind: 'command',
+            command: 'pnpm proof:context',
+            status: 'verified',
+            expectedEvidence: [{ id: 'ac-1', kind: 'automated', description: 'The old generic proof.', required: true }],
+            verificationRecords: [{
+              id: 'old-proof',
+              evidenceId: 'ac-1',
+              kind: 'automated',
+              status: 'passed',
+              summary: 'The command exited zero.',
+              recordedAt: now,
+              recordedBy: 'old-worker',
+              evidenceRefs: [],
+            }],
+            launchSteps: [],
+            relatedTaskIds: ['proof-world'],
+            createdAt: now,
+            updatedAt: now,
+            createdBy: 'old-worker',
+          }],
+        }],
+      },
+      summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.22/proof-command-identity'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.22/proof-command-identity'])
+    const task = readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks.find(candidate => candidate.id === 'proof-world') as unknown as {
+      status?: string
+      acceptanceCriteria: Array<Record<string, unknown>>
+      proofPaths?: unknown[]
+      notes: Array<Record<string, unknown>>
+    }
+    expect(task).toMatchObject({ status: 'ready' })
+    expect(task?.acceptanceCriteria).toEqual([expect.objectContaining({
+      id: 'ac-1',
+      met: false,
+      expectedOutputIncludes: ['guildhall-proof:parent-world'],
+    })])
+    expect(task?.acceptanceCriteria[0]?.command).toBeUndefined()
+    expect(task?.proofPaths).toEqual([])
+    expect(task?.notes.at(-1)?.structured).toMatchObject({
+      event: 'proof_command_identity_contract_installed',
+      parentTaskId: 'parent-world',
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.22/proof-command-identity'],
+    })).applied).toEqual([])
+  })
+
+  it('reopens an unproven proof setup task instead of preserving a false done state', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-21T21:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          proofStyle: 'script_only',
+          nodeIds: ['work:proof-child'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'proof-child',
+          title: 'Establish concrete proof',
+          description: 'The proof boundary was incorrectly closed before its current command ran.',
+          projectPath: projectRoot,
+          status: 'done',
+          assignedTo: 'worker-agent',
+          completedAt: now,
+          semanticKind: 'proof_setup',
+          taskKind: 'verification',
+          releaseIds: ['release-current'],
+          acceptanceCriteria: [{
+            id: 'ac-1',
+            description: 'The exact proof command passes.',
+            verifiedBy: 'automated',
+            command: 'pnpm exec vitest run src/example.test.ts',
+            expectedOutputIncludes: ['guildhall-proof:proof-child'],
+            met: false,
+          }],
+          proofPaths: [{
+            id: 'proof-child-ac-1-command-proof',
+            kind: 'command',
+            source: 'documented',
+            command: 'pnpm exec vitest run src/example.test.ts',
+            status: 'planned',
+            expectedEvidence: [{
+              id: 'ac-1',
+              kind: 'automated',
+              description: 'The exact proof command passes.',
+              required: true,
+            }],
+            verificationRecords: [],
+          }],
+          doneSummaryBundle: {
+            status: 'done',
+            completedAt: now,
+            summary: { journey: 'Historical completion packet.' },
+          },
+          mergeRecord: {
+            fromBranch: 'guildhall/proof-child',
+            toBranch: 'main',
+            strategy: 'cherry_pick_local',
+            result: 'merged',
+            mergedAt: now,
+          },
+        }],
+      },
+      summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.30/proof-setup-completion-authority'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.30/proof-setup-completion-authority'])
+    const task = readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks.find(candidate => candidate.id === 'proof-child')
+    expect(task).toMatchObject({ status: 'ready', semanticKind: 'proof_setup' })
+    expect(task?.completedAt).toBeUndefined()
+    expect(task?.assignedTo).toBeUndefined()
+    expect(task?.doneSummaryBundle).toMatchObject({
+      status: 'reopened',
+      reopenReason: 'Current typed proof was missing; the prior completion is historical evidence only.',
+    })
+    expect((await readTaskRuntimeStore(projectRoot)).tasks['proof-child']?.proofRecovery).toMatchObject({
+      kind: 'proof',
+      reason: 'Current typed proof was missing; historical completion evidence cannot settle the active lifecycle.',
+    })
+    expect((task?.notes as Array<Record<string, unknown>> | undefined)?.at(-1)?.structured).toMatchObject({
+      event: 'proof_setup_reopened_before_proof',
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.30/proof-setup-completion-authority'],
+    })).applied).toEqual([])
+  })
+
+  it('restores a cleared proof-setup execution blueprint without sending it through generic spec intake', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-21T22:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-parent', 'work:proof-child'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'task-parent',
+          title: 'Reader knowledge review',
+          domain: 'docs',
+          projectPath: projectRoot,
+          status: 'done',
+          releaseIds: ['release-current'],
+          createdAt: now,
+          updatedAt: now,
+        }, {
+          id: 'proof-child',
+          title: 'Establish concrete proof for Reader knowledge review',
+          description: 'The proof task lost its current plan during recovery.',
+          domain: 'docs',
+          projectPath: projectRoot,
+          status: 'blocked',
+          blockReason: 'Previous proof handoff was invalid.',
+          semanticKind: 'proof_setup',
+          releaseIds: ['release-current'],
+          hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' },
+          acceptanceCriteria: [],
+          notes: [],
+          createdAt: now,
+          updatedAt: now,
+        }],
+      },
+      summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.41/proof-setup-execution-blueprint'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.41/proof-setup-execution-blueprint'])
+
+    const task = readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks.find(candidate => candidate.id === 'proof-child') as any
+    expect(task).toMatchObject({
+      id: 'proof-child',
+      status: 'blocked',
+      semanticKind: 'proof_setup',
+      taskKind: 'verification',
+      blockReason: 'Previous proof handoff was invalid.',
+    })
+    expect(task.structuredSpec.completionBoundary.splitPolicy).toBe('none')
+    expect(task.acceptanceCriteria).toEqual([expect.objectContaining({
+      id: 'ac-1',
+      expectedOutputIncludes: ['guildhall-proof:task-parent'],
+    })])
+    expect(task.notes.at(-1)?.structured).toMatchObject({
+      event: 'proof_setup_execution_blueprint_restored',
+      source: 'deterministic',
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.41/proof-setup-execution-blueprint'],
+    })).applied).toEqual([])
+  })
+
+  it('creates a release-local proof sibling when the old proof child is shared with a shipped release', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-21T21:30:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-active',
+        releases: [{
+          id: 'release-shipped',
+          label: 'Shipped release',
+          kind: 'release',
+          state: 'shipped',
+          proofStyle: 'script_only',
+          nodeIds: ['work:parent', 'work:proof-child'],
+          deferredNodeIds: [],
+        }, {
+          id: 'release-active',
+          label: 'Active release',
+          kind: 'release',
+          state: 'active',
+          proofStyle: 'script_only',
+          nodeIds: ['work:parent', 'work:proof-child'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'parent',
+          title: 'Build the capability',
+          description: 'The shipped capability has a new release-local proof obligation.',
+          projectPath: projectRoot,
+          status: 'done',
+          releaseIds: ['release-shipped', 'release-active'],
+          hierarchy: { childIds: ['proof-child'], order: 0, relation: 'contains' },
+        }, {
+          id: 'proof-child',
+          title: 'Establish concrete proof for Build the capability',
+          description: 'The old proof child is shared with historical and active releases.',
+          projectPath: projectRoot,
+          status: 'done',
+          semanticKind: 'proof_setup',
+          taskKind: 'verification',
+          releaseIds: ['release-shipped', 'release-active'],
+          hierarchy: { parentId: 'parent', childIds: [], order: 0, relation: 'decomposes' },
+          acceptanceCriteria: [{
+            id: 'ac-1',
+            description: 'The proof command passes.',
+            verifiedBy: 'automated',
+            command: 'pnpm exec vitest run src/example.test.ts',
+            met: false,
+          }],
+          proofPaths: [{
+            id: 'proof-child-ac-1-command-proof',
+            kind: 'command',
+            source: 'documented',
+            command: 'pnpm exec vitest run src/example.test.ts',
+            status: 'planned',
+            expectedEvidence: [{ id: 'ac-1', kind: 'automated', required: true }],
+            verificationRecords: [],
+          }],
+        }],
+      },
+      summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.30/proof-setup-completion-authority'],
+    })
+    expect(result.failed).toEqual([])
+    const queue = readProjectStateDatabaseQueueDefinition(tasksPath)
+    const oldProof = queue?.tasks.find(candidate => candidate.id === 'proof-child')
+    const activeProof = queue?.tasks.find(candidate => candidate.id !== 'proof-child' && String(candidate.id).startsWith('parent-proof-setup'))
+    expect(oldProof).toMatchObject({ status: 'done', releaseIds: ['release-shipped'] })
+    expect(activeProof).toMatchObject({
+      status: 'ready',
+      semanticKind: 'proof_setup',
+      releaseIds: ['release-active'],
+      hierarchy: { parentId: 'parent' },
+    })
+  })
+
   it('separates recovery history from current task plans and reopens polluted active plans', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     const now = '2026-07-18T12:00:00.000Z'
@@ -667,13 +1307,12 @@ describe('applyProjectMigrations', () => {
       projectRoot,
       only: ['0.13.11/current-plan-recovery-boundary'],
     })
-    expect(result.applied.map(item => item.id)).toEqual(['0.13.11/current-plan-recovery-boundary'])
+    expect(result.applied).toEqual([])
     const queue = readProjectStateDatabaseQueueDefinition(tasksPath)
     const task = queue?.tasks.find(candidate => candidate.id === 'task-polluted')
-    expect(task?.status).toBe('exploring')
-    expect(task?.spec).toBeUndefined()
-    expect(task?.productBrief).toBeUndefined()
-    expect((task?.notes as Array<Record<string, unknown>> | undefined)?.at(-1)?.content).toContain('internal recovery/process history')
+    expect(task?.status).toBe('spec_review')
+    expect(task?.spec).toContain('Exceeded maxRevisions')
+    expect((task?.productBrief as { nonGoals?: string[] } | undefined)?.nonGoals?.[0]).toContain('Target directory structure')
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.13.11/current-plan-recovery-boundary'],
@@ -806,6 +1445,7 @@ describe('applyProjectMigrations', () => {
       source: { kind: 'task', taskId: 'task-owner-input', questionId: 'q-owner-input' },
       target: { kind: 'thread' },
       question: {
+        kind: 'choice',
         prompt: 'Which proof should run first?',
         choices: ['The smoke test', 'The full suite'],
       },
@@ -1117,6 +1757,82 @@ describe('applyProjectMigrations', () => {
       },
     })
     expect((await applyProjectMigrations({ projectRoot, only: ['0.12.31/task-evidence-current-projection'] })).applied).toEqual([])
+  })
+
+  it('reprojects retained machine evidence after an old current row lost its prose tail', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(tasksPath, JSON.stringify({
+      version: 1,
+      lastUpdated: '2026-07-14T12:00:00.000Z',
+      tasks: [{ id: 'task-machine-contract', title: 'Machine contract task', status: 'ready' }],
+    }, null, 2), 'utf8')
+    await fs.writeFile(getProjectSystemStatePath(projectRoot, 'project-summary.json'), JSON.stringify({ version: 3, freshness: 'current' }), 'utf8')
+    const evidencePath = path.join(
+      getProjectLocalHistoryDir(projectRoot),
+      'tasks',
+      'task-machine-contract',
+      'notes.jsonl',
+    )
+    const machineContract = {
+      acceptanceCriteria: [{ id: 'ac-1', status: 'met' }],
+      changedFiles: ['src/example.ts'],
+      verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+      proofEvidenceIds: ['proof-1'],
+    }
+    const historicalContent = `Human explanation that may be shortened in the current projection.\n\n**Machine self-critique:**\n\n\`\`\`json\n${JSON.stringify(machineContract)}\n\`\`\``
+    await fs.mkdir(path.dirname(evidencePath), { recursive: true })
+    await fs.writeFile(evidencePath, `${JSON.stringify({
+      id: 'note-machine-contract',
+      taskId: 'task-machine-contract',
+      kind: 'note',
+      recordedAt: '2026-07-14T12:02:00.000Z',
+      payload: { content: historicalContent },
+    })}\n`, 'utf8')
+
+    await applyProjectMigrations({ projectRoot, only: ['0.12.0/project-state-database'] })
+    await applyProjectMigrations({ projectRoot, only: ['0.12.31/task-evidence-current-projection'] })
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    database.prepare('UPDATE task_evidence_current SET updated_at = ?, payload_json = ? WHERE task_id = ?').run(
+      '2026-07-14T12:02:00.000Z',
+      JSON.stringify({
+        taskId: 'task-machine-contract',
+        updatedAt: '2026-07-14T12:02:00.000Z',
+        byKind: {
+          note: [{
+            id: 'note:unattributed',
+            recordedAt: '2026-07-14T12:02:00.000Z',
+            payload: { content: 'Human explanation that may be shortened...' },
+          }],
+        },
+      }),
+      'task-machine-contract',
+    )
+    database.close()
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.11/model-independent-machine-boundary'],
+    })
+
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.11/model-independent-machine-boundary'])
+    expect(readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-machine-contract')).toMatchObject({
+      taskId: 'task-machine-contract',
+      byKind: {
+        note: [{
+          payload: {
+            structured: machineContract,
+          },
+        }],
+      },
+    })
+    expect((await readTaskEvidence(projectRoot, 'task-machine-contract', { allowLegacy: true })).at(-1)?.payload).toEqual({
+      content: historicalContent,
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.11/model-independent-machine-boundary'],
+    })).applied).toEqual([])
   })
 
   it('realigns promoted summary and scope from current evidence without reading compatibility files', async () => {
@@ -1865,6 +2581,104 @@ describe('applyProjectMigrations', () => {
     expect(await fs.readFile(tasksPath, 'utf8')).toBe(before)
   })
 
+  it('reprojects release readiness without letting a shipped proof child block a later release', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-21T12:00:00.000Z'
+    const parent = {
+      id: 'task-release-parent',
+      title: 'Release parent',
+      description: 'Parent work with release-local proof.',
+      domain: 'runtime',
+      projectPath: projectRoot,
+      status: 'done',
+      releaseIds: ['release-shipped', 'release-current'],
+      hierarchy: { childIds: ['task-proof-shipped', 'task-proof-current'], order: 0, relation: 'contains' },
+      acceptanceCriteria: [{ id: 'ac-parent', description: 'Parent proof exists.', verifiedBy: 'review', met: false }],
+      notes: [],
+      createdAt: now,
+      updatedAt: now,
+    }
+    const shippedProof = {
+      id: 'task-proof-shipped',
+      title: 'Shipped proof',
+      description: 'Historical proof child.',
+      domain: 'runtime',
+      projectPath: projectRoot,
+      status: 'done',
+      semanticKind: 'proof_setup',
+      workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+      releaseIds: ['release-shipped'],
+      hierarchy: { parentId: parent.id, childIds: [], order: 1, relation: 'decomposes' },
+      acceptanceCriteria: [],
+      notes: [],
+      createdAt: now,
+      updatedAt: now,
+    }
+    const currentProof = {
+      id: 'task-proof-current',
+      title: 'Current proof',
+      description: 'Current release proof child.',
+      domain: 'runtime',
+      projectPath: projectRoot,
+      status: 'done',
+      semanticKind: 'proof_setup',
+      workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+      releaseIds: ['release-current'],
+      hierarchy: { parentId: parent.id, childIds: [], order: 1, relation: 'decomposes' },
+      acceptanceCriteria: [{ id: 'ac-current', description: 'Current proof command passes.', verifiedBy: 'automated', command: 'pnpm proof:current', expectedOutputIncludes: ['guildhall-proof:task-release-parent'], met: true }],
+      proofPaths: [{
+        id: 'current-proof-command', kind: 'command', command: 'pnpm proof:current', status: 'verified',
+        verificationRecords: [{ evidenceId: 'ac-current', status: 'passed', command: 'pnpm proof:current', recordedAt: now }],
+      }],
+      notes: [],
+      createdAt: now,
+      updatedAt: now,
+    }
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [
+          { id: 'release-shipped', label: 'Shipped', kind: 'release', state: 'shipped', source: 'release_plan', proofStyle: 'script_only', nodeIds: ['work:task-release-parent'], deferredNodeIds: [] },
+          { id: 'release-current', label: 'Current', kind: 'release', state: 'active', source: 'release_plan', proofStyle: 'script_only', nodeIds: ['work:task-release-parent'], deferredNodeIds: [] },
+        ],
+        tasks: [parent, shippedProof, currentProof],
+      },
+      summary: {
+        projectId: path.basename(projectRoot),
+        generatedAt: now,
+        freshness: 'current',
+        releaseSummary: {
+          scopeMode: 'named_release',
+          release: { id: 'release-current', label: 'Current', kind: 'release', state: 'active', source: 'release_plan' },
+          state: 'blocked',
+          counts: { total: 1, done: 1, unfinished: 0, ready: 0, active: 0, blocked: 1, deferred: 0, ownerBlocked: 0, proofBlocked: 1 },
+          taskStatusCounts: { done: 1 },
+          blockers: [{ id: parent.id, owningTaskId: parent.id, label: 'Completion proof is missing or stale.', code: 'proof_evidence_missing' }],
+          updatedAt: now,
+        },
+      },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const before = readProjectSummaryProjection(tasksPath)
+    expect(before?.releaseSummary?.counts.proofBlocked).toBe(1)
+    const first = await applyProjectMigrations({ projectRoot, only: ['0.13.33/release-local-proof-child-scope'] })
+    expect(first.applied.map(item => item.id)).toEqual(['0.13.33/release-local-proof-child-scope'])
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
+      freshness: 'current',
+      releaseSummary: {
+        state: 'ready',
+        counts: { total: 1, done: 1, blocked: 0, proofBlocked: 0 },
+        blockers: [],
+      },
+    })
+
+    const second = await applyProjectMigrations({ projectRoot, only: ['0.13.33/release-local-proof-child-scope'] })
+    expect(second.applied).toEqual([])
+  })
+
   it('moves orientation out of an existing summary row without rewriting task state', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     await fs.mkdir(path.dirname(tasksPath), { recursive: true })
@@ -1985,6 +2799,7 @@ describe('applyProjectMigrations', () => {
       source: { kind: 'task', taskId: 'task-templates', questionId: 'q-templates' },
       target: { kind: 'thread' },
       question: {
+        kind: 'choice',
         prompt: 'Should Templates stay in the current release scope?',
         choices: ['Keep Templates in the current release', 'Defer Templates'],
       },

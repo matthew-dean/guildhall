@@ -88,6 +88,16 @@ export interface EnsureWorktreeResult {
   created: boolean
 }
 
+export class WorktreeSyncError extends Error {
+  readonly code: 'task_worktree_sync' | 'task_worktree_sync_conflict'
+
+  constructor(taskId: string, baseBranch: string, detail: string, conflict: boolean) {
+    super(`Guildhall could not synchronize task worktree ${taskId} with ${baseBranch}: ${detail}`)
+    this.name = 'WorktreeSyncError'
+    this.code = conflict ? 'task_worktree_sync_conflict' : 'task_worktree_sync'
+  }
+}
+
 /**
  * Idempotent per-dispatch worktree setup. Called before the worker agent runs.
  *
@@ -127,6 +137,12 @@ export async function ensureWorktreeForDispatch(
     existsSync(resolveRuntimePath(task.worktreePath))
   ) {
     const existingWorktreePath = resolveRuntimePath(task.worktreePath)
+    await synchronizeReusableWorktree({
+      task,
+      worktreePath: existingWorktreePath,
+      baseBranch: task.baseBranch ?? baseBranch,
+      gitDriver,
+    })
     await pruneProjectRuntimeLinks({
       projectPath,
       worktreePath: existingWorktreePath,
@@ -153,6 +169,12 @@ export async function ensureWorktreeForDispatch(
     await input.gitDriver.attachWorktree(projectPath, {
       worktreePath: expectedPath,
       branch: expectedBranch,
+    })
+    await synchronizeReusableWorktree({
+      task,
+      worktreePath: expectedPath,
+      baseBranch: task.baseBranch ?? baseBranch,
+      gitDriver,
     })
     await pruneProjectRuntimeLinks({
       projectPath,
@@ -206,6 +228,8 @@ export async function ensureWorktreeForDispatch(
 export interface CleanupWorktreeInput {
   task: Task
   mode: WorktreeMode
+  /** Stable workspace identity used to prove the checkout is Guildhall-owned. */
+  projectId: string
   projectPath: string
   gitDriver: GitDriver
   /**
@@ -217,8 +241,8 @@ export interface CleanupWorktreeInput {
 }
 
 /**
- * Called on terminal transitions (`done`, `shelved`, `blocked`) to tear down
- * the worktree. No-op when mode is `none` or preservation is requested.
+ * Called after successfully landed work reaches `done` to tear down the
+ * worktree. No-op when mode is `none` or preservation is requested.
  */
 export async function cleanupWorktreeForTerminal(
   input: CleanupWorktreeInput,
@@ -226,7 +250,13 @@ export async function cleanupWorktreeForTerminal(
   if (input.mode === 'none') return
   if (input.preserveForPendingPr) return
   if (!input.task.worktreePath) return
-  await input.gitDriver.removeWorktree(input.projectPath, resolveRuntimePath(input.task.worktreePath))
+  const worktreePath = resolveRuntimePath(input.task.worktreePath)
+  const ownedRoot = path.resolve(worktreeRootFor(input.projectId))
+  const relativePath = path.relative(ownedRoot, worktreePath)
+  if (relativePath === '' || relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+    throw new Error(`Refusing to remove non-Guildhall worktree for ${input.task.id}: ${worktreePath}`)
+  }
+  await input.gitDriver.removeWorktree(input.projectPath, worktreePath)
 }
 
 interface EnsureWorkspaceSiblingLinksInput {
@@ -269,6 +299,25 @@ async function copyWorktreeIncludeFiles(
     }
     await copyWorktreeIncludePath({ projectRoot, worktreeRoot, relativePath: normalized })
   }
+}
+
+async function synchronizeReusableWorktree(input: {
+  task: Task
+  worktreePath: string
+  baseBranch: string
+  gitDriver: GitDriver
+}): Promise<void> {
+  const result = await input.gitDriver.syncWorktreeWithBase(
+    input.worktreePath,
+    input.baseBranch,
+    `Guildhall: checkpoint task work before synchronizing ${input.task.id}`,
+    input.task.semanticKind === 'proof_setup'
+      ? { conflictStrategy: 'prefer_task' }
+      : undefined,
+  )
+  if (result.ok) return
+  const detail = result.detail ?? 'unknown worktree synchronization error'
+  throw new WorktreeSyncError(input.task.id, input.baseBranch, detail, result.conflict === true)
 }
 
 function normalizeWorktreeIncludePattern(rawPattern: string): string | null {

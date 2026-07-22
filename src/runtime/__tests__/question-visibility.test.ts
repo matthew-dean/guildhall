@@ -32,7 +32,7 @@ function taskWithQuestions(openQuestions: NonNullable<Task['openQuestions']>): T
 }
 
 describe('visibleOpenQuestions', () => {
-  it('filters persisted tool-receipt and research narration questions on read', () => {
+  it('keeps structured questions visible and hides narration-shaped records', () => {
     const task = taskWithQuestions([
       {
         id: 'q-fake',
@@ -53,7 +53,7 @@ describe('visibleOpenQuestions', () => {
     expect(visibleOpenQuestions(task).map(question => (question as { id?: string }).id)).toEqual(['q-real'])
   })
 
-  it('filters agent plan narration that is not an owner decision', () => {
+  it('hides agent narration even when it is stored in the question slot', () => {
     const task = taskWithQuestions([
       {
         id: 'q-plan',
@@ -64,10 +64,10 @@ describe('visibleOpenQuestions', () => {
       },
     ])
 
-    expect(visibleOpenQuestions(task)).toEqual([])
+    expect(visibleOpenQuestions(task)).toHaveLength(0)
   })
 
-  it('filters evidence-summary choice prompts that are not owner decisions', () => {
+  it('hides evidence summaries even when they are stored as choice prompts', () => {
     const task = taskWithQuestions([
       {
         id: 'q-files',
@@ -83,6 +83,6 @@ describe('visibleOpenQuestions', () => {
       },
     ])
 
-    expect(visibleOpenQuestions(task)).toEqual([])
+    expect(visibleOpenQuestions(task)).toHaveLength(0)
   })
 })

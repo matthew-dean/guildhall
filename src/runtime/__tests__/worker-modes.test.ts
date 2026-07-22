@@ -34,16 +34,16 @@ function task(partial: Partial<Task>): Task {
 }
 
 describe('worker modes', () => {
-  it('selects diagnose for failures, tdd for explicit test-first work, and build otherwise', () => {
-    expect(selectWorkerMode(task({ title: 'Debug failing provider setup', description: 'pnpm test fails with timeout' }))).toMatchObject({
+  it('selects only the explicit structured execution mode', () => {
+    expect(selectWorkerMode(task({ executionMode: 'diagnose', title: 'A lyrical unrelated title' }))).toMatchObject({
       id: 'diagnose',
-      reason: expect.stringContaining('failure'),
+      reason: expect.stringContaining('structured'),
     })
-    expect(selectWorkerMode(task({ title: 'Use TDD to add language map', description: 'Write the failing test first.' }))).toMatchObject({
+    expect(selectWorkerMode(task({ executionMode: 'tdd', title: 'A terse task' }))).toMatchObject({
       id: 'tdd',
-      reason: expect.stringContaining('test-first'),
+      reason: expect.stringContaining('structured'),
     })
-    expect(selectWorkerMode(task({ title: 'Add settings label', description: 'Small UI copy change.' }))).toMatchObject({
+    expect(selectWorkerMode(task({ title: 'Debug failing provider setup', description: 'pnpm test fails with timeout' }))).toMatchObject({
       id: 'build',
     })
   })
@@ -51,8 +51,9 @@ describe('worker modes', () => {
   it('injects only the selected mode loop into worker context', async () => {
     const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worker-mode-'))
     const ctx = await buildContext(task({
-      title: 'Use TDD to add Language Map extraction',
-      description: 'Write the failing test before implementation.',
+      executionMode: 'tdd',
+      title: 'Language Map extraction',
+      description: 'Implement the accepted contract.',
     }), memoryDir)
 
     expect(ctx.workerMode?.id).toBe('tdd')

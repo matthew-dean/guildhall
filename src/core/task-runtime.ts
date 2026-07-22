@@ -10,6 +10,9 @@ export const TaskRuntimeState = z.object({
   }).optional(),
   proofRecovery: z.object({
     reopenedAt: z.string(),
+    // The recovery lane is machine state. The human-facing reason is
+    // explanatory evidence and must never be searched to choose a lane.
+    kind: z.enum(['proof']).optional(),
     reason: z.string().optional(),
   }).optional(),
   remediationAttempts: z.number().int().nonnegative().optional(),
@@ -165,6 +168,72 @@ function serializedBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength
 }
 
+/**
+ * Extract the worker self-critique contract from a note before its narrative
+ * content is bounded. This is JSON extraction, not prose interpretation: the
+ * result is valid only when every machine field has the expected collection
+ * shape. The runtime contract performs the stricter enum validation.
+ */
+export function extractStructuredSelfCritique(
+  value: unknown,
+  options: { allowLegacyContent?: boolean } = {},
+): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const existing = record.structured
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    const structured = existing as Record<string, unknown>
+    if (
+      Array.isArray(structured.acceptanceCriteria) &&
+      Array.isArray(structured.changedFiles) &&
+      Array.isArray(structured.verificationCommands) &&
+      Array.isArray(structured.proofEvidenceIds)
+    ) {
+      return structured
+    }
+  }
+  if (!options.allowLegacyContent) return null
+  const content = typeof record.content === 'string' ? record.content : ''
+  const trimmedContent = content.trim()
+  if (trimmedContent.startsWith('{') && trimmedContent.endsWith('}')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmedContent)
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed) &&
+        Array.isArray((parsed as Record<string, unknown>).acceptanceCriteria) &&
+        Array.isArray((parsed as Record<string, unknown>).changedFiles) &&
+        Array.isArray((parsed as Record<string, unknown>).verificationCommands) &&
+        Array.isArray((parsed as Record<string, unknown>).proofEvidenceIds)
+      ) {
+        return { kind: 'worker_self_critique', ...(parsed as Record<string, unknown>) }
+      }
+    } catch {
+      // A non-JSON response remains narrative only.
+    }
+  }
+  for (const match of content.matchAll(/```json\s*([\s\S]*?)```/gi)) {
+    try {
+      const parsed: unknown = JSON.parse(match[1]!.trim())
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed) &&
+        Array.isArray((parsed as Record<string, unknown>).acceptanceCriteria) &&
+        Array.isArray((parsed as Record<string, unknown>).changedFiles) &&
+        Array.isArray((parsed as Record<string, unknown>).verificationCommands) &&
+        Array.isArray((parsed as Record<string, unknown>).proofEvidenceIds)
+      ) {
+        return { kind: 'worker_self_critique', ...(parsed as Record<string, unknown>) }
+      }
+    } catch {
+      // Invalid machine JSON remains narrative only.
+    }
+  }
+  return null
+}
+
 /** Return the bounded payload that is allowed into durable project state. */
 export function compactTaskEvidencePayload(
   kind: TaskEvidenceKind,
@@ -176,6 +245,10 @@ export function compactTaskEvidencePayload(
       compactEvidenceValue(value, key, 0),
     ]),
   )
+  if (kind === 'note') {
+    const structured = extractStructuredSelfCritique(payload)
+    if (structured) compact.structured = compactEvidenceValue(structured, 'structured', 0)
+  }
   if (serializedBytes(compact) <= TASK_EVIDENCE_PAYLOAD_MAX_BYTES) return compact
 
   // A malformed or unusually nested producer must not bypass the budget.

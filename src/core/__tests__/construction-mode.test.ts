@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { constructionModeForTask } from '../construction-mode.js'
 import type { Task } from '../task.js'
 
-type TaskFixtureInput = Partial<Task> & { blocker?: string }
+type TaskFixtureInput = Partial<Task> & { blockerKind?: 'change_order' | 'execution_failure' }
 
 function task(partial: TaskFixtureInput): Task & { blocker?: string } {
   return {
@@ -33,12 +33,12 @@ describe('constructionModeForTask', () => {
     expect(constructionModeForTask(task({ status }))).toBe(mode)
   })
 
-  it('maps blocked spec ambiguity to change_order', () => {
+  it('maps an explicit structured planning blocker to change_order', () => {
     expect(
       constructionModeForTask(
         task({
           status: 'blocked',
-          blocker: 'Spec is wrong: API scope changed after implementation evidence.',
+          blockerKind: 'change_order',
         }),
       ),
     ).toBe('change_order')
@@ -49,7 +49,7 @@ describe('constructionModeForTask', () => {
       constructionModeForTask(
         task({
           status: 'blocked',
-          blocker: 'Worker hit a typecheck failure after editing the target file.',
+          blockerKind: 'execution_failure',
         }),
       ),
     ).toBe('inspect')

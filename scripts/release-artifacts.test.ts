@@ -30,9 +30,9 @@ describe('release artifact contract', () => {
 
   it('keeps the documented curl installer tied to GitHub latest releases', () => {
     const installer = read('scripts/install.sh')
-    const manifest = JSON.parse(read('package.json')) as { version: string }
     const readme = read('README.md')
     const quickStart = read('docs/guide/quick-start.md')
+    const docsIndex = read('docs/index.md')
 
     const curlCommand =
       'curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | sh'
@@ -50,8 +50,12 @@ describe('release artifact contract', () => {
     expect(quickStart).toContain(curlCommand)
     expect(readme).toContain('Node.js 22 or newer')
     expect(quickStart).toContain('Node.js 22 or newer')
-    expect(readme).toContain(`GUILDHALL_VERSION=${manifest.version}`)
-    expect(quickStart).toContain(`GUILDHALL_VERSION=${manifest.version}`)
+    const pinnedVersion = quickStart.match(/GUILDHALL_VERSION=(\d+\.\d+\.\d+)/)?.[1]
+    const publicDocsVersion = docsIndex.match(/\/releases\/(\d+\.\d+\.\d+)/)?.[1]
+    expect(pinnedVersion).toBeDefined()
+    expect(pinnedVersion).toBe(publicDocsVersion)
+    expect(readme).toContain(`GUILDHALL_VERSION=${pinnedVersion}`)
+    expect(quickStart).toContain(`GUILDHALL_VERSION=${pinnedVersion}`)
     expect(quickStart).toContain('guildhall-macos.tar.gz.sha256')
   })
 

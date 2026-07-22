@@ -966,24 +966,6 @@
     if (/\bstopped\s*\(\s*Idle Limit\s*\)|\bIdle Limit\b/i.test(text)) {
       return 'The run stopped after reaching the idle limit. Start it again when you are ready to continue.'
     }
-    if (/already have the question posted|posted (?:a |the )?(?:choice|freeform)?\s*question|wait for the user's answer|yield now|q-\d/i.test(text)) {
-      return 'A question is waiting for an answer.'
-    }
-    if (/research budget exhausted|hit the research budget|refusing more read-only tool calls|do not call more read-only tools now/i.test(text)) {
-      return 'Work paused after gathering enough context. Open the task to choose the next step.'
-    }
-    if (/spec (?:author|agent|shaping).*(?:turn limit|maximum turn|timed out)|kept researching after guildhall asked for durable progress/i.test(text)) {
-      return 'Spec shaping stopped before the next draft was saved. Open the task to retry from the transcript or reframe the work.'
-    }
-    if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
-      return 'One missing verification check needs to run or be saved before this task can finish.'
-    }
-    if (/authoritative verification|upstream workspace build failure|checkpoint-touched|task worktree/i.test(text)) {
-      return 'The project build is failing outside this task. Decide whether to reframe the task, fix the wider build first, or retry after the build is healthy.'
-    }
-    if (/no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)) {
-      return 'Useful context was found, but the next draft was not saved. Decide whether to retry from those notes or reframe the task.'
-    }
     const withoutCodePrefix = text
       .replace(/^ERROR:\s*/i, '')
       .replace(/^[a-z][a-z0-9_]*:\s*/i, '')
@@ -994,26 +976,20 @@
   }
 
   function inferBlockerCategory(task: Task): string {
-    const reason = blockerReason(task)
-    const haystack = `${task.title ?? ''} ${reason} ${task.description ?? ''}`.toLowerCase()
-
     const inbox = inboxItems.find(item => item.taskId === task.id || item.title === task.title)
 
-    if (task.status === 'import_draft' || /brief|source-backed|shaping|clearer/.test(haystack)) return 'Needs shaping'
-    if (/provider|oauth|api key|model|fallback|stripe|supabase auth/.test(haystack)) return 'Provider settings'
-    if (/git|branch|commit|push|dirty|merge/.test(haystack)) return 'Repository follow-up'
-    if (/bootstrap|readiness|database|migration|db\b/.test(haystack)) return 'Project readiness / bootstrap'
-    if ((task.dependsOn ?? []).length > 0 || referencesAnotherTask(task, haystack)) return 'Dependencies'
+    // Category is presentation over structured state. Do not classify a
+    // model's title, description, or blocker prose by keyword; two models
+    // describing the same state must land in the same category.
+    if (
+      task.status === 'import_draft' ||
+      task.requestIntake?.recommendedNextAction === 'ask_clarifying_question' ||
+      task.taskReadiness?.recommendation === 'needs_one_question'
+    ) return 'Needs shaping'
+    if (task.taskReadiness?.recommendation === 'needs_research_spike') return 'Needs research'
+    if ((task.dependsOn ?? []).length > 0) return 'Dependencies'
     if (inbox?.missingSteps?.length) return 'Missing prerequisite'
     return 'Needs triage'
-  }
-
-  function referencesAnotherTask(task: Task, haystack: string): boolean {
-    return tasks.some(candidate => {
-      if (candidate.id === task.id) return false
-      const title = candidate.title?.trim().toLowerCase()
-      return haystack.includes(candidate.id.toLowerCase()) || (title && title.length > 8 && haystack.includes(title))
-    })
   }
 
   function startReadinessLabel(code: string | undefined): string {

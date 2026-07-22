@@ -3,6 +3,31 @@ import type { EvidenceRef, GuildhallPersistence, PersistedRecord, PersistencePla
 
 export { LaunchStepBase, LaunchStep, EvidenceKind, ExpectedEvidence, ProofPath, ProofPathScope, VerificationRecord }
 
+/**
+ * A proof command must identify the bounded work item it proves. This marker
+ * is machine evidence, not a phrase a provider can satisfy by imitation.
+ */
+export function proofIdentityMarkerForTask(taskId: string): string {
+  return `guildhall-proof:${taskId}`
+}
+
+export function proofSetupHasTaskIdentity(
+  task: Pick<Task, 'hierarchy' | 'delivery' | 'acceptanceCriteria'>,
+): boolean {
+  const parentId = task.hierarchy?.parentId ?? task.delivery?.supports?.[0]
+  if (!parentId) return false
+  const marker = proofIdentityMarkerForTask(parentId)
+  // Compact project projections deliberately omit the full acceptance
+  // contract. Treat that shape as “identity not established” so proof health
+  // can fail closed without pretending a card is a full mutable Task.
+  const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : []
+  return acceptanceCriteria.some((criterion) =>
+    typeof criterion.command === 'string' &&
+    isConcreteProjectProofCommand(criterion.command) &&
+    ((criterion.expectedOutputIncludes ?? []).includes(marker) || criterion.command.includes(marker)),
+  )
+}
+
 type TaskProofPath = ProofPathType
 type TaskProofEvidence = TaskProofPath['expectedEvidence'][number]
 type TaskProofVerification = TaskProofPath['verificationRecords'][number]
@@ -47,7 +72,7 @@ export function buildTaskProofPath(input: {
   const expectedEvidence = input.task.acceptanceCriteria.length > 0
     ? input.task.acceptanceCriteria.map((criterion, index) => ExpectedEvidence.parse({
         id: criterion.id ?? `ac-${index + 1}`,
-        kind: evidenceKindFromCriterion(criterion.verifiedBy ?? 'review'),
+        kind: evidenceKindFromVerifier(criterion.verifiedBy),
         description: criterion.description,
         required: true,
         sourceRef: criterion.command,
@@ -96,56 +121,98 @@ export function ensureCommandProofPathsFromAcceptanceCriteria(
       .filter((path): path is Record<string, unknown> => Boolean(path) && typeof path === 'object' && !Array.isArray(path))
       .map(path => path as ProofPathType)
     : [])
-  const existingCommands = new Set(
-    existing
-      .filter(path => isCommandProofPath(path))
-      .map(path => comparableCommand(path.command))
-      .filter(Boolean),
-  )
-
+  const criteriaByCommand = new Map<string, Task['acceptanceCriteria']>()
   for (const criterion of task.acceptanceCriteria ?? []) {
     const command = typeof criterion.command === 'string' ? criterion.command.trim() : ''
     if (!command) continue
     const comparable = comparableCommand(command)
     if (!comparable) continue
+    const criteria = criteriaByCommand.get(comparable) ?? []
+    criteria.push(criterion)
+    criteriaByCommand.set(comparable, criteria)
+  }
 
-    const expectedEvidence = {
-      id: criterion.id,
+  const reconciled = existing.filter((path) => {
+    if (!isCommandProofPath(path) || !isGeneratedCommandProofPath(path, task.id)) return true
+    const command = comparableCommand(path.command)
+    // Generated paths are a projection of the current acceptance contract.
+    // Once their command is no longer named by a criterion, keeping the row
+    // would preserve a phantom proof obligation from an older plan revision.
+    return Boolean(command && criteriaByCommand.has(command))
+  })
+
+  for (const [comparable, criteria] of criteriaByCommand) {
+    const criterion = criteria[0]
+    if (!criterion) continue
+    const command = typeof criterion.command === 'string' ? criterion.command.trim() : ''
+
+    const expectedEvidenceForCommand = criteria.map(currentCriterion => ({
+      id: currentCriterion.id,
       kind: 'automated' as const,
-      description: criterion.description,
+      description: currentCriterion.description,
       required: true,
-      sourceRef: command,
-      ...(criterion.expectedExit ? { expectedExit: criterion.expectedExit } : {}),
-      ...(criterion.expectedOutputIncludes?.length
-        ? { expectedOutputIncludes: criterion.expectedOutputIncludes }
+      sourceRef: currentCriterion.command,
+      ...(currentCriterion.expectedExit ? { expectedExit: currentCriterion.expectedExit } : {}),
+      ...(currentCriterion.expectedOutputIncludes?.length
+        ? { expectedOutputIncludes: currentCriterion.expectedOutputIncludes }
         : {}),
-    }
-    const existingPath = existing.find((path): path is CommandProofPath =>
+    }))
+    const existingPath = reconciled.find((path): path is CommandProofPath =>
       isCommandProofPath(path) && comparableCommand(path.command) === comparable,
     )
     if (existingPath) {
-      const previousEvidence = existingPath.expectedEvidence?.find((evidence) => evidence.id === criterion.id)
-      const evidenceChanged = JSON.stringify(previousEvidence) !== JSON.stringify(expectedEvidence)
-      existingPath.expectedEvidence = [
-        ...(existingPath.expectedEvidence ?? []).filter((evidence) => evidence.id !== criterion.id),
-        expectedEvidence,
-      ]
-      if (evidenceChanged) {
+      const generatedPath = isGeneratedCommandProofPath(existingPath, task.id)
+      const existingExpectedEvidence = Array.isArray(existingPath.expectedEvidence)
+        ? existingPath.expectedEvidence
+        : []
+      // A documented provider path may have a richer artifact contract than
+      // the generated acceptance criterion. Preserve that authoritative path
+      // contract; replacing it with the criterion would erase provider
+      // evidence and make the next tick rerun a command that already passed.
+      const nextExpectedEvidence = !generatedPath && existingExpectedEvidence.length > 0
+        ? existingExpectedEvidence
+        : expectedEvidenceForCommand
+      const evidenceChanged = JSON.stringify(existingExpectedEvidence) !== JSON.stringify(nextExpectedEvidence)
+      const nextTitle = `Run ${criteria.map(currentCriterion => currentCriterion.id).join(', ')}`
+      const nextSummary = criteria.map(currentCriterion => currentCriterion.description).join(' ')
+      const currentLaunchStep = Array.isArray(existingPath.launchSteps)
+        ? existingPath.launchSteps[0]
+        : undefined
+      const nextLaunchSteps = generatedPath
+        ? [{
+            ...(currentLaunchStep ?? { id: `${existingPath.id}-launch` }),
+            kind: 'copy_command' as const,
+            title: nextTitle,
+            command,
+            expectedOutcome: nextSummary,
+          }]
+        : existingPath.launchSteps
+      const presentationChanged = generatedPath && (
+        existingPath.title !== nextTitle ||
+        existingPath.summary !== nextSummary ||
+        JSON.stringify(existingPath.launchSteps) !== JSON.stringify(nextLaunchSteps)
+      )
+      existingPath.expectedEvidence = nextExpectedEvidence
+      if (generatedPath) {
+        existingPath.title = nextTitle
+        existingPath.summary = nextSummary
+        existingPath.launchSteps = nextLaunchSteps
+      }
+      if (evidenceChanged || presentationChanged) {
         existingPath.status = 'planned'
         existingPath.verificationRecords = []
         existingPath.updatedAt = now
         existingPath.updatedBy = createdBy
       }
-      existingCommands.add(comparable)
       continue
     }
 
-    const proofPathId = `${task.id}-${criterion.id}-command-proof`
-    existing.push(ProofPath.parse({
+    const proofPathId = `${task.id}-${criteria.map(currentCriterion => currentCriterion.id).join('-')}-command-proof`
+    reconciled.push(ProofPath.parse({
       id: proofPathId,
       scope: { type: 'task', id: task.id },
-      title: `Run ${criterion.id}`,
-      summary: criterion.description,
+      title: `Run ${criteria.map(currentCriterion => currentCriterion.id).join(', ')}`,
+      summary: criteria.map(currentCriterion => currentCriterion.description).join(' '),
       kind: 'command',
       command,
       source: 'documented',
@@ -153,21 +220,29 @@ export function ensureCommandProofPathsFromAcceptanceCriteria(
       launchSteps: [{
         id: `${proofPathId}-launch`,
         kind: 'copy_command',
-        title: `Run ${criterion.id}`,
+        title: `Run ${criteria.map(currentCriterion => currentCriterion.id).join(', ')}`,
         command,
-        expectedOutcome: criterion.description,
+        expectedOutcome: criteria.map(currentCriterion => currentCriterion.description).join(' '),
       }],
-      expectedEvidence: [expectedEvidence],
+      expectedEvidence: expectedEvidenceForCommand,
       verificationRecords: [],
       relatedTaskIds: [task.id],
       createdAt: now,
       updatedAt: now,
       createdBy,
     }))
-    existingCommands.add(comparable)
   }
 
-  return existing
+  return reconciled
+}
+
+function isGeneratedCommandProofPath(
+  path: CommandProofPath,
+  taskId: string,
+): boolean {
+  return typeof path.id === 'string' &&
+    path.id.startsWith(`${taskId}-`) &&
+    path.id.endsWith('-command-proof')
 }
 
 function dedupeCommandProofPaths(
@@ -223,7 +298,14 @@ function dedupeCommandProofPaths(
  */
 export function isConcreteProjectProofCommand(command: string): boolean {
   const normalized = command.trim().replace(/\s+/g, ' ')
-  return !/^(?:pnpm|npm|yarn|bun)\s+(?:(?:run|exec)\s+)?(?:test|proof|check|verify|validate|build|lint|typecheck)\s*$/i.test(normalized)
+  if (/^(?:pnpm|npm|yarn|bun)\s+(?:(?:run|exec)\s+)?(?:test|proof|check|verify|validate|build|lint|typecheck)\s*$/i.test(normalized)) {
+    return false
+  }
+  // A namespaced package script can still be a workspace-wide convention.
+  // Require the worker to choose a lane-specific command instead of dressing
+  // up `proof:context` or `proof:all` as bounded evidence.
+  const scriptOnly = normalized.match(/^(?:pnpm|npm|yarn|bun)\s+(?:(?:run|exec)\s+)?([^\s]+)$/i)?.[1]
+  return !(scriptOnly && /^(?:test|proof|check|verify|validate|build|lint|typecheck):(?:context|project|workspace|all|mvp|smoke|suite|default)$/i.test(scriptOnly))
 }
 
 /**
@@ -289,7 +371,15 @@ export function replaceGenericProjectProofPathsWithSetup(
 export function recordCommandProofPathResults(
   task: Pick<Task, 'proofPaths'>,
   gates: Array<{ id: string; command: string }>,
-  results: Array<{ gateId: string; type: 'hard' | 'soft'; passed: boolean; output?: string; checkedAt: string }>,
+  results: Array<{
+    gateId: string
+    type: 'hard' | 'soft'
+    passed: boolean
+    /** Raw process result before the acceptance contract interprets it. */
+    observedPassed?: boolean
+    output?: string
+    checkedAt: string
+  }>,
   recordedBy = 'run-gates',
 ): void {
   if (!Array.isArray(task.proofPaths)) return
@@ -319,6 +409,7 @@ export function recordCommandProofPathResults(
     const evidenceItems = expectedEvidence.length > 0
       ? expectedEvidence
       : [{ id: `${proofPathId}-evidence-0`, description: proofCommand }]
+    const contractPassed = commandResultSatisfiesProofContract(task, gates, result)
     for (const [evidenceIndex, rawEvidence] of evidenceItems.entries()) {
       const evidence = rawEvidence && typeof rawEvidence === 'object' && !Array.isArray(rawEvidence)
         ? rawEvidence as Record<string, unknown>
@@ -330,8 +421,8 @@ export function recordCommandProofPathResults(
         id: `command-proof-${evidenceId}-${result.checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
         evidenceId,
         kind: 'automated',
-        status: result.passed ? 'passed' : 'failed',
-        summary: result.passed
+        status: contractPassed ? 'passed' : 'failed',
+        summary: contractPassed
           ? `Observed command passed: ${proofCommand}`
           : `Observed command failed: ${proofCommand}`,
         command: proofCommand,
@@ -346,10 +437,37 @@ export function recordCommandProofPathResults(
     const requiredEvidence = evidenceItems.filter((evidence) =>
       !(evidence && typeof evidence === 'object' && !Array.isArray(evidence) && (evidence as Record<string, unknown>).required === false),
     )
-    pathRecord.status = result.passed && requiredEvidence.length > 0 ? 'verified' : 'blocked'
+    pathRecord.status = contractPassed && requiredEvidence.length > 0 ? 'verified' : 'blocked'
     pathRecord.updatedAt = result.checkedAt
     pathRecord.updatedBy = recordedBy
   }
+}
+
+export function commandResultSatisfiesProofContract(
+  task: Pick<Task, 'proofPaths'>,
+  gates: Array<{ id: string; command: string }>,
+  result: { gateId: string; passed: boolean; observedPassed?: boolean; output?: string },
+): boolean {
+  const gateCommand = comparableCommand(gates.find((gate) => gate.id === result.gateId)?.command ?? '')
+  const path = (task.proofPaths ?? []).find((proofPath) =>
+    proofPath && typeof proofPath === 'object' && !Array.isArray(proofPath) &&
+    proofPath.kind === 'command' &&
+    comparableCommand(proofPath.command) === gateCommand,
+  )
+  if (!path || typeof path !== 'object' || Array.isArray(path)) return result.passed
+  const expectedEvidence = Array.isArray(path.expectedEvidence)
+    ? path.expectedEvidence.filter((evidence): evidence is Record<string, unknown> =>
+        Boolean(evidence) && typeof evidence === 'object' && !Array.isArray(evidence),
+      )
+    : []
+  const requiredEvidence = expectedEvidence.filter((evidence) => evidence.required !== false)
+    const observedExit = (result.observedPassed ?? result.passed) ? 'zero' : 'non_zero'
+  return result.passed && requiredEvidence.every((evidence) =>
+    (evidence.expectedExit === undefined || evidence.expectedExit === observedExit) &&
+    (Array.isArray(evidence.expectedOutputIncludes) ? evidence.expectedOutputIncludes : [])
+      .filter((value): value is string => typeof value === 'string')
+      .every((expected) => (result.output ?? '').includes(expected)),
+  )
 }
 
 export async function recordProofPath(input: {
@@ -408,12 +526,16 @@ export function buildProofPathContext(proofPaths: readonly ProofPath[]): string 
   return lines.join('\n').trim()
 }
 
-function evidenceKindFromCriterion(value: unknown): EvidenceKind {
-  const text = String(value ?? '').toLowerCase()
-  if (/\b(test|command|gate|typecheck|build|lint)\b/.test(text)) return 'automated'
-  if (/\b(browser|ui|visual|manual|review)\b/.test(text)) return 'manual'
-  if (/\b(provider|dashboard|deploy|preview)\b/.test(text)) return 'provider'
-  return 'manual'
+function evidenceKindFromVerifier(value: unknown): EvidenceKind {
+  switch (value) {
+    case 'automated':
+      return 'automated'
+    case 'review':
+    case 'human':
+      return 'manual'
+    default:
+      throw new Error(`Acceptance criterion requires a typed verifier before proof-path construction.`)
+  }
 }
 
 function sourceRefsForProofPath(proofPath: ProofPath): string[] {

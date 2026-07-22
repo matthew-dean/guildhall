@@ -189,7 +189,7 @@ describe('project skill proposals', () => {
         id: 'nuxt-invite-skill',
         name: 'nuxt-invite-skill',
         description: 'Repair Nuxt invite routes',
-        triggerKeywords: ['invite', 'workspace'],
+        routingKeys: ['domain:invite'],
         content: 'Use the existing workspace route helpers before adding new utilities.',
         risk: 'medium',
         requiresApproval: true,
@@ -202,7 +202,7 @@ describe('project skill proposals', () => {
       status: 'suggested',
       requiresApproval: true,
     })
-    expect(selectRelevantProjectSkills(proposals, 'fix invite route')).toEqual([])
+    expect(selectRelevantProjectSkills(proposals, ['domain:invite'])).toEqual([])
 
     await expect(activateProjectSkillProposal({
       memoryDir: baseDir,
@@ -217,7 +217,7 @@ describe('project skill proposals', () => {
 
     const active = selectRelevantProjectSkills(
       readProjectSkillProposals(baseDir),
-      'fix invite route',
+      ['domain:invite'],
     )
     expect(active).toHaveLength(1)
     expect(active[0]).toMatchObject({
@@ -233,7 +233,7 @@ describe('project skill proposals', () => {
         id: 'dismissed-skill',
         name: 'dismissed-skill',
         description: 'Dismissed',
-        triggerKeywords: ['billing'],
+        routingKeys: ['domain:billing'],
         content: 'Do billing-specific steps.',
         risk: 'low',
         requiresApproval: false,
@@ -249,7 +249,7 @@ describe('project skill proposals', () => {
         id: 'other-skill',
         name: 'other-skill',
         description: 'Other project only',
-        triggerKeywords: ['billing'],
+        routingKeys: ['domain:billing'],
         content: 'Only the other project should see this.',
         risk: 'low',
         requiresApproval: false,
@@ -257,8 +257,8 @@ describe('project skill proposals', () => {
     })
     await activateProjectSkillProposal({ memoryDir: otherProject, id: 'other-skill' })
 
-    expect(selectRelevantProjectSkills(readProjectSkillProposals(baseDir), 'billing')).toEqual([])
-    expect(selectRelevantProjectSkills(readProjectSkillProposals(otherProject), 'billing'))
+    expect(selectRelevantProjectSkills(readProjectSkillProposals(baseDir), ['domain:billing'])).toEqual([])
+    expect(selectRelevantProjectSkills(readProjectSkillProposals(otherProject), ['domain:billing']))
       .toHaveLength(1)
   })
 })

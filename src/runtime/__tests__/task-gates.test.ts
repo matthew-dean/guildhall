@@ -9,7 +9,7 @@ import {
   findInvalidAutomatedAcceptanceCommands,
   resolveEffectiveTaskProjectPath,
   normalizeAutomatedAcceptanceCriterionCommands,
-  reconcileAutomatedAcceptanceCommandsFromVerifiedWork,
+  reconcileAutomatedAcceptanceCommandsFromVerificationResults,
   renderTaskScopedGateInstructions,
   renderTaskScopedVerificationInstructions,
   rewriteWorkspaceCommandsForIsolatedTaskWorktree,
@@ -88,7 +88,7 @@ describe('resolveEffectiveTaskProjectPath', () => {
     ).toBe(knitPath)
   })
 
-  it('routes container-scoped tasks to the child repo named in task text', async () => {
+  it('does not route container-scoped tasks from prose; explicit domain owns identity', async () => {
     const loomaPath = path.join(tmpDir, 'looma')
     const knitPath = path.join(tmpDir, 'knit')
 
@@ -96,7 +96,8 @@ describe('resolveEffectiveTaskProjectPath', () => {
       resolveEffectiveTaskProjectPath(
         {
           projectPath: tmpDir,
-          title: 'Integrate AlertDialog into Knit destructive confirmation flow',
+          domain: 'knit',
+          title: 'Integrate AlertDialog into a destructive confirmation flow',
         },
         tmpDir,
         {
@@ -109,7 +110,7 @@ describe('resolveEffectiveTaskProjectPath', () => {
     ).toBe(knitPath)
   })
 
-  it('routes broad domain labels to the named child repo', async () => {
+  it('does not route broad domain labels to a child repo', async () => {
     const loomaPath = path.join(tmpDir, 'looma')
     const knitPath = path.join(tmpDir, 'knit')
 
@@ -124,7 +125,7 @@ describe('resolveEffectiveTaskProjectPath', () => {
           ],
         },
       ),
-    ).toBe(knitPath)
+    ).toBe(tmpDir)
   })
 
   it('does not guess a child repo when task text names multiple child repos', async () => {
@@ -460,15 +461,44 @@ describe('resolveEffectiveTaskSuccessGates', () => {
       ],
     } as any
 
-    expect(reconcileAutomatedAcceptanceCommandsFromVerifiedWork({
+    expect(reconcileAutomatedAcceptanceCommandsFromVerificationResults({
       task,
       workspaceProjectPath: tmpDir,
-      recentVerifiedWork: [
-        'Ran bash command cd frontend && pnpm build [PASS]',
+      recentVerificationResults: [
+        {
+          kind: 'command',
+          command: 'cd frontend && pnpm build',
+          passed: true,
+          observedAt: '2026-07-20T00:00:00.000Z',
+        },
       ],
     })).toBe(true)
 
     expect(task.acceptanceCriteria[0].command).toBe('cd frontend && pnpm build')
+  })
+
+  it('does not learn an acceptance command from an unstructured or unrelated result', async () => {
+    const task = {
+      projectPath: tmpDir,
+      acceptanceCriteria: [
+        {
+          id: 'ac-build',
+          description: 'build succeeds',
+          verifiedBy: 'automated',
+          command: 'pnpm build',
+          met: false,
+        },
+      ],
+    } as any
+
+    expect(reconcileAutomatedAcceptanceCommandsFromVerificationResults({
+      task,
+      workspaceProjectPath: tmpDir,
+      recentVerificationResults: [
+        { kind: 'command', command: 'a model said the build passed', passed: true },
+      ],
+    })).toBe(false)
+    expect(task.acceptanceCriteria[0].command).toBe('pnpm build')
   })
 
   it('uses automated acceptance commands to override broader project defaults', async () => {
@@ -873,7 +903,7 @@ describe('resolveEffectiveTaskSuccessGates', () => {
     expect(result).toEqual(['pnpm typecheck', 'pnpm build', 'pnpm test'])
   })
 
-  it('infers a task-scoped playwright command from automated acceptance prose when command is missing', async () => {
+  it('does not infer an executable proof command from automated acceptance prose', async () => {
     const webDir = path.join(tmpDir, 'web')
     await fs.mkdir(path.join(webDir, 'tests/e2e'), { recursive: true })
     await fs.writeFile(
@@ -914,26 +944,10 @@ describe('resolveEffectiveTaskSuccessGates', () => {
         ],
       } as any,
       workspaceProjectPath: tmpDir,
-      workspaceBootstrap: {
-        commands: [],
-        successGates: ['pnpm typecheck', 'pnpm build', 'pnpm test', 'pnpm lint'],
-        timeoutMs: 300_000,
-        verifiedAt: '2026-05-03T00:00:00Z',
-        packageManager: 'pnpm',
-        install: { command: 'pnpm install', status: 'ok' },
-        gates: {
-          typecheck: { command: 'pnpm typecheck', available: true },
-          build: { command: 'pnpm build', available: true },
-          test: { command: 'pnpm test', available: true },
-          lint: { command: 'pnpm lint', available: true },
-        },
-      } as any,
+      workspaceBootstrap: undefined,
     })
 
-    expect(result).toEqual([
-      'pnpm --dir web typecheck',
-      'pnpm --dir web exec playwright test tests/e2e/authoring-flow.spec.ts',
-    ])
+    expect(result).toBeUndefined()
   })
 })
 

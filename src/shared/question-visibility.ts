@@ -1,4 +1,5 @@
 export type QuestionVisibilityRecord = {
+  kind?: unknown
   prompt?: unknown
   restatement?: unknown
   choices?: unknown
@@ -42,80 +43,6 @@ function normalizedChoiceText(question: QuestionVisibilityRecord): string[] {
     .filter(Boolean)
 }
 
-function looksLikeOwnerDecisionPrompt(text: string): boolean {
-  return (
-    text.includes('?') ||
-    /\b(?:which|what|should i|should we|should this|do you want|would you prefer|pick|choose|confirm)\b/.test(text)
-  )
-}
-
-function looksLikeOutputPromisePrompt(text: string): boolean {
-  return (
-    /^if you pick one,?\s+i(?:'|’)ll immediately produce:?$/.test(text) ||
-    /^if you choose one,?\s+i(?:'|’)ll immediately produce:?$/.test(text)
-  )
-}
-
-export function isOperationalReceiptQuestion(question: QuestionVisibilityRecord): boolean {
-  const text = normalizedQuestionText(question)
-  if (!text) return false
-  if (/^(?:done|complete|completed|finished)\s*(?:[—-]\s*|\:\s*|$)/.test(text)) return true
-  if (/^i took (?:the )?durable .*steps:?$/.test(text)) return true
-  if (/^i persisted (?:this|the) .* with tools:?$/.test(text)) return true
-  if (/^i(?:'|’)ve now persisted progress with tools\b/.test(text)) return true
-  if (/^i took durable tool steps this turn:?$/.test(text)) return true
-  if (/^i have enough from\b.*\b(?:glob|search|read|scan|inspection|results?)\b/.test(text)) return true
-  if (/^let me piece together what i know\b/.test(text)) return true
-  if (/^(?:here(?:'|’)s|here is) what i (?:found|know|learned)\b/.test(text) && !looksLikeOwnerDecisionPrompt(text)) return true
-  if (/^i(?:'|’)m going to\b.*\b(?:inspect|read|scan|search|open|check|summarize|draft|write|update)\b/.test(text)) return true
-  if (/^i don(?:'|’)t see\b.*\b(?:todo|readme|file|directory|docs?)\b/.test(text)) return true
-  if (/^i found\b.*\b(?:glob|search|read|scan|inspection|results?)\b/.test(text) && !looksLikeOwnerDecisionPrompt(text)) return true
-  if (/^based on (?:the )?(?:glob|search|read|scan|inspection|results?)\b/.test(text) && !looksLikeOwnerDecisionPrompt(text)) return true
-  if (/^(?:from|after) (?:the )?(?:glob|search|read|scan|inspection|results?)\b/.test(text) && !looksLikeOwnerDecisionPrompt(text)) return true
-  if (looksLikeOutputPromisePrompt(text)) return true
-  if (
-    /^i (?:will|can|now|have)\b.*\b(?:persist|draft|update|write|post|set|move|create|record)\b/.test(text) &&
-    !looksLikeOwnerDecisionPrompt(text)
-  ) return true
-  if (/^recorded durable intake progress\b/.test(text)) return true
-  if (/^logged this turn to the exploring transcript\b/.test(text)) return true
-  if (/^posted (?:a |one |two |three |\d+ )?(?:focused |scope |structured )?questions?\b/.test(text)) return true
-  if (/\bwas split into \d+ children:?$/.test(text)) return true
-  if (/^from the parent .* spec,? i can see it covers:?$/.test(text)) return true
-
-  const choices = normalizedChoiceText(question)
-  if (choices.length === 0) return false
-  const choiceText = choices.join(' ')
-  const operationalChoiceCount = [
-    /\bupdated the product brief\b/,
-    /\bupdate(?:d)? the? ?product brief\b/,
-    /\bi (?:will|can|now|have)\b.*\b(?:persist|draft|update|write|post|set|move|create|record)\b/,
-    /\brevised and strengthened the spec\b/,
-    /\bset task status to\b/,
-    /\bmove task to spec_review\b/,
-    /\bappended .*exploring transcript\b/,
-    /\bread back .*transcript\b/,
-    /\blogged a milestone\b/,
-    /\blogged the current progress state\b/,
-    /\bprogress\.md\b/,
-    /\bpersist(?:ed)? progress with tools\b/,
-    /\bposted the .*question\b/,
-    /\btask-[a-z0-9-]+.*\bthis one\b/,
-    /\btask-[a-z0-9-]+.*\bbackend api\b/,
-    /\ba public .* page at\b/,
-    /\bauthor dashboard .* card\b/,
-  ].filter((pattern) => pattern.test(choiceText)).length
-  return operationalChoiceCount >= 2
-}
-
-function genericChoicePromptKey(text: string): string {
-  if (/^(?:pick|choose|select)\b/.test(text)) return 'generic-choice'
-  if (/^which\b.*\b(?:fallback\s+)?(?:path|option|choice|approach|direction)\b.*\b(?:should|use|pick|choose)\b/.test(text)) {
-    return 'generic-choice'
-  }
-  return text
-}
-
 export function visibleQuestionSignature(question: QuestionVisibilityRecord): string {
   const kind = typeof (question as { kind?: unknown }).kind === 'string'
     ? (question as { kind: string }).kind.trim().toLowerCase()
@@ -125,6 +52,5 @@ export function visibleQuestionSignature(question: QuestionVisibilityRecord): st
     : ''
   const choices = normalizedChoiceText(question)
   const text = normalizedQuestionText(question)
-  const promptKey = choices.length >= 2 ? genericChoicePromptKey(text) : text
-  return [kind, promptKey, choices.join('|'), selectionMode].join('::')
+  return [kind, text, choices.join('|'), selectionMode].join('::')
 }

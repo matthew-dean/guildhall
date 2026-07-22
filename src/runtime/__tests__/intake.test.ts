@@ -113,6 +113,33 @@ function buildableSpec(extra = ''): string {
   ].filter(Boolean).join('\n')
 }
 
+function boundedStructuredSpec(splitPolicy: 'none' | 'conditional' | 'required' = 'none') {
+  return {
+    whatThisIs: 'A bounded source-backed task.',
+    problemContext: 'The task needs one explicit completion boundary.',
+    goals: ['Implement the bounded outcome.'],
+    nonGoals: ['Do not expand into unrelated work.'],
+    proposedDesign: 'Use the existing project surface.',
+    keyDecisions: ['Keep the proof attached to this task.'],
+    acceptanceCriteria: [{
+      scenario: 'Given the task boundary, when the work is complete',
+      expectation: 'Then the bounded outcome is available.',
+      verificationMode: 'review' as const,
+    }],
+    verification: ['Run the task-specific proof.'],
+    completionBoundary: {
+      productOutcome: 'The bounded outcome is available.',
+      whatGuildhallCanCompleteInCode: 'Implement the task boundary.',
+      externalDependencies: 'None known.',
+      ownerOnlySetup: 'None known.',
+      verificationEnvironment: 'The registered local project.',
+      whatCountsAsDone: 'The bounded outcome is proven.',
+      whatMustBeSplitOrBlocked: 'No split is required for this task.',
+      splitPolicy,
+    },
+  }
+}
+
 describe('createExploringTask', () => {
   it('creates a new task in exploring status and seeds the transcript', async () => {
     const result = await createExploringTask({
@@ -401,11 +428,13 @@ describe('reframeTask', () => {
     const reframed = await reframeTask({
       memoryDir,
       taskId: result.taskId,
+      recoveryKind: 'proof',
       reason: 'The selected release requires a concrete project-backed proof command.',
     })
 
     expect(reframed.success).toBe(true)
     const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks[result.taskId]?.proofRecovery?.kind).toBe('proof')
     expect(runtime.tasks[result.taskId]?.proofRecovery?.reason).toContain('project-backed proof command')
   })
 })
@@ -422,6 +451,7 @@ describe('approveSpec', () => {
     const queue = await readQueue()
     queue.tasks[0]!.status = 'spec_review'
     queue.tasks[0]!.spec = buildableSpec()
+    queue.tasks[0]!.structuredSpec = boundedStructuredSpec()
     queue.tasks[0]!.productBrief = {
       userJob: 'Use a lower-emphasis button action.',
       successMetric: 'A ghost button variant is available and reviewable.',
@@ -493,6 +523,17 @@ describe('approveSpec', () => {
   it('derives the product brief from a complete completion boundary before approval', async () => {
     const queue = await readQueue()
     delete queue.tasks[0]!.productBrief
+    queue.tasks[0]!.structuredSpec = {
+      ...boundedStructuredSpec(),
+      completionBoundary: {
+        ...boundedStructuredSpec().completionBoundary,
+        productOutcome: 'A developer can run the fixture loop and inspect a saved run record.',
+        whatGuildhallCanCompleteInCode: 'Add the script and local proof.',
+        verificationEnvironment: 'Local Node.js command.',
+        whatCountsAsDone: 'The fixture loop exits 0 and saves reviewer and writer output.',
+        whatMustBeSplitOrBlocked: 'Real LLM calls belong to a later stage.',
+      },
+    }
     queue.tasks[0]!.spec = [
       '## Summary',
       '',
@@ -524,7 +565,7 @@ describe('approveSpec', () => {
     })
   })
 
-  it('approves needs-research-spike specs when no child work is materialized', async () => {
+  it('approves an explicit contract task when no child work is materialized', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.title = 'Define fixture, expected-record, prototype-run, and evaluation contracts'
     queue.tasks[0]!.hierarchy = { parentId: 'task-parent', childIds: [] }
@@ -568,7 +609,7 @@ describe('approveSpec', () => {
     expect(result.newStatus).toBe('ready')
     const updated = await readQueue()
     expect(updated.tasks[0]!.status).toBe('ready')
-    expect(updated.tasks[0]!.sizePlan?.action).toBe('proceed_with_warning')
+    expect(updated.tasks[0]!.sizePlan?.action).toBe('proceed')
     expect(updated.tasks[0]!.sizePlan?.recommendedChildren ?? []).toEqual([])
   })
 
@@ -792,6 +833,7 @@ describe('approveSpec', () => {
   it('splits a split-required spec into containing work and child tasks when approved', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
+    parent.structuredSpec = boundedStructuredSpec('required')
     parent.spec = parent.spec?.replace(
       'Nothing to split.',
       'The proposed UI and API work must be split into linked child tasks before execution.',
@@ -805,16 +847,18 @@ describe('approveSpec', () => {
       factors: [],
       recommendedChildren: [
         {
+          identity: 'implement-billing-settings-workflow',
           title: 'Implement the billing settings workflow',
           reason: 'Keep the user-facing workflow small enough for UX review.',
           suggestedDomain: 'frontend',
           dependsOn: [],
         },
         {
+          identity: 'admin-subscription-api-contract',
           title: 'Add the admin subscription API contract',
           reason: 'Separate API compatibility and security review from UI work.',
           suggestedDomain: 'backend',
-          dependsOn: ['Implement the billing settings workflow'],
+          dependsOn: ['implement-billing-settings-workflow'],
         },
       ],
       reviewBudgetHint: 'release_critical',
@@ -839,12 +883,12 @@ describe('approveSpec', () => {
       'Add the admin subscription API contract',
     ])
     expect(updated.tasks[0]!.sizePlan?.recommendedChildren.map(child => child.createdTaskId)).toEqual([
-      'task-001-split-implement-the-billing-settings-workflow',
-      'task-001-split-add-the-admin-subscription-api-contract',
+      'task-001-split-implement-billing-settings-workflow',
+      'task-001-split-admin-subscription-api-contract',
     ])
     expect(updated.tasks[0]!.hierarchy?.childIds).toEqual([
-      'task-001-split-implement-the-billing-settings-workflow',
-      'task-001-split-add-the-admin-subscription-api-contract',
+      'task-001-split-implement-billing-settings-workflow',
+      'task-001-split-admin-subscription-api-contract',
     ])
     expect(updated.tasks[1]).toMatchObject({
       status: 'exploring',
@@ -857,7 +901,7 @@ describe('approveSpec', () => {
       origination: 'system',
       proposedBy: 'task-sizing',
     })
-    expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-implement-the-billing-settings-workflow'])
+    expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-implement-billing-settings-workflow'])
   })
 
   it('does not re-split a child task into duplicate sibling work when approved', async () => {
@@ -877,6 +921,7 @@ describe('approveSpec', () => {
       agentIssues: [],
       revisionCount: 0,
       remediationAttempts: 0,
+      structuredSpec: boundedStructuredSpec('required'),
       origination: 'system' as const,
       createdAt: '2026-05-25T12:00:00.000Z',
       updatedAt: '2026-05-25T12:00:00.000Z',
@@ -898,6 +943,7 @@ describe('approveSpec', () => {
         {
           ...base,
           id: 'child-audit',
+          sourceIdentity: 'parent::split::audit',
           title: 'Audit the remaining replacement scope',
           status: 'spec_review',
           hierarchy: {
@@ -921,9 +967,9 @@ describe('approveSpec', () => {
             action: 'split_required',
             factors: [],
             recommendedChildren: [
-              { title: 'Audit the remaining replacement scope', reason: 'Duplicate of current child.', dependsOn: [] },
-              { title: 'Implement the first independently verifiable replacement', reason: 'Duplicate sibling.', dependsOn: [] },
-              { title: 'Verify and update the migration record', reason: 'Duplicate sibling.', dependsOn: [] },
+              { identity: 'audit', createdTaskId: 'child-audit', title: 'Audit the remaining replacement scope', reason: 'Duplicate of current child.', dependsOn: [] },
+              { identity: 'implement', createdTaskId: 'child-implement', title: 'Implement the first independently verifiable replacement', reason: 'Duplicate sibling.', dependsOn: [] },
+              { identity: 'verify', createdTaskId: 'child-verify', title: 'Verify and update the migration record', reason: 'Duplicate sibling.', dependsOn: [] },
             ],
             reviewBudgetHint: 'release_critical',
             reasons: ['Task size score: 8.'],
@@ -934,6 +980,7 @@ describe('approveSpec', () => {
         {
           ...base,
           id: 'child-implement',
+          sourceIdentity: 'parent::split::implement',
           title: 'Implement the first independently verifiable replacement',
           status: 'exploring',
           hierarchy: {
@@ -945,6 +992,7 @@ describe('approveSpec', () => {
         {
           ...base,
           id: 'child-verify',
+          sourceIdentity: 'parent::split::verify',
           title: 'Verify and update the migration record',
           status: 'exploring',
           hierarchy: {
@@ -1000,6 +1048,7 @@ describe('approveSpec', () => {
       'What counts as done: Linked proof is recorded.',
       'What must be split or blocked: Audit and implementation must still be split before work can proceed.',
     ].join('\n')
+    base.structuredSpec = boundedStructuredSpec('required')
     base.sizePlan = {
       taskId: 'parent',
       score: 8,
@@ -1008,9 +1057,18 @@ describe('approveSpec', () => {
       factors: [],
       recommendedChildren: [
         {
+          identity: 'audit',
+          createdTaskId: 'child-audit',
           title: 'Stale coordinator split title',
           reason: 'This no longer matches the real child records.',
           dependsOn: [],
+        },
+        {
+          identity: 'implement',
+          createdTaskId: 'child-implement',
+          title: 'Another stale coordinator split title',
+          reason: 'This is represented by the existing implementation child.',
+          dependsOn: ['audit'],
         },
       ],
       reviewBudgetHint: 'release_critical',
@@ -1050,6 +1108,7 @@ describe('approveSpec', () => {
       {
         ...structuredClone(base),
         id: 'child-audit',
+        sourceIdentity: 'parent::split::audit',
         title: 'Audit the remaining replacement scope',
         status: 'exploring',
         hierarchy: { parentId: 'parent', childIds: [], order: 0 },
@@ -1059,6 +1118,7 @@ describe('approveSpec', () => {
       {
         ...structuredClone(base),
         id: 'child-implement',
+        sourceIdentity: 'parent::split::implement',
         title: 'Implement the first independently verifiable replacement',
         status: 'exploring',
         hierarchy: { parentId: 'parent', childIds: [], order: 1 },
@@ -1070,7 +1130,7 @@ describe('approveSpec', () => {
 
     const result = await approveSpec({ memoryDir, taskId: 'parent' })
 
-    expect(result.success).toBe(true)
+    expect(result.success, result.error).toBe(true)
     const updated = await readQueue()
     const parent = updated.tasks.find(task => task.id === 'parent')!
     expect(updated.tasks.map(task => task.id)).toEqual(['parent', 'child-audit', 'child-implement'])
@@ -1084,6 +1144,7 @@ describe('approveSpec', () => {
   it('splits a split-recommended spec into containing work and child tasks when approved', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
+    parent.structuredSpec = boundedStructuredSpec('required')
     parent.spec = parent.spec?.replace(
       'Nothing to split.',
       'The implementation and visual-proof work should be split into linked child tasks before execution.',
@@ -1096,16 +1157,18 @@ describe('approveSpec', () => {
       factors: [],
       recommendedChildren: [
         {
+          identity: 'component-implementation',
           title: 'Component implementation',
           reason: 'Ship the component implementation first.',
           suggestedDomain: 'frontend',
           dependsOn: [],
         },
         {
+          identity: 'storybook-story',
           title: 'Storybook story',
           reason: 'Add visual proof after the implementation exists.',
           suggestedDomain: 'frontend',
-          dependsOn: ['Component implementation'],
+          dependsOn: ['component-implementation'],
         },
       ],
       reviewBudgetHint: 'thorough',
@@ -1147,6 +1210,7 @@ describe('approveSpec', () => {
     task.title = 'Define Narrative Harness MVP drafting model and physical-world review lanes'
     task.description = 'Shape the Narrative Harness MVP drafting model and physical-world review lanes.'
     task.domain = 'harness'
+    task.structuredSpec = boundedStructuredSpec('required')
     task.spec = [
       '## Summary',
       'Define the Narrative Harness MVP drafting model and physical-world review lanes.',
@@ -1207,19 +1271,19 @@ describe('approveSpec', () => {
     const updated = await readQueue()
     const parent = updated.tasks.find(candidate => candidate.id === 'task-001')!
     expect(parent.hierarchy?.childIds).toEqual([
-      'task-001-split-select-and-prove-deepinfra-drafting-model',
-      'task-001-split-define-world-state-continuity-review-lane',
-      'task-001-split-define-spatial-geographic-continuity-review-lane',
+      'task-001-split-recovered-requirement-1',
+      'task-001-split-recovered-requirement-2',
+      'task-001-split-recovered-requirement-3',
     ])
     expect(updated.tasks.map(candidate => candidate.title)).toContain('Select and prove DeepInfra drafting model')
     expect(updated.tasks.find(candidate => candidate.title === 'Define world-state continuity review lane')?.dependsOn).toEqual([
-      'task-001-split-select-and-prove-deepinfra-drafting-model',
+      'task-001-split-recovered-requirement-1',
     ])
     expect(parent.taskReadiness?.recommendation).toBe('ready')
     expect(parent.spec).toContain('Already split into linked child tasks')
   })
 
-  it('does not report spec approval as successful when split-required work has no child units', async () => {
+  it('does not invent generic child work when a split boundary has no explicit work units', async () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!
     task.title = 'Define a broad delivery program'
@@ -1249,14 +1313,14 @@ describe('approveSpec', () => {
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('could not materialize any child tasks')
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
     const updated = await readQueue()
     expect(updated.tasks).toHaveLength(1)
-    expect(updated.tasks[0]!.status).toBe('spec_review')
+    expect(updated.tasks[0]!.status).toBe('ready')
   })
 
-  it('backfills acceptance criteria from approved markdown specs before blueprint sanity', async () => {
+  it('uses the structured acceptance boundary instead of prose-only markdown criteria', async () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!
     task.title = 'Pantry Pulse app spec'
@@ -1279,6 +1343,7 @@ describe('approveSpec', () => {
       'What counts as done: The app can be opened and reviewed locally.',
       'What must be split or blocked: Nothing to split.',
     ].join('\n')
+    task.structuredSpec = boundedStructuredSpec('none')
     task.productBrief = {
       userJob: 'Track pantry items.',
       successMetric: 'Browser review shows the title and count update.',
@@ -1293,8 +1358,7 @@ describe('approveSpec', () => {
     expect(approved.newStatus).toBe('ready')
     const updated = await readQueue()
     expect(updated.tasks.find(candidate => candidate.id === task.id)?.acceptanceCriteria.map(ac => ac.description)).toEqual([
-      'A page titled Pantry Pulse is visible.',
-      'Mark used updates the visible count.',
+      'Given the task boundary, when the work is complete Then the bounded outcome is available.',
     ])
   })
 
@@ -1306,6 +1370,7 @@ describe('approveSpec', () => {
     task.domain = 'product'
     task.projectPath = tmpDir
     task.status = 'spec_review'
+    task.structuredSpec = boundedStructuredSpec('none')
     task.spec = [
       '## Summary',
       'Build Pantry Pulse.',
@@ -1378,6 +1443,7 @@ describe('approveSpec', () => {
       'What counts as done: The record, provenance rules, consumer mapping, and proof are visible on the task.',
       'What must be split or blocked: Synopsis generation, drafting, reviewers, model selection, and UI are separate tasks; nothing is blocked for this input boundary.',
     ].join('\n')
+    task.structuredSpec = boundedStructuredSpec('none')
     task.productBrief = {
       userJob: 'Record project intent and representative author voice once for downstream generation.',
       successMetric: 'The durable input boundary and its provenance are validated and visible in Guildhall.',
@@ -1439,6 +1505,7 @@ describe('approveSpec', () => {
     task.notes = [{
       agentId: 'coordinator-recovery',
       role: 'system',
+      structured: { event: 'recovery_spec_seed', source: 'deterministic' },
       content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane, so the task has durable progress instead of returning to a read-only shaping loop.',
       timestamp: '2026-06-12T20:43:48.886Z',
     }]
@@ -1462,11 +1529,11 @@ describe('approveSpec', () => {
 
     const approved = await approveSpec({ memoryDir, taskId: task.id })
 
-    expect(approved.success).toBe(false)
-    expect(approved.error).toContain('still needs child work')
+    expect(approved.success).toBe(true)
+    expect(approved.newStatus).toBe('ready')
     const updated = await readQueue()
     const parent = updated.tasks.find(candidate => candidate.id === task.id)
-    expect(parent?.status).toBe('spec_review')
+    expect(parent?.status).toBe('ready')
     expect(parent?.hierarchy?.childIds ?? []).toEqual([])
     expect(updated.tasks).toHaveLength(1)
   })
@@ -1502,6 +1569,7 @@ describe('approveSpec', () => {
   it('describes split approval in plain language in the transcript', async () => {
     const queue = await readQueue()
     const parent = queue.tasks[0]!
+    parent.structuredSpec = boundedStructuredSpec('required')
     parent.spec = parent.spec?.replace(
       'Nothing to split.',
       'The policy work must be split into linked child tasks before execution.',
@@ -1515,6 +1583,7 @@ describe('approveSpec', () => {
       factors: [],
       recommendedChildren: [
         {
+          identity: 'draft-policy',
           title: 'Draft the policy',
           reason: 'Separate the decision from implementation.',
           suggestedDomain: 'product',
@@ -1540,10 +1609,11 @@ describe('approveSpec', () => {
   it('refuses to approve a task that has no spec', async () => {
     const queue = await readQueue()
     delete queue.tasks[0]!.spec
+    delete queue.tasks[0]!.structuredSpec
     await writeQueue(queue)
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
     expect(result.success).toBe(false)
-    expect(result.error).toContain('no spec')
+    expect(result.error).toContain('no structured spec')
   })
 
   it('refuses to approve a task not in spec_review status', async () => {

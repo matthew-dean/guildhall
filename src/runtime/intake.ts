@@ -1,7 +1,7 @@
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
+import { acceptanceCriteriaFromStructuredSpec, explicitTaskStructuralIdentity, splitChildSourceIdentity, TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
 import {
   atomicWriteText,
   appendTaskEvidence,
@@ -37,7 +37,6 @@ import {
 import { analyzeRequestIntake, type RequestIntakeOwnerInput } from './request-intake.js'
 import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
 import {
-  extractAcceptanceCriteriaFromSpec,
   productBriefFromSpecCompletionBoundary,
   validateProductBriefGrounding,
   validateSpecCompletionBoundary,
@@ -232,6 +231,7 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
         : ownerInput.source,
       target: ownerInput.target,
       question: {
+        kind: 'text',
         prompt: ownerInput.prompt,
         ...(ownerInput.helperText ? { description: ownerInput.helperText } : {}),
         ...(ownerInput.choices ? { choices: ownerInput.choices } : {}),
@@ -408,20 +408,19 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       error: `Task ${input.taskId} is in status '${task.status}', expected 'spec_review'`,
     }
   }
-  if (!task.spec || task.spec.trim().length === 0) {
+  if (!task.structuredSpec) {
     return {
       success: false,
-      error: `Task ${input.taskId} has no spec yet; cannot approve`,
+      error: `Task ${input.taskId} has no structured spec yet; rendered Markdown cannot be approved as the planning authority`,
     }
   }
-  backfillAcceptanceCriteriaFromSpec(task)
+  if (task.acceptanceCriteria.length === 0) {
+    task.acceptanceCriteria = acceptanceCriteriaFromStructuredSpec(task.structuredSpec)
+  }
   if (!task.productBrief?.userJob?.trim() || !task.productBrief?.successMetric?.trim()) {
-    const derivedBrief = productBriefFromSpecCompletionBoundary(task.spec)
+    const derivedBrief = productBriefFromSpecCompletionBoundary(task)
     if (derivedBrief) {
-      const candidateBrief = {
-        ...derivedBrief,
-        authoredAt: new Date().toISOString(),
-      }
+      const candidateBrief = { ...derivedBrief, authoredAt: new Date().toISOString() }
       const grounding = validateProductBriefGrounding(task, candidateBrief)
       if (!grounding.ok) {
         return {
@@ -507,10 +506,15 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     })
   }
   applyTaskShaping(task, { now, recordNote: false })
-  const representedParentSplit = isMaterializableSplitAction(task.sizePlan?.action) && !shouldKeepFixedSpecRunnable(task)
+  const duplicateSiblingSplit = splitRecommendationsDuplicateExistingSiblings(queue, task)
+  // A nested task whose recommendations are already represented by siblings
+  // must take the sibling path first. Treating those siblings as this task's
+  // children would create a hierarchy cycle.
+  const representedParentSplit = isMaterializableSplitAction(task.sizePlan?.action) &&
+    !shouldKeepFixedSpecRunnable(task) &&
+    !duplicateSiblingSplit
     ? settleMaterializedSplitReadiness(queue, task, now)
     : null
-  const duplicateSiblingSplit = splitRecommendationsDuplicateExistingSiblings(queue, task)
   let splitMaterialized = false
   let attemptedSplitMaterialization = false
   if (
@@ -574,7 +578,12 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       now,
     })
   }
-  if (task.status === 'spec_review' && task.taskReadiness?.recommendation === 'needs_research_spike') {
+  if (
+    task.status === 'spec_review' &&
+    task.taskReadiness?.recommendation === 'needs_research_spike' &&
+    task.sizePlan?.action !== 'split_required' &&
+    task.sizePlan?.action !== 'decompose_before_execution'
+  ) {
     settleBoundedChildContractWorkWithoutMaterializedChildren(task)
     transitionTaskStatus({
       task,
@@ -659,21 +668,8 @@ function siblingSpecRefsBySurfaceId(queue: TaskQueue, currentTaskId: string): Re
   return refs
 }
 
-function backfillAcceptanceCriteriaFromSpec(task: Task): void {
-  if (task.acceptanceCriteria.length > 0 || !task.spec) return
-  const extracted = extractAcceptanceCriteriaFromSpec(task.spec)
-  if (extracted.length === 0) return
-  task.acceptanceCriteria = extracted
-  task.notes.push({
-    agentId: 'spec-quality',
-    role: 'blueprint-review',
-    content: `Backfilled ${extracted.length} acceptance criteria from the approved spec markdown before approval.`,
-    timestamp: new Date().toISOString(),
-  })
-}
-
 function shouldKeepFixedSpecRunnable(task: Task): boolean {
-  if (!hasExplicitNoSplitBoundary(task.spec)) return false
+  if (!hasExplicitNoSplitBoundary(task)) return false
   return task.acceptanceCriteria.length > 0
 }
 
@@ -682,8 +678,10 @@ function isBoundedChildContractWorkWithoutMaterializedChildren(task: Task): bool
   if ((task.sizePlan?.recommendedChildren?.length ?? 0) > 0) return false
   const hasContainingWork = Boolean(task.hierarchy?.parentId) || (task.delivery?.supports?.length ?? 0) > 0
   if (!hasContainingWork) return false
-  const text = [task.title, task.description, task.spec].filter(Boolean).join('\n')
-  return /\b(contract|schema|fixture|expected-record|prototype-run|evaluation)\b/i.test(text)
+  return (
+    (task.structuredSpec?.contractSurfaceDeltas?.length ?? 0) > 0 ||
+    (task.contractSurfaceReviewPackets?.length ?? 0) > 0
+  )
 }
 
 function settleBoundedChildContractWorkWithoutMaterializedChildren(task: Task): boolean {
@@ -733,17 +731,24 @@ function splitRecommendationsDuplicateExistingSiblings(queue: TaskQueue, task: T
   const parentId = task.hierarchy?.parentId
   const recommendations = task.sizePlan?.recommendedChildren ?? []
   if (!parentId || recommendations.length === 0) return false
-  const existingTitles = new Set(
+  const containingParent = queue.tasks.find(candidate => candidate.id === parentId)
+  if (!containingParent) return false
+  const existingIdentities = new Set(
     queue.tasks
       .filter(candidate => candidate.id === task.id || candidate.hierarchy?.parentId === parentId)
-      .map(candidate => normalizeTitle(candidate.title)),
+      .map(candidate => explicitTaskStructuralIdentity(candidate))
+      .filter((identity): identity is string => identity !== null),
   )
-  if (existingTitles.size === 0) return false
-  return recommendations.every(recommendation => existingTitles.has(normalizeTitle(recommendation.title)))
-}
-
-function normalizeTitle(title: string): string {
-  return title.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  if (existingIdentities.size === 0) return false
+  return recommendations.every(recommendation => {
+    if (recommendation.createdTaskId && queue.tasks.some(candidate => candidate.id === recommendation.createdTaskId)) {
+      return true
+    }
+    if (!recommendation.identity) return false
+    return existingIdentities.has(
+      `sourceIdentity:${splitChildSourceIdentity(containingParent, recommendation.identity)}`,
+    )
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -894,6 +899,8 @@ export interface ReframeTaskInput {
   memoryDir: string
   taskId: string
   reason?: string | undefined
+  /** Explicitly marks a proof reframe; never infer this from reason prose. */
+  recoveryKind?: 'proof'
 }
 
 export interface ReframeTaskResult {
@@ -1075,6 +1082,10 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
     content: reason
       ? `Asked to reframe this task. Reason: ${reason}`
       : 'Asked to reframe this task from current project memory.',
+    structured: {
+      event: 'reframe_requested',
+      source: 'human',
+    },
     timestamp: now,
   })
 
@@ -1092,6 +1103,7 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   }
 
   delete task.blockReason
+  delete task.recoveryCode
   task.status = 'exploring'
   task.assignedTo = 'spec-agent'
   task.productBrief = undefined
@@ -1117,9 +1129,6 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   task.updatedAt = now
   queue.lastUpdated = now
 
-  const proofRecoveryReason = reason && /(?:script proof|proof command|project-backed|release proof)/i.test(reason)
-    ? reason
-    : undefined
   await replaceExploringTranscript({
     memoryDir: input.memoryDir,
     taskId: task.id,
@@ -1141,11 +1150,12 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   // so this reframe cannot immediately erase its own proof marker.
   await upsertTaskRuntimeState(projectRoot, task.id, {
     assignedTo: 'spec-agent',
-    ...(proofRecoveryReason
+    ...(input.recoveryKind === 'proof'
       ? {
           proofRecovery: {
             reopenedAt: now,
-            reason: proofRecoveryReason,
+            kind: 'proof' as const,
+            reason: reason || 'The current proof plan was cleared for a fresh source-backed spec pass.',
           },
         }
       : {}),
@@ -1290,57 +1300,15 @@ export async function shapeImportDraft(
   return { success: true, newStatus: 'exploring' }
 }
 
-const DUPLICATE_TITLE_STOPWORDS = new Set([
-  'add',
-  'build',
-  'create',
-  'implement',
-  'write',
-  'draft',
-  'task',
-  'tests',
-  'test',
-  'view',
-  'deferred',
-  'the',
-  'a',
-  'an',
-  'to',
-  'for',
-  'of',
-  'and',
-])
-
-function normalizedTitleTokens(title: string | undefined): string[] {
-  return (title ?? '')
-    .toLowerCase()
-    .replace(/[→>\-–—/:()"'`.,[\]{}]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-    .filter(token => !DUPLICATE_TITLE_STOPWORDS.has(token))
-}
-
-function similarityScore(left: string[], right: string[]): number {
-  if (left.length === 0 || right.length === 0) return 0
-  const leftSet = new Set(left)
-  const rightSet = new Set(right)
-  let overlap = 0
-  for (const token of leftSet) {
-    if (rightSet.has(token)) overlap += 1
-  }
-  return overlap / Math.max(leftSet.size, rightSet.size)
-}
-
 function findFinishedDuplicate(tasks: TaskQueue['tasks'], task: Task): { id: string; title: string } | null {
-  const targetTokens = normalizedTitleTokens(task.title)
-  if (targetTokens.length < 4) return null
+  const identity = explicitTaskStructuralIdentity(task)
+  if (!identity) return null
   for (const candidate of tasks) {
     if (candidate.id === task.id) continue
     if (candidate.status !== 'done' && candidate.status !== 'shelved') continue
     if (candidate.domain !== task.domain) continue
     if (candidate.projectPath !== task.projectPath) continue
-    const score = similarityScore(targetTokens, normalizedTitleTokens(candidate.title))
-    if (score >= 0.75) {
+    if (explicitTaskStructuralIdentity(candidate) === identity) {
       return { id: candidate.id, title: candidate.title ?? candidate.id }
     }
   }
@@ -1421,6 +1389,10 @@ export async function rerunTaskStage(
       agentId: 'human',
       role: 'human',
       content: 'Human requested a fresh spec pass from the current project reality.',
+      structured: {
+        event: 'reframe_requested',
+        source: 'human',
+      },
       timestamp: now,
     })
     await writeQueue(input.memoryDir, queue)
@@ -1436,6 +1408,7 @@ export async function rerunTaskStage(
         assignedTo: null,
         proofRecovery: {
           reopenedAt: now,
+          kind: 'proof',
           reason:
             input.recoveryReason?.trim() ||
             'The current proof plan was cleared for a fresh source-backed spec pass.',

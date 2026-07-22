@@ -228,7 +228,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'required_migration_pending') return 'Migrate project'
   if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
   if (readiness.code === 'owner_input_required') {
-    return /question|answer/i.test(readiness.message ?? '') ? 'Open Thread' : 'Open item'
+    return 'Open Thread'
   }
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Shape first task'
@@ -241,26 +241,19 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
     if (readiness.focusKind === 'blocked_work') return 'Open Work'
     if (readiness.focusKind === 'brief_cleanup') return 'Review brief'
     if (readiness.focusKind === 'spec_review') return readiness.count && readiness.count > 1 ? 'Review next spec' : 'Review spec'
-    const message = readiness.message ?? ''
-    if (/brief/i.test(message)) return 'Review brief'
-    if (/spec|review|approve/i.test(message)) return pluralSpecReviewMessage(message) ? 'Review next spec' : 'Review spec'
     return 'Open Work'
   }
   return 'Open item'
-}
-
-function pluralSpecReviewMessage(message: string): boolean {
-  return /\b\d+\s+specs\b/i.test(message)
 }
 
 function runControlLabel(readiness: ProjectActionStartReadiness | null | undefined, running: boolean, stopping: boolean): string {
   if (stopping) return 'Stopping'
   if (running) return 'Pause'
   if (!readiness || readiness.canStart) return 'Resume'
-  const message = readiness.message ?? ''
   if (readiness.code === 'required_migration_pending') return 'Migrate'
   if (isProviderReadinessCode(readiness.code)) return 'Needs provider'
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
+  if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Needs shaping'
   if (readiness.code === 'workspace_import_refresh_needed') return 'Refresh import'
   if (readiness.code === 'proof_evidence_missing') return 'Resume'
@@ -270,11 +263,6 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'blocked_work') return 'Needs recovery'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'brief_cleanup') return 'Review brief'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'spec_review') return 'Review needed'
-  if (/question|answer/i.test(message)) return 'Waiting on answer'
-  if (/recover|blocked|escalation/i.test(message)) return 'Needs recovery'
-  if (/draft/i.test(message)) return 'Review drafts'
-  if (/brief/i.test(message)) return 'Review brief'
-  if (/review|approve/i.test(message)) return 'Review needed'
   if (readiness.code === 'owner_input_required') return 'Needs input'
   return 'Start blocked'
 }
@@ -301,9 +289,6 @@ function startReadinessActionLabel(readiness: ProjectActionStartReadiness): stri
     if (readiness.focusKind === 'blocked_work') return 'Blocked work'
     if (readiness.focusKind === 'brief_cleanup') return 'Needs brief cleanup'
     if (readiness.focusKind === 'spec_review') return 'Spec review pending'
-    const message = readiness.message ?? ''
-    if (/brief/i.test(message)) return 'Needs brief cleanup'
-    if (/spec|review|approve/i.test(message)) return 'Review waiting specs'
     return 'Nothing ready to run'
   }
   if (readiness.code === 'bootstrap_blocked') return 'Readiness blocked'
@@ -616,7 +601,11 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     primaryAction,
     secondaryActions,
     runControl: {
-      label: setupBlocksStart && !running && !stopping ? 'Waiting on setup' : runControlLabel(startReadiness, running, stopping),
+      label: setupBlocksStart && !running && !stopping
+        ? 'Waiting on setup'
+        : ownerInput.active && !running && !stopping
+          ? 'Waiting on answer'
+          : runControlLabel(startReadiness, running, stopping),
       startEnabled: running || (!stopping && (startReadiness?.canStart !== false || blockedButRunnable) && !setupBlocksStart),
       disabledReason,
       href: startReadiness?.actionHref ?? setup.href,

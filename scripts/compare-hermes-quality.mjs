@@ -216,10 +216,19 @@ async function runHermes(input) {
       task: input.task,
       artifact,
       exitedCleanly: run.exitCode === 0,
-      truthfulCompletion: run.exitCode === 0 && /\bDONE\b|done|complete/i.test(run.stdout + run.stderr),
-      proofPresent: run.exitCode === 0,
+      // Provider prose is diagnostic output, never a completion contract.
+      // The artifact and process result are the only portable evidence here.
+      truthfulCompletion: run.exitCode === 0 && artifactSatisfiesTask(input.task, artifact),
+      proofPresent: run.exitCode === 0 && artifactSatisfiesTask(input.task, artifact),
     }),
   }
+}
+
+export function artifactSatisfiesTask(task, artifact) {
+  if (isAppMode(task.mode)) {
+    return artifact.fileExists && artifact.browserProof?.loaded === true && artifact.browserProof?.headingVisible === true
+  }
+  return artifact.fileExists && artifact.exactContent === true
 }
 
 export function resolvePersistentReportRoot(outputDir) {

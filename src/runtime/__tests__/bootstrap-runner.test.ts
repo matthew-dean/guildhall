@@ -166,6 +166,38 @@ describe('runBootstrap', () => {
     expect(res.steps[0]?.output).toContain('ERR_PNPM_IGNORED_BUILDS')
   })
 
+  it('repairs an outdated pnpm lockfile inside the isolated worktree', () => {
+    const fakePnpm = join(dir, 'pnpm')
+    writeFileSync(
+      fakePnpm,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        '  *--no-frozen-lockfile*) echo "Packages: +1"; exit 0 ;;',
+        '  *) echo "ERR_PNPM_OUTDATED_LOCKFILE" 1>&2; exit 1 ;;',
+        'esac',
+      ].join('\n'),
+    )
+    chmodSync(fakePnpm, 0o755)
+    process.env.PATH = `${dir}:${originalPath}`
+
+    const res = runBootstrap({
+      projectPath: dir,
+      memoryDir: join(dir, 'memory'),
+      commands: ['pnpm install'],
+      successGates: [],
+      timeoutMs: 5_000,
+    })
+
+    expect(res.success).toBe(true)
+    expect(res.steps[0]).toMatchObject({
+      command: 'pnpm install --no-frozen-lockfile',
+      result: 'pass',
+    })
+    expect(res.steps[0]?.output).toContain('ERR_PNPM_OUTDATED_LOCKFILE')
+    expect(res.steps[0]?.output).toContain('retried the isolated install')
+  })
+
   it('persists status to user-local history with lockfileHash', () => {
     writeFileSync(join(dir, 'pnpm-lock.yaml'), 'x')
     runBootstrap({

@@ -1,6 +1,7 @@
 import type { GuildDefinition } from '@guildhall/guilds'
 import type { ReviewVerdict, AdjudicationRecord, Task } from '@guildhall/core'
 import type { ReviewPlanRecord, ReviewRiskLane } from './review-audit-store.js'
+import { readStructuredReviewResult, reviewVerdictIsNonSubstantiveFailure } from './review-contract.js'
 
 /**
  * Reviewer fan-out: at `review`, each applicable persona produces an
@@ -30,6 +31,12 @@ export interface PersonaVerdict {
   deferredRisk?: 'low' | 'medium' | 'high'
   /** Broader ideas that should not block this task. */
   followUpItems?: string[]
+  /** Stable acceptance-criterion IDs from the machine result. */
+  acceptedCriteriaIds?: string[]
+  /** Stable proof evidence IDs from the machine result. */
+  proofEvidenceIds?: string[]
+  /** Machine-classified failure; never inferred from reviewer prose. */
+  failureCode?: ReviewVerdict['failureCode']
   /** Raw model output, preserved for audit. */
   rawOutput: string
 }
@@ -41,7 +48,11 @@ export interface FanoutAggregate {
   dissenting: PersonaVerdict[]
   /** Personas that returned `approve`. */
   approving: PersonaVerdict[]
-  /** Combined feedback for the worker's next prompt, empty on full approval. */
+  /**
+   * Combined machine-derived feedback for the worker's next prompt, empty on
+   * full approval. Reviewer reasoning is retained for audit but never copied
+   * into the next mutation prompt.
+   */
   combinedFeedback: string
   /**
    * When true, the caller should route to the coordinator for
@@ -55,7 +66,10 @@ export interface FanoutAggregate {
 
 interface PersonaOutputHints {
   taskText?: string
-  narrowScopeTask?: boolean
+}
+
+type PersonaParseOptions = {
+  failureCode?: ReviewVerdict['failureCode']
 }
 
 export type ReviewerFanoutPolicy =
@@ -131,103 +145,32 @@ export function selectReviewersForPlan(
 
 /**
  * Parse a single persona's output into a structured verdict. The persona
- * prompt requires a specific format (`**Verdict:** approve|revise` +
- * reasoning + revision items) — we're liberal in what we accept but strict
- * on the verdict keyword. If no clear verdict is present, default to
- * `revise` with the raw output as reasoning — a missing verdict is itself
- * a failed review pass.
+ * prompt requires a structured JSON machine result. Prose is parsed only for
+ * human-facing context and never controls the verdict. If the machine result
+ * is missing or malformed, fail closed with `invalid_review_contract`.
  */
 export function parsePersonaOutput(
   guild: GuildDefinition,
   rawOutput: string,
-  hints: PersonaOutputHints = {},
+  _hints: PersonaOutputHints = {},
+  options: PersonaParseOptions = {},
 ): PersonaVerdict {
-  const verdictMatch = rawOutput.match(/\*\*Verdict:\*\*\s*(approve|revise|approved|needs revision)/i)
-  const verdict: PersonaVerdict['verdict'] = verdictMatch
-    ? /^approv/i.test(verdictMatch[1]!)
-      ? 'approve'
-      : 'revise'
-    : 'revise'
+  const structuredResult = readStructuredReviewResult(rawOutput)
+  const verdict: PersonaVerdict['verdict'] = structuredResult?.verdict ?? 'revise'
 
-  const reasoningMatch = rawOutput.match(
-    /\*\*Reasoning:\*\*\s*([\s\S]*?)(?:\n\s*\*\*|$)/i,
-  )
-  const reasoning = reasoningMatch
-    ? reasoningMatch[1]!.trim()
-    : `(no **Reasoning:** block found — raw output retained)\n${rawOutput.trim().slice(0, 800)}`
+  // Keep the complete audit trace. No heading or prose convention is needed
+  // to interpret or retain a model's explanation.
+  const reasoning = rawOutput.trim()
 
-  const revisionItems: string[] = []
-  if (verdict === 'revise') {
-    const revBlockMatch = rawOutput.match(
-      /\*\*If revise[^:]*:\*\*\s*([\s\S]*?)(?:\n\s*\*\*|$)/i,
-    )
-    if (revBlockMatch) {
-      const lines = revBlockMatch[1]!
-        .split('\n')
-        .map((l) => l.trim())
-        .filter((l) => l.startsWith('-') || l.startsWith('*'))
-      for (const l of lines) {
-        const cleaned = l.replace(/^[-*]\s*/, '').trim()
-        if (cleaned.length > 0) revisionItems.push(cleaned)
-      }
-    }
-  }
-
-  const followUpItems: string[] = []
-  const riskItems: string[] = []
-  const advisoryScores = parseAdvisoryScores(rawOutput)
-  const followUpMatch = rawOutput.match(
-    /\*\*Optional follow-up ideas[^:]*:\*\*\s*([\s\S]*?)(?:\n\s*\*\*|$)/i,
-  )
-  if (followUpMatch) {
-    const lines = followUpMatch[1]!
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith('-') || l.startsWith('*'))
-    for (const l of lines) {
-      const cleaned = l.replace(/^[-*]\s*/, '').trim()
-      if (cleaned.length === 0) continue
-      if (/^\(none\)$/i.test(cleaned)) continue
-      followUpItems.push(cleaned)
-    }
-  }
-  const riskMatch = rawOutput.match(
-    /\*\*Risk if accepted as-is:\*\*\s*([\s\S]*?)(?:\n\s*\*\*|$)/i,
-  )
-  if (riskMatch) {
-    const lines = riskMatch[1]!
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith('-') || l.startsWith('*'))
-    for (const l of lines) {
-      const cleaned = l.replace(/^[-*]\s*/, '').trim()
-      if (cleaned.length === 0) continue
-      if (/^\(none\)$/i.test(cleaned)) continue
-      riskItems.push(cleaned)
-    }
-  }
-
-  let demotedRevisionItems = 0
-  if (verdict === 'revise' && revisionItems.length > 0) {
-    const normalization = normalizeTaskBoundedRevisionScope({
-      reasoning,
-      revisionItems,
-      followUpItems,
-      taskText: hints.taskText ?? '',
-      narrowScopeTask: hints.narrowScopeTask ?? inferNarrowScopeTask(hints.taskText ?? ''),
-    })
-    demotedRevisionItems = normalization.demotedRevisionItems
-    revisionItems.splice(0, revisionItems.length, ...normalization.revisionItems)
-    followUpItems.splice(0, followUpItems.length, ...normalization.followUpItems)
-  }
-
-  const effectiveVerdict: PersonaVerdict['verdict'] =
-    verdict === 'revise' && revisionItems.length === 0 && demotedRevisionItems > 0 ? 'approve' : verdict
+  const revisionItems = structuredResult?.revisionItems ?? []
+  const followUpItems = structuredResult?.followUpItems ?? []
+  const riskItems = structuredResult?.riskItems ?? []
+  const advisoryScores = structuredResult?.advisoryScores ?? {}
 
   return {
     guildSlug: guild.slug,
     guildName: guild.name,
-    verdict: effectiveVerdict,
+    verdict,
     reasoning,
     revisionItems,
     riskItems,
@@ -235,165 +178,13 @@ export function parsePersonaOutput(
     expectedValue: advisoryScores.expectedValue,
     deferredRisk: advisoryScores.deferredRisk,
     followUpItems,
+    ...(structuredResult ? { acceptedCriteriaIds: structuredResult.acceptedCriteriaIds } : {}),
+    ...(structuredResult ? { proofEvidenceIds: structuredResult.proofEvidenceIds } : {}),
+    ...((options.failureCode ?? (structuredResult ? undefined : 'invalid_review_contract'))
+      ? { failureCode: options.failureCode ?? 'invalid_review_contract' as const }
+      : {}),
     rawOutput,
   }
-}
-
-function parseAdvisoryScores(rawOutput: string): {
-  recommendationPriority?: 'low' | 'medium' | 'high'
-  expectedValue?: 'low' | 'medium' | 'high'
-  deferredRisk?: 'low' | 'medium' | 'high'
-} {
-  const block = rawOutput.match(/\*\*Advisory scoring[^:]*:\*\*\s*([\s\S]*?)(?:\n\s*\*\*|$)/i)?.[1] ?? ''
-  const parseLevel = (label: string): 'low' | 'medium' | 'high' | undefined => {
-    const match = block.match(new RegExp(`${label}:\\s*(low|medium|high)`, 'i'))
-    return match ? match[1]!.toLowerCase() as 'low' | 'medium' | 'high' : undefined
-  }
-  return {
-    recommendationPriority: parseLevel('Recommendation priority'),
-    expectedValue: parseLevel('Expected value if taken'),
-    deferredRisk: parseLevel('Risk if deferred'),
-  }
-}
-
-function normalizeTaskBoundedRevisionScope(input: {
-  reasoning: string
-  revisionItems: string[]
-  followUpItems: string[]
-  taskText: string
-  narrowScopeTask: boolean
-}): { revisionItems: string[]; followUpItems: string[]; demotedRevisionItems: number } {
-  const revisionItems: string[] = []
-  const followUpItems = [...input.followUpItems]
-  const likelyScopeSpillover =
-    /(?:meets|satisfies).*(?:functional|task|acceptance).*(?:criteria|spec)/i.test(input.reasoning) &&
-    /(?:principle|rubric|standard)/i.test(input.reasoning)
-  let demotedRevisionItems = 0
-
-  if (
-    likelyScopeSpillover &&
-    input.revisionItems.length > 0 &&
-    input.revisionItems.every((item) =>
-      looksLikeBroadStandardsFollowUp(item) || looksLikeExistingSurfaceConcern(item),
-    )
-  ) {
-    return {
-      revisionItems: [],
-      followUpItems: [...followUpItems, ...input.revisionItems],
-      demotedRevisionItems: input.revisionItems.length,
-    }
-  }
-
-  for (const item of input.revisionItems) {
-    if (likelyScopeSpillover && looksLikeBroadStandardsFollowUp(item)) {
-      followUpItems.push(item)
-      demotedRevisionItems += 1
-      continue
-    }
-    if (
-      likelyScopeSpillover &&
-      !/\bac-\d+\b|line\s*\d+|changed file|scope\b|introduced|regression|bug\b/i.test(`${input.reasoning}\n${item}`) &&
-      looksLikeExistingSurfaceConcern(item)
-    ) {
-      followUpItems.push(item)
-      demotedRevisionItems += 1
-      continue
-    }
-    if (
-      input.narrowScopeTask &&
-      looksLikeBroadStandardsFollowUp(item) &&
-      !mentionsTaskLocalAnchor(item) &&
-      !taskExplicitlyRequestsConcern(item, input.taskText)
-    ) {
-      followUpItems.push(item)
-      demotedRevisionItems += 1
-      continue
-    }
-    if (
-      input.narrowScopeTask &&
-      looksLikeExistingSurfaceConcern(item) &&
-      !mentionsTaskLocalAnchor(`${input.reasoning}\n${item}`)
-    ) {
-      followUpItems.push(item)
-      demotedRevisionItems += 1
-      continue
-    }
-    if (looksLikeInventedProofCommandDemand(item, input.taskText)) {
-      followUpItems.push(item)
-      demotedRevisionItems += 1
-      continue
-    }
-    revisionItems.push(item)
-  }
-
-  return { revisionItems, followUpItems, demotedRevisionItems }
-}
-
-function looksLikeBroadStandardsFollowUp(item: string): boolean {
-  return /\b(?:versioned prefix|\/v1\/|idempotency-key|idempotent by design|observability|trace span|metric counter|structured logging|schema validation|validate(?: the)? [a-z_]+ parameter|error envelope)\b/i.test(item)
-}
-
-function looksLikeExistingSurfaceConcern(item: string): boolean {
-  return /\b(?:route|endpoint|handler|api|request|response|parameter|header|logging|metrics|trace|validation)\b/i.test(item)
-}
-
-export function sanitizeInventedProofCommandFeedback(feedback: string, taskText: string): string {
-  return feedback
-    .split('\n')
-    .filter(line => !looksLikeInventedProofCommandDemand(line, taskText))
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
-export function looksLikeInventedProofCommandDemand(item: string, taskText: string): boolean {
-  if (!/\b(?:run|execute|use)\b[\s\S]{0,80}\b(?:proof command|command)\b|\bproof command\b[\s\S]{0,80}\b(?:run|executed|capture|record)/i.test(item)) {
-    return false
-  }
-  const commands = commandLikeSnippets(item)
-  if (commands.length === 0) return false
-  const normalizedTaskText = normalizeCommandText(taskText)
-  return commands.every(command => !normalizedTaskText.includes(normalizeCommandText(command)))
-}
-
-function commandLikeSnippets(text: string): string[] {
-  return Array.from(text.matchAll(/`([^`]+)`/g))
-    .map(match => match[1]?.trim() ?? '')
-    .filter(command => /^(?:pnpm|npm|yarn|bun|npx|node|guildhall)\b/.test(command))
-}
-
-function normalizeCommandText(text: string): string {
-  return text.replace(/\s+/g, ' ').trim().toLowerCase()
-}
-
-function mentionsTaskLocalAnchor(text: string): boolean {
-  return /\bac-\d+\b|line\s*\d+|changed file|scope\b|introduced|regression|bug\b|unused-variable|deleteTrashRes|Promise\.all|restoreRes\.error|success:\s*true/i.test(text)
-}
-
-function inferNarrowScopeTask(taskText: string): boolean {
-  if (taskText.trim().length === 0) return false
-  return /single-line cleanup|one-line cleanup|single file|no ambiguity|unused [a-z0-9_]+ binding|only the unused|any changes to other files|adding tests|keep .* exactly the same|behavior is unchanged/i.test(taskText)
-}
-
-function taskExplicitlyRequestsConcern(item: string, taskText: string): boolean {
-  const lowerItem = item.toLowerCase()
-  const lowerTask = taskText.toLowerCase()
-  if (/\bversioned prefix|\/v1\/|versioned route\b/i.test(item)) {
-    return /\bversion(?:ed|ing)?\b|\/v1\//i.test(taskText)
-  }
-  if (/\bidempotency-key|idempotent by design|idempotent\b/i.test(item)) {
-    return /\bidempotenc/i.test(taskText)
-  }
-  if (/\bobservability|trace span|metric counter|structured logging\b/i.test(item)) {
-    return /\bobservability|trace|metric|logging\b/i.test(taskText)
-  }
-  if (/\bschema validation|validate(?: the)? [a-z_]+ parameter|boundary validation\b/i.test(item)) {
-    return /\bvalidate|validation|schema|zod|valibot|typebox|json schema|boundary\b/i.test(taskText)
-  }
-  if (/\berror envelope\b/i.test(item)) {
-    return /\berror envelope|error shape|error format|response shape\b/i.test(taskText)
-  }
-  return lowerTask.includes(lowerItem)
 }
 
 export function buildPersonaOutputHints(task: Pick<Task, 'title' | 'description' | 'spec' | 'acceptanceCriteria' | 'outOfScope'>): PersonaOutputHints {
@@ -409,7 +200,6 @@ export function buildPersonaOutputHints(task: Pick<Task, 'title' | 'description'
 
   return {
     taskText,
-    narrowScopeTask: inferNarrowScopeTask(taskText),
   }
 }
 
@@ -425,7 +215,7 @@ export function buildPersonaOutputHints(task: Pick<Task, 'title' | 'description'
  *     the system stays conservative).
  *   - `coordinator_adjudicates_on_conflict` — same as `strict` for a single
  *     round; when `priorRounds` shows a *recurring* dissent from the same
- *     persona on overlapping revision items, set `needsAdjudication: true`
+ *     persona, set `needsAdjudication: true`
  *     so the orchestrator routes to the coordinator instead of the worker.
  *
  * `priorRounds` — a list of prior fan-out rounds' verdicts (most-recent
@@ -440,9 +230,9 @@ export function aggregateFanout(
 ): FanoutAggregate {
   const policy = opts.policy ?? 'strict'
   const approving = verdicts.filter((v) => v.verdict === 'approve')
-  const availabilityOnly = verdicts.filter((v) => isInfrastructureOnlyFanoutFailure(v))
+  const availabilityOnly = verdicts.filter((v) => isNonSubstantiveFanoutFailure(v))
   const dissenting = verdicts.filter(
-    (v) => v.verdict === 'revise' && !isInfrastructureOnlyFanoutFailure(v),
+    (v) => v.verdict === 'revise' && !isNonSubstantiveFanoutFailure(v),
   )
 
   if (dissenting.length === 0) {
@@ -469,6 +259,9 @@ export function aggregateFanout(
 
   // Combined feedback rendering — same across policies (approving dissents
   // ride along as notes even under advisory, so the worker sees everything).
+  // The renderer deliberately consumes only structured fields. Raw reviewer
+  // prose is an audit trace, not an instruction channel: otherwise a model's
+  // preferred vocabulary could change the next mutation.
   const combinedFeedback =
     taskVerdict === 'revise' || dissenting.length > 0
       ? renderCombinedFeedback([...dissenting, ...availabilityOnly])
@@ -499,8 +292,8 @@ function renderCombinedFeedback(
   dissenting: readonly PersonaVerdict[],
 ): string {
   if (dissenting.length === 0) return ''
-  const actionable = dissenting.filter((verdict) => !isInfrastructureOnlyFanoutFailure(verdict))
-  const availability = dissenting.filter((verdict) => isInfrastructureOnlyFanoutFailure(verdict))
+  const actionable = dissenting.filter((verdict) => !isNonSubstantiveFanoutFailure(verdict))
+  const availability = dissenting.filter((verdict) => isNonSubstantiveFanoutFailure(verdict))
   const followUps = actionable.flatMap((verdict) =>
     (verdict.followUpItems ?? []).map((item) => ({ guildName: verdict.guildName, item })),
   )
@@ -513,11 +306,18 @@ function renderCombinedFeedback(
   for (const d of actionable) {
     sections.push(`### From ${d.guildName}`)
     sections.push('')
-    sections.push(d.reasoning)
     if ((d.revisionItems ?? []).length > 0) {
       sections.push('')
       sections.push('Recommended task-local revisions:')
       for (const item of d.revisionItems ?? []) sections.push(`- ${item}`)
+    }
+    if ((d.acceptedCriteriaIds ?? []).length > 0) {
+      sections.push('')
+      sections.push(`Accepted criteria IDs: ${(d.acceptedCriteriaIds ?? []).join(', ')}`)
+    }
+    if ((d.proofEvidenceIds ?? []).length > 0) {
+      sections.push('')
+      sections.push(`Verified proof evidence IDs: ${(d.proofEvidenceIds ?? []).join(', ')}`)
     }
     const scoreLines = [
       d.recommendationPriority ? `- Recommendation priority: ${d.recommendationPriority}` : null,
@@ -551,38 +351,30 @@ function renderCombinedFeedback(
       sections.push('### Reviewer availability notes')
       sections.push('')
       sections.push(
-        'These reviewers did not return a usable verdict. Their infra failures are preserved for audit, but they are not counted as substantive revision requests.',
+      'These reviewers did not return a usable structured verdict. Their contract or provider failures are preserved for audit, but they are not counted as substantive revision requests.',
       )
       sections.push('')
     }
     for (const d of availability) {
-      sections.push(`- ${d.guildName}: ${singleLine(d.reasoning)}`)
+      sections.push(`- ${d.guildName}: ${d.failureCode ?? 'reviewer_unavailable'}`)
     }
     sections.push('')
   }
   return sections.join('\n').trim()
 }
 
-function isInfrastructureOnlyFanoutFailure(verdict: PersonaVerdict): boolean {
-  if (verdict.verdict !== 'revise') return false
-  const text = `${verdict.reasoning}\n${verdict.rawOutput}`
-  if (/no \*\*Reasoning:\*\* block found/i.test(text)) return true
-  if (!/failed to produce a verdict|no \*\*Reasoning:\*\* block found/i.test(text)) return false
-  return /HTTP 429|Too Many Requests|rate limit|provider timeout|connection refused|Exceeded maximum turn limit \(\d+\)|temporarily unavailable|service unavailable|timed out after \d+ms/i.test(text)
-}
-
-function singleLine(text: string): string {
-  const compact = text.replace(/\s+/g, ' ').trim()
-  return compact.length > 220 ? `${compact.slice(0, 217).trimEnd()}...` : compact
+function isNonSubstantiveFanoutFailure(verdict: PersonaVerdict): boolean {
+  return reviewVerdictIsNonSubstantiveFailure(verdict)
 }
 
 /**
- * Detect personas whose `revise` in the current round overlaps significantly
- * with their `revise` in the most-recent prior round. Overlap is measured
- * as ≥50% token-set intersection across the concatenated revision items.
+ * Detect personas whose `revise` in the current round repeats in the
+ * most-recent prior round. Attribution is identity-based; reviewer prose is
+ * deliberately not compared because a different wording must not change
+ * orchestration state.
  *
- * Pure, deterministic, no embeddings. Returns the guild slugs whose dissent
- * is recurrent — these are the ones the coordinator will adjudicate.
+ * Pure and deterministic. Returns the guild slugs whose dissent is recurrent
+ * — these are the ones the coordinator will adjudicate.
  *
  * Exported so tests can exercise the heuristic without going through the
  * full aggregation path.
@@ -603,41 +395,9 @@ export function findRecurrentDissent(
   for (const cur of currentDissenting) {
     const pv = priorBySlug.get(cur.guildSlug)
     if (!pv) continue
-    const overlap = tokenOverlapRatio(
-      cur.revisionItems.join(' '),
-      pv.revisionItems.join(' '),
-    )
-    if (overlap >= 0.5) recurrent.push(cur.guildSlug)
+    recurrent.push(cur.guildSlug)
   }
   return recurrent
-}
-
-function tokenOverlapRatio(a: string, b: string): number {
-  const ta = tokenSet(a)
-  const tb = tokenSet(b)
-  if (ta.size === 0 || tb.size === 0) return 0
-  let inter = 0
-  for (const t of ta) if (tb.has(t)) inter++
-  // Jaccard-ish; we use min(|A|,|B|) as the denominator so a shorter round's
-  // full-coverage in the longer round still registers as overlap.
-  return inter / Math.min(ta.size, tb.size)
-}
-
-const STOP_WORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'of', 'in', 'on', 'to', 'for', 'is',
-  'are', 'was', 'were', 'be', 'been', 'being', 'this', 'that', 'these',
-  'those', 'it', 'its', 'as', 'at', 'by', 'with', 'from', 'not', 'no',
-  'must', 'should', 'change', 'fix', 'add', 'remove', 'update',
-])
-
-function tokenSet(s: string): Set<string> {
-  const out = new Set<string>()
-  for (const raw of s.toLowerCase().split(/[^a-z0-9_\-.]+/)) {
-    if (raw.length < 3) continue
-    if (STOP_WORDS.has(raw)) continue
-    out.add(raw)
-  }
-  return out
 }
 
 /**
@@ -658,10 +418,14 @@ export function personaVerdictToReviewRecord(
   return {
     verdict: v.verdict,
     reviewerPath: opts.reviewerPath ?? 'llm',
+    reviewerId: v.guildSlug,
+    reviewerName: v.guildName,
     reason:
       v.verdict === 'approve'
         ? `${v.guildName} approved`
-        : `${v.guildName} requested revision`,
+        : v.failureCode
+          ? `${v.guildName} returned ${v.failureCode}; no product finding was inferred`
+          : `${v.guildName} requested revision`,
     reasoning:
       (v.followUpItems ?? []).length > 0
         ? [
@@ -671,7 +435,17 @@ export function personaVerdictToReviewRecord(
             ...(v.followUpItems ?? []).map((item) => `- ${item}`),
           ].join('\n')
         : v.reasoning,
-    failingSignals: v.verdict === 'revise' ? [v.guildSlug] : [],
+    failingSignals: v.verdict === 'revise' && !v.failureCode ? [v.guildSlug] : [],
+    ...(v.acceptedCriteriaIds ? { acceptedCriteriaIds: v.acceptedCriteriaIds } : {}),
+    ...(v.proofEvidenceIds ? { proofEvidenceIds: v.proofEvidenceIds } : {}),
+    ...((v.recommendationPriority || v.expectedValue || v.deferredRisk) ? {
+      advisoryScores: {
+        ...(v.recommendationPriority ? { recommendationPriority: v.recommendationPriority } : {}),
+        ...(v.expectedValue ? { expectedValue: v.expectedValue } : {}),
+        ...(v.deferredRisk ? { deferredRisk: v.deferredRisk } : {}),
+      },
+    } : {}),
+    ...(v.failureCode ? { failureCode: v.failureCode } : {}),
     recordedAt: opts.now,
     ...(opts.policyVersion !== undefined ? { policyVersion: opts.policyVersion } : {}),
     ...(opts.llmError !== undefined ? { llmError: opts.llmError } : {}),

@@ -1,4 +1,5 @@
 import type { AgentNote, ReviewVerdict } from '@guildhall/core'
+import { reviewVerdictIsInfrastructureFailure } from './review-contract.js'
 
 export const FAILURE_CLASSES = [
   'self_authored_verification_failure',
@@ -105,6 +106,8 @@ export interface CommandEvidence {
   command: string
   passed: boolean
   summary?: string
+  /** Stable files attached by the verification runner; prose is not parsed. */
+  files?: readonly string[]
   observedAt?: string
 }
 
@@ -221,12 +224,6 @@ function normalizePathForText(path: string): string {
   return path.trim().replace(/^\.\//, '')
 }
 
-function textMentionsPath(text: string, filePath: string): boolean {
-  const normalizedText = text.replaceAll('\\', '/')
-  const normalizedPath = normalizePathForText(filePath).replaceAll('\\', '/')
-  return normalizedText.includes(normalizedPath)
-}
-
 function classifySelfAuthoredVerificationFailure(
   input: ClassifyAgentFailureInput,
 ): FailureClassification | null {
@@ -235,14 +232,13 @@ function classifySelfAuthoredVerificationFailure(
 
   const failedVerification = (input.verification ?? []).find((entry) => {
     if (entry.passed) return false
-    const searchable = `${entry.command}\n${entry.summary ?? ''}\n${input.blockReason ?? ''}`
-    return touchedFiles.some((file) => textMentionsPath(searchable, file))
+    return (entry.files ?? []).some((file) => touchedFiles.includes(normalizePathForText(file)))
   })
   if (!failedVerification) return null
 
-  const mentionedFile = touchedFiles.find((file) =>
-    textMentionsPath(`${failedVerification.summary ?? ''}\n${input.blockReason ?? ''}`, file),
-  )
+  const mentionedFile = (failedVerification.files ?? [])
+    .map(normalizePathForText)
+    .find((file) => touchedFiles.includes(file))
 
   return {
     class: 'self_authored_verification_failure',
@@ -256,37 +252,6 @@ function classifySelfAuthoredVerificationFailure(
     ],
     scope: 'task',
     safePlaybooks: ['repair_touched_file_failure', 'rerun_authoritative_command'],
-    needsHuman: false,
-  }
-}
-
-function classifyVerificationCommandEnvironmentClaim(
-  input: ClassifyAgentFailureInput,
-): FailureClassification | null {
-  const touchedFiles = (input.touchedFiles ?? []).map(normalizePathForText).filter(Boolean)
-  if (touchedFiles.length === 0) return null
-
-  const text = input.blockReason ?? ''
-  if (
-    !/implementation is complete|code follows|completed implementation/i.test(text) ||
-    !/verification commands?.*(?:do not|don't|cannot|can't|won't|not work|failed|unavailable|environment)/i.test(text)
-  ) {
-    return null
-  }
-
-  return {
-    class: 'authoritative_command_unknown',
-    confidence: 'medium',
-    evidence: [
-      {
-        kind: 'task',
-        summary:
-          'Worker claimed implementation was complete but verification commands could not run while task-owned files were changed.',
-        ref: touchedFiles[0],
-      },
-    ],
-    scope: 'task',
-    safePlaybooks: ['rerun_authoritative_command', 'route_to_review'],
     needsHuman: false,
   }
 }
@@ -320,15 +285,7 @@ function classifyStaleEditTarget(input: ClassifyAgentFailureInput): FailureClass
 }
 
 function reviewVerdictLooksLikeInfrastructureNoise(verdict: ReviewVerdict): boolean {
-  const searchable = [
-    verdict.reason,
-    verdict.reasoning,
-    verdict.llmError,
-    ...verdict.failingSignals,
-  ]
-    .filter(Boolean)
-    .join('\n')
-  return /timeout|timed out|429|rate.?limit|throttl|provider|infrastructure|llmError/i.test(searchable)
+  return reviewVerdictIsInfrastructureFailure(verdict)
 }
 
 function classifyReviewerInfrastructureNoise(
@@ -344,7 +301,7 @@ function classifyReviewerInfrastructureNoise(
       {
         kind: 'review',
         summary: 'Reviewer verdict contains infrastructure failure evidence.',
-        ref: noisyVerdict.reason,
+        ref: noisyVerdict.failureCode ?? noisyVerdict.reviewerId ?? noisyVerdict.recordedAt,
       },
     ],
     scope: 'task',
@@ -356,7 +313,6 @@ function classifyReviewerInfrastructureNoise(
 export function classifyAgentFailure(input: ClassifyAgentFailureInput): FailureClassification {
   return (
     classifySelfAuthoredVerificationFailure(input) ??
-    classifyVerificationCommandEnvironmentClaim(input) ??
     classifyStaleEditTarget(input) ??
     classifyReviewerInfrastructureNoise(input) ??
     DEFAULT_CLASSIFICATION

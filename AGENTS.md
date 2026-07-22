@@ -1,5 +1,12 @@
 # Guildhall Repo Instructions
 
+## Commit Boundaries
+
+- Start independent work on a reviewable `codex/...` branch unless the user explicitly asks to recover an already-mixed worktree.
+- Before beginning another independent concern, commit and push the verified current unit or record why it cannot yet be isolated.
+- Keep product behavior, data migrations, documentation, and generated output in separate commits when they can be reviewed independently. If a release-boundary commit must combine them, say why in the commit message or accompanying audit.
+- Before requesting review or publishing, report the branch, commit range, dirty-file count, and validations performed.
+
 ## Guildhall MCP when available
 
 - Use Guildhall's MCP bridge as the preferred way to read Guildhall project
@@ -102,6 +109,27 @@
 - If two surfaces disagree about the next action, readiness, owner input,
   release blocker, or task-summary status, treat that as a runtime summary-model
   bug first and a copy/layout bug second.
+
+## Model-independence boundary
+
+- Human-readable model prose is audit/display material, never an operational
+  contract. It must not decide routing, sizing, decomposition, readiness,
+  proof, release scope, approval, or completion.
+- If code or a test matches a model's adjective, phrase, heading, sentence
+  order, verbosity, or explanation to make a decision, treat it as an
+  immediate release-blocking defect. Stop the affected worker/review loop;
+  remove the matcher and replace it with typed fields, stable IDs, enums,
+  numeric metrics, or evidence references; fail closed when those are absent.
+  Do not tune prompts around the failing wording, add a fixture exception, or
+  preserve the prose matcher as a fallback. Re-run the same step after the
+  owning contract is repaired.
+- Model-output tests must vary arbitrary prose while holding structured data
+  constant. Exact prose assertions are allowed only for system-authored copy,
+  never for provider output.
+- Run `pnpm model:independence` before claiming a model-facing change is
+  complete. The gate rejects direct and locally aliased provider-text
+  matchers; a failure is an immediate nuke-and-replace condition, not a prompt
+  calibration task or a reason to add a fixture exception.
 
 ## Contract and schema governance
 

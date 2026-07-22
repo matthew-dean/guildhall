@@ -92,7 +92,7 @@ describe('postUserQuestionTool', () => {
     const result = await postUserQuestionTool.execute(
       {
         kind: 'choice',
-        body: 'Pick one',
+        body: 'Pick one?',
         choices: ['A', 'B'],
         selectionMode: 'single',
       },
@@ -108,9 +108,9 @@ describe('postUserQuestionTool', () => {
     expect(result.is_error).toBe(false)
 
     expect(await ownerInputCount()).toBe(1)
-    expect(await ownerInputPrompts()).toEqual(['Pick one'])
+    expect(await ownerInputPrompts()).toEqual(['Pick one?'])
     expect(await ownerInputChoices()).toEqual([['A', 'B']])
-    expect(await firstSessionPrompt()).toBe('Pick one')
+    expect(await firstSessionPrompt()).toBe('Pick one?')
     expect(await taskHasOpenQuestions()).toBe(false)
   })
 
@@ -118,7 +118,7 @@ describe('postUserQuestionTool', () => {
     const result = await postUserQuestionTool.execute(
       {
         kind: 'choice',
-        prompt: 'Pick one',
+        prompt: 'Pick one?',
         choices: ['A', 'B'],
         selectionMode: 'single',
       },
@@ -134,7 +134,7 @@ describe('postUserQuestionTool', () => {
     expect(result.is_error).toBe(false)
 
     expect(await sessionQuestions()).toEqual([expect.objectContaining({
-      prompt: 'Pick one',
+      prompt: 'Pick one?',
       choices: ['A', 'B'],
     })])
     expect(await taskHasOpenQuestions()).toBe(false)
@@ -150,7 +150,7 @@ describe('postUserQuestionTool', () => {
     const first = await postUserQuestionTool.execute(
       {
         kind: 'choice',
-        body: 'Pick one',
+      body: 'Pick one?',
         choices: ['A', 'B'],
         selectionMode: 'single',
       },
@@ -159,7 +159,7 @@ describe('postUserQuestionTool', () => {
     const second = await postUserQuestionTool.execute(
       {
         kind: 'choice',
-        body: 'Pick one',
+      body: 'Pick one?',
         choices: ['A', 'B'],
         selectionMode: 'single',
       },
@@ -171,11 +171,11 @@ describe('postUserQuestionTool', () => {
     expect(second.metadata?.questionId).toBe(first.metadata?.questionId)
 
     expect(await ownerInputCount()).toBe(1)
-    expect(await ownerInputPrompts()).toEqual(['Pick one'])
+    expect(await ownerInputPrompts()).toEqual(['Pick one?'])
     expect(await taskHasOpenQuestions()).toBe(false)
   })
 
-  it('infers structured choice questions from last_assistant_text when the model calls it with {}', async () => {
+  it('rejects an empty call instead of inferring a question from assistant prose', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
       current_task_id: 'task-001',
@@ -195,19 +195,11 @@ describe('postUserQuestionTool', () => {
 
     const first = await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
     const second = await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
-    expect(first.is_error).toBe(false)
-    expect(second.is_error).toBe(false)
+    expect(first.is_error).toBe(true)
+    expect(second.is_error).toBe(true)
 
     const questions = await sessionQuestions()
-    expect(questions).toHaveLength(2)
-    expect(questions).toEqual(expect.arrayContaining([expect.objectContaining({
-      prompt: 'Primary scenario to spec',
-      choices: ['Validation failure', 'Empty assistant message'],
-    })]))
-    expect(questions).toEqual(expect.arrayContaining([expect.objectContaining({
-      prompt: 'Stop behavior',
-      choices: ['Stop immediately', 'Allow a batch, then stop'],
-    })]))
+    expect(questions).toHaveLength(0)
     expect(await taskHasOpenQuestions()).toBe(false)
   })
 
@@ -288,7 +280,7 @@ describe('postUserQuestionTool', () => {
     expect(await taskHasOpenQuestions()).toBe(false)
   })
 
-  it('limits inferred questions from assistant prose to the top three', async () => {
+  it('never creates owner questions from assistant prose, regardless of how many it contains', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
       current_task_id: 'task-001',
@@ -314,22 +306,20 @@ describe('postUserQuestionTool', () => {
       ].join('\n'),
     }
 
-    await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
-    await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
-    await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
-    const fourth = await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
-    expect(fourth.is_error).toBe(true)
+    const results = await Promise.all([
+      postUserQuestionTool.execute({}, { cwd: '/tmp', metadata }),
+      postUserQuestionTool.execute({}, { cwd: '/tmp', metadata }),
+      postUserQuestionTool.execute({}, { cwd: '/tmp', metadata }),
+      postUserQuestionTool.execute({}, { cwd: '/tmp', metadata }),
+    ])
+    expect(results.every(result => result.is_error)).toBe(true)
 
-    expect(await ownerInputCount()).toBe(3)
-    expect((await sessionQuestions()).map((q) => q.prompt)).toEqual(expect.arrayContaining([
-      'First',
-      'Second',
-      'Third',
-    ]))
+    expect(await ownerInputCount()).toBe(0)
+    expect(await sessionQuestions()).toHaveLength(0)
     expect(await taskHasOpenQuestions()).toBe(false)
   })
 
-  it('prefers prompt-line plus numbered choices over promoting the trailing Other option into the prompt', async () => {
+  it('does not parse prompt lines and options from assistant prose', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
       current_task_id: 'task-001',
@@ -352,33 +342,18 @@ describe('postUserQuestionTool', () => {
       ].join('\n'),
     }
 
-    await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
-    await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
+    const results = await Promise.all([
+      postUserQuestionTool.execute({}, { cwd: '/tmp', metadata }),
+      postUserQuestionTool.execute({}, { cwd: '/tmp', metadata }),
+    ])
 
     const questions = await sessionQuestions()
-    expect(questions).toHaveLength(2)
-    expect(questions[0]).toMatchObject({
-      prompt: 'To lock scope before I draft acceptance criteria, pick one:',
-      choices: [
-        'Behavior spec only',
-        'End-to-end feature spec',
-        'Evaluation harness spec',
-        'Other',
-      ],
-    })
-    expect(questions[1]).toMatchObject({
-      prompt: 'Also, what should success look like in one concrete check?',
-      choices: [
-        'In first turn, agent asks at most N questions and yields.',
-        'Task spec quality stays complete while first turn stays narrow.',
-        'Both A and B.',
-        'Other.',
-      ],
-    })
+    expect(results.every(result => result.is_error)).toBe(true)
+    expect(questions).toHaveLength(0)
     expect(await taskHasOpenQuestions()).toBe(false)
   })
 
-  it('infers multiple choice questions from headed sections that use lettered A/B/C options', async () => {
+  it('does not parse headed options from assistant prose', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
       current_task_id: 'task-001',
@@ -396,27 +371,14 @@ describe('postUserQuestionTool', () => {
       ].join('\n'),
     }
 
-    await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
-    await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
+    const results = await Promise.all([
+      postUserQuestionTool.execute({}, { cwd: '/tmp', metadata }),
+      postUserQuestionTool.execute({}, { cwd: '/tmp', metadata }),
+    ])
 
     const questions = await sessionQuestions()
-    expect(questions).toHaveLength(2)
-    expect(questions).toEqual(expect.arrayContaining([expect.objectContaining({
-      prompt: 'What should be the **primary success signal** for this task? (pick one)',
-      choices: [
-        'Spec quality only: clear ACs + testing strategy, no implementation expectations',
-        'Implementation-ready: ACs are directly testable and mapped to unit/integration tests',
-        'End-to-end governance: includes ACs for behavior, tests, task-state transitions, and transcript persistence as release gates',
-      ],
-    })]))
-    expect(questions).toEqual(expect.arrayContaining([expect.objectContaining({
-      prompt: 'Coverage posture for the future implementation (pick one)',
-      choices: [
-        'Standard floor only (existing project defaults; no extra target)',
-        'Elevated on touched intake modules (explicit higher expectation in spec)',
-        'Standard floor + explicit exemption note allowed for non-deterministic orchestration paths',
-      ],
-    })]))
+    expect(results.every(result => result.is_error)).toBe(true)
+    expect(questions).toHaveLength(0)
     expect(await taskHasOpenQuestions()).toBe(false)
   })
 
@@ -450,7 +412,7 @@ describe('postUserQuestionTool', () => {
     expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
   })
 
-  it('rejects topic labels masquerading as choice answers', async () => {
+  it('accepts structured choices without inspecting the prose for a particular vocabulary', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
       current_task_id: 'task-001',
@@ -460,15 +422,14 @@ describe('postUserQuestionTool', () => {
     const result = await postUserQuestionTool.execute(
       {
         kind: 'choice',
-        body: 'Spec updated with inline chip + CSS confirmed. Two questions remain:',
+        body: 'Which remaining scope should Guildhall shape first?',
         choices: ['Extension ownership', 'Knit integration'],
         selectionMode: 'single',
       },
       { cwd: '/tmp', metadata },
     )
 
-    expect(result.is_error).toBe(true)
-    expect(result.output).toContain('question choices must be answers')
+    expect(result.is_error).toBe(false)
 
     const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
       tasks: Array<{ openQuestions?: Array<unknown> }>
@@ -476,7 +437,7 @@ describe('postUserQuestionTool', () => {
     expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
   })
 
-  it('rejects research narration masquerading as a choice question', async () => {
+  it('accepts structured choices even when the prompt uses unexpected prose', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
       current_task_id: 'task-001',
@@ -486,7 +447,7 @@ describe('postUserQuestionTool', () => {
     const result = await postUserQuestionTool.execute(
       {
         kind: 'choice',
-        body: "OK, I've hit the research budget for this turn. Let me synthesize:",
+        body: 'Which bounded direction should Guildhall use next?',
         choices: [
           'The plan doc says Rust gave 10-15% speedup.',
           'The current task is blocked on pixi install.',
@@ -496,8 +457,7 @@ describe('postUserQuestionTool', () => {
       { cwd: '/tmp', metadata },
     )
 
-    expect(result.is_error).toBe(true)
-    expect(result.output).toContain('choice question prompt')
+    expect(result.is_error).toBe(false)
 
     const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
       tasks: Array<{ openQuestions?: Array<unknown> }>
@@ -505,7 +465,7 @@ describe('postUserQuestionTool', () => {
     expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
   })
 
-  it('rejects templated title-as-grammar prompts before they reach Thread', async () => {
+  it('does not use title-shaped prose as a hidden validation contract', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
       current_task_id: 'task-001',
@@ -520,8 +480,7 @@ describe('postUserQuestionTool', () => {
       { cwd: '/tmp', metadata },
     )
 
-    expect(result.is_error).toBe(true)
-    expect(result.output).toContain('write a complete human-readable question')
+    expect(result.is_error).toBe(false)
 
     const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
       tasks: Array<{ openQuestions?: Array<unknown> }>
@@ -575,7 +534,7 @@ describe('postUserQuestionTool', () => {
     expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
   })
 
-  it('extracts a highlighted question from prose that says what the agent should ask', async () => {
+  it('does not extract a highlighted question from prose that says what the agent should ask', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
       current_task_id: 'task-001',
@@ -590,16 +549,10 @@ describe('postUserQuestionTool', () => {
     }
 
     const result = await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
-    expect(result.is_error).toBe(false)
+    expect(result.is_error).toBe(true)
 
     const questions = await sessionQuestions()
-    expect(questions).toHaveLength(1)
-    expect(questions[0]).toMatchObject({
-      prompt: 'What variants does AlertDialog need?',
-    })
-    expect(questions[0]?.helperText).toContain('roadmap lists AlertDialog as missing')
-    expect(questions[0]?.helperText).not.toContain('The key question I need to ask')
-    expect(questions[0]?.prompt).not.toContain('The key question I need to ask')
+    expect(questions).toHaveLength(0)
     expect(await taskHasOpenQuestions()).toBe(false)
   })
 })

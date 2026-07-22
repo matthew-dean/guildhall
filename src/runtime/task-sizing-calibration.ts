@@ -23,6 +23,11 @@ export const TaskSizingCalibrationCase = z.object({
     priority: TaskPrioritySchema,
     changedFiles: z.array(z.string().min(1)).default([]),
     riskLanes: z.array(z.string().min(1)).default([]),
+    structuredSignals: z.object({
+      acceptanceCriteriaCount: z.number().int().nonnegative().default(0),
+      contractSurfaceCount: z.number().int().nonnegative().default(0),
+      splitPolicy: z.enum(['none', 'conditional', 'required']).optional(),
+    }).partial().default({}),
   }),
   expected: z.object({
     minScore: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(5), z.literal(8)]),
@@ -124,6 +129,7 @@ export function gradeTaskSizingCase(
       priority: parsedCase.task.priority,
       acceptanceCriteria: [],
       outOfScope: [],
+      structuredSignals: parsedCase.task.structuredSignals,
     },
     changedFiles: parsedCase.task.changedFiles,
     riskLanes: parsedCase.task.riskLanes,
@@ -157,6 +163,7 @@ export function runTaskSizingFrontier(input: {
           priority: parsed.task.priority as TaskPriority,
           acceptanceCriteria: [],
           outOfScope: [],
+          structuredSignals: parsed.task.structuredSignals,
         },
         changedFiles: variant.strictness === 'split_sensitive' ? parsed.task.changedFiles : [],
         riskLanes: variant.strictness === 'split_sensitive' ? parsed.task.riskLanes : [],

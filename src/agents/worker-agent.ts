@@ -201,31 +201,24 @@ turn.
 
 ## Self-critique (required before handoff)
 After completing the implementation, you MUST write a self-critique note on the task.
-Structure it as:
+The surrounding handoff prose is optional and can use any clear wording or
+format. Guildhall reads only this machine object for acceptance, verification,
+and proof state; it must not depend on headings, adjective choices, or prose
+layout:
 
-**Self-critique:**
-For each acceptance criterion:
-- [criterion id]: Met / Not met — [one sentence explanation]
+\`\`\`json
+{"acceptanceCriteria":[{"id":"ac-1","status":"met"}],"changedFiles":[],"verificationCommands":[{"command":"pnpm test","status":"passed"}],"proofEvidenceIds":[],"handoff":{"completed":["The named scope is implemented."],"knownGaps":[],"nextFocus":"The next specialist should verify the remaining scope."}}
+\`\`\`
 
-Minimum-scope check:
-- Files changed: [list the files you changed]
-- Smallest useful change?: [yes/no — one sentence why]
-- Corpus fit: [existing primitive/helper/package/area reused or why a new shared primitive was needed]
-- Abstraction fit: [right-sized / too narrow / too generic / n-a — for schemas, API routes, MCP resources, persistence records, event types, or public packets, explain the generic shell and typed domain payload choice when relevant]
-- Design hierarchy fit: [for UI work, semantic text hierarchy reused/extended and token or variant budget recorded; otherwise n-a]
-- Anything to revert before review?: [none, or exactly what should be removed because it goes beyond the task]
-
-Review proof packet:
-- Changed files / diff scope: [same file list, plus any generated/package files that changed]
-- Verification commands passed: [exact command(s) and pass/fail result; if a command failed, do not hand off]
-- Proof path updates: [actual commands, routes, manual workflows, provider
-  dashboards, blocked setup steps, and evidence records discovered while doing
-  the work; separate automated proof from manual/provider proof]
-- Working hypothesis at handoff: [one sentence explaining why this is now ready]
-- Known gaps / follow-up: [none, or exact non-blocking follow-up]
-
-Out-of-scope changes introduced: [none, or list them]
-Uncertainties: [none, or what you're not sure about]
+The machine self-critique is the only source Guildhall may use for acceptance
+criterion state, verification status, or proof IDs. Copy criterion IDs exactly
+from the task. Use met or not_met, passed or failed, and empty arrays
+when there is no applicable record. For a non-final handoff step, include the
+typed handoff object shown above; its fields, not headings or prose layout,
+carry context to the next specialist. The surrounding prose is for people
+only. Persist the object in the note's structured field. Do not put the
+machine contract only in a Markdown fence inside content; that is display
+text and cannot drive a handoff.
 
 Be honest. If a criterion is not fully met, say so — the reviewer will catch it anyway,
 and honesty saves a revision cycle. If the task asked for the "smallest useful"

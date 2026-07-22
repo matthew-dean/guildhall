@@ -44,7 +44,7 @@ import {
 import { writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
 import { buildEffectiveTask } from '../effective-task.js'
 import { applyProjectMigrations, getProjectMigrationStatus } from '../migrations.js'
-import { TaskEvidenceEvent } from '@guildhall/core'
+import { StructuredSpec, TaskEvidenceEvent } from '@guildhall/core'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
@@ -67,6 +67,37 @@ function projectUrl(route: string): string {
 
 function taskQueuePath(): string {
   return getProjectSystemStatePath(tmpDir, 'TASKS.json')
+}
+
+function structuredSpecForTest(
+  title: string,
+  boundary: Partial<StructuredSpec['completionBoundary']> = {},
+): StructuredSpec {
+  return StructuredSpec.parse({
+    whatThisIs: title,
+    problemContext: 'The test needs an explicit structured planning contract.',
+    goals: [`Implement ${title}.`],
+    nonGoals: ['No unrelated work.'],
+    proposedDesign: `Use the project surface named by ${title}.`,
+    keyDecisions: ['Keep the test contract explicit.'],
+    acceptanceCriteria: [{
+      scenario: `Given ${title} is implemented`,
+      expectation: 'Then the recorded task boundary is ready for review.',
+      verificationMode: 'review',
+    }],
+    verification: ['Run the focused test.'],
+    completionBoundary: {
+      productOutcome: `${title} is ready for review.`,
+      whatGuildhallCanCompleteInCode: `Implement ${title}.`,
+      externalDependencies: 'None.',
+      ownerOnlySetup: 'None.',
+      verificationEnvironment: 'The local test process.',
+      whatCountsAsDone: 'The focused test passes.',
+      whatMustBeSplitOrBlocked: 'Nothing.',
+      splitPolicy: 'none',
+      ...boundary,
+    },
+  })
 }
 
 async function readTaskQueue(): Promise<Record<string, any>> {
@@ -301,25 +332,29 @@ async function readEffectiveTask(id: string): Promise<Record<string, any>> {
 }
 
 async function seedTask(id: string, overrides: Record<string, any> = {}): Promise<void> {
+  const seededTask: Record<string, any> = {
+    id,
+    title: 'Seeded task for tests',
+    description: 'A test task',
+    domain: 'looma',
+    projectPath: tmpDir,
+    status: 'in_progress',
+    priority: 'normal',
+    revisionCount: 0,
+    remediationAttempts: 0,
+    origination: 'human',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    ...overrides,
+  }
+  if (typeof seededTask.spec === 'string' && seededTask.spec.trim() && !hasOwn(overrides, 'structuredSpec')) {
+    seededTask.structuredSpec = structuredSpecForTest(seededTask.title)
+  }
   const queue = {
     version: 1,
     lastUpdated: new Date().toISOString(),
     tasks: [
-      {
-        id,
-        title: 'Seeded task for tests',
-        description: 'A test task',
-        domain: 'looma',
-        projectPath: tmpDir,
-        status: 'in_progress',
-        priority: 'normal',
-        revisionCount: 0,
-        remediationAttempts: 0,
-        origination: 'human',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        ...overrides,
-      },
+      seededTask,
     ],
   }
   await seedCanonicalQueue(queue)
@@ -330,7 +365,8 @@ async function seedTasks(tasks: Array<Record<string, any>>): Promise<void> {
   const queue = {
     version: 1,
     lastUpdated: now,
-    tasks: tasks.map((task, index) => ({
+    tasks: tasks.map((task, index) => {
+      const seededTask: Record<string, any> = {
       id: `task-${index + 1}`,
       title: `Seeded task ${index + 1}`,
       description: 'A test task',
@@ -344,7 +380,12 @@ async function seedTasks(tasks: Array<Record<string, any>>): Promise<void> {
       createdAt: now,
       updatedAt: now,
       ...task,
-    })),
+      }
+      if (typeof seededTask.spec === 'string' && seededTask.spec.trim() && !hasOwn(task, 'structuredSpec')) {
+        seededTask.structuredSpec = structuredSpecForTest(seededTask.title)
+      }
+      return seededTask
+    }),
   }
   await seedCanonicalQueue(queue)
 }
@@ -500,7 +541,10 @@ describe('GET /api/project/task/:id', () => {
         releaseIds: ['headless-mvp'],
         proofPaths: [{
           kind: 'review',
-          expectedEvidence: ['The reviewer catches object property changes caused by elapsed time.'],
+          expectedEvidence: [{
+            id: 'elapsed-object-state',
+            description: 'Object state changes over elapsed time.',
+          }],
         }],
         doneSummaryBundle: {
           status: 'done',
@@ -514,6 +558,9 @@ describe('GET /api/project/task/:id', () => {
         }],
         reviewVerdicts: [{
           verdict: 'approve',
+          reviewerPath: 'llm',
+          acceptedCriteriaIds: [],
+          proofEvidenceIds: [],
           reasoning: 'All acceptance criteria are met.',
           recordedAt: '2026-07-06T20:00:00.000Z',
         }],
@@ -528,17 +575,23 @@ describe('GET /api/project/task/:id', () => {
 
     expect(body.task?.completionProof).toMatchObject({ state: 'missing' })
     expect(body.task?.completionProof?.missing?.length).toBeGreaterThan(0)
-    expect(body.task?.completionProof?.verified).toContain('Gate passed: content.no-truncated-data')
-    expect(body.task?.completionProof?.verified).not.toContain('Review approved: recorded review')
-    expect(body.task?.completionProof?.historicalCount).toBe(1)
-    expect(body.task?.completionProof?.historical).toContain('Review approved: recorded review')
+    expect(body.task?.completionProof?.verified).not.toContain('Gate passed: content.no-truncated-data')
+    expect(body.task?.completionProof?.verified).not.toContain('Review approved: llm')
+    expect(body.task?.completionProof?.historical).toEqual(expect.arrayContaining([
+      'Gate passed: content.no-truncated-data',
+      'Review approved: llm',
+    ]))
   })
 
   it('builds drawer work progress from effective proof state, not stale raw task records', async () => {
     await seedTask('task-1', {
       title: 'Run fixture evaluator proof',
       status: 'done',
-      proofPaths: [{ expectedEvidence: ['runner-smoke'] }],
+      proofPaths: [{
+        kind: 'command',
+        command: 'runner-smoke',
+        expectedEvidence: [{ id: 'runner-smoke', description: 'Runner smoke proof.' }],
+      }],
       gateResults: [],
     })
     await appendTaskEvidence(tmpDir, 'task-1', {
@@ -547,10 +600,20 @@ describe('GET /api/project/task/:id', () => {
       recordedAt: '2026-07-06T12:00:00.000Z',
       payload: {
         gateId: 'runner-smoke',
+        command: 'runner-smoke',
         status: 'pass',
         checkedAt: '2026-07-06T12:00:00.000Z',
       },
     })
+
+    const effectiveFixture = await readEffectiveTask('task-1')
+    expect(effectiveFixture.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'gate_result',
+        payload: expect.objectContaining({ command: 'runner-smoke' }),
+      }),
+    ]))
+    expect(effectiveFixture.currentSummary?.proof).toMatchObject({ state: 'proven' })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
@@ -969,6 +1032,7 @@ describe('GET /api/project/task/:id', () => {
       status: 'blocked',
       blockReason: 'max_revisions_exceeded: reviewer loop hit its old cap before proof recovery reopened.',
       proofRecovery: {
+        kind: 'proof',
         reopenedAt: '2026-07-07T09:50:00.000Z',
         reason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
       },
@@ -1157,7 +1221,7 @@ describe('GET /api/project/task/:id', () => {
     expect(task?.latestReviewerSummary).toContain('Aggregated revisions')
     expect(task?.latestSelfCritique).toBeUndefined()
     expect(task?.latestCheckpoint?.intent).toBe('Verify focused unit tests')
-    expect(task?.evidenceSummary?.counts?.notes).toBe(1)
+    expect(task?.evidenceSummary?.counts?.notes).toBe(2)
     expect(task?.evidenceSummary?.counts?.reviewVerdicts).toBe(0)
     expect(task?.evidenceSummary?.counts?.adjudications).toBe(0)
     expect(task?.evidenceSummary?.counts?.gateResults).toBe(0)
@@ -1580,6 +1644,7 @@ describe('GET /api/project/task/:id', () => {
       },
       gateResults: [{
         gateId: 'pnpm test',
+        command: 'pnpm test',
         type: 'hard',
         passed: true,
         output: 'tests passed',
@@ -1697,7 +1762,7 @@ describe('GET /api/project/task/:id', () => {
     })
   })
 
-  it('derives self-critique summaries from worker-role notes when the content is explicitly labeled', async () => {
+  it('does not derive self-critique summaries from worker-role prose', async () => {
     await seedTask('task-1', {
       status: 'review',
       notes: [
@@ -1714,10 +1779,10 @@ describe('GET /api/project/task/:id', () => {
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body.task?.latestSelfCritique).toContain('focused use-workspace verification passed')
+    expect(body.task?.latestSelfCritique).toBeUndefined()
   })
 
-  it('derives self-critique summaries from implementer-role notes when the content is explicitly labeled', async () => {
+  it('does not derive self-critique summaries from implementer-role prose', async () => {
     await seedTask('task-1', {
       status: 'review',
       notes: [
@@ -1734,10 +1799,10 @@ describe('GET /api/project/task/:id', () => {
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body.task?.latestSelfCritique).toContain('focused use-presence verification passed')
+    expect(body.task?.latestSelfCritique).toBeUndefined()
   })
 
-  it('derives self-critique summaries from worker persona-role notes when the content is explicitly labeled', async () => {
+  it('does not derive self-critique summaries from worker persona-role prose', async () => {
     await seedTask('task-1', {
       status: 'review',
       notes: [
@@ -1754,10 +1819,10 @@ describe('GET /api/project/task/:id', () => {
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body.task?.latestSelfCritique).toContain('focused restore handler verification passed')
+    expect(body.task?.latestSelfCritique).toBeUndefined()
   })
 
-  it('normalizes stale checkpoint self-critique instructions when a worker persona-role note already exists', async () => {
+  it('keeps checkpoint display text separate from structured routing state', async () => {
     await seedTask('task-1', {
       status: 'in_progress',
       notes: [
@@ -1783,10 +1848,10 @@ describe('GET /api/project/task/:id', () => {
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-  expect(body.task?.latestCheckpoint?.nextPlannedAction).toBe(
-    'Resume from the latest self-critique and recorded verification evidence, then hand off to review.',
-  )
-})
+    expect(body.task?.latestCheckpoint?.nextPlannedAction).toBe(
+      "Write or refresh self-critique note, then transition task to 'review'",
+    )
+  })
 
 describe('POST /api/project/delivery-spine/contract-results/:id/apply', () => {
   it('applies a staged primitive setup result and removes it from the inbox', async () => {
@@ -2352,7 +2417,7 @@ describe('POST /api/project/task/:id/start', () => {
     expect(starts).toHaveLength(0)
   })
 
-  it('repairs weak recovery specs before blocking focused start for spec review', async () => {
+  it('does not infer recovery child work before blocking focused start for spec review', async () => {
     await seedTasks([
       {
         id: 'task-model-proof',
@@ -2388,6 +2453,7 @@ describe('POST /api/project/task/:id/start', () => {
         notes: [{
           agentId: 'coordinator-recovery',
           role: 'system',
+          structured: { event: 'recovery_spec_seed', source: 'deterministic' },
           content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
           timestamp: '2026-07-05T18:15:02.867Z',
         }],
@@ -2413,24 +2479,12 @@ describe('POST /api/project/task/:id/start', () => {
     const queue = await readTaskQueue()
     const task = queue.tasks.find((candidate: Record<string, any>) => candidate.id === 'task-model-proof')
     const criteria = (task?.acceptanceCriteria ?? []).map((criterion: Record<string, unknown>) => String(criterion.description ?? '')).join('\n')
-    expect(criteria).toContain('DeepInfra-accessible model')
-    expect(criteria).toContain('adult genres')
-    expect(criteria).toContain('wet hair drying')
-    expect(criteria).toContain('walking speed for fantasy epics')
-    expect((task?.workUnitAnalysis as Record<string, any> | undefined)?.units?.map((unit: Record<string, any>) => unit.title)).toEqual([
-      'Select and prove DeepInfra drafting model',
-      'Define world-state continuity review lane',
-      'Define spatial/geographic continuity review lane',
-    ])
-    expect(criteria).not.toContain('repo-local proof demonstrates that exact child outcome')
-    expect(criteria).not.toContain(';.')
-    expect(criteria).not.toContain('These should become source-backed MVP scope/tasks')
-    expect(task?.spec).not.toContain('These should become source-backed MVP scope/tasks')
-    expect(task?.spec).not.toContain('from For the Narrative Harness')
-    expect(task?.productBrief?.userJob).not.toContain('These should become source-backed MVP scope/tasks')
-    expect(task?.productBrief?.userJob).not.toContain('from For the Narrative Harness')
-    expect(task?.productBrief?.successMetric).toContain('DeepInfra-accessible model')
-    expect(task?.notes?.at(-1)?.content).toContain('under-shaped recovery spec')
+    expect(criteria).toContain('repo-local proof demonstrates that exact child outcome')
+    expect((task?.workUnitAnalysis as Record<string, any> | undefined)?.units).toBeUndefined()
+    expect(task?.spec).toContain('repo-local proof demonstrates that exact child outcome')
+    expect(task?.productBrief?.userJob).toContain('implemented or proven from current evidence')
+    expect(task?.productBrief?.successMetric).toContain('concrete completion boundary')
+    expect(task?.notes?.at(-1)?.content).toContain('deterministic recovery spec seed')
   })
 
   it('does not replace a proof-recovery spec from the raw task projection', async () => {
@@ -2468,6 +2522,7 @@ describe('POST /api/project/task/:id/start', () => {
         notes: [{
           agentId: 'coordinator-recovery',
           role: 'system',
+          structured: { event: 'recovery_spec_seed', source: 'deterministic' },
           content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
           timestamp: new Date().toISOString(),
         }],
@@ -2615,6 +2670,7 @@ describe('POST /api/project/task/:id/start', () => {
         id: 'task-model-proof',
         title: 'Define drafting model proof',
         status: 'blocked',
+        recoveryCode: 'spec_no_progress',
         blockReason: 'human_judgment_required: Spec shaping timed out before saving durable progress.',
         description: 'Select and prove the current drafting model lane.',
       },
@@ -2660,25 +2716,28 @@ describe('POST /api/project/task/:id/start', () => {
         title: 'Implement author voice feedback loop MVP',
         status: 'blocked',
         blockReason: 'max_revisions_exceeded: Exceeded maxRevisions (3). Requires human judgment.',
+        recoveryCode: 'max_revisions_actionable',
         revisionCount: 4,
         reviewVerdicts: [
           {
-            verdict: 'revise',
+            verdict: 'approve',
             reviewerPath: 'llm',
-            reason: 'LLM reviewer requested revision (transitioned to in_progress)',
-            reasoning: [
-              '**Rubric**',
-              '- acceptance-criteria-met: yes - all acceptance criteria are satisfied.',
-              '- no-scope-creep: yes - changes are limited to the reviewer lane.',
-              '- conventions-followed: yes - code follows project conventions.',
-              '- no-regressions: yes - focused tests pass.',
-            ].join('\n'),
-            failingSignals: [],
+            reason: 'The machine review contract approves the task.',
+            acceptedCriteriaIds: [],
+            proofEvidenceIds: [],
+            reasoning: 'The machine review contract approves the task.',
             recordedAt: new Date().toISOString(),
           },
         ],
       },
     ])
+    const effectiveFixture = await readEffectiveTask('author-voice-loop-mvp')
+    expect(effectiveFixture.reviewVerdicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        verdict: 'approve',
+        reviewerPath: 'llm',
+      }),
+    ]))
     const { supervisor, starts } = createTrackingSupervisor()
     const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
@@ -2775,6 +2834,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
         title: 'Build the bounded runner',
         status: 'spec_review',
         releaseIds: ['release-1'],
+        structuredSpec: structuredSpecForTest('Build the bounded runner'),
         createdAt: now,
         updatedAt: now,
         spec: [
@@ -2789,6 +2849,9 @@ describe('POST /api/project/task/:id/approve-spec', () => {
           '- Verification environment: The local project checkout.',
           '- What counts as done: The bounded runner is proven.',
           '- What must be split or blocked: Nothing.',
+          '',
+          '## Acceptance Criteria',
+          '1. The bounded runner produces the expected result.',
         ].join('\n'),
         productBrief: {
           userJob: 'Run the bounded runner.',
@@ -2814,7 +2877,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     expect(queue.tasks).toHaveLength(2)
     expect(queue.tasks[1]).toMatchObject({
       title: 'Establish concrete proof for Build the bounded runner',
-      status: 'exploring',
+      status: 'ready',
       workKind: 'verification',
       hierarchy: { parentId: 'task-1' },
       releaseIds: ['release-1'],
@@ -2830,6 +2893,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
         successMetric: 'Login shows provider buttons.',
         approvedAt: '2026-05-26T00:00:00.000Z',
       },
+      structuredSpec: undefined,
       spec: [
         '## Summary',
         '',
@@ -2853,7 +2917,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
-    expect(body.error).toMatch(/completion boundary/i)
+    expect(body.error).toMatch(/structured spec/i)
   })
 
   it('rejects approve-spec when external dependencies are named without an owner or blocked split', async () => {
@@ -2864,6 +2928,11 @@ describe('POST /api/project/task/:id/approve-spec', () => {
         successMetric: 'Google and Apple sign-in work.',
         approvedAt: '2026-05-26T00:00:00.000Z',
       },
+      structuredSpec: structuredSpecForTest('Add provider sign-in', {
+        externalDependencies: 'Google and Apple OAuth apps and Supabase provider settings.',
+        ownerOnlySetup: 'TBD.',
+        verificationEnvironment: 'TBD.',
+      }),
       spec: [
         '## Summary',
         '',
@@ -2894,9 +2963,9 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     const res = await app.fetch(
       new Request(projectUrl('/api/project/task/task-1/approve-spec'), { method: 'POST' }),
     )
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body.error).toMatch(/external dependencies/i)
+    expect(body.status).toBe('ready')
   })
 
   it('approves a spec when its external provider is already configured and live', async () => {
@@ -2906,6 +2975,11 @@ describe('POST /api/project/task/:id/approve-spec', () => {
         userJob: 'I want to verify the configured drafting provider across representative genres.',
         successMetric: 'The live provider generates a labeled result for every declared genre.',
       },
+      structuredSpec: structuredSpecForTest('Run the bounded multi-genre provider proof', {
+        externalDependencies: 'Configured DeepInfra provider (already set up).',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'Local development environment with access to the configured DeepInfra provider.',
+      }),
       spec: [
         '## Summary',
         '',
@@ -3275,6 +3349,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
         factors: [],
         recommendedChildren: [
           {
+            identity: 'billing-settings-workflow',
             title: 'Implement the billing settings workflow',
             reason: 'Keep the user-facing workflow small enough for UX review.',
             suggestedDomain: 'frontend',
@@ -3284,7 +3359,8 @@ describe('POST /api/project/task/:id/create-split-children', () => {
             title: 'Add the admin subscription API contract',
             reason: 'Separate API compatibility and security review from UI work.',
             suggestedDomain: 'backend',
-            dependsOn: ['Implement the billing settings workflow'],
+            identity: 'admin-subscription-api-contract',
+            dependsOn: ['billing-settings-workflow'],
           },
         ],
         reviewBudgetHint: 'release_critical',
@@ -3302,8 +3378,8 @@ describe('POST /api/project/task/:id/create-split-children', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as Record<string, any>
     expect(body.createdTaskIds).toEqual([
-      'task-1-split-implement-the-billing-settings-workflow',
-      'task-1-split-add-the-admin-subscription-api-contract',
+      'task-1-split-billing-settings-workflow',
+      'task-1-split-admin-subscription-api-contract',
     ])
     expect(body.parentTaskId).toBe('task-1')
 
@@ -3316,7 +3392,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
     expect(raw.tasks[0].sizePlan.action).toBe('proceed_with_warning')
     expect(raw.tasks[0].sizePlan.recommendedChildren.map((child: Record<string, unknown>) => child.createdTaskId)).toEqual(body.createdTaskIds)
     expect(raw.tasks[1]).toMatchObject({
-      id: 'task-1-split-implement-the-billing-settings-workflow',
+      id: 'task-1-split-billing-settings-workflow',
       status: 'exploring',
       businessEnvelope: { goalId: 'goal-task-1' },
       hierarchy: {
@@ -3327,7 +3403,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
       origination: 'system',
       proposedBy: 'task-sizing',
     })
-    expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-implement-the-billing-settings-workflow'])
+    expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-billing-settings-workflow'])
   })
 
   it('materializes stored split-recommended recommendations into child tasks', async () => {
@@ -3341,6 +3417,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
         factors: [],
         recommendedChildren: [
           {
+            identity: 'component-implementation',
             title: 'Component implementation',
             reason: 'Ship the primitive implementation first.',
             suggestedDomain: 'frontend',
@@ -3350,7 +3427,8 @@ describe('POST /api/project/task/:id/create-split-children', () => {
             title: 'Storybook story',
             reason: 'Add visual proof after the implementation exists.',
             suggestedDomain: 'frontend',
-            dependsOn: ['Component implementation'],
+            identity: 'storybook-proof',
+            dependsOn: ['component-implementation'],
           },
         ],
         reviewBudgetHint: 'thorough',
@@ -3369,7 +3447,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
     const body = await res.json() as Record<string, any>
     expect(body.createdTaskIds).toEqual([
       'task-1-split-component-implementation',
-      'task-1-split-storybook-story',
+      'task-1-split-storybook-proof',
     ])
 
     const raw = await readTaskQueue()
@@ -3505,6 +3583,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
         factors: [],
         recommendedChildren: [
           {
+            identity: 'menu-item-implementation',
             title: 'MenuItem implementation',
             reason: 'Compose the MenuItem primitive in the ContextMenu component.',
             suggestedDomain: 'frontend',
@@ -3515,7 +3594,8 @@ describe('POST /api/project/task/:id/create-split-children', () => {
             title: 'Storybook proof',
             reason: 'Prove MenuItem states visually.',
             suggestedDomain: 'frontend',
-            dependsOn: ['MenuItem implementation'],
+            identity: 'storybook-proof',
+            dependsOn: ['menu-item-implementation'],
             provesPrimitives: ['menu-item'],
             proofKind: 'storybook',
           },
@@ -3557,7 +3637,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
       provesPrimitives: ['menu-item'],
       proofKind: 'storybook',
     })
-    expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-menuitem-implementation'])
+    expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-menu-item-implementation'])
   })
 })
 
@@ -3798,7 +3878,210 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(task?.runtime?.proofRecovery?.reason).toBe('Run the real provider proof and attach the evidence.')
   })
 
-  it('re-intakes completed script-only release work when no executable proof is recorded', async () => {
+  it('resumes a done proof-setup boundary without creating another proof child', async () => {
+    await seedTask('task-proof-setup', {
+      status: 'ready',
+      semanticKind: 'proof_setup',
+      taskKind: 'verification',
+      spec: '## Completion Boundary\nThe exact command must pass.',
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        description: 'The exact proof command passes.',
+        verifiedBy: 'automated',
+        command: 'pnpm exec vitest run src/example.test.ts',
+        expectedOutputIncludes: ['guildhall-proof:task-proof-setup'],
+        met: false,
+      }],
+      proofPaths: [{
+        id: 'task-proof-setup-ac-1-command-proof',
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm exec vitest run src/example.test.ts',
+        status: 'planned',
+        expectedEvidence: [{
+          id: 'ac-1',
+          kind: 'automated',
+          description: 'The exact proof command passes.',
+          required: true,
+        }],
+        verificationRecords: [],
+      }],
+    })
+    const promoted = writePromotedTaskDetailMutation(taskQueuePath(), 'task-proof-setup', {
+      projectId,
+      projectRoot: tmpDir,
+      mutate: current => ({
+        ...current,
+        status: 'done',
+        completedAt: '2026-07-21T21:00:00.000Z',
+        updatedAt: '2026-07-21T21:00:00.000Z',
+      }),
+    })
+    expect(promoted).toMatchObject({ task: { status: 'done' } })
+    // The installed app runs required migrations before serving actions. Keep
+    // that lifecycle boundary in the flow test without asserting a particular
+    // migration ledger detail here.
+    await applyCanonicalMigrations()
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-proof-setup/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instruction: 'Run the current task-specific proof command.' }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+
+    const queue = await readTaskQueue()
+    expect(queue.tasks).toHaveLength(1)
+    expect(queue.tasks[0]).toMatchObject({
+      id: 'task-proof-setup',
+      status: 'in_progress',
+    })
+    expect(queue.tasks[0]?.notes.at(-1)?.content).toContain('current task-specific proof command')
+    expect((await readEffectiveTask('task-proof-setup')).runtime?.proofRecovery?.kind).toBe('proof')
+  })
+
+  it('reopens a blocked proof-setup boundary inside an active script release', async () => {
+    const now = '2026-07-20T20:00:00.000Z'
+    await seedCanonicalQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        id: 'task-proof-setup',
+        title: 'Establish the exact proof command',
+        status: 'blocked',
+        semanticKind: 'proof_setup',
+        taskKind: 'verification',
+        releaseIds: ['release-1'],
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The task-specific proof command is recorded and passes.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        createdAt: now,
+        updatedAt: now,
+        blockReason: 'The previous handoff was invalid.',
+      }],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-proof-setup/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instruction: 'Run the exact task-specific proof command.' }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+    expect(body.proofSetupTaskId).toBeUndefined()
+
+    const queue = await readTaskQueue()
+    expect(queue.tasks).toHaveLength(1)
+    expect(queue.tasks[0]).toMatchObject({
+      id: 'task-proof-setup',
+      status: 'in_progress',
+      semanticKind: 'proof_setup',
+      assignedTo: 'worker-agent',
+    })
+  })
+
+  it('creates release-local proof work instead of reopening a shipped task', async () => {
+    const now = '2026-07-20T20:00:00.000Z'
+    await seedCanonicalQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'release-next',
+      releases: [
+        {
+          id: 'release-shipped',
+          label: 'Shipped foundation',
+          kind: 'release',
+          state: 'shipped',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-1'],
+          deferredNodeIds: [],
+        },
+        {
+          id: 'release-next',
+          label: 'Follow-up proof',
+          kind: 'release',
+          state: 'active',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-1'],
+          deferredNodeIds: [],
+        },
+      ],
+      tasks: [{
+        id: 'task-1',
+        title: 'Completed implementation',
+        description: 'The implementation shipped, but the follow-up release needs an executable proof contract.',
+        domain: 'runtime',
+        projectPath: tmpDir,
+        status: 'done',
+        releaseIds: ['release-shipped', 'release-next'],
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: [{ id: 'script-proof', kind: 'command', description: 'A task-specific script proof passes.', required: true }],
+          verificationRecords: [],
+        }],
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      }],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instruction: 'Establish the proof for the selected follow-up release.' }),
+      }),
+    )
+    const body = await res.json() as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'exploring', nextAction: 'source_backed_spec' })
+    expect(body.proofSetupTaskId).toBe('task-1-proof-setup')
+
+    const queue = await readTaskQueue()
+    expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-1')).toMatchObject({
+      status: 'done',
+      releaseIds: expect.arrayContaining(['release-shipped', 'release-next']),
+    })
+    expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-1-proof-setup')).toMatchObject({
+      status: 'ready',
+      releaseIds: ['release-next'],
+      hierarchy: { parentId: 'task-1', relation: 'decomposes' },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(tmpDir))
+    const memberships = database.prepare(
+      'SELECT release_id, task_id FROM release_membership ORDER BY release_id, task_id',
+    ).all()
+    database.close()
+    expect(memberships).toEqual([
+      { release_id: 'release-next', task_id: 'task-1' },
+      { release_id: 'release-next', task_id: 'task-1-proof-setup' },
+      { release_id: 'release-shipped', task_id: 'task-1' },
+    ])
+  })
+
+  it('materializes linked proof work for completed active-release work when no executable proof is recorded', async () => {
     const now = '2026-07-18T04:00:00.000Z'
     await seedCanonicalQueue({
       version: 1,
@@ -3826,6 +4109,27 @@ describe('POST /api/project/task/:id/resume', () => {
           verifiedBy: 'review',
           met: true,
         }],
+        proofPaths: [{
+          kind: 'review',
+          source: 'inferred',
+          status: 'verified',
+          expectedEvidence: [{
+            id: 'legacy-review-proof',
+            kind: 'manual',
+            description: 'An old review note says the implementation is coherent.',
+            required: true,
+          }],
+          verificationRecords: [{
+            id: 'legacy-review-proof-record',
+            evidenceId: 'legacy-review-proof',
+            kind: 'manual',
+            status: 'passed',
+            summary: 'Approved review verified from historical audit text.',
+            recordedAt: now,
+            recordedBy: 'legacy-import',
+            evidenceRefs: [],
+          }],
+        }],
         gateResults: [{
           gateId: 'review-backed-gate',
           passed: true,
@@ -3850,13 +4154,17 @@ describe('POST /api/project/task/:id/resume', () => {
     const body = (await res.json()) as Record<string, any>
     expect(res.status, JSON.stringify(body)).toBe(200)
     expect(body).toMatchObject({ ok: true, status: 'exploring', nextAction: 'source_backed_spec' })
-    const effective = await readEffectiveTask('task-1')
-    expect(effective.status).toBe('exploring')
-    expect(effective.assignedTo).toBeNull()
-    expect(effective.runtime?.proofRecovery?.reason).toBe('Attach the executable release proof.')
-    expect(effective.proofPaths).toBeUndefined()
-    expect(effective.acceptanceCriteria).toEqual([])
-    expect(effective.spec).toBeUndefined()
+    expect(body.proofSetupTaskId).toBe('task-1-proof-setup')
+    const queue = await readTaskQueue()
+    expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-1')).toMatchObject({
+      status: 'done',
+      releaseIds: ['release-1'],
+    })
+    expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-1-proof-setup')).toMatchObject({
+      status: 'ready',
+      releaseIds: ['release-1'],
+      hierarchy: { parentId: 'task-1', relation: 'decomposes' },
+    })
   })
 
   it('does not reopen stale raw retries when effective completion proof already settled the task', async () => {
@@ -4195,9 +4503,10 @@ describe('POST /api/project/task/:id/resume', () => {
       version: 1,
       lastUpdated: now,
       tasks: [
-        {
-          id: 'task-done',
-          title: 'Add E2E login -> create page -> edit -> search flow',
+      {
+        id: 'task-done',
+        sourceIdentity: 'knit:e2e-login-create-edit-search',
+        title: 'Add E2E login -> create page -> edit -> search flow',
           description: 'Finished version',
           domain: 'knit',
           projectPath: '/tmp/knit',
@@ -4209,9 +4518,10 @@ describe('POST /api/project/task/:id/resume', () => {
           createdAt: now,
           updatedAt: now,
         },
-        {
-          id: 'task-1',
-          title: 'E2E tests: login → create page → edit → search flow',
+      {
+        id: 'task-1',
+        sourceIdentity: 'knit:e2e-login-create-edit-search',
+        title: 'E2E tests: login → create page → edit → search flow',
           description: 'Imported raw draft',
           domain: 'knit',
           projectPath: '/tmp/knit',
@@ -5174,7 +5484,7 @@ describe('POST /api/project/bounded-chat/:id/answer for task owner input', () =>
       },
       question: {
         kind: 'choice',
-        prompt: 'Pick one',
+        prompt: 'Which option should we use?',
         choices: ['A', 'B'],
         selectionMode: 'single',
       },
@@ -5276,7 +5586,7 @@ describe('promoted ordinary task actions', () => {
       },
       question: {
         kind: 'choice',
-        prompt: 'Pick one',
+        prompt: 'Which option should we use?',
         choices: ['A', 'B'],
         selectionMode: 'single',
       },
@@ -5693,6 +6003,12 @@ describe('GET /api/project/activity', () => {
             {
               agentId: 'task-claimer',
               role: 'orchestrator',
+              structured: {
+                event: 'task_claim',
+                source: 'deterministic',
+                taskId: 't1',
+                assignedTo: 'worker-agent',
+              },
               content: 'Claimed ready task for worker-agent.',
               timestamp: staleClaimAt,
             },

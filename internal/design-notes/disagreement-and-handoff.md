@@ -135,8 +135,9 @@ decision recorded the same way the Coordinator's would be.
 The cheap heuristic to avoid false positives:
 
 1. **Same-persona-repeat-dissent**: the same persona emits `revise`
-   across two consecutive rounds with overlapping `revisionItems` (≥50%
-   token overlap on the item text).
+   across two consecutive rounds. Attribution is by the persisted reviewer
+   identity; reviewer prose is never compared because wording changes must not
+   alter orchestration state.
 2. **Mutual-exclusion keywords**: any revision item contains a
    negation-of-another-item pattern (`"do NOT do X"` where another
    persona asked for X). Detected via a simple regex scan; false
@@ -194,8 +195,9 @@ it, so the audit trail is visible without grepping DECISIONS.md.
 
 ### 1.5 Open questions
 
-- How do we detect "overlapping revision items" robustly? Token overlap
-  works for most cases; semantic overlap requires an embedding-ish call
+- How do we detect repeated dissent without model prose? The current contract
+  uses stable reviewer identity and deliberately does not infer semantic
+  overlap from free-form revision text.
   which adds cost.
 - Should the Coordinator's adjudication decision be *itself* reviewable
   by a human before the worker sees it, for high-stakes domains? Probably

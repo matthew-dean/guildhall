@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os'
 import { InMemoryGitDriver } from '../git-driver.js'
 import {
   classifyGitStoryState,
+  gitStoryFollowupIsActive,
   inspectGitStory,
   summarizeGitStories,
 } from '../git-story.js'
@@ -122,6 +123,40 @@ describe('classifyGitStoryState', () => {
       hasUpstream: false,
       mergeRecordResult: 'reconciled',
     })).toBe('merged')
+  })
+})
+
+describe('gitStoryFollowupIsActive', () => {
+  it('treats a skipped landing as historical after proven task completion', () => {
+    expect(gitStoryFollowupIsActive({
+      status: 'done',
+      mergeRecordResult: 'skipped',
+      hasCompletionProof: true,
+      hasTaskWorktree: false,
+    })).toBe(false)
+  })
+
+  it('keeps a skipped landing active without durable completion proof', () => {
+    expect(gitStoryFollowupIsActive({
+      status: 'done',
+      mergeRecordResult: 'skipped',
+      hasCompletionProof: false,
+      hasTaskWorktree: false,
+    })).toBe(true)
+  })
+
+  it('keeps real task worktrees and conflicts actionable', () => {
+    expect(gitStoryFollowupIsActive({
+      status: 'done',
+      mergeRecordResult: 'skipped',
+      hasCompletionProof: true,
+      hasTaskWorktree: true,
+    })).toBe(true)
+    expect(gitStoryFollowupIsActive({
+      status: 'done',
+      mergeRecordResult: 'conflict',
+      hasCompletionProof: true,
+    })).toBe(true)
   })
 })
 

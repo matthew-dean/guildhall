@@ -46,7 +46,7 @@ describe('project question planner', () => {
     expect(memory.inferredFacts.map(f => f.text)).toContainEqual(expect.stringContaining('author voice'))
   })
 
-  it('asks about the highest-impact Narrative Harness fork instead of generic domains', () => {
+  it('asks one generic typed direction question instead of classifying project prose', () => {
     const evidence = buildProjectQuestionEvidence(narrativeHarnessInput)
     const plan = planNextProjectQuestion({
       evidence,
@@ -56,45 +56,30 @@ describe('project question planner', () => {
 
     expect(plan.kind).toBe('ask')
     if (plan.kind !== 'ask') throw new Error('expected a question')
+    expect(plan.question.id).toBe('project-direction-open')
     expect(plan.question.prompt).toBe(
-      'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+      'What should Guildhall use as the main direction for Narrative Harness when shaping work?',
     )
-    expect(plan.question.prompt).not.toMatch(/workflow|day-to-day constraint|domain|anything else/i)
-    expect(plan.question.choices).toEqual([
-      'Reviewer-lane MVPs',
-      'Author-facing editor UX',
-      'Story-memory/schema foundations',
-      'Generation/evaluation loops',
-    ])
-    expect(plan.question.why).toContain('changes which backlog items Guildhall should shape first')
+    expect(plan.question.choices).toBeUndefined()
+    expect(plan.question.evidence).toEqual([])
   })
 
   it('keeps asking the next planned root question when one fork is resolved but other intake questions remain', () => {
     const evidence = buildProjectQuestionEvidence({
       ...narrativeHarnessInput,
       currentAnswers: [{
-        questionId: 'project-direction-priority',
-        prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+        questionId: 'project-direction-open',
+        prompt: 'What should Guildhall use as the main direction for Narrative Harness when shaping work?',
         answer: 'Reviewer-lane MVPs first, then generation/evaluation loops.',
       }],
     })
     const plan = planNextProjectQuestion({
       evidence,
       answeredQuestions: evidence.currentAnswers,
-      askedCandidateIds: ['project-direction-priority'],
+      askedCandidateIds: ['project-direction-open'],
     })
 
-    expect(plan.kind).toBe('ask')
-    if (plan.kind !== 'ask') throw new Error('expected a question')
-    expect(plan.question).toMatchObject({
-      id: 'visual-direction-mode',
-      prompt: 'Should Narrative Harness feel more like a calm writing desk, a professional editorial tool, or an analytical story-debugging cockpit?',
-      choices: [
-        'Calm writing desk',
-        'Professional editorial tool',
-        'Analytical story-debugging cockpit',
-      ],
-    })
+    expect(plan.kind).toBe('complete')
   })
 
   it('treats user confusion as a failed question instead of project memory', () => {
@@ -112,8 +97,8 @@ describe('project question planner', () => {
 
   it('accepts a useful bounded answer without asking a follow-up', () => {
     const answer = {
-      questionId: 'project-direction-priority',
-      prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+      questionId: 'project-direction-open',
+      prompt: 'What should Guildhall use as the main direction for Narrative Harness when shaping work?',
       answer: 'Reviewer-lane MVPs first, especially author voice and coherence reviewers. Save editor UX for later.',
     }
 
@@ -127,21 +112,17 @@ describe('project question planner', () => {
     })
   })
 
-  it('asks a follow-up only when a choice remains materially ambiguous', () => {
+  it('does not classify free-form answer vocabulary into a project-specific follow-up', () => {
     const answer = {
-      questionId: 'project-direction-priority',
-      prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+      questionId: 'project-direction-open',
+      prompt: 'What should Guildhall use as the main direction for Narrative Harness when shaping work?',
       answer: 'Probably reviewer stuff, but only if it helps us know whether a novel is actually good.',
     }
 
-    const followUp = planFollowUpForAnswer(answer)
-
-    expect(followUp.kind).toBe('ask')
-    if (followUp.kind !== 'ask') throw new Error('expected follow-up')
-    expect(followUp.question.prompt).toBe(
-      'Should reviewer-lane MVPs judge internal story coherence, reader engagement, author voice preservation, or all three?',
-    )
-    expect(followUp.question.prompt).not.toContain(answer.answer)
+    expect(planFollowUpForAnswer(answer)).toEqual({
+      kind: 'none',
+      reason: 'The answer resolves the active fork.',
+    })
   })
 
   it('does not recreate the bad Narrative Harness check-in sequence', () => {
@@ -163,8 +144,8 @@ describe('project question planner', () => {
   it('never places the full previous answer inside the next prompt', () => {
     const previousAnswer = 'A quiet but powerful editor with clean lines, muted colors, lots of whitespace, and reader feedback loops.'
     const followUp = planFollowUpForAnswer({
-      questionId: 'project-direction-priority',
-      prompt: 'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+      questionId: 'project-direction-open',
+      prompt: 'What should Guildhall use as the main direction for Narrative Harness when shaping work?',
       answer: previousAnswer,
     })
 

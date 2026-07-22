@@ -16,7 +16,8 @@
  *   3. Bump the root `package.json` to the new version.
  *   4. For real publishes, update public docs pointers and cut the one-time
  *      docs/versions/<version> snapshot from canonical docs. Dry-runs skip this.
- *   5. Typecheck + docs build + tests + dep-cruise as the pre-publish gate.
+ *   5. Typecheck + docs build + model-independence + tests + dep-cruise as
+ *      the pre-publish gate.
  *   6. Rebuild `dist/` fresh.
  *   7. Build the macOS packaged artifact used by the curl installer.
  *   8. Verify package contents exclude raw docs/ but keep generated help.
@@ -165,10 +166,14 @@ const releaseHelpDocsEnv = flags.dryRun
 // ---------------------------------------------------------------------------
 
 if (!flags.skipTests) {
-  log('Running typecheck, docs build, lint:deps, and tests...')
+  log('Running typecheck, docs build, model-independence, lint:deps, and tests...')
   run('pnpm', ['typecheck'])
   run('pnpm', ['docs:build'], releaseHelpDocsEnv)
   run('pnpm', ['lint:deps'])
+  // A model changing prose is a release blocker if it changes any durable
+  // Guildhall meaning. Keep this adversarial gate explicit and visible rather
+  // than relying on the much larger suite to make that contract obvious.
+  run('pnpm', ['model:independence'])
   run('pnpm', ['test'])
 } else {
   warn('Skipping gate (--skip-tests). Build still runs.')

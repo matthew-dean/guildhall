@@ -4,6 +4,7 @@ import {
   completionProofCanSettleUnmetAcceptanceCriteria,
   hasActiveProofRecovery,
   normalizeAcceptanceCriteriaForCurrentProof,
+  taskHasScriptProofPath,
   taskDoneButReviewConflict,
   taskDoneButProofMissing,
   taskDoneButProofMissingForScope,
@@ -22,13 +23,45 @@ function reviewedTask(criterion: Record<string, unknown>) {
     acceptanceCriteria: [criterion],
     reviewVerdicts: [{
       verdict: 'approved',
+      reviewerPath: 'llm',
+      reason: 'Approved',
       reasoning: 'acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
       recordedAt: '2026-07-13T22:00:00.000Z',
+      acceptedCriteriaIds: [criterion.id],
     }],
   }
 }
 
 describe('proof health', () => {
+  it('uses the shared current-proof rule for acceptance-linked command paths', () => {
+    const task = {
+      status: 'done',
+      acceptanceCriteria: [{ id: 'AC-1', met: true }],
+      proofPaths: [{
+        kind: 'command',
+        title: 'Run AC-1',
+        command: 'pnpm test -- current',
+        expectedEvidence: [{ id: 'evidence-1', required: true }],
+        verificationRecords: [],
+      }],
+      gateResults: [{ gateId: 'AC-1', command: 'pnpm test -- current', type: 'hard', passed: true }],
+    }
+
+    expect(taskDoneButProofMissing(task)).toBe(false)
+  })
+
+  it('treats compact proof-setup rows as unproven instead of crashing', () => {
+    const compactTask = {
+      id: 'task-proof-setup',
+      semanticKind: 'proof_setup',
+      status: 'done',
+      hierarchy: { parentId: 'task-parent' },
+      proofPaths: [],
+    }
+
+    expect(taskDoneButProofMissing(compactTask)).toBe(true)
+  })
+
   it('materializes one durable command proof path per explicit acceptance command', () => {
     const task = {
       id: 'task-command-proof',
@@ -86,8 +119,94 @@ describe('proof health', () => {
     expect(taskDoneButProofMissingForScope(task, 'manual')).toBe(false)
   })
 
+  it('does not call an inferred blocked-until-setup path executable', () => {
+    const task = {
+      status: 'done',
+      proofPaths: [{
+        kind: 'command',
+        source: 'inferred',
+        launchSteps: [{
+          kind: 'blocked_until_setup',
+          setupRequirement: 'Name the command first.',
+        }],
+      }],
+    }
+
+    expect(taskHasScriptProofPath(task)).toBe(false)
+  })
+
+  it('never lets a proof-setup checkbox settle missing command evidence', () => {
+    const task = {
+      id: 'task-proof-setup',
+      title: 'Establish concrete proof',
+      semanticKind: 'proof_setup',
+      status: 'done',
+      hierarchy: { parentId: 'task-parent' },
+      acceptanceCriteria: [{ id: 'ac-1', met: true }],
+    }
+
+    expect(taskDoneButProofMissing(task)).toBe(true)
+  })
+
+  it('keeps proof-setup completion tied to the exact command identity', () => {
+    const task = {
+      id: 'task-proof-setup',
+      title: 'Establish concrete proof',
+      semanticKind: 'proof_setup',
+      status: 'done',
+      hierarchy: { parentId: 'task-parent' },
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        command: 'pnpm run proof:task-parent',
+        expectedOutputIncludes: ['guildhall-proof:task-parent'],
+        met: true,
+      }],
+      proofPaths: [{
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm run proof:task-parent',
+        expectedEvidence: [{ id: 'ac-1', required: true }],
+        verificationRecords: [{
+          evidenceId: 'ac-1',
+          command: 'pnpm run proof:task-parent',
+          status: 'passed',
+        }],
+      }],
+    }
+
+    expect(taskDoneButProofMissing(task)).toBe(false)
+    task.acceptanceCriteria[0]!.expectedOutputIncludes = ['guildhall-proof:some-other-task']
+    expect(taskDoneButProofMissing(task)).toBe(true)
+  })
+
+  it('accepts a typed marker emitted by the command and a passing criterion gate without prose parsing', () => {
+    const task = {
+      id: 'task-proof-setup',
+      title: 'Establish concrete proof',
+      semanticKind: 'proof_setup',
+      status: 'done',
+      hierarchy: { parentId: 'task-parent' },
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        command: 'node scripts/proof.mjs && printf guildhall-proof:task-parent',
+        met: false,
+      }],
+      proofPaths: [{
+        kind: 'command',
+        command: 'node scripts/proof.mjs && printf guildhall-proof:task-parent',
+        expectedEvidence: [{ id: 'ac-1', required: true }],
+        verificationRecords: [],
+      }],
+      gateResults: [{ gateId: 'ac-1', type: 'hard', passed: true }],
+    }
+
+    expect(taskDoneButProofMissing(task)).toBe(false)
+  })
+
   it('does not treat a bare workspace convention as task-specific proof during recovery', () => {
     expect(isConcreteProjectProofCommand('pnpm test')).toBe(false)
+    expect(isConcreteProjectProofCommand('pnpm proof:context')).toBe(false)
+    expect(isConcreteProjectProofCommand('pnpm proof:world-object-state')).toBe(true)
     expect(isConcreteProjectProofCommand('pnpm run proof:story-records')).toBe(true)
     expect(isConcreteProjectProofCommand('pnpm test -- story-records')).toBe(true)
   })
@@ -104,7 +223,7 @@ describe('proof health', () => {
     expect(taskDoneButProofMissing(task)).toBe(true)
   })
 
-  it('still permits review-only criteria to settle from an approving review', () => {
+  it('permits review-only criteria to settle from an approving review with criterion IDs', () => {
     const task = reviewedTask({
       id: 'review-only-proof',
       description: 'The reviewer records the user-facing decision rationale.',
@@ -113,6 +232,61 @@ describe('proof health', () => {
     })
 
     expect(completionProofCanSettleUnmetAcceptanceCriteria(task)).toBe(true)
+    expect(taskDoneButProofMissing(task)).toBe(false)
+  })
+
+  it('does not let reviewer prose settle a review-only criterion', () => {
+    const task = reviewedTask({
+      id: 'review-only-prose',
+      description: 'The reviewer records the user-facing decision rationale.',
+      verifiedBy: 'review',
+      met: false,
+    })
+    task.reviewVerdicts[0]!.acceptedCriteriaIds = []
+
+    expect(completionProofCanSettleUnmetAcceptanceCriteria(task)).toBe(false)
+    expect(taskDoneButProofMissing(task)).toBe(true)
+  })
+
+  it('does not let free-form completion handoff prose settle a task', () => {
+    const task = {
+      id: 'handoff-prose-only',
+      status: 'done',
+      acceptanceCriteria: [{
+        id: 'proof',
+        description: 'The bounded proof runs successfully.',
+        verifiedBy: 'automated',
+        met: false,
+      }],
+      completionHandoff: {
+        verified: ['The proof passed and the task is complete.'],
+        evidenceRefs: ['proof:claimed-by-worker'],
+      },
+    }
+
+    expect(completionProofCanSettleUnmetAcceptanceCriteria(task)).toBe(false)
+    expect(taskDoneButProofMissing(task)).toBe(true)
+  })
+
+  it('accepts structured completion handoff verification records', () => {
+    const task = {
+      id: 'handoff-structured-proof',
+      status: 'done',
+      completionHandoff: {
+        verified: ['The prose is irrelevant.'],
+        notVerified: ['A current proof record is still required.'],
+        automatedProof: [{
+          id: 'proof-record',
+          kind: 'automated',
+          status: 'passed',
+          summary: 'Proof record',
+          recordedAt: '2026-07-20T00:00:00.000Z',
+          recordedBy: 'gate-checker-agent',
+          evidenceRefs: [],
+        }],
+      },
+    }
+
     expect(taskDoneButProofMissing(task)).toBe(false)
   })
 
@@ -214,6 +388,36 @@ describe('proof health', () => {
     expect(normalized.acceptanceCriteria).toMatchObject([{ met: true, verificationSource: 'passed-command-proof' }])
     expect(completionProofCanSettleUnmetAcceptanceCriteria(task)).toBe(true)
     expect(taskDoneButProofMissing(normalized)).toBe(false)
+  })
+
+  it('does not treat gate names or output prose as command proof', () => {
+    const task = {
+      id: 'task-prose-proof-trap',
+      status: 'done',
+      acceptanceCriteria: [{
+        id: 'command-proof',
+        description: 'Run the bounded proof command.',
+        verifiedBy: 'automated',
+        command: 'pnpm run validate:story',
+        met: false,
+      }],
+      proofPaths: [{
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm run validate:story',
+      }],
+      gateResults: [{
+        type: 'hard',
+        gateId: 'unrelated-gate',
+        name: 'The pnpm run validate:story proof passed',
+        output: 'A reviewer said pnpm run validate:story passed, but this gate did not run it.',
+        passed: true,
+        checkedAt: '2026-07-14T07:38:00.000Z',
+      }],
+    }
+
+    expect(completionProofCanSettleUnmetAcceptanceCriteria(task)).toBe(false)
+    expect(taskDoneButProofMissing(task)).toBe(true)
   })
 
   it('keeps command proof blocked when the current hard gate is failed', () => {
@@ -341,6 +545,42 @@ describe('proof health', () => {
     expect(normalized.acceptanceCriteriaProofState).toEqual({ state: 'verified' })
   })
 
+  it('clears stale diagnostics even when persisted state already says verified', () => {
+    const normalized = normalizeAcceptanceCriteriaForCurrentProof({
+      id: 'task-clears-verified-diagnostics',
+      status: 'done',
+      acceptanceCriteria: [{
+        id: 'command-proof',
+        description: 'Run the bounded proof command.',
+        verifiedBy: 'automated',
+        command: 'pnpm run validate:story',
+        met: true,
+        verificationState: 'verified',
+      }],
+      acceptanceCriteriaProofState: {
+        state: 'verified',
+        reason: 'Current typed proof was missing; historical completion evidence cannot settle the active lifecycle.',
+        gateId: 'command-proof',
+        checkedAt: '2026-07-14T07:38:00.000Z',
+        staleMetCount: 0,
+      },
+      proofPaths: [{
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm run validate:story',
+      }],
+      gateResults: [{
+        type: 'hard',
+        gateId: 'command-proof',
+        command: 'pnpm run validate:story',
+        passed: true,
+        checkedAt: '2026-07-14T07:39:00.000Z',
+      }],
+    })
+
+    expect(normalized.acceptanceCriteriaProofState).toEqual({ state: 'verified' })
+  })
+
   it('retires proof recovery after newer evidence for the documented proof path', () => {
     const task = {
       id: 'task-recovered-proof',
@@ -359,6 +599,32 @@ describe('proof health', () => {
         gateId: 'proof-command-pnpm-run-validate-story',
         command: 'pnpm run validate:story',
         passed: true,
+        checkedAt: '2026-07-14T07:38:00.000Z',
+      }],
+    }
+
+    expect(hasActiveProofRecovery(task)).toBe(false)
+  })
+
+  it('retires proof recovery from the stable evidence id when the gate omits command prose', () => {
+    const task = {
+      id: 'task-recovered-proof-by-id',
+      status: 'done',
+      proofRecovery: {
+        reopenedAt: '2026-07-14T06:04:21.094Z',
+        reason: 'Missing release proof evidence.',
+      },
+      proofPaths: [{
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm run validate:story',
+        expectedEvidence: [{ id: 'ac-1', required: true }],
+      }],
+      gateResults: [{
+        type: 'hard',
+        gateId: 'ac-1',
+        passed: true,
+        output: 'Provider chose an arbitrary successful explanation.',
         checkedAt: '2026-07-14T07:38:00.000Z',
       }],
     }

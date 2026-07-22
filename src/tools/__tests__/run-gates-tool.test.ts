@@ -134,9 +134,13 @@ describe('runGatesTool scoped exceptions', () => {
         metadata: {
           current_task_project_path: '/tmp/project',
           current_task_likely_target_files: ['web/tests/unit/composables/use-presence.test.ts'],
-          current_task_resolved_scope_decisions: [
-            'Treat AC13 as scoped to this task changed target for now. Continue the task by relying on the focused unit-test verification and keep any broader unrelated repo-red findings out of scope unless the same file set is touched.',
-          ],
+          current_task_gate_scope_exceptions: [{
+            id: 'gate-exception-1',
+            gateId: 'typecheck',
+            disposition: 'exclude_unrelated_failure',
+            createdAt: '2026-07-21T00:00:00.000Z',
+            createdBy: 'human',
+          }],
         },
       },
     )
@@ -381,7 +385,7 @@ describe('runGatesTool scoped exceptions', () => {
         metadata: {
           current_task_project_path: '/tmp/project',
           current_task_likely_target_files: ['web/app/composables/use-workspace.ts', 'web/app/types/supabase.ts'],
-          current_task_resolved_scope_decisions: [],
+          current_task_gate_scope_exceptions: [],
         },
       },
     )

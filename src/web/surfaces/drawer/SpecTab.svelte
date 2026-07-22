@@ -17,7 +17,7 @@
   import Textarea from '../../lib/Textarea.svelte'
   import Byline from '../../lib/Byline.svelte'
   import { briefDoneWhenForReaders, briefScopeForReaders } from '../../lib/brief-display.js'
-  import { parseReviewerSummarySections, type ReviewerAdvisoryScores } from '../../lib/reviewer-summary.js'
+  import { buildReviewerSummarySections, type ReviewerAdvisoryScores } from '../../lib/reviewer-summary.js'
   import { readableTaskDescription } from '../../lib/task-display.js'
   import { specApprovalNeedsStructuredBrief } from '../../lib/task-drawer-integrity.js'
   import WhyStuck from './WhyStuck.svelte'
@@ -81,7 +81,7 @@
       : rawSpecText,
   )
   const latestReviewerSummary = $derived((task.latestReviewerSummary ?? '').trim())
-  const reviewerSections = $derived(parseReviewerSummarySections(latestReviewerSummary))
+  const reviewerSections = $derived(buildReviewerSummarySections(task.reviewVerdicts ?? []))
   const latestSelfCritique = $derived((task.latestSelfCritique ?? '').trim())
   const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
   const reviewPlan = $derived(task.reviewPlan ?? null)
@@ -90,7 +90,7 @@
   const hasRecoverySpecSeed = $derived(
     task.status === 'spec_review' &&
       (task.notes ?? []).some((note) =>
-        /deterministic recovery spec seed/i.test(note.content ?? ''),
+        note.structured?.event === 'recovery_spec_seed',
       ),
   )
   const hasTaskLocalSpecification = $derived(

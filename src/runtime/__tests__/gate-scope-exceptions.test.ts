@@ -6,7 +6,7 @@ import {
   summarizeScopedHardGateDisposition,
   type ScopedGateContext,
   type ScopedGateResultLike,
-} from '../gate-scope-exceptions.js'
+} from '../../tools/gate-scope-exceptions.js'
 
 const projectPath = '/workspace/app'
 
@@ -23,7 +23,7 @@ function context(overrides: Partial<ScopedGateContext> = {}): ScopedGateContext 
   return {
     projectPath,
     likelyTargetFiles: ['src/features/editor/Menu.ts'],
-    resolvedDecisionTexts: [],
+    gateScopeExceptions: [],
     ...overrides,
   }
 }
@@ -93,7 +93,7 @@ describe('isScopedGateFailureExempt', () => {
     ).toBe(false)
   })
 
-  it('requires an explicit scoped-verification decision before exempting typecheck failures', () => {
+  it('requires an explicit typed gate exception before exempting typecheck failures', () => {
     const typecheckFailure = gate({
       gateId: 'typecheck',
       output: 'src/legacy.ts(2,8): error TS2307: Cannot find module',
@@ -103,13 +103,32 @@ describe('isScopedGateFailureExempt', () => {
     expect(
       isScopedGateFailureExempt(
         context({
-          resolvedDecisionTexts: [
-            'Typecheck is repo-red outside the changed target and scoped to the same file set.',
-          ],
+          gateScopeExceptions: [{
+            id: 'gate-exception-1',
+            gateId: 'typecheck',
+            disposition: 'exclude_unrelated_failure',
+            createdAt: '2026-07-21T00:00:00.000Z',
+            createdBy: 'human',
+          }],
         }),
         typecheckFailure,
       ),
     ).toBe(true)
+
+    expect(
+      isScopedGateFailureExempt(
+        context({
+          gateScopeExceptions: [{
+            id: 'gate-exception-2',
+            gateId: 'typecheck',
+            disposition: 'exclude_unrelated_failure',
+            createdAt: '2026-07-21T00:00:00.000Z',
+            createdBy: 'human',
+          }],
+        }),
+        gate({ gateId: 'build', output: 'src/legacy.ts(2,8): error TS2307: Cannot find module' }),
+      ),
+    ).toBe(false)
   })
 
   it('does not exempt build failures or failures without parseable paths', () => {

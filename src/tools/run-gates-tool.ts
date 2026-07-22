@@ -12,9 +12,10 @@ import type { HardGate } from '@guildhall/core'
 import {
   parseAuthoritativeCommands,
   reconcileRequestedGatesWithAuthority,
+  TaskGateScopeException,
 } from '@guildhall/core'
 import { summarizeScopedHardGateDisposition } from './gate-scope-exceptions.js'
-import { recordCommandProofPathResults } from '@guildhall/runtime/proof-paths'
+import { commandResultSatisfiesProofContract, recordCommandProofPathResults } from '@guildhall/runtime/proof-paths'
 import {
   readProjectTaskQueueForMutationSync,
   writePromotedTaskDetailMutation,
@@ -27,6 +28,11 @@ function metadataStringArray(metadata: Record<string, unknown>, key: string): st
   return Array.isArray(metadata[key])
     ? (metadata[key] as unknown[]).filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
     : []
+}
+
+function metadataGateScopeExceptions(metadata: Record<string, unknown>): TaskGateScopeException[] {
+  const parsed = TaskGateScopeException.array().safeParse(metadata['current_task_gate_scope_exceptions'])
+  return parsed.success ? parsed.data : []
 }
 
 function isInsideOrSame(parent: string, child: string): boolean {
@@ -98,14 +104,14 @@ async function persistGateResultsForCurrentTask(input: {
   metadata: Record<string, unknown>
   gates: Array<{ id: string; command: string }>
   results: Array<{ gateId: string; type: 'hard' | 'soft'; passed: boolean; output?: string; checkedAt: string }>
-}): Promise<boolean> {
+}): Promise<{ persisted: boolean; proofContractFailureIds: string[] }> {
   const taskId = typeof input.metadata['current_task_id'] === 'string'
     ? input.metadata['current_task_id']
     : ''
   const tasksPath = typeof input.metadata['tasks_path'] === 'string'
     ? input.metadata['tasks_path']
     : ''
-  if (!taskId || !tasksPath) return false
+  if (!taskId || !tasksPath) return { persisted: false, proofContractFailureIds: [] }
 
   try {
     const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
@@ -115,7 +121,7 @@ async function persistGateResultsForCurrentTask(input: {
       tasks: Array<Record<string, unknown>>
     }
     const task = queue.tasks.find((candidate) => candidate['id'] === taskId)
-    if (!task) return false
+    if (!task) return { persisted: false, proofContractFailureIds: [] }
 
     const projectRoot = typeof input.metadata['current_task_project_path'] === 'string'
       ? input.metadata['current_task_project_path']
@@ -139,6 +145,9 @@ async function persistGateResultsForCurrentTask(input: {
       nextTask['gateResults'] = [...existingGateResults, ...input.results]
     }
     recordCommandProofPathResults(nextTask, input.gates, input.results)
+    const proofContractFailureIds = input.results
+      .filter((result) => !commandResultSatisfiesProofContract(nextTask, input.gates, result))
+      .map((result) => result.gateId)
     const now = new Date().toISOString()
     nextTask['updatedAt'] = now
     if (databaseAuthority) {
@@ -173,7 +182,7 @@ async function persistGateResultsForCurrentTask(input: {
         payload: result,
       }),
     ))
-    return true
+    return { persisted: true, proofContractFailureIds }
   } catch (error) {
     throw error instanceof Error ? error : new Error(String(error))
   }
@@ -233,7 +242,7 @@ export const runGatesTool = defineTool({
             ? ctx.metadata['current_task_project_path']
             : input.cwd,
         likelyTargetFiles: metadataStringArray(ctx.metadata, 'current_task_likely_target_files'),
-        resolvedDecisionTexts: metadataStringArray(ctx.metadata, 'current_task_resolved_scope_decisions'),
+        gateScopeExceptions: metadataGateScopeExceptions(ctx.metadata),
       },
       summary.results,
     )
@@ -243,7 +252,8 @@ export const runGatesTool = defineTool({
       gates: effective.gates,
       results: summary.results,
     })
-    const effectiveAllPassed = scopeDisposition?.shouldPass ?? summary.allPassed
+    const effectiveAllPassed = persistedTaskGateResults.proofContractFailureIds.length === 0 &&
+      (scopeDisposition?.shouldPass ?? summary.allPassed)
 
     const lines = [
       ...(effective.usedAuthority ? ['Using authoritative task-scoped hard gates.', ''] : []),
@@ -254,6 +264,9 @@ export const runGatesTool = defineTool({
           ]
         : []),
       `Gates: ${effectiveAllPassed ? 'ALL PASS' : 'SOME FAIL'} (${summary.results.filter((r) => r.passed).length}/${summary.results.length} raw)`,
+      ...(persistedTaskGateResults.proofContractFailureIds.length > 0
+        ? [`Proof contract failed for: ${persistedTaskGateResults.proofContractFailureIds.join(', ')}. Command output did not satisfy the structured evidence contract.`]
+        : []),
       ...summary.results.map(
         (r) => `- ${r.gateId}: ${r.passed ? 'pass' : 'FAIL'}${r.output ? `\n  ${r.output.split('\n').slice(0, 3).join('\n  ')}` : ''}`,
       ),
@@ -266,7 +279,8 @@ export const runGatesTool = defineTool({
         ...(summary as unknown as Record<string, unknown>),
         effectiveGates: effective.gates as unknown as Record<string, unknown>,
         usedAuthoritativeTaskGates: effective.usedAuthority,
-        persistedTaskGateResults,
+        persistedTaskGateResults: persistedTaskGateResults.persisted,
+        proofContractFailureIds: persistedTaskGateResults.proofContractFailureIds,
         effectiveAllPassed,
         scopeExemptFailures: scopeDisposition?.exemptedFailures as unknown as Record<string, unknown>,
       },

@@ -5,6 +5,7 @@ import type {
   TaskDecompositionRecord,
   TaskDecompositionReasonCode,
   TaskKind,
+  TaskSplitRecommendation,
 } from '@guildhall/core'
 import { buildDecompositionChildDrafts, buildTaskSizePlan } from '@guildhall/core'
 import { assessTaskReadiness } from './task-readiness.js'
@@ -39,6 +40,7 @@ export function applyTaskShaping(task: Task, opts: { now?: string; recordNote?: 
         ...(task.acceptanceCriteria?.length ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
         ...(task.outOfScope?.length ? { outOfScope: task.outOfScope } : {}),
         ...(task.workUnitAnalysis ? { workUnitAnalysis: task.workUnitAnalysis } : {}),
+        ...(task.structuredSpec ? { structuredSpec: task.structuredSpec } : {}),
       },
       createdAt: now,
       createdBy: 'task-shaping',
@@ -179,49 +181,43 @@ function childDraftsFor(
     return []
   }
   const recommendations = buildDecompositionChildDrafts({ task })
-    .filter(recommendation => !isGenericOutcomePlaceholder(recommendation.title))
 
-  return recommendations.map((recommendation, index) => ({
+  return recommendations.map((recommendation) => ({
     title: recommendation.title,
-    kind: inferChildTaskKind(recommendation.title, index),
+    kind: taskKindForRecommendation(recommendation.suggestedTaskKind),
     reason: recommendation.reason,
     dependsOn: recommendation.dependsOn,
-    definitionOfDone: definitionOfDoneForRecommendation(recommendation.title, definitionOfDone),
+    definitionOfDone: definitionOfDoneForRecommendation(definitionOfDone, taskKindForRecommendation(recommendation.suggestedTaskKind)),
   }))
 }
 
-function taskText(task: Task): string {
-  return [
-    task.title,
-    task.description,
-    task.spec,
-    ...(task.acceptanceCriteria ?? []).map(ac => ac.description),
-  ].filter(Boolean).join('\n')
-}
-
-function isGenericOutcomePlaceholder(title: string): boolean {
-  return /^extract the (first|second) independently verifiable outcome$/i.test(title.trim())
-}
-
-function inferChildTaskKind(title: string, index: number): TaskKind {
-  if (/\b(research|audit|investigate|compare|decide)\b/i.test(title)) return 'research'
-  if (/\b(verify|validation|proof|test)\b/i.test(title)) return 'verification'
-  if (/\b(doc|docs|documentation|record|inventory|note)\b/i.test(title)) return 'cleanup'
-  return index === 0 ? 'implementation' : 'implementation'
+function taskKindForRecommendation(kind: TaskSplitRecommendation['suggestedTaskKind']): TaskKind {
+  switch (kind) {
+    case 'research':
+    case 'decision':
+    case 'spike':
+    case 'cleanup':
+    case 'verification':
+    case 'release':
+    case 'learning':
+      return kind
+    default:
+      return 'implementation'
+  }
 }
 
 function definitionOfDoneForRecommendation(
-  title: string,
   defaultDefinitionOfDone: DefinitionOfDone,
+  suggestedTaskKind?: TaskKind,
 ): DefinitionOfDone {
-  if (/\b(research|audit|investigate|compare|decide)\b/i.test(title)) {
+  if (suggestedTaskKind === 'research' || suggestedTaskKind === 'decision' || suggestedTaskKind === 'spike') {
     return {
       items: ['The split records the concrete outcome, evidence, and unresolved follow-up.'],
       evidenceRequired: ['Source-backed decomposition evidence is attached to the task.'],
       createdBy: 'task-decomposition',
     }
   }
-  if (/\b(verify|validation|proof|test)\b/i.test(title)) {
+  if (suggestedTaskKind === 'verification') {
     return {
       items: ['Verification result records expected evidence, actual evidence, and remaining uncertainty.'],
       evidenceRequired: ['Proof path result is recorded.'],

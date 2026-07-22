@@ -79,6 +79,8 @@ export interface CalibrationReviewPacket {
 }
 
 export interface CalibrationReviewerFinding {
+  /** Optional exact id when the reviewer protocol exposes one. */
+  findingId?: string
   lane: z.infer<typeof ReviewRiskLane> | string
   severity: 'low' | 'medium' | 'high' | 'critical' | string
   summary: string
@@ -429,7 +431,11 @@ export function gradeCalibrationRun(input: {
   const matchedReviewerIndexes = new Set<number>()
   for (const finding of input.case.knownFindings) {
     const matchedIndex = input.reviewerFindings.findIndex((reviewerFinding, index) =>
-      !matchedReviewerIndexes.has(index) && reviewerFindingMatches(finding, reviewerFinding),
+      !matchedReviewerIndexes.has(index) && reviewerFindingMatches(
+        finding,
+        reviewerFinding,
+        input.case.knownFindings,
+      ),
     )
     if (matchedIndex >= 0) {
       matchedFindingIds.push(finding.id)
@@ -538,30 +544,22 @@ function outcomeFor(input: {
 function reviewerFindingMatches(
   knownFinding: CalibrationKnownFinding,
   reviewerFinding: CalibrationReviewerFinding,
+  knownFindings: readonly CalibrationKnownFinding[],
 ): boolean {
-  const text = normalize(`${reviewerFinding.summary} ${reviewerFinding.lane}`)
-  if (normalize(reviewerFinding.lane).includes(normalize(knownFinding.lane))) return true
-  return knownFinding.matchHints.some((hint) => text.includes(normalize(hint)))
-}
-
-function normalize(value: string): string {
-  return value.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (reviewerFinding.findingId) return reviewerFinding.findingId === knownFinding.id
+  // Calibration may grade a model that emits only structured lane/severity
+  // fields. Never match a finding because its prose happens to contain one of
+  // the case author's hint phrases. If multiple hidden findings share the same
+  // structured pair, the output is under-specified and must remain unmatched.
+  const sameShape = knownFindings.filter(candidate =>
+    candidate.lane === reviewerFinding.lane && candidate.severity === reviewerFinding.severity,
+  )
+  return sameShape.length === 1 && sameShape[0]?.id === knownFinding.id
 }
 
 function deriveMatchHints(text: string): string[] {
-  const normalized = text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  const candidates = [
-    ...normalized.matchAll(/\b(primary\s+\w+\s+action)\b/g),
-    ...normalized.matchAll(/\b(safe\s+next\s+action)\b/g),
-    ...normalized.matchAll(/\b(ambiguous)\b/g),
-    ...normalized.matchAll(/\b(permission|privacy|migration|rollback|keyboard|focus|token|budget|cost)\b/g),
-  ].map((match) => match[1]!)
-
-  return [...new Set(candidates)].slice(0, 6)
+  void text
+  return []
 }
 
 function slugId(value: string): string {

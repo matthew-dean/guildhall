@@ -2,14 +2,13 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
-import { AcceptanceCriteria, ProjectReleaseState, TaskQueue, TERMINAL_TASK_STATUSES, buildDecompositionChildDrafts, type ProjectRelease, type Task, type TaskPriority } from '@guildhall/core'
+import { AcceptanceCriteria, explicitTaskStructuralIdentity, ProjectReleaseState, renderStructuredSpecMarkdown, splitChildSourceIdentity, StructuredSpec, TaskQueue, TERMINAL_TASK_STATUSES, buildDecompositionChildDrafts, type ProjectRelease, type Task, type TaskPriority } from '@guildhall/core'
 import { getProjectLocalHistoryDir, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir, readProjectStateDatabaseQueueRevision } from '@guildhall/sessions'
 import { appendExploringTranscript, replaceExploringTranscript } from '@guildhall/tools'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import {
   detectWorkspaceSignals,
   formWorkspaceHypothesis,
-  isFormattingDebris,
   type DraftContext,
   type DraftGoal,
   type DraftMilestone,
@@ -23,17 +22,16 @@ import {
   planEvidenceWorkGraph,
   type EvidenceTask,
   type EvidenceSource,
+  type EvidenceStatusHint,
+  type EvidenceWorkShape,
 } from './evidence-work-graph-intake.js'
+import type { ImportSemanticKind } from './import-semantic-kind.js'
 import {
   evidenceTaskDescription,
   evidenceTaskPriority,
   evidenceTaskReferences,
   evidenceTaskWhyThisMayMatter,
 } from './evidence-task-import-draft.js'
-import {
-  detectShadowedCurrentMilestoneDeliverableImports,
-  detectShadowedStageAlignedRoadmapDeliverables,
-} from './current-milestone-shadowing.js'
 import { deriveReleaseContainersFromTaskMembership, releaseLabelFromId, taskScopeNodeId } from './project-scope-projection.js'
 import { applyTaskShaping } from './task-decomposition.js'
 import { isMaterializableSplitAction, materializeSplitChildren } from '@guildhall/tools'
@@ -41,7 +39,6 @@ import { effectiveTaskTitle } from '@guildhall/shared'
 import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
 import {
   contractShapedImportHasNoConcreteContracts,
-  titleLooksContractShaped,
 } from './imported-work-integrity.js'
 import { readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './project-reserved-task-ids.js'
@@ -575,6 +572,15 @@ export interface ParsedAcceptanceCriterion {
 export interface ParsedTask {
   id: string
   title: string
+  sourceIdentity?: string
+  deliverableName?: string
+  producedArtifact?: string
+  /** Explicit graph metadata; never inferred from title or description. */
+  workShape?: EvidenceWorkShape
+  statusHint?: EvidenceStatusHint
+  targetArea?: string
+  buildsOn?: readonly string[]
+  consumerSurfaces?: readonly string[]
   description: string
   whyThisMayMatter?: string
   assumptions?: readonly string[]
@@ -588,6 +594,12 @@ export interface ParsedTask {
   proofPaths?: readonly Record<string, unknown>[]
   releaseIds?: readonly string[]
   sourceClaims?: Task['sourceClaims']
+  /** Explicit intake metadata; never inferred from title or description. */
+  semanticKind?: ImportSemanticKind
+  /** Explicit contract names owned by this task; never inferred from title prose. */
+  contractNames?: readonly string[]
+  /** Explicit parent acceptance links; never inferred from criterion prose. */
+  parentAcceptanceCriterionIds?: readonly string[]
 }
 
 export interface MaterializedImportTask extends ParsedTask {
@@ -613,7 +625,7 @@ function simpleImportedProofPaths(paths: readonly unknown[] | undefined): Simple
 }
 
 function importedSourceClaimsForTask(
-  task: Pick<MaterializedImportTask, 'title' | 'description' | 'whyThisMayMatter' | 'references' | 'scope' | 'releaseIds'>,
+  task: Pick<MaterializedImportTask, 'id' | 'sourceIdentity' | 'deliverableName' | 'title' | 'description' | 'whyThisMayMatter' | 'references' | 'scope' | 'releaseIds'>,
   normalizedReferences: readonly string[],
 ): Task['sourceClaims'] {
   const evidence = [
@@ -629,14 +641,19 @@ function importedSourceClaimsForTask(
     ...(task.scope ? { scopeHint: task.scope } : {}),
     ...(releaseId ? { releaseId } : {}),
     confidence: normalizedReferences.length > 0 ? 'high' : 'medium',
-    linkedTaskHints: [task.title],
+    // A source claim may point back to work only through an explicit id or
+    // source-owned identity. The title is audit text, not a join key.
+    linkedTaskHints: [task.id, task.sourceIdentity, task.deliverableName].filter(
+      (value): value is string => typeof value === 'string' && value.trim().length > 0,
+    ),
   }]
 }
 
 function dedupeImportSourceClaims(claims: readonly NonNullable<MaterializedImportTask['sourceClaims']>[number][]): Task['sourceClaims'] {
   const byKey = new Map<string, NonNullable<Task['sourceClaims']>[number]>()
-  for (const claim of claims) {
+  for (const [index, claim] of claims.entries()) {
     const normalized: NonNullable<Task['sourceClaims']>[number] = {
+      ...(claim.signalId ? { signalId: claim.signalId } : {}),
       source: claim.source,
       title: claim.title,
       evidence: claim.evidence,
@@ -649,12 +666,9 @@ function dedupeImportSourceClaims(claims: readonly NonNullable<MaterializedImpor
       confidence: claim.confidence,
       linkedTaskHints: [...(claim.linkedTaskHints ?? [])],
     }
-    const key = [
-      normalized.source,
-      normalizeImportText(normalized.title),
-      normalized.evidence.trim().toLowerCase(),
-      normalized.references.join('|'),
-    ].join('\0')
+    const key = normalized.signalId
+      ? `${normalized.source}\0signal:${normalized.signalId}`
+      : `${normalized.source}\0ordinal:${index}`
     if (!byKey.has(key)) byKey.set(key, normalized)
   }
   return [...byKey.values()]
@@ -686,6 +700,7 @@ type ImportedBlueprintSeed = {
   proofPaths?: readonly Record<string, unknown>[]
   productBrief?: Task['productBrief']
   spec?: Task['spec']
+  structuredSpec?: Task['structuredSpec']
   outOfScope: Task['outOfScope']
   notes: Task['notes']
   workUnitAnalysis?: Task['workUnitAnalysis']
@@ -749,6 +764,28 @@ export function workspaceImportYamlErrors(spec: string): string[] {
 function normStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((v): v is string => typeof v === 'string')
+}
+
+const EVIDENCE_WORK_SHAPES: ReadonlySet<EvidenceWorkShape> = new Set([
+  'ui-component',
+  'frontend-integration',
+  'backend-api',
+  'cli-tool',
+  'docs',
+  'migration',
+  'bugfix',
+  'single-edit',
+  'generic',
+])
+
+function parseEvidenceWorkShape(value: unknown): EvidenceWorkShape | undefined {
+  return typeof value === 'string' && EVIDENCE_WORK_SHAPES.has(value as EvidenceWorkShape)
+    ? value as EvidenceWorkShape
+    : undefined
+}
+
+function parseEvidenceStatusHint(value: unknown): EvidenceStatusHint | undefined {
+  return value === 'missing' || value === 'shipped' || value === 'unknown' ? value : undefined
 }
 
 function parseProjectReleaseState(value: unknown): ProjectRelease['state'] | undefined {
@@ -893,82 +930,6 @@ function normalizeImportText(value: string): string {
     .trim()
 }
 
-function importTaskTokens(value: string): Set<string> {
-  return new Set(
-    normalizeImportText(value)
-      .replace(/-/g, ' ')
-      .split(/\s+/)
-      .filter(token => token.length >= 3)
-      .filter(token => ![
-        'add',
-        'and',
-        'build',
-        'define',
-        'first',
-        'from',
-        'implement',
-        'into',
-        'review',
-        'reviewer',
-        'schema',
-        'spec',
-        'task',
-        'the',
-        'use',
-        'using',
-      ].includes(token)),
-  )
-}
-
-function importTaskOverlapRatio(left: Set<string>, right: Set<string>): number {
-  if (left.size === 0 || right.size === 0) return 0
-  let shared = 0
-  for (const token of left) {
-    if (right.has(token)) shared += 1
-  }
-  return shared / Math.max(left.size, right.size)
-}
-
-function importTaskSharedTokenCount(left: Set<string>, right: Set<string>): number {
-  let shared = 0
-  for (const token of left) {
-    if (right.has(token)) shared += 1
-  }
-  return shared
-}
-
-function importTaskReferenceBasenames(refs: readonly string[] | undefined): Set<string> {
-  return new Set(
-    (refs ?? [])
-      .map(ref => path.basename(ref.trim()))
-      .filter(Boolean),
-  )
-}
-
-function importTasksShareSourceReferences(
-  left: readonly string[] | undefined,
-  right: readonly string[] | undefined,
-): boolean {
-  const leftRefs = importTaskReferenceBasenames(left)
-  if (leftRefs.size === 0) return false
-  const rightRefs = importTaskReferenceBasenames(right)
-  if (rightRefs.size === 0) return false
-  return [...leftRefs].some(ref => rightRefs.has(ref))
-}
-
-function importedTaskHasSourceBackedDescriptionMatch(
-  existing: Task,
-  importedTitle: string,
-  importedReferences: readonly string[] | undefined,
-): boolean {
-  const existingSourcePath = importTaskSourcePath(existing.description ?? '')
-  if (!existingSourcePath) return false
-  const importedRefs = importTaskReferenceBasenames(importedReferences)
-  if (importedRefs.size === 0 || !importedRefs.has(path.basename(existingSourcePath))) return false
-  const existingDescription = normalizeImportText(existing.description ?? '')
-  return importedTitle.length >= 50 && existingDescription.includes(importedTitle)
-}
-
 function sourceTitleFromImportedDescription(description: string): string | null {
   const sourcePath = importTaskSourcePath(description)
   if (!sourcePath) return null
@@ -998,59 +959,9 @@ function existingImportedTaskMatchesIncoming(
   existing: Task,
   imported: MaterializedImportTask,
 ): boolean {
-  if (!isWorkspaceImportManagedTask(existing)) return false
-  const existingTitle = normalizeImportText(existing.title)
-  const importedTitle = normalizeImportText(imported.title)
-  if (!existingTitle || !importedTitle) return false
-  if (existingTitle === importedTitle) return true
-  const sourceBacked =
-    importTasksShareSourceReferences(existing.references, imported.references) ||
-    importedTaskHasSourceBackedDescriptionMatch(existing, importedTitle, imported.references)
-  if (!sourceBacked) return false
-  const shorter = existingTitle.length < importedTitle.length ? existingTitle : importedTitle
-  const longer = existingTitle.length < importedTitle.length ? importedTitle : existingTitle
-  return shorter.length >= 50 && longer.startsWith(shorter)
-}
-
-const ARCHIVED_IMPORT_DUPLICATE_STOPWORDS = new Set([
-  'add',
-  'build',
-  'create',
-  'implement',
-  'write',
-  'draft',
-  'task',
-  'tests',
-  'test',
-  'view',
-  'deferred',
-  'the',
-  'a',
-  'an',
-  'to',
-  'for',
-  'of',
-  'and',
-])
-
-function archivedImportTitleTokens(title: string | undefined): string[] {
-  return (title ?? '')
-    .toLowerCase()
-    .replace(/[→>\-–—/:()"'`.,[\]{}]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-    .filter(token => !ARCHIVED_IMPORT_DUPLICATE_STOPWORDS.has(token))
-}
-
-function archivedImportSimilarityScore(left: string[], right: string[]): number {
-  if (left.length === 0 || right.length === 0) return 0
-  const leftSet = new Set(left)
-  const rightSet = new Set(right)
-  let overlap = 0
-  for (const token of leftSet) {
-    if (rightSet.has(token)) overlap += 1
-  }
-  return overlap / Math.max(leftSet.size, rightSet.size)
+  // Imported task identity is a durable id, never a title. A different model
+  // may rewrite the title without changing which work record it represents.
+  return existing.id === imported.id
 }
 
 async function readRecoverableArchivedImportTasks(memoryDir: string): Promise<Task[]> {
@@ -1118,10 +1029,9 @@ function archivedImportTaskMatchesIncoming(
       domain,
     })
   if (archived.projectPath && projectPath && archived.projectPath !== projectPath) return false
-  const archivedTokens = archivedImportTitleTokens(archived.title)
-  const importedTokens = archivedImportTitleTokens(imported.title)
-  if (archivedTokens.length < 4 || importedTokens.length < 4) return false
-  return archivedImportSimilarityScore(archivedTokens, importedTokens) >= 0.75
+  // Archived completion recovery must follow the explicit durable task id.
+  // Title similarity would let a model's wording decide which work is alive.
+  return archived.id === imported.id
 }
 
 function activeImportedTaskShouldYieldToArchivedCompletion(existing: Task, archived: Task): boolean {
@@ -1135,7 +1045,6 @@ function ensureArchivedTaskRecoveredForImport(input: {
   queue: TaskQueue
   archived: Task
   existingImportedTasks: Task[]
-  existingImportedTasksByTitle: Map<string, Task>
 }): Task {
   const existing = input.queue.tasks.find(task => task.id === input.archived.id)
   if (existing) return existing
@@ -1151,105 +1060,12 @@ function ensureArchivedTaskRecoveredForImport(input: {
   ]
   input.queue.tasks.push(restored)
   input.existingImportedTasks.push(restored)
-  const normalizedTitle = normalizeImportText(restored.title)
-  if (normalizedTitle && !input.existingImportedTasksByTitle.has(normalizedTitle)) {
-    input.existingImportedTasksByTitle.set(normalizedTitle, restored)
-  }
   return restored
-}
-
-function importTaskStructuralForm(
-  description: string,
-): 'numbered' | 'bullet' | null {
-  const trimmed = description.trim()
-  if (/: \d+\.\s+/.test(trimmed)) return 'numbered'
-  if (/: -\s+/.test(trimmed)) return 'bullet'
-  return null
 }
 
 function importTaskSourcePath(description: string): string | null {
   const match = /^(.+?\.md):\s+/.exec(description.trim())
   return match?.[1]?.trim() ?? null
-}
-
-function parsedTaskShadowsDetectedTask(
-  detectedTask: DraftTask,
-  parsedTask: ParsedTask,
-): boolean {
-  if ((parsedTask.scope === 'later') !== (detectedTask.scope === 'later')) return false
-  if (parsedTask.domain.trim() && detectedTask.domain.trim() && parsedTask.domain !== detectedTask.domain) return false
-
-  const detectedTokens = importTaskTokens(detectedTask.title)
-  const parsedTokens = importTaskTokens(parsedTask.title)
-  const overlap = importTaskOverlapRatio(detectedTokens, parsedTokens)
-  const sharedTokenCount = importTaskSharedTokenCount(detectedTokens, parsedTokens)
-  if (overlap < 0.45) return false
-  const detectedForm = importTaskStructuralForm(detectedTask.description)
-  const parsedForm = importTaskStructuralForm(parsedTask.description)
-  const detectedSourcePath = importTaskSourcePath(detectedTask.description)
-  const parsedSourcePath = importTaskSourcePath(parsedTask.description)
-  if (
-    detectedForm &&
-    parsedForm &&
-    detectedForm !== parsedForm &&
-    detectedSourcePath &&
-    parsedSourcePath &&
-    detectedSourcePath === parsedSourcePath
-  ) {
-    return false
-  }
-
-  const detectedRefs = importTaskReferenceBasenames(detectedTask.references)
-  const parsedRefs = importTaskReferenceBasenames(parsedTask.references)
-  const sharedRef = [...detectedRefs].some(ref => parsedRefs.has(ref))
-  if (sharedRef) {
-    if (detectedForm && parsedForm && detectedForm !== parsedForm) return false
-  }
-  if (sharedRef) return true
-
-  const detectedTitle = normalizeImportText(detectedTask.title)
-  const parsedTitle = normalizeImportText(parsedTask.title)
-  return (
-    detectedTitle.includes(parsedTitle) ||
-    parsedTitle.includes(detectedTitle) ||
-    overlap >= 0.6 ||
-    sharedTokenCount >= 3
-  )
-}
-
-function taskTitleContainsCompletionMetadata(title: string): boolean {
-  return /\b(?:completed?|done|shipped|verified|proof|evidence)\b/i.test(title)
-}
-
-function parsedTaskShadowsEvidenceTask(
-  parsedTask: ParsedTask,
-  evidenceTask: EvidenceTask,
-): boolean {
-  const parsedTokens = importTaskTokens(parsedTask.title)
-  const evidenceTokens = importTaskTokens(evidenceTask.title)
-  const overlap = importTaskOverlapRatio(parsedTokens, evidenceTokens)
-  const sharedTokenCount = importTaskSharedTokenCount(parsedTokens, evidenceTokens)
-  if (overlap < 0.45) return false
-
-  const parsedRefs = importTaskReferenceBasenames(parsedTask.references)
-  const evidenceRefs = importTaskReferenceBasenames(evidenceTaskReferences(evidenceTask))
-  const sharedRef = [...parsedRefs].some(ref => evidenceRefs.has(ref))
-  const parsedTitle = normalizeImportText(parsedTask.title)
-  const evidenceTitle = normalizeImportText(evidenceTask.title)
-  if (sharedRef) {
-    return (
-      parsedTitle.includes(evidenceTitle) ||
-      evidenceTitle.includes(parsedTitle) ||
-      overlap >= 0.6 ||
-      sharedTokenCount >= 3
-    )
-  }
-  return (
-    parsedTitle.includes(evidenceTitle) ||
-    evidenceTitle.includes(parsedTitle) ||
-    overlap >= 0.6 ||
-    sharedTokenCount >= 3
-  )
 }
 
 function supportingText(title: string, value: string): string {
@@ -1288,15 +1104,12 @@ export function mergeWorkspaceImportDraft(
   const parsedTasks = parsed.tasks
 
   const mergedGoals: DraftGoal[] = []
-  const parsedGoalsByTitle = new Map(
-    parsed.goals.map(goal => [normalizeImportText(goal.title), goal] as const),
-  )
-  const usedGoalTitles = new Set<string>()
+  const parsedGoalsById = new Map(parsed.goals.map(goal => [goal.id, goal] as const))
+  const usedGoalIds = new Set<string>()
   for (const goal of detected.goals) {
-    const normalizedTitle = normalizeImportText(goal.title)
-    const parsedGoal = parsedGoalsByTitle.get(normalizedTitle)
+    const parsedGoal = parsedGoalsById.get(goal.id)
     if (parsedGoal) {
-      usedGoalTitles.add(normalizedTitle)
+      usedGoalIds.add(parsedGoal.id)
       mergedGoals.push({
         ...goal,
         id: parsedGoal.id,
@@ -1308,9 +1121,7 @@ export function mergeWorkspaceImportDraft(
     mergedGoals.push(goal)
   }
   for (const goal of parsed.goals) {
-    const normalizedTitle = normalizeImportText(goal.title)
-    if (usedGoalTitles.has(normalizedTitle)) continue
-    if (parsedGoalIsShadowedByDetectedGoal(goal, detected.goals)) continue
+    if (usedGoalIds.has(goal.id)) continue
     mergedGoals.push({
       id: goal.id,
       title: goal.title,
@@ -1337,22 +1148,17 @@ export function mergeWorkspaceImportDraft(
   const mergedReleases = [...mergedReleasesById.values()]
 
   const mergedTasks: DraftTask[] = []
-  const parsedTasksByTitle = new Map(
-    parsedTasks.map(task => [normalizeImportText(task.title), task] as const),
-  )
   const usedParsedTaskIds = new Set<string>()
-  const usedTaskTitles = new Set<string>()
   for (const task of detected.tasks) {
-    const normalizedTitle = normalizeImportText(task.title)
-    const parsedTask = parsedTasksByTitle.get(normalizedTitle)
-      ?? parsedTasks.find(candidate =>
-        !usedParsedTaskIds.has(candidate.id) &&
-        parsedTaskShadowsDetectedTask(task, candidate),
-      )
+    // Task prose is presentation, not identity. A parsed task may refine a
+    // detector task only when it preserves the detector's durable id. A
+    // wording change without that link is a new candidate and must remain
+    // visible instead of silently mutating an existing record.
+    const parsedTask = parsedTasks.find(candidate =>
+      candidate.id === task.suggestedId && !usedParsedTaskIds.has(candidate.id),
+    )
     if (parsedTask) {
-      usedTaskTitles.add(normalizedTitle)
       usedParsedTaskIds.add(parsedTask.id)
-      const exactTitleMatch = normalizeImportText(parsedTask.title) === normalizedTitle
       const resolvedDescription = preserveDetectedScope
         ? task.description || parsedTask.description
         : parsedTask.description || task.description
@@ -1374,10 +1180,15 @@ export function mergeWorkspaceImportDraft(
       const resolvedProofPaths = preserveDetectedScope
         ? task.proofPaths ?? parsedTask.proofPaths
         : parsedTask.proofPaths ?? task.proofPaths
-      const useParsedTaskIdentity = exactTitleMatch || taskTitleContainsCompletionMetadata(task.title)
+      const resolvedContractNames = preserveDetectedScope
+        ? task.contractNames ?? parsedTask.contractNames
+        : parsedTask.contractNames ?? task.contractNames
+      const resolvedParentAcceptanceCriterionIds = preserveDetectedScope
+        ? task.parentAcceptanceCriterionIds ?? parsedTask.parentAcceptanceCriterionIds
+        : parsedTask.parentAcceptanceCriterionIds ?? task.parentAcceptanceCriterionIds
       const mergedProofPaths = finalizeDraftTaskProofPaths({
-        suggestedId: useParsedTaskIdentity ? parsedTask.id : task.suggestedId,
-        title: useParsedTaskIdentity ? parsedTask.title : task.title,
+        suggestedId: task.suggestedId,
+        title: parsedTask.title,
         proofPaths: resolvedProofPaths,
       })
       const resolvedReleaseIds = preserveDetectedScope
@@ -1389,8 +1200,39 @@ export function mergeWorkspaceImportDraft(
       ]
       mergedTasks.push({
         ...task,
-        suggestedId: useParsedTaskIdentity ? parsedTask.id : task.suggestedId,
-        title: useParsedTaskIdentity ? parsedTask.title : task.title,
+        suggestedId: task.suggestedId,
+        title: parsedTask.title,
+        ...(parsedTask.sourceIdentity || task.sourceIdentity
+          ? { sourceIdentity: parsedTask.sourceIdentity ?? task.sourceIdentity }
+          : {}),
+        ...(parsedTask.deliverableName || task.deliverableName
+          ? { deliverableName: parsedTask.deliverableName ?? task.deliverableName }
+          : {}),
+        ...(parsedTask.producedArtifact || task.producedArtifact
+          ? { producedArtifact: parsedTask.producedArtifact ?? task.producedArtifact }
+          : {}),
+        ...(parsedTask.workShape || task.workShape
+          ? { workShape: parsedTask.workShape ?? task.workShape }
+          : {}),
+        ...(parsedTask.statusHint || task.statusHint
+          ? { statusHint: parsedTask.statusHint ?? task.statusHint }
+          : {}),
+        ...(parsedTask.targetArea || task.targetArea
+          ? { targetArea: parsedTask.targetArea ?? task.targetArea }
+          : {}),
+        ...(parsedTask.buildsOn?.length || task.buildsOn?.length
+          ? { buildsOn: [...(parsedTask.buildsOn ?? task.buildsOn ?? [])] }
+          : {}),
+        ...(parsedTask.consumerSurfaces?.length || task.consumerSurfaces?.length
+          ? { consumerSurfaces: [...(parsedTask.consumerSurfaces ?? task.consumerSurfaces ?? [])] }
+          : {}),
+        ...(task.semanticKind || parsedTask.semanticKind
+          ? { semanticKind: task.semanticKind ?? parsedTask.semanticKind }
+          : {}),
+        ...(resolvedContractNames?.length ? { contractNames: [...resolvedContractNames] } : {}),
+        ...(resolvedParentAcceptanceCriterionIds?.length
+          ? { parentAcceptanceCriterionIds: [...resolvedParentAcceptanceCriterionIds] }
+          : {}),
         description: resolvedDescription,
         ...(resolvedWhyThisMayMatter ? { whyThisMayMatter: resolvedWhyThisMayMatter } : {}),
         ...(resolvedAssumptions && resolvedAssumptions.length > 0 ? { assumptions: [...resolvedAssumptions] } : {}),
@@ -1415,10 +1257,7 @@ export function mergeWorkspaceImportDraft(
     mergedTasks.push(task)
   }
   for (const task of parsedTasks) {
-    const normalizedTitle = normalizeImportText(task.title)
     if (usedParsedTaskIds.has(task.id)) continue
-    if (usedTaskTitles.has(normalizedTitle)) continue
-    if (detected.tasks.some(detectedTask => parsedTaskShadowsDetectedTask(detectedTask, task))) continue
     if (!retainParsedOnlyTasks) continue
     const proofPaths = finalizeDraftTaskProofPaths({
       suggestedId: task.id,
@@ -1428,6 +1267,19 @@ export function mergeWorkspaceImportDraft(
     mergedTasks.push({
       suggestedId: task.id,
       title: task.title,
+      ...(task.sourceIdentity ? { sourceIdentity: task.sourceIdentity } : {}),
+      ...(task.deliverableName ? { deliverableName: task.deliverableName } : {}),
+      ...(task.producedArtifact ? { producedArtifact: task.producedArtifact } : {}),
+      ...(task.workShape ? { workShape: task.workShape } : {}),
+      ...(task.statusHint ? { statusHint: task.statusHint } : {}),
+      ...(task.targetArea ? { targetArea: task.targetArea } : {}),
+      ...(task.buildsOn?.length ? { buildsOn: [...task.buildsOn] } : {}),
+      ...(task.consumerSurfaces?.length ? { consumerSurfaces: [...task.consumerSurfaces] } : {}),
+      ...(task.semanticKind ? { semanticKind: task.semanticKind } : {}),
+      ...(task.contractNames?.length ? { contractNames: [...task.contractNames] } : {}),
+      ...(task.parentAcceptanceCriterionIds?.length
+        ? { parentAcceptanceCriterionIds: [...task.parentAcceptanceCriterionIds] }
+        : {}),
       description: task.description,
       ...(task.whyThisMayMatter ? { whyThisMayMatter: task.whyThisMayMatter } : {}),
       ...(task.assumptions && task.assumptions.length > 0
@@ -1450,34 +1302,17 @@ export function mergeWorkspaceImportDraft(
     })
   }
 
-  const mergedMilestones: DraftMilestone[] = []
-  const parsedMilestonesByTitle = new Map(
-    parsed.milestones.map(milestone => [normalizeImportText(milestone.title), milestone] as const),
-  )
-  const usedMilestoneTitles = new Set<string>()
-  for (const milestone of detected.milestones) {
-    const normalizedTitle = normalizeImportText(milestone.title)
-    const parsedMilestone = parsedMilestonesByTitle.get(normalizedTitle)
-    if (parsedMilestone) {
-      usedMilestoneTitles.add(normalizedTitle)
-      mergedMilestones.push({
-        ...milestone,
-        title: parsedMilestone.title,
-        evidence: parsedMilestone.evidence || milestone.evidence,
-      })
-      continue
-    }
-    mergedMilestones.push(milestone)
-  }
-  for (const milestone of parsed.milestones) {
-    const normalizedTitle = normalizeImportText(milestone.title)
-    if (usedMilestoneTitles.has(normalizedTitle)) continue
-    mergedMilestones.push({
+  // Milestones have no source-owned identity in the legacy parser. Preserve
+  // both records until an adapter supplies one; prose similarity must never
+  // decide which history entry survives.
+  const mergedMilestones: DraftMilestone[] = [
+    ...detected.milestones,
+    ...parsed.milestones.map(milestone => ({
       title: milestone.title,
       evidence: milestone.evidence,
-      source: 'workspace-importer',
-    })
-  }
+      source: 'workspace-importer' as const,
+    })),
+  ]
 
   return {
     goals: mergedGoals,
@@ -1487,22 +1322,6 @@ export function mergeWorkspaceImportDraft(
     context: [...detected.context],
     stats: detected.stats,
   }
-}
-
-function parsedGoalIsShadowedByDetectedGoal(
-  goal: ParsedGoal,
-  detectedGoals: readonly DraftGoal[],
-): boolean {
-  const parsedNormalized = normalizeImportText(goal.title)
-  if (!parsedNormalized) return false
-  const parsedWords = parsedNormalized.split(/\s+/).filter(Boolean)
-  return detectedGoals.some((detectedGoal) => {
-    const detectedNormalized = normalizeImportText(detectedGoal.title)
-    if (!detectedNormalized || detectedNormalized === parsedNormalized) return false
-    if (!detectedNormalized.startsWith(parsedNormalized)) return false
-    const detectedWords = detectedNormalized.split(/\s+/).filter(Boolean)
-    return parsedWords.length >= 6 && detectedWords.length >= parsedWords.length + 2
-  })
 }
 
 function normalizeImportedReferenceForTask(
@@ -1609,6 +1428,19 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         tasks.push({
           id,
           title,
+          ...(typeof t['sourceIdentity'] === 'string' && t['sourceIdentity'].trim() ? { sourceIdentity: t['sourceIdentity'].trim() } : {}),
+          ...(typeof t['deliverableName'] === 'string' && t['deliverableName'].trim() ? { deliverableName: t['deliverableName'].trim() } : {}),
+          ...(typeof t['producedArtifact'] === 'string' && t['producedArtifact'].trim() ? { producedArtifact: t['producedArtifact'].trim() } : {}),
+          ...(parseEvidenceWorkShape(t['workShape']) ? { workShape: parseEvidenceWorkShape(t['workShape']) } : {}),
+          ...(parseEvidenceStatusHint(t['statusHint']) ? { statusHint: parseEvidenceStatusHint(t['statusHint']) } : {}),
+          ...(typeof t['targetArea'] === 'string' && t['targetArea'].trim() ? { targetArea: t['targetArea'].trim() } : {}),
+          ...(normStringList(t['buildsOn']).length > 0 ? { buildsOn: normStringList(t['buildsOn']) } : {}),
+          ...(normStringList(t['consumerSurfaces']).length > 0 ? { consumerSurfaces: normStringList(t['consumerSurfaces']) } : {}),
+          ...(typeof t['semanticKind'] === 'string' && t['semanticKind'].trim() ? { semanticKind: t['semanticKind'].trim() } : {}),
+          ...(normStringList(t['contractNames']).length > 0 ? { contractNames: normStringList(t['contractNames']) } : {}),
+          ...(normStringList(t['parentAcceptanceCriterionIds']).length > 0
+            ? { parentAcceptanceCriterionIds: normStringList(t['parentAcceptanceCriterionIds']) }
+            : {}),
           description: supportingText(title, rawDescription),
           ...(whyThisMayMatter ? { whyThisMayMatter } : {}),
           ...(normStringList(t['assumptions']).length > 0 ? { assumptions: normStringList(t['assumptions']) } : {}),
@@ -1687,6 +1519,19 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         tasks.push({
           id,
           title,
+          ...(typeof t['sourceIdentity'] === 'string' && t['sourceIdentity'].trim() ? { sourceIdentity: t['sourceIdentity'].trim() } : {}),
+          ...(typeof t['deliverableName'] === 'string' && t['deliverableName'].trim() ? { deliverableName: t['deliverableName'].trim() } : {}),
+          ...(typeof t['producedArtifact'] === 'string' && t['producedArtifact'].trim() ? { producedArtifact: t['producedArtifact'].trim() } : {}),
+          ...(parseEvidenceWorkShape(t['workShape']) ? { workShape: parseEvidenceWorkShape(t['workShape']) } : {}),
+          ...(parseEvidenceStatusHint(t['statusHint']) ? { statusHint: parseEvidenceStatusHint(t['statusHint']) } : {}),
+          ...(typeof t['targetArea'] === 'string' && t['targetArea'].trim() ? { targetArea: t['targetArea'].trim() } : {}),
+          ...(normStringList(t['buildsOn']).length > 0 ? { buildsOn: normStringList(t['buildsOn']) } : {}),
+          ...(normStringList(t['consumerSurfaces']).length > 0 ? { consumerSurfaces: normStringList(t['consumerSurfaces']) } : {}),
+          ...(typeof t['semanticKind'] === 'string' && t['semanticKind'].trim() ? { semanticKind: t['semanticKind'].trim() } : {}),
+          ...(normStringList(t['contractNames']).length > 0 ? { contractNames: normStringList(t['contractNames']) } : {}),
+          ...(normStringList(t['parentAcceptanceCriterionIds']).length > 0
+            ? { parentAcceptanceCriterionIds: normStringList(t['parentAcceptanceCriterionIds']) }
+            : {}),
           description: supportingText(title, rawDescription),
           ...(whyThisMayMatter ? { whyThisMayMatter } : {}),
           ...(normStringList(t['assumptions']).length > 0 ? { assumptions: normStringList(t['assumptions']) } : {}),
@@ -1815,6 +1660,19 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
     for (const t of draft.tasks) {
       lines.push(`  - id: ${escape(t.suggestedId)}`)
       lines.push(`    title: ${escape(t.title)}`)
+      if (t.sourceIdentity) lines.push(`    sourceIdentity: ${escape(t.sourceIdentity)}`)
+      if (t.deliverableName) lines.push(`    deliverableName: ${escape(t.deliverableName)}`)
+      if (t.producedArtifact) lines.push(`    producedArtifact: ${escape(t.producedArtifact)}`)
+      if (t.workShape) lines.push(`    workShape: ${t.workShape}`)
+      if (t.statusHint) lines.push(`    statusHint: ${t.statusHint}`)
+      if (t.targetArea) lines.push(`    targetArea: ${escape(t.targetArea)}`)
+      if (t.buildsOn?.length) lines.push(`    buildsOn: ${JSON.stringify([...t.buildsOn])}`)
+      if (t.consumerSurfaces?.length) lines.push(`    consumerSurfaces: ${JSON.stringify([...t.consumerSurfaces])}`)
+      if (t.semanticKind) lines.push(`    semanticKind: ${escape(t.semanticKind)}`)
+      if (t.contractNames?.length) lines.push(`    contractNames: ${JSON.stringify([...t.contractNames])}`)
+      if (t.parentAcceptanceCriterionIds?.length) {
+        lines.push(`    parentAcceptanceCriterionIds: ${JSON.stringify([...t.parentAcceptanceCriterionIds])}`)
+      }
       lines.push(`    description: ${escape(t.description || '')}`)
       if (t.whyThisMayMatter) lines.push(`    whyThisMayMatter: ${escape(t.whyThisMayMatter)}`)
       lines.push(`    domain: ${escape(t.domain || 'core')}`)
@@ -1904,6 +1762,19 @@ function parsedImportFromDraft(draft: WorkspaceImportDraft): ParsedImport {
     tasks: draft.tasks.map(task => ({
       id: task.suggestedId,
       title: task.title,
+      ...(task.sourceIdentity ? { sourceIdentity: task.sourceIdentity } : {}),
+      ...(task.deliverableName ? { deliverableName: task.deliverableName } : {}),
+      ...(task.producedArtifact ? { producedArtifact: task.producedArtifact } : {}),
+      ...(task.workShape ? { workShape: task.workShape } : {}),
+      ...(task.statusHint ? { statusHint: task.statusHint } : {}),
+      ...(task.targetArea ? { targetArea: task.targetArea } : {}),
+      ...(task.buildsOn?.length ? { buildsOn: [...task.buildsOn] } : {}),
+      ...(task.consumerSurfaces?.length ? { consumerSurfaces: [...task.consumerSurfaces] } : {}),
+      ...(task.semanticKind ? { semanticKind: task.semanticKind } : {}),
+      ...(task.contractNames?.length ? { contractNames: [...task.contractNames] } : {}),
+      ...(task.parentAcceptanceCriterionIds?.length
+        ? { parentAcceptanceCriterionIds: [...task.parentAcceptanceCriterionIds] }
+        : {}),
       description: task.description,
       ...(task.whyThisMayMatter ? { whyThisMayMatter: task.whyThisMayMatter } : {}),
       ...(task.assumptions?.length ? { assumptions: [...task.assumptions] } : {}),
@@ -2523,113 +2394,39 @@ async function evidenceSourcesForParsedTasks(
     }
 
     const content = await readManagedTextFile(absolute, 'utf-8')
+    const sourceTasks = tasks.filter(task => task.references.some(reference =>
+      absoluteImportedReference(reference, projectPath) === absolute,
+    ))
+    const metadataByDeliverable = <T>(select: (task: ParsedTask) => T | undefined): Record<string, T> => Object.fromEntries(sourceTasks.flatMap(task => {
+        const deliverable = task.deliverableName?.trim()
+        const value = select(task)
+        return deliverable && value !== undefined ? [[deliverable, value]] : []
+      })) as Record<string, T>
+    const unitIdentities = metadataByDeliverable(task => task.sourceIdentity)
+    const semanticKinds = metadataByDeliverable(task => task.semanticKind)
+    const contractNames = metadataByDeliverable(task => task.contractNames)
+    const workShapes = metadataByDeliverable(task => task.workShape)
+    const statusHints = metadataByDeliverable(task => task.statusHint)
+    const targetAreas = metadataByDeliverable(task => task.targetArea)
+    const producedArtifacts = metadataByDeliverable(task => task.producedArtifact)
+    const buildsOn = metadataByDeliverable(task => task.buildsOn)
+    const consumerSurfaces = metadataByDeliverable(task => task.consumerSurfaces)
     sources.push({
       path: path.relative(projectPath, absolute) || path.basename(absolute),
       content,
+      ...(Object.keys(unitIdentities).length > 0 ? { unitIdentities } : {}),
+      ...(Object.keys(semanticKinds).length > 0 ? { semanticKinds } : {}),
+      ...(Object.keys(contractNames).length > 0 ? { contractNames } : {}),
+      ...(Object.keys(workShapes).length > 0 ? { workShapes } : {}),
+      ...(Object.keys(statusHints).length > 0 ? { statusHints } : {}),
+      ...(Object.keys(targetAreas).length > 0 ? { targetAreas } : {}),
+      ...(Object.keys(producedArtifacts).length > 0 ? { producedArtifacts } : {}),
+      ...(Object.keys(buildsOn).length > 0 ? { buildsOn } : {}),
+      ...(Object.keys(consumerSurfaces).length > 0 ? { consumerSurfaces } : {}),
     })
   }
 
   return sources
-}
-
-const IMPORT_DOCUMENT_IGNORE_RE = /(^|\/)(node_modules|\.git|dist|build|coverage|\.nuxt|memory)(\/|$)/i
-const IMPORT_DOCUMENT_RE = /\.(?:md|markdown|txt)$/i
-
-async function listProjectDocumentationFiles(projectPath: string): Promise<string[]> {
-  const files: string[] = []
-  const visit = async (directory: string): Promise<void> => {
-    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
-    try {
-      entries = await fs.readdir(directory, { withFileTypes: true, encoding: 'utf8' }) as unknown as Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
-    } catch {
-      return
-    }
-    for (const entry of entries) {
-      const absolute = path.join(directory, entry.name)
-      const relative = path.relative(projectPath, absolute).replaceAll('\\', '/')
-      if (IMPORT_DOCUMENT_IGNORE_RE.test(relative)) continue
-      if (entry.isDirectory()) {
-        await visit(absolute)
-      } else if (entry.isFile() && IMPORT_DOCUMENT_RE.test(relative)) {
-        files.push(absolute)
-      }
-    }
-  }
-
-  await visit(projectPath)
-  return files.sort((left, right) => left.localeCompare(right))
-}
-
-function discoveredProofCommandMatchesTask(command: string, title: string): boolean {
-  const generic = new Set([
-    'check',
-    'command',
-    'continuity',
-    'executable',
-    'proof',
-    'prove',
-    'review',
-    'reviewer',
-    'run',
-    'script',
-    'test',
-    'validate',
-    'verification',
-    'verify',
-  ])
-  const taskKeywords = titleKeywords(title)
-    .flatMap(keyword => keyword.split('-'))
-    .filter(keyword => keyword.length >= 4 && !generic.has(keyword))
-  const commandKeywords = normalizeImportText(command)
-    .split(/[\s:_\/-]+/)
-    .filter(keyword => keyword.length >= 4 && !generic.has(keyword))
-  const shared = taskKeywords.filter(keyword => commandKeywords.includes(keyword))
-  if (shared.length < 2) return false
-  return taskKeywords.length <= 12 || shared.length / taskKeywords.length >= 0.16
-}
-
-async function attachDocumentedProofReferences(
-  projectPath: string,
-  tasks: readonly MaterializedImportTask[],
-): Promise<MaterializedImportTask[]> {
-  if (tasks.length === 0) return []
-  const candidates = await listProjectDocumentationFiles(projectPath)
-  if (candidates.length === 0) return [...tasks]
-
-  const referencesByTask = new Map<string, string[]>()
-  for (const absolute of candidates) {
-    let content: string
-    try {
-      content = await readManagedTextFile(absolute, 'utf-8')
-    } catch {
-      continue
-    }
-    if (!/\b(?:pnpm|npm)\s+(?:run\s+)?[a-z0-9@:_./-]+|\bscripts\/prove-[a-z0-9._/-]+/i.test(content)) {
-      continue
-    }
-
-    for (const task of tasks) {
-      const commands = documentedImportedProofCommands({
-        title: task.title,
-        description: task.description,
-        references: [absolute],
-      })
-      if (!commands.some(command => discoveredProofCommandMatchesTask(command, task.title))) continue
-      referencesByTask.set(
-        task.id,
-        mergeImportReferences(referencesByTask.get(task.id), [absolute]) ?? [],
-      )
-    }
-  }
-
-  return tasks.map(task => {
-    const relatedReferences = referencesByTask.get(task.id)
-    if (!relatedReferences?.length) return task
-    return {
-      ...task,
-      references: mergeImportReferences(task.references, relatedReferences) ?? task.references,
-    }
-  })
 }
 
 async function materializeEvidenceWorkGraphTasks(
@@ -2645,7 +2442,15 @@ async function materializeEvidenceWorkGraphTasks(
     : []
   const sources = await evidenceSourcesForParsedTasks(input.projectPath, input.parsedTasks, inventoryReferences)
   if (sources.length === 0) {
-    return attachDocumentedProofReferences(input.projectPath, input.parsedTasks)
+    return [...input.parsedTasks]
+  }
+  // Evidence graph expansion is an explicit intake operation. A document
+  // reference or detector signal identity alone does not authorize Guildhall
+  // to promote prose bullets into executable work. The importer/spec must
+  // name the deliverable that owns each graph unit. Source identity can then
+  // stabilize that unit, but it cannot substitute for the unit declaration.
+  if (!input.parsedTasks.some(task => task.deliverableName)) {
+    return [...input.parsedTasks]
   }
 
   const plan = planEvidenceWorkGraph({
@@ -2655,6 +2460,9 @@ async function materializeEvidenceWorkGraphTasks(
       ...input.parsedTasks.map(task => ({
         id: task.id,
         title: task.title,
+        ...(task.sourceIdentity ? { sourceIdentity: task.sourceIdentity } : {}),
+        ...(task.deliverableName ? { deliverableName: task.deliverableName } : {}),
+        ...(task.producedArtifact ? { producedArtifact: task.producedArtifact } : {}),
         description: task.description,
         status: 'import_draft',
         acceptanceCriteria: [],
@@ -2663,151 +2471,75 @@ async function materializeEvidenceWorkGraphTasks(
     ],
   })
   if (plan.tasks.length === 0) {
-    return attachDocumentedProofReferences(input.projectPath, input.parsedTasks)
+    return [...input.parsedTasks]
   }
 
   const graphTaskIds = new Set(plan.tasks.map(task => task.id))
-  const graphTaskTitles = new Set(plan.tasks.map(task => normalizeImportText(task.title)).filter(Boolean))
   const suppressedTaskTitles = new Set(plan.suppressedTaskTitles.map(title => normalizeImportText(title)).filter(Boolean))
   const reconciledIds = new Set(plan.reconciliations.map(reconciliation => reconciliation.existingTaskId))
   const parsedTasksById = new Map(input.parsedTasks.map(task => [task.id, task] as const))
-  const parsedTasksByTitle = new Map(
-    input.parsedTasks.map(task => [normalizeImportText(task.title), task] as const),
-  )
   const graphMatchedParsedIds = new Set<string>()
-  const graphMatchedParsedTitles = new Set<string>()
-  const inventoryReferencesByTitle = new Map<string, string[]>()
-  const inventoryScopeByTitle = new Map<string, 'current' | 'later'>()
-  const inventoryScopeByReference = new Map<string, 'current' | 'later'>()
-  for (const signal of inventory?.signals ?? []) {
-    const keys = [
-      normalizeImportText(signal.title),
-      ...((signal.linkedTaskHints ?? []).map(hint => normalizeImportText(hint))),
-    ].filter(Boolean)
-    const refs = (signal.references ?? [])
-      .filter(Boolean)
-      .map(reference => path.relative(
-        input.projectPath,
-        absoluteImportedReference(reference, input.projectPath),
-      ) || path.basename(reference))
-    if (keys.length === 0 || refs.length === 0) continue
-    const signalScope = signal.scopeHint === 'later' ? 'later' : 'current'
-    for (const key of keys) {
-      inventoryReferencesByTitle.set(
-        key,
-        mergeImportReferences(inventoryReferencesByTitle.get(key), refs) ?? [],
-      )
-      const existingScope = inventoryScopeByTitle.get(key)
-      inventoryScopeByTitle.set(
-        key,
-        existingScope === 'current' || signalScope === 'current' ? 'current' : 'later',
-      )
-    }
-    for (const ref of refs) {
-      const existingReferenceScope = inventoryScopeByReference.get(ref)
-      inventoryScopeByReference.set(
-        ref,
-        existingReferenceScope === 'current' || signalScope === 'current' ? 'current' : 'later',
-      )
-    }
-  }
   const graphTasks = plan.tasks.map(task => {
-    const taskReferenceScopes = evidenceTaskReferences(task)
-      .map(reference => inventoryScopeByReference.get(reference))
-      .filter((scope): scope is 'current' | 'later' => Boolean(scope))
-    const detectedScope = inventoryScopeByTitle.get(normalizeImportText(task.title))
-      ?? (
-        taskReferenceScopes.includes('current')
-          ? 'current'
-          : taskReferenceScopes.includes('later')
-            ? 'later'
-            : undefined
-      )
     const matchedById = parsedTasksById.get(task.id)
-    const matchedByTitle = matchedById ? undefined : parsedTasksByTitle.get(normalizeImportText(task.title))
-    const matchedBySemantic = matchedById || matchedByTitle
-      ? undefined
-      : input.parsedTasks.find(candidate =>
-          !graphMatchedParsedIds.has(candidate.id) &&
-          parsedTaskShadowsEvidenceTask(candidate, task),
-        )
-    const matchedParsedTask = matchedById ?? matchedByTitle ?? matchedBySemantic
-    const shadowedByExistingParsedTask = !matchedParsedTask && input.parsedTasks.some(candidate =>
-      parsedTaskShadowsEvidenceTask(candidate, task),
-    )
+    const explicitSourceOwner = !matchedById
+      ? input.parsedTasks.find(candidate => Boolean(
+        (candidate.semanticKind || candidate.contractNames?.length) &&
+        typeof candidate.deliverableName === 'string' &&
+        normalizeImportText(candidate.deliverableName) === normalizeImportText(task.deliverableName),
+      ))
+      : undefined
+    // Scope is carried by the parsed structural record. A source path or a
+    // task title cannot assign a graph node to current or later work.
+    const detectedScope = matchedById?.scope ?? explicitSourceOwner?.scope ?? 'current'
+    // A source path is evidence membership, not work identity: one document
+    // can own many tasks. Only an exact durable graph id may reconcile a
+    // parsed task, while an explicit deliverable identity can suppress the
+    // duplicate graph candidate. Similar titles and shared references remain
+    // visible until a source adapter supplies a real identity.
+    const matchedParsedTask = matchedById
+    const hasExplicitSourceOwner = Boolean(explicitSourceOwner)
     if (matchedParsedTask) {
       graphMatchedParsedIds.add(matchedParsedTask.id)
-      graphMatchedParsedTitles.add(normalizeImportText(matchedParsedTask.title))
     }
-    if (!matchedParsedTask && detectedScope === 'later') {
+    if (hasExplicitSourceOwner) {
+      // The graph candidate was deliberately suppressed because the parsed
+      // task is the explicit owner. Do not let its planned id make the real
+      // parsed task disappear from the untouched set.
+      graphTaskIds.delete(task.id)
       return null
     }
-    if (!matchedParsedTask && shadowedByExistingParsedTask && task.kind === 'implementation') {
+    if (!matchedParsedTask && detectedScope === 'later') {
       return null
     }
     return graphTaskToParsedTask(
       task,
       matchedParsedTask,
-      inventoryReferencesByTitle.get(normalizeImportText(task.title)),
+      undefined,
       detectedScope,
-      Boolean(matchedBySemantic),
+      Boolean(matchedById),
     )
-  }).filter((task): task is MaterializedImportTask => task !== null && !isFormattingDebris({ title: task.title }))
-  const shadowedImports = detectShadowedCurrentMilestoneDeliverableImports(sources)
-  const shadowedStageAlignedDeliverables = detectShadowedStageAlignedRoadmapDeliverables(sources)
+  }).filter((task): task is MaterializedImportTask => task !== null)
   const untouchedParsedTasks = input.parsedTasks.filter(task =>
     !graphTaskIds.has(task.id) &&
     !graphMatchedParsedIds.has(task.id) &&
     !reconciledIds.has(task.id) &&
-    !graphTaskTitles.has(normalizeImportText(task.title)) &&
-    !graphMatchedParsedTitles.has(normalizeImportText(task.title)) &&
-    !suppressedParsedImportedTask(task, suppressedTaskTitles, shadowedStageAlignedDeliverables) &&
-    !isShadowedCurrentMilestoneDeliverableTask(task, shadowedImports),
+    !suppressedParsedImportedTask(task, suppressedTaskTitles),
   )
 
-  return attachDocumentedProofReferences(input.projectPath, [...graphTasks, ...untouchedParsedTasks])
-}
-
-function isShadowedCurrentMilestoneDeliverableTask(
-  task: ParsedTask,
-  shadowedImports: readonly { sourcePath: string; title: string }[],
-): boolean {
-  if (shadowedImports.length === 0) return false
-  const description = task.description.trim()
-  if (!description.includes(': - ')) return false
-  return task.references.some(reference =>
-    shadowedImports.some(candidate =>
-      candidate.title === task.title &&
-      importReferenceMatchesSource(reference, candidate.sourcePath),
-    ),
-  )
+  return [...graphTasks, ...untouchedParsedTasks]
 }
 
 function suppressedParsedImportedTask(
   task: ParsedTask,
   suppressedTaskTitles: ReadonlySet<string>,
-  shadowedStageAlignedDeliverables: readonly { sourcePath: string; title: string }[],
 ): boolean {
-  const normalizedTitle = normalizeImportText(task.title)
-  if (!suppressedTaskTitles.has(normalizedTitle)) return false
-  const description = task.description.trim()
-  if (task.scope !== 'later') return true
-  if (!description.includes(': - ')) return true
-  return task.references.some(reference =>
-    shadowedStageAlignedDeliverables.some(candidate =>
-      candidate.title === task.title &&
-      importReferenceMatchesSource(reference, candidate.sourcePath),
-    ),
-  )
-}
-
-function importReferenceMatchesSource(reference: string, sourcePath: string): boolean {
-  const normalizedReference = reference.replace(/\\/g, '/')
-  const normalizedSource = sourcePath.replace(/\\/g, '/')
-  return (
-    normalizedReference === normalizedSource ||
-    normalizedReference.endsWith(`/${normalizedSource}`) ||
-    path.basename(normalizedReference) === path.basename(normalizedSource)
+  const structuralIdentity = task.deliverableName?.trim()
+  // A source-backed suppression is valid only when the parsed record names
+  // the same structural deliverable explicitly. Title wording is evidence,
+  // not permission to drop an approved current or deferred task.
+  return Boolean(
+    structuralIdentity &&
+    suppressedTaskTitles.has(normalizeImportText(structuralIdentity)),
   )
 }
 
@@ -2824,23 +2556,58 @@ function graphTaskToParsedTask(
   )
   return {
     id: preferParsedIdentity && parsedTask ? parsedTask.id : task.id,
-    title: preferParsedIdentity && parsedTask ? parsedTask.title : task.title,
-    description: evidenceTaskDescription(task),
+    sourceIdentity: task.sourceIdentity,
+    // The graph/source adapter owns the display label for a graph node. A
+    // parsed model title may be useful audit context, but it cannot replace
+    // the source-backed node or influence identity by wording.
+    title: task.title,
+    deliverableName: task.deliverableName,
+    ...(task.producedArtifact ? { producedArtifact: task.producedArtifact } : {}),
+    ...(task.targetArea ? { targetArea: task.targetArea } : {}),
+    workShape: task.workShape,
+    statusHint: task.statusHint,
+    ...(task.buildsOn.length > 0 ? { buildsOn: [...task.buildsOn] } : {}),
+    ...(task.consumerSurface ? { consumerSurfaces: [task.consumerSurface] } : {}),
+    // An exact durable id permits the parsed task to keep its authored
+    // description while the evidence graph still owns the node identity and
+    // structural dependencies. Wording is never used to create that join.
+    description: parsedDescriptionWithoutExactSourcePrefix(
+      parsedTask?.description,
+      task.sourceRefs[0]?.path,
+    ) || evidenceTaskDescription(task),
     whyThisMayMatter: evidenceTaskWhyThisMayMatter(task),
     assumptions: [
       'The referenced documentation still represents intended project direction.',
     ],
     missingInformation: cleanImportedMissingInformation(parsedTask?.missingInformation ?? []),
+    ...(task.semanticKind ?? parsedTask?.semanticKind
+      ? { semanticKind: task.semanticKind ?? parsedTask?.semanticKind }
+      : {}),
+    ...(parsedTask?.contractNames?.length ? { contractNames: [...parsedTask.contractNames] } : {}),
+    ...(parsedTask?.parentAcceptanceCriterionIds?.length
+      ? { parentAcceptanceCriterionIds: [...parsedTask.parentAcceptanceCriterionIds] }
+      : {}),
     domain: graphTaskDomain(task, parsedTask),
     scope: detectedScope ?? (parsedTask?.scope === 'later' ? 'later' : 'current'),
     priority: evidenceTaskPriority(task),
     references: references ?? [],
     acceptanceCriteria: task.acceptanceCriteria,
     dependsOn: task.dependsOn,
-    proofPaths: task.proofPaths,
+    proofPaths: parsedTask?.proofPaths?.length ? parsedTask.proofPaths : task.proofPaths,
     ...(parsedTask?.releaseIds?.length ? { releaseIds: [...parsedTask.releaseIds] } : {}),
     evidenceGraphTask: true,
   }
+}
+
+function parsedDescriptionWithoutExactSourcePrefix(
+  description: string | undefined,
+  sourcePath: string | undefined,
+): string {
+  const value = description?.trim() ?? ''
+  const prefix = sourcePath?.trim() ?? ''
+  if (!value || !prefix) return value
+  const exactPrefix = `${prefix}:`
+  return value.startsWith(exactPrefix) ? value.slice(exactPrefix.length).trim() : value
 }
 
 function graphTaskDomain(task: EvidenceTask, parsedTask?: ParsedTask): string {
@@ -2987,9 +2754,9 @@ function mergeImportedRefreshNotes(existing: Task['notes'], seeded: Task['notes'
 function completionHandoffHasVerifiedEvidence(handoff: unknown): boolean {
   if (!handoff || typeof handoff !== 'object' || Array.isArray(handoff)) return false
   const record = handoff as Record<string, unknown>
-  return nonEmptyStringArray(record.verified).length > 0 ||
-    nonEmptyArray(record.evidenceRefs).length > 0 ||
-    passedVerificationRecords(record.automatedProof).length > 0 ||
+  // `verified` and `evidenceRefs` are human/audit fields. They must not keep a
+  // stale imported task looking complete without a structured result.
+  return passedVerificationRecords(record.automatedProof).length > 0 ||
     passedVerificationRecords(record.manualProof).length > 0 ||
     passedVerificationRecords(record.providerProof).length > 0
 }
@@ -3035,11 +2802,9 @@ function materializedAcceptanceCriteria(
     description: criterion.description,
     scenario: criterion.scenario ?? criterion.description,
     expectation: criterion.expectation ?? criterion.description,
-    verifiedBy: criterion.verifiedBy === 'automated' || criterion.verifiedBy === 'review'
+    verifiedBy: criterion.verifiedBy === 'automated' || criterion.verifiedBy === 'review' || criterion.verifiedBy === 'human'
       ? criterion.verifiedBy
-      : criterion.id.includes('automated') || criterion.id.includes('regression')
-        ? 'automated'
-        : 'review',
+      : 'review',
     source: criterion.source === 'inferred' ? 'inferred' : 'documented',
     ...(criterion.command ? { command: criterion.command } : {}),
     ...(criterion.expectedExit ? { expectedExit: criterion.expectedExit } : {}),
@@ -3056,7 +2821,7 @@ function materializedAcceptanceCriteria(
 
 function importedTaskHasBlueprintSeed(task: MaterializedImportTask, evidenceDetail?: ImportedEvidenceDetail): boolean {
   if (contractShapedImportHasNoConcreteContracts({
-    title: task.title,
+    semanticKind: task.semanticKind,
     contractNames: evidenceDetail?.contractNames,
     hasAlternativeStructuralEvidence: evidenceDetail ? importedTaskHasAlternativeStructuralEvidence(evidenceDetail) : false,
   })) {
@@ -3089,15 +2854,14 @@ function importedTaskHasAlternativeStructuralEvidence(evidenceDetail: ImportedEv
 function summarizeImportedSuccessMetric(task: MaterializedImportTask, evidenceDetail?: ImportedEvidenceDetail): string {
   const acceptance = (task.acceptanceCriteria ?? [])
     .map(criterion => criterion.description.trim())
-    .filter(description => !/\b(expected public contract|target-area conventions|accessibility, security, or reliability)\b/i.test(description))
     .filter(Boolean)
-  if (titleLooksContractShaped(task.title)) {
+  if (task.semanticKind === 'contract') {
     return `${task.title} defines and proves the cited local contracts.`
   }
-  if (/\breviewer lane\b/i.test(task.title)) {
+  if (task.semanticKind === 'reviewer_lane') {
     return `${task.title} records the documented fiction-specific findings for a bounded proof fixture.`
   }
-  if (/\b(feedback chain|pipeline|orchestration|coordinator|involvement modes|packet)\b/i.test(task.title)) {
+  if (task.semanticKind === 'workflow') {
     return `${task.title} preserves the documented workflow, weighting, and fiction-first decision boundary.`
   }
   if (acceptance.length > 0) {
@@ -3138,43 +2902,6 @@ function summarizeImportedVerification(task: MaterializedImportTask): string {
   return steps.join('; ')
 }
 
-function importedCompletionBoundary(
-  task: MaterializedImportTask,
-  evidenceDetail: ImportedEvidenceDetail,
-): string {
-  const successMetric = summarizeImportedSuccessMetric(task, evidenceDetail)
-  const proofCommand = firstImportedProofCommand(task)
-  const verificationPlan = proofCommand
-    ? evidenceDetail.verificationBullets.length > 0
-      ? `Local workspace proof using: ${evidenceDetail.verificationBullets.join('; ')}`
-      : `Local workspace proof using: ${summarizeImportedVerification(task)}`
-    : `Add bounded local workspace proof for ${task.title} before treating this work as execution-complete.`
-  const verificationEnvironment = `Local filesystem and repo-local tooling already available in the execution environment; run the cited proof plan. ${verificationPlan}`
-  const missingInformation = cleanImportedMissingInformation(task.missingInformation ?? [])
-  const splitOrBlock = missingInformation.length > 0
-    ? `Split only if these unresolved imported gaps still change the implementation boundary: ${missingInformation.join('; ')}. Block only for missing external credentials, unavailable services, or absent source evidence.`
-    : task.evidenceGraphTask
-      ? 'Nothing to split before this source-backed task runs; reshape only if live implementation discovers a truly separate deliverable.'
-    : 'Split only if the cited work turns out to contain more than one independently verifiable deliverable. Block only for missing external credentials, unavailable services, or absent source evidence.'
-  return [
-    '## Completion Boundary',
-    `- Product outcome: ${successMetric}`,
-    `- What Guildhall can complete in code: Implement ${task.title} within the boundary already described by the cited sources, acceptance criteria, and proof plan.`,
-    '- External dependencies: None beyond the cited repo-local evidence and the local tooling needed to run the proof plan.',
-    '- Owner-only setup: None expected. If the imported evidence is stale or points at the wrong task-scope boundary, reshape the task before execution instead of silently changing scope.',
-    `- Verification environment: ${verificationEnvironment}`,
-    `- What counts as done: ${successMetric} Record the proof result against the imported acceptance criteria.`,
-    `- What must be split or blocked: ${splitOrBlock}`,
-  ].join('\n')
-}
-
-function titleKeywords(title: string): string[] {
-  return normalizeImportText(title)
-    .split(/\s+/)
-    .filter(word => word.length >= 4)
-    .filter(word => !['from', 'with', 'that', 'this', 'into', 'then', 'than', 'have', 'will', 'they', 'their', 'there', 'about', 'because', 'using', 'build', 'implement'].includes(word))
-}
-
 function cleanImportedMissingInformation(items: readonly string[]): string[] {
   return items
     .filter(Boolean)
@@ -3185,23 +2912,16 @@ function cleanImportedMissingInformation(items: readonly string[]): string[] {
 }
 
 function importedTaskLooksContractDriven(task: MaterializedImportTask): boolean {
-  return titleLooksContractShaped(task.title)
+  return task.semanticKind === 'contract'
 }
 
 function importedPrototypeTaskKind(
   task: MaterializedImportTask,
 ): 'fixture' | 'runner' | 'evaluation' | 'debug_report' | 'schema_prune' | 'drafting_model' | 'author_intent' | 'chapter_draft' | 'world_state_review' | 'spatial_review' | null {
-  const title = task.title.trim()
-  if (/^add the first tiny fiction fixture and human-authored expected records\.?$/i.test(title)) return 'fixture'
-  if (/\bno-ui runner\b/i.test(title) || /\bbuilds a packet from fixture records\b/i.test(title)) return 'runner'
-  if (/\bdeterministic evaluation output\b/i.test(title)) return 'evaluation'
-  if (/\bdebug report\b/i.test(title)) return 'debug_report'
-  if (/\bnarrow the mvp story-memory schema\b/i.test(title)) return 'schema_prune'
-  if (/\bdeepinfra\b/i.test(title) && /\bdrafting model\b/i.test(title)) return 'drafting_model'
-  if (/\bauthor-intent\b/i.test(title) && /\b(inputs?|voice|genre|audience|theme|review plan)\b/i.test(title)) return 'author_intent'
-  if (/\bcli-first story synopsis\b/i.test(title) || /\bone chapter draft\b/i.test(title)) return 'chapter_draft'
-  if (/\bworld-state\b/i.test(title) && /\bcontinuity review\b/i.test(title)) return 'world_state_review'
-  if (/\bspatial\/geographic\b/i.test(title) && /\bcontinuity review\b/i.test(title)) return 'spatial_review'
+  const kind = task.semanticKind
+  if (kind === 'fixture' || kind === 'runner' || kind === 'evaluation' || kind === 'debug_report' ||
+      kind === 'schema_prune' || kind === 'drafting_model' || kind === 'author_intent' ||
+      kind === 'chapter_draft' || kind === 'world_state_review' || kind === 'spatial_review') return kind
   return null
 }
 
@@ -3209,22 +2929,21 @@ function importedTaskLooksReviewerLane(
   task: MaterializedImportTask,
   evidenceDetail: ImportedEvidenceDetail,
 ): boolean {
-  return /\b(reviewer lane|reviewer|dialogue|character voice|reader knowledge|revelation|theme|meaning|scene|chapter intelligence)\b/i.test(task.title) || (
-    evidenceDetail.reviewQuestions.length > 0 &&
-    task.domain === 'coherence' &&
-    /\b(voice|dialogue|reader|theme|scene|chapter|review)\b/i.test(task.title)
-  )
+  // Review-lane shaping is an intake decision, not a keyword detector over
+  // source prose. Keep source detail available to the explicit adapter, but
+  // do not promote a task merely because a document contains review questions.
+  void evidenceDetail
+  return task.semanticKind === 'reviewer_lane'
 }
 
 function importedTaskLooksWorkflowDriven(
   task: MaterializedImportTask,
-  evidenceDetail: ImportedEvidenceDetail,
+  _evidenceDetail: ImportedEvidenceDetail,
 ): boolean {
-  return (
-    /\b(feedback chain|pipeline|workflow|orchestration|coordinator|involvement modes)\b/i.test(task.title) ||
-    evidenceDetail.weightDimensions.length > 0 ||
-    evidenceDetail.severityLevels.length > 0
-  )
+  // Weight tables and severity headings are source evidence, not an
+  // authoritative task kind. A model can describe the same work in many
+  // ways; only the explicit intake metadata may select workflow shaping.
+  return task.semanticKind === 'workflow'
 }
 
 type ImportedGeneralShapeKind =
@@ -3235,11 +2954,10 @@ type ImportedGeneralShapeKind =
   | 'general'
 
 function importedGeneralShapeKind(task: MaterializedImportTask): ImportedGeneralShapeKind {
-  const title = task.title.trim()
-  if (/\b(retrieval|retrieve|askable)\b/i.test(title)) return 'retrieval'
-  if (/\b(writer agent|editor agent|specialist editor|agent call|agent calls)\b/i.test(title)) return 'agent_call'
-  if (/\b(invalidation|invalidate|stale context|edited sections?|edited scenes?|scene edits?|source edits?)\b/i.test(title)) return 'invalidation'
-  if (/\b(telemetry|cost\/latency\/quality|cost|latency|quality|usage accounting|quota)\b/i.test(title)) return 'telemetry'
+  if (task.semanticKind === 'retrieval') return 'retrieval'
+  if (task.semanticKind === 'agent_call') return 'agent_call'
+  if (task.semanticKind === 'invalidation') return 'invalidation'
+  if (task.semanticKind === 'telemetry') return 'telemetry'
   return 'general'
 }
 
@@ -3249,7 +2967,15 @@ function shouldDeriveImportedAcceptanceCriteria(
   evidenceDetail?: ImportedEvidenceDetail,
 ): boolean {
   if (!evidenceDetail) return false
-  if (importedPrototypeTaskKind(task)) return true
+  // Explicit intake semantics are sufficient to select the shaping adapter.
+  // The adapter must not depend on a particular source document containing a
+  // magic starter criterion such as `source-implementation`.
+  if (
+    importedPrototypeTaskKind(task) ||
+    task.semanticKind === 'contract' ||
+    task.semanticKind === 'reviewer_lane' ||
+    task.semanticKind === 'workflow'
+  ) return true
   const ids = new Set(current.map(criterion => criterion.id))
   if (!ids.has('source-implementation')) return false
   if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) return true
@@ -3594,6 +3320,7 @@ function deriveContractDrivenAcceptanceCriteria(
   evidenceDetail: ImportedEvidenceDetail,
 ): Task['acceptanceCriteria'] {
   const contractList = evidenceDetail.contractNames.slice(0, 6).map(name => `\`${name}\``).join(', ')
+  const contractBoundary = contractList || 'the explicit contract boundary in the cited evidence'
   const fixtureContracts = evidenceDetail.contractNames.filter(name => /(fixture|expected)/i.test(name))
   const runContracts = evidenceDetail.contractNames.filter(name => /(run|evaluation|score|trace|signal)/i.test(name))
   const verificationSummary = evidenceDetail.verificationBullets[0]?.replace(/\.$/, '')
@@ -3601,9 +3328,9 @@ function deriveContractDrivenAcceptanceCriteria(
   const criteria: Task['acceptanceCriteria'] = [
     {
       id: 'contracts-defined',
-      description: `The cited contracts are explicitly defined and usable in code: ${contractList}.`,
+      description: `The cited contracts are explicitly defined and usable in code: ${contractBoundary}.`,
       scenario: `Import ${task.title} from the cited project evidence.`,
-      expectation: `Code can create and consume ${contractList}.`,
+      expectation: `Code can create and consume ${contractBoundary}.`,
       verifiedBy: 'review',
       source: 'inferred',
       met: false,
@@ -3677,7 +3404,6 @@ function deriveReviewerLaneAcceptanceCriteria(
     evidenceDetail.rules.length > 0
       ? evidenceDetail.rules
       : [
-          ...evidenceDetail.implementationBullets.filter(item => /\b(do not|distinguish|protect|respect)\b/i.test(item)),
           ...evidenceDetail.goalStatements,
           summarizeImportedProblemContext(task, evidenceDetail),
         ]
@@ -3751,7 +3477,10 @@ function deriveWorkflowAcceptanceCriteria(
   const boundaryRules = (
     evidenceDetail.rules.length > 0
       ? evidenceDetail.rules
-      : evidenceDetail.implementationBullets.filter(item => /\b(not optimize|fiction|friction|protect)\b/i.test(item))
+      : [
+          ...evidenceDetail.goalStatements,
+          summarizeImportedProblemContext(task, evidenceDetail),
+        ]
   ).slice(0, 3)
   const proofCommand = firstImportedProofCommand(task)
   const criteria: Task['acceptanceCriteria'] = []
@@ -3941,186 +3670,7 @@ function firstImportedProofCommand(task: MaterializedImportTask): string | null 
       isConcreteProjectProofCommand(proof.command),
   )
   if (proofCommand?.command?.trim()) return proofCommand.command.trim()
-
-  const documentedCommand = documentedImportedProofCommands(task)[0]
-  if (documentedCommand) return documentedCommand
-
-  // Imported task text is source evidence too. Preserve an explicit command
-  // already named in the title/description instead of inventing a missing
-  // proof-command setup step.
-  const commandPattern = /pnpm(?:\s+[a-z0-9@:_./-]+)+/i
-  const text = `${task.title}\n${task.description}`
-  const candidates = [
-    ...text.matchAll(/`([^`\n]+)`/g),
-    ...text.matchAll(/\(([^)\n]+)\)/g),
-    ...text.matchAll(/\b(?:run|using|via|command(?:\s+is)?)\s+([^\n.]+)/gi),
-  ]
-  for (const match of candidates) {
-    const candidate = match[1]?.trim() ?? ''
-    const command = candidate.match(commandPattern)?.[0]?.replace(/[.,;!?]+$/, '').trim()
-    if (command) return command
-  }
   return null
-}
-
-function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'title' | 'description' | 'references'>): string[] {
-  const commands = new Set<string>()
-  const genericProofKeywords = new Set([
-    'check',
-    'command',
-    'executable',
-    'npm',
-    'pnpm',
-    'proof',
-    'prove',
-    'review',
-    'run',
-    'script',
-    'test',
-    'validate',
-    'verification',
-    'verify',
-  ])
-  const taskKeywords = titleKeywords(task.title)
-    .flatMap(keyword => keyword.split('-'))
-    .filter(keyword => keyword.length >= 4 && !genericProofKeywords.has(keyword))
-  const add = (command: string): void => {
-    const normalized = command.trim().replace(/[.,;!?]+$/, '')
-    if (normalized) commands.add(normalized)
-  }
-
-  const commandMatchesTask = (command: string): boolean => {
-    const commandKeywords = normalizeImportText(command)
-      .split(/[\s:_\/-]+/)
-      .filter(keyword => keyword.length >= 4 && !genericProofKeywords.has(keyword))
-    if (commandKeywords.length === 0) return false
-    return commandKeywords.every(commandKeyword => taskKeywords.some(taskKeyword =>
-      taskKeyword === commandKeyword ||
-      (commandKeywords.length === 1 && taskKeyword.length >= 5 && commandKeyword.length >= 5 && (
-        taskKeyword.startsWith(commandKeyword.slice(0, 5)) ||
-        commandKeyword.startsWith(taskKeyword.slice(0, 5))
-      )),
-    ))
-  }
-
-  const collectFromText = (text: string, requireTaskMatch: boolean): void => {
-    for (const line of text.split(/\r?\n/)) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      for (const match of trimmed.matchAll(/\bpnpm\s+(?:(run)\s+)?([a-z0-9@:_./-]+)/gi)) {
-        const script = match[2]?.trim()
-        if (!script) continue
-        const command = `pnpm${match[1] ? ' run' : ''} ${script}`
-        if (
-          isConcreteProjectProofCommand(command) &&
-          (!requireTaskMatch || commandMatchesTask(command)) &&
-          (/\b(prove|test|check|validate|verify|verification|proof|executable)\b/i.test(trimmed) || /\b(prove|test|check|validate|verify)\b/i.test(script))
-        ) {
-          add(command)
-        }
-      }
-    }
-  }
-
-  collectFromText(`${task.title}\n${task.description}`, false)
-  for (const reference of task.references ?? []) {
-    // Materialized imports normalize references to absolute paths. Relative
-    // references are still valid source claims, but cannot safely be opened
-    // here without the importer project root; leave them to the existing
-    // evidence reader rather than resolving them against Guildhall's cwd.
-    if (!path.isAbsolute(reference)) continue
-    const absoluteReference = path.resolve(reference)
-    let content: string
-    try {
-      content = readManagedTextFileSync(absoluteReference, 'utf-8')
-    } catch {
-      continue
-    }
-    const scopedContent = sourceTaskBlockContent(content, task.title)
-    if (scopedContent === null) continue
-    collectFromText(scopedContent, true)
-
-    const scriptReferences = [...scopedContent.matchAll(/\b(scripts\/[A-Za-z0-9._/-]+)/g)]
-      .map(match => match[1])
-      .filter((value): value is string => typeof value === 'string' && /\b(prove|test|check|validate|verify)\b/i.test(value))
-
-    let directory = path.dirname(absoluteReference)
-    while (directory !== path.dirname(directory)) {
-      try {
-        const packageJson = JSON.parse(readManagedTextFileSync(path.join(directory, 'package.json'), 'utf-8')) as {
-          scripts?: Record<string, unknown>
-        }
-        for (const [name, value] of Object.entries(packageJson.scripts ?? {})) {
-          if (typeof value !== 'string') continue
-          const command = `pnpm run ${name}`
-          const isProofScript = /\b(prove|test|check|validate|verify|verification)\b/i.test(name)
-          if (
-            isConcreteProjectProofCommand(command) &&
-            (
-              (isProofScript && packageScriptMatchesTask(command)) ||
-              (scriptReferences.length > 0 && scriptReferences.some(script => value.includes(script)))
-            )
-          ) add(command)
-        }
-        break
-      } catch {
-        directory = path.dirname(directory)
-      }
-    }
-  }
-  return [...commands]
-
-  function packageScriptMatchesTask(command: string): boolean {
-    const commandKeywords = normalizeImportText(command)
-      .split(/[\s:_\/-]+/)
-      .filter(keyword => keyword.length >= 4 && !genericProofKeywords.has(keyword))
-    if (commandKeywords.length === 0) return false
-    if (commandKeywords.length > 1) return commandMatchesTask(command)
-    // A one-word script such as `prove:generation` is too generic to match a
-    // title that merely says "Generate ...". It must appear as the same
-    // substantive noun in the task title; explicit source references are
-    // handled by the branch above.
-    return meaningfulSourceTokens(task.title).includes(commandKeywords[0]!)
-  }
-}
-
-function sourceTaskBlockContent(content: string, taskTitle: string): string | null {
-  const lines = content.split(/\r?\n/)
-  const blocks: string[] = []
-  let current: string[] = []
-  for (const line of lines) {
-    if (/^\s*\d+[.)]\s+/.test(line) && current.length > 0) {
-      blocks.push(current.join('\n'))
-      current = []
-    }
-    if (/^\s*\d+[.)]\s+/.test(line) || current.length > 0) current.push(line)
-  }
-  if (current.length > 0) blocks.push(current.join('\n'))
-  if (blocks.length === 0) return content
-
-  const titleTokens = meaningfulSourceTokens(taskTitle)
-  const matching = blocks.filter(block => {
-    // A numbered roadmap item owns its proof commands until the next item,
-    // but its sub-bullets can mention other capabilities. Match the task only
-    // against the item heading/continuation, not those implementation notes.
-    const heading = block.split(/\n\s*[-*]\s+/)[0] ?? block
-    const blockTokens = new Set(meaningfulSourceTokens(heading))
-    const overlap = titleTokens.filter(token => blockTokens.has(token)).length
-    return overlap >= Math.min(3, Math.max(1, Math.ceil(titleTokens.length * 0.5)))
-  })
-  return matching.length > 0 ? matching.join('\n') : null
-}
-
-function meaningfulSourceTokens(value: string): string[] {
-  const stopWords = new Set([
-    'add', 'build', 'create', 'define', 'implement', 'the', 'a', 'an', 'and',
-    'for', 'from', 'into', 'one', 'this', 'that', 'with', 'each', 'use',
-    'first', 'selected', 'current', 'requested', 'prove', 'proof', 'run',
-  ])
-  return [...new Set(normalizeImportText(value)
-    .split(/\s+/)
-    .flatMap(token => token.split('-'))
-    .filter(token => token.length >= 4 && !stopWords.has(token)))]
 }
 
 function deterministicImportedCriterion(
@@ -4254,7 +3804,9 @@ function materializedProofPaths(
     proofPaths: task.proofPaths?.map(normalizeImportedProofPath),
   })
   const fallback = importedAcceptanceProofPath(task, evidenceDetail)
-  if (!evidenceDetail) return current.length > 0 && !importedProofPathsLookGeneric(current) ? current : fallback
+  if (!evidenceDetail) return current.length > 0 ? current : fallback
+  const semanticProofPaths = semanticImportProofPaths({ ...task, proofPaths: current })
+  if (semanticProofPaths) return semanticProofPaths
   const prototypeTaskKind = importedPrototypeTaskKind(task)
   if (prototypeTaskKind) {
     const command = firstImportedProofCommand(task)
@@ -4424,10 +3976,10 @@ function materializedProofPaths(
           importedCommandProofPath(command, [
             ...materializedAcceptanceCriteria(task, evidenceDetail).map(criterion => criterion.description.trim()).filter(Boolean).slice(0, 6),
           ], 'documented'),
-          ...current.filter(proof => proof.kind !== 'command' && !importedProofPathsLookGeneric([proof])),
+          ...current.filter(proof => proof.kind !== 'command'),
         ]
       }
-      if (current.length > 0 && !importedProofPathsLookGeneric(current)) return current
+      if (current.length > 0) return current
       if (evidenceDetail.verificationBullets.length > 0) {
         return [{
           kind: 'review',
@@ -4436,6 +3988,47 @@ function materializedProofPaths(
         }]
       }
       return fallback
+  }
+}
+
+function semanticImportProofPaths(
+  task: MaterializedImportTask,
+): Task['proofPaths'] | null {
+  const command = firstImportedProofCommand(task)
+  const reviewPath = (expectedEvidence: string): NonNullable<Task['proofPaths']>[number] => ({
+    kind: 'review',
+    source: 'inferred',
+    expectedEvidence: [expectedEvidence],
+  })
+
+  switch (task.semanticKind) {
+    case 'drafting_model':
+      return [
+        importedCommandProofExpectation(task, command, ['The model bakeoff records comparable structured results across the selected genre matrix.']),
+        reviewPath('The selected model record includes quality, refusal, repetition, cost, latency, and content-boundary fields.'),
+      ]
+    case 'author_intent':
+      return [
+        importedCommandProofExpectation(task, command, ['The author-intent record round-trips through the bounded packet and review inputs.']),
+        reviewPath('The structured intent record contains the declared voice, genre, audience, theme, story-shape, world-state, and review-plan fields.'),
+      ]
+    case 'chapter_draft':
+      return [
+        importedCommandProofExpectation(task, command, ['The synopsis-to-chapter pipeline emits the declared structured records and bounded chapter output.']),
+        reviewPath('The draft result identifies the input records and preserves the requested author and genre constraints.'),
+      ]
+    case 'world_state_review':
+      return [
+        importedCommandProofExpectation(task, command, ['The world-state fixture produces structured findings for elapsed time and object/property transitions.']),
+        reviewPath('Each finding identifies the entity, prior state, later state, elapsed time, environment, and any explicit world-rule exception.'),
+      ]
+    case 'spatial_review':
+      return [
+        importedCommandProofExpectation(task, command, ['The spatial fixture produces structured findings for distance, terrain, travel mode, speed, weather, light, and map consistency.']),
+        reviewPath('Each finding identifies the passage, location, movement claim, expected plausible behavior, difference, severity, and evidence.'),
+      ]
+    default:
+      return null
   }
 }
 
@@ -4453,18 +4046,6 @@ function importedAcceptanceProofPath(
     source: 'inferred',
     expectedEvidence: expectedEvidence.slice(0, 6),
   }]
-}
-
-function importedProofPathsLookGeneric(paths: Task['proofPaths']): boolean {
-  if (!paths || paths.length === 0) return false
-  const text = simpleImportedProofPaths(paths)
-    .flatMap(path => path.expectedEvidence ?? [])
-    .join('\n')
-  return /\brecords focused implementation, verification, or reviewer evidence\b/i.test(text) ||
-    /\bcites how .* shaped the completed work\b/i.test(text) ||
-    /^\[[ x]\]\s+/im.test(text) ||
-    /\bhas a bounded proof plan for harness\b/i.test(text) ||
-    /\breuses Stage \d+\b/i.test(text)
 }
 
 function splitMarkdownSections(content: string): Array<{ heading: string; body: string }> {
@@ -4512,27 +4093,16 @@ function importedRawLineIsMetadata(line: string): boolean {
 function importedBulletIsAuditNoise(bullet: string): boolean {
   return (
     /^\[[ x]\]\s+/i.test(bullet) ||
-    /directory does not exist on disk/i.test(bullet) ||
-    /\bcannot run\b/i.test(bullet) ||
-    /\bartifact missing\b/i.test(bullet) ||
-    /\bseparate remediation task\b/i.test(bullet) ||
-    /\bworker timed out\b/i.test(bullet) ||
-    /\bwas never written to disk\b/i.test(bullet) ||
-    /\bcreated this inventory document\b/i.test(bullet) ||
-    /\bas recorded in TASKS\.json\b/i.test(bullet) ||
-    /`test -d [^`]+`/i.test(bullet) ||
-    /\bmissing\b/i.test(bullet) && /packages\/schemas|on disk|directory/i.test(bullet)
+    // A command plus its captured status is an evidence record, not a
+    // durable implementation rule. Keep it out of imported task prose based
+    // on its machine-shaped syntax, regardless of the provider's wording for
+    // the status (MISSING, absent, failed, etc.).
+    /^`[^`\n]+`\s*(?:->|=>|→)/i.test(bullet)
   )
 }
 
 function importedBulletIsPlanningMetadata(bullet: string): boolean {
   return /^(covers|recommended first task title|recommended domain|stage alignment|why not decomposed yet|depends on|current next milestone)\b/i.test(bullet)
-}
-
-function importedBulletLooksLikeVerification(bullet: string): boolean {
-  if (importedBulletIsPlanningMetadata(bullet)) return false
-  if (/^(run|review|evaluate|replay|verify|record|capture|check|assert)\b/i.test(bullet)) return true
-  return /\b(proof flow|proof loop|deterministic proof|verification|pass signal|evaluation output|trace capture|run summary)\b/i.test(bullet)
 }
 
 function markdownSectionAllowsContractNameExtraction(section: {
@@ -4590,42 +4160,6 @@ function keywordOverlapScore(text: string, keywords: readonly string[]): number 
   return keywords.reduce((sum, keyword) => sum + (haystack.includes(keyword) ? 1 : 0), 0)
 }
 
-function contractSectionMatchKeywords(taskTitle: string): string[] {
-  const generic = new Set([
-    'define',
-    'using',
-    'schema',
-    'schemas',
-    'contract',
-    'contracts',
-    'concrete',
-    'cited',
-    'docs',
-    'record',
-    'records',
-    'run',
-    'runs',
-  ])
-  const keywords = new Set<string>()
-  for (const word of normalizeContractSectionText(taskTitle).split(/\s+/)) {
-    if (!generic.has(word) && word.length >= 4) keywords.add(word)
-    for (const part of word.split('-')) {
-      if (!generic.has(part) && part.length >= 4) keywords.add(part)
-    }
-  }
-  return [...keywords]
-}
-
-function normalizeContractSectionText(value: string): string {
-  return normalizeImportText(value.replace(/([a-z0-9])([A-Z])/g, '$1 $2'))
-}
-
-function contractSectionMatchesTask(section: { heading: string; body: string }, taskTitle: string): boolean {
-  const contractNames = [...section.body.matchAll(/`([^`\n]{2,80})`/g)].map(match => match[1] ?? '').join(' ')
-  const haystack = normalizeContractSectionText(`${section.heading}\n${contractNames}`)
-  return contractSectionMatchKeywords(taskTitle).some(keyword => haystack.includes(keyword))
-}
-
 function importedReferenceSlug(reference: string): string | null {
   const normalized = reference.replace(/\\/g, '/')
   const base = normalized.split('/').pop()?.trim() ?? ''
@@ -4637,14 +4171,16 @@ function extractReferenceEvidenceDetail(
   task: MaterializedImportTask,
   workspaceProjectPath: string,
 ): ImportedEvidenceDetail {
-  const keywords = titleKeywords(task.title)
-  const normalizedTaskTitle = normalizeImportText(task.title)
+  // Source evidence is selected from explicit references and structured
+  // sections. A task title is display text, not a source-retrieval key.
+  const keywords: readonly string[] = []
   const referenceSlugs = [...new Set(
     task.references
       .map(reference => importedReferenceSlug(reference))
       .filter((slug): slug is string => Boolean(slug)),
   )]
-  const contractNames = new Set<string>()
+  const contractNames = new Set<string>(task.contractNames ?? [])
+  const hasExplicitContractNames = contractNames.size > 0
   const implementationBullets: string[] = []
   const verificationBullets: string[] = []
   const goalStatements: string[] = []
@@ -4659,7 +4195,7 @@ function extractReferenceEvidenceDetail(
   const packetFields: string[] = []
   const privacyRules: string[] = []
   const invalidationRules: string[] = []
-  const titleSuggestsContracts = /\b(schema|schemas|contract|trace|evaluation|fixture|expected-record|prototype-run)\b/i.test(task.title)
+  const titleSuggestsContracts = task.semanticKind === 'contract'
 
   for (const reference of task.references) {
     const content = readImportedReferenceContent(reference, workspaceProjectPath)
@@ -4694,7 +4230,10 @@ function extractReferenceEvidenceDetail(
         const bullet = cleanedImportedBullet(line)
         if (!bullet) continue
         if (importedBulletIsAuditNoise(bullet)) continue
-        if (/\?$/.test(bullet) || /reviewer questions|questions/i.test(lowerHeading)) {
+        // An open question is a question-shaped source record. A heading such
+        // as "Reviewer Questions" is not enough to turn a statement into a
+        // question, especially when a model used that heading loosely.
+        if (/\?$/.test(bullet)) {
           if (reviewQuestions.length < 6 && !reviewQuestions.includes(bullet)) reviewQuestions.push(bullet)
         }
         if (/decision tree|ordered feedback chain|grounding pass|core claim/i.test(lowerHeading)) {
@@ -4731,28 +4270,21 @@ function extractReferenceEvidenceDetail(
           referenceSlugs.length > 0 &&
           /\.md`?/i.test(section.heading) &&
           !sectionMatchesReferenceSlug
-        const exactTaskTitleInSection = normalizedTaskTitle.length > 0 && haystack.includes(normalizedTaskTitle)
-        const sectionMentionsOtherRecommendedTask =
-          /recommended first task title:/i.test(section.body) && !exactTaskTitleInSection
         const contractSection =
           /\b(schema|trace|run record|fixture shape|prototype run|expected-record|needed contracts|first mvp candidate|minimum prototype requirements)\b/i.test(section.heading) ||
           /\bneeded contracts:\b/i.test(section.body)
-        const matchesTaskContractTerms = contractSectionMatchesTask(section, task.title)
-        const verificationSection =
-          /\b(verification|evaluation|rubric|run record|trace spine|success criteria)\b/i.test(section.heading) ||
-          /\b(evaluate|evaluation|proof|trace|pass signal|run summary)\b/i.test(section.body)
+        const matchesTaskContractTerms = task.semanticKind === 'contract' && contractSection
+        const verificationSection = /^(?:\d+[.)]?\s*)?(verification|evaluation|rubric|run record|trace spine|success criteria|proof)\b/i.test(section.heading.trim())
         const genericSequenceSection =
           /\b(current next milestone|iteration round|test rounds|recommended decomposition order)\b/i.test(heading)
         return {
           ...section,
           score:
             score +
-            (exactTaskTitleInSection ? 12 : 0) +
             (sectionMatchesReferenceSlug ? 10 : 0) +
             (titleSuggestsContracts && contractSection && matchesTaskContractTerms ? 6 : 0) +
             (verificationSection ? 2 : 0) -
             (sectionMentionsAnotherSpecSlug ? 12 : 0) -
-            (sectionMentionsOtherRecommendedTask ? 5 : 0) -
             (genericSequenceSection ? 4 : 0),
           contractSection,
           matchesTaskContractTerms,
@@ -4777,6 +4309,7 @@ function extractReferenceEvidenceDetail(
       const lowerHeading = section.heading.toLowerCase()
       const sectionLines = section.body.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
       if (markdownSectionAllowsContractNameExtraction(section)) {
+        if (hasExplicitContractNames) continue
         for (const match of section.body.matchAll(/`([^`\n]{2,80})`/g)) {
           const name = match[1]!.trim()
           if (/^[A-Za-z][A-Za-z0-9_-]+$/.test(name)) contractNames.add(name)
@@ -4790,10 +4323,7 @@ function extractReferenceEvidenceDetail(
         if (importedBulletIsAuditNoise(bullet)) continue
         const bulletKeywordScore = keywordOverlapScore(bullet, keywords)
         const allowGenericSequenceBullet = !section.genericSequenceSection || bulletKeywordScore > 0
-        if (
-          allowGenericSequenceBullet &&
-          importedBulletLooksLikeVerification(bullet)
-        ) {
+        if (allowGenericSequenceBullet && section.verificationSection) {
           if (verificationBullets.length < 5) verificationBullets.push(bullet)
           continue
         }
@@ -4848,11 +4378,10 @@ function summarizeImportedProblemContext(
   return task.description.trim() || `${task.title} is imported current-scope work backed by the cited project evidence.`
 }
 
-function importedTaskSpec(
+function importedStructuredSpec(
   task: MaterializedImportTask,
   workspaceProjectPath: string,
-): string {
-  const references = (task.references ?? []).filter(Boolean)
+): NonNullable<Task['structuredSpec']> {
   const evidenceDetail = extractReferenceEvidenceDetail(task, workspaceProjectPath)
   const acceptanceCriteria = materializedAcceptanceCriteria(task, evidenceDetail)
   const assumptions = (task.assumptions ?? []).filter(Boolean)
@@ -4861,69 +4390,82 @@ function importedTaskSpec(
   const proposedDesignBullets = importedTaskProposedDesignBullets(task, evidenceDetail)
   const proofPlan = simpleImportedProofPaths(materializedProofPaths(task, evidenceDetail)).map((path) => {
     if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
-      return `- Run \`${path.command.trim()}\``
+      return `Run \`${path.command.trim()}\``
     }
-    if (path.kind === 'browser') return '- Capture browser proof for the documented flow.'
+    if (path.kind === 'browser') return 'Capture browser proof for the documented flow.'
     if (path.kind === 'review') {
       const expected = Array.isArray(path.expectedEvidence) ? path.expectedEvidence.filter(Boolean).join(', ') : ''
-      return expected ? `- Review recorded evidence: ${expected}` : '- Review the documented proof output.'
+      return expected ? `Review recorded evidence: ${expected}` : 'Review the documented proof output.'
     }
     return null
   }).filter((line): line is string => Boolean(line))
-
-  return [
-    '## What this is',
-    task.title,
-    '',
-    '## Problem / context',
-    importedContext,
-    '',
-    '## Goals',
-    `- ${summarizeImportedSuccessMetric(task, evidenceDetail)}`,
-    ...(evidenceDetail.contractNames.length > 0
-      ? [`- Define and use the concrete contracts named in the cited docs: ${evidenceDetail.contractNames.map(name => `\`${name}\``).join(', ')}.`]
-      : []),
-    '',
-    '## Non-goals',
-    ...(missingInformation.length > 0
-      ? missingInformation.map(item => `- ${item}`)
-      : ['- Do not broaden beyond the cited evidence, acceptance criteria, and proof plan.']),
-    '',
-    '## Proposed design',
-    ...(proposedDesignBullets.length > 0
-      ? proposedDesignBullets.map((item, index) => `${index + 1}. ${item}`)
-      : [task.description.trim() || task.title]),
-    '',
-    '## Key decisions',
-    `- Stay anchored to the imported evidence for ${task.title}.`,
-    ...(assumptions.length > 0
-      ? assumptions.map(item => `- Assumption: ${item}`)
-      : ['- Reuse the documented project structure instead of inventing a new boundary.']),
-    '',
-    '## Imported evidence',
-    ...(references.length > 0 ? references.map(reference => `- ${reference}`) : ['- No explicit source path was preserved in the import draft.']),
-    '',
-    '## Acceptance criteria',
-    ...(acceptanceCriteria.length > 0
-      ? acceptanceCriteria.map((criterion, index) => `${index + 1}. ${criterion.description}`)
-      : ['1. The imported task is rewritten with concrete acceptance criteria before approval.']),
-    '',
-    '## Verification',
-    ...(proofPlan.length > 0
-      ? proofPlan
-      : evidenceDetail.verificationBullets.length > 0
-        ? evidenceDetail.verificationBullets.map(item => `- ${item}`)
-        : ['- Run the documented proof plan from the cited project evidence and record the result.']),
-    '',
-    importedCompletionBoundary(task, evidenceDetail),
-  ].join('\n')
+  const verification = proofPlan.length > 0
+    ? proofPlan
+    : evidenceDetail.verificationBullets.length > 0
+      ? evidenceDetail.verificationBullets
+      : [`Run the documented proof plan for ${task.title} and record the result.`]
+  const successMetric = summarizeImportedSuccessMetric(task, evidenceDetail)
+  const proposedDesign = proposedDesignBullets.length > 0
+    ? proposedDesignBullets.join('\n')
+    : task.description.trim() || task.title
+  return StructuredSpec.parse({
+    whatThisIs: task.title,
+    problemContext: importedContext,
+    goals: [
+      successMetric,
+      ...(evidenceDetail.contractNames.length > 0
+        ? [`Define and use the concrete contracts named in the cited docs: ${evidenceDetail.contractNames.join(', ')}.`]
+        : []),
+    ],
+    nonGoals: missingInformation.length > 0
+      ? missingInformation
+      : ['Do not broaden beyond the cited evidence, acceptance criteria, and proof plan.'],
+    proposedDesign,
+    keyDecisions: [
+      `Stay anchored to the imported evidence for ${task.title}.`,
+      ...(assumptions.length > 0
+        ? assumptions.map(item => `Assumption: ${item}`)
+        : ['Reuse the documented project structure instead of inventing a new boundary.']),
+    ],
+    acceptanceCriteria: acceptanceCriteria.length > 0
+      ? acceptanceCriteria.map((criterion) => ({
+          scenario: criterion.scenario ?? criterion.description,
+          expectation: criterion.expectation ?? criterion.description,
+          verificationMode: criterion.verifiedBy === 'automated'
+            ? 'automated'
+            : criterion.verifiedBy === 'review'
+              ? 'review'
+              : 'human',
+          ...(criterion.command ? { command: criterion.command } : {}),
+          ...(criterion.expectedExit ? { expectedExit: criterion.expectedExit } : {}),
+          ...(criterion.expectedOutputIncludes?.length ? { expectedOutputIncludes: criterion.expectedOutputIncludes } : {}),
+          ...(criterion.evidenceHint ? { evidenceHint: criterion.evidenceHint } : {}),
+          ...(criterion.negativeCase ? { negativeCase: criterion.negativeCase } : {}),
+        }))
+      : [{
+          scenario: `Given the imported task ${task.title}, when it is shaped for execution`,
+          expectation: 'Then it has concrete acceptance criteria and a recorded proof result.',
+          verificationMode: 'review',
+        }],
+    verification,
+    completionBoundary: {
+      productOutcome: successMetric,
+      whatGuildhallCanCompleteInCode: `Implement ${task.title} within the boundary described by the cited sources, acceptance criteria, and proof plan.`,
+      externalDependencies: 'None beyond the cited repo-local evidence and the local tooling needed to run the proof plan.',
+      ownerOnlySetup: 'None expected. Reshape the task if the imported evidence is stale or points at the wrong scope boundary.',
+      verificationEnvironment: `Local filesystem and repo-local tooling; run the cited proof plan for ${task.title}.`,
+      whatCountsAsDone: `${successMetric} Record the proof result against the imported acceptance criteria.`,
+      whatMustBeSplitOrBlocked: 'Split only if the cited work contains independently verifiable deliverables. Block only for missing external credentials, unavailable services, or absent source evidence.',
+      splitPolicy: 'conditional',
+    },
+  })
 }
 
 function importedTaskProposedDesignBullets(
   task: MaterializedImportTask,
   evidenceDetail: ImportedEvidenceDetail,
 ): string[] {
-  if (/\breviewer lane\b|\breview\b/i.test(task.title)) {
+  if (task.semanticKind === 'reviewer_lane') {
     const bullets: string[] = []
     if (evidenceDetail.reviewQuestions.length > 0) {
       bullets.push(`Evaluate the documented review questions: ${evidenceDetail.reviewQuestions.join(' ')}`)
@@ -4972,7 +4514,6 @@ function importedTaskBrief(
 ): Task['productBrief'] {
   const cleanedNonGoals = (task.missingInformation ?? [])
     .filter(Boolean)
-    .filter(item => !/guildhall still needs to confirm scope, current relevance, and success criteria during shaping/i.test(item))
   return {
     userJob: summarizeImportedProblemContext(task, evidenceDetail),
     whyItMattersNow: summarizeImportedProblemContext(task, evidenceDetail),
@@ -5773,7 +5314,8 @@ export function buildImportedBlueprintSeed(
   }
 
   const seededProductBrief = importedTaskBrief(normalizedTask, evidenceDetail, now)
-  const seededSpec = importedTaskSpec(normalizedTask, workspaceProjectPath)
+  const seededStructuredSpec = importedStructuredSpec(normalizedTask, workspaceProjectPath)
+  const seededSpec = renderStructuredSpecMarkdown(seededStructuredSpec)
   const seededWorkUnitAnalysis = importedTaskWorkUnitAnalysis(normalizedTask, evidenceDetail, now)
   const shapedSeedTask: Task = applyTaskShaping({
     id: `seed:${normalizedTask.id}`,
@@ -5783,6 +5325,8 @@ export function buildImportedBlueprintSeed(
     projectPath: '',
     status: 'spec_review',
     priority: normalizedTask.priority,
+    ...(normalizedTask.semanticKind ? { semanticKind: normalizedTask.semanticKind } : {}),
+    ...(normalizedTask.contractNames?.length ? { contractNames: [...normalizedTask.contractNames] } : {}),
     dependsOn: [...(normalizedTask.dependsOn ?? [])],
     outOfScope: [...(normalizedTask.missingInformation ?? [])],
     acceptanceCriteria,
@@ -5832,6 +5376,7 @@ export function buildImportedBlueprintSeed(
     escalations: [],
     agentIssues: [],
     spec: seededSpec,
+    structuredSpec: seededStructuredSpec,
     productBrief: seededProductBrief,
     workUnitAnalysis: seededWorkUnitAnalysis,
     proofPaths: materializedProofPaths(normalizedTask, evidenceDetail),
@@ -5850,6 +5395,7 @@ export function buildImportedBlueprintSeed(
     proofPaths: materializedProofPaths(normalizedTask, evidenceDetail),
     productBrief: seededProductBrief,
     spec: seededSpec,
+    structuredSpec: seededStructuredSpec,
     outOfScope: [...(task.missingInformation ?? [])],
     notes,
     workUnitAnalysis: seededWorkUnitAnalysis,
@@ -5939,24 +5485,16 @@ export async function approveWorkspaceImport(
     ? formatParsedImportAsSpec(normalizeParsedImportForSpec(materializedParsed, input.projectPath))
     : null
   const recoverableArchivedTasks = await readRecoverableArchivedImportTasks(input.memoryDir)
-  const existingImportedTasksByTitle = new Map<string, Task>()
   const existingImportedTasks: Task[] = []
   for (const existingTask of queue.tasks) {
     if (existingTask.id === WORKSPACE_IMPORT_TASK_ID) continue
     repairImportedTaskTitleFromSourceDescription(existingTask)
     existingImportedTasks.push(existingTask)
-    const normalizedTitle = normalizeImportText(existingTask.title)
-    if (!normalizedTitle || existingImportedTasksByTitle.has(normalizedTitle)) continue
-    existingImportedTasksByTitle.set(normalizedTitle, existingTask)
   }
   const refreshableTasks: Array<{ existing: Task; imported: MaterializedImportTask }> = []
   const supersededImportedTaskIds = new Set<string>()
-  const pendingTitleSeen = new Set<string>()
   const mergeableTasks = materializedTasks.filter(task => {
-    const normalizedTitle = normalizeImportText(task.title)
-    if (!normalizedTitle) return true
-    const existing = existingImportedTasksByTitle.get(normalizedTitle)
-      ?? existingImportedTasks.find(candidate => existingImportedTaskMatchesIncoming(candidate, task))
+    const existing = existingImportedTasks.find(candidate => existingImportedTaskMatchesIncoming(candidate, task))
     const archived = recoverableArchivedTasks.find(candidate =>
       archivedImportTaskMatchesIncoming(candidate, task, input),
     )
@@ -5965,7 +5503,6 @@ export async function approveWorkspaceImport(
         queue,
         archived,
         existingImportedTasks,
-        existingImportedTasksByTitle,
       })
       if (existing && existing.id !== restored.id) supersededImportedTaskIds.add(existing.id)
       refreshableTasks.push({ existing: restored, imported: task })
@@ -5975,8 +5512,6 @@ export async function approveWorkspaceImport(
       refreshableTasks.push({ existing, imported: task })
       return false
     }
-    if (pendingTitleSeen.has(normalizedTitle)) return false
-    pendingTitleSeen.add(normalizedTitle)
     return true
   })
 
@@ -6060,6 +5595,24 @@ export async function approveWorkspaceImport(
     existing.domain = domain
     existing.projectPath = taskProjectPath
     existing.priority = imported.priority
+    if (imported.sourceIdentity) existing.sourceIdentity = imported.sourceIdentity
+    else delete existing.sourceIdentity
+    if (imported.deliverableName) existing.deliverableName = imported.deliverableName
+    else delete existing.deliverableName
+    if (imported.producedArtifact) existing.producedArtifact = imported.producedArtifact
+    else delete existing.producedArtifact
+    if (imported.workShape) existing.workShape = imported.workShape
+    else delete existing.workShape
+    if (imported.targetArea) existing.targetArea = imported.targetArea
+    else delete existing.targetArea
+    if (imported.buildsOn?.length) existing.buildsOn = [...imported.buildsOn]
+    else delete existing.buildsOn
+    if (imported.consumerSurfaces?.length) existing.consumerSurfaces = [...imported.consumerSurfaces]
+    else delete existing.consumerSurfaces
+    if (imported.semanticKind) existing.semanticKind = imported.semanticKind
+    else delete existing.semanticKind
+    if (imported.contractNames?.length) existing.contractNames = [...imported.contractNames]
+    else delete existing.contractNames
     existing.dependsOn = [...(imported.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency)
     existing.releaseIds = [...(imported.releaseIds ?? [])]
     existing.acceptanceCriteria = refreshedAcceptanceCriteria
@@ -6168,10 +5721,19 @@ export async function approveWorkspaceImport(
       id,
       title: importedTitle,
       description: normalizedDescription,
+      ...(t.sourceIdentity ? { sourceIdentity: t.sourceIdentity } : {}),
+      ...(t.deliverableName ? { deliverableName: t.deliverableName } : {}),
+      ...(t.producedArtifact ? { producedArtifact: t.producedArtifact } : {}),
+      ...(t.workShape ? { workShape: t.workShape } : {}),
+      ...(t.targetArea ? { targetArea: t.targetArea } : {}),
+      ...(t.buildsOn?.length ? { buildsOn: [...t.buildsOn] } : {}),
+      ...(t.consumerSurfaces?.length ? { consumerSurfaces: [...t.consumerSurfaces] } : {}),
       domain,
       projectPath: taskProjectPath,
       status: seededBlueprint.status,
       priority: t.priority,
+      ...(t.semanticKind ? { semanticKind: t.semanticKind } : {}),
+      ...(t.contractNames?.length ? { contractNames: [...t.contractNames] } : {}),
       dependsOn: [...(t.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency),
       releaseIds: [...(t.releaseIds ?? [])],
       outOfScope: seededBlueprint.outOfScope,
@@ -6323,7 +5885,6 @@ function pruneInactiveImportedSplitDependencies(queue: TaskQueue, now: string): 
     queue.tasks
       .filter(task =>
         (task.status === 'archived' || task.status === 'cancelled') &&
-        task.id.includes('-split-') &&
         (
           task.proposedBy === 'task-sizing' ||
           task.origination === 'system' ||
@@ -6367,7 +5928,6 @@ function normalizeImportedSplitChildVisibility(
     if (child.hierarchy?.parentId !== parent.id) continue
     if (child.workVisibility?.kind) continue
     const looksLikeGeneratedSplitChild =
-      child.id.startsWith(`${parent.id}-split-`) ||
       child.hierarchy?.relation === 'decomposes' ||
       child.notes?.some(note => note.agentId === 'task-sizing')
     if (!looksLikeGeneratedSplitChild) continue
@@ -6389,12 +5949,17 @@ function reconcileImportedSplitChildren(
   const plannedChildren = task.sizePlan?.recommendedChildren?.length
     ? task.sizePlan.recommendedChildren
     : buildDecompositionChildDrafts({ task })
-  const plannedTitles = new Set(
+  const plannedChildIds = new Set(
     plannedChildren
-      .map(child => normalizeImportText(child.title))
-      .filter(Boolean),
+      .map(child => child.createdTaskId)
+      .filter((id): id is string => Boolean(id?.trim())),
   )
-  if (plannedTitles.size === 0) return
+  const plannedChildIdentities = new Set(
+    plannedChildren
+      .filter((child): child is typeof child & { identity: string } => Boolean(child.identity?.trim()))
+      .map(child => splitChildSourceIdentity(task, child.identity)),
+  )
+  if (plannedChildIds.size === 0 && plannedChildIdentities.size === 0) return
 
   const currentChildIds = task.hierarchy?.childIds ?? []
   if (currentChildIds.length === 0) return
@@ -6406,10 +5971,14 @@ function reconcileImportedSplitChildren(
     if (!child) continue
     const isGeneratedSplitChild =
       child.hierarchy?.parentId === task.id ||
-      child.id.startsWith(`${task.id}-split-`) ||
+      child.hierarchy?.relation === 'decomposes' ||
       child.notes?.some(note => note.agentId === 'task-sizing')
-    const normalizedTitle = normalizeImportText(child.title)
-    if (!isGeneratedSplitChild || plannedTitles.has(normalizedTitle)) {
+    const childIdentity = explicitTaskStructuralIdentity(child)
+    const isPlannedChild = plannedChildIds.has(child.id) ||
+      (childIdentity !== null && plannedChildIdentities.has(childIdentity))
+    // A generated child without an explicit identity is legacy data. Preserve
+    // it rather than guessing from its display title which child it represents.
+    if (!isGeneratedSplitChild || isPlannedChild || (childIdentity === null && !plannedChildIds.has(child.id))) {
       keptChildIds.push(childId)
       continue
     }
@@ -6422,10 +5991,18 @@ function reconcileImportedSplitChildren(
     }
     if (!['done', 'pending_pr'].includes(child.status)) child.status = 'archived'
     child.updatedAt = now
-    if (!child.notes.some(note => note.agentId === 'workspace-importer' && /superseded by a refreshed imported split/i.test(note.content))) {
+    if (!child.notes.some(note =>
+      note.agentId === 'workspace-importer' &&
+      note.structured?.event === 'workspace_import_archive' &&
+      note.structured?.reason === 'superseded_imported_split'
+    )) {
       child.notes.push({
         agentId: 'workspace-importer',
         role: 'system',
+        structured: {
+          event: 'workspace_import_archive',
+          reason: 'superseded_imported_split',
+        },
         content: `Archived because this split child was superseded by a refreshed imported split for ${task.id}.`,
         timestamp: now,
       })
@@ -6460,8 +6037,7 @@ function archiveGeneratedImportedDescendants(
     for (const candidate of queue.tasks) {
       if (seen.has(candidate.id)) continue
       const isDescendant =
-        candidate.hierarchy?.parentId === parentId ||
-        candidate.id.startsWith(`${parentId}-split-`)
+        candidate.hierarchy?.parentId === parentId
       if (!isDescendant) continue
 
       seen.add(candidate.id)
@@ -6469,8 +6045,8 @@ function archiveGeneratedImportedDescendants(
 
       const isGeneratedSplitChild =
         candidate.hierarchy?.parentId === parentId ||
-        candidate.id.startsWith(`${parentId}-split-`) ||
-        candidate.notes?.some(note => note.agentId === 'task-sizing')
+        candidate.hierarchy?.relation === 'decomposes' ||
+        candidate.notes?.some(note => note.agentId === 'task-sizing' || note.agentId === 'workspace-importer')
       if (!isGeneratedSplitChild) continue
 
       if (candidate.hierarchy?.parentId) {
@@ -6481,10 +6057,18 @@ function archiveGeneratedImportedDescendants(
       if (!['done', 'pending_pr'].includes(candidate.status)) candidate.status = 'archived'
       candidate.updatedAt = now
       const notes = candidate.notes ?? (candidate.notes = [])
-      if (!notes.some(note => note.agentId === 'workspace-importer' && /superseded because its imported parent left the approved import scope/i.test(note.content))) {
+      if (!notes.some(note =>
+        note.agentId === 'workspace-importer' &&
+        note.structured?.event === 'workspace_import_archive' &&
+        note.structured?.reason === 'superseded_imported_parent_scope'
+      )) {
         notes.push({
           agentId: 'workspace-importer',
           role: 'system',
+          structured: {
+            event: 'workspace_import_archive',
+            reason: 'superseded_imported_parent_scope',
+          },
           content: 'Archived because this generated split child was superseded because its imported parent left the approved import scope.',
           timestamp: now,
         })

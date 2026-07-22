@@ -94,7 +94,31 @@ describe('summarizeStructuralTaskContext', () => {
 
     expect(context.status).toBe('unmatched')
     expect(context.summary).toBe('Guildhall does not have a confident structural match for this task yet.')
-    expect(context.reasons).toContain('No package or domain matched the current task text.')
+    expect(context.reasons).toContain("No package or domain matched the task's explicit structural references.")
+  })
+
+  it('does not route from domain words in model-shaped task prose', async () => {
+    await writeRepoFixture(projectRoot, {
+      name: '@example/root',
+      workspace: ['packages/*'],
+      packages: [
+        { dir: 'packages/core', name: '@example/core', scripts: { test: 'vitest run packages/core' } },
+      ],
+    })
+    const accepted = await acceptFreshMap(projectRoot, 'example')
+
+    const context = summarizeStructuralTaskContext({
+      map: accepted,
+      task: {
+        id: 'task-prose-only-route',
+        title: 'A lyrical core task',
+        text: 'The model mentions core and parser, but no structural reference was recorded.',
+      },
+    })
+
+    expect(context.status).toBe('unmatched')
+    expect(context.likelyArea).toBeUndefined()
+    expect(context.primaryDomain).toBeUndefined()
   })
 
   it('does not present setup tasks as routed project work', async () => {

@@ -9,6 +9,7 @@ import {
   readTasksTool,
   updateTaskTool,
   addTaskTool,
+  isProofSetupTask,
   materializeSplitChildren,
   materializeProofSetupTask,
   settleMaterializedSplitReadiness,
@@ -156,7 +157,7 @@ describe('updateTask', () => {
 
     expect(result).toMatchObject({
       success: false,
-      error: expect.stringContaining('Current task specs may only contain the product boundary'),
+      error: expect.stringContaining('Freeform spec Markdown cannot be written by an agent'),
     })
     expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.spec).toBeUndefined()
   })
@@ -222,6 +223,19 @@ describe('updateTask', () => {
     expect(raw.tasks[0].domain).toBe('harness')
   })
 
+  it('persists explicit parent acceptance links without interpreting task prose', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      parentAcceptanceCriterionIds: ['bounded-writer-packet', 'proof-output'],
+    })
+    const raw = readProjectTaskQueueSync(tasksPath)
+    expect(raw.tasks[0].parentAcceptanceCriterionIds).toEqual([
+      'bounded-writer-packet',
+      'proof-output',
+    ])
+  })
+
   it('persists updates through the project-state boundary', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', title: 'Boundary-safe title' })
 
@@ -280,7 +294,17 @@ describe('updateTask', () => {
       tasksPath: promotedTasksPath,
       taskId: 'task-001',
       status: 'review',
-      note: { agentId: 'worker-agent', role: 'self-critique', content: 'Handed off for review.' },
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: 'Handed off for review.',
+        structured: {
+          acceptanceCriteria: [{ id: 'AC-1', status: 'met' }],
+          changedFiles: ['src/index.ts'],
+          verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+          proofEvidenceIds: [],
+        },
+      },
     }, { current_task_project_path: tmpDir })
 
     expect(result.success).toBe(true)
@@ -303,6 +327,266 @@ describe('updateTask', () => {
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(raw.tasks[0].status).toBe('review')
     expect(effective.assignedTo).toBe('reviewer-agent')
+  })
+
+  it('rejects a worker review handoff whose machine facts exist only in prose', async () => {
+    seedQueue.tasks[0]!.status = 'in_progress'
+    writeProjectTaskQueue(tasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'review',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: '**Self-critique:** Everything passed and the work is ready.',
+      },
+    }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('requires note.structured')
+  })
+
+  it('rejects a worker handoff whose structured criterion IDs do not match the task', async () => {
+    seedQueue.tasks[0]!.status = 'in_progress'
+    writeProjectTaskQueue(tasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'review',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: 'The explanation is intentionally arbitrary.',
+        structured: {
+          acceptanceCriteria: [{ id: 'invented-ac-9', status: 'met' }],
+          changedFiles: ['src/index.ts'],
+          verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+          proofEvidenceIds: [],
+        },
+      },
+    }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('must exactly match the current task contract')
+  })
+
+  it('rejects a non-final specialist handoff without the typed handoff payload', async () => {
+    const queue = TaskQueue.parse(seedQueue)
+    queue.tasks[0]!.status = 'in_progress'
+    queue.tasks[0]!.handoffSequence = [
+      { agent: 'frontend-engineer', scope: [] },
+      { agent: 'backend-engineer', scope: [] },
+    ]
+    queue.tasks[0]!.handoffStep = 0
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'review',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: '## Handoff note\nThe first specialist finished; the next should continue.',
+        structured: {
+          acceptanceCriteria: [],
+          changedFiles: ['src/index.ts'],
+          verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+          proofEvidenceIds: [],
+        },
+      },
+    }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('structured.handoff')
+  })
+
+  it('does not let proof setup enter review before it has a concrete command', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        status: 'done',
+        hierarchy: { childIds: [], order: 0, relation: 'contains' },
+        releaseIds: ['release-1'],
+      }],
+      releases: [{
+        id: 'release-1',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        nodeIds: ['task-001'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+    })
+    const parent = queue.tasks[0]!
+    const child = materializeProofSetupTask(queue, parent, new Date().toISOString(), { releaseIds: ['release-1'] })
+    expect(child.status).toBe('materialized')
+    const proofTask = queue.tasks.find((task) => task.id === child.childTaskId)!
+    proofTask.status = 'in_progress'
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: child.childTaskId,
+      status: 'review',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: 'I am finished according to my explanation.',
+        structured: {
+          acceptanceCriteria: [{ id: 'ac-1', status: 'met' }],
+          changedFiles: ['tests/synopsis/generation-proof.test.ts'],
+          verificationCommands: [{ command: 'pnpm build', status: 'passed' }],
+          proofEvidenceIds: [],
+        },
+      },
+    }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('exact task-specific command')
+  })
+
+  it('projects a typed worker verification command onto the proof acceptance contract', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        status: 'done',
+        hierarchy: { childIds: [], order: 0, relation: 'contains' },
+        releaseIds: ['release-1'],
+      }],
+      releases: [{
+        id: 'release-1',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        nodeIds: ['task-001'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+    })
+    const parent = queue.tasks[0]!
+    const child = materializeProofSetupTask(queue, parent, new Date().toISOString(), { releaseIds: ['release-1'] })
+    const proofTask = queue.tasks.find((task) => task.id === child.childTaskId)!
+    proofTask.status = 'in_progress'
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: child.childTaskId,
+      status: 'review',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: 'This explanation may be paraphrased without changing the state.',
+        structured: {
+          acceptanceCriteria: [{ id: 'ac-1', status: 'met' }],
+          changedFiles: ['scripts/proof-synopsis-loop.mjs'],
+          verificationCommands: [{ command: 'pnpm proof:synopsis-loop', status: 'passed' }],
+          proofEvidenceIds: [],
+        },
+      },
+    }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
+
+    expect(result.success, JSON.stringify(result)).toBe(true)
+    expect(readProjectStateDatabaseTask(tasksPath, child.childTaskId)?.definition).toMatchObject({
+      status: 'review',
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        command: 'pnpm proof:synopsis-loop',
+        expectedExit: 'zero',
+        expectedOutputIncludes: ['guildhall-proof:task-001'],
+        met: false,
+      }],
+    })
+  })
+
+  it('does not let proof setup enter done from a met checkbox alone', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        status: 'done',
+        hierarchy: { childIds: [], order: 0, relation: 'contains' },
+        releaseIds: ['release-1'],
+      }],
+      releases: [{
+        id: 'release-1',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        nodeIds: ['task-001'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+    })
+    const parent = queue.tasks[0]!
+    const child = materializeProofSetupTask(queue, parent, new Date().toISOString(), { releaseIds: ['release-1'] })
+    const proofTask = queue.tasks.find((task) => task.id === child.childTaskId)!
+    proofTask.status = 'ready'
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: child.childTaskId,
+      status: 'done',
+      acceptanceCriteria: proofTask.acceptanceCriteria.map((criterion) => ({ ...criterion, met: true })),
+      completedAt: new Date().toISOString(),
+    }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('concrete task-specific command')
+    expect(readProjectTaskQueueSync(tasksPath).tasks.find((task) => task.id === child.childTaskId)?.status)
+      .toBe('ready')
+  })
+
+  it('does not let a worker bypass proof handoff validation by omitting self-critique', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        status: 'done',
+        hierarchy: { childIds: [], order: 0, relation: 'contains' },
+        releaseIds: ['release-1'],
+      }],
+      releases: [{
+        id: 'release-1',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        nodeIds: ['task-001'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+    })
+    const parent = queue.tasks[0]!
+    const child = materializeProofSetupTask(queue, parent, new Date().toISOString(), { releaseIds: ['release-1'] })
+    const proofTask = queue.tasks.find((task) => task.id === child.childTaskId)!
+    proofTask.status = 'in_progress'
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: child.childTaskId,
+      status: 'review',
+    }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('requires a self-critique note')
+    expect(readProjectTaskQueueSync(tasksPath).tasks.find((task) => task.id === child.childTaskId)?.status)
+      .toBe('in_progress')
   })
 
   it('normalizes gate-checker ownership when a task moves into gate_check', async () => {
@@ -591,8 +875,7 @@ describe('updateTask', () => {
         description: 'Build passes',
         scenario: 'Build passes',
         expectation: 'Build passes',
-        verifiedBy: 'automated',
-        command: 'pnpm test',
+        verifiedBy: 'review',
         met: false,
         source: 'documented',
       },
@@ -653,6 +936,20 @@ describe('updateTask', () => {
     ])
   })
 
+  it('rejects freeform Markdown when an agent tries to author planning state', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      spec: '## Summary\nA model-specific prose draft.',
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result).toEqual({
+      success: false,
+      taskId: 'task-001',
+      error: 'Freeform spec Markdown cannot be written by an agent. Submit structuredSpec JSON; Guildhall renders Markdown from that contract and keeps prose display-only.',
+    })
+  })
+
   it('rejects updates that provide both markdown spec and structuredSpec JSON', async () => {
     const result = await updateTask({
       tasksPath,
@@ -690,20 +987,30 @@ describe('updateTask', () => {
     await updateTask({
       tasksPath,
       taskId: 'task-001',
-      spec: [
-        '## Summary',
-        'Add billing settings, create an admin API endpoint, migrate subscription data, send invite emails, and document analytics rollout.',
-        '',
-        '## Acceptance Criteria',
-        '- Billing settings update subscriptions.',
-        '- Admin API returns subscription status.',
-        '- Migration backfills existing workspace subscriptions.',
-      ].join('\n'),
-      acceptanceCriteria: [
-        { id: 'ac-1', description: 'Billing settings update subscriptions.', verifiedBy: 'review' },
-        { id: 'ac-2', description: 'Admin API returns subscription status.', verifiedBy: 'review' },
-        { id: 'ac-3', description: 'Migration backfills subscriptions.', verifiedBy: 'review' },
-      ],
+      structuredSpec: {
+        whatThisIs: 'A cross-surface billing delivery contract.',
+        problemContext: 'The work has multiple independently reviewable boundaries.',
+        goals: ['Deliver the declared work units.'],
+        nonGoals: ['Unrelated product changes.'],
+        proposedDesign: 'Use the existing project surfaces.',
+        keyDecisions: ['Decompose before execution.'],
+        acceptanceCriteria: [
+          { scenario: 'Billing is in scope.', expectation: 'The billing boundary is represented.', verificationMode: 'review' },
+          { scenario: 'API is in scope.', expectation: 'The API boundary is represented.', verificationMode: 'review' },
+          { scenario: 'Migration is in scope.', expectation: 'The migration boundary is represented.', verificationMode: 'review' },
+        ],
+        verification: ['Review each declared boundary.'],
+        completionBoundary: {
+          productOutcome: 'The declared work is ready to execute.',
+          whatGuildhallCanCompleteInCode: 'The project changes within the boundary.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'The registered project.',
+          whatCountsAsDone: 'Each declared boundary is complete.',
+          whatMustBeSplitOrBlocked: 'The work must be decomposed before execution.',
+          splitPolicy: 'required',
+        },
+      },
     })
 
     const raw = readProjectTaskQueueSync(tasksPath)
@@ -830,6 +1137,7 @@ describe('updateTask', () => {
           deliverable: 'ContextMenu component implementation is available.',
           rationale: 'The runtime component is the base deliverable.',
           suggestedDomain: 'frontend',
+          suggestedTaskKind: 'component' as const,
           dependsOn: [],
         },
         {
@@ -838,6 +1146,7 @@ describe('updateTask', () => {
           deliverable: 'ContextMenu has a Storybook story.',
           rationale: 'Visual proof can be reviewed separately.',
           suggestedDomain: 'frontend',
+          suggestedTaskKind: 'story' as const,
           dependsOn: ['wu-1'],
         },
         {
@@ -901,7 +1210,7 @@ describe('updateTask', () => {
       task.delivery?.supports?.includes('task-knit-context-actions'),
     )).toBe(true)
     expect(children.find((task: { title: string }) => task.title === 'Storybook story')?.dependsOn).toEqual([
-      'task-001-split-component-implementation',
+      'task-001-split-wu-1',
     ])
   })
 
@@ -922,16 +1231,20 @@ describe('updateTask', () => {
             factors: [],
             recommendedChildren: [
               {
+                identity: 'implementation',
                 title: 'Implement import review flow',
                 reason: 'Keep the product change separate from proof.',
                 suggestedDomain: 'product',
+                suggestedTaskKind: 'implementation',
                 dependsOn: [],
               },
               {
+                identity: 'verification',
                 title: 'Runtime proof for import review flow',
                 reason: 'Keep proof explicit without adding another visible work item.',
                 suggestedDomain: 'product',
-                dependsOn: ['Implement import review flow'],
+                suggestedTaskKind: 'test',
+                dependsOn: ['implementation'],
               },
             ],
             reasons: ['Broad enough to split.'],
@@ -991,6 +1304,7 @@ describe('updateTask', () => {
             factors: [],
             recommendedChildren: [
               {
+                identity: 'first-replacement',
                 title: 'Implement the first independently verifiable replacement',
                 reason: 'Make the first replacement executable.',
                 dependsOn: [],
@@ -1034,9 +1348,11 @@ describe('updateTask', () => {
             factors: [],
             recommendedChildren: [
               {
+                identity: 'writer-packet',
                 title: 'Build the bounded writer packet',
                 reason: 'Prove packet discipline as a separate runnable child.',
                 dependsOn: [],
+                createdTaskId: 'task-runner-split-build-the-bounded-writer-packet',
               },
             ],
             reasons: ['Broad enough to split.'],
@@ -1110,9 +1426,9 @@ describe('updateTask', () => {
             action: 'split_required',
             factors: [],
             recommendedChildren: [
-              { title: 'Audit the remaining replacement scope', reason: 'Duplicate current child.', dependsOn: [] },
-              { title: 'Implement the first independently verifiable replacement', reason: 'Duplicate sibling.', dependsOn: [] },
-              { title: 'Verify and update the migration record', reason: 'Duplicate sibling.', dependsOn: [] },
+              { identity: 'audit', createdTaskId: 'child-audit', title: 'Audit the remaining replacement scope', reason: 'Duplicate current child.', dependsOn: [] },
+              { identity: 'implement', createdTaskId: 'child-implement', title: 'Implement the first independently verifiable replacement', reason: 'Duplicate sibling.', dependsOn: [] },
+              { identity: 'verify', createdTaskId: 'child-verify', title: 'Verify and update the migration record', reason: 'Duplicate sibling.', dependsOn: [] },
             ],
             reasons: ['Task size score: 8.'],
             reviewBudgetHint: 'release_critical',
@@ -1139,6 +1455,7 @@ describe('updateTask', () => {
           id: 'child-audit-split-audit',
           title: 'Audit the remaining replacement scope',
           status: 'shelved',
+          sourceIdentity: 'parent::split::audit',
           hierarchy: { parentId: 'child-audit', childIds: [], order: 0 },
         },
         {
@@ -1146,6 +1463,7 @@ describe('updateTask', () => {
           id: 'child-audit-split-implement',
           title: 'Implement the first independently verifiable replacement',
           status: 'shelved',
+          sourceIdentity: 'parent::split::implement',
           hierarchy: { parentId: 'child-audit', childIds: [], order: 1 },
         },
         {
@@ -1153,6 +1471,7 @@ describe('updateTask', () => {
           id: 'child-audit-split-verify',
           title: 'Verify and update the migration record',
           status: 'shelved',
+          sourceIdentity: 'parent::split::verify',
           hierarchy: { parentId: 'child-audit', childIds: [], order: 2 },
         },
       ],
@@ -1510,7 +1829,7 @@ describe('updateTask', () => {
     expect(result.error).toContain('Workers cannot mark command-backed acceptance criteria as met')
   })
 
-  it('rejects spec_review promotion when the spec buries unanswered human questions in markdown', async () => {
+  it('does not let Markdown headings or question-shaped prose change spec_review promotion', async () => {
     const result = await updateTask({
       tasksPath,
       taskId: 'task-001',
@@ -1530,12 +1849,11 @@ describe('updateTask', () => {
       ].join('\n'),
     })
 
-    expect(result.success).toBe(false)
-    expect(result.error).toMatch(/post-user-question/i)
+    expect(result.success).toBe(true)
 
     const raw = readProjectTaskQueueSync(tasksPath)
-    expect(raw.tasks[0].status).toBe('exploring')
-    expect(raw.tasks[0].spec).toBeUndefined()
+    expect(raw.tasks[0].status).toBe('spec_review')
+    expect(raw.tasks[0].spec).toContain('Who can invite?')
   })
 
   it('normalizes duplicated subproject path prefixes inside specs and derived verification commands', async () => {
@@ -1592,7 +1910,7 @@ describe('updateTask', () => {
     ])
   })
 
-  it('retitles imported deferred tasks from spec summary once a real spec exists', async () => {
+  it('does not retitle imported work from the prose of a later spec', async () => {
     const importedQueue = {
       ...seedQueue,
       tasks: [
@@ -1625,42 +1943,52 @@ describe('updateTask', () => {
     })
 
     const raw = readProjectTaskQueueSync(tasksPath)
-    expect(raw.tasks[0].title).toBe('Knit: add a version diff view to page history')
+    expect(raw.tasks[0].title).toBe('Version diff view (deferred)')
   })
 
-  it('derives structured acceptance criteria from the spec when none are provided explicitly', async () => {
+  it('derives acceptance criteria from structuredSpec when none are provided explicitly', async () => {
     await updateTask({
       tasksPath,
       taskId: 'task-001',
-      spec: [
-        '## Summary',
-        'Build the thing.',
-        '',
-        '## Acceptance Criteria',
-        '1. The table menu renders.',
-        '2. `pnpm -F web build` passes.',
-      ].join('\n'),
+      structuredSpec: {
+        whatThisIs: 'A table menu contract.',
+        problemContext: 'The table menu needs a bounded review contract.',
+        goals: ['Render the table menu.'],
+        nonGoals: ['Unrelated editor work.'],
+        proposedDesign: 'Use the existing table surface.',
+        keyDecisions: ['Keep the contract reviewable.'],
+        acceptanceCriteria: [
+          { scenario: 'The table is visible.', expectation: 'The table menu renders.', verificationMode: 'review' },
+          { scenario: 'The project is built.', expectation: 'The declared build proof is available.', verificationMode: 'review' },
+        ],
+        verification: ['Review the table menu and declared build proof.'],
+        completionBoundary: {
+          productOutcome: 'The table menu is reviewable.',
+          whatGuildhallCanCompleteInCode: 'The table menu changes.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'The registered project.',
+          whatCountsAsDone: 'Both acceptance criteria are satisfied.',
+          whatMustBeSplitOrBlocked: 'Unrelated editor work.',
+        },
+      },
     })
 
     const raw = readProjectTaskQueueSync(tasksPath)
-    expect(raw.tasks[0].acceptanceCriteria).toEqual([
+    expect(raw.tasks[0].acceptanceCriteria).toMatchObject([
       {
         id: 'ac-1',
-        description: 'The table menu renders.',
-        scenario: 'The table menu renders.',
+        scenario: 'The table is visible.',
         expectation: 'The table menu renders.',
         verifiedBy: 'review',
         met: false,
-        source: 'documented',
       },
       {
         id: 'ac-2',
-        description: '`pnpm -F web build` passes.',
-        scenario: '`pnpm -F web build` passes.',
-        expectation: '`pnpm -F web build` passes.',
+        scenario: 'The project is built.',
+        expectation: 'The declared build proof is available.',
         verifiedBy: 'review',
         met: false,
-        source: 'documented',
       },
     ])
   })
@@ -1797,8 +2125,7 @@ describe('updateTask', () => {
         description: 'Build passes',
         scenario: 'Build passes',
         expectation: 'Build passes',
-        verifiedBy: 'automated',
-        command: 'pnpm test',
+        verifiedBy: 'review',
         met: false,
         source: 'documented',
       },
@@ -1865,13 +2192,25 @@ describe('materializeProofSetupTask', () => {
     expect(second).toEqual({ status: 'already_represented', childTaskId: first.childTaskId })
     expect(child).toMatchObject({
       title: 'Establish concrete proof for Test task',
-      status: 'exploring',
+      status: 'ready',
       workKind: 'verification',
+      taskKind: 'verification',
+      semanticKind: 'proof_setup',
+      projectPath: queue.tasks[0]!.projectPath,
       releaseIds: ['release-1'],
       references: ['docs/release-plan.md'],
       workVisibility: { kind: 'internal_step', countInProjectTotals: false },
       hierarchy: { parentId: 'task-001', relation: 'decomposes' },
     })
+    expect(child?.structuredSpec?.completionBoundary.splitPolicy).toBe('none')
+    expect(child?.acceptanceCriteria).toEqual([
+      expect.objectContaining({
+        id: 'ac-1',
+        verifiedBy: 'review',
+        met: false,
+        expectedOutputIncludes: ['guildhall-proof:task-001'],
+      }),
+    ])
     expect(queue.tasks[0]!.hierarchy?.childIds).toContain(first.childTaskId)
     expect(queue.tasks[0]!.deliverySteps).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -1880,6 +2219,89 @@ describe('materializeProofSetupTask', () => {
         blocksCompletion: true,
       }),
     ]))
+    expect(isProofSetupTask(child!)).toBe(true)
+    const childWithDifferentRationale = {
+      semanticKind: child!.semanticKind,
+      proposalRationale: 'A completely different model explanation.',
+    }
+    expect(isProofSetupTask(childWithDifferentRationale)).toBe(true)
+    expect(isProofSetupTask({ ...child!, semanticKind: undefined })).toBe(false)
+  })
+
+  it('creates a fresh release-local proof child when the existing child is historical', () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-next',
+      releases: [{
+        id: 'release-shipped',
+        label: 'Shipped release',
+        kind: 'release',
+        state: 'shipped',
+        proofStyle: 'script_only',
+        nodeIds: ['work:task-001', 'work:task-001-proof-setup'],
+        deferredNodeIds: [],
+      }, {
+        id: 'release-next',
+        label: 'Follow-up release',
+        kind: 'release',
+        state: 'active',
+        proofStyle: 'script_only',
+        nodeIds: ['work:task-001'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        id: 'task-001',
+        status: 'done',
+        releaseIds: ['release-shipped', 'release-next'],
+        hierarchy: { childIds: ['task-001-proof-setup'], order: 0, relation: 'contains' },
+      }, {
+        ...seedQueue.tasks[0],
+        id: 'task-001-proof-setup',
+        title: 'Establish concrete proof for Test task',
+        status: 'done',
+        semanticKind: 'proof_setup',
+        workKind: 'verification',
+        taskKind: 'verification',
+        releaseIds: ['release-shipped', 'release-next'],
+        hierarchy: { parentId: 'task-001', childIds: [], order: 0, relation: 'decomposes' },
+      }],
+    })
+
+    const result = materializeProofSetupTask(queue, queue.tasks[0]!, '2026-07-21T21:00:00.000Z', {
+      releaseIds: ['release-next'],
+      linkParent: false,
+    })
+    const child = queue.tasks.find(task => task.id === result.childTaskId)
+
+    expect(result.status).toBe('materialized')
+    expect(result.childTaskId).toBe('task-001-proof-setup-2')
+    expect(child).toMatchObject({
+      status: 'ready',
+      releaseIds: ['release-next'],
+      hierarchy: { parentId: 'task-001', relation: 'decomposes' },
+    })
+    expect(queue.tasks[0]!.hierarchy?.childIds).toEqual(['task-001-proof-setup'])
+  })
+
+  it('treats an existing proof setup task as its own boundary instead of nesting another child', () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        semanticKind: 'proof_setup',
+        title: 'Establish concrete proof for Test task',
+        hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' },
+      }],
+    })
+    const proofTask = queue.tasks[0]!
+    const beforeCount = queue.tasks.length
+
+    expect(materializeProofSetupTask(queue, proofTask, '2026-07-21T20:00:00.000Z')).toEqual({
+      status: 'already_represented',
+      childTaskId: proofTask.id,
+    })
+    expect(queue.tasks).toHaveLength(beforeCount)
   })
 })
 

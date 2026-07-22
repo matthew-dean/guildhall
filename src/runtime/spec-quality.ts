@@ -1,4 +1,4 @@
-import type { Task } from '@guildhall/core'
+import { StructuredSpec, type Task } from '@guildhall/core'
 
 export interface SpecQualityResult {
   ok: boolean
@@ -10,61 +10,12 @@ export interface SpecGroundingResult {
   errors: string[]
 }
 
-const REQUIRED_COMPLETION_BOUNDARY_FIELDS = [
-  'product outcome',
-  'what guildhall can complete in code',
-  'external dependencies',
-  'owner-only setup',
-  'verification environment',
-  'what counts as done',
-  'what must be split or blocked',
-] as const
-
-const EMPTY_FIELD_PATTERN = /\b(tbd|todo|unknown|unclear|not sure|to be decided|n\/a\?)\b/i
-const NO_EXTERNAL_DEPENDENCY_PATTERN = /^(none|no|nothing|not required|no external dependencies)(?:[.\s].*)?$/i
-const BROWSER_ONLY_VERIFICATION_DEPENDENCY_PATTERN =
-  /\b(?:modern\s+)?(?:web\s+)?browser\b[\s\S]*\b(?:verification|verify|inspect|screenshot|headless|local)\b[\s\S]*\b(?:no runtime dependencies|no APIs|no CDN|no backend|no credentials|no deployed infrastructure|no network)\b/i
-const STANDARD_LOCAL_TOOLING_PATTERN =
-  /\b(?:node(?:\.js)?|npm|pnpm|yarn|bun|python|ruby|go|rust|cargo|java|dotnet|swift|xcode|git|bash|zsh|shell)\b/i
-const LOCAL_TOOLING_ALREADY_AVAILABLE_PATTERN =
-  /\b(?:already available|already installed|available on path|available in the execution environment|local filesystem|local[- ]only|no external services|no external dependencies|none)\b/i
-const NO_SPLIT_OR_BLOCK_PATTERN = /^(none|nothing|not required|no split|no blockers?|nothing to split)(?:[.\s].*)?$/i
-const EXTERNAL_SETUP_RESOLUTION_PATTERN =
-  /\b(owner|user|admin|operator|human|create|configure|set up|setup|provision|dashboard|credential|secret|key|callback|webhook|env|environment|supabase|provider)\b/i
-const SPLIT_OR_BLOCK_RESOLUTION_PATTERN =
-  /\b(split|block|blocked|setup task|follow-?up|separate task|dependency|shelv|owner|human|configure|configuration|credential|secret|key)\b/i
-const CONFIGURED_DEPENDENCY_PATTERN =
-  /\b(?:already\s+(?:set\s+up|configured|available)|configured\s+(?:provider|service|endpoint|environment)|available\s+(?:provider|service|endpoint|environment))\b/i
-const LIVE_VERIFICATION_PATTERN =
-  /\b(end[- ]to[- ]end|e2e|live|staging|production|configured|configuration|provider|credential|callback|webhook|verified|works|can actually|real user|target environment)\b/i
-
 const EXECUTABLE_DETAIL_PATTERN = /\b(?:pnpm|npm|node|npx|yarn|bun|python(?:3)?|pytest|vitest|playwright|git)\s+[^\n.;,)]+/gi
 const PROJECT_PATH_PATTERN = /(?:^|[\s`"'(])((?:scripts|src|test|tests|fixtures|docs|internal|dist|output|package\.json|expected-records\.json)[A-Za-z0-9_./:@=-]*)/g
 const MODEL_FAMILY_PATTERN = /\b(?:mixtral|mistral|qwen|deepseek|kimi|glm|nemotron|llama|gemma|phi|command-r|gpt)(?:[A-Za-z0-9./:_-]*)\b/gi
 const INVENTED_SYMBOL_PATTERN = /\b[A-Z][A-Za-z0-9]*(?:Run|Fixture|Agent|Interface|Schema|Harness)\b/g
 
-const CURRENT_PLAN_PROCESS_LEAKAGE_PATTERNS = [
-  /\bexceeded maxrevisions\b/i,
-  /\bdeterministic reviewer bounced\b/i,
-  /\bretrying worker pass\b/i,
-  /\btarget directory structure does not match expected paths\b/i,
-  /\bexpected file path .*\.guildhall[\\/]worktrees\b/i,
-  /\bparent directories do not exist\b/i,
-  /\bsuperseded after\b/i,
-  /\brequires human judgment\b/i,
-] as const
-
-/**
- * Current briefs/specs describe the product boundary. Recovery attempts,
- * revision counters, and internal worktree diagnostics belong in notes and
- * evidence, where they remain useful without becoming executable scope.
- */
-export function currentPlanProcessLeakage(text: string): string | null {
-  const match = CURRENT_PLAN_PROCESS_LEAKAGE_PATTERNS.find((pattern) => pattern.test(text))
-  return match ? match.source : null
-}
-
-type GroundingTask = Pick<Task, 'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief'>
+type GroundingTask = Pick<Task, 'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief' | 'structuredSpec'>
 
 function groundingContext(task: GroundingTask, includeProductBrief = true): string {
   return JSON.stringify({
@@ -128,25 +79,58 @@ function validateImportedPlanningText(
 }
 
 export function validateSpecGrounding(task: Pick<Task,
-  'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief' | 'spec'
+  'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief' | 'spec' | 'structuredSpec'
 >): SpecGroundingResult {
+  if (task.structuredSpec) return validateStructuredSpecGrounding(task)
   return validateImportedPlanningText(task, task.spec?.trim() ?? '', 'Spec', true)
+}
+
+function validateStructuredSpecGrounding(task: GroundingTask): SpecGroundingResult {
+  const structured = StructuredSpec.safeParse(task.structuredSpec)
+  if (!structured.success) {
+    return { ok: false, errors: ['Structured spec is invalid and cannot be used as a planning contract.'] }
+  }
+  const imported = (task.sourceClaims?.length ?? 0) > 0 ||
+    task.requestIntake?.evidenceRefs?.some(ref => /^import:/.test(ref)) === true ||
+    (task.references?.length ?? 0) > 0 ||
+    task.requestIntake?.createdBy === 'workspace-importer'
+  if (!imported) return { ok: true, errors: [] }
+
+  // Only typed executable fields can be checked here. The rest of the
+  // structured spec is explanatory prose and must not be searched for model-
+  // specific vocabulary, commands, paths, or symbols.
+  const context = groundingContext(task, true)
+  const errors: string[] = []
+  for (const criterion of structured.data.acceptanceCriteria) {
+    const command = criterion.command?.trim() ?? ''
+    if (!command) continue
+    const executable = unsupportedMatches(command, context, EXECUTABLE_DETAIL_PATTERN)
+    if (executable.length > 0) {
+      errors.push(`Spec acceptance criterion command is not present in the visible task/source context: ${executable.join(', ')}.`)
+    }
+    const paths = unsupportedMatches(command, context, PROJECT_PATH_PATTERN)
+    if (paths.length > 0) {
+      errors.push(`Spec acceptance criterion command names project paths or files not present in the visible task/source context: ${paths.join(', ')}.`)
+    }
+    const models = unsupportedMatches(command, context, MODEL_FAMILY_PATTERN)
+    if (models.length > 0) {
+      errors.push(`Spec acceptance criterion command names model families not present in the visible task/source context: ${models.join(', ')}.`)
+    }
+  }
+  return { ok: errors.length === 0, errors }
 }
 
 export function validateProductBriefGrounding(
   task: GroundingTask,
   productBrief: NonNullable<Task['productBrief']>,
 ): SpecGroundingResult {
-  return validateImportedPlanningText(task, JSON.stringify(productBrief), 'Product brief', false, true)
-}
-
-export function stripCurrentPlanProcessLeakage(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .filter((line) => currentPlanProcessLeakage(line) === null)
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  void task
+  void productBrief
+  // A product brief is explanatory intent, not an executable contract. Do
+  // not scan its prose for commands, paths, or model names: those words are
+  // valid in arbitrary user language and must not make a model fail intake.
+  // Executable proof belongs in structured acceptance criteria instead.
+  return { ok: true, errors: [] }
 }
 
 export function specSectionBody(markdown: string, heading: string): string {
@@ -155,11 +139,7 @@ export function specSectionBody(markdown: string, heading: string): string {
   return match?.[1]?.trim() ?? ''
 }
 
-function sectionBody(markdown: string, heading: string): string {
-  return specSectionBody(markdown, heading)
-}
-
-function normalizeFieldName(raw: string): string {
+function normalizeLegacyFieldName(raw: string): string {
   return raw
     .trim()
     .replace(/^\*{1,3}|\*{1,3}$/g, '')
@@ -169,7 +149,7 @@ function normalizeFieldName(raw: string): string {
     .replace(/:$/, '')
 }
 
-function completionBoundaryFields(boundary: string): Map<string, string> {
+function legacyCompletionBoundaryFields(boundary: string): Map<string, string> {
   const fields = new Map<string, string>()
   let currentField: string | null = null
   for (const rawLine of boundary.split('\n')) {
@@ -178,48 +158,106 @@ function completionBoundaryFields(boundary: string): Map<string, string> {
       /^(?:\*{1,3}|_{1,3})(.+?)(?::)(?:\*{1,3}|_{1,3})\s*(.*)$/.exec(line)
     const match = emphasizedMatch ?? /^([^:]+):\s*(.*)$/.exec(line)
     if (match) {
-      currentField = normalizeFieldName(match[1]!)
+      currentField = normalizeLegacyFieldName(match[1]!)
       fields.set(currentField, match[2]!.trim())
       continue
     }
     if (!currentField || !line) continue
-    const existing = fields.get(currentField) ?? ''
-    fields.set(currentField, [existing, line].filter(Boolean).join('\n').trim())
+    fields.set(currentField, [fields.get(currentField) ?? '', line].filter(Boolean).join('\n').trim())
   }
   return fields
 }
 
-function isFilled(value: string | undefined): value is string {
-  return Boolean(value && value.trim().length > 0 && !EMPTY_FIELD_PATTERN.test(value.trim()))
+/**
+ * One-way compatibility conversion for records written before structuredSpec
+ * became mandatory. This is intentionally a migration reader, not a normal
+ * planning path: new agent/tool writes cannot submit Markdown as authority.
+ * The converted object is what validation consumes and what the caller should
+ * persist back to the queue.
+ */
+export function migrateLegacySpecToStructuredSpec(spec: string | undefined): NonNullable<Task['structuredSpec']> | null {
+  if (!spec?.trim()) return null
+  const boundary = specSectionBody(spec, 'Completion Boundary')
+  if (!boundary) return null
+  const fields = legacyCompletionBoundaryFields(boundary)
+  const required = [
+    'product outcome',
+    'what guildhall can complete in code',
+    'external dependencies',
+    'owner-only setup',
+    'verification environment',
+    'what counts as done',
+    'what must be split or blocked',
+  ] as const
+  if (required.some(field => !fields.get(field)?.trim())) return null
+
+  const criteria = extractLegacyAcceptanceCriteriaFromMarkdown(spec)
+  if (criteria.length === 0) return null
+  const summary = specSectionBody(spec, 'Summary') || fields.get('product outcome')!
+  const outOfScope = specSectionBody(spec, 'Out of Scope')
+    ?.split('\n')
+    .map(line => line.trim().replace(/^[-*]\s+/, '').replace(/^\d+[.)]\s+/, ''))
+    .filter(Boolean)
+  const verification = specSectionBody(spec, 'Verification')
+    ?.split('\n')
+    .map(line => line.trim().replace(/^[-*]\s+/, '').replace(/^\d+[.)]\s+/, ''))
+    .filter(Boolean)
+  return StructuredSpec.parse({
+    whatThisIs: summary,
+    problemContext: summary,
+    goals: [fields.get('product outcome')!],
+    nonGoals: outOfScope && outOfScope.length > 0 ? outOfScope : ['Work outside this completion boundary.'],
+    proposedDesign: fields.get('what guildhall can complete in code')!,
+    keyDecisions: ['Preserve the migrated completion boundary and its explicit proof contract.'],
+    acceptanceCriteria: criteria.map((criterion) => ({
+      scenario: criterion.scenario ?? criterion.description,
+      expectation: criterion.expectation ?? criterion.description,
+      verificationMode: criterion.verifiedBy === 'automated' ? 'automated' : criterion.verifiedBy === 'human' ? 'human' : 'review',
+      ...(criterion.command ? { command: criterion.command } : {}),
+      ...(criterion.expectedExit ? { expectedExit: criterion.expectedExit } : {}),
+      ...(criterion.expectedOutputIncludes ? { expectedOutputIncludes: criterion.expectedOutputIncludes } : {}),
+      ...(criterion.evidenceHint ? { evidenceHint: criterion.evidenceHint } : {}),
+      ...(criterion.negativeCase ? { negativeCase: criterion.negativeCase } : {}),
+    })),
+    verification: verification && verification.length > 0 ? verification : ['Review the task evidence against the completion boundary.'],
+    completionBoundary: {
+      productOutcome: fields.get('product outcome')!,
+      whatGuildhallCanCompleteInCode: fields.get('what guildhall can complete in code')!,
+      externalDependencies: fields.get('external dependencies')!,
+      ownerOnlySetup: fields.get('owner-only setup')!,
+      verificationEnvironment: fields.get('verification environment')!,
+      whatCountsAsDone: fields.get('what counts as done')!,
+      whatMustBeSplitOrBlocked: fields.get('what must be split or blocked')!,
+      splitPolicy: 'conditional',
+    },
+  })
 }
 
-export function productBriefFromSpecCompletionBoundary(spec: string): NonNullable<Task['productBrief']> | null {
-  const boundary = sectionBody(spec, 'Completion Boundary')
-  if (!boundary) return null
-  const fields = completionBoundaryFields(boundary)
-  const userJob = fields.get('product outcome')
-  const successMetric = fields.get('what counts as done')
-  if (!isFilled(userJob) || !isFilled(successMetric)) return null
-  const nonGoals = fields.get('what must be split or blocked')
+export function productBriefFromSpecCompletionBoundary(
+  task: Pick<Task, 'structuredSpec'>,
+): NonNullable<Task['productBrief']> | null {
+  const structured = StructuredSpec.safeParse(task.structuredSpec)
+  if (!structured.success) return null
+  const { productOutcome: userJob, whatCountsAsDone: successMetric, whatMustBeSplitOrBlocked: nonGoals } = structured.data.completionBoundary
   return {
     userJob,
     successMetric,
-    ...(isFilled(nonGoals) ? { nonGoals: [nonGoals], antiPatterns: [nonGoals] } : {}),
+    nonGoals: [nonGoals],
+    antiPatterns: [nonGoals],
     authoredBy: 'system:completion-boundary',
   }
 }
 
 export function validateSpecCompletionBoundary(task: Pick<Task,
-  'spec' | 'acceptanceCriteria' | 'productBrief'
+  'spec' | 'structuredSpec' | 'acceptanceCriteria' | 'productBrief'
 >): SpecQualityResult {
   const errors: string[] = []
-  const spec = task.spec?.trim() ?? ''
-  if (!spec) {
-    return { ok: false, errors: ['Spec is missing.'] }
-  }
-
-  if (currentPlanProcessLeakage(spec)) {
-    errors.push('Spec contains internal recovery/process history. Keep that evidence in task notes or history, and write only the current product boundary here.')
+  // Rendered Markdown is intentionally not a live compatibility reader.
+  // Durable planning state must already have been migrated or authored as a
+  // structured contract before any runtime path can validate or execute it.
+  const structured = StructuredSpec.safeParse(task.structuredSpec)
+  if (!structured.success) {
+    errors.push('Structured spec is missing or invalid. Durable planning state must be authored through structuredSpec; rendered Markdown is display-only.')
   }
 
   const brief = task.productBrief
@@ -230,63 +268,15 @@ export function validateSpecCompletionBoundary(task: Pick<Task,
   if (!Array.isArray(task.acceptanceCriteria) || task.acceptanceCriteria.length === 0) {
     errors.push('At least one acceptance criterion is required before approval.')
   }
-
-  const boundary = sectionBody(spec, 'Completion Boundary')
-  if (!boundary) {
-    errors.push('Spec must include a Completion Boundary section.')
-    return { ok: errors.length === 0, errors }
-  }
-
-  const fields = completionBoundaryFields(boundary)
-  for (const field of REQUIRED_COMPLETION_BOUNDARY_FIELDS) {
-    if (!isFilled(fields.get(field))) {
-      errors.push(`Completion Boundary is missing a concrete "${field}" value.`)
-    }
-  }
-
-  const externalDependencies = fields.get('external dependencies') ?? ''
-  const ownerOnlySetup = fields.get('owner-only setup') ?? ''
-  const verificationEnvironment = fields.get('verification environment') ?? ''
-  const done = fields.get('what counts as done') ?? ''
-  const splitOrBlocked = fields.get('what must be split or blocked') ?? ''
-  const localToolingAlreadyAvailable =
-    isFilled(externalDependencies) &&
-    STANDARD_LOCAL_TOOLING_PATTERN.test(externalDependencies) &&
-    LOCAL_TOOLING_ALREADY_AVAILABLE_PATTERN.test(
-      `${externalDependencies}\n${ownerOnlySetup}\n${verificationEnvironment}\n${splitOrBlocked}`,
-    )
-  const hasExternalDependencies =
-    isFilled(externalDependencies) &&
-    !NO_EXTERNAL_DEPENDENCY_PATTERN.test(externalDependencies.trim()) &&
-    !BROWSER_ONLY_VERIFICATION_DEPENDENCY_PATTERN.test(externalDependencies.trim()) &&
-    !localToolingAlreadyAvailable
-
-  if (hasExternalDependencies) {
-    const ownerSetupResolved =
-      isFilled(ownerOnlySetup) && EXTERNAL_SETUP_RESOLUTION_PATTERN.test(ownerOnlySetup)
-    const splitOrBlockResolved =
-      isFilled(splitOrBlocked) &&
-      !NO_SPLIT_OR_BLOCK_PATTERN.test(splitOrBlocked.trim()) &&
-      SPLIT_OR_BLOCK_RESOLUTION_PATTERN.test(splitOrBlocked)
-    const dependencyAlreadyConfigured =
-      CONFIGURED_DEPENDENCY_PATTERN.test(externalDependencies) &&
-      LIVE_VERIFICATION_PATTERN.test(`${verificationEnvironment}\n${done}`)
-    if (!ownerSetupResolved && !splitOrBlockResolved && !dependencyAlreadyConfigured) {
-      errors.push(
-        'External dependencies must name the owner/setup action or be split/blocked before implementation.',
-      )
-    }
-    if (!LIVE_VERIFICATION_PATTERN.test(`${verificationEnvironment}\n${done}`)) {
-      errors.push(
-        'External dependencies require a live/configured verification environment or end-to-end proof.',
-      )
-    }
+  if (structured.success && structured.data.acceptanceCriteria.length === 0) {
+    errors.push('Structured spec must contain at least one acceptance criterion.')
   }
 
   return { ok: errors.length === 0, errors }
 }
 
-export function extractAcceptanceCriteriaFromSpec(spec: string): Task['acceptanceCriteria'] {
+/** One-way migration helper; rendered Markdown is never a live contract. */
+export function extractLegacyAcceptanceCriteriaFromMarkdown(spec: string): Task['acceptanceCriteria'] {
   const body = specSectionBody(spec, 'Acceptance Criteria')
   if (!body) return []
   const criteria: Task['acceptanceCriteria'] = []
@@ -300,15 +290,13 @@ export function extractAcceptanceCriteriaFromSpec(spec: string): Task['acceptanc
     criteria.push({
       id: `AC-${criteria.length + 1}`,
       description,
-      verifiedBy: inferVerificationKind(description),
+      // Rendered Markdown is explanatory text, not an executable proof
+      // contract. Automated verification requires an explicit structured
+      // command on the criterion.
+      verifiedBy: 'review',
       source: 'documented',
       met: false,
     })
   }
   return criteria
-}
-
-function inferVerificationKind(description: string): Task['acceptanceCriteria'][number]['verifiedBy'] {
-  if (/\b(test|build|lint|typecheck|command)\b/i.test(description)) return 'automated'
-  return 'review'
 }

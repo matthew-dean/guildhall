@@ -44,13 +44,25 @@ describe('decomposeTaskForFinishability', () => {
       description: 'Build checkout UI, API, migration, release docs, verification, provider setup, and rollback.',
       spec: 'Build checkout UI, API, migration, release docs, verification, provider setup, and rollback.',
       acceptanceCriteria: [{ id: 'AC-1', description: 'Checkout ships.', verifiedBy: 'review', met: false }],
+      sizePlan: {
+        taskId: 'task-1',
+        score: 8,
+        band: 'epic',
+        action: 'decompose_before_execution',
+        factors: [],
+        recommendedChildren: [],
+        reviewBudgetHint: 'release_critical',
+        reasons: ['Explicit structured scope spans multiple independently verifiable surfaces.'],
+        createdAt: now,
+        createdBy: 'test',
+      },
     })
 
     const decomposition = decomposeTaskForFinishability(broadTask)
 
     expect(decomposition.action).toBe('split')
     expect(decomposition.reasons.map(reason => reason.code)).toContain('too_broad')
-    expect(decomposition.reasons.map(reason => reason.code)).toContain('too_much_context')
+    expect(decomposition.reasons.map(reason => reason.code)).toContain('too_broad')
     expect(decomposition.childDrafts).toEqual([])
   })
 
@@ -60,6 +72,8 @@ describe('decomposeTaskForFinishability', () => {
       description: 'Compare Fuse, MiniSearch, and hosted search, then implement the best choice.',
       spec: 'Research options, decide, and implement.',
       acceptanceCriteria: [{ id: 'AC-1', description: 'Search works.', verifiedBy: 'automated', command: 'pnpm test', met: false }],
+      taskKind: 'research',
+      workKind: 'implementation',
     })
 
     const decomposition = decomposeTaskForFinishability(mixedTask)
@@ -86,6 +100,11 @@ describe('decomposeTaskForFinishability', () => {
       ].join('\n'),
       acceptanceCriteria: [{ id: 'AC-1', description: 'Checkout opens.', verifiedBy: 'review', met: false }],
       proofPaths: [{ id: 'checkout-proof' }],
+      definitionOfDone: {
+        items: ['Browser proof shows checkout opens.'],
+        evidenceRequired: ['Checkout proof path is recorded.'],
+        createdBy: 'test',
+      },
     })
 
     const result = applyTaskShaping(target, { now })
@@ -159,6 +178,7 @@ describe('decomposeTaskForFinishability', () => {
             deliverable: 'Fixture and evaluation schemas exist.',
             rationale: 'Schemas unblock every later harness proof.',
             suggestedDomain: 'harness',
+            suggestedTaskKind: 'research',
             dependsOn: [],
           },
           {
@@ -209,6 +229,7 @@ describe('decomposeTaskForFinishability', () => {
       dependsOn: ['schemas'],
       kind: 'implementation',
     })
+    expect(decomposition.childDrafts[0]?.kind).toBe('research')
   })
 })
 

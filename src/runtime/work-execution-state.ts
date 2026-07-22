@@ -109,7 +109,11 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
     })
     .map(child => child.id)
   const blockedChildIds = descendants
-    .filter(child => BLOCKED_STATUSES.has(child.status) || hasBlockReason(child))
+    // A terminal child may retain the reason that explained its historical
+    // recovery. That history must not keep a completed parent blocked; only
+    // non-terminal child work can block the current execution state.
+    .filter(child => !TERMINAL_STATUSES.has(child.status) &&
+      (BLOCKED_STATUSES.has(child.status) || hasBlockReason(child)))
     .map(child => child.id)
   const activeChildIds = descendants
     .filter(child => ACTIVE_STATUSES.has(child.status) && !TERMINAL_STATUSES.has(child.status) && !hasBlockReason(child))
@@ -130,6 +134,7 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
   const requiredDelivery = deliverySteps.filter(step => step.required !== false && step.blocksCompletion !== false)
   const requiredDeliveryDone = requiredDelivery.filter(step => step.status === 'done' || step.status === 'waived').length
   const blockedInternalProofCount = descendants.filter(child =>
+    !TERMINAL_STATUSES.has(child.status) &&
     (BLOCKED_STATUSES.has(child.status) || hasBlockReason(child)) &&
     (visibilityForTask(child, tasks).kind === 'internal_step' || child.workKind === 'verification' || child.workKind === 'test'),
   ).length
@@ -200,8 +205,8 @@ function isRunnableEmptyBoundedChildContract(task: Task): boolean {
   }
   const hasContainingWork = Boolean(task.hierarchy?.parentId) || (task.delivery?.supports?.length ?? 0) > 0
   if (!hasContainingWork) return false
-  const text = [task.title, task.description, task.spec].filter(Boolean).join('\n')
-  return /\b(contract|schema|fixture|expected-record|prototype-run|evaluation)\b/i.test(text)
+  return task.structuredSpec?.completionBoundary.splitPolicy === 'none' ||
+    (task.structuredSpec?.contractSurfaceDeltas?.length ?? 0) > 0
 }
 
 function descendantsFor(tasks: Task[], workId: string): string[] {

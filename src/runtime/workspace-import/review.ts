@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { explicitTaskStructuralIdentity } from '@guildhall/core'
 import type {
   DraftContext,
   DraftGoal,
@@ -8,8 +9,12 @@ import type {
 } from './hypothesis.js'
 
 export interface WorkspaceImportExistingTask {
-  title: string
+  id?: string
+  title?: string
   status: string
+  sourceIdentity?: string
+  deliverableName?: string
+  producedArtifact?: string
 }
 
 export interface WorkspaceImportSourceGroup {
@@ -119,10 +124,6 @@ function sourceArea(
   return { key: head, label: titleCaseSlug(head) }
 }
 
-function normalizedTitle(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
 function summarizeGroup(group: {
   taskCount: number
   currentTaskCount?: number
@@ -214,7 +215,11 @@ export function buildWorkspaceImportReview(
     ?? draft.context.find(context => /^Stage\s+\d+\s*:/i.test(context.label))?.label
     ?? null
   const releaseScopeLabel = currentReleaseScopeLabel(draft)
-  const existingTitles = new Set(existingTasks.map(task => normalizedTitle(task.title)))
+  const existingIdentities = new Set(
+    existingTasks
+      .map(task => explicitTaskStructuralIdentity(task))
+      .filter((identity): identity is string => identity !== null),
+  )
   const byKey = new Map<string, Omit<WorkspaceImportSourceGroup, 'summary' | 'kind'> & {
     taskTitles: string[]
   }>()
@@ -289,7 +294,8 @@ export function buildWorkspaceImportReview(
     }
     group.taskIds.push(task.suggestedId)
     group.taskTitles.push(task.title)
-    if (existingTitles.has(normalizedTitle(task.title))) {
+    const identity = explicitTaskStructuralIdentity(task)
+    if (identity !== null && existingIdentities.has(identity)) {
       group.existingOverlapCount += 1
     }
   }

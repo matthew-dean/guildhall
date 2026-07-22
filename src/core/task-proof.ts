@@ -115,7 +115,9 @@ export const ProofPath = z.preprocess((value) => {
   summary: z.string(),
   // Legacy/imported task paths use a compact command/review/browser shape;
   // preserve it alongside the richer launch-step representation.
-  kind: z.enum(['command', 'review', 'browser']).optional(),
+  // Provider-backed proof is an explicit evidence lane. It is never inferred
+  // from the path title, summary, or provider output prose.
+  kind: z.enum(['command', 'review', 'browser', 'provider']).optional(),
   command: z.string().optional(),
   source: z.enum(['documented', 'inferred']).default('documented'),
   status: z.enum(['planned', 'in_progress', 'verified', 'blocked', 'stale']).default('planned'),

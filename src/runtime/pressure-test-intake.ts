@@ -966,10 +966,11 @@ async function inspectEvidenceFiles(memoryDir: string, projectPath: string): Pro
 
 function chooseDomainForFact(
   intake: PressureTestIntake,
-  fact: string,
+  _fact: string,
 ): z.infer<typeof PressureTestDomain> | undefined {
-  const lower = fact.toLowerCase()
+  // Domain routing is durable intake state. Do not guess it from a model's
+  // wording or from a domain title; the active domain is the explicit owner
+  // of the fact, and the first domain is the deterministic seed fallback.
   return intake.domains.find(domain => domain.id === intake.activeDomainId) ??
-    intake.domains.find(domain => lower.includes(domain.title.toLowerCase().split(' ')[0] ?? '')) ??
     intake.domains[0]
 }

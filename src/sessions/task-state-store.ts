@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline'
 import {
   TaskEvidenceEvent,
   compactTaskEvidenceEvent,
+  extractStructuredSelfCritique,
   type TaskEvidenceKind,
   TaskRuntimeStateStore,
   TaskWorkspaceStateStore,
@@ -1203,12 +1204,22 @@ export async function backfillTaskEvidenceCurrent(
   for (const taskId of [...new Set(taskIds)]) {
     const history = await readTaskEvidence(projectRoot, taskId, { allowLegacy: true })
     if (history.length === 0) continue
-    upsertProjectStateDatabaseTaskProofs(projectRoot, history.map(event => ({
-      taskId,
-      kind: event.kind,
-      recordedAt: event.recordedAt,
-      payload: event.payload,
-    })))
+    upsertProjectStateDatabaseTaskProofs(projectRoot, history.map(event => {
+      // This is the one-time migration boundary for pre-0.13 notes that put
+      // machine JSON inside narrative content. Live writes and ordinary reads
+      // never promote prose into current state.
+      const legacyStructured = event.kind === 'note'
+        ? extractStructuredSelfCritique(event.payload, { allowLegacyContent: true })
+        : null
+      return {
+        taskId,
+        kind: event.kind,
+        recordedAt: event.recordedAt,
+        payload: legacyStructured && !event.payload.structured
+          ? { ...event.payload, structured: legacyStructured }
+          : event.payload,
+      }
+    }))
     tasks += 1
     events += history.length
   }

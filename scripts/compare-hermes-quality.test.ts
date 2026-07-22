@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { discoverGuildhallArtifactRoots, guildhallProjectIdForOutputRoot, gradeArtifact, resolvePersistentReportRoot, scoreQuality } from './compare-hermes-quality.mjs'
+import { artifactSatisfiesTask, discoverGuildhallArtifactRoots, guildhallProjectIdForOutputRoot, gradeArtifact, resolvePersistentReportRoot, scoreQuality } from './compare-hermes-quality.mjs'
 
 describe('Hermes quality comparator artifact discovery', () => {
   it('grades a Guildhall app from the task worktree while marking it unlanded', async () => {
@@ -64,6 +64,19 @@ describe('Hermes quality comparator artifact discovery', () => {
     expect(() => resolvePersistentReportRoot('.guildhall/benchmark-fixtures/out')).toThrow(
       /must not be written inside tracked fixture or Guildhall state directories/i,
     )
+  })
+
+  it('uses artifact evidence instead of provider completion prose', () => {
+    const artifact = {
+      fileExists: true,
+      exactContent: true,
+    }
+
+    expect(artifactSatisfiesTask({ mode: 'file' }, artifact)).toBe(true)
+    expect(artifactSatisfiesTask({ mode: 'file' }, {
+      ...artifact,
+      exactContent: false,
+    })).toBe(false)
   })
 })
 

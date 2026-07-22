@@ -13,18 +13,7 @@ import {
 } from './design-feedback.js'
 import { workSubtreeIds } from './work-hierarchy.js'
 
-const DESIGN_REVIEW_TASK_SIGNALS = /\b(ui|ux|frontend|front[- ]end|screen|page|view|form|modal|drawer|panel|toolbar|navigation|nav|component|primitive|variant|props?|control|button|split button|menu button|select|dropdown|combobox|typeahead|autocomplete|listbox|long list|layout|spacing|css|style|tailwind|token|design system|design-system|storybook|ladle|looma|ad-hoc|one-off|inline style|className)\b/i
-const ARCHITECTURE_OPPORTUNITY_SIGNALS = /\b(third[- ]party|dependency|package|library|bespoke|custom|replace|remove|overhead|bundle|virtuali[sz]ation|positioning|combobox|autocomplete|typeahead|architecture|pivot|ad-hoc|one-off|style sprawl|inline style|wrapper class)\b/i
-const TOKEN_GAP_SIGNALS = /\b(token|spacing|radius|density|motion|contrast|palette|color|typography)\b/i
 const TERMINAL_STATUSES = new Set<TaskStatus>(TERMINAL_TASK_STATUSES)
-const GENERATED_NOTE_ROLES = new Set([
-  'automation',
-  'approver',
-  'blueprint-review',
-  'git-story',
-  'improvement-review',
-  'orchestrator',
-])
 
 export interface DesignLensReviewResult {
   examinedTaskIds: string[]
@@ -51,8 +40,8 @@ export async function reviewInProcessWorkForDesignLens(input: {
     if (scopedIds && !scopedIds.has(task.id)) continue
     if (TERMINAL_STATUSES.has(task.status)) continue
     if (task.status === 'proposed') continue
-    const taskText = designLensTaskText(task)
-    if (!DESIGN_REVIEW_TASK_SIGNALS.test(taskText)) continue
+    const classification = designLensClassificationFor(task)
+    if (!classification) continue
 
     examinedTaskIds.push(task.id)
     const findingId = `design-lens-review-${task.id}`
@@ -63,7 +52,7 @@ export async function reviewInProcessWorkForDesignLens(input: {
 
     const finding = await recordDesignFinding({
       memoryDir: input.memoryDir,
-      finding: buildDesignLensFinding(task, taskText, findingId, input.now?.() ?? new Date().toISOString()),
+      finding: buildDesignLensFinding(task, classification, findingId, input.now?.() ?? new Date().toISOString()),
     })
     await routeDesignFinding({ memoryDir: input.memoryDir, findingId: finding.id })
     existingIds.add(finding.id)
@@ -84,11 +73,10 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 
 function buildDesignLensFinding(
   task: Task,
-  taskText: string,
+  classification: DesignFindingClassification,
   findingId: string,
   now: string,
 ): Omit<DesignFinding, 'classification'> {
-  const classification = classifyTaskForDesignLens(taskText)
   const hierarchyLine = ' Recheck the semantic text hierarchy too: primary/current, body, secondary, muted, history, action, state, and code should map to named roles. If the active work needs a new text role, token, or component variant, require a token or variant budget before the surface consumes it.'
   const architectureLine = classification === 'architecture-opportunity'
     ? ' Check whether the stronger move is an owner-visible dependency or architecture pivot, including bespoke-to-library or library-to-bespoke. If the current shape is style sprawl, prefer elevating the need into shared UI primitives, shared layout controls, or clearer design-system prop semantics.'
@@ -106,6 +94,7 @@ function buildDesignLensFinding(
       : classification === 'token-system-gap'
         ? 'design-system-token-gap'
         : 'design-lens-backstop',
+    targetPackage: classification === 'token-system-gap' ? 'tokens' : 'core',
     evidenceRefs: [
       {
         kind: 'task',
@@ -119,42 +108,19 @@ function buildDesignLensFinding(
   }
 }
 
-function classifyTaskForDesignLens(taskText: string): DesignFindingClassification {
-  if (ARCHITECTURE_OPPORTUNITY_SIGNALS.test(taskText)) return 'architecture-opportunity'
-  if (TOKEN_GAP_SIGNALS.test(taskText)) return 'token-system-gap'
+function designLensClassificationFor(task: Task): DesignFindingClassification | null {
+  const lanes = new Set(task.reviewRisk?.lanes ?? [])
+  const structured = task.structuredSpec
+  const hasDesignLane = lanes.has('visual_design') ||
+    lanes.has('ux_comprehension') ||
+    lanes.has('accessibility')
+  const hasStructuredDesignSurface = Boolean(
+    structured?.visualInteractionNotes?.trim() ||
+    structured?.componentApiShape?.trim() ||
+    structured?.userFacingBehavior?.trim(),
+  )
+  const isExplicitComponentWork = task.workKind === 'component' || task.workKind === 'story'
+  if (!hasDesignLane && !hasStructuredDesignSurface && !isExplicitComponentWork) return null
+  if (isExplicitComponentWork || structured?.componentApiShape?.trim()) return 'architecture-opportunity'
   return 'reusable-pattern'
-}
-
-function designLensTaskText(task: Task): string {
-  return [
-    task.title,
-    task.description,
-    task.request?.raw,
-    stripGeneratedBoundarySections(task.spec),
-    task.productBrief?.userJob,
-    task.productBrief?.successMetric,
-    task.productBrief?.antiPatterns?.join('\n'),
-    task.acceptanceCriteria.map(ac => `${ac.id} ${ac.description}`).join('\n'),
-    task.notes
-      .filter(note => !GENERATED_NOTE_ROLES.has(note.role))
-      .map(note => note.content)
-      .join('\n'),
-  ].filter(Boolean).join('\n')
-}
-
-function stripGeneratedBoundarySections(text: string | undefined): string | undefined {
-  if (!text) return undefined
-  const stripped: string[] = []
-  let skipping = false
-  for (const line of text.split('\n')) {
-    if (/^##\s+(Out of Scope|Security Review)\b/i.test(line)) {
-      skipping = true
-      continue
-    }
-    if (skipping && /^##\s+/.test(line)) {
-      skipping = false
-    }
-    if (!skipping) stripped.push(line)
-  }
-  return stripped.join('\n')
 }

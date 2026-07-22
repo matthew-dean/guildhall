@@ -2,7 +2,7 @@ import type { Task } from './task.js'
 
 export interface ConstructionModeTaskInput {
   status: Task['status']
-  blocker?: string | undefined
+  blockerKind?: ConstructionBlockerKind | undefined
 }
 
 export type ConstructionMode =
@@ -14,15 +14,22 @@ export type ConstructionMode =
   | 'change_order'
   | 'punch_list'
 
+export type ConstructionBlockerKind = 'change_order' | 'execution_failure'
+
+export function constructionBlockerKindForEscalationReason(reason: string | undefined): ConstructionBlockerKind {
+  return reason === 'spec_ambiguous' ||
+    reason === 'scope_boundary' ||
+    reason === 'decision_required' ||
+    reason === 'human_judgment_required'
+    ? 'change_order'
+    : 'execution_failure'
+}
+
 export function constructionModeForTask(
   task: ConstructionModeTaskInput,
 ): ConstructionMode {
   if (task.status === 'blocked') {
-    const blocker = task.blocker ?? ''
-    if (/\b(spec|scope|assumption|plan|blueprint|decision|change order)\b/i.test(blocker)) {
-      return 'change_order'
-    }
-    return 'inspect'
+    return task.blockerKind === 'change_order' ? 'change_order' : 'inspect'
   }
 
   switch (task.status) {

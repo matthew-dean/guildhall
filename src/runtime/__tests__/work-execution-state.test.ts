@@ -129,6 +129,32 @@ describe('work execution state', () => {
     expect(feature?.summaryState).toBe('blocked')
   })
 
+  it('does not let a terminal child blocker keep its completed parent blocked', () => {
+    const tasks = [
+      task({
+        id: 'parent',
+        title: 'Current release work',
+        status: 'done',
+        hierarchy: { childIds: ['proof'], order: 0 },
+      }),
+      task({
+        id: 'proof',
+        title: 'Historical proof setup',
+        status: 'done',
+        blockReason: 'A prior proof handoff needed repair.',
+        workKind: 'verification',
+        hierarchy: { parentId: 'parent', childIds: [], order: 0 },
+        workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+      }),
+    ]
+
+    const state = deriveWorkExecutionState(tasks, 'parent')
+
+    expect(state.blockedChildIds).toEqual([])
+    expect(state.missingProofCount).toBe(0)
+    expect(state.summaryState).toBe('complete')
+  })
+
   it('keeps importer-generated decomposition children out of visible execution scope', () => {
     const tasks = [
       task({
@@ -286,13 +312,35 @@ describe('work execution state', () => {
         title: 'Capture prototype run and evaluation records',
         description: 'Stage 1 prototype-run and evaluation contract work.',
         status: 'ready',
-        spec: [
-          '## Summary',
-          'Define the concrete prototype-run and evaluation record surface.',
-          '',
-          '## Completion Boundary',
-          '- What must be split or blocked: any newly discovered product decision that changes which contracts belong in Stage 1 versus a later stage.',
-        ].join('\n'),
+        structuredSpec: {
+          whatThisIs: 'A bounded contract task.',
+          problemContext: 'The contract needs an explicit boundary.',
+          goals: ['Record the bounded contract.'],
+          nonGoals: ['Do not expand the contract.'],
+          proposedDesign: 'Define the contract surface.',
+          keyDecisions: ['Keep the contract bounded.'],
+          acceptanceCriteria: [{
+            scenario: 'Given the bounded contract, when it is recorded',
+            expectation: 'Then the contract is available for review.',
+            verificationMode: 'review',
+          }],
+          verification: ['Review the contract record.'],
+          completionBoundary: {
+            productOutcome: 'The contract record exists.',
+            whatGuildhallCanCompleteInCode: 'Record the contract.',
+            externalDependencies: 'None known.',
+            ownerOnlySetup: 'None known.',
+            verificationEnvironment: 'The local project.',
+            whatCountsAsDone: 'The contract is recorded.',
+            whatMustBeSplitOrBlocked: 'Split only if an independent contract appears.',
+            splitPolicy: 'none',
+          },
+          contractSurfaceDeltas: [{
+            relation: 'extends',
+            summary: 'Add the bounded contract surface.',
+            proofObligations: ['The contract is reviewed.'],
+          }],
+        },
         hierarchy: { parentId: 'parent', childIds: [], order: 1 },
         sizePlan: {
           taskId: 'child',

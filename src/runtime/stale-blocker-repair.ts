@@ -38,23 +38,14 @@ export interface CompletionProofCriteriaRepairResult {
   repairs: CompletionProofCriteriaRepair[]
 }
 
-const INTERNAL_TOOLING_BLOCKER =
-  /tool (?:read|reads|layer|runtime|file\/write|file read\/write)|cross-task (?:tool )?guardrail|stale workspace path guardrail|tooling\/context routing|path mismatch|misrouted|intercepted|unrelated missing path|unrelated task file|different task worktree/i
-
-const STALE_SOURCE_PATH_BLOCKER =
-  /\b(?:missing|likely target|target file|stale source|source reference)\b/i
-
-const BLUEPRINT_LANE =
-  /\b(?:spec-agent|coordinator|blueprint|spec|planning lane)\b/i
-
-const MUTATION_FORCED_ON_PLANNING =
-  /\b(?:create|author|mutate|write)\b/i
-
-const MODEL_TOOL_USE_RECOVERY_BLOCKER =
-  /\b(?:stopped after hitting (?:its|the) turn limit|turn budget|usable tool call|model failed|failed to produce)\b/i
-
-const DIRTY_WORKER_TIMEOUT_BLOCKER =
-  /\bworker repeatedly hit (?:its|the) turn budget after saving partial work\b/i
+export interface StaleBlockerRepairOptions {
+  /**
+   * Keep typed recovery records intact for the orchestrator's specialized
+   * handlers. Generic state repair must not consume the machine identity that
+   * decides the next lane.
+   */
+  preserveTypedRecoveries?: boolean
+}
 
 const REVIEW_PARTIAL_DIFF_REPAIR_NOTE =
   'Auto-repaired stale model/tool-use blocker. Guildhall will review the saved partial diff instead of asking the owner to choose retry, narrowing, or provider switch.'
@@ -81,41 +72,9 @@ function taskHasUsableBlueprint(task: Task): boolean {
   )
 }
 
-function activeEscalationText(task: Task): string {
-  return (task.escalations ?? [])
-    .filter((escalation) => !escalation.resolvedAt)
-    .map((escalation) => `${escalation.agentId}\n${escalation.reason}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`)
-    .join('\n')
-}
-
-function blockerText(task: Task): string {
-  return [task.blockReason ?? '', activeEscalationText(task)].join('\n')
-}
-
-function hasModelToolUseFailureClassification(task: Task): boolean {
-  return (task.notes ?? []).some((note) => {
-    if (note.role !== 'policy-classification') return false
-    try {
-      const parsed = JSON.parse(note.content) as Record<string, unknown>
-      return parsed['class'] === 'model_tool_use_failure'
-    } catch {
-      return false
-    }
-  })
-}
-
 function isHighConfidenceInternalBlocker(task: Task): boolean {
-  const text = blockerText(task)
-  if (!text.trim()) return false
-
-  if (INTERNAL_TOOLING_BLOCKER.test(text)) return true
-  if (DIRTY_WORKER_TIMEOUT_BLOCKER.test(text)) return true
-  if (hasModelToolUseFailureClassification(task) && MODEL_TOOL_USE_RECOVERY_BLOCKER.test(text)) return true
-
-  return (
-    BLUEPRINT_LANE.test(text) &&
-    STALE_SOURCE_PATH_BLOCKER.test(text) &&
-    MUTATION_FORCED_ON_PLANNING.test(text)
+  return (task.escalations ?? []).some((escalation) =>
+    !escalation.resolvedAt && Boolean(escalation.recoveryCode),
   )
 }
 
@@ -130,16 +89,7 @@ function unresolvedEscalationCount(task: Task): number {
 function resolveStaleEscalations(task: Task, now: string): void {
   for (const escalation of task.escalations ?? []) {
     if (escalation.resolvedAt) continue
-    const text = `${escalation.agentId}\n${escalation.reason}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`
-    if (
-      INTERNAL_TOOLING_BLOCKER.test(text) ||
-      MODEL_TOOL_USE_RECOVERY_BLOCKER.test(text) ||
-      (
-        BLUEPRINT_LANE.test(text) &&
-        STALE_SOURCE_PATH_BLOCKER.test(text) &&
-        MUTATION_FORCED_ON_PLANNING.test(text)
-      )
-    ) {
+    if (escalation.recoveryCode) {
       escalation.resolvedAt = now
       escalation.resolvedBy = 'system'
       escalation.resolution =
@@ -157,45 +107,40 @@ function nextStatusForRepairedTask(task: Task, opts: { dirtyWorkerTimeout?: bool
 }
 
 function isDirtyWorkerTimeoutBlocker(task: Task): boolean {
-  return DIRTY_WORKER_TIMEOUT_BLOCKER.test(blockerText(task))
+  return (task.escalations ?? []).some((escalation) =>
+    !escalation.resolvedAt && escalation.recoveryCode === 'worker_timeout_likely_target',
+  )
 }
 
 export function repairStaleBlockersInQueue(
   queue: TaskQueue,
   now = new Date().toISOString(),
+  options: StaleBlockerRepairOptions = {},
 ): StaleBlockerRepairResult {
   const repairs: StaleBlockerRepair[] = []
 
   for (const task of queue.tasks) {
     const researchSpikeApproval = isResearchSpikeStuckInSpecReview(task)
     if (!researchSpikeApproval && !isHighConfidenceInternalBlocker(task)) continue
+    const hasTypedRecovery = task.recoveryCode !== undefined ||
+      task.escalations.some((escalation) => !escalation.resolvedAt && escalation.recoveryCode !== undefined)
+    if (options.preserveTypedRecoveries && hasTypedRecovery) continue
     const beforeUnresolved = unresolvedEscalationCount(task)
     const previousStatus = task.status
     const dirtyWorkerTimeout = isDirtyWorkerTimeoutBlocker(task)
+    const hasRecoveryEscalation = isHighConfidenceInternalBlocker(task)
+    const recoveryCode = task.escalations?.find((escalation) => !escalation.resolvedAt)?.recoveryCode
     const repairReason = researchSpikeApproval
       ? 'research_spike_not_approval'
-      : dirtyWorkerTimeout || (hasModelToolUseFailureClassification(task) && MODEL_TOOL_USE_RECOVERY_BLOCKER.test(blockerText(task)))
+      : dirtyWorkerTimeout || recoveryCode === 'worker_turn_limit' || recoveryCode === 'worker_timeout_no_progress'
       ? 'model_tool_use_recovery_blocker'
       : 'stale_internal_tooling_blocker'
 
     resolveStaleEscalations(task, now)
 
-    const blockReasonLooksStale =
-      typeof task.blockReason === 'string' &&
-      (
-        INTERNAL_TOOLING_BLOCKER.test(task.blockReason) ||
-        DIRTY_WORKER_TIMEOUT_BLOCKER.test(task.blockReason) ||
-        (
-          hasModelToolUseFailureClassification(task) &&
-          MODEL_TOOL_USE_RECOVERY_BLOCKER.test(task.blockReason)
-        ) ||
-        (
-          BLUEPRINT_LANE.test(task.blockReason) &&
-          STALE_SOURCE_PATH_BLOCKER.test(task.blockReason) &&
-          MUTATION_FORCED_ON_PLANNING.test(task.blockReason)
-        )
-      )
-    if (blockReasonLooksStale) task.blockReason = undefined
+    if (hasRecoveryEscalation) {
+      task.blockReason = undefined
+    }
 
     if (!researchSpikeApproval && beforeUnresolved > 0 && unresolvedEscalationCount(task) > 0) continue
     if (task.blockReason && task.status === 'blocked') continue

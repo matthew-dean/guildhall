@@ -922,7 +922,7 @@ Scope:
     ]))
   })
 
-  it('marks deferred checklist items as later even when they appear in status history', async () => {
+  it('does not move checklist items to later scope from title prose alone', async () => {
     writeFileSync(
       join(dir, 'PROJECT_STATE.md'),
       `# Project State
@@ -946,8 +946,8 @@ Scope:
     expect(sigs).toContainEqual(expect.objectContaining({
       kind: 'open_work',
       title: 'Version diff view (deferred)',
-      scopeHint: 'later',
     }))
+    expect(sigs.find(signal => signal.title === 'Version diff view (deferred)')?.scopeHint).toBeUndefined()
   })
 
   it('does not duplicate current-stage deliverables as open work when the roadmap already names explicit current milestone starter tasks', async () => {
@@ -1074,7 +1074,7 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
     expect(sigs).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'context',
-        role: 'brief_input',
+        role: 'capability',
         structure: 'record',
         title: 'Book brief',
         evidence: expect.stringContaining('author voice, premise, genre, themes, constraints'),
@@ -1088,7 +1088,7 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       }),
       expect.objectContaining({
         kind: 'context',
-        role: 'brief_input',
+        role: 'capability',
         title: 'Author builds a house: premise, world, cast, outline, chapter goals, review standards.',
       }),
       expect.objectContaining({
@@ -1107,18 +1107,15 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
         title: 'Accepted decisions update the story bible, outline, and manuscript tasks.',
       }),
     ]))
-    expect(sigs).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'open_work',
-        title: 'Author defines book intent, genre/form expectations, themes, and voice.',
-      }),
+    expect(sigs).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'context',
+        role: 'capability',
         title: 'Author defines book intent, genre/form expectations, themes, and voice.',
       }),
     ]))
     expect(sigs.find(signal => signal.title === 'Book brief')?.evidence).toContain(
-      'Also described as: Author defines book intent, genre/form expectations, themes, and voice.',
+      'author voice, premise, genre, themes, constraints',
     )
   })
 

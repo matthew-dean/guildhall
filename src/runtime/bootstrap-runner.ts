@@ -108,23 +108,47 @@ function runStep(
   opts: { projectPath: string; timeoutMs: number },
 ): BootstrapStep {
   const start = Date.now()
-  const res = runShellSync({
-    command,
+  const run = (stepCommand: string) => runShellSync({
+    command: stepCommand,
     cwd: opts.projectPath,
     timeoutMs: opts.timeoutMs,
     env: { CI: 'true', PNPM_CONFIG_IGNORE_SCRIPTS: 'true' },
   })
+  let effectiveCommand = command
+  let res = run(effectiveCommand)
+  let repairOutput = ''
+  // Task worktrees can legitimately carry a package.json change without a
+  // refreshed lockfile yet. Repair that deterministic install mismatch inside
+  // the isolated worktree; do not turn package-manager bookkeeping into owner
+  // input or let a model decide whether it is safe to retry.
+  if (
+    kind === 'command' &&
+    res.exitCode !== 0 &&
+    /^\s*pnpm\s+install(?:\s|$)/.test(command) &&
+    !/--no-frozen-lockfile\b/.test(command) &&
+    /ERR_PNPM_OUTDATED_LOCKFILE/i.test(res.output)
+  ) {
+    effectiveCommand = `${command} --no-frozen-lockfile`
+    const initialOutput = res.output
+    const repaired = run(effectiveCommand)
+    repairOutput = [
+      initialOutput,
+      `Guildhall retried the isolated install with ${effectiveCommand} after the lockfile mismatch.`,
+      repaired.output,
+    ].filter(Boolean).join('\n')
+    res = repaired
+  }
   const ignoredPnpmBuildScripts =
     kind === 'command' &&
-    /\bpnpm\s+install\b/.test(command) &&
+    /\bpnpm\s+install\b/.test(effectiveCommand) &&
     res.exitCode !== 0 &&
     /\bERR_PNPM_IGNORED_BUILDS\b/i.test(res.output)
   return {
     kind,
-    command,
+    command: effectiveCommand,
     result: res.success || ignoredPnpmBuildScripts ? 'pass' : 'fail',
     exitCode: res.exitCode,
-    output: res.output,
+    output: repairOutput || res.output,
     durationMs: Date.now() - start,
   }
 }

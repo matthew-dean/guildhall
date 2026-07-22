@@ -34,6 +34,7 @@ describe('repairOwnerInputState', () => {
       source: { kind: 'task', taskId: 'task-1', questionId: 'q-bad' },
       target: { kind: 'thread' },
       question: {
+        kind: 'choice',
         prompt: 'Which command should verify the converter package?',
         choices: ['pnpm test', 'pnpm build'],
       },
@@ -90,6 +91,7 @@ describe('repairOwnerInputState', () => {
       source: { kind: 'task', taskId: 'task-2', questionId: 'q-fallback' },
       target: { kind: 'thread' },
       question: {
+        kind: 'choice',
         prompt: 'Which file should receive the planning note?',
         choices: ['.cursor/plan.md', '.guildhall/project-brief.md'],
       },
@@ -182,6 +184,7 @@ describe('repairOwnerInputState', () => {
       source: { kind: 'task', taskId: 'task-promoted', questionId: 'q-promoted-bad' },
       target: { kind: 'thread' },
       question: {
+        kind: 'choice',
         prompt: 'Which proof should verify the promoted task?',
         choices: ['pnpm test', 'pnpm build'],
       },
@@ -242,6 +245,7 @@ async function createPlanningNoteQuestion(root: string, questionId: string) {
     source: { kind: 'task', taskId: 'task-2', questionId },
     target: { kind: 'thread' },
     question: {
+      kind: 'choice',
       prompt: 'I do not see a TODO.md, PLANNING.md, or BACKLOG.md in the repo. Where should I put the "review timezone wording later" note?',
       choices: [
         '.cursor/plan.md - add a note there',

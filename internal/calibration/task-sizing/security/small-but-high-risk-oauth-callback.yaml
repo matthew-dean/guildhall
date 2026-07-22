@@ -11,6 +11,9 @@ task:
     - security
     - privacy
     - api_contract
+  structuredSignals:
+    acceptanceCriteriaCount: 2
+    contractSurfaceCount: 1
 expected:
   minScore: 3
   action: proceed_with_warning

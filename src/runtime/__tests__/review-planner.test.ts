@@ -92,6 +92,17 @@ function task(overrides: Partial<Task> = {}): Task {
   }
 }
 
+function reviewRisk(...lanes: string[]): NonNullable<Task['reviewRisk']> {
+  return {
+    lanes,
+    recipes: [],
+    requiredArtifacts: [],
+    artifactPolicy: 'advisory',
+    assessedAt: '2026-05-25T00:00:00.000Z',
+    assessedBy: 'test-fixture',
+  }
+}
+
 describe('buildReviewPlan', () => {
   it('keeps small docs work lean while still checking plan and test adequacy', () => {
     const plan = buildReviewPlan({
@@ -99,6 +110,7 @@ describe('buildReviewPlan', () => {
         priority: 'low',
         title: 'Clarify release-note wording',
         description: 'Update the public docs copy for the changelog.',
+        reviewRisk: reviewRisk('copy_clarity', 'docs_truth'),
       }),
       createdAt: '2026-05-25T12:00:00.000Z',
     })
@@ -120,6 +132,7 @@ describe('buildReviewPlan', () => {
       task: task({
         title: 'Improve setup wizard empty state',
         description: 'The browser setup flow has confusing labels and missing keyboard focus behavior.',
+        reviewRisk: reviewRisk('copy_clarity', 'accessibility'),
       }),
       changedFiles: [
         'src/web/surfaces/SetupWizard.svelte',
@@ -173,7 +186,37 @@ describe('buildReviewPlan', () => {
     ]))
     expect(plan.requiredArtifacts).not.toContain('visual-evidence')
     expect(plan.deterministicChecks).not.toContain('browser-or-screenshot-evidence')
-    expect(plan.reasons).toContain('Headless/no-UI proof scope removes product UI review lanes and visual evidence requirements.')
+    expect(plan.reasons).toContain('No structured review-risk lanes were declared; Guildhall will not infer them from prose.')
+  })
+
+  it('keeps review selection stable when the same structured task changes prose style', () => {
+    const structured = {
+      reviewRisk: reviewRisk('privacy', 'docs_truth'),
+      taskKind: 'verification' as const,
+    }
+    const first = buildReviewPlan({
+      task: task({
+        ...structured,
+        title: 'A lyrical, expansive review of the provider boundary',
+        description: 'The implementation should feel careful, comprehensive, and deeply trustworthy.',
+      }),
+      changedFiles: ['src/provider/contract.ts'],
+      createdAt: '2026-05-25T12:00:00.000Z',
+    })
+    const second = buildReviewPlan({
+      task: task({
+        ...structured,
+        title: 'Check provider boundary',
+        description: 'Verify the contract.',
+      }),
+      changedFiles: ['src/provider/contract.ts'],
+      createdAt: '2026-05-25T12:00:00.000Z',
+    })
+
+    expect(second.selectedLanes).toEqual(first.selectedLanes)
+    expect(second.requiredArtifacts).toEqual(first.requiredArtifacts)
+    expect(second.deterministicChecks).toEqual(first.deterministicChecks)
+    expect(second.budget).toEqual(first.budget)
   })
 
   it('brings design-system control-choice work into generic UX, visual, and accessibility review', () => {
@@ -181,6 +224,7 @@ describe('buildReviewPlan', () => {
       task: task({
         title: 'Make the project UI library agent-ready',
         description: 'Document when to use split buttons, variants, props, and layout controls so agents choose from the design system instead of adding margins or bespoke wrapper styles.',
+        reviewRisk: reviewRisk('accessibility'),
       }),
       changedFiles: [
         'packages/ui/src/components/SplitButton.tsx',
@@ -203,7 +247,7 @@ describe('buildReviewPlan', () => {
       'style-sprawl-regression-scan',
       'shared-primitive-opportunity-scan',
     ]))
-    expect(plan.reasons).toContain('Design-system control selection needs reviewer context for component intent, variants, layout ownership, anti-sprawl extraction opportunities, findability, and accessible semantics.')
+    expect(plan.reasons).toContain('Review lanes came from the structured review-risk declaration: accessibility.')
   })
 
   it('flags long select-list work for control-choice review', () => {
@@ -211,6 +255,7 @@ describe('buildReviewPlan', () => {
       task: task({
         title: 'Replace long country select with typeahead',
         description: 'The form currently uses a huge dropdown. Prefer a combobox/autocomplete affordance so people can type to complete long option lists.',
+        reviewRisk: reviewRisk('accessibility'),
       }),
       changedFiles: ['src/components/CountrySelect.tsx'],
       createdAt: '2026-05-25T12:00:00.000Z',
@@ -223,7 +268,7 @@ describe('buildReviewPlan', () => {
     ]))
     expect(plan.deterministicChecks).toContain('design-system-control-reference-check')
     expect(plan.deterministicChecks).toContain('style-sprawl-regression-scan')
-    expect(plan.reasons).toContain('Design-system control selection needs reviewer context for component intent, variants, layout ownership, anti-sprawl extraction opportunities, findability, and accessible semantics.')
+    expect(plan.reasons).toContain('Review lanes came from the structured review-risk declaration: accessibility.')
   })
 
   it('projects review plans into task review-risk profiles with artifact gates', () => {
@@ -231,6 +276,7 @@ describe('buildReviewPlan', () => {
       task: task({
         title: 'Improve setup wizard empty state',
         description: 'The browser setup flow has confusing labels and missing keyboard focus behavior.',
+        reviewRisk: reviewRisk('accessibility'),
       }),
       changedFiles: ['src/web/surfaces/SetupWizard.svelte'],
       createdAt: '2026-05-25T12:00:00.000Z',
@@ -279,6 +325,7 @@ describe('buildReviewPlan', () => {
         priority: 'critical',
         title: 'Migrate account permission model',
         description: 'Change the auth API schema, migrate database rows, and preserve rollout fallback.',
+        reviewRisk: reviewRisk('security', 'release_risk', 'rollout_safety'),
       }),
       changedFiles: [
         'src/api/accounts.ts',
@@ -307,6 +354,7 @@ describe('buildReviewPlan', () => {
       task: task({
         title: 'Tune model-review budget',
         description: 'Adjust reviewer model settings, token budget, and calibration prompts.',
+        reviewRisk: reviewRisk('calibration_governance', 'cost_control'),
       }),
       requestedEffort: 'custom',
       budgetOverride: {
@@ -337,6 +385,7 @@ describe('buildReviewPlan', () => {
         priority: 'critical',
         title: 'Migrate account permission model',
         description: 'Change the auth API schema, migrate database rows, and preserve rollout fallback.',
+        reviewRisk: reviewRisk('security', 'release_risk', 'rollout_safety'),
       }),
       changedFiles: [
         'src/api/accounts.ts',
@@ -358,6 +407,7 @@ describe('buildReviewPlan', () => {
         status: 'spec_review',
         title: 'Shape a rough product idea into first runnable work',
         description: 'The request is ambiguous and needs a spec, task boundary, acceptance criteria, and proof path before implementation.',
+        taskKind: 'spike',
       }),
       createdAt: '2026-05-25T12:00:00.000Z',
     })
@@ -375,6 +425,7 @@ describe('buildReviewPlan', () => {
       task: task({
         title: 'Improve public docs onboarding copy',
         description: 'Make the guide easier for a brand new reader and note one future follow-up opportunity without expanding this task.',
+        reviewRisk: reviewRisk('copy_clarity', 'docs_truth'),
       }),
       changedFiles: ['docs/guide/index.md'],
       createdAt: '2026-05-25T12:00:00.000Z',
@@ -384,11 +435,7 @@ describe('buildReviewPlan', () => {
       'first_principles',
       'executor',
       'outsider',
-      'expansionist',
     ])
-    expect(plan.advisoryLenses.find((lens) => lens.lens === 'expansionist')).toMatchObject({
-      blocking: 'advisory',
-    })
   })
 
   it('recognizes a script-only proof from the product brief and excludes UI review scope', () => {
@@ -594,16 +641,11 @@ describe('ensureTaskReviewPlanRecorded', () => {
       now: () => new Date('2026-05-25T12:00:00.000Z'),
     })
 
-    expect(result.recorded).toBe(true)
-    expect(result.plan.selectedLanes).not.toContain('ux_comprehension')
-    expect(result.plan.requiredArtifacts).not.toContain('visual-evidence')
-    expect(result.reviewRisk.requiredArtifacts).not.toContain('visual-evidence')
-    expect(savedPlans).toHaveLength(1)
-    expect(savedEvents).toMatchObject([
-      {
-        kind: 'override',
-        summary: 'Removed UI review artifacts from a stored plan after the task resolved to headless/no-UI proof.',
-      },
-    ])
+    expect(result.recorded).toBe(false)
+    expect(result.plan.selectedLanes).toContain('ux_comprehension')
+    expect(result.plan.requiredArtifacts).toContain('visual-evidence')
+    expect(result.reviewRisk.requiredArtifacts).toContain('visual-evidence')
+    expect(savedPlans).toHaveLength(0)
+    expect(savedEvents).toHaveLength(0)
   })
 })

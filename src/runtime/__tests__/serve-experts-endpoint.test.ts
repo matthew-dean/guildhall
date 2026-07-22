@@ -135,7 +135,7 @@ describe('GET /api/project/task/:id/experts', () => {
     expect(body.reviewers.length).toBe(body.applicable.length)
   })
 
-  it('groups review verdicts by guild slug via failingSignals', async () => {
+  it('groups review verdicts by stable reviewer identity, never by prose', async () => {
     await seedDesignSystem()
     await seedTask('task-1', {
       reviewVerdicts: [
@@ -150,6 +150,7 @@ describe('GET /api/project/task/:id/experts', () => {
         {
           verdict: 'approve',
           reviewerPath: 'llm',
+          reviewerId: 'component-designer',
           reason: 'The Component Designer approved',
           reasoning: 'Prop API matches the catalog.',
           failingSignals: [],
@@ -166,11 +167,34 @@ describe('GET /api/project/task/:id/experts', () => {
     expect(body.verdictsBySlug['accessibility-specialist'][0].verdict).toBe(
       'revise',
     )
-    // Approve verdict gets attributed by name-match to component-designer.
+    // Approved verdicts use the persisted reviewer id.
     expect(body.verdictsBySlug['component-designer']).toHaveLength(1)
     expect(body.verdictsBySlug['component-designer'][0].verdict).toBe(
       'approve',
     )
+  })
+
+  it('keeps legacy prose-only reviewer attribution in the audit bucket', async () => {
+    await seedDesignSystem()
+    await seedTask('task-1', {
+      reviewVerdicts: [
+        {
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'The Component Designer approved',
+          reasoning: 'This wording must never identify the reviewer.',
+          failingSignals: [],
+          recordedAt: new Date().toISOString(),
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/experts')),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(body.verdictsBySlug['component-designer']).toBeUndefined()
+    expect(body.verdictsBySlug.unattributed).toHaveLength(1)
   })
 
   it('groups gate results by guild via gate-id prefix', async () => {

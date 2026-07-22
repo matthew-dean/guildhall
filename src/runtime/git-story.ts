@@ -65,6 +65,30 @@ export interface GitStoryClassificationInput {
   override?: 'local_only' | 'deferred'
 }
 
+/**
+ * A merge record is a current repository follow-up only while the task still
+ * has an unresolved landing surface. A skipped landing attempt is historical
+ * once the task has durable completion proof and its isolated worktree is
+ * gone; the repository snapshot remains the authority for current Git state.
+ */
+export function gitStoryFollowupIsActive(input: {
+  status?: string
+  mergeRecordResult?: string
+  hasCompletionProof?: boolean
+  hasTaskWorktree?: boolean
+  hasOverride?: boolean
+}): boolean {
+  if (input.hasOverride) return true
+  if (input.status === 'pending_pr') return true
+  if (input.mergeRecordResult === 'conflict') return true
+  if (input.mergeRecordResult !== 'skipped') return false
+  return !(
+    input.status === 'done' &&
+    input.hasCompletionProof === true &&
+    input.hasTaskWorktree !== true
+  )
+}
+
 export function classifyGitStoryState(input: GitStoryClassificationInput): GitStoryClosureState {
   if (input.override === 'local_only') return 'local_only'
   if (input.override === 'deferred') return 'deferred'

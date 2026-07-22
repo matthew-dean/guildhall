@@ -816,6 +816,7 @@ export function projectTaskRecordFromDatabasePoint(task: ProjectStateDatabaseTas
     ...(task.domain !== null ? { domain: task.domain } : {}),
     ...(task.priority !== null ? { priority: task.priority } : {}),
     ...(task.workKind !== null ? { workKind: task.workKind } : {}),
+    ...(task.semanticKind !== null && task.semanticKind !== undefined ? { semanticKind: task.semanticKind } : {}),
     ...(task.hierarchy ? { hierarchy: task.hierarchy } : {}),
     ...(task.dependsOn.length > 0 ? { dependsOn: [...task.dependsOn] } : {}),
     ...(task.releaseIds.length > 0 ? { releaseIds: [...task.releaseIds] } : {}),

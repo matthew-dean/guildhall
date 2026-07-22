@@ -655,6 +655,7 @@ describe('buildProjectTicker', () => {
       startReadiness: {
         canStart: false,
         code: 'owner_input_required',
+        focusKind: 'spec_review',
         message: 'Review the waiting spec before Guildhall can continue',
       },
     }

@@ -50,6 +50,7 @@ describe('escalationPrimaryAction', () => {
       escalationPrimaryAction({
         reason: 'human_judgment_required',
         agentId: 'worker-agent',
+        recoveryCode: 'worker_turn_limit',
         summary: 'Worker stopped after hitting its turn limit.',
       }),
     ).toMatchObject({
@@ -64,6 +65,7 @@ describe('escalationRecoveryCopy', () => {
     expect(
       escalationRecoveryCopy({
         agentId: 'spec-agent',
+        recoveryCode: 'spec_no_progress',
         summary: 'Spec agent made no visible progress after 3 passes.',
         details: 'Task remained in exploring with no saved spec.',
       }),
@@ -77,12 +79,13 @@ describe('escalationRecoveryCopy', () => {
     expect(
       escalationRecoveryCopy({
         agentId: 'spec-agent',
+        recoveryCode: 'spec_no_progress',
         summary: 'Spec author stopped after hitting its turn limit.',
         details: 'Exceeded maximum turn limit (8)',
       }),
     ).toEqual({
-      headline: 'Spec shaping stopped before saving the next draft.',
-      detail: 'Retry from the transcript notes, or reframe the task if the request is too broad.',
+      headline: 'Context was found, but the next draft was not saved.',
+      detail: 'The transcript may contain useful observations. Retry from those notes or resolve the blocker after reviewing them.',
     })
   })
 })
@@ -91,12 +94,13 @@ describe('escalationUserGuidance', () => {
   it('turns internal acceptance-criteria evidence blockers into actionable user copy', () => {
     const guidance = escalationUserGuidance({
       agentId: 'worker-agent',
+      recoveryCode: 'self_authored_verification',
       summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
       details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result (timestamp + exit code) and concrete auth test specs.',
     })
 
     expect(guidance.title).toBe('One missing check needs to run.')
-    expect(guidance.detail).toContain('auth')
+    expect(guidance.detail).not.toContain('auth')
     expect(guidance.detail).toContain('not asking you to prove anything')
     expect(guidance.nextStep).toContain('recovery action')
     expect(guidance.actionOwner).toBe('guildhall')
@@ -104,6 +108,7 @@ describe('escalationUserGuidance', () => {
     expect(guidance.technicalNote).toBeUndefined()
     expect(escalationPrimaryAction({
       agentId: 'worker-agent',
+      recoveryCode: 'self_authored_verification',
       summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
       details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result (timestamp + exit code) and concrete auth test specs.',
     })).toMatchObject({
@@ -115,6 +120,7 @@ describe('escalationUserGuidance', () => {
   it('explains workspace build recovery without asking for an unnamed decision', () => {
     const guidance = escalationUserGuidance({
       agentId: 'worker-agent',
+      handling: 'external_dependency',
       summary: 'Required authoritative verification is blocked by upstream workspace build failure outside checkpoint-touched editor files.',
       details: 'Reran authoritative command pnpm build in the task worktree.',
     })
@@ -132,6 +138,7 @@ describe('escalationUserGuidance', () => {
     const guidance = escalationUserGuidance({
       agentId: 'worker-agent',
       reason: 'human_judgment_required',
+      recoveryCode: 'worker_timeout_no_progress',
       summary: 'Worker timed out after failing to mutate the likely target file.',
       details: 'worker-agent timed out after 120000ms of inactivity',
     })
@@ -144,6 +151,7 @@ describe('escalationUserGuidance', () => {
     expect(escalationPrimaryAction({
       agentId: 'worker-agent',
       reason: 'human_judgment_required',
+      recoveryCode: 'worker_timeout_no_progress',
       summary: 'Worker timed out after failing to mutate the likely target file.',
     })).toMatchObject({
       label: 'Retry worker',
@@ -155,6 +163,7 @@ describe('escalationUserGuidance', () => {
     const guidance = escalationUserGuidance({
       agentId: 'spec-agent',
       reason: 'human_judgment_required',
+      recoveryCode: 'spec_no_progress',
       summary: 'Spec author stopped after hitting its turn limit.',
       details: 'Exceeded maximum turn limit (8)',
     })
@@ -169,6 +178,7 @@ describe('escalationUserGuidance', () => {
     const guidance = escalationUserGuidance({
       agentId: 'gate-checker',
       reason: 'gate_hard_failure',
+      recoveryCode: 'stale_gate_failure',
       summary: 'Verification failed.',
     })
 

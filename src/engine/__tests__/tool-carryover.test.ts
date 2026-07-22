@@ -16,6 +16,7 @@ import {
   rememberAsyncAgentTask,
   rememberReadFile,
   rememberSkillInvocation,
+  rememberVerificationResult,
   rememberUserGoal,
   rememberVerifiedWork,
   rememberWorkLog,
@@ -125,6 +126,24 @@ describe('rememberVerifiedWork', () => {
   })
 })
 
+describe('rememberVerificationResult', () => {
+  it('keeps command proof in a structured metadata bucket', () => {
+    const meta: Record<string, unknown> = {}
+    rememberVerificationResult(meta, {
+      kind: 'command',
+      command: 'pnpm test',
+      passed: true,
+      observedAt: '2026-07-20T00:00:00.000Z',
+    })
+    expect(meta['recent_verification_results']).toEqual([{
+      kind: 'command',
+      command: 'pnpm test',
+      passed: true,
+      observedAt: '2026-07-20T00:00:00.000Z',
+    }])
+  })
+})
+
 describe('rememberReadFile', () => {
   it('stores span + preview and replaces prior entry for the same path', () => {
     const meta: Record<string, unknown> = {}
@@ -214,24 +233,21 @@ describe('rememberAsyncAgentActivity', () => {
 })
 
 describe('rememberAsyncAgentTask', () => {
-  it('parses "Spawned agent <name> (task_id=<id>)" from output', () => {
+  it('does not infer an agent identity from provider/tool output prose', () => {
     const meta: Record<string, unknown> = {}
     rememberAsyncAgentTask(meta, {
       toolName: 'agent',
       toolInput: { description: 'ship it' },
       output: 'Spawned agent Explorer (task_id=T-1)',
     })
-    const bucket = meta['async_agent_tasks'] as AsyncAgentTaskEntry[]
-    expect(bucket[0]!.agent_id).toBe('Explorer')
-    expect(bucket[0]!.task_id).toBe('T-1')
-    expect(bucket[0]!.status).toBe('spawned')
+    expect(meta['async_agent_tasks']).toBeUndefined()
   })
-  it('prefers result_metadata over regex scraping when both present', () => {
+  it('uses typed result metadata for the agent identity', () => {
     const meta: Record<string, unknown> = {}
     rememberAsyncAgentTask(meta, {
       toolName: 'agent',
       toolInput: { description: 'x' },
-      output: 'Spawned agent Bogus (task_id=B-1)',
+      output: 'The provider used a different summary style.',
       resultMetadata: { agent_id: 'Real', task_id: 'R-1' },
     })
     const bucket = meta['async_agent_tasks'] as AsyncAgentTaskEntry[]
@@ -243,12 +259,14 @@ describe('rememberAsyncAgentTask', () => {
     rememberAsyncAgentTask(meta, {
       toolName: 'agent',
       toolInput: { description: 'first' },
-      output: 'Spawned agent A (task_id=T-9)',
+      output: 'first provider summary',
+      resultMetadata: { agent_id: 'A', task_id: 'T-9' },
     })
     rememberAsyncAgentTask(meta, {
       toolName: 'agent',
       toolInput: { description: 'second' },
-      output: 'Spawned agent A (task_id=T-9)',
+      output: 'second provider summary',
+      resultMetadata: { agent_id: 'A', task_id: 'T-9' },
     })
     const bucket = meta['async_agent_tasks'] as AsyncAgentTaskEntry[]
     expect(bucket).toHaveLength(1)
@@ -269,7 +287,8 @@ describe('rememberAsyncAgentTask', () => {
       rememberAsyncAgentTask(meta, {
         toolName: 'agent',
         toolInput: { description: `t-${i}` },
-        output: `Spawned agent A (task_id=T-${i})`,
+        output: `provider summary variant ${i}`,
+        resultMetadata: { agent_id: 'A', task_id: `T-${i}` },
       })
     }
     expect((meta['async_agent_tasks'] as AsyncAgentTaskEntry[]).length).toBe(
@@ -479,7 +498,8 @@ describe('recordToolCarryover (top-level dispatcher)', () => {
       toolMetadata: meta,
       toolName: 'Task',
       toolInput: { description: 'triage issue' },
-      toolOutput: 'Spawned agent Triager (task_id=T-7)',
+      toolOutput: 'The agent was created successfully.',
+      toolResultMetadata: { agent_id: 'Triager', task_id: 'T-7' },
       isError: false,
       resolvedFilePath: null,
     })

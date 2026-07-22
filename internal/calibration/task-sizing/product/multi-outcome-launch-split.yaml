@@ -18,6 +18,9 @@ task:
     - migration_safety
     - privacy
     - release_risk
+  structuredSignals:
+    acceptanceCriteriaCount: 5
+    contractSurfaceCount: 0
 expected:
   minScore: 8
   action: decompose_before_execution

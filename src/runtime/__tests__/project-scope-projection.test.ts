@@ -96,6 +96,90 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.start).toMatchObject({ code: 'proof_evidence_missing', focusTaskId: 'task-complete' })
   })
 
+  it('uses the current release proof child instead of a shipped proof child', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1-r1',
+      releases: [
+        {
+          id: 'stage-1-shipped',
+          label: 'Stage 1 shipped',
+          kind: 'release',
+          state: 'shipped',
+          source: 'release_plan',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-parent'],
+          deferredNodeIds: [],
+        },
+        {
+          id: 'stage-1-r1',
+          label: 'Stage 1 follow-up',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-parent'],
+          deferredNodeIds: [],
+        },
+      ],
+      tasks: [
+        task({
+          id: 'task-parent',
+          title: 'Parent work',
+          status: 'done',
+          releaseIds: ['stage-1-shipped', 'stage-1-r1'],
+          hierarchy: { childIds: ['task-parent-proof-shipped'], order: 0, relation: 'contains' },
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Parent proof exists.', verifiedBy: 'review', met: false }],
+        }),
+        task({
+          id: 'task-parent-proof-shipped',
+          title: 'Historical proof',
+          status: 'done',
+          semanticKind: 'proof_setup',
+          workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+          releaseIds: ['stage-1-shipped'],
+          hierarchy: { parentId: 'task-parent', childIds: [], order: 1, relation: 'decomposes' },
+        }),
+        task({
+          id: 'task-parent-proof-current',
+          title: 'Current release proof',
+          status: 'done',
+          semanticKind: 'proof_setup',
+          workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+          releaseIds: ['stage-1-r1'],
+          hierarchy: { parentId: 'task-parent', childIds: [], order: 1, relation: 'decomposes' },
+          acceptanceCriteria: [{
+            id: 'ac-1',
+            description: 'Current proof command passes.',
+            verifiedBy: 'automated',
+            command: 'pnpm proof:current',
+            expectedOutputIncludes: ['guildhall-proof:task-parent'],
+            met: true,
+          }],
+          proofPaths: [{
+            id: 'current-proof-command',
+            kind: 'command',
+            command: 'pnpm proof:current',
+            status: 'verified',
+            verificationRecords: [{
+              evidenceId: 'ac-1',
+              status: 'passed',
+              command: 'pnpm proof:current',
+              recordedAt: now,
+            }],
+          }],
+        }),
+      ],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-parent')).toMatchObject({
+      proofBlocked: false,
+      blocksRelease: false,
+    })
+    expect(projection.release).toMatchObject({ state: 'ready', blockers: [] })
+  })
+
   it('focuses blocked work before completed items with missing proof', () => {
     const projection = buildProjectScopeProjection({
       version: 1,
@@ -951,6 +1035,8 @@ describe('buildProjectScopeProjection', () => {
   })
 
   it('shows active proof-recovery reason instead of stale max-revision blocker text', () => {
+    const recoveryReason =
+      'Codex is acting as the owner for this calibration run. Reopen this completed task only to recover the missing release proof. Run or create the smallest command-backed proof for DeepInfra drafting-model selection, including real provider/model/API evidence when credentials are available, and do not mark the task complete until that proof is attached.'
     const projection = buildProjectScopeProjection(queue([
       task({
         id: 'task-contracts',
@@ -958,19 +1044,18 @@ describe('buildProjectScopeProjection', () => {
         status: 'blocked',
         blockReason: 'max_revisions_exceeded: reviewer loop hit its old cap.',
         proofRecovery: {
+          kind: 'proof',
           reopenedAt: now,
-          reason:
-            'Codex is acting as the owner for this calibration run. Reopen this completed task only to recover the missing release proof. Run or create the smallest command-backed proof for DeepInfra drafting-model selection, including real provider/model/API evidence when credentials are available, and do not mark the task complete until that proof is attached.',
+          reason: recoveryReason,
         },
       }),
     ]))
 
     expect(projection.rows.find(row => row.taskId === 'task-contracts')).toMatchObject({
       handoffState: 'blocked',
-      blockerSummary: 'Provider credentials are required before Guildhall can run the live proof.',
+      blockerSummary: recoveryReason,
     })
-    expect(projection.start.message).toContain('Provider credentials are required before Guildhall can run the live proof.')
+    expect(projection.start.message).toContain(recoveryReason)
     expect(projection.start.message).not.toContain('max_revisions_exceeded')
-    expect(projection.start.message).not.toContain('Codex is acting')
   })
 })

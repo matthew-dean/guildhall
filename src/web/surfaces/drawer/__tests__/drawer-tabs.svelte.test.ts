@@ -427,6 +427,7 @@ describe('drawer task detail tabs', () => {
           {
             agentId: 'coordinator-recovery',
             role: 'system',
+            structured: { event: 'recovery_spec_seed', source: 'deterministic' },
             content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
             timestamp: now,
           },

@@ -1,12 +1,9 @@
 import type { GuildSignals } from '../types.js'
-
-const COLOR_KEYWORDS = /\b(color|palette|theme|token|dark mode|light mode|brand|ui|web app|app|screen|page|card|dashboard|visual|design)\b/i
+import { hasStructuredSurface } from '../structured-signals.js'
 
 export function applicable(signals: GuildSignals): boolean {
   if (signals.designSystem && signals.designSystem.tokens.color.length > 0) {
-    return true
+    return hasStructuredSurface(signals.task, 'user_facing')
   }
-  if (signals.task.productBrief) return true
-  const text = `${signals.task.title} ${signals.task.description}`
-  return COLOR_KEYWORDS.test(text)
+  return false
 }

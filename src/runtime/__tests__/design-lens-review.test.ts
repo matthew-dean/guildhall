@@ -19,6 +19,7 @@ describe('design lens review', () => {
           title: 'Improve account picker',
           description: 'Replace the long select list with a combobox and review the bespoke dropdown implementation.',
           status: 'in_progress',
+          workKind: 'component',
         }),
         task({
           id: 'task-terminal-ui',
@@ -69,6 +70,14 @@ describe('design lens review', () => {
           title: 'Normalize panel spacing',
           description: 'UI layout work should use design-system spacing primitives.',
           status: 'review',
+          reviewRisk: {
+            lanes: ['visual_design'],
+            recipes: [],
+            requiredArtifacts: [],
+            artifactPolicy: 'advisory',
+            assessedAt: '2026-05-29T12:00:00.000Z',
+            assessedBy: 'test',
+          },
         }),
       ])
 
@@ -133,6 +142,38 @@ describe('design lens review', () => {
       await fs.rm(memoryDir, { recursive: true, force: true })
     }
   })
+
+  it('keeps design classification stable when only model prose changes', async () => {
+    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-design-lens-review-prose-'))
+    try {
+      await writeQueue(memoryDir, [
+        task({
+          id: 'task-terse',
+          title: 'Build combobox',
+          description: 'Implement it.',
+          status: 'in_progress',
+          workKind: 'component',
+        }),
+        task({
+          id: 'task-lyrical',
+          title: 'Shape a luminous account-selection experience for the patient rhythm of everyday work',
+          description: 'Craft an expansive, humane interaction whose many contextual details invite the reader into a considered journey through selection, confirmation, and return.',
+          status: 'in_progress',
+          workKind: 'component',
+        }),
+      ])
+
+      const result = await reviewInProcessWorkForDesignLens({ memoryDir })
+      const store = await readDesignFeedbackStore(memoryDir)
+      expect(result.examinedTaskIds).toEqual(['task-terse', 'task-lyrical'])
+      expect(store.findings.map(finding => [finding.suggestedClassification, finding.dimension])).toEqual([
+        ['architecture-opportunity', 'design-architecture-opportunity'],
+        ['architecture-opportunity', 'design-architecture-opportunity'],
+      ])
+    } finally {
+      await fs.rm(memoryDir, { recursive: true, force: true })
+    }
+  })
 })
 
 async function writeQueue(memoryDir: string, tasks: Task[]): Promise<void> {
@@ -148,6 +189,7 @@ async function writeQueue(memoryDir: string, tasks: Task[]): Promise<void> {
 
 function task(overrides: Partial<Task> & Pick<Task, 'id' | 'title' | 'description' | 'status'>): Task {
   return {
+    ...overrides,
     id: overrides.id,
     title: overrides.title,
     description: overrides.description,

@@ -72,6 +72,21 @@ export function effectiveTaskStatus(task: unknown): string | undefined {
   // Reopening a falsely completed task must not be immediately re-promoted by
   // older completion proof while the substantive review finding is unresolved.
   if (latestFallbackApprovalHasUnresolvedSubstantiveRevision(record)) return status
+  // A max-revision stop is a deliberate recovery boundary. An earlier
+  // approval can make the focused Start action eligible again, but it must not
+  // silently turn the blocked task into a terminal done record first. The
+  // boundary is a typed recovery fact; blocker prose is never authoritative.
+  const recoveryCode = record.recoveryCode
+  const activeEscalationRecoveryCodes = Array.isArray(record.escalations)
+    ? record.escalations
+      .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate) && typeof candidate === 'object')
+      .filter(candidate => !candidate.resolvedAt)
+      .map(candidate => candidate.recoveryCode)
+    : []
+  if (
+    status === 'blocked' &&
+    (recoveryCode === 'max_revisions_actionable' || activeEscalationRecoveryCodes.includes('max_revisions_actionable'))
+  ) return status
   // Promoted projects keep the current proof answer on the compact task point
   // because the rich completion bundle is intentionally outside the ordinary
   // read model. A ready task with a completed timestamp and a proven indexed
@@ -463,9 +478,27 @@ function buildEffectiveTaskFromState(
         proofRecovery: runtime.proofRecovery,
       }
     : definitionTask
-  const effectiveRuntime = runtime?.proofRecovery && !hasActiveProofRecovery(proofRecoveryInput)
-    ? { ...runtime, proofRecovery: undefined }
-    : runtime
+  const effectiveRuntime = (() => {
+    const base = runtime?.proofRecovery && !hasActiveProofRecovery(proofRecoveryInput)
+      ? { ...runtime, proofRecovery: undefined }
+      : runtime
+    if (!base || !hasActiveProofRecovery(proofRecoveryInput)) return base
+    const supersededEscalationIds = new Set(
+      (task.escalations ?? [])
+        .filter((escalation) => escalation.reason === 'max_revisions_exceeded')
+        .map((escalation) => escalation.id),
+    )
+    // Promoted task points intentionally omit the full escalation collection.
+    // In that case there is no authoritative basis for clearing runtime IDs;
+    // retain them until a durable task definition explicitly supersedes them.
+    const openEscalationIds = supersededEscalationIds.size > 0
+      ? (base.openEscalationIds ?? []).filter((id) => !supersededEscalationIds.has(id))
+      : base.openEscalationIds
+    return {
+      ...base,
+      openEscalationIds,
+    }
+  })()
   const normalized = normalizeTerminalCompletionEvidence({
     ...definitionTask,
     ...projected,
@@ -601,6 +634,9 @@ function legacyFieldsFromEvidence(evidence: TaskEvidenceEvent[]): Record<string,
           : `evidence:${event.id}`,
         role: typeof payload.role === 'string' && payload.role.length > 0 ? payload.role : 'system',
         content: typeof payload.content === 'string' ? payload.content : JSON.stringify(payload),
+        ...(payload.structured && typeof payload.structured === 'object' && !Array.isArray(payload.structured)
+          ? { structured: payload.structured }
+          : {}),
         timestamp: typeof payload.timestamp === 'string' ? payload.timestamp : event.recordedAt,
       }
     })

@@ -179,7 +179,11 @@ function stubAgent(name: string, sideEffect?: () => Promise<void> | void) {
     name,
     async generate(): Promise<{ text: string }> {
       if (sideEffect) await sideEffect()
-      return { text: 'ok' }
+      return {
+        text: name === 'reviewer-agent'
+          ? '{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[],"revisionItems":[],"riskItems":[],"followUpItems":[],"advisoryScores":{}}'
+          : 'ok',
+      }
     },
   }
 }

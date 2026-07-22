@@ -32,10 +32,9 @@
   import { humanizeProjectName } from '../lib/project-name.js'
   import { isWorkerRunnableStatus } from '../lib/task-state.js'
   import { activeEscalations } from '../lib/escalation.js'
-  import { isOperationalReceiptQuestion } from '@guildhall/shared'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
-  import type { AgentQuestion, EventEnvelope, ProjectDetail, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, Task } from '../lib/types.js'
+  import type { AgentQuestion, EventEnvelope, ProjectDetail, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, StartReadiness, Task } from '../lib/types.js'
 
   type MigrationApplyStage = 'idle' | 'applying' | 'refreshing-project' | 'refreshing-inbox' | 'checking-status' | 'complete'
   type MigrationApplyResult = {
@@ -70,6 +69,13 @@
     ariaLabel: string
     actionHref?: string | null
     actionLabel?: string | null
+  }
+
+  function readinessAttentionReason(readiness: StartReadiness | null | undefined): string | null {
+    if (!readiness) return null
+    if (readiness.code === 'no_unattended_progress') return readiness.focusKind ?? null
+    if (readiness.code === 'owner_input_required') return 'awaiting_human'
+    return null
   }
 
   interface Props {
@@ -660,10 +666,7 @@
   function hasVisibleUnansweredQuestion(task: Task): boolean {
     const status = task.status ?? ''
     if (['done', 'shelved', 'blocked', 'pending_pr'].includes(status)) return false
-    return (task.openQuestions ?? []).some((question: AgentQuestion) =>
-      !question.answeredAt &&
-      !isOperationalReceiptQuestion(question),
-    )
+    return (task.openQuestions ?? []).some((question: AgentQuestion) => !question.answeredAt)
   }
 
   function isClosedTaskStatus(status: string): boolean {
@@ -824,6 +827,20 @@
       return {
         stopReason: 'awaiting_human',
         stopMessage: 'Waiting on input.',
+        attentionCode: counts.awaitingApproval > 0
+          ? 'no_unattended_progress'
+          : counts.draftReview > 0
+            ? 'import_drafts_waiting'
+            : counts.waitingOnUser > 0
+              ? 'owner_input_required'
+              : null,
+        attentionReason: counts.awaitingApproval > 0
+          ? 'spec_review'
+          : counts.draftReview > 0
+            ? null
+            : counts.waitingOnUser > 0
+              ? 'awaiting_human'
+              : null,
         idleSummary: { counts },
       }
     }
@@ -875,6 +892,8 @@
       return {
         stopReason: 'awaiting_human',
         stopMessage: startReadiness.message ?? 'Waiting on your answer.',
+        attentionCode: startReadiness.code,
+        attentionReason: readinessAttentionReason(startReadiness),
       }
     }
     if (currentStopSummary) return currentStopSummary
@@ -966,7 +985,7 @@
   })
   const runStopActionLabel = $derived(
     runStopSummary?.stopReason === 'awaiting_human'
-      ? primaryAction?.buttonLabel ?? startReadinessActionLabel(startReadiness?.message)
+      ? primaryAction?.buttonLabel ?? startReadinessActionLabel(startReadiness)
       : runStopSummary?.stopReason === 'required_migration_pending'
         ? 'Migrate project'
       : runStopSummary?.stopReason === 'blocked_only'
@@ -995,7 +1014,7 @@
     if (metaIntakePending) return 'Open project setup'
     if (startReadiness?.code === 'import_drafts_waiting') return 'Review drafts'
     if (blockers.bootstrap) return 'Open readiness checks'
-    return startReadinessActionLabel(startReadiness?.message)
+    return startReadinessActionLabel(startReadiness)
   })
   const shellAttentionNotices = $derived.by(() => {
     if (!detail) return []
@@ -1004,6 +1023,7 @@
       notices.push({
         id: 'start-readiness',
         code: startReadiness.code,
+        reason: readinessAttentionReason(startReadiness),
         message: startReadiness.message,
         href: startReadinessNoticeHref,
         priority: 10,
@@ -1018,7 +1038,8 @@
       const runStopTone = shellAlertTone(runStopSummarySeverity)
       notices.push({
         id: 'run-stop-summary',
-        reason: runStopSummary?.stopReason ?? null,
+        code: runStopSummary?.attentionCode ?? null,
+        reason: runStopSummary?.attentionReason ?? runStopSummary?.stopReason ?? null,
         message: runStopSummaryText,
         href: runStopActionHref,
         priority: 20,
@@ -1139,29 +1160,27 @@
       ? actionRunControl.label
     : requiredMigrationBlocked
       ? 'Migrate'
-    : startReadiness?.code === 'owner_input_required'
-      ? /question|answer/i.test(startReadiness.message ?? '')
-        ? 'Waiting on answer'
-        : /recover|blocked|escalation/i.test(startReadiness.message ?? '')
-          ? 'Needs recovery'
-          : /review|approve/i.test(startReadiness.message ?? '')
-            ? 'Review needed'
-            : 'Needs input'
     : startReadiness?.canStart === false
-      ? startReadinessActionLabel(startReadiness.message)
+      ? startReadinessActionLabel(startReadiness)
       : 'Resume',
   )
   const showAdvanceOneTaskAction = $derived(
     !allTerminalStart,
   )
 
-  function startReadinessActionLabel(message: string | undefined): string {
-    if (/question|answer/i.test(message ?? '')) return 'Answer question'
-    if (/draft/i.test(message ?? '')) return 'Review drafts'
-    if (/proof/i.test(message ?? '')) return 'Attach proof'
-    if (/spec/i.test(message ?? '')) return /\b\d+\s+specs\b/i.test(message ?? '') ? 'Review next spec' : 'Review spec'
-    if (/brief/i.test(message ?? '')) return 'Review brief'
-    if (/recover|blocked|escalation/i.test(message ?? '')) return 'Review recovery'
+  function startReadinessActionLabel(readiness: StartReadiness | null | undefined): string {
+    if (!readiness) return 'Open next action'
+    if (readiness.code === 'owner_input_required') {
+      if (readiness.focusKind === 'blocked_work') return 'Needs recovery'
+      return readiness.focusKind === 'spec_review' ? 'Review spec' : 'Answer question'
+    }
+    if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
+    if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
+    if (readiness.code === 'no_unattended_progress') {
+      if (readiness.focusKind === 'spec_review') return readiness.count && readiness.count > 1 ? 'Review next spec' : 'Review spec'
+      if (readiness.focusKind === 'brief_cleanup') return 'Review brief'
+      if (readiness.focusKind === 'blocked_work') return 'Review recovery'
+    }
     return 'Open next action'
   }
 </script>

@@ -73,24 +73,10 @@ export function buildProjectQuestionEvidence(input: ProjectQuestionEvidenceInput
 }
 
 export function inferProjectMemory(evidence: ProjectQuestionEvidence): InferredProjectMemory {
-  const wanted = [
-    'fiction-writing software',
-    'coherent novel',
-    'author voice',
-    'reader experience',
-    'quiet',
-    'quiet UI',
-    'commercial editor direction',
-    'commercial direction',
-    'print-quality',
-    'reviewer',
-    'reader knowledge',
-    'imagined-world coherence',
-  ]
-  const inferredFacts = evidence.facts.filter(fact =>
-    wanted.some(term => fact.text.toLowerCase().includes(term.toLowerCase())),
-  )
-  return { inferredFacts: uniqueFacts(inferredFacts) }
+  // Keep source facts as evidence, but do not classify them by vocabulary.
+  // Provider-authored or differently worded prose must not change which
+  // project questions Guildhall asks.
+  return { inferredFacts: uniqueFacts(evidence.facts) }
 }
 
 export function planNextProjectQuestion(input: {
@@ -98,8 +84,7 @@ export function planNextProjectQuestion(input: {
   answeredQuestions: ProjectQuestionAnswer[]
   askedCandidateIds: string[]
 }): ProjectQuestionPlan {
-  const memory = inferProjectMemory(input.evidence)
-  const candidates = generateCandidates(input.evidence, memory)
+  const candidates = generateCandidates(input.evidence)
     .filter(candidate => !input.askedCandidateIds.includes(candidate.id))
     .filter(candidate => !isAnswered(candidate, input.answeredQuestions))
     .filter(candidate => candidate.changes.length > 0)
@@ -130,86 +115,12 @@ export function planFollowUpForAnswer(answer: ProjectQuestionAnswer): ProjectFol
   if (classification.kind === 'discard') {
     return { kind: 'none', reason: 'The answer did not add durable project guidance.' }
   }
-
-  const lower = answer.answer.toLowerCase()
-  if (
-    answer.questionId === 'project-direction-priority' &&
-    lower.includes('reviewer') &&
-    /\bgood\b|reader|engagement|quality/.test(lower) &&
-    !/(coherence|voice|all three|reader engagement)/.test(lower)
-  ) {
-    return {
-      kind: 'ask',
-      question: {
-        id: 'reviewer-success-lens',
-        prompt: 'Should reviewer-lane MVPs judge internal story coherence, reader engagement, author voice preservation, or all three?',
-        why: 'This changes which reviewer contracts and fixtures workers should build first.',
-        choices: [
-          'Internal story coherence',
-          'Reader engagement',
-          'Author voice preservation',
-          'All three',
-        ],
-        changes: ['priority', 'review', 'scope'],
-        evidence: ['Previous answer points to reviewer work and novel-quality evaluation.'],
-        score: 90,
-      },
-    }
-  }
-
   return { kind: 'none', reason: 'The answer resolves the active fork.' }
 }
 
-function generateCandidates(
-  evidence: ProjectQuestionEvidence,
-  memory: InferredProjectMemory,
-): ProjectQuestionCandidate[] {
-  const joinedFacts = memory.inferredFacts.map(f => f.text).join(' ').toLowerCase()
-  const joinedWork = evidence.currentWork.map(work => `${work.title} ${work.description ?? ''}`).join(' ').toLowerCase()
-  const hasNarrativeHarnessSignals =
-    (joinedFacts.includes('fiction-writing') && joinedFacts.includes('coherent novel')) ||
-    (joinedFacts.includes('author voice') && joinedWork.includes('reviewer'))
-
+function generateCandidates(evidence: ProjectQuestionEvidence): ProjectQuestionCandidate[] {
   const candidates: ProjectQuestionCandidate[] = []
-  if (hasNarrativeHarnessSignals) {
-    candidates.push({
-      id: 'project-direction-priority',
-      prompt: `For the next few ${evidence.projectName} tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?`,
-      why: 'This changes which backlog items Guildhall should shape first and what evidence workers need.',
-      choices: [
-        'Reviewer-lane MVPs',
-        'Author-facing editor UX',
-        'Story-memory/schema foundations',
-        'Generation/evaluation loops',
-      ],
-      changes: ['priority', 'scope', 'review'],
-      evidence: memory.inferredFacts.slice(0, 4).map(f => `${f.source}: ${f.text}`),
-      score: 100,
-    })
-  }
-
-  if (
-    joinedFacts.includes('quiet ui') ||
-    joinedFacts.includes('quiet ') ||
-    joinedFacts.includes('commercial editor direction') ||
-    joinedFacts.includes('commercial direction')
-  ) {
-    candidates.push({
-      id: 'visual-direction-mode',
-      prompt: `Should ${evidence.projectName} feel more like a calm writing desk, a professional editorial tool, or an analytical story-debugging cockpit?`,
-      why: 'This changes UI acceptance criteria and reviewer expectations for author-facing work.',
-      choices: [
-        'Calm writing desk',
-        'Professional editorial tool',
-        'Analytical story-debugging cockpit',
-      ],
-      changes: ['product_direction', 'review'],
-      evidence: memory.inferredFacts.filter(f => /quiet ui|commercial|reader/i.test(f.text)).map(f => `${f.source}: ${f.text}`),
-      score: 70,
-    })
-  }
-
-  if (candidates.length === 0 && memory.inferredFacts.length === 0) {
+  if (candidates.length === 0) {
     candidates.push({
       id: 'project-direction-open',
       prompt: `What should Guildhall use as the main direction for ${evidence.projectName} when shaping work?`,

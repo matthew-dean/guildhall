@@ -165,6 +165,87 @@ describe('NodeGitDriver.createWorktree + removeWorktree', () => {
   })
 })
 
+describe('NodeGitDriver.syncWorktreeWithBase', () => {
+  it('checkpoints reusable task edits and merges the current base branch', async () => {
+    const driver = new NodeGitDriver()
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'sync')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-sync',
+      baseBranch: 'main',
+    })
+
+    await fs.writeFile(path.join(repoRoot, 'base-latest.txt'), 'base\n', 'utf-8')
+    await git(repoRoot, ['add', 'base-latest.txt'])
+    await git(repoRoot, ['commit', '-q', '-m', 'advance base'])
+    await fs.writeFile(path.join(worktreePath, 'task-edit.txt'), 'task\n', 'utf-8')
+
+    const result = await driver.syncWorktreeWithBase(
+      worktreePath,
+      'main',
+      'Guildhall: checkpoint task work before synchronizing task-sync',
+    )
+
+    expect(result.ok).toBe(true)
+    expect(result.changed).toBe(true)
+    await expect(fs.readFile(path.join(worktreePath, 'base-latest.txt'), 'utf-8')).resolves.toBe('base\n')
+    await expect(fs.readFile(path.join(worktreePath, 'task-edit.txt'), 'utf-8')).resolves.toBe('task\n')
+  })
+
+  it('fails closed on a synchronization conflict', async () => {
+    const driver = new NodeGitDriver()
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'sync-conflict')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-sync-conflict',
+      baseBranch: 'main',
+    })
+
+    await fs.writeFile(path.join(repoRoot, 'README.md'), '# Main\n', 'utf-8')
+    await git(repoRoot, ['add', 'README.md'])
+    await git(repoRoot, ['commit', '-q', '-m', 'conflicting base change'])
+    await fs.writeFile(path.join(worktreePath, 'README.md'), '# Task\n', 'utf-8')
+    await git(worktreePath, ['add', 'README.md'])
+    await git(worktreePath, ['commit', '-q', '-m', 'conflicting task change'])
+
+    const result = await driver.syncWorktreeWithBase(
+      worktreePath,
+      'main',
+      'Guildhall: checkpoint task work before synchronizing task-sync-conflict',
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.conflict).toBe(true)
+  })
+
+  it('can resolve a Guildhall-owned proof conflict in favor of the task branch', async () => {
+    const driver = new NodeGitDriver()
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'proof-sync-conflict')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-proof-sync-conflict',
+      baseBranch: 'main',
+    })
+
+    await fs.writeFile(path.join(repoRoot, 'README.md'), '# Main\n', 'utf-8')
+    await git(repoRoot, ['add', 'README.md'])
+    await git(repoRoot, ['commit', '-q', '-m', 'proof base change'])
+    await fs.writeFile(path.join(worktreePath, 'README.md'), '# Task proof\n', 'utf-8')
+    await git(worktreePath, ['add', 'README.md'])
+    await git(worktreePath, ['commit', '-q', '-m', 'proof task change'])
+
+    const result = await driver.syncWorktreeWithBase(
+      worktreePath,
+      'main',
+      'Guildhall: checkpoint proof task before synchronizing',
+      { conflictStrategy: 'prefer_task' },
+    )
+
+    expect(result.ok).toBe(true)
+    await expect(fs.readFile(path.join(worktreePath, 'README.md'), 'utf-8')).resolves.toBe('# Task proof\n')
+  })
+})
+
 describe('NodeGitDriver.fastForwardMerge', () => {
   it('fast-forwards cleanly when the feature branch is ahead of base', async () => {
     const driver = new NodeGitDriver()
@@ -294,5 +375,35 @@ describe('NodeGitDriver.checkpointDirtyWork', () => {
     const config = await fs.readFile(path.join(repoRoot, 'guildhall.yaml'), 'utf8')
     expect(tasks).toContain('"tasks":[]')
     expect(config).toContain('name: demo')
+  })
+
+  it('preserves newer shared-checkout edits when reusing an existing task branch', async () => {
+    const driver = new NodeGitDriver()
+    const sourcePath = path.join(repoRoot, 'src.ts')
+    await fs.writeFile(sourcePath, 'export const value = 0\n', 'utf8')
+    await git(repoRoot, ['add', 'src.ts'])
+    await git(repoRoot, ['commit', '-q', '-m', 'add source'])
+
+    await fs.writeFile(sourcePath, 'export const value = 1\n', 'utf8')
+    const first = await driver.checkpointDirtyWork(repoRoot, {
+      branch: 'guildhall/task-reused',
+      baseBranch: 'main',
+      commitMessage: 'first checkpoint',
+    })
+    expect(first.ok).toBe(true)
+
+    await fs.writeFile(sourcePath, 'export const value = 2\n', 'utf8')
+    const second = await driver.checkpointDirtyWork(repoRoot, {
+      branch: 'guildhall/task-reused',
+      baseBranch: 'main',
+      commitMessage: 'second checkpoint',
+    })
+
+    expect(second.ok).toBe(true)
+    expect(await driver.currentBranch(repoRoot)).toBe('main')
+    const { stdout: taskBranchSource } = await git(repoRoot, ['show', 'guildhall/task-reused:src.ts'])
+    expect(taskBranchSource.trim()).toBe('export const value = 2')
+    expect(await fs.readFile(sourcePath, 'utf8')).toBe('export const value = 0\n')
+    await expect(driver.isClean(repoRoot)).resolves.toBe(true)
   })
 })

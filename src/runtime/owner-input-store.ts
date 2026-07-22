@@ -63,11 +63,9 @@ export async function createOwnerInputRequest(
   rawInput: CreateOwnerInputRequestInput,
 ): Promise<CreateOwnerInputRequestResult> {
   const input = CreateOwnerInputRequestInput.parse(rawInput)
-  const rawQuestion = input.question ?? (input.prompt
-    ? { prompt: input.prompt, description: input.helperText, choices: input.choices }
-    : null)
-  if (!rawQuestion) {
-    throw new Error('owner-input requires a structured question')
+  const rawQuestion = input.question ?? null
+  if (!rawQuestion || !rawQuestion.kind) {
+    throw new Error('owner-input requires a structured question with kind and prompt; prose is not an answerable user question')
   }
   const normalizedQuestion = normalizeStructuredOwnerQuestion(rawQuestion)
   if (!normalizedQuestion) {

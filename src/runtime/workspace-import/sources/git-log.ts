@@ -84,6 +84,7 @@ export function makeGitLogSource(opts: { limit?: number } = {}): TaskSource {
           if (!confidence) continue
 
           signals.push({
+            signalId: root.domainHint ? `${root.domainHint}:${sha}` : sha,
             source: 'git-log',
             kind: 'milestone',
             title: subject,

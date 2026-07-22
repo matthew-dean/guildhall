@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { planEvidenceWorkGraph } from '../evidence-work-graph-intake.js'
+import { planEvidenceWorkGraph, type EvidenceSource } from '../evidence-work-graph-intake.js'
 
 const loomaComponentEvidence = [
   '# Component audit',
@@ -94,10 +94,171 @@ const narrativeRoadmapStageTwoEvidence = [
   '- specialist editor agent calls for the first review lanes',
 ].join('\n')
 
+const loomaComponentSource: EvidenceSource = {
+  path: 'looma/docs/component-library-audit.md',
+  content: loomaComponentEvidence,
+  workShapes: { Dialog: 'ui-component', AlertDialog: 'ui-component', Drawer: 'ui-component' },
+  statusHints: { Dialog: 'shipped', AlertDialog: 'missing', Drawer: 'missing' },
+  producedArtifacts: { Dialog: 'ui-dialog', AlertDialog: 'ui-alert-dialog', Drawer: 'ui-drawer' },
+  buildsOn: {
+    AlertDialog: ['Dialog', 'Button'],
+    Drawer: ['Dialog', 'overlay manager'],
+  },
+  consumerSurfaces: {
+    AlertDialog: ['Knit destructive confirmation flow'],
+    Drawer: ['Knit mobile navigation drawer'],
+  },
+}
+
+const compliancePipelineSource: EvidenceSource = {
+  path: 'docs/data-retention-launch-plan.md',
+  content: compliancePipelineEvidence,
+  workShapes: {
+    'Retention policy schema': 'migration',
+    'Retention worker': 'backend-api',
+    'Audit export API': 'backend-api',
+    'Compliance dashboard integration': 'frontend-integration',
+  },
+  statusHints: {
+    'Retention policy schema': 'missing',
+    'Retention worker': 'missing',
+    'Audit export API': 'missing',
+    'Compliance dashboard integration': 'missing',
+  },
+  producedArtifacts: {
+    'Retention policy schema': 'retention-policy-schema',
+    'Retention worker': 'retention-worker',
+    'Audit export API': 'audit-export-api',
+    'Compliance dashboard integration': 'compliance-dashboard',
+  },
+  buildsOn: {
+    'Retention worker': ['Retention policy schema', 'audit-event cursor'],
+    'Audit export API': ['audit-event query service'],
+    'Compliance dashboard integration': ['Audit export API', 'Retention worker'],
+  },
+  consumerSurfaces: {
+    'Retention worker': ['Operations runbook'],
+    'Audit export API': ['Compliance dashboard'],
+    'Compliance dashboard integration': ['Admin settings page'],
+  },
+  targetAreas: { 'Compliance dashboard integration': 'Admin settings page' },
+}
+
+const releaseMatrixSource: EvidenceSource = {
+  path: 'internal/fixtures/release-proof-matrix/component-consumer/plan.md',
+  content: releaseMatrixEvidence,
+  workShapes: {
+    'AlertDialog primitive': 'ui-component',
+    'Comment endpoint': 'backend-api',
+    'Inspect json output': 'cli-tool',
+    'Quick start install warning': 'docs',
+    'Archived at migration': 'migration',
+    'Summary duplicate row bugfix': 'bugfix',
+    'Settings footer copy': 'single-edit',
+  },
+  statusHints: {
+    'AlertDialog primitive': 'missing',
+    'Comment endpoint': 'missing',
+    'Inspect json output': 'missing',
+    'Quick start install warning': 'missing',
+    'Archived at migration': 'missing',
+    'Summary duplicate row bugfix': 'missing',
+    'Settings footer copy': 'missing',
+  },
+  producedArtifacts: {
+    'AlertDialog primitive': 'alert-dialog',
+    'Comment endpoint': 'comment-endpoint',
+    'Inspect json output': 'inspect-json',
+    'Quick start install warning': 'quick-start-warning',
+    'Archived at migration': 'archived-at',
+    'Summary duplicate row bugfix': 'summary-duplicate-fix',
+    'Settings footer copy': 'settings-footer-copy',
+  },
+  targetAreas: {
+    'AlertDialog primitive': 'component-consumer',
+    'Comment endpoint': 'backend-api',
+    'Inspect json output': 'backend-api',
+    'Quick start install warning': 'backend-api',
+    'Archived at migration': 'backend-api',
+    'Summary duplicate row bugfix': 'backend-api',
+    'Settings footer copy': 'backend-api',
+  },
+  consumerSurfaces: { 'AlertDialog primitive': ['demo app destructive action'] },
+}
+
+const narrativeRoadmapSource: EvidenceSource = {
+  path: 'docs/harness/implementation-roadmap.md',
+  content: narrativeRoadmapEvidence,
+  workShapes: {
+    'Define fixture, expected-record, prototype-run, and evaluation schemas.': 'generic',
+    'Add the first tiny fiction fixture and human-authored expected records.': 'generic',
+    'Implement a no-UI runner that builds a packet from fixture records.': 'cli-tool',
+    'Add deterministic evaluation output that reports missing, noisy, stale, and useful context.': 'generic',
+    'Generate a developer-readable debug report for each run.': 'docs',
+    'Use the first run to narrow the MVP story-memory schema.': 'generic',
+  },
+  statusHints: {
+    'Define fixture, expected-record, prototype-run, and evaluation schemas.': 'missing',
+    'Add the first tiny fiction fixture and human-authored expected records.': 'missing',
+    'Implement a no-UI runner that builds a packet from fixture records.': 'missing',
+    'Add deterministic evaluation output that reports missing, noisy, stale, and useful context.': 'missing',
+    'Generate a developer-readable debug report for each run.': 'missing',
+    'Use the first run to narrow the MVP story-memory schema.': 'missing',
+  },
+  buildsOn: {
+    'Define fixture, expected-record, prototype-run, and evaluation schemas.': ['Stage 1'],
+    'Add the first tiny fiction fixture and human-authored expected records.': ['Define fixture, expected-record, prototype-run, and evaluation schemas.'],
+    'Implement a no-UI runner that builds a packet from fixture records.': ['Add the first tiny fiction fixture and human-authored expected records.'],
+    'Add deterministic evaluation output that reports missing, noisy, stale, and useful context.': ['Implement a no-UI runner that builds a packet from fixture records.'],
+    'Generate a developer-readable debug report for each run.': ['Add deterministic evaluation output that reports missing, noisy, stale, and useful context.'],
+    'Use the first run to narrow the MVP story-memory schema.': ['Generate a developer-readable debug report for each run.'],
+  },
+}
+
 describe('evidence-to-work-graph intake', () => {
+  it('keeps graph identity and routing stable when source prose is rewritten', () => {
+    const first = planEvidenceWorkGraph({
+      sources: [{
+        path: 'docs/harness/release-plan.md',
+        content: '| Deliverable | Need | Foundation | Consumer |\n| --- | --- | --- | --- |\n| Writer packet | Build the bounded packet. | Story records | Draft runner |',
+        unitIdentities: { 'Writer packet': 'nh/release/writer-packet' },
+        workShapes: { 'Writer packet': 'generic' },
+        statusHints: { 'Writer packet': 'missing' },
+        producedArtifacts: { 'Writer packet': 'writer-packet' },
+        consumerSurfaces: { 'Writer packet': ['Draft runner'] },
+      }],
+    })
+    const rewritten = planEvidenceWorkGraph({
+      sources: [{
+        path: 'docs/harness/release-plan.md',
+        content: '| Deliverable | Need | Foundation | Consumer |\n| --- | --- | --- | --- |\n| Constrained context envelope | Assemble the context envelope. | Story records | Draft runner |',
+        unitIdentities: { 'Constrained context envelope': 'nh/release/writer-packet' },
+        workShapes: { 'Constrained context envelope': 'generic' },
+        statusHints: { 'Constrained context envelope': 'missing' },
+        producedArtifacts: { 'Constrained context envelope': 'writer-packet' },
+        consumerSurfaces: { 'Constrained context envelope': ['Draft runner'] },
+      }],
+    })
+    const durable = (plan: ReturnType<typeof planEvidenceWorkGraph>) => plan.tasks.map(task => ({
+      id: task.id,
+      sourceIdentity: task.sourceIdentity,
+      kind: task.kind,
+      workShape: task.workShape,
+      statusHint: task.statusHint,
+      targetArea: task.targetArea,
+      producedArtifact: task.producedArtifact,
+      buildsOn: task.buildsOn,
+      dependsOn: task.dependsOn,
+      consumerSurface: task.consumerSurface,
+    }))
+
+    expect(durable(rewritten)).toEqual(durable(first))
+    expect(rewritten.tasks.map(task => task.title)).not.toEqual(first.tasks.map(task => task.title))
+  })
+
   it('extracts deliverable units from source evidence instead of flattening them into one vague task', () => {
     const plan = planEvidenceWorkGraph({
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaComponentEvidence }],
+      sources: [loomaComponentSource],
       existingTasks: [],
     })
 
@@ -111,7 +272,7 @@ describe('evidence-to-work-graph intake', () => {
 
   it('preserves foundation, shared primitive, and dependency relationships for a UI component-library fixture', () => {
     const plan = planEvidenceWorkGraph({
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaComponentEvidence }],
+      sources: [loomaComponentSource],
       existingTasks: [
         {
           id: 'task-dialog-foundation',
@@ -142,7 +303,7 @@ describe('evidence-to-work-graph intake', () => {
 
   it('does not turn archived or shelved history into a live prerequisite', () => {
     const plan = planEvidenceWorkGraph({
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaComponentEvidence }],
+      sources: [loomaComponentSource],
       existingTasks: [
         {
           id: 'task-dialog-foundation',
@@ -172,6 +333,7 @@ describe('evidence-to-work-graph intake', () => {
       }],
       existingTasks: [{
         id: 'task-synopsis-expansion',
+        sourceIdentity: 'docs/harness/synopsis-expansion.md#unit:1',
         title: 'Expand synopsis into story records',
         description: 'Synopsis expansion into story records.',
         status: 'import_draft',
@@ -185,7 +347,7 @@ describe('evidence-to-work-graph intake', () => {
 
   it('splits reusable deliverables from consuming-product integration work', () => {
     const plan = planEvidenceWorkGraph({
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaComponentEvidence }],
+      sources: [loomaComponentSource],
       existingTasks: [],
     })
 
@@ -202,7 +364,7 @@ describe('evidence-to-work-graph intake', () => {
 
   it('generates proof contracts appropriate to implementation and integration work', () => {
     const plan = planEvidenceWorkGraph({
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaComponentEvidence }],
+      sources: [loomaComponentSource],
       existingTasks: [],
     })
 
@@ -228,7 +390,7 @@ describe('evidence-to-work-graph intake', () => {
 
   it('applies the same graph behavior to a backend/data-compliance launch plan', () => {
     const plan = planEvidenceWorkGraph({
-      sources: [{ path: 'docs/data-retention-launch-plan.md', content: compliancePipelineEvidence }],
+      sources: [compliancePipelineSource],
       existingTasks: [],
     })
 
@@ -242,10 +404,11 @@ describe('evidence-to-work-graph intake', () => {
     const worker = plan.tasks.find(task => task.deliverableName === 'Retention worker' && task.kind === 'implementation')
     const exportApi = plan.tasks.find(task => task.deliverableName === 'Audit export API' && task.kind === 'implementation')
     const dashboard = plan.tasks.find(task => task.deliverableName === 'Compliance dashboard integration' && task.kind === 'integration')
+    const policySchema = plan.tasks.find(task => task.deliverableName === 'Retention policy schema' && task.kind === 'implementation')
 
     expect(worker).toMatchObject({
       buildsOn: ['Retention policy schema', 'audit-event cursor'],
-      dependsOn: [expect.stringMatching(/retention-policy-schema/)],
+      dependsOn: [policySchema?.id],
     })
     expect(dashboard).toMatchObject({
       targetArea: 'Admin settings page',
@@ -256,10 +419,11 @@ describe('evidence-to-work-graph intake', () => {
 
   it('reconciles duplicate vague tasks into the structured graph instead of creating competing work', () => {
     const plan = planEvidenceWorkGraph({
-      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaComponentEvidence }],
+      sources: [loomaComponentSource],
       existingTasks: [
         {
           id: 'task-039',
+          deliverableName: 'AlertDialog',
           title: 'Build AlertDialog primitive',
           description: 'Build the Looma AlertDialog primitive as a concrete UI-library component.',
           status: 'blocked',
@@ -291,7 +455,7 @@ describe('evidence-to-work-graph intake', () => {
 
   it('keeps reusable component work split from consumer integration with dependency proof', () => {
     const plan = planEvidenceWorkGraph({
-      sources: [{ path: 'internal/fixtures/release-proof-matrix/component-consumer/plan.md', content: releaseMatrixEvidence }],
+      sources: [releaseMatrixSource],
       existingTasks: [],
     })
 
@@ -316,7 +480,7 @@ describe('evidence-to-work-graph intake', () => {
 
   it('shapes backend/API, CLI/tooling, docs-only, migration/data, bugfix, and single-edit scenarios without UI assumptions', () => {
     const plan = planEvidenceWorkGraph({
-      sources: [{ path: 'internal/fixtures/release-proof-matrix/backend-api/plan.md', content: releaseMatrixEvidence }],
+      sources: [{ ...releaseMatrixSource, path: 'internal/fixtures/release-proof-matrix/backend-api/plan.md' }],
       existingTasks: [],
     })
 
@@ -361,7 +525,7 @@ describe('evidence-to-work-graph intake', () => {
 
   it('extracts current milestone task chains from prose roadmap docs instead of requiring deliverable tables', () => {
     const plan = planEvidenceWorkGraph({
-      sources: [{ path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapEvidence }],
+      sources: [narrativeRoadmapSource],
       existingTasks: [],
     })
 
@@ -385,7 +549,7 @@ describe('evidence-to-work-graph intake', () => {
     expect(sixthTask?.relatedTasks).toEqual(expect.arrayContaining([
       expect.objectContaining({
         relationship: 'blocks',
-        reason: expect.stringContaining('comes after'),
+        reason: expect.stringContaining('builds on'),
       }),
     ]))
     expect(plan.tasks.every(task => task.kind === 'implementation')).toBe(true)
@@ -418,24 +582,13 @@ describe('evidence-to-work-graph intake', () => {
     expect(JSON.stringify(plan.tasks)).not.toContain('Completed')
   })
 
-  it('extracts recommended implementation tasks from decomposition inventories instead of treating spec docs as inert context', () => {
+  it('keeps decomposition recommendations out of executable work', () => {
     const plan = planEvidenceWorkGraph({
       sources: [{ path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence }],
       existingTasks: [],
     })
 
-    expect(plan.tasks.filter(task => task.kind === 'implementation')).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          title: 'Implement dialogue-and-character-voice reviewer lane',
-          targetArea: 'coherence',
-        }),
-        expect.objectContaining({
-          title: 'Implement scene-and-chapter-intelligence reviewer lane',
-          targetArea: 'coherence',
-        }),
-      ]),
-    )
+    expect(plan.tasks).toEqual([])
   })
 
   it('does not turn roadmap-stage deliverables into implementation work without an explicit starter-task or recommendation layer', () => {
@@ -454,7 +607,7 @@ describe('evidence-to-work-graph intake', () => {
     ])
   })
 
-  it('ignores markdown-decorated none placeholders in recommended first task titles', () => {
+  it('does not turn markdown-decorated recommendations into work', () => {
     const plan = planEvidenceWorkGraph({
       sources: [{
         path: 'docs/harness/remaining-spec-decomposition-inventory.md',
@@ -477,11 +630,10 @@ describe('evidence-to-work-graph intake', () => {
       existingTasks: [],
     })
 
-    expect(plan.tasks.map(task => task.title)).toContain('Implement dialogue-and-character-voice reviewer lane')
-    expect(plan.tasks.map(task => task.title)).not.toContain('*(none — umbrella doc, covered by child specs)*')
+    expect(plan.tasks).toEqual([])
   })
 
-  it('does not recreate resolved inventory recommendations as current work', () => {
+  it('does not recreate resolved or unresolved inventory recommendations as current work', () => {
     const plan = planEvidenceWorkGraph({
       sources: [{
         path: 'docs/harness/remaining-spec-decomposition-inventory.md',
@@ -505,16 +657,16 @@ describe('evidence-to-work-graph intake', () => {
       existingTasks: [],
     })
 
-    expect(plan.tasks.map(task => task.title)).toContain('Implement scene-and-chapter-intelligence reviewer lane')
-    expect(plan.tasks.map(task => task.title)).not.toContain('Implement editor-writer feedback chain contract and weighted-feedback pipeline')
+    expect(plan.tasks).toEqual([])
     expect(JSON.stringify(plan.tasks)).not.toContain('contract surface recovered')
   })
 
-  it('does not recreate ready source-backed tasks as missing evidence work', () => {
+  it('does not use recommendation prose to recreate ready source-backed tasks', () => {
     const plan = planEvidenceWorkGraph({
       sources: [{ path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence }],
       existingTasks: [{
         id: 'task-import-lho60m',
+        deliverableName: 'Implement dialogue-and-character-voice reviewer lane',
         title: 'Implement dialogue-and-character-voice reviewer lane',
         status: 'ready',
         description: 'Implement the source-backed reviewer lane.',
@@ -532,7 +684,7 @@ describe('evidence-to-work-graph intake', () => {
 
     expect(plan.tasks.map(task => task.title)).not.toContain('Implement dialogue-and-character-voice reviewer lane')
     expect(plan.reconciliations).toEqual([])
-    expect(plan.tasks.map(task => task.title)).toContain('Implement scene-and-chapter-intelligence reviewer lane')
+    expect(plan.tasks).toEqual([])
   })
 
   it('generates proof evidence expectations about completed work, not proof-planning meta-work', () => {
@@ -547,33 +699,32 @@ describe('evidence-to-work-graph intake', () => {
 
     expect(evidenceText).not.toMatch(/\bproof plan\b/i)
     expect(evidenceText).not.toMatch(/\breuses\b/i)
-    expect(evidenceText).toContain('records focused implementation, verification, or reviewer evidence')
+    expect(evidenceText).toBe('')
   })
 
-  it('keeps later-stage inventory recommendations inside the same MVP task graph when a roadmap names the active milestone stage', () => {
+  it('keeps later-stage inventory recommendations out of the MVP task graph', () => {
     const plan = planEvidenceWorkGraph({
       sources: [
-        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapEvidence },
+        narrativeRoadmapSource,
         { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence },
       ],
       existingTasks: [],
     })
 
-    expect(plan.tasks.map(task => task.title)).toEqual(
-      expect.arrayContaining([
-        'Implement dialogue-and-character-voice reviewer lane',
-        'Implement scene-and-chapter-intelligence reviewer lane',
-      ]),
-    )
+    expect(plan.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
+      'Implement dialogue-and-character-voice reviewer lane',
+      'Implement scene-and-chapter-intelligence reviewer lane',
+    ]))
     const milestoneTerminal = plan.tasks.find(task => task.title === 'Use the first run to narrow the MVP story-memory schema.')
     const dialogue = plan.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
-    expect(dialogue?.dependsOn).toContain(milestoneTerminal?.id)
+    expect(milestoneTerminal).toBeDefined()
+    expect(dialogue).toBeUndefined()
   })
 
   it('suppresses coarse later-stage roadmap deliverable bullets when a current milestone already has decomposed spec tasks', () => {
     const plan = planEvidenceWorkGraph({
       sources: [
-        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapEvidence },
+        narrativeRoadmapSource,
         { path: 'docs/harness/stage-two-roadmap.md', content: narrativeRoadmapStageTwoEvidence },
         { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence },
       ],
@@ -582,6 +733,8 @@ describe('evidence-to-work-graph intake', () => {
 
     expect(plan.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
       'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+    ]))
+    expect(plan.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
       'Implement dialogue-and-character-voice reviewer lane',
       'Implement scene-and-chapter-intelligence reviewer lane',
     ]))

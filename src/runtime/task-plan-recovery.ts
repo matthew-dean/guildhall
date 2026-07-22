@@ -19,7 +19,25 @@ export function resetCurrentPlanForProofRecovery(
   task: Task,
   input: { reason: string; now: string; agentId?: string; role?: string },
 ): void {
+  // A proof-setup task is already the smallest executable proof boundary.
+  // Clearing its blueprint would turn a bounded recovery into generic spec
+  // intake and invite a second proof child. Repair its command contract in
+  // place instead; the migration/recovery caller owns that repair.
+  if (task.semanticKind === 'proof_setup') {
+    task.notes.push({
+      agentId: input.agentId ?? 'system',
+      role: input.role ?? 'proof-recovery',
+      content: `Guildhall preserved the proof-setup execution blueprint during recovery: ${input.reason}`,
+      structured: {
+        event: 'proof_setup_plan_preserved',
+        source: 'guildhall',
+      },
+      timestamp: input.now,
+    })
+    return
+  }
   task.proofPaths = undefined
+  task.recoveryCode = undefined
   task.acceptanceCriteria = []
   task.productBrief = undefined
   task.spec = undefined
@@ -44,6 +62,10 @@ export function resetCurrentPlanForProofRecovery(
     agentId: input.agentId ?? 'system',
     role: input.role ?? 'proof-recovery',
     content: `Guildhall cleared the stale current plan and will re-intake a source-backed implementation contract: ${input.reason}`,
+    structured: {
+      event: 'current_plan_reset',
+      source: 'guildhall',
+    },
     timestamp: input.now,
   })
 }

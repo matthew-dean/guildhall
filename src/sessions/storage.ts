@@ -39,6 +39,7 @@ export const PERSISTED_TOOL_METADATA_KEYS = [
   'async_agent_tasks',
   'recent_work_log',
   'recent_verified_work',
+  'recent_verification_results',
   'task_focus_state',
   'compact_checkpoints',
   'compact_last',

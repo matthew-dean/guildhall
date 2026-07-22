@@ -798,6 +798,8 @@ export interface ProjectStateDatabaseTask {
   domain: string | null
   priority: string | null
   workKind: string | null
+  /** Stable semantic discriminator used by compact projections, never prose. */
+  semanticKind?: string | null
   parentId: string | null
   hierarchy: JsonRecord | null
   dependsOn: string[]
@@ -2718,9 +2720,9 @@ function workItemSummary(task: JsonRecord): JsonRecord {
   const scalarKeys = [
     'id', 'title', 'description', 'orientationSummary', 'domain', 'status',
     'priority', 'revisionCount', 'updatedAt', 'completedAt', 'assignedTo',
-    'importedDraft', 'requestKind', 'requestStage', 'workKind', 'workVisibility',
+    'importedDraft', 'requestKind', 'requestStage', 'workKind', 'semanticKind', 'workVisibility',
     'dependsOn', 'hierarchy', 'sourceRefs', 'blockReason',
-    'persistedBlockReason', 'shelveReason', 'latestReviewerSummary',
+    'recoveryCode', 'bootstrapRepairOwnership', 'persistedBlockReason', 'shelveReason', 'latestReviewerSummary',
     'terminalSummary', 'openQuestions', 'workerHandoff',
   ]
   for (const key of scalarKeys) {
@@ -2787,6 +2789,9 @@ function workItemSummary(task: JsonRecord): JsonRecord {
         ...(typeof task.taskReadiness.summary === 'string' ? { summary: task.taskReadiness.summary } : {}),
       }
     : null
+  const sizePlanAction = isRecord(task.sizePlan) && typeof task.sizePlan.action === 'string'
+    ? task.sizePlan.action
+    : null
   const currentProof = currentProofSummary(task)
   summary.currentSummary = {
     imported,
@@ -2800,6 +2805,7 @@ function workItemSummary(task: JsonRecord): JsonRecord {
     acceptanceCriteriaCount,
     proof: currentProof,
     ...(taskReadiness ? { taskReadiness } : {}),
+    ...(sizePlanAction ? { sizePlanAction } : {}),
   }
   return summary
 }
@@ -3237,6 +3243,53 @@ export function migrateProjectStateDatabaseCompactReadModels(
     })
     database.prepare('UPDATE project_summary SET revision = ?, generated_at = ? WHERE id = 1').run(revision, generatedAt)
     result.revision = revision
+  })
+  return result
+}
+
+export interface ProjectStateDatabaseTaskSummaryRewriteResult {
+  updatedCount: number
+  revision: number | null
+}
+
+/**
+ * Replace only bounded indexed task summaries after an effective-state
+ * projection. Full definitions and evidence stay in their existing stores;
+ * this writer exists so migrations do not reach around the database boundary
+ * or leave the point-read index behind the shared task model.
+ */
+export function rewriteProjectStateDatabaseTaskSummaries(
+  projectRoot: string,
+  summaries: readonly { taskId: string; summary: Record<string, unknown> }[],
+): ProjectStateDatabaseTaskSummaryRewriteResult {
+  const result: ProjectStateDatabaseTaskSummaryRewriteResult = {
+    updatedCount: 0,
+    revision: null,
+  }
+  withWritableDatabase(projectRoot, database => {
+    if (!tableExists(database, 'work_items')) return
+    const update = database.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?')
+    for (const item of summaries) {
+      const current = database.prepare('SELECT summary_json FROM work_items WHERE id = ?').get(item.taskId) as JsonRecord | undefined
+      if (!current) continue
+      if (JSON.stringify(parseJson<JsonRecord>(current.summary_json, {})) === JSON.stringify(item.summary)) continue
+      update.run(json(item.summary), item.taskId)
+      result.updatedCount += 1
+    }
+    if (result.updatedCount === 0) {
+      result.revision = currentQueueRevision(database)
+      return
+    }
+    const projectRevision = commitAuthoritativeMutation(database, {
+      updatedAt: new Date().toISOString(),
+      domains: ['queue'],
+      summaryFreshness: 'preserve',
+    })
+    database.prepare('UPDATE project_summary SET revision = ?, generated_at = ? WHERE id = 1').run(
+      projectRevision,
+      new Date().toISOString(),
+    )
+    result.revision = currentQueueRevision(database)
   })
   return result
 }
@@ -7089,6 +7142,8 @@ function compactCurrentEvidencePayload(kind: string, payload: JsonRecord): JsonR
   const keys = new Set([
     'id', 'taskId', 'kind', 'type', 'gateId', 'command', 'name', 'checkedAt',
     'reviewerId', 'reviewer', 'reviewerPath', 'decision', 'verdict', 'passed',
+    'acceptedCriteriaIds', 'proofEvidenceIds', 'revisionItems', 'riskItems',
+    'followUpItems', 'advisoryScores', 'failureCode',
     'recordedAt', 'timestamp', 'raisedAt', 'resolvedAt', 'status', 'reason', 'summary',
     'content', 'role', 'agentId', 'output', 'reasoning', 'score', 'failingSignals',
     'source', 'llmError', 'policyVersion', 'round', 'trigger', 'dissenters',
@@ -7098,6 +7153,8 @@ function compactCurrentEvidencePayload(kind: string, payload: JsonRecord): JsonR
     'prUrl', 'error', 'details', 'externalChecklist', 'completedAt', 'createdAt',
     'reopenedAt', 'reopenReason',
     'createdBy', 'retention', 'evidenceRefs',
+    'recoveryCode',
+    'structured',
     // Agent-issue evidence is current operational state, not a task
     // definition. Keep the fields needed to route and display it.
     'code', 'severity', 'detail', 'suggestedAction', 'broadcast',
@@ -7118,6 +7175,7 @@ function compactCurrentEvidencePayload(kind: string, payload: JsonRecord): JsonR
     'id', 'taskId', 'kind', 'gateId', 'reviewerId', 'reviewer', 'decision',
     'verdict', 'passed', 'recordedAt', 'raisedAt', 'resolvedAt', 'status',
     'reason', 'summary', 'mergedAt', 'branch', 'commit', 'error',
+    'recoveryCode',
   ])
   const compact = Object.fromEntries(Object.entries(selected)
     .filter(([key]) => identityKeys.has(key))
@@ -7132,6 +7190,7 @@ function compactCurrentEvidencePayload(kind: string, payload: JsonRecord): JsonR
     ...Object.fromEntries(Object.entries(compact).filter(([key]) => [
       'id', 'taskId', 'gateId', 'reviewerId', 'decision', 'verdict',
       'passed', 'recordedAt', 'raisedAt', 'resolvedAt', 'status', 'summary',
+      'recoveryCode',
     ].includes(key))),
     compacted: true,
     compactedKind: kind,
@@ -8549,6 +8608,7 @@ function compactTaskFromRow(row: ProjectStateDatabaseTask): JsonRecord {
     ...(row.domain ? { domain: row.domain } : {}),
     ...(row.priority ? { priority: row.priority } : {}),
     ...(row.workKind ? { workKind: row.workKind } : {}),
+    ...(row.semanticKind ? { semanticKind: row.semanticKind } : {}),
     ...(row.parentId || row.hierarchy ? { hierarchy: { ...(row.hierarchy ?? {}), ...(row.parentId ? { parentId: row.parentId } : {}) } } : {}),
     ...(row.dependsOn.length > 0 ? { dependsOn: row.dependsOn } : {}),
     ...(row.releaseIds.length > 0 ? { releaseIds: row.releaseIds } : {}),

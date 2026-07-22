@@ -138,6 +138,7 @@ describe('formWorkspaceHypothesis', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
+          signalId: 'story/world-state-reviewer',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Add world state reviewer',
@@ -150,6 +151,7 @@ describe('formWorkspaceHypothesis', () => {
           linkedTaskHints: ['World state reviewer'],
         },
         {
+          signalId: 'story/world-state-reviewer',
           source: 'roadmap',
           kind: 'open_work',
           title: 'Add world state reviewer',
@@ -403,6 +405,7 @@ describe('formWorkspaceHypothesis', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
+          signalId: 'release/version-diff-view',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Version diff view',
@@ -411,6 +414,7 @@ describe('formWorkspaceHypothesis', () => {
           confidence: 'medium',
         },
         {
+          signalId: 'release/version-diff-view',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Version diff view (deferred)',
@@ -552,7 +556,7 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks[0]!.description).toBe('')
   })
 
-  it('does not promote generic TODOs or bootstrap chores into starter tasks', () => {
+  it('honors source-owned disposition instead of classifying TODO prose', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
@@ -561,6 +565,7 @@ describe('formWorkspaceHypothesis', () => {
           title: 'TODO: Add more features:',
           evidence: 'TODO: Add more features:',
           confidence: 'low',
+          taskDisposition: 'ignore',
         },
         {
           source: 'todo-comments',
@@ -568,6 +573,7 @@ describe('formWorkspaceHypothesis', () => {
           title: 'TODO: Could clean up visible type tags here if needed',
           evidence: 'TODO: Could clean up visible type tags here if needed',
           confidence: 'low',
+          taskDisposition: 'ignore',
         },
         {
           source: 'roadmap',
@@ -575,6 +581,7 @@ describe('formWorkspaceHypothesis', () => {
           title: 'Verify bootstrap: pnpm install → build → test',
           evidence: '- [ ] Verify bootstrap: pnpm install → build → test',
           confidence: 'high',
+          taskDisposition: 'ignore',
         },
         {
           source: 'roadmap',
@@ -612,7 +619,7 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks.map((task) => task.domain)).toEqual(['looma', 'knit'])
   })
 
-  it('filters obvious formatting debris before creating draft tasks', () => {
+  it('honors explicit source disposition for formatting records', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
@@ -621,6 +628,7 @@ describe('formWorkspaceHypothesis', () => {
           title: '(none)',
           evidence: 'placeholder',
           confidence: 'medium',
+          taskDisposition: 'ignore',
         },
         {
           source: 'planning-docs',
@@ -628,6 +636,7 @@ describe('formWorkspaceHypothesis', () => {
           title: 'Numbered Given/When/Then acceptance criteria',
           evidence: 'summary line',
           confidence: 'medium',
+          taskDisposition: 'ignore',
         },
         {
           source: 'planning-docs',
@@ -641,7 +650,7 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks.map((task) => task.title)).toEqual(['Fix import review affordance'])
   })
 
-  it('filters umbrella placeholders that say child specs own the real work', () => {
+  it('does not promote an explicitly ignored umbrella record', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
@@ -650,6 +659,7 @@ describe('formWorkspaceHypothesis', () => {
           title: '*(none — umbrella doc, covered by child specs)*',
           evidence: 'recommended first task title',
           confidence: 'medium',
+          taskDisposition: 'ignore',
         },
         {
           source: 'planning-docs',
@@ -665,7 +675,7 @@ describe('formWorkspaceHypothesis', () => {
     ])
   })
 
-  it('filters colon-ended grouping headers from task backlog', () => {
+  it('does not promote an explicitly ignored grouping record', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
@@ -675,6 +685,7 @@ describe('formWorkspaceHypothesis', () => {
           evidence: 'group heading',
           domainHint: 'looma',
           confidence: 'medium',
+          taskDisposition: 'ignore',
         },
         {
           source: 'planning-docs',
@@ -689,7 +700,7 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks.map((task) => task.title)).toEqual(['Listbox'])
   })
 
-  it('keeps explanatory planning bullets as context instead of task backlog', () => {
+  it('keeps explicitly marked explanatory notes as context', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
@@ -699,6 +710,7 @@ describe('formWorkspaceHypothesis', () => {
           evidence: 'comparative editor note',
           domainHint: 'looma',
           confidence: 'medium',
+          taskDisposition: 'context_only',
         },
         {
           source: 'planning-docs',
@@ -707,6 +719,7 @@ describe('formWorkspaceHypothesis', () => {
           evidence: 'environment note',
           domainHint: 'knit',
           confidence: 'medium',
+          taskDisposition: 'context_only',
         },
         {
           source: 'planning-docs',
@@ -752,10 +765,71 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft2.tasks[0]!.suggestedId).toBe(draft.tasks[0]!.suggestedId)
   })
 
+  it('keeps routing and identity stable when a model rewrites display prose', () => {
+    const base = {
+      signalId: 'release:headless-mvp:writer-packet',
+      source: 'planning-docs' as const,
+      kind: 'open_work' as const,
+      scopeHint: 'current' as const,
+      releaseId: 'headless-mvp',
+      releaseLabel: 'Headless MVP',
+      domainHint: 'harness',
+      confidence: 'high' as const,
+    }
+    const first = formWorkspaceHypothesis(invFrom([{
+      ...base,
+      title: 'Build the bounded writer packet',
+      evidence: 'The writer packet carries the declared context contract.',
+    }]))
+    const rewritten = formWorkspaceHypothesis(invFrom([{
+      ...base,
+      title: 'Assemble a constrained author context envelope',
+      evidence: 'The context envelope preserves the declared contract for drafting.',
+    }]))
+
+    expect(rewritten.tasks[0]).toMatchObject({
+      suggestedId: first.tasks[0]?.suggestedId,
+      sourceIdentity: first.tasks[0]?.sourceIdentity,
+      domain: first.tasks[0]?.domain,
+      scope: first.tasks[0]?.scope,
+      releaseIds: first.tasks[0]?.releaseIds,
+      priority: first.tasks[0]?.priority,
+    })
+    expect(rewritten.tasks[0]?.title).toBe('Assemble a constrained author context envelope')
+  })
+
+  it('does not merge similar prose when source-owned identities differ', () => {
+    const draft = formWorkspaceHypothesis(invFrom([
+      {
+        signalId: 'release:headless-mvp:writer-packet',
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Build the bounded writer packet',
+        evidence: 'Writer packet contract.',
+        confidence: 'high',
+      },
+      {
+        signalId: 'release:headless-mvp:review-packet',
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Build the bounded writer packet',
+        evidence: 'Review packet contract.',
+        confidence: 'high',
+      },
+    ]))
+
+    expect(draft.tasks).toHaveLength(2)
+    expect(new Set(draft.tasks.map(task => task.sourceIdentity))).toEqual(new Set([
+      'release:headless-mvp:writer-packet',
+      'release:headless-mvp:review-packet',
+    ]))
+  })
+
   it('dedupes repeated open_work across sources and merges references', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
+          signalId: 'theme/dark-mode',
           source: 'roadmap',
           kind: 'open_work',
           title: 'Add dark mode',
@@ -764,6 +838,7 @@ describe('formWorkspaceHypothesis', () => {
           references: ['ROADMAP.md'],
         },
         {
+          signalId: 'theme/dark-mode',
           source: 'todo-comments',
           kind: 'open_work',
           title: 'Add dark mode',
@@ -786,7 +861,7 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.stats.deduped).toBe(1)
   })
 
-  it('fuzzily dedupes near-identical tasks from the same planning file', () => {
+  it('keeps near-identical tasks separate when the source provides no shared identity', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
@@ -809,13 +884,14 @@ describe('formWorkspaceHypothesis', () => {
         },
       ]),
     )
-    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks).toHaveLength(2)
   })
 
   it('dedupes component roadmap wording across canonical ui tag and human component names', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
+          signalId: 'component/button',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Button: loading and icon-placement guidance',
@@ -825,6 +901,7 @@ describe('formWorkspaceHypothesis', () => {
           confidence: 'medium',
         },
         {
+          signalId: 'component/button',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'ui-button: loading and icon-placement guidance',
@@ -849,6 +926,7 @@ describe('formWorkspaceHypothesis', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
+          signalId: 'component/combobox',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Combobox after select/listbox baseline is stable',
@@ -858,6 +936,7 @@ describe('formWorkspaceHypothesis', () => {
           confidence: 'medium',
         },
         {
+          signalId: 'component/combobox',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Combobox after the simpler select path is stable',
@@ -876,6 +955,7 @@ describe('formWorkspaceHypothesis', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
+          signalId: 'harness/schema-contracts',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
@@ -886,6 +966,7 @@ describe('formWorkspaceHypothesis', () => {
           scopeHint: 'current',
         },
         {
+          signalId: 'harness/schema-contracts',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
@@ -916,6 +997,7 @@ describe('formWorkspaceHypothesis', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
+          signalId: 'harness/schema-contracts',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
@@ -926,6 +1008,7 @@ describe('formWorkspaceHypothesis', () => {
           scopeHint: 'current',
         },
         {
+          signalId: 'harness/schema-contracts',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
@@ -961,6 +1044,7 @@ describe('formWorkspaceHypothesis', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
+          signalId: 'harness/schema-contracts',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
@@ -971,6 +1055,7 @@ describe('formWorkspaceHypothesis', () => {
           scopeHint: 'current',
         },
         {
+          signalId: 'harness/schema-contracts',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
@@ -1005,6 +1090,7 @@ describe('formWorkspaceHypothesis', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
+          signalId: 'harness/schema-contracts',
           source: 'planning-docs',
           kind: 'open_work',
           title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
@@ -1020,6 +1106,7 @@ describe('formWorkspaceHypothesis', () => {
           evidence: 'These schemas turn the story-intelligence specs into buildable contracts.',
           confidence: 'high',
           references: ['/repo/docs/specs/story-memory-schemas.md'],
+          linkedTaskHints: ['harness/schema-contracts'],
         },
         {
           source: 'planning-docs',
@@ -1028,6 +1115,7 @@ describe('formWorkspaceHypothesis', () => {
           evidence: 'Immediate schema work covers fixture, expected-record, prototype run, and evaluation contracts.',
           confidence: 'high',
           references: ['/repo/docs/specs/schema-contract-roadmap.md'],
+          linkedTaskHints: ['harness/schema-contracts'],
         },
         {
           source: 'text-corpus',
@@ -1036,6 +1124,7 @@ describe('formWorkspaceHypothesis', () => {
           evidence: 'The first usable proof should be a harness that can test story-memory model, packet builder, editor agents, and writer agents.',
           confidence: 'high',
           references: ['/repo/docs/harness/prototype-iteration-workflow.md'],
+          linkedTaskHints: ['harness/schema-contracts'],
         },
       ]),
     )
@@ -1055,6 +1144,7 @@ describe('formWorkspaceHypothesis', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
         {
+          signalId: 'billing/ship',
           source: 'todo-comments',
           kind: 'open_work',
           title: 'Ship billing',
@@ -1062,6 +1152,7 @@ describe('formWorkspaceHypothesis', () => {
           confidence: 'low',
         },
         {
+          signalId: 'billing/ship',
           source: 'roadmap',
           kind: 'open_work',
           title: 'Ship billing',
@@ -1151,6 +1242,7 @@ describe('formWorkspaceHypothesis', () => {
           references: ['/repo/docs/harness/architecture-notes.md'],
           role: 'brief_input',
           structure: 'record',
+          signalId: 'nh/system-records/book-brief',
         },
         {
           source: 'planning-docs',
@@ -1161,6 +1253,7 @@ describe('formWorkspaceHypothesis', () => {
           references: ['/repo/docs/specs/agent-context-packets-and-compaction.md'],
           role: 'brief_input',
           structure: 'record',
+          signalId: 'nh/system-records/book-brief',
         },
       ]),
     )

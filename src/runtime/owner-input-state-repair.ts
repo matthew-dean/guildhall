@@ -119,15 +119,6 @@ function planRepairs(requests: OwnerInputRequestRecord[]): RepairDecision[] {
       })
       continue
     }
-    const assumption = containedPlanningNoteAssumption(request)
-    if (assumption) {
-      decisions.push({
-        request,
-        action: 'resolve_by_assumption',
-        reason: 'The decision is low-risk after atomic-commit containment, so Guildhall should proceed with a recorded assumption instead of interrupting.',
-        assumption,
-      })
-    }
   }
 
   const alreadyPlanned = new Set(decisions.map(decision => decision.request.id))
@@ -158,24 +149,10 @@ function planRepairs(requests: OwnerInputRequestRecord[]): RepairDecision[] {
 }
 
 function isNarrationRequest(request: OwnerInputRequestRecord): boolean {
-  const prompt = request.prompt.trim()
-  const normalized = prompt.replace(/\s+/g, ' ').toLowerCase()
-  return (
-    isInvalidOwnerQuestionPrompt(prompt) ||
-    /^no problem\b/.test(normalized) ||
-    /\bi already have the question posted\b/.test(normalized) ||
-    /\bthe question is already there in the task'?s `?openquestions`?\b/.test(normalized) ||
-    /^i have enough from\b/.test(normalized)
-  )
-}
-
-function containedPlanningNoteAssumption(request: OwnerInputRequestRecord): string | null {
-  const prompt = request.prompt.toLowerCase()
-  const choices = request.choices ?? []
-  if (!prompt.includes('review timezone wording later')) return null
-  const cursorPlanChoice = choices.find(choice => choice.includes('.cursor/plan.md'))
-  if (!cursorPlanChoice) return null
-  return 'Use `.cursor/plan.md` as the planning backlog target for the harmless timezone-wording follow-up note.'
+  // Only the structural question contract decides this repair. A valid
+  // question may use any vocabulary or model voice; prose phrase lists are
+  // not a durable classifier.
+  return isInvalidOwnerQuestionPrompt(request.prompt)
 }
 
 function duplicateSignature(request: OwnerInputRequestRecord): string | null {

@@ -1,7 +1,7 @@
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { z } from 'zod'
 import { guildhallHomeDir } from '@guildhall/config'
 import { projectSkillProposalsPath } from '@guildhall/skills'
@@ -128,7 +128,6 @@ export async function listMemoryRecords(input: {
 }): Promise<MemoryRecord[]> {
   const records = [
     ...readStore(input.memoryDir).records,
-    ...readMemoryMarkdown(input.memoryDir),
     ...readLearningAdapters(input.memoryDir, 'project'),
     ...readLearningAdapters(guildhallHomeDir(), 'user_global'),
     ...readProjectSkillAdapters(input.memoryDir),
@@ -153,41 +152,6 @@ function readStore(memoryDir: string): MemoryStore {
 async function writeStore(memoryDir: string, store: MemoryStore): Promise<void> {
   await fs.mkdir(memoryDir, { recursive: true })
   await writeManagedTextFile(memoryStorePath(memoryDir), `${JSON.stringify(MemoryStore.parse(store), null, 2)}\n`, 'utf8')
-}
-
-function readMemoryMarkdown(memoryDir: string): MemoryRecord[] {
-  const file = getProjectSystemStatePathFromMemoryDir(memoryDir, 'MEMORY.md')
-  if (!existsSync(file)) return []
-  const raw = readManagedTextFileSync(file, 'utf8')
-  const sections = raw.split(/^##\s+/m).slice(1)
-  const now = '1970-01-01T00:00:00.000Z'
-  return sections
-    .map((section) => {
-      const [heading = '', ...body] = section.split('\n')
-      const content = body.join('\n').trim()
-      if (!heading.trim() || !content) return null
-      const title = heading.trim()
-      return MemoryRecord.parse({
-        id: `memory-md-${slug(title)}`,
-        scope: 'project',
-        type: inferType(`${title}\n${content}`),
-        status: 'active',
-        summary: firstSentence(content),
-        content,
-        tags: keywords(title),
-        domains: keywords(title),
-        taskKinds: [],
-        fileAreas: fileAreaHints(content),
-        confidence: 'medium',
-        risk: 'low',
-        freshness: 'recent',
-        evidenceRefs: [{ kind: 'artifact', ref: 'MEMORY.md', summary: `MEMORY.md section: ${title}` }],
-        createdAt: now,
-        updatedAt: now,
-        source: 'MEMORY.md',
-      })
-    })
-    .filter((record): record is MemoryRecord => record !== null)
 }
 
 function readLearningAdapters(dir: string, scope: 'project' | 'user_global'): MemoryRecord[] {
@@ -255,8 +219,8 @@ function readProjectSkillAdapters(memoryDir: string): MemoryRecord[] {
         status: statusFromLearning(proposal.status),
         summary: description,
         content,
-        tags: Array.isArray(proposal.triggerKeywords)
-          ? proposal.triggerKeywords.filter((value): value is string => typeof value === 'string')
+        tags: Array.isArray(proposal.routingKeys)
+          ? proposal.routingKeys.filter((value): value is string => typeof value === 'string')
           : [],
         domains: [],
         taskKinds: [],
@@ -321,14 +285,6 @@ function containsAny(values: readonly string[], needles: readonly string[]): boo
   return needles.some((needle) => haystack.includes(needle.toLowerCase()))
 }
 
-function slug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'memory'
-}
-
-function firstSentence(value: string): string {
-  return value.trim().split(/\n\s*\n|(?<=\.)\s+/)[0]?.trim() || value.trim()
-}
-
 function keywords(value: string): string[] {
   return [...new Set((value.toLowerCase().match(/[a-z][a-z0-9_-]{2,}/g) ?? []).slice(0, 8))]
 }
@@ -336,12 +292,6 @@ function keywords(value: string): string[] {
 function fileAreaHints(value: string): string[] {
   return [...new Set(value.match(/\b(?:src|docs|internal|packages|scripts)\/[A-Za-z0-9_./-]+/g) ?? [])]
     .map((hint) => hint.replace(/\/[^/]+\.[A-Za-z0-9]+$/, ''))
-}
-
-function inferType(text: string): MemoryType {
-  if (/\b(prefer|avoid|do not|don't|style|habit)\b/i.test(text)) return 'project_habit'
-  if (/\b(component|module|function|route|file|src\/)\b/i.test(text)) return 'codebase_knowledge'
-  return 'project_fact'
 }
 
 function typeFromDestination(destination: string): MemoryType {

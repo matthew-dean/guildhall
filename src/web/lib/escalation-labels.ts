@@ -89,39 +89,47 @@ function stripInternalAcceptanceIds(text: string): string {
     .trim()
 }
 
-function inferEvidenceArea(text: string): string {
-  if (/\bauth|email confirmation|profile management|login|signup\b/i.test(text)) return 'auth'
-  if (/\bcss|style|visual|layout\b/i.test(text)) return 'UI'
-  if (/\bapi|endpoint|request|response\b/i.test(text)) return 'API'
-  return 'this task'
+type EscalationRecoveryCode =
+  | 'worker_turn_limit'
+  | 'worker_timeout_likely_target'
+  | 'worker_timeout_no_progress'
+  | 'spec_no_progress'
+  | 'worker_no_progress'
+  | 'self_authored_verification'
+  | 'stale_gate_failure'
+
+type EscalationHandling = 'owner_required' | 'guildhall_recovery' | 'external_dependency'
+
+type EscalationDisplayInput = {
+  summary?: string | undefined
+  details?: string | undefined
+  agentId?: string | undefined
+  reason?: string | undefined
+  recoveryCode?: EscalationRecoveryCode | string | undefined
+  handling?: EscalationHandling | string | undefined
 }
 
-function hasInternalRecoveryLanguage(text: string): boolean {
-  return /authoritative|checkpoint-touched|worktree|AC-\d+|handoff packet|coordinator scoped|bounded repair|policy read|human_judgment_required|spec_ambiguous|gate_hard_failure/i.test(text)
+function isWorkerRecoveryCode(code: string | undefined): boolean {
+  return code === 'worker_turn_limit' ||
+    code === 'worker_timeout_likely_target' ||
+    code === 'worker_timeout_no_progress' ||
+    code === 'worker_no_progress'
 }
 
 export function escalationUserGuidance(
-  escalation: {
-    summary?: string | undefined
-    details?: string | undefined
-    agentId?: string | undefined
-    reason?: string | undefined
-  } | undefined | null,
+  escalation: EscalationDisplayInput | undefined | null,
 ): EscalationUserGuidance {
-  const summary = escalation?.summary ?? ''
   const details = escalation?.details ?? ''
-  const text = `${summary}\n${details}`
-  if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
-    const area = inferEvidenceArea(text)
+  if (escalation?.recoveryCode === 'self_authored_verification') {
     return {
       title: 'One missing check needs to run.',
-      detail: `This is not asking you to prove anything. The ${area} task needs a saved frontend test result before it can be marked finished.`,
+      detail: 'This is not asking you to prove anything. The task needs a saved verification result before it can be marked finished.',
       nextStep: 'Use the recovery action on this card. The task will resume, run or refresh the relevant tests, save the result, and continue. Only add the result yourself if you already ran the check outside the app.',
       actionOwner: 'guildhall',
     }
   }
 
-  if (/authoritative verification|upstream workspace build failure|checkpoint-touched|task worktree/i.test(text)) {
+  if (escalation?.handling === 'external_dependency') {
     return {
       title: 'The project build is failing outside this task.',
       detail: 'The task was verified, but the failure appears to come from nearby workspace code rather than the focused files for this work.',
@@ -139,10 +147,7 @@ export function escalationUserGuidance(
     }
   }
 
-  if (
-    escalation?.agentId === 'worker-agent' &&
-    /timed out|turn limit|maximum turn|no visible progress|model provider|provider unavailable|local model/i.test(text)
-  ) {
+  if (escalation?.agentId === 'worker-agent' && isWorkerRecoveryCode(escalation.recoveryCode)) {
     return {
       title: 'Worker execution can be retried.',
       detail: 'The last worker attempt stalled before it finished useful work. This is an automatic recovery step, not something you need to solve by hand.',
@@ -151,10 +156,7 @@ export function escalationUserGuidance(
     }
   }
 
-  if (
-    escalation?.agentId === 'spec-agent' &&
-    /timed out|turn limit|maximum turn|kept researching|durable progress/i.test(text)
-  ) {
+  if (escalation?.agentId === 'spec-agent' && escalation.recoveryCode === 'spec_no_progress') {
     return {
       title: 'Spec shaping can be retried.',
       detail: 'The spec lane stalled before saving the next useful draft. This is not a project decision you need to solve by hand.',
@@ -164,34 +166,26 @@ export function escalationUserGuidance(
   }
 
   const recovery = escalationRecoveryCopy(escalation)
-  const hasSpecificRecovery = /no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)
   return {
-    title: hasSpecificRecovery ? recovery.headline : 'This task needs a recovery decision.',
-    detail: hasSpecificRecovery ? recovery.detail : recovery.headline,
+    title: recovery.headline,
+    detail: recovery.detail,
     nextStep: 'Choose the action that matches what you know: resume if the task can continue, rework the spec if the brief is unclear, or mark it resolved only if you already handled the blocker outside the app.',
     actionOwner: 'user',
-    technicalNote: details && !hasInternalRecoveryLanguage(details) ? stripInternalAcceptanceIds(details) : undefined,
+    technicalNote: details ? stripInternalAcceptanceIds(details) : undefined,
   }
 }
 
 export function escalationRecoveryCopy(
-  escalation: {
-    summary?: string | undefined
-    details?: string | undefined
-    agentId?: string | undefined
-  } | undefined | null,
+  escalation: EscalationDisplayInput | undefined | null,
 ): EscalationRecoveryCopy {
-  const text = `${escalation?.summary ?? ''}\n${escalation?.details ?? ''}`
-  if (/no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)) {
+  if (escalation?.recoveryCode === 'worker_no_progress' ||
+      escalation?.recoveryCode === 'spec_no_progress') {
     return {
       headline: 'Context was found, but the next draft was not saved.',
       detail: 'The transcript may contain useful observations. Retry from those notes or resolve the blocker after reviewing them.',
     }
   }
-  if (
-    escalation?.agentId === 'spec-agent' &&
-    /timed out|turn limit|maximum turn|kept researching|durable progress/i.test(text)
-  ) {
+  if (escalation?.agentId === 'spec-agent' && escalation.recoveryCode === 'spec_no_progress') {
     return {
       headline: 'Spec shaping stopped before saving the next draft.',
       detail: 'Retry from the transcript notes, or reframe the task if the request is too broad.',
@@ -207,17 +201,11 @@ export function escalationRecoveryCopy(
 }
 
 export function escalationPrimaryAction(
-  escalation: {
-    reason?: string | undefined
-    agentId?: string | undefined
-    summary?: string | undefined
-    details?: string | undefined
-  } | undefined | null,
+  escalation: EscalationDisplayInput | undefined | null,
 ): EscalationAction {
   const reason = escalation?.reason ?? ''
   const agentId = escalation?.agentId ?? ''
-  const text = `${escalation?.summary ?? ''}\n${escalation?.details ?? ''}`
-  if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
+  if (escalation?.recoveryCode === 'self_authored_verification') {
     return {
       label: 'Run the missing check',
       nextStatus: 'ready',
@@ -231,10 +219,7 @@ export function escalationPrimaryAction(
       resolution: 'Retrying gates after addressing the failure.',
     }
   }
-  if (
-    agentId === 'worker-agent' &&
-    /turn limit|maximum turn|timed out|no visible progress|made no visible progress|model provider|provider unavailable|local model/i.test(text)
-  ) {
+  if (agentId === 'worker-agent' && isWorkerRecoveryCode(escalation?.recoveryCode)) {
     return {
       label: 'Retry worker',
       nextStatus: 'in_progress',

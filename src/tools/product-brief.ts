@@ -11,7 +11,7 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueueWithSummary,
 } from '@guildhall/runtime/project-state-boundary'
-import { currentPlanProcessLeakage, validateProductBriefGrounding } from '@guildhall/runtime/spec-quality'
+import { validateProductBriefGrounding } from '@guildhall/runtime/spec-quality'
 
 // ---------------------------------------------------------------------------
 // update-product-brief: the Spec Agent's authoring surface for the product
@@ -66,7 +66,7 @@ const updateProductBriefInputSchema = z.object({
       }).passthrough(),
     ])
     .optional()
-    .describe('Optional nested/serialized brief payload recovered from near-miss model calls.'),
+    .describe('Optional nested/serialized structured brief payload.'),
 })
 
 export type UpdateProductBriefInput = z.input<typeof updateProductBriefInputSchema>
@@ -170,113 +170,7 @@ function resolveBriefTarget(
   return { tasksPath, taskId, authoredBy }
 }
 
-function firstMeaningfulParagraph(text: string): string | null {
-  const paragraphs = text
-    .split(/\n\s*\n/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .filter((part) => !/^(#+|\d+[.)]\s|\-\s)/.test(part))
-  return paragraphs[0] ?? null
-}
-
-function inferBriefContentFromAssistantText(
-  text: string,
-  taskTitle: string,
-): ResolvedBriefContent | null {
-  const trimmed = text.trim()
-  if (!trimmed) return null
-
-  const guessMatch = trimmed.match(/my best guess(?: for [^:\n]+)?\s*\n+([\s\S]+)/i)
-  const afterGuess = guessMatch?.[1]?.trim() ?? trimmed
-  const lines = afterGuess
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-  const userJobLine = lines.find((line) =>
-    /^you want to\b/i.test(line) ||
-    /^this task is about\b/i.test(line) ||
-    /^this task\b/i.test(line) ||
-    /^the goal is to\b/i.test(line),
-  ) ?? firstMeaningfulParagraph(afterGuess)
-  const normalizedUserJob = userJobLine?.replace(/^[-*]\s*/, '').trim() ?? ''
-  const looksLikeEvidencePreamble =
-    /^based on\b/i.test(normalizedUserJob) ||
-    /^the grep clearly shows\b/i.test(normalizedUserJob) ||
-    /^i have sufficient evidence\b/i.test(normalizedUserJob) ||
-    /^the integration appears complete\b/i.test(normalizedUserJob) ||
-    /^let me write\b/i.test(normalizedUserJob)
-  const fallbackUserJob =
-    looksLikeEvidencePreamble || !normalizedUserJob
-      ? `I want to verify whether ${taskTitle.replace(/\.$/, '')} is already done and, if not, capture only the remaining delta.`
-      : normalizedUserJob
-  if (!fallbackUserJob) return null
-
-  const antiPatterns = lines
-    .filter((line) => /^don't\b/i.test(line) || /^do not\b/i.test(line))
-    .map((line) => line.replace(/^[*-]\s*/, '').trim())
-  const nonGoals = antiPatterns.length > 0 ? antiPatterns : fallbackNonGoals(taskTitle)
-
-  return {
-    userJob: fallbackUserJob,
-    whyItMattersNow: `This matters now because Guildhall needs a concrete product outcome for "${taskTitle}" before implementation or approval can be trusted.`,
-    successMetric: `The remaining work for "${taskTitle}" is described clearly enough to approve or narrow with one focused question.`,
-    nonGoals,
-    antiPatterns: nonGoals,
-  }
-}
-
 function validateBriefContent(content: ResolvedBriefContent): string | null {
-  const currentPlanFields = [
-    content.userJob,
-    content.whyItMattersNow,
-    content.successMetric,
-    ...content.nonGoals,
-    ...(content.audience ? [content.audience] : []),
-    ...(content.usageContext ? [content.usageContext] : []),
-    ...content.antiPatterns,
-    ...(content.rolloutPlan ? [content.rolloutPlan] : []),
-    ...(content.brandInteractionNotes ? [content.brandInteractionNotes] : []),
-  ]
-  if (currentPlanFields.some((field) => currentPlanProcessLeakage(field))) {
-    return 'Product briefs may only describe the product outcome and boundary. Keep recovery attempts, revision history, and worktree diagnostics in task notes or evidence.'
-  }
-  const normalizedUserJob = content.userJob.toLowerCase()
-  const normalizedWhy = content.whyItMattersNow.toLowerCase()
-  const normalizedSuccessMetric = content.successMetric.toLowerCase()
-  const agentProcessPatterns = [
-    /\blet me\b/,
-    /\bi (need|will|should|can) (explore|inspect|read|look at|check|investigate)\b/,
-    /\bi have (enough context|a clear picture)\b/,
-    /\bnow i have\b/,
-    /\bwrite the (product )?brief\b/,
-    /\bwrite the spec\b/,
-    /\bgood\b.*\buser confirmed\b/,
-    /\bi still need\b.*\b(decision|decisions|answer|answers)\b/,
-    /\blet me post\b/,
-    /\bbefore i can write the spec\b/,
-    /\bproject state and prior task history\b/,
-    /\bask the right questions\b/,
-    /\blet me do that now\b/,
-    /\bunderstand the current .+ before drafting\b/,
-    /\bbefore (drafting|writing) the spec\b/,
-    /\bafter i (explore|inspect|read|look at|check|investigate)\b/,
-  ]
-  const guildhallStatePatterns = [
-    /\bthread shows\b/,
-    /\bdrafted brief\b/,
-    /\bbrief card\b/,
-    /\bactionable next step\b/,
-    /\bproduct brief is visible\b/,
-  ]
-  if (agentProcessPatterns.some((pattern) => pattern.test(normalizedUserJob))) {
-    return 'Product brief must describe the user/product outcome, not the agent research process. Ask a focused question or draft from existing evidence instead.'
-  }
-  if (agentProcessPatterns.some((pattern) => pattern.test(normalizedWhy))) {
-    return 'Product brief whyItMattersNow must describe the product or project reason for the work, not the agent drafting process.'
-  }
-  if (guildhallStatePatterns.some((pattern) => pattern.test(normalizedSuccessMetric))) {
-    return 'Product brief successMetric must describe the product outcome, not Guildhall UI state.'
-  }
   if (!content.nonGoals.length && !content.antiPatterns.length) {
     return 'Product brief must name at least one non-goal or anti-pattern so the task boundary is explicit.'
   }
@@ -322,7 +216,6 @@ function parseBriefLikePayload(raw: unknown): BriefLikePayload | null {
 
 function resolveBriefContent(
   input: Pick<UpdateProductBriefInput, 'userJob' | 'whyItMattersNow' | 'successMetric' | 'nonGoals' | 'audience' | 'usageContext' | 'antiPatterns' | 'rolloutPlan' | 'brandInteractionNotes' | 'productBrief'>,
-  metadata: Record<string, unknown>,
   taskTitle: string,
 ): ResolvedBriefContent | { error: string } {
   const nested = parseBriefLikePayload(input.productBrief)
@@ -361,25 +254,10 @@ function resolveBriefContent(
     return validationError ? { error: validationError } : content
   }
 
-  const inferred = inferBriefContentFromAssistantText(
-    String(metadata['last_assistant_text'] ?? ''),
-    taskTitle,
-  )
-  if (!inferred) {
-    return { error: 'Missing userJob/successMetric and could not infer a brief from metadata.last_assistant_text' }
+  return {
+    error:
+      'Missing userJob/successMetric. Guildhall does not infer durable product briefs from assistant prose; call update-product-brief with the structured brief fields.',
   }
-  const content = {
-    ...inferred,
-    ...(whyItMattersNow ? { whyItMattersNow } : {}),
-    nonGoals: nonGoals?.length ? nonGoals : inferred.nonGoals,
-    ...(audience ? { audience } : {}),
-    ...(usageContext ? { usageContext } : {}),
-    antiPatterns: antiPatterns?.length ? antiPatterns : inferred.antiPatterns,
-    ...(rolloutPlan ? { rolloutPlan } : {}),
-    ...(brandInteractionNotes ? { brandInteractionNotes } : {}),
-  }
-  const validationError = validateBriefContent(content)
-  return validationError ? { error: validationError } : content
 }
 
 export async function updateProductBrief(
@@ -494,7 +372,7 @@ export const updateProductBriefTool = defineTool({
     } catch {
       // keep fallback taskTitle
     }
-    const content = resolveBriefContent(input, ctx.metadata, taskTitle)
+    const content = resolveBriefContent(input, taskTitle)
     if ('error' in content) {
       return {
         output: `Error updating product brief: ${content.error}`,

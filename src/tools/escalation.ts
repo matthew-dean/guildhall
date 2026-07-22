@@ -5,9 +5,12 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
   Escalation,
+  EscalationHandling,
+  EscalationRecoveryCode,
   EscalationReason,
   ProgressEntry,
   TaskQueue,
+  TaskGateScopeException,
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
@@ -18,7 +21,6 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueue,
 } from '@guildhall/runtime/project-state-boundary'
-import { providerCommandEnv } from '@guildhall/config/global-providers'
 
 // ---------------------------------------------------------------------------
 // FR-10 Escalation protocol
@@ -47,6 +49,8 @@ const raiseEscalationInputSchema = z.object({
   taskId: z.string(),
   agentId: z.string(),
   reason: EscalationReason,
+  handling: EscalationHandling.optional(),
+  recoveryCode: EscalationRecoveryCode.optional(),
   summary: z.string(),
   details: z.string().optional(),
   externalChecklist: z.array(z.object({
@@ -95,13 +99,20 @@ function findMatchingOpenEscalation(escalations: Escalation[], input: RaiseEscal
     !escalation.resolvedAt &&
     escalation.agentId === input.agentId &&
     escalation.reason === input.reason &&
-    normalizeEscalationText(escalation.summary) === normalizeEscalationText(input.summary),
+    (input.recoveryCode !== undefined && escalation.recoveryCode !== undefined
+      ? escalation.recoveryCode === input.recoveryCode
+      : normalizeEscalationText(escalation.summary) === normalizeEscalationText(input.summary)),
   ) ?? null
 }
 
-function blockTaskForEscalation(task: Task, input: Pick<RaiseEscalationInput, 'reason' | 'summary'>, now: string): void {
+function blockTaskForEscalation(
+  task: Task,
+  input: Pick<RaiseEscalationInput, 'reason' | 'summary' | 'recoveryCode'>,
+  now: string,
+): void {
   task.status = 'blocked'
   task.assignedTo = null
+  if (input.recoveryCode !== undefined) task.recoveryCode = input.recoveryCode
   task.blockReason = `${input.reason}: ${input.summary}`
   task.updatedAt = now
 }
@@ -120,10 +131,20 @@ function persistEscalationTaskState(input: {
       definition.status = input.task.status
       if (typeof input.task.blockReason === 'string') definition.blockReason = input.task.blockReason
       else delete definition.blockReason
+      if (input.task.recoveryCode !== undefined) definition.recoveryCode = input.task.recoveryCode
+      else delete definition.recoveryCode
       if (Array.isArray((input.task as Task & { openEscalations?: unknown }).openEscalations)) {
         definition.openEscalations = (input.task as Task & { openEscalations?: unknown }).openEscalations
       } else {
         delete definition.openEscalations
+      }
+      // Gate scope disposition is a typed task-definition fact. Keep it in
+      // the same promoted point mutation as the task status; the escalation
+      // prose remains audit-only and must never be reconstructed here.
+      if (Array.isArray(input.task.gateScopeExceptions)) {
+        definition.gateScopeExceptions = input.task.gateScopeExceptions
+      } else {
+        delete definition.gateScopeExceptions
       }
       definition.updatedAt = input.task.updatedAt
       return definition
@@ -146,56 +167,6 @@ function projectRootForTaskState(tasksPath: string, task: Task): string {
   return inferProjectRootFromMemoryDir(stateDir)
 }
 
-function looksLikeRoutineVerificationEscalation(input: RaiseEscalationInput): boolean {
-  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
-  return (
-    /\bAC[- ]?\d+\b/i.test(text) &&
-    /\b(?:evidence|verification|test result|gate|proof)\b/i.test(text) &&
-    /\b(?:pnpm|npm|yarn|bun|vitest|test|typecheck|build)\b/i.test(text)
-  )
-}
-
-function looksLikeSelfReferentialProofEscalation(input: RaiseEscalationInput): boolean {
-  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
-  return (
-    /\b(?:npx\s+)?guildhall\s+run\b/i.test(text) &&
-    /\s--task(?:=|\s)/i.test(text) &&
-    /\b(?:proof|verification|AC[- ]?\d+|acceptance criterion)\b/i.test(text)
-  )
-}
-
-function looksLikeWorkerImplementationRecovery(input: RaiseEscalationInput): boolean {
-  if (input.agentId !== 'worker-agent') return false
-  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
-  const brittleEditFailure =
-    /\b(?:exact string|search string|string (?:was )?not found|template syntax mismatch|whitespace|formatting mismatch|failed to edit|attempts? to edit|replace failed|patch failed)\b/i.test(text)
-  const localImplementationEvidence =
-    /\b(?:component exists|correctly imported|current file|template|props?|composable|import|dashboard\.vue|\.vue|\.svelte|\.tsx?|\.jsx?)\b/i.test(text)
-  const asksForOwnerToResolveImplementation =
-    /\b(?:need clarification|needs clarification|how to properly apply|how to apply|how to edit|how to wire|how to import)\b/i.test(text)
-  return brittleEditFailure && (localImplementationEvidence || asksForOwnerToResolveImplementation)
-}
-
-function configuredProviderEnvBlocksCredentialEscalation(input: RaiseEscalationInput): boolean {
-  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}\n${JSON.stringify(input.externalChecklist ?? [])}`
-  const mentionsProviderToken =
-    /\bDEEPINFRA_API_TOKEN\b/.test(text) ||
-    /\bOPENAI_API_KEY\b/.test(text) ||
-    /\bOPENAI_BASE_URL\b/.test(text)
-  if (!mentionsProviderToken) return false
-  let env: Record<string, string>
-  try {
-    env = providerCommandEnv()
-  } catch {
-    return false
-  }
-  return Boolean(
-    (/\bDEEPINFRA_API_TOKEN\b/.test(text) && env.DEEPINFRA_API_TOKEN) ||
-    (/\bOPENAI_API_KEY\b/.test(text) && env.OPENAI_API_KEY) ||
-    (/\bOPENAI_BASE_URL\b/.test(text) && env.OPENAI_BASE_URL),
-  )
-}
-
 export async function raiseEscalation(
   input: RaiseEscalationInput,
 ): Promise<RaiseEscalationResult> {
@@ -209,35 +180,11 @@ export async function raiseEscalation(
     Object.assign(task, effectiveTask)
     const effectiveEscalations = await readEffectiveEscalations(projectRoot, task)
 
-    if (looksLikeSelfReferentialProofEscalation(input)) {
+    if (input.handling === 'guildhall_recovery') {
       return {
         success: false,
         error:
-          'Do not raise a human escalation to decide whether `guildhall run --task=...` counts as project proof. It does not: that command delegates back to Guildhall orchestration. Use the project-local proof command, save its result in the task proof packet or checkpoint, and continue.',
-      }
-    }
-
-    if (looksLikeRoutineVerificationEscalation(input)) {
-      return {
-        success: false,
-        error:
-          'Do not raise a human escalation for routine verification evidence. Run the focused check, save the result in the task proof packet or checkpoint, and continue. Escalate only if an external credential, environment outage, or product decision prevents Guildhall from running the check.',
-      }
-    }
-
-    if (looksLikeWorkerImplementationRecovery(input)) {
-      return {
-        success: false,
-        error:
-          'This is implementation recovery, not an owner decision: do not ask the owner to resolve failed exact-string edits, whitespace mismatches, local template syntax, imports, or component props. Re-read the current file and component API, apply a smaller structural edit, or record a checkpoint and retry with the existing spec.',
-      }
-    }
-
-    if (configuredProviderEnvBlocksCredentialEscalation(input)) {
-      return {
-        success: false,
-        error:
-          'Do not raise a human escalation for provider credentials that Guildhall already has configured. Run the focused proof command through Guildhall shell/runtime execution, which supplies the configured provider environment, then record the real proof result or command failure.',
+          'This escalation is marked guildhall_recovery. Resolve it through Guildhall-owned recovery, verification, or re-dispatch instead of creating an owner blocker.',
       }
     }
 
@@ -272,6 +219,8 @@ export async function raiseEscalation(
       taskId: task.id,
       agentId: input.agentId,
       reason: input.reason,
+      handling: input.handling ?? 'owner_required',
+      ...(input.recoveryCode !== undefined ? { recoveryCode: input.recoveryCode } : {}),
       summary: input.summary,
       raisedAt: now,
       ...(input.details !== undefined ? { details: input.details } : {}),
@@ -345,6 +294,12 @@ export const raiseEscalationTool = defineTool({
           'scope_boundary',
         ],
       },
+      handling: {
+        type: 'string',
+        enum: ['owner_required', 'guildhall_recovery', 'external_dependency'],
+        description: 'Structured routing authority. Summary/details are explanatory text and never classify the escalation.',
+        default: 'owner_required',
+      },
       summary: { type: 'string' },
       details: { type: 'string' },
       externalChecklist: {
@@ -386,6 +341,16 @@ const resolveEscalationInputSchema = z.object({
   escalationId: z.string(),
   resolution: z.string(),
   resolvedBy: z.string().default('human'),
+  /**
+   * Optional typed disposition for a gate failure outside this task's target
+   * surface. Resolution prose alone can never create this exception.
+   */
+  gateScopeException: TaskGateScopeException.omit({
+    id: true,
+    sourceEscalationId: true,
+    createdAt: true,
+    createdBy: true,
+  }).optional(),
   nextStatus: z
     .enum([
       'exploring',
@@ -482,11 +447,31 @@ export async function resolveEscalation(
       }
     }
 
+    if (input.gateScopeException && (input.resolvedBy ?? 'human') !== 'human') {
+      return {
+        success: false,
+        error: 'A gate scope exception is an explicit owner decision and must be recorded with resolvedBy="human".',
+      }
+    }
+
     const now = new Date().toISOString()
     esc.resolvedAt = now
     esc.resolution = input.resolution
     esc.resolvedBy = input.resolvedBy ?? 'human'
     task.escalations = effectiveEscalations
+    if (input.gateScopeException) {
+      const exception = TaskGateScopeException.parse({
+        ...input.gateScopeException,
+        id: `gate-scope-${task.id}-${input.gateScopeException.gateId}`,
+        sourceEscalationId: esc.id,
+        createdAt: now,
+        createdBy: input.resolvedBy ?? 'human',
+      })
+      task.gateScopeExceptions = [
+        ...(task.gateScopeExceptions ?? []).filter((candidate) => candidate.id !== exception.id),
+        exception,
+      ]
+    }
 
     const stillOpen = effectiveEscalations.some((e) => e.id !== esc.id && !e.resolvedAt)
     let retryWindowPatch: Task['retryWindow'] | undefined
@@ -501,6 +486,7 @@ export async function resolveEscalation(
         task.retryWindow = retryWindowPatch
       }
       delete task.blockReason
+      delete task.recoveryCode
       delete (task as Task & { openEscalations?: unknown }).openEscalations
     }
     task.updatedAt = now

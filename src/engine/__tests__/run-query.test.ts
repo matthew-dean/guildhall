@@ -30,7 +30,41 @@ function assistantToolUse(
   input: Record<string, unknown>,
   id = 'toolu_1',
 ): ConversationMessage {
-  return { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] }
+  const note = input.note
+  const normalizedInput =
+    note && typeof note === 'object' && !Array.isArray(note) &&
+    'content' in note && note.content && typeof note.content === 'object' && !Array.isArray(note.content)
+      ? {
+          ...input,
+          note: { ...note, ...(note.content as Record<string, unknown>) },
+        }
+      : input
+  return { role: 'assistant', content: [{ type: 'tool_use', id, name, input: normalizedInput }] }
+}
+
+function withMachineSelfCritique(
+  prose: string,
+  options: {
+    acceptanceCriteria?: Array<{ id: string; status: 'met' | 'not_met' }>
+    changedFiles?: string[]
+    verificationCommands?: Array<{ command: string; status: 'passed' | 'failed' }>
+    proofEvidenceIds?: string[]
+  } = {},
+): { content: string; structured: {
+  acceptanceCriteria: Array<{ id: string; status: 'met' | 'not_met' }>
+  changedFiles: string[]
+  verificationCommands: Array<{ command: string; status: 'passed' | 'failed' }>
+  proofEvidenceIds: string[]
+} } {
+  return {
+    content: prose,
+    structured: {
+      acceptanceCriteria: options.acceptanceCriteria ?? [{ id: 'ac-1', status: 'met' }],
+      changedFiles: options.changedFiles ?? ['src/a.ts'],
+      verificationCommands: options.verificationCommands ?? [{ command: 'pnpm test', status: 'passed' }],
+      proofEvidenceIds: options.proofEvidenceIds ?? [],
+    },
+  }
 }
 
 async function drain(gen: AsyncIterable<{ event: StreamEvent }>): Promise<StreamEvent[]> {
@@ -289,7 +323,7 @@ describe('runQuery — single turn, no tools', () => {
     expect(messages.filter((m) => m.role === 'user')).toHaveLength(2)
   })
 
-  it('nudges future-step planning prose even after an earlier tool call already ran', async () => {
+  it('does not route from future-step planning prose after an earlier tool call', async () => {
     const registry = new ToolRegistry()
     let durableCalls = 0
     registry.register(
@@ -344,20 +378,11 @@ describe('runQuery — single turn, no tools', () => {
       ),
     )
 
-    expect(durableCalls).toBe(1)
+    expect(durableCalls).toBe(0)
     expect(events.some((event) =>
       event.type === 'status' &&
       event.message.includes('only narrated future steps without a tool call'),
-    )).toBe(true)
-    expect(messages).toContainEqual({
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: 'Take a concrete durable tool step now: update-task, update-product-brief, post-user-question, or raise-escalation.',
-        },
-      ],
-    })
+    )).toBe(false)
   })
 
   it('demands a handoff tool call after review-ready prose with verified evidence', async () => {
@@ -431,8 +456,8 @@ describe('runQuery — single turn, no tools', () => {
     expect(checkpointCalls).toBe(1)
     expect(events.some((e) =>
       e.type === 'status' &&
-      e.message.includes('review-ready handoff prose without a task-state tool call'),
-    )).toBe(true)
+      e.message.includes('machine handoff contract'),
+    )).toBe(false)
     const nudge = messages.find((m) =>
       m.role === 'user' &&
       Array.isArray(m.content) &&
@@ -444,10 +469,10 @@ describe('runQuery — single turn, no tools', () => {
         String(part.text).includes('verified implementation evidence'),
       ),
     )
-  expect(nudge).toBeTruthy()
+  expect(nudge).toBeFalsy()
   })
 
-  it('demands self-critique persistence after a worker writes structured self-critique prose without a tool call', async () => {
+  it('does not route from self-critique prose without a machine contract or tool call', async () => {
     const registry = new ToolRegistry()
     let updateCalls = 0
     registry.register(
@@ -533,15 +558,15 @@ Uncertainties: none`),
     expect(updateCalls).toBe(1)
     expect(events.some((e) =>
       e.type === 'status' &&
-      e.message.includes('review-ready handoff prose without a task-state tool call'),
-    )).toBe(true)
+      e.message.includes('machine handoff contract'),
+    )).toBe(false)
     expect(messages.some((message) =>
       message.role === 'user' &&
       message.content.some((block) =>
         block.type === 'text' &&
         block.text.includes('persist that exact self-critique now'),
       ),
-    )).toBe(true)
+    )).toBe(false)
   })
 
   it('nudges after repeated read-only tool turns and continues to a durable progress tool', async () => {
@@ -969,6 +994,10 @@ Uncertainties: none`),
       event.type === 'status' &&
       event.message.includes('repeated intake-budget refusals'),
     )).toBe(true)
+    expect(events.some((event) =>
+      event.type === 'status' &&
+      event.statusCode === 'no_progress',
+    )).toBe(true)
   })
 
   it('ends the turn when append-exploring-transcript is used alone after a durable-progress nudge', async () => {
@@ -1373,7 +1402,7 @@ describe('runQuery — unknown tool + invalid input', () => {
     expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('Blocked transition to review')
   })
 
-  it('blocks worker self-critique notes before implementation evidence exists', async () => {
+  it('blocks a structured self-critique before implementation evidence exists', async () => {
     const registry = new ToolRegistry()
     let updateCalls = 0
     registry.register(
@@ -1405,7 +1434,7 @@ describe('runQuery — unknown tool + invalid input', () => {
             note: {
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: `**Self-critique:**
+              ...withMachineSelfCritique(`**Self-critique:**
 For each acceptance criterion:
 - [ac-1]: Met — index.html exists and renders the app.
 
@@ -1421,7 +1450,10 @@ Review proof packet:
 - Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
-Uncertainties: none`,
+Uncertainties: none`, {
+                changedFiles: ['index.html'],
+                verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+              }),
             },
           },
         ),
@@ -1530,7 +1562,7 @@ Uncertainties: none`,
             note: {
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: `**Self-critique:**
+              ...withMachineSelfCritique(`**Self-critique:**
 For each acceptance criterion:
 - [ac-1]: Met — The implementation file was inspected and updated appropriately.
 
@@ -1546,7 +1578,10 @@ Review proof packet:
 - Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
-Uncertainties: none`,
+Uncertainties: none`, {
+                changedFiles: ['/workspace/project/packages/converter/src/index.ts'],
+                verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+              }),
             },
           },
           'update-1',
@@ -1659,7 +1694,7 @@ Uncertainties: none`,
             note: {
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: `**Self-critique:**
+              ...withMachineSelfCritique(`**Self-critique:**
 For each acceptance criterion:
 - [ac-1]: Met — Added the missing diff action.
 - [ac-7]: Met — Typecheck passes.
@@ -1677,7 +1712,13 @@ Review proof packet:
 - Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
-Uncertainties: none`,
+Uncertainties: none`, {
+                changedFiles: ['/workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue'],
+                verificationCommands: [
+                  { command: 'pnpm --filter @knit-app typecheck', status: 'passed' },
+                  { command: 'pnpm --filter @knit-app build', status: 'passed' },
+                ],
+              }),
             },
           },
           'update-verify',
@@ -1751,7 +1792,7 @@ Uncertainties: none`,
                   note: {
                     agentId: 'worker-agent',
                     role: 'self-critique',
-                    content: `**Self-critique:**
+                    ...withMachineSelfCritique(`**Self-critique:**
 For each acceptance criterion:
 - AC 1: Met — Type definitions compile.
 
@@ -1761,7 +1802,10 @@ For each acceptance criterion:
 - Changed files / diff scope: packages/schemas/src
 - Verification commands passed: npx tsc --noEmit
 - Working hypothesis at handoff: The cwd-scoped typecheck proves the schema package.
-- Known gaps / follow-up: none`,
+- Known gaps / follow-up: none`, {
+                      changedFiles: ['packages/schemas/src'],
+                      verificationCommands: [{ command: 'cd packages/schemas && npx tsc --noEmit', status: 'passed' }],
+                    }),
                   },
                 },
                 'update-review',
@@ -1798,7 +1842,7 @@ For each acceptance criterion:
     expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toBe('updated')
   })
 
-  it('allows review handoff when the self-critique uses plain AC lines and a bold minimum-scope heading', async () => {
+  it('does not allow review handoff when the self-critique is prose-only', async () => {
     const registry = new ToolRegistry()
     let called = false
     registry.register(
@@ -1921,8 +1965,8 @@ AC-2 (Email confirmation): Met - /auth/confirm reads token from query params, ca
       .filter((e) => e.type === 'tool_execution_completed')
       .at(-1)
     expect(called).toBe(true)
-    expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.is_error : true).toBe(false)
-    expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.output : '').toBe('updated')
+    expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.is_error : false).toBe(true)
+    expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.output : '').toContain('structured self-critique')
   })
 
   it('allows review handoff after a structured self-critique is persisted as a string note', async () => {
@@ -1962,7 +2006,7 @@ AC-2 (Email confirmation): Met - /auth/confirm reads token from query params, ca
         },
       }),
     )
-    const stringNote = `**Self-critique:**
+    const stringNote = withMachineSelfCritique(`**Self-critique:**
 
 **Acceptance criteria:**
 - AC 1 (Schemas): Met - fixture and evaluation schema exports were verified.
@@ -1976,7 +2020,10 @@ Review proof packet:
 - Changed files / diff scope: src/schemas/fixture.ts, src/schemas/evaluation.ts
 - Verification commands passed: pnpm build passed.
 - Working hypothesis at handoff: The schema implementation is ready for review.
-- Known gaps / follow-up: none.`
+- Known gaps / follow-up: none.`, {
+      changedFiles: ['src/schemas/fixture.ts', 'src/schemas/evaluation.ts'],
+      verificationCommands: [{ command: 'pnpm build', status: 'passed' }],
+    })
     const client = new ScriptedApiClient([
       { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'in_progress' }, 'start-string-note') },
       {
@@ -2287,7 +2334,7 @@ Uncertainties: none`,
             note: {
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: `**Self-critique:**
+              ...withMachineSelfCritique(`**Self-critique:**
 For each acceptance criterion:
 - [ac-1]: Met — The implementation change is verified.
 
@@ -2303,7 +2350,10 @@ Review proof packet:
 - Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
-Uncertainties: none`,
+Uncertainties: none`, {
+                changedFiles: ['/workspace/project/packages/converter/src/index.ts'],
+                verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+              }),
             },
           },
           'review-1',
@@ -2402,7 +2452,7 @@ Uncertainties: none`,
             note: {
               agentId: 'worker-agent',
               role: 'worker',
-              content: `**Self-critique:**
+              ...withMachineSelfCritique(`**Self-critique:**
 AC-1 (Converter behavior): Met — The file change is complete.
 
 **Minimal-scope check:**
@@ -2417,7 +2467,10 @@ AC-1 (Converter behavior): Met — The file change is complete.
 - Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
-Uncertainties: none`,
+Uncertainties: none`, {
+                changedFiles: ['/workspace/project/packages/converter/src/index.ts'],
+                verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+              }),
             },
           },
           'critique-1',
@@ -2485,7 +2538,10 @@ Uncertainties: none`,
             note: {
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: `**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\nMinimum-scope check:\nFiles changed: frontend/app/pages/register.vue\nSmallest useful change?: yes — checkpoint already captures the touched auth files.\n\nReview proof packet:\n- Changed files / diff scope: frontend/app/pages/register.vue\n- Verification commands passed: pnpm build passed\n- Working hypothesis at handoff: The checkpointed auth file is verified and ready for review.\n- Known gaps / follow-up: none\n\nOut-of-scope changes introduced: none.\nUncertainties: none.`,
+              content: withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\nMinimum-scope check:\nFiles changed: frontend/app/pages/register.vue\nSmallest useful change?: yes — checkpoint already captures the touched auth files.\n\nReview proof packet:\n- Changed files / diff scope: frontend/app/pages/register.vue\n- Verification commands passed: pnpm build passed\n- Working hypothesis at handoff: The checkpointed auth file is verified and ready for review.\n- Known gaps / follow-up: none\n\nOut-of-scope changes introduced: none.\nUncertainties: none.`, {
+                changedFiles: ['frontend/app/pages/register.vue'],
+                verificationCommands: [{ command: 'pnpm build', status: 'passed' }],
+              }),
             },
           },
           'critique-checkpoint',
@@ -2586,7 +2642,7 @@ Uncertainties: none`,
             note: {
               agentId: 'worker-agent',
               role: 'worker',
-              content: `**Self-critique:**
+              ...withMachineSelfCritique(`**Self-critique:**
 For each acceptance criterion:
 - [ac-1]: Met — The implementation change is verified and ready for review.
 
@@ -2602,7 +2658,10 @@ Review proof packet:
 - Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
-Uncertainties: none`,
+Uncertainties: none`, {
+                changedFiles: ['/workspace/project/packages/converter/src/index.ts'],
+                verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+              }),
             },
           },
           'critique-1',
@@ -2835,7 +2894,7 @@ Uncertainties: none`,
             note: {
               agentId: 'worker-agent',
               role: 'worker',
-              content: `**Self-critique:**
+              ...withMachineSelfCritique(`**Self-critique:**
 - ac-1: Met — The file change is complete.
 - Minimum-scope check:
   - Files changed: /workspace/project/packages/converter/src/index.ts
@@ -2846,7 +2905,10 @@ Review proof packet:
 - Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
 - Verification commands passed: pnpm lint passed
 - Working hypothesis at handoff: The file change is complete and lint passed.
-- Known gaps / follow-up: none`,
+- Known gaps / follow-up: none`, {
+                changedFiles: ['/workspace/project/packages/converter/src/index.ts'],
+                verificationCommands: [{ command: 'pnpm lint', status: 'passed' }],
+              }),
             },
           },
           'critique-1',
@@ -2921,6 +2983,7 @@ Review proof packet:
       current_task_id: 'task-1',
       current_task_checkpoint_next_action:
         'Rerun the focused verification command and fix whatever still fails before you write the structured self-critique.',
+      current_task_checkpoint_next_action_kind: 'rerun_verification',
       current_task_checkpoint_files_touched: ['src/index.ts'],
       current_task_verification_commands: ['pnpm lint'],
     }
@@ -3481,7 +3544,7 @@ Review proof packet:
             note: {
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: `**Self-critique:**
+              content: withMachineSelfCritique(`**Self-critique:**
 For each acceptance criterion:
 - [ac-1]: Met — Added the missing diff action.
 - [ac-7]: Met — Typecheck passes.
@@ -3499,7 +3562,13 @@ Review proof packet:
 - Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
-Uncertainties: none`,
+Uncertainties: none`, {
+                changedFiles: ['/workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue'],
+                verificationCommands: [
+                  { command: 'pnpm --filter @knit-app typecheck', status: 'passed' },
+                  { command: 'pnpm --filter @knit-app build', status: 'passed' },
+                ],
+              }),
             },
           },
           'update-verify',
@@ -4095,6 +4164,7 @@ Uncertainties: none`,
           toolMetadata: {
             current_agent_id: 'worker-agent',
             current_task_checkpoint_next_action: 'Verify typecheck passes with the generated types',
+            current_task_checkpoint_next_action_kind: 'mutate',
             current_task_checkpoint_files_touched: [
               '/workspace/project/web/app/types/supabase.ts',
               '/workspace/project/web/app/composables/use-workspace.ts',
@@ -4289,7 +4359,8 @@ Uncertainties: none`,
           toolMetadata: {
             current_agent_id: 'worker-agent',
             current_task_id: 'task-012',
-            current_task_checkpoint_next_action: "Set task status to 'review'",
+            current_task_checkpoint_next_action: 'Use the durable next lane after the proof packet is complete.',
+            current_task_checkpoint_next_action_kind: 'review_handoff',
           },
         },
         messages,
@@ -4300,7 +4371,9 @@ Uncertainties: none`,
       message.role === 'user' &&
       message.content.some(block =>
         block.type === 'text' &&
-        block.text.includes('Call update-task with { taskId: "task-012", status: "review", note: { agentId: "worker-agent", role: "self-critique", content: "**Self-critique:** ..." } } now.'),
+        block.text.includes('Call update-task') &&
+        block.text.includes('task-012') &&
+        block.text.includes('structured'),
       ),
     )).toBe(true)
   })
@@ -4347,6 +4420,7 @@ Uncertainties: none`,
           toolMetadata: {
             current_agent_id: 'worker-agent',
             current_task_checkpoint_next_action: 'Search for ad-hoc DB-facing shapes to replace with generated types',
+            current_task_checkpoint_next_action_kind: 'inspect',
             current_task_checkpoint_files_touched: [
               'web/app/types/supabase.ts',
               'web/app/composables/use-workspace.ts',
@@ -4413,6 +4487,7 @@ Uncertainties: none`,
             current_task_project_path: projectRoot,
             current_task_worktree_path: worktreeRoot,
             current_task_checkpoint_next_action: 'Search for ad-hoc DB-facing shapes to replace with generated types',
+            current_task_checkpoint_next_action_kind: 'inspect',
             current_task_checkpoint_files_touched: [touchedRelative],
           },
         },
@@ -4472,6 +4547,7 @@ Uncertainties: none`,
             current_agent_id: 'worker-agent',
             current_task_project_path: '/workspace/project/knit',
             current_task_checkpoint_next_action: 'Search for ad-hoc DB-facing shapes to replace with generated types',
+            current_task_checkpoint_next_action_kind: 'inspect',
             current_task_checkpoint_files_touched: ['web/app/types/supabase.ts'],
           },
         },
@@ -4536,6 +4612,7 @@ Uncertainties: none`,
           toolMetadata: {
             current_agent_id: 'worker-agent',
             current_task_checkpoint_next_action: 'Search for ad-hoc DB-facing shapes to replace with generated types',
+            current_task_checkpoint_next_action_kind: 'inspect',
             current_task_checkpoint_files_touched: [
               'web/app/types/supabase.ts',
               'web/app/composables/use-workspace.ts',
@@ -4726,6 +4803,7 @@ Uncertainties: none`,
             current_agent_id: 'worker-agent',
             current_task_id: 'task-012',
             current_task_checkpoint_next_action: 'Write self-critique addressing all acceptance criteria and out-of-scope types',
+            current_task_checkpoint_next_action_kind: 'review_handoff',
             current_task_checkpoint_files_touched: ['web/app/composables/use-workspace.ts'],
           },
         },
@@ -4833,6 +4911,7 @@ Uncertainties: none`,
             current_agent_id: 'worker-agent',
             current_task_id: 'task-012',
             current_task_checkpoint_next_action: 'Resume from the recorded verification evidence, write or refresh the self-critique note, then hand off to review.',
+            current_task_checkpoint_next_action_kind: 'review_handoff',
             current_task_checkpoint_files_touched: [
               'packages/converter/src/features/functionDeclaration.ts',
               'packages/converter/src/features/variableDeclaration.ts',
@@ -4911,6 +4990,7 @@ Uncertainties: none`,
             current_task_id: 'task-012',
             current_task_checkpoint_next_action:
               'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_checkpoint_files_touched: [
               'packages/converter/src/jsdocHelpers.ts',
               'packages/converter/src/typescriptToJsdoc.ts',
@@ -5020,6 +5100,7 @@ Uncertainties: none`,
             current_task_project_path: projectRoot,
             current_task_checkpoint_next_action:
               'Resume from the active worktree diff, refresh focused verification, and keep the task in implementation until the focused checks are green.',
+            current_task_checkpoint_next_action_kind: 'mutate',
             current_task_checkpoint_files_touched: [
               touchedRelative,
               'packages/converter/src/features/variableDeclaration.ts',
@@ -5122,6 +5203,7 @@ Uncertainties: none`,
             current_task_id: 'task-012',
             current_task_checkpoint_next_action:
               'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_checkpoint_files_touched: [
               'packages/converter/src/commentInserter.ts',
               'packages/converter/src/jsdocHelpers.ts',
@@ -5208,6 +5290,7 @@ Uncertainties: none`,
             current_task_id: 'task-012',
             current_task_checkpoint_next_action:
               'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_checkpoint_files_touched: [
               'packages/converter/src/commentInserter.ts',
             ],
@@ -5319,6 +5402,7 @@ Uncertainties: none`,
           toolMetadata: {
             current_agent_id: 'worker-agent',
             current_task_checkpoint_next_action: 'Remove unused types and finalize',
+            current_task_checkpoint_next_action_kind: 'mutate',
             current_task_checkpoint_files_touched: ['web/app/composables/use-workspace.ts'],
           },
         },
@@ -5444,6 +5528,7 @@ Uncertainties: none`,
             current_agent_id: 'worker-agent',
             current_task_checkpoint_next_action:
               'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_checkpoint_files_touched: [
               'web/app/pages/settings.vue',
               'web/server/api/workspaces/[id]/invite.post.ts',
@@ -5507,6 +5592,7 @@ Uncertainties: none`,
             current_task_id: 'task-012',
             current_task_checkpoint_next_action:
               'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_checkpoint_files_touched: [
               'packages/converter/src/commentInserter.ts',
               'packages/converter/src/features/variableDeclaration.ts',
@@ -5574,6 +5660,7 @@ Uncertainties: none`,
             current_task_id: 'task-012',
             current_task_checkpoint_next_action:
               'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_checkpoint_files_touched: [
               'packages/converter/src/commentInserter.ts',
               'packages/converter/src/features/variableDeclaration.ts',
@@ -5664,6 +5751,7 @@ Uncertainties: none`,
             current_agent_id: 'worker-agent',
             current_task_checkpoint_next_action:
               'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_checkpoint_files_touched: [
               '.gitignore',
               'package.json',
@@ -5771,6 +5859,7 @@ Uncertainties: none`,
             current_task_id: 'task-012',
             current_task_checkpoint_next_action:
               'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_checkpoint_files_touched: [
               'packages/converter/src/jsdocHelpers.ts',
               'packages/converter/src/typescriptToJsdoc.ts',
@@ -5880,6 +5969,7 @@ Uncertainties: none`,
             current_task_id: 'task-012',
             current_task_checkpoint_next_action:
               'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_checkpoint_files_touched: [
               'packages/converter/src/jsdocHelpers.ts',
               'packages/converter/src/typescriptToJsdoc.ts',
@@ -5951,6 +6041,7 @@ Uncertainties: none`,
       current_task_id: 'task-012',
       current_task_checkpoint_next_action:
         'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+      current_task_checkpoint_next_action_kind: 'rerun_verification',
       current_task_checkpoint_files_touched: [
         'packages/converter/src/jsdocHelpers.ts',
         'packages/converter/test/ts-to-jsdoc.test.ts',
@@ -6203,6 +6294,7 @@ Uncertainties: none`,
             current_task_id: 'task-012',
             current_task_checkpoint_next_action:
               'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_checkpoint_files_touched: [
               'packages/converter/src/jsdocHelpers.ts',
               'packages/converter/src/typescriptToJsdoc.ts',
@@ -6352,6 +6444,7 @@ Uncertainties: none`,
             current_agent_id: 'worker-agent',
             current_task_checkpoint_next_action:
               'Rerun the focused verification command and fix whatever still fails in the checkpoint-touched files.',
+            current_task_checkpoint_next_action_kind: 'rerun_verification',
             current_task_likely_target_files: [firstTarget, secondTarget],
             current_task_checkpoint_files_touched: [
               'web/server/api/workspaces/[id]/invite.post.ts',
@@ -6545,6 +6638,7 @@ Uncertainties: none`,
           toolMetadata: {
             current_agent_id: 'worker-agent',
             current_task_checkpoint_next_action: 'Transition task to review after verifying the implementation state.',
+            current_task_checkpoint_next_action_kind: 'review_handoff',
             current_task_likely_target_files: [likelyTarget],
             current_task_checkpoint_files_touched: [
               'packages/converter/test/ts-to-jsdoc.test.ts',
@@ -6823,7 +6917,7 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
-  it('refuses immediate repeat file mutations after the assistant says the prior write failed', async () => {
+  it('does not change tool execution because assistant prose describes a prior write differently', async () => {
     const registry = new ToolRegistry()
     const writes: string[] = []
     registry.register(
@@ -6893,17 +6987,15 @@ Uncertainties: none`,
       ),
     )
 
-    expect(writes).toEqual(['export const first = true\\n'])
-    expect(events.some(e =>
-      e.type === 'status' &&
-      e.message.includes('self-reported a failed file mutation'),
-    )).toBe(true)
-    expect(events.some(e =>
-      e.type === 'tool_execution_completed' &&
-      e.tool_name === 'write-file' &&
-      e.is_error === true &&
-      String(e.output).includes('Do not immediately try another file mutation'),
-    )).toBe(true)
+    expect(writes).toEqual([
+      'export const first = true\\n',
+      'export const second = true\\n',
+    ])
+    expect(events
+      .filter((e): e is Extract<typeof e, { type: 'tool_execution_completed' }> =>
+        e.type === 'tool_execution_completed' && e.tool_name === 'write-file',
+      )
+      .every(e => e.is_error === false)).toBe(true)
   })
 
   it('nudges the agent after repeating the same no-match tool call', async () => {

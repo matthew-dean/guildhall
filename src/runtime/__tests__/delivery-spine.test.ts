@@ -301,15 +301,19 @@ describe('project-local delivery spine', () => {
         factors: [],
         recommendedChildren: [
           {
+            identity: 'contextmenu-menuitem-implementation',
             title: 'ContextMenu MenuItem implementation',
             reason: 'Compose the MenuItem primitive in the ContextMenu surface.',
             dependsOn: [],
+            usesPrimitives: ['menu-item'],
           },
           {
+            identity: 'contextmenu-storybook-proof',
             title: 'ContextMenu Storybook proof',
             reason: 'Prove the menu-item states with visual proof.',
-            dependsOn: ['ContextMenu MenuItem implementation'],
+            dependsOn: ['contextmenu-menuitem-implementation'],
             provesPrimitives: ['menu-item'],
+            proofKind: 'storybook',
           },
         ],
         createdAt: now,
@@ -380,18 +384,18 @@ describe('project-local delivery spine', () => {
         summary: 'Two independently deliverable units.',
         units: [
           {
-            id: 'implementation',
+            id: 'contextmenu-component-implementation',
             title: 'ContextMenu component implementation',
             deliverable: 'ContextMenu works against the menu primitive.',
             rationale: 'Implementation lands before proof.',
             dependsOn: [],
           },
           {
-            id: 'proof',
+            id: 'contextmenu-storybook-proof',
             title: 'ContextMenu Storybook proof',
             deliverable: 'Storybook demonstrates the component states.',
             rationale: 'Proof is a separate deliverable from the component implementation.',
-            dependsOn: ['implementation'],
+            dependsOn: ['contextmenu-component-implementation'],
           },
         ],
         proofOnlyItems: [],
