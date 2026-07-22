@@ -33,6 +33,7 @@ import {
   projectTaskStateExistsSync,
   readProjectCurrentStateModel,
   readProjectMapStateModel,
+  readProjectOverviewStateAtBoundary,
   readProjectStateAuthorityAtBoundary,
   readProjectSurfaceStateAtBoundary,
   readProjectTaskRecordsAtBoundaryWithRevision,
@@ -264,6 +265,20 @@ describe('project-state-boundary', () => {
         },
         availability: { status: 'paused', reason: 'test pause' },
       })
+      const overview = readProjectOverviewStateAtBoundary(root)
+      expect(overview).toMatchObject({
+        authority: 'database',
+        queueRevision: current.queueRevision,
+        projectRevision: current.projectRevision,
+        // This fixture intentionally carries an older unversioned summary.
+        // Overview reads it through the runtime schema boundary, so it is
+        // visible but stale instead of being accepted as current state.
+        summary: { freshness: 'stale' },
+        availability: { status: 'paused', reason: 'test pause' },
+      })
+      // The Overview boundary intentionally exposes no compact projection:
+      // its task cards must be point-hydrated from saved spine IDs instead.
+      expect(overview).not.toHaveProperty('compact')
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

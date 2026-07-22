@@ -58,7 +58,7 @@ import {
   pruneFleetSummaryProjectionAtBoundary,
   readFleetSummaryProjectionPageAtBoundary,
 } from './fleet-summary-projection.js'
-import { ProjectStateRevisionMismatchError, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
+import { ProjectStateRevisionMismatchError, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectOverviewStateAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -6964,10 +6964,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const inventoryLimit = input.inventoryLimit && input.inventoryLimit > 0
       ? Math.min(100, input.inventoryLimit)
       : 100
-    // Authority and the saved surface arrive from one sessions transaction.
-    // A stale projection can still provide the last indexed shape; it must
-    // never trigger a fresh aggregate reconstruction from TASKS.json.
-    const surfaceState = input.surfaceState ?? readProjectSurfaceStateAtBoundary(project.path, {
+    // Overview has its own lean saved-summary transaction. Work and Map use
+    // the richer surface projection; neither path reconstructs TASKS.json.
+    const overviewState = input.surface === 'overview'
+      ? readProjectOverviewStateAtBoundary(project.path)
+      : null
+    const surfaceState = input.surface === 'overview' ? null : (input.surfaceState ?? readProjectSurfaceStateAtBoundary(project.path, {
       offset: inventoryOffset,
       limit: inventoryLimit,
       ...(input.includeDetailSections ? { includeDefinitions: true } : {}),
@@ -6979,10 +6981,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       includeAvailability: true,
       ...(input.includeDetailSections ? { includeAttention: true } : {}),
       ...(input.includeDetailSections ? { includeMemoryHealth: true } : {}),
-    })
-    const promotedState = surfaceState?.authority === 'database'
+    }))
+    const promotedState = (overviewState?.authority ?? surfaceState?.authority) === 'database'
     const compactState: ProjectCompactStateReadModel | null = surfaceState?.compact ?? null
-    const savedProjection = compactState?.summary ?? (promotedState ? null : readProjectSummaryForProjectAtBoundary(project.path))
+    const savedProjection = overviewState?.summary ?? compactState?.summary ?? (promotedState ? null : readProjectSummaryForProjectAtBoundary(project.path))
+    const stateQueueRevision = overviewState?.queueRevision ?? compactState?.queueRevision ?? null
+    const stateProjectRevision = overviewState?.projectRevision ?? compactState?.projectRevision ?? null
     const compactProjection = savedProjection
     const storedSpine = savedProjection?.orientationSpine ?? null
     const indexedInventory = compactState?.inventory ?? null
@@ -7100,7 +7104,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // The boundary already selected this scope from the same SQLite snapshot.
     // A surface may format it, but it must not reconstruct a competing scope
     // from the bounded inventory page.
-    const selectedScope = compactState?.scope ?? storedSpine?.selectedTaskScope ?? null
+    const selectedScope = overviewState?.scope ?? compactState?.scope ?? storedSpine?.selectedTaskScope ?? null
     const readinessScope = selectedScope
     // Compact surfaces consume the durable projection. Full readiness, Git,
     // and repository checks remain explicit detail work on the Release view.
@@ -7151,17 +7155,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
       }
     }
-    const liveOrientationPreview = buildOverviewOrientationPreviewSpine({
-      projectId: project.id,
-      rawQueue: {
-        tasks: (indexedInventory?.tasks ?? tasks) as unknown as Array<Record<string, unknown>>,
-        releases: scopeQueue.releases as unknown as ProjectRelease[],
-        ...(scopeQueue.selectedReleaseId ? { selectedReleaseId: scopeQueue.selectedReleaseId } : {}),
-      },
-      charter: projection.orientation?.charter ?? null,
-      startReadiness: summary.startReadiness,
-      sourceSpine: builtOrientationSpine,
-    })
+    // The saved spine is the Overview authority. Its selected-scope summary
+    // is already materialized with the full task set; rebuilding it from the
+    // deliberately absent inventory would turn real membership into zero.
+    const liveOrientationPreview = input.surface === 'overview'
+      ? { summary: builtOrientationSpine.summary }
+      : buildOverviewOrientationPreviewSpine({
+          projectId: project.id,
+          rawQueue: {
+            tasks: (indexedInventory?.tasks ?? tasks) as unknown as Array<Record<string, unknown>>,
+            releases: scopeQueue.releases as unknown as ProjectRelease[],
+            ...(scopeQueue.selectedReleaseId ? { selectedReleaseId: scopeQueue.selectedReleaseId } : {}),
+          },
+          charter: projection.orientation?.charter ?? null,
+          startReadiness: summary.startReadiness,
+          sourceSpine: builtOrientationSpine,
+        })
     const reconciledLiveSummarySpine = reconcileOrientationSpineWithReleaseTruth(
       {
         ...builtOrientationSpine,
@@ -7171,13 +7180,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...orientationReleaseTruthFromSummary(projection.releaseSummary, scopeQueue),
       },
     )
-    // Reconciliation owns durable release truth, while this preview owns the
-    // current readiness action. Keep both in the response so an older release
-    // blocker cannot replace the task the shared action model selected now.
-    const liveSummarySpine = {
-      ...reconciledLiveSummarySpine,
-      summary: liveOrientationPreview.summary,
-    } as unknown as Record<string, unknown>
+    // Reconciliation is the shared authority for release membership and
+    // progress. Do not overwrite its summary with a route-local preview: that
+    // would make Overview report zero work whenever it intentionally omitted
+    // the full inventory.
+    const liveSummarySpine = reconciledLiveSummarySpine as unknown as Record<string, unknown>
     const initialOrientationSpine = input.surface === 'overview'
       ? compactOrientationSpineForOverviewSurface(liveSummarySpine)
       : input.surface === 'map'
@@ -7188,7 +7195,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // but the selected scope is owned by the same compact database snapshot
     // consumed by Release detail. Overlay only that canonical scope here so
     // every ordinary surface answers membership from one relation.
-    const compactScope = compactState?.scope ?? null
+    const compactScope = overviewState?.scope ?? compactState?.scope ?? null
     const baseOrientationSpine = compactScope
       ? {
           ...initialOrientationSpine,
@@ -7224,13 +7231,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       : null
     if (
-      compactState &&
       indexedOverviewTaskRead &&
-      (indexedOverviewTaskRead.queueRevision !== compactState.queueRevision ||
-        indexedOverviewTaskRead.projectRevision !== compactState.projectRevision)
+      stateQueueRevision !== null &&
+      stateProjectRevision !== null &&
+      (indexedOverviewTaskRead.queueRevision !== stateQueueRevision ||
+        indexedOverviewTaskRead.projectRevision !== stateProjectRevision)
     ) {
       throw new ProjectStateRevisionMismatchError(
-        { queue: compactState.queueRevision, project: compactState.projectRevision },
+        { queue: stateQueueRevision, project: stateProjectRevision },
         { queue: indexedOverviewTaskRead.queueRevision, project: indexedOverviewTaskRead.projectRevision },
       )
     }
@@ -7238,10 +7246,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const scopedResponseTasks = indexedOverviewTasks ?? (overviewTaskIds && overviewTaskIds.size > 0
       ? tasks.filter(task => overviewTaskIds.has(task.id))
       : tasks)
-    // Overview's selected cards are already bounded by the saved orientation
-    // spine. The compact transaction still reads an inventory page so its
-    // release/summary/inventory inputs share one revision, but that page is
-    // not the Overview response's pagination authority.
+    // Overview's selected cards are bounded by the saved orientation spine.
+    // Its lean boundary deliberately has no inventory; these point reads are
+    // revision-checked against the saved summary snapshot above.
     const responseInventory = storedSpine && input.surface === 'overview' && compactProjection?.freshness === 'current'
       ? null
       : indexedInventory
@@ -7262,9 +7269,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ? scopedResponseTasks
       : scopedResponseTasks.slice(inventoryStart, inventoryEnd)
     const selectedTask = input.requestedTaskId
-      ? storedSpine
-        ? compactState?.selectedTask ?? null
-        : scopedResponseTasks.find(task => task.id === input.requestedTaskId)
+      ? scopedResponseTasks.find(task => task.id === input.requestedTaskId)
       : undefined
     const responseTasks = selectedTask && !pagedResponseTasks.some(task => task.id === selectedTask.id)
       ? [...pagedResponseTasks, selectedTask]
@@ -7277,13 +7282,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         )
       : null
     if (
-      compactState &&
       detailTaskRead &&
-      (detailTaskRead.queueRevision !== compactState.queueRevision ||
-        detailTaskRead.projectRevision !== compactState.projectRevision)
+      stateQueueRevision !== null &&
+      stateProjectRevision !== null &&
+      (detailTaskRead.queueRevision !== stateQueueRevision ||
+        detailTaskRead.projectRevision !== stateProjectRevision)
     ) {
       throw new ProjectStateRevisionMismatchError(
-        { queue: compactState.queueRevision, project: compactState.projectRevision },
+        { queue: stateQueueRevision, project: stateProjectRevision },
         { queue: detailTaskRead.queueRevision, project: detailTaskRead.projectRevision },
       )
     }
@@ -7369,8 +7375,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ...(detailRecentEvents ? { recentEvents: detailRecentEvents } : {}),
       ...(providerStatus ? { providerStatus } : {}),
       coordinatorCount: project.config?.coordinators?.length ?? 0,
-      queueRevision: compactState?.queueRevision ?? null,
-      projectRevision: compactState?.projectRevision ?? null,
+      queueRevision: stateQueueRevision,
+      projectRevision: stateProjectRevision,
       selectedTaskId: input.requestedTaskId && responseTasks.some(task => task.id === input.requestedTaskId)
         ? input.requestedTaskId
         : null,

@@ -5,6 +5,61 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+## 2026-07-22 Overview cold-read projection boundary
+
+- Work id: `0.13.55/overview-cold-read-projection`
+- User job: Opening the project list or a project's Overview must show a
+  truthful orientation quickly. It must not wait for every project's complete
+  task inventory, repository diagnostics, or detail data merely to render a
+  saved summary and a few visible work cards.
+- Finding: The `overview` route requested the generic compact surface. That
+  surface read the full bounded inventory, every scope row, repositories, and
+  diagnostics for every cold project request, despite Overview already being
+  driven by the durable summary/orientation projection. SQLite's synchronous
+  reads then serialized the concurrent project requests.
+- Plan: Add a named Overview read boundary that reads only authority,
+  revisions, durable summary, and availability in one SQLite transaction.
+  Hydrate only the saved-spine task IDs in a separate revision-checked point
+  read. Work and Map retain their explicit richer projections.
+- Proof required: a regression that proves Overview's boundary does not load
+  inventory/repositories/diagnostics; cold fleet audit meets its budget; API
+  summary/action state agrees with Overview; build and installed-app browser
+  checks prove no stale server and no clipped orientation at desktop and
+  mobile widths.
+
+### Contract Touch Decision
+
+- Work id: `0.13.55/overview-cold-read-projection`
+- Touched contracts: sessions surface-read shape, runtime Overview projection
+  boundary, saved-summary freshness/revision join, and Overview task-card
+  hydration.
+- Contracts considered but not touched: task persistence schema, release
+  membership, summary/action semantics, provider prose, raw history, and Map
+  or Work route detail projections.
+- Required follow-up: retain a single shared projection authority; Overview
+  must report unavailable/stale saved state rather than rebuild it on request.
+- Proof required/provided: listed above / pending implementation.
+- Waivers: none.
+- Owner-review items: none.
+- Apply/revert: revert the named boundary and route use together; do not
+  restore generic inventory reads as an Overview fallback.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope: read-path selection over existing normalized project-state tables.
+- Change class: shared projection performance and ownership correction.
+- Existing data impact: none.
+- Migration id: none required.
+- Safety: the saved summary is revision-captured; card point reads reject a
+  revision mismatch instead of composing stale and current facts.
+- Compatibility reader: promoted projects fail honestly when their saved
+  summary is missing or stale; no compatibility-file reconstruction is added.
+- Fixtures/tests: sessions boundary regression and cold fleet performance
+  audit.
+- Owner-facing plan text: none.
+- Rollback/revert: no data rollback is required.
+
 ## 2026-07-22 Typed proof handoff stalls remain delegated
 
 - Work id: `0.13.54/typed-proof-handoff-no-progress`

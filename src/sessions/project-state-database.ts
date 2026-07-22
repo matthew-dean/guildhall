@@ -696,6 +696,8 @@ export interface ProjectStateDatabaseReadBundleOptions extends ProjectStateDatab
   includeAvailability?: boolean
   includeCurrentEvidence?: boolean
   includeMemoryHealth?: boolean
+  /** Include normalized scope membership without expanding the work inventory. */
+  includeScopeRows?: boolean
   currentEvidenceTaskIds?: readonly string[]
 }
 
@@ -4881,7 +4883,8 @@ export function readProjectStateDatabaseReadBundle<T = unknown>(
       options.includeProjection === true ||
       options.includeTaskOverlays === true ||
       options.includeRepositories === true ||
-      options.includeDiagnostics === true
+      options.includeDiagnostics === true ||
+      options.includeScopeRows === true
     const queueDefinition = options.includeQueueDefinition === true && hasQueue && queueRevision !== null
       ? readQueueDetailsForRevision(tasksPath, queueRevision, database)
       : null

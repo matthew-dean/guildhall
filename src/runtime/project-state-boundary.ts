@@ -642,6 +642,53 @@ export interface ProjectSurfaceStateReadModel {
   projectRevision: number | null
 }
 
+/**
+ * Overview is a saved-orientation surface. It deliberately reads neither the
+ * task inventory nor diagnostics: visible task cards are hydrated later by
+ * their saved spine IDs and checked against these same revisions.
+ */
+export interface ProjectOverviewStateReadModel {
+  authority: 'database' | 'legacy'
+  summary: ProjectSummaryProjection | null
+  /** Current normalized membership for the saved selected release only. */
+  scope: ProjectScope | null
+  availability: ProjectStateDatabaseSurfaceState['availability']
+  queueRevision: number | null
+  projectRevision: number | null
+}
+
+export function readProjectOverviewStateAtBoundary(
+  projectRoot: string,
+): ProjectOverviewStateReadModel | null {
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const current = readProjectStateDatabaseReadBundle<ProjectSummaryProjection>(
+    tasksPath,
+    {
+      includeAvailability: true,
+      includeScopeRows: true,
+    },
+  )
+  if (!current) return null
+  const summary = current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null
+  const releases = Array.isArray(summary?.orientationSpine?.releases)
+    ? summary.orientationSpine.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
+    : []
+  const selectedReleaseId = summary?.orientationSpine?.selectedRelease?.id
+  return {
+    authority: current.authority,
+    summary,
+    scope: projectScopeFromSavedState({
+      releases,
+      ...(selectedReleaseId ? { selectedReleaseId } : {}),
+      summary,
+      scopeRows: current.scopeRows,
+    }),
+    availability: current.availability,
+    queueRevision: current.queueRevision,
+    projectRevision: current.projectRevision,
+  }
+}
+
 export function readProjectSurfaceStateAtBoundary(
   projectRoot: string,
   options: ProjectStateDatabaseSurfaceReadOptions = {},
