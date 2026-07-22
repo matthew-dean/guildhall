@@ -34,6 +34,18 @@ help_summary: |
 - Owner-facing plan text: none.
 - Rollback/revert: code-only revert.
 
+## 2026-07-22 Targeted-run revision conflicts retry from current state
+
+### Contract Touch Decision
+
+- Work id: `0.13.58/targeted-run-cas-retry`.
+- Touched contracts: orchestrator run-loop handling of the normalized targeted-task-batch CAS boundary.
+- Finding: a normal concurrent project revision caused a targeted CLI run to throw a fatal stale-batch error, despite the database correctly rejecting the stale mutation.
+- Change: retain the database's fail-closed CAS write; the owning run loop performs up to three bounded fresh-read retries for that explicit conflict only. Other errors still fail normally.
+- Proof required: focused regression that forces a stale batch on first dispatch then proves a second fresh tick proceeds; installed targeted Narrative Harness replay.
+- Proof provided: pending.
+- Schema migration: none; this is run-loop control flow over the existing normalized database authority.
+
 ## 2026-07-22 Delegated owner approval remains distinct from Guildhall automation
 
 ### Contract Touch Decision

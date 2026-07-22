@@ -6157,12 +6157,29 @@ export class Orchestrator {
     }
 
     let tick = 0
+    let staleTargetedBatchRetries = 0
     while (tick < maxTicks) {
       tick++
-      const raw = await this.tick({
-        ...(stopAfterOneTask ? { dispatchLimit: 1 } : {}),
-        ...(preferredTaskId ? { preferredTaskId } : {}),
-      })
+      let raw: TickOutcome
+      try {
+        raw = await this.tick({
+          ...(stopAfterOneTask ? { dispatchLimit: 1 } : {}),
+          ...(preferredTaskId ? { preferredTaskId } : {}),
+        })
+        staleTargetedBatchRetries = 0
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        if (/^Stale targeted task batch:/.test(message) && staleTargetedBatchRetries < 3) {
+          staleTargetedBatchRetries += 1
+          tick -= 1
+          console.warn(
+            `[guildhall] project state changed during targeted dispatch; refreshing and retrying (${staleTargetedBatchRetries}/3).`,
+          )
+          await new Promise(resolve => setTimeout(resolve, Math.min(250 * staleTargetedBatchRetries, 750)))
+          continue
+        }
+        throw err
+      }
 
       // FR-24: flatten batch outcomes from fanout dispatch so the logging /
       // backend-event paths keep their one-entry-per-task shape.
