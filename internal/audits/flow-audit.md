@@ -14,6 +14,7 @@ help_summary: |
 - Contracts considered but not touched: task lifecycle, worktree allocation/cleanup, release scope, proof evidence schema, UI projections, and provider routing.
 - Finding: a proof-recovery task retained its historical task-worktree after its implementation had been cherry-picked locally. The command gate then executed the old checkout and reported a missing proof script that existed in the landed project state. The coordinator subsequently misclassified its own stale-checkout failure as a human decision.
 - Change: a task with a durable local landing result (`merged`, `pushed`, or `push_failed_degraded`) runs its acceptance proof against the effective project checkout. Each command verification record now persists its typed execution root (`task_worktree` or `project_checkout`), so a recovery gate runs once against current landed state and a new failure returns to implementation rather than repeating stale-worktree recovery. Unlanded task work continues to verify inside its isolated worktree.
+- Follow-up repair: when that current-project proof fails, the runtime records `proofRecovery.freshWorktree` and increments the attempt. The next worker dispatch uses a fresh per-attempt worktree rather than reattaching the historical landed branch.
 - Proof required: a regression with conflicting project/worktree contents, a regression for landed proof recovery, typed execution-root evidence coverage, typecheck, model-independence gate, and installed Narrative Harness replay.
 - Proof provided: regressions added; focused tests pass. Remaining validation is pending this implementation's installed replay.
 - Waivers: none.
@@ -22,9 +23,9 @@ help_summary: |
 
 ### Schema Migration Decision
 
-- Persisted schema touched: `VerificationRecord.executionRoot`.
+- Persisted schema touched: `VerificationRecord.executionRoot` and optional runtime field `proofRecovery.freshWorktree`.
 - Scope: runtime execution-root selection and proof evidence over existing task `mergeRecord` and worktree metadata.
-- Change class: additive typed proof-evidence field and authority correction.
+- Change class: additive typed proof-evidence/runtime fields and authority correction.
 - Existing data impact: existing landed merge records begin selecting the current project checkout for proof recovery; unlanded worktree behavior is unchanged. Historical verification records simply omit the new field and are conservatively treated as unknown origin.
 - Migration id: none required; the field is optional and writes only on new command-gate results.
 - Safety: only explicit landing enums switch execution root; unknown or absent records retain existing worktree behavior and cannot falsely satisfy a project-checkout recovery replay.

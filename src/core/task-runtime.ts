@@ -14,6 +14,9 @@ export const TaskRuntimeState = z.object({
     // explanatory evidence and must never be searched to choose a lane.
     kind: z.enum(['proof']).optional(),
     reason: z.string().optional(),
+    // A current-project proof failure after prior landing needs a new branch,
+    // not another pass in the historical worktree that produced the landing.
+    freshWorktree: z.boolean().optional(),
   }).optional(),
   remediationAttempts: z.number().int().nonnegative().optional(),
   // Current worker recovery state belongs in the normalized runtime overlay,

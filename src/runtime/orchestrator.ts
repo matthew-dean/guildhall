@@ -377,6 +377,16 @@ function landedTaskWorkRequiresProjectCheckoutProof(task: Task): boolean {
   return commands.some((command) => !projectCheckoutCommands.has(command))
 }
 
+function proofRecoveryNeedsFreshWorktree(task: Task): boolean {
+  const recovery = (task as Task & {
+    proofRecovery?: { freshWorktree?: unknown }
+    runtime?: { proofRecovery?: { freshWorktree?: unknown } }
+  }).proofRecovery ?? (task as Task & {
+    runtime?: { proofRecovery?: { freshWorktree?: unknown } }
+  }).runtime?.proofRecovery
+  return recovery?.freshWorktree === true
+}
+
 function shouldRunAcceptanceCommandCriterion(
   task: Task,
   criterion: Task['acceptanceCriteria'][number],
@@ -3432,6 +3442,8 @@ export class Orchestrator {
     // identifies an actual repository.
     const worktreeMode = repositoryStatus?.repository === false
       ? 'none'
+      : proofRecoveryNeedsFreshWorktree(task)
+        ? 'per_attempt'
       : configuredWorktreeMode
     let activeWorktreePath = effectiveTaskProjectPath
     const baseBranch = await this.resolveBaseBranch(effectiveTaskProjectPath)
@@ -7620,9 +7632,8 @@ export class Orchestrator {
     // has landed, the project checkout is the authoritative code state. A
     // gate must never rerun against the old branch and report a missing
     // command that is present in the landed project.
-    const taskWorkIsLanded = ['merged', 'pushed', 'push_failed_degraded'].includes(
-      task.mergeRecord?.result ?? '',
-    )
+    const taskWorkIsLanded = !proofRecoveryNeedsFreshWorktree(task) &&
+      ['merged', 'pushed', 'push_failed_degraded'].includes(task.mergeRecord?.result ?? '')
     const taskProjectPath =
       !taskWorkIsLanded && typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
         ? task.worktreePath.trim()
@@ -7759,6 +7770,7 @@ export class Orchestrator {
         ensureWorkerOwnership(current)
         current.completedAt = undefined
         current.revisionCount += 1
+        const needsFreshWorktree = taskWorkIsLanded
         current.notes.push({
           agentId: 'acceptance-command-gates',
           role: 'gate-checker',
@@ -7774,6 +7786,17 @@ export class Orchestrator {
           timestamp: now,
         })
         await this.writeQueue(queue)
+        if (needsFreshWorktree) {
+          await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
+            proofRecovery: {
+              reopenedAt: now,
+              kind: 'proof',
+              reason: 'Current project proof failed after prior landing.',
+              freshWorktree: true,
+            },
+            updatedAt: now,
+          })
+        }
         await this.logTickProgress({
           task: current,
           agent: 'acceptance-command-gates',
