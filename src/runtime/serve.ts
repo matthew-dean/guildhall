@@ -15196,18 +15196,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         brief.approvedBy = approvalActor
         brief.approvedAt = now
         task.productBrief = brief
-        const notes = Array.isArray(task.notes)
-          ? [...task.notes as Array<Record<string, unknown>>]
-          : []
-        if (approvalActor === 'codex_delegated_owner') {
-          notes.push({
-            agentId: 'codex:delegated-owner',
-            role: 'approver',
-            content: 'Approved by Codex under the owner delegation recorded for this run. Guildhall did not approve this brief autonomously.',
-            timestamp: now,
-          })
+        const delegatedApprovalNote = approvalActor === 'codex_delegated_owner'
+          ? {
+              agentId: 'codex:delegated-owner',
+              role: 'approver',
+              content: 'Approved by Codex under the owner delegation recorded for this run. Guildhall did not approve this brief autonomously.',
+              timestamp: now,
+            }
+          : null
+        if (delegatedApprovalNote && !databaseAuthority) {
+          task.notes = [...(Array.isArray(task.notes) ? task.notes : []), delegatedApprovalNote]
         }
-        task.notes = notes
         const effectiveTask = await buildEffectiveTask(project.path, task as Task)
         if (Array.isArray(effectiveTask.escalations)) {
           task.escalations = [...effectiveTask.escalations] as typeof task.escalations
@@ -15255,7 +15254,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
               else delete current.spec
               if (Array.isArray(task.acceptanceCriteria)) current.acceptanceCriteria = task.acceptanceCriteria
               if (typeof task.status === 'string') current.status = task.status
-              if (Array.isArray(task.notes)) current.notes = task.notes as Task['notes']
               current.updatedAt = now
               return current
             },
@@ -15268,13 +15266,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
               updatedAt: now,
             })
           }
-          const approvalNote = Array.isArray(task.notes) ? task.notes.at(-1) : undefined
-          if (approvalNote && typeof approvalNote === 'object') {
+          if (delegatedApprovalNote) {
             await appendPromotedHumanTaskNote({
               taskId: id,
               action: 'approve-brief',
               now,
-              note: approvalNote as Record<string, unknown>,
+              note: delegatedApprovalNote,
             })
           }
           for (const escalation of Array.isArray(task.escalations) ? task.escalations : []) {
