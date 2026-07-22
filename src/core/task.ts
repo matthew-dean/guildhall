@@ -687,6 +687,7 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
     ? parseScenarioExpectationFromDescription(normalizedDescription)
     : { scenario: rawScenario, expectation: rawExpectation }
 
+  const hasExecutableCommand = typeof criterion.command === 'string' && criterion.command.trim().length > 0
   const baseCriterion = {
     ...criterion,
     id: typeof criterion.id === 'string' && criterion.id.trim()
@@ -697,12 +698,12 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
     ...(normalizedDescription ? { description: normalizedDescription } : {}),
     ...(rawScenario ? { scenario: rawScenario } : normalizedScenarioExpectation.scenario ? { scenario: normalizedScenarioExpectation.scenario } : {}),
     ...(rawExpectation ? { expectation: rawExpectation } : normalizedScenarioExpectation.expectation ? { expectation: normalizedScenarioExpectation.expectation } : {}),
-    verifiedBy: verifiedBy ?? 'review',
+    // `command` is an executable acceptance contract. It cannot coexist with
+    // a narrative verifier: command gates record its observed result.
+    verifiedBy: hasExecutableCommand ? 'automated' : verifiedBy ?? 'review',
   }
 
-  if (verifiedBy === undefined && typeof criterion.command === 'string' && criterion.command.trim()) {
-    return { ...baseCriterion, verifiedBy: 'automated' }
-  }
+  if (hasExecutableCommand) return baseCriterion
   if (typeof verifiedBy !== 'string') return baseCriterion
   if ((ACCEPTANCE_VERIFIERS as readonly string[]).includes(verifiedBy)) return baseCriterion
 

@@ -199,6 +199,28 @@ export interface UpdateTaskResult {
 type TaskRecord = TaskModel
 type TaskQueueRecord = TaskQueueModel
 
+function changedExistingAcceptanceCommand(
+  task: TaskRecord,
+  nextCriteria: readonly TaskRecord['acceptanceCriteria'][number][],
+): { criterionId: string; current: string; next: string } | null {
+  const nextById = new Map(nextCriteria.map((criterion) => [criterion.id, criterion] as const))
+  for (const current of task.acceptanceCriteria) {
+    const currentCommand = typeof current.command === 'string' ? current.command.trim() : ''
+    if (!currentCommand) continue
+    const nextCommand = typeof nextById.get(current.id)?.command === 'string'
+      ? nextById.get(current.id)!.command!.trim()
+      : ''
+    if (nextCommand !== currentCommand) {
+      return { criterionId: current.id, current: currentCommand, next: nextCommand }
+    }
+  }
+  return null
+}
+
+function acceptanceContractIsActive(task: TaskRecord): boolean {
+  return ['ready', 'in_progress', 'review', 'gate_check', 'pending_pr', 'done'].includes(task.status)
+}
+
 function inferMetadataTaskId(metadata: Record<string, unknown> = {}): string | null {
   const taskId = metadata['current_task_id']
   return typeof taskId === 'string' && taskId.trim().length > 0 ? taskId.trim() : null
@@ -335,6 +357,18 @@ async function updateTaskUnlocked(
       ? z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
         .map((criterion) => normalizeAcceptanceCriterionForTaskProjectPath(criterion, task.projectPath))
       : undefined
+    if (normalizedAcceptanceCriteria && acceptanceContractIsActive(task)) {
+      const changedCommand = changedExistingAcceptanceCommand(task, normalizedAcceptanceCriteria)
+      if (changedCommand) {
+        return {
+          success: false,
+          taskId,
+          error:
+            `Acceptance command ${changedCommand.criterionId} is an active executable contract and cannot be replaced or removed by update-task. ` +
+            'Return the task to exploring/spec_review and save a deliberate re-plan before changing its proof command.',
+        }
+      }
+    }
     const baseAcceptanceCriteria = normalizedAcceptanceCriteria ?? task.acceptanceCriteria
     const workerSelfCritique = currentAgentId === 'worker-agent' && normalizedNote?.role === 'self-critique'
       ? extractStructuredSelfCritique({ content: '', structured: normalizedNote.structured })

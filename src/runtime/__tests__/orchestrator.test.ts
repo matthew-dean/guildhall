@@ -7734,6 +7734,60 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     })
   })
 
+  it('hands a failed landed-proof retry to a fresh worker worktree instead of rerunning the same checkout gate', async () => {
+    const projectPath = path.join(tmpDir, 'landed-proof-fresh-worker-handoff')
+    await fs.mkdir(projectPath, { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'package.json'), JSON.stringify({ name: 'landed-proof-fresh-worker-handoff' }), 'utf8')
+    await writeQueue([
+      mkTask({
+        id: 'landed-proof-fresh-worker-handoff',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath,
+        spec: VALID_SPEC,
+        semanticKind: 'proof_setup',
+        mergeRecord: {
+          fromBranch: 'guildhall/task-landed-proof-fresh-worker-handoff',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'push_failed_degraded',
+          mergedAt: '2026-07-22T00:00:00.000Z',
+        },
+        proofRecovery: {
+          kind: 'proof',
+          reopenedAt: '2026-07-22T00:00:00.000Z',
+          reason: 'Current landed proof failed.',
+          freshWorktree: true,
+        },
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The focused proof passes.',
+          verifiedBy: 'automated',
+          command: 'false',
+          met: false,
+        }],
+        gateResults: [{
+          gateId: 'AC-1',
+          type: 'hard',
+          passed: false,
+          output: 'false - non-zero exit',
+          checkedAt: '2026-07-22T00:00:01.000Z',
+        }],
+      }),
+    ])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet({ worker }) })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'landed-proof-fresh-worker-handoff',
+      agent: 'worker-agent',
+      beforeStatus: 'in_progress',
+    })
+  })
+
   it('ignores Guildhall bookkeeping when acceptance git-diff gates check task file scope', async () => {
     const projectPath = path.join(tmpDir, 'acceptance-command-git-scope')
     await fs.mkdir(path.join(projectPath, '.guildhall'), { recursive: true })

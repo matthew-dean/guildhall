@@ -1829,6 +1829,43 @@ describe('updateTask', () => {
     expect(result.error).toContain('Workers cannot mark command-backed acceptance criteria as met')
   })
 
+  it('does not let an active task silently replace its existing proof command', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        status: 'in_progress',
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The focused proof passes.',
+          verifiedBy: 'automated',
+          command: 'pnpm proof:current',
+        }],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'The focused proof passes.',
+        verifiedBy: 'review',
+        command: 'pnpm proof:invented-replacement',
+      }],
+    }, { current_agent_id: 'worker-agent' })
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('active executable contract'),
+    })
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.acceptanceCriteria[0]).toMatchObject({
+      command: 'pnpm proof:current',
+      verifiedBy: 'automated',
+    })
+  })
+
   it('does not let Markdown headings or question-shaped prose change spec_review promotion', async () => {
     const result = await updateTask({
       tasksPath,

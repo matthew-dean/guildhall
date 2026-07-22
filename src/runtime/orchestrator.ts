@@ -7559,6 +7559,10 @@ export class Orchestrator {
   ): Promise<TickOutcome | null> {
     const proofRecovery = (task as Task & { proofRecovery?: unknown }).proofRecovery
     const needsLandedCheckoutProof = landedTaskWorkRequiresProjectCheckoutProof(task)
+    // A landed task gets one authoritative project-checkout proof attempt.
+    // If it fails, the failure requires a fresh worker worktree; repeatedly
+    // routing it back to the landed checkout can never change the result.
+    const needsInitialLandedCheckoutProof = needsLandedCheckoutProof && !proofRecoveryNeedsFreshWorktree(task)
     if (
       task.status !== 'in_progress' ||
       ((!proofRecovery || typeof proofRecovery !== 'object') && !needsLandedCheckoutProof)
@@ -7584,7 +7588,7 @@ export class Orchestrator {
       Number.isFinite(Date.parse(gate.checkedAt)) &&
       Date.parse(gate.checkedAt) > reopenedAt,
     )
-    if (!needsLandedCheckoutProof && hasFailedCommandSinceRecovery) return null
+    if (!needsInitialLandedCheckoutProof && hasFailedCommandSinceRecovery) return null
 
     const beforeStatus = task.status
     return await this.withQueueWriteLock(async () => {

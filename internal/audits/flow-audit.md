@@ -51486,3 +51486,42 @@ Contract Touch Decision
 - Waivers: none.
 - Owner-review items: none; this is an invariant-preserving release guard.
 - Apply/revert: keep the guard and remove any newly detected prose authority by replacing it with typed data.
+
+## 2026-07-22 Executable acceptance-contract ownership
+
+### Finding
+
+- [ ] A proof-setup task could persist `verifiedBy: review` alongside a shell
+      command. Command gates still executed that command, but command
+      normalization and invalid-command repair only considered `automated`.
+      An agent could therefore replace an already-passing command with a new,
+      nonexistent command while the task was active.
+- [ ] After a landed-checkout proof failed, the recovery router could send the
+      same task back to that unchanged checkout even after it had requested a
+      fresh worktree, producing a gate/retry loop instead of repair work.
+
+### Repair
+
+- [ ] Parse every acceptance criterion containing a command as `automated`.
+      `command` is a typed executable contract, never review prose.
+- [ ] Reject replacement or removal of an existing command while a task is
+      active. Replanning must explicitly return to shaping first.
+- [ ] Route a failed landed-proof retry with `freshWorktree: true` to the
+      worker rather than rerunning the unchanged checkout command.
+
+### Contract Touch Decision
+
+- Work id: `0.13.54/executable-acceptance-contract-ownership`.
+- Touched contracts: `AcceptanceCriteria.command`/`verifiedBy`, task mutation
+      policy, proof-recovery state machine.
+- Considered but not touched: task prose, provider output, release scope, and
+      historical verification records. They remain evidence, not command
+      authority.
+- Required follow-up: replay the Narrative Harness scene proof through the
+      installed product and confirm the release no longer cycles.
+- Proof required: parser normalization, active-contract mutation rejection,
+      landed retry handoff regression, command-gate regression, installed
+      replay.
+- Apply/revert: command-bearing review criteria normalize to automated proof.
+      Restoring silent active-command mutation or retry loops is release
+      blocking.
