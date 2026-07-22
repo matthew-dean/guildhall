@@ -51607,3 +51607,37 @@ Contract Touch Decision
       Git Story policy/confirmation boundary.
 - Apply/revert: revert the invalidation and regression together; do not add a
       route-local repository status patch as a replacement.
+
+## 2026-07-22 Closed release truth reaches internal proof children
+
+### Finding
+
+- [x] The installed Narrative Harness Overview said both `0 missing proof` and
+      `Proof needed: Establish concrete proof for Build Fixture and
+      expected-record harness.` The stale gap belonged to an internal proof
+      child; its counted parent was already terminal and the authoritative
+      release reported `15 / 15` proven.
+
+### Repair
+
+- [x] The shared orientation reconciler now carries terminal selected-scope
+      truth through a parent task's saved child hierarchy. It clears only
+      descendant proof gaps/pins and proof state under that terminal parent.
+      It does not treat every unscoped task as closed or alter release counts.
+
+### Contract Touch Decision
+
+- Work id: `0.13.57/orientation-proof-child-release-truth`.
+- Touched contracts: orientation hierarchy reconciliation, proof gap/pin
+      projection, and release-read truth application.
+- Considered but not touched: task persistence, task hierarchy schema,
+      release membership, proof evidence, provider output, and Overview copy.
+- Required follow-up: rebuild/install and confirm the installed NH Overview
+      shows no proof-needed item when selected-release proof count is zero.
+- Proof required: nested internal proof-child regression, typecheck, contract
+      detector, model-independence gate, and installed Overview replay.
+- Proof provided: source regression and static gates; installed replay pending.
+- Waivers: none.
+- Owner-review items: none.
+- Apply/revert: revert the reconciler and nested-child regression together;
+      do not hide stale proof gaps in an Overview-only formatter.

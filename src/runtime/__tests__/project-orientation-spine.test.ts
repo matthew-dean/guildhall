@@ -162,6 +162,54 @@ describe('buildProjectOrientationSpine', () => {
     })
   })
 
+  it('clears a stale internal proof-child gap when its included parent is closed', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'proof-child-authority',
+      now: '2026-07-22T00:00:00.000Z',
+      scope: {
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:task-1'],
+        deferredNodeIds: [],
+      },
+      selectedReleaseId: 'release-1',
+      tasks: [
+        {
+          id: 'task-1',
+          title: 'Completed parent',
+          status: 'done',
+          hierarchy: { childIds: ['task-1-proof'] },
+        },
+        {
+          id: 'task-1-proof',
+          title: 'Establish proof for completed parent',
+          status: 'ready',
+          workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+          hierarchy: { parentId: 'task-1' },
+          acceptanceCriteria: [{ description: 'The proof command is recorded.', met: false }],
+        },
+      ],
+    })
+
+    expect(spine.gaps).toContainEqual(expect.objectContaining({
+      kind: 'proof_needed',
+      refs: ['task:task-1-proof'],
+    }))
+
+    const reconciled = reconcileOrientationSpineWithReleaseTruth(spine, {
+      state: 'ready',
+      counts: { total: 1, done: 1, unfinished: 0, deferred: 0, proofBlocked: 0 },
+    })
+
+    expect(reconciled.gaps.some(gap => gap.refs.includes('task:task-1-proof'))).toBe(false)
+    expect(reconciled.nodes['work:task-1-proof']).toMatchObject({
+      maturity: 'done',
+      proof: { state: 'proven', missing: [] },
+    })
+  })
+
   it('builds a scoped state-of-the-union spine from charter, release scope, work hierarchy, and proof', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

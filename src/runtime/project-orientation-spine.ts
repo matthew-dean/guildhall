@@ -312,13 +312,25 @@ export function reconcileOrientationSpineWithReleaseTruth(
       if (taskId && !rowTaskIds.has(taskId)) terminalIncludedTaskIds.add(taskId)
     }
   }
+  // Internal proof/setup children are not independently counted in a release,
+  // but their stale pins must not outlive a terminal included parent. Follow
+  // the saved hierarchy here rather than treating a child-only gap as a new
+  // release blocker.
+  const terminalHierarchyTaskIds = new Set(terminalIncludedTaskIds)
+  const collectTerminalDescendants = (node: OrientationNode, parentIsTerminal = false): void => {
+    const taskId = node.id.startsWith('work:') ? node.id.slice('work:'.length) : null
+    const terminal = parentIsTerminal || (taskId !== null && terminalIncludedTaskIds.has(taskId))
+    if (terminal && taskId) terminalHierarchyTaskIds.add(taskId)
+    for (const child of node.children) collectTerminalDescendants(child, terminal)
+  }
+  spine.roots.forEach(root => collectTerminalDescendants(root))
   const proofGapBelongsToClosedTask = (gap: OrientationGap): boolean => gap.kind === 'proof_needed' && gap.refs.some(ref => {
     const taskId = ref.replace(/^task:/, '').replace(/^work:/, '')
-    return terminalIncludedTaskIds.has(taskId)
+    return terminalHierarchyTaskIds.has(taskId)
   })
   const patchNode = (node: OrientationNode): OrientationNode => {
     const taskId = node.id.startsWith('work:') ? node.id.slice('work:'.length) : null
-    const terminal = releaseIsProven && terminalIncludedTaskIds.has(taskId ?? '')
+    const terminal = releaseIsProven && terminalHierarchyTaskIds.has(taskId ?? '')
     const children = node.children.map(patchNode)
     return {
       ...node,
