@@ -5482,7 +5482,9 @@ function buildOverviewOrientationPreviewSpine(input: {
   const sourceProgress = sourceSpine?.summary.progress
   const progress = {
     scopeId: scope?.id ?? null,
-    total: projection.counts.included + projection.counts.deferred,
+    // Overview completion is bounded to the selected scope. Later work is a
+    // separate count and must not make a current release look less complete.
+    total: projection.counts.included,
     // Maturity counts describe the assembled plan, not the bounded task page
     // used by this preview. Preserve the saved plan counts while refreshing
     // execution/proof counts from the current compact release projection.

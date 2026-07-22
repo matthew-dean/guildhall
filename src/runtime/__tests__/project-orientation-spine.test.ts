@@ -1964,7 +1964,9 @@ describe('buildProjectOrientationSpine', () => {
 
     expect(spine.summary.progress).toMatchObject({ done: 0, proven: 0 })
     expect(spine.proofContracts[0]).toMatchObject({ state: 'needed' })
-    expect(spine.proofContracts[0]?.verified).toEqual(['Gate passed: pnpm-build'])
+    // Both the hard gate and review verdict predate the recovery. They remain
+    // history, not current proof for the reopened task.
+    expect(spine.proofContracts[0]?.verified).toEqual([])
     expect(spine.proofContracts[0]?.verified).not.toContain('Review approved: llm')
   })
 

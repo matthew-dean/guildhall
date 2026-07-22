@@ -357,7 +357,9 @@ export function reconcileOrientationSpineWithReleaseTruth(
   const retainedCompletionNote = releaseIsProven ? null : existingTopBlocker
   const progress = {
     ...spine.summary.progress,
-    total: truth.counts.total + truth.counts.deferred,
+    // Progress answers "how complete is this selected scope?" Deferred work
+    // is deliberately reported beside it, never folded into the denominator.
+    total: truth.counts.total,
     done: truth.counts.done,
     deferred: truth.counts.deferred,
     blocked: truth.state === 'blocked' ? truth.counts.unfinished : 0,
