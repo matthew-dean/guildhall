@@ -51508,6 +51508,10 @@ Contract Touch Decision
       active. Replanning must explicitly return to shaping first.
 - [ ] Route a failed landed-proof retry with `freshWorktree: true` to the
       worker rather than rerunning the unchanged checkout command.
+- [ ] Reject a command that names a missing PNPM package script before it can
+      enter a gate/retry loop, then route it to source-backed reshaping.
+- [ ] Default a compact task without `revisionCount` to fresh-worktree attempt
+      zero rather than persisting an `attempt-undefined` branch/path.
 
 ### Contract Touch Decision
 

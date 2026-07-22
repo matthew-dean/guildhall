@@ -69,6 +69,15 @@ describe('computeBranchName / computeWorktreePath', () => {
     )
   })
 
+  it('uses attempt zero when a compact legacy task omits revisionCount', () => {
+    const compactTask = { ...task({ id: 'abc' }), revisionCount: undefined } as any
+
+    expect(computeBranchName(compactTask, 'per_attempt')).toBe('guildhall/task-abc-attempt-0')
+    expect(computeWorktreePath('demo-project', compactTask, 'per_attempt')).toBe(
+      path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc', 'attempt-0'),
+    )
+  })
+
   it('worktreeRootFor joins under ~/.guildhall/worktrees/<project-id>', () => {
     expect(worktreeRootFor('some-project')).toBe(
       path.join(TEST_GUILDHALL_HOME, 'worktrees', 'some-project'),

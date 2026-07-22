@@ -116,6 +116,14 @@ function isSelfReferentialGuildhallTaskCommand(command: string): boolean {
 }
 
 function packageScriptBodyForCommand(command: string, projectPath: string): string | null {
+  const reference = packageScriptReferenceForCommand(command, projectPath)
+  return reference?.parsed.scriptBodies[reference.script]?.trim() ?? null
+}
+
+function packageScriptReferenceForCommand(
+  command: string,
+  projectPath: string,
+): { script: string; parsed: NonNullable<ReturnType<typeof readPackageScripts>> } | null {
   const normalized = normalizeCommand(command)
   const dirMatch = /^pnpm\s+--dir\s+(\S+)\s+(.+)$/i.exec(normalized)
   const targetPath = dirMatch ? path.resolve(projectPath, dirMatch[1]!) : projectPath
@@ -124,7 +132,8 @@ function packageScriptBodyForCommand(command: string, projectPath: string): stri
   if (!scriptMatch) return null
   const script = scriptMatch[1]!
   if (['exec', 'install', 'add', 'remove', 'update', 'dlx'].includes(script.toLowerCase())) return null
-  return readPackageScripts(targetPath)?.scriptBodies[script]?.trim() ?? null
+  const parsed = readPackageScripts(targetPath)
+  return parsed ? { script, parsed } : null
 }
 
 export type InvalidAutomatedAcceptanceCommand = {
@@ -148,6 +157,15 @@ export function findInvalidAutomatedAcceptanceCommands(input: {
         criterionId: criterion.id,
         command,
         reason: 'The command invokes Guildhall task orchestration instead of proving the project locally.',
+      })
+      continue
+    }
+    const scriptReference = packageScriptReferenceForCommand(command, input.projectPath)
+    if (scriptReference && !scriptReference.parsed.scripts.has(scriptReference.script)) {
+      invalid.push({
+        criterionId: criterion.id,
+        command,
+        reason: `The PNPM script \`${scriptReference.script}\` is not present in the registered project package contract.`,
       })
       continue
     }
