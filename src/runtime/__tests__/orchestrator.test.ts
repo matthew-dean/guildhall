@@ -7929,6 +7929,56 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(await fs.readFile(path.join(projectPath, 'RELEASE_NOTES.md'), 'utf8')).not.toContain('benchmark artifact evidence')
   })
 
+  it('runs proof recovery against the landed project instead of a stale task worktree', async () => {
+    const projectPath = path.join(tmpDir, 'landed-proof-project')
+    const worktreePath = path.join(tmpDir, 'landed-proof-stale-worktree')
+    await fs.mkdir(projectPath, { recursive: true })
+    await fs.mkdir(worktreePath, { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'proof.txt'), 'current landed proof\n', 'utf8')
+    await fs.writeFile(path.join(worktreePath, 'proof.txt'), 'stale task checkout\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'landed-proof',
+        status: 'gate_check',
+        projectPath,
+        worktreePath,
+        mergeRecord: {
+          fromBranch: 'guildhall/task-landed-proof',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          // A locally landed task can be reopened for proof recovery even if
+          // its remote push was deferred. It must verify the local landing
+          // checkout, never its historical task branch.
+          result: 'push_failed_degraded',
+          mergedAt: '2026-07-22T00:00:00.000Z',
+        },
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The landed proof is present.',
+          verifiedBy: 'automated',
+          command: "grep -q 'current landed proof' proof.txt",
+          met: false,
+        }],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'acceptance-command-gates',
+      afterStatus: 'done',
+    })
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'landed-proof')!
+    expect(task.acceptanceCriteria[0]?.met).toBe(true)
+  })
+
   it('lands accepted command-gated task work before cleaning up the task worktree', async () => {
     const projectPath = path.join(tmpDir, 'acceptance-command-land-project')
     const worktreePath = path.join(tmpDir, 'acceptance-command-land-worktree')

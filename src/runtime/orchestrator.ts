@@ -7589,8 +7589,16 @@ export class Orchestrator {
       .filter(({ criterion }) => shouldRunAcceptanceCommandCriterion(task, criterion))
     if (commandCriteria.length === 0) return null
 
+    // A task reopened solely to refresh stale proof may still retain the
+    // checkout from its original implementation attempt. Once that attempt
+    // has landed, the project checkout is the authoritative code state. A
+    // gate must never rerun against the old branch and report a missing
+    // command that is present in the landed project.
+    const taskWorkIsLanded = ['merged', 'pushed', 'push_failed_degraded'].includes(
+      task.mergeRecord?.result ?? '',
+    )
     const taskProjectPath =
-      typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
+      !taskWorkIsLanded && typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
         ? task.worktreePath.trim()
         : this.resolveEffectiveTaskProjectPath(task)
     const gates = commandCriteria.map(({ criterion }) => ({

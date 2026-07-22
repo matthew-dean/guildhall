@@ -5,6 +5,34 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+## 2026-07-22 Proof recovery reads landed project state
+
+### Contract Touch Decision
+
+- Work id: `0.13.57/landed-proof-recovery-authority`.
+- Touched contracts: acceptance-command gate execution root and task landing/proof-recovery relationship.
+- Contracts considered but not touched: task lifecycle, worktree allocation/cleanup, release scope, proof evidence schema, UI projections, and provider routing.
+- Finding: a proof-recovery task retained its historical task-worktree after its implementation had been cherry-picked locally. The command gate then executed the old checkout and reported a missing proof script that existed in the landed project state. The coordinator subsequently misclassified its own stale-checkout failure as a human decision.
+- Change: a task with a durable local landing result (`merged`, `pushed`, or `push_failed_degraded`) runs its acceptance proof against the effective project checkout. Unlanded task work continues to verify inside its isolated worktree.
+- Proof required: a regression with conflicting project/worktree contents, focused orchestrator test, typecheck, model-independence gate, and installed Narrative Harness replay.
+- Proof provided: regression added; focused test passes. Remaining validation is pending this implementation's installed replay.
+- Waivers: none.
+- Owner-review items: none. This is a runtime-authority repair, not a product decision.
+- Apply/revert: revert the checkout-selection rule and its regression together. No persisted data changes.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope: runtime execution-root selection over existing task `mergeRecord` and worktree metadata.
+- Change class: authority correction.
+- Existing data impact: existing landed merge records begin selecting the current project checkout for proof recovery; unlanded worktree behavior is unchanged.
+- Migration id: none required.
+- Safety: only explicit landing enums switch execution root; unknown or absent records retain the existing worktree behavior.
+- Compatibility reader: not applicable.
+- Fixtures/tests: focused orchestrator regression.
+- Owner-facing plan text: none.
+- Rollback/revert: code-only revert.
+
 ## 2026-07-22 Delegated owner approval remains distinct from Guildhall automation
 
 ### Contract Touch Decision
