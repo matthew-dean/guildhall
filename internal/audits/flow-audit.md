@@ -51558,11 +51558,14 @@ Contract Touch Decision
       cursor, and compact summary refresh ownership.
 - Considered but not touched: task schema, runtime/evidence payloads, release
       scope, worker dispatch, provider prose, and historical task data.
-- Required follow-up: add a deterministic stale-CAS regression, rebuild and
-      replay the selected Narrative Harness proof task in the installed app.
+- Required follow-up: add a deterministic stale-CAS regression if this
+      boundary changes again. The installed Narrative Harness replay is now
+      recorded below.
 - Proof required: stale point-mutation rebase regression, typecheck,
       `lint:contracts`, model-independence, and installed targeted replay.
-- Proof provided: pending.
+- Proof provided: focused promoted-boundary suite, typecheck, contract and
+      model-independence gates, and installed Narrative Harness replay. The
+      selected proof task completed without a stale project-revision failure.
 - Waivers: none.
 - Owner-review items: none.
 - Apply/revert: revert the bounded rebase with its regression; do not restore
@@ -51591,11 +51594,14 @@ Contract Touch Decision
       invalidation domains.
 - Considered but not touched: repository snapshot schema, release scope,
       task completion semantics, Git policy, and UI formatting.
-- Required follow-up: installed replay must show the Git Story diagnostic
-      current after a successful push.
+- Required follow-up: none for this boundary; retain the endpoint regression
+      whenever Git Story actions or projection scheduling change.
 - Proof required: endpoint invalidation regression plus installed release
       readiness read after the scheduled refresh.
-- Proof provided: pending.
+- Proof provided: endpoint invalidation regression and installed Narrative
+      Harness push replay. After the delegated push, the saved readiness
+      projection reports repository `clean`, zero repository blockers, and
+      `15 / 15 done` for the selected release.
 - Waivers: none.
 - Owner-review items: none; the action remains protected by the existing
       Git Story policy/confirmation boundary.
