@@ -384,7 +384,13 @@ function proofRecoveryNeedsFreshWorktree(task: Task): boolean {
   }).proofRecovery ?? (task as Task & {
     runtime?: { proofRecovery?: { freshWorktree?: unknown } }
   }).runtime?.proofRecovery
-  return recovery?.freshWorktree === true
+  if (recovery?.freshWorktree === true) return true
+  if (!['merged', 'pushed', 'push_failed_degraded'].includes(task.mergeRecord?.result ?? '')) return false
+  return (task.proofPaths ?? []).some((path) =>
+    Array.isArray(path?.verificationRecords) && path.verificationRecords.some((record) =>
+      record.executionRoot === 'project_checkout' && record.status === 'failed',
+    ),
+  )
 }
 
 function shouldRunAcceptanceCommandCriterion(
