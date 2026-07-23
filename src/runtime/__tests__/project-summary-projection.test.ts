@@ -1015,6 +1015,27 @@ describe('project-summary-projection', () => {
     expect(readProjectSummaryProjection(tasksPath)).toMatchObject({ freshness: 'current' })
   })
 
+  it('treats a matching-version summary without its decision packet as stale', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-decision-required-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    writeProjectTaskQueue(tasksPath, queue([task('decision-ready', 'ready')]), {
+      projectId: 'decision-required-project',
+      projectRoot: temp,
+    })
+    promoteProjectStateDatabaseAuthority(temp)
+    const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'decision-required-project',
+      sourceQueueLastUpdated: now,
+    })!
+    const { decision: _decision, ...invalidProjection } = projection
+    const database = new DatabaseSync(projectStateDatabasePath(temp))
+    database.prepare('UPDATE project_summary SET payload_json = ?, freshness = ? WHERE id = 1')
+      .run(JSON.stringify(invalidProjection), 'current')
+    database.close()
+
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({ freshness: 'stale' })
+  })
+
   it('materializes evidence-derived status beside scope rows without rewriting task detail', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-evidence-status-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')

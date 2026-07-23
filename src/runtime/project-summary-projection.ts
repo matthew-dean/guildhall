@@ -43,12 +43,13 @@ import {
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
 import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
+import { buildProjectDecisionProjection, projectDecisionStartReadiness, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 20 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 21 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -118,6 +119,8 @@ export interface ProjectSummaryProjection {
   orientationSpine: ProjectOrientationSpine | null
   approvedPlan: ProjectSummaryApprovedPlan | null
   releaseSummary: ProjectSummaryReleaseSummary
+  /** The sole compact authority for execution, release, and primary-action decisions. */
+  decision: ProjectDecisionProjection
   execution?: {
     status: 'running' | 'stopping' | 'stopped' | 'error' | string
     mode?: 'continuous' | 'one_task' | string
@@ -571,6 +574,13 @@ export function buildProjectSummaryProjection(
       : {}),
   }))
   const recentWork = recentWorkForTasks(tasks)
+  const decision = buildProjectDecisionProjection({
+    generatedAt,
+    start,
+    release: releaseSummary,
+    ownerInput: input.ownerInput,
+    runStatus: input.execution?.status ?? 'stopped',
+  })
   // Start readiness remains an execution fact. The summary action is what a
   // person should do next, so a finished release must not surface the stale
   // "no runnable work" transport message as though more work were expected.
@@ -591,7 +601,7 @@ export function buildProjectSummaryProjection(
         ...(start.focusKind ? { focusKind: start.focusKind } : {}),
       }
   const startReadiness = {
-    canStart: start.canStart,
+    ...projectDecisionStartReadiness(decision),
     ...(nextAction.code ? { code: nextAction.code } : {}),
     message: nextAction.message,
     ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
@@ -673,6 +683,7 @@ export function buildProjectSummaryProjection(
     orientationSpine,
     approvedPlan,
     releaseSummary,
+    decision,
     ...(input.execution ? { execution: input.execution } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.ownerInput ? { ownerInput: input.ownerInput } : {}),
@@ -1059,6 +1070,15 @@ export function buildProjectSummaryProjectionFromIndexedState(
     blockers: taskReleaseBlockers,
     updatedAt: generatedAt,
   }
+  const decision = buildProjectDecisionProjection({
+    projectRevision: current.projectRevision,
+    queueRevision: current.queueRevision,
+    generatedAt,
+    start,
+    release: releaseSummary,
+    ownerInput: base.ownerInput,
+    runStatus: base.execution?.status ?? 'stopped',
+  })
   if (releaseSummary.state === 'ready' && start.code === 'all_terminal') {
     nextAction = {
       code: 'release_ready',
@@ -1069,7 +1089,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const rawCounts = summarizeRawTaskCounts(tasks)
   const actionModel = buildProjectActionModel({
     startReadiness: {
-      canStart: start.canStart,
+      ...projectDecisionStartReadiness(decision),
       ...(nextAction.code ? { code: nextAction.code } : {}),
       message: nextAction.message,
       ...(nextAction.focusTaskId ? { focusTaskId: nextAction.focusTaskId } : {}),
@@ -1145,6 +1165,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     scope,
     orientationSpine: currentOrientationSpine,
     releaseSummary,
+    decision,
     nextAction,
     blockers: taskReleaseBlockers,
     recentWork: recentWorkForTasks(tasks.map(task => ({
@@ -1512,6 +1533,22 @@ export function buildProjectSummaryProjectionError(input: {
       blockers: [],
       updatedAt: input.generatedAt ?? new Date().toISOString(),
     },
+    decision: buildProjectDecisionProjection({
+      generatedAt: input.generatedAt ?? new Date().toISOString(),
+      start: {
+        canStart: false,
+        code: 'summary_unavailable',
+        message: 'The project summary could not be refreshed from its task state.',
+      },
+      release: {
+        scopeMode: 'unavailable',
+        release: null,
+        state: 'unknown',
+        blockers: [],
+      },
+      ownerInput: input.ownerInput,
+      runStatus: input.execution?.status ?? 'stopped',
+    }),
     ...(input.execution ? { execution: input.execution } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.ownerInput ? { ownerInput: input.ownerInput } : {}),
@@ -1838,7 +1875,7 @@ export function readProjectSummaryProjection(tasksPath: string): ProjectSummaryP
   if (databaseSummary) {
     return {
       ...databaseSummary.payload,
-      freshness: databaseSummary.payload.version === PROJECT_SUMMARY_PROJECTION_VERSION
+      freshness: projectSummaryProjectionIsCurrent(databaseSummary.payload)
         ? databaseSummary.freshness
         : 'stale',
     }
@@ -1863,7 +1900,7 @@ export function readProjectSummaryProjectionForMigration(tasksPath: string): Pro
       (parsed.version !== PROJECT_SUMMARY_PROJECTION_VERSION && !LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS.has(parsed.version))) {
       return null
     }
-    if (LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS.has(parsed.version)) {
+    if (LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS.has(parsed.version) || !projectSummaryProjectionIsCurrent(parsed)) {
       return { ...parsed, freshness: 'stale' } as unknown as ProjectSummaryProjection
     }
     const recordedMtimeMs = parsed.source?.taskQueueMtimeMs
@@ -1911,7 +1948,7 @@ export function readProjectSummaryShellProjection(tasksPath: string): ProjectSum
       return {
         ...databaseSummary.payload,
         orientationSpine: null,
-        freshness: databaseSummary.payload.version === PROJECT_SUMMARY_PROJECTION_VERSION
+        freshness: projectSummaryProjectionIsCurrent(databaseSummary.payload)
           ? databaseSummary.freshness
           : 'stale',
       }
@@ -1920,6 +1957,23 @@ export function readProjectSummaryShellProjection(tasksPath: string): ProjectSum
     // A corrupt or locked project stays visible as unavailable; it cannot fail the fleet shell.
   }
   return null
+}
+
+/**
+ * A matching version alone is not enough. Derived projection fields can be
+ * introduced by a partial writer or a failed upgrade; a summary without the
+ * shared decision packet must refresh instead of presenting old caches as
+ * current project state.
+ */
+function projectSummaryProjectionIsCurrent(value: Pick<ProjectSummaryProjection, 'version' | 'decision'> | Record<string, unknown>): boolean {
+  if (value.version !== PROJECT_SUMMARY_PROJECTION_VERSION) return false
+  const decision = value.decision
+  return Boolean(
+    decision &&
+    typeof decision === 'object' &&
+    !Array.isArray(decision) &&
+    (decision as { version?: unknown }).version === 1,
+  )
 }
 
 export function projectSummaryProjectionNeedsBackfill(tasksPath: string): boolean {

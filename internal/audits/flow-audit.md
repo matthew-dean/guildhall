@@ -52640,3 +52640,73 @@ Repair:
 - Apply/revert: all product surfaces must call `resolveProjectActionModel`
       for a saved action. Do not reintroduce view-local task ranking to repair
       a cached action.
+
+## 2026-07-23 Project decisions must resolve claims, not competing summaries
+
+- [ ] Narrative Harness currently proves that compact, diagnostic, and release
+      routes can produce incompatible answers from the same project revision.
+      The route user job is to tell whether work can proceed, whether the
+      selected release can ship, what action matters now, and what evidence
+      makes that answer trustworthy.
+- [ ] Replace overlapping persisted `nextAction`, `actionModel`, and
+      independently rebuilt readiness with one revisioned
+      `ProjectDecisionProjection`. It must distinguish execution from release
+      delivery rather than treating them as competing descriptions of one
+      status.
+- [ ] Add an evidence-backed claim and field-policy contract at the existing
+      canonical mutation/observation boundary. Do not add a generic durable
+      claim store or a second project-state system. Same-authority conflicts
+      must remain visible with a typed reconciliation action; no agent, route,
+      or timestamp silently chooses a winner.
+- [ ] Verify one decision packet across Overview, Work, Map, Thread,
+      diagnostic API, release readiness, Start, restart, and the installed
+      Narrative Harness UI.
+
+### Contract Touch Decision
+
+- Work id: `0.13.87/project-decision-resolution`.
+- Touched contracts: project summary projection, compact project responses,
+      diagnostic readiness, release readiness, primary action, runtime and
+      owner-input envelopes, and future multi-agent state assertions.
+- Considered but not touched: task-definition, evidence, release-membership,
+      and approval writers remain canonical sources; this change consumes their
+      typed facts rather than duplicating them.
+- Required follow-up: migrate all decision consumers and remove old persisted
+      decision fragments after the transition. The bounded architecture and
+      verification matrix are recorded in
+      `internal/plans/2026-07-23-project-decision-resolution.md`.
+- Proof required: cross-surface response matrix, contradictory-claim fixture,
+      lifecycle invalidation fixture, compact/read-boundary tests, typecheck,
+      contract lint, and installed Narrative Harness replay.
+- Proof provided: live API evidence has established the current disagreement;
+      implementation and replay are pending.
+- Waivers: none.
+- Owner-review items: only fields whose policy explicitly names owner scope
+      selection may request owner input. Agent work-scope reasoning is not an
+      owner-approval gate.
+- Apply/revert: do not retain two decision authorities. Revert only as one
+      coherent projection migration, with the response matrix restored to a
+      single shared resolver.
+
+### Schema Migration Decision
+
+- Persisted schema touched: project-summary derived projection only.
+- Scope: decision derivation and provenance at existing canonical boundaries,
+      not raw agent transcript storage or a second claim database.
+- Change class: summary schema replacement.
+- Existing data impact: old action and next-action caches become stale on the
+      projection-version bump and are rebuilt from current typed state. Existing
+      task, proof, and release records are not rewritten.
+- Migration id: `project-decision-projection-v1`.
+- Safety: execution and release are separate fields; equal-authority conflict
+      returns explicit uncertainty rather than selecting arbitrary state.
+- Compatibility reader: current transitional readers may display old fields
+      only when the new projection is unavailable; they cannot recompute or
+      override a current decision projection. Remove them after migration.
+- Fixtures/tests: response matrix and conflict-resolution fixtures listed
+      above.
+- Owner-facing plan text: a project may continue runnable work while its
+      release remains unshippable, and the UI will say both plainly.
+- Rollback/revert: rebuild the previous derived projection from canonical
+      task/runtime/evidence records; never write a route-local decision back
+      into canonical state.

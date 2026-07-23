@@ -45,6 +45,7 @@ import { normalizeReviewPlanForTask } from './review-planner.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { readPersistedStructuredSelfCritique, reviewVerdictHasStructuredApproval } from './review-contract.js'
 import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
+import { projectDecisionStartReadiness, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
 import { readCurrentThreadTaskIdsAtBoundary, readThreadHistoryReadProjection, readThreadReadProjection, threadReadProjectionFromBoundary } from './thread-read-projection.js'
@@ -602,6 +603,7 @@ interface ServiceProjectSummary {
     shelved: number
   }
   releaseSummary?: ProjectSummaryProjection['releaseSummary']
+  decision?: ProjectDecisionProjection
   workProgress?: ProjectWorkProgress
   highlights?: {
     activeTaskTitle?: string | null
@@ -2519,27 +2521,35 @@ function summarizeProjectFromProjection(
     }
   }
 
-  const savedStartReadiness = applyOwnerInputToStartReadiness({
-    canStart: projection.nextAction.code === 'ready_work' || projection.nextAction.code === 'paused_live_work',
-    label: projection.nextAction.label as ProjectScopeProjection['start']['label'],
-    ...(projection.nextAction.code ? { code: projection.nextAction.code } : {}),
-    message: projection.nextAction.message,
-    ...(typeof projection.nextAction.count === 'number' ? { count: projection.nextAction.count } : {}),
-    actionHref: projection.scope ? `/projects/${encodeURIComponent(project.id)}/work${projection.nextAction.focusTaskId ? `?task=${encodeURIComponent(projection.nextAction.focusTaskId)}` : ''}` : '/work',
-    ...(projection.nextAction.focusTaskId ? { focusTaskId: projection.nextAction.focusTaskId } : {}),
-    ...(projection.nextAction.focusTaskTitle ? { focusTaskTitle: projection.nextAction.focusTaskTitle } : {}),
-    ...(projection.nextAction.focusKind ? { focusKind: projection.nextAction.focusKind as ProjectScopeProjection['start']['focusKind'] } : {}),
-    executionScope: projection.scope
-      ? {
-          id: projection.scope.id,
-          label: projection.scope.label,
-          kind: projection.scope.kind as ProjectScope['kind'],
-          source: projection.scope.source as ProjectScope['source'],
-          taskCount: projection.scope.included,
-          deferredTaskCount: projection.scope.deferred,
-        }
-      : undefined,
-  }, projection.ownerInput)
+  const actionScope = projection.scope
+    ? {
+        id: projection.scope.id,
+        label: projection.scope.label,
+        kind: projection.scope.kind as ProjectScope['kind'],
+        source: projection.scope.source as ProjectScope['source'],
+        taskCount: projection.scope.included,
+        deferredTaskCount: projection.scope.deferred,
+      }
+    : undefined
+  const savedStartReadiness = projection.decision
+    ? {
+        ...projectDecisionStartReadiness(projection.decision),
+        label: projection.decision.execution.state === 'paused' ? 'Resume' as const : 'Start' as const,
+        actionHref: projection.scope ? `/projects/${encodeURIComponent(project.id)}/work${projection.decision.execution.focusTaskId ? `?task=${encodeURIComponent(projection.decision.execution.focusTaskId)}` : ''}` : '/work',
+        executionScope: actionScope,
+      }
+    : applyOwnerInputToStartReadiness({
+      canStart: projection.nextAction.code === 'ready_work' || projection.nextAction.code === 'paused_live_work',
+      label: projection.nextAction.label as ProjectScopeProjection['start']['label'],
+      ...(projection.nextAction.code ? { code: projection.nextAction.code } : {}),
+      message: projection.nextAction.message,
+      ...(typeof projection.nextAction.count === 'number' ? { count: projection.nextAction.count } : {}),
+      actionHref: projection.scope ? `/projects/${encodeURIComponent(project.id)}/work${projection.nextAction.focusTaskId ? `?task=${encodeURIComponent(projection.nextAction.focusTaskId)}` : ''}` : '/work',
+      ...(projection.nextAction.focusTaskId ? { focusTaskId: projection.nextAction.focusTaskId } : {}),
+      ...(projection.nextAction.focusTaskTitle ? { focusTaskTitle: projection.nextAction.focusTaskTitle } : {}),
+      ...(projection.nextAction.focusKind ? { focusKind: projection.nextAction.focusKind as ProjectScopeProjection['start']['focusKind'] } : {}),
+      executionScope: actionScope,
+    }, projection.ownerInput)
   const startReadiness = applyRunStatusToStartReadiness(
     savedStartReadiness,
     run?.status ?? projection.execution?.status,
@@ -2622,6 +2632,7 @@ function summarizeProjectFromProjection(
     },
     workProgress: workProgressFromProjectSummaryProjection(projection),
     ...(projection.releaseSummary ? { releaseSummary: projection.releaseSummary } : {}),
+    ...(projection.decision ? { decision: projection.decision } : {}),
     ...(projection.execution ? { execution: projection.execution } : {}),
     ...(projection.runtime ? { runtime: projection.runtime } : {}),
     ...(projection.ownerInput ? { ownerInput: projection.ownerInput } : {}),
@@ -7775,6 +7786,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : {}),
         ...(gitStory ? { gitStory } : {}),
         ...(releaseReadiness ? { releaseReadiness } : {}),
+        ...(currentState.summary?.decision ? { decision: currentState.summary.decision } : {}),
         startReadiness,
         actionModel,
         orientationSpine: mapSurface
@@ -9181,9 +9193,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (terminal && terminal.code !== 'proof_evidence_missing') {
       return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
-    if (terminal?.code === 'proof_evidence_missing') {
-      return attachExecutionScope(startReadinessForTerminalState(terminal))
-    }
     // The saved proof count is a compact fallback only. When the caller
     // supplied the current queue, effective tasks, and selected scope, those
     // facts decide whether work remains runnable; otherwise a completed
@@ -9202,6 +9211,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (taskReadinessBlocker) return attachExecutionScope(taskReadinessBlocker)
     }
 
+    // Missing proof can prevent release shipment while other selected work is
+    // still ready. Let the shared task readiness decision name that runnable
+    // work before falling back to the proof-recovery action.
     if (terminal) {
       return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
@@ -17053,6 +17065,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         queueRevision: state.queueRevision,
         projectRevision: state.projectRevision,
         stateConsistency,
+        ...(state.summary?.decision ? { decision: state.summary.decision } : {}),
         ...(summaryFreshness !== 'current' && savedReleaseSummary
           ? { notReadyReason: 'The saved project summary is refreshing.' }
           : savedCounts.total === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
