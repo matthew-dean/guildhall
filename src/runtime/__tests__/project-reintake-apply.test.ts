@@ -341,6 +341,8 @@ describe('project re-intake apply', () => {
       status: 'import_draft',
       acceptanceCriteria: [],
     })
+    expect(reframed).not.toHaveProperty('structuredSpec')
+    expect(reframed).not.toHaveProperty('acceptanceCriteriaProofState')
     expect(reframed).not.toHaveProperty('taskKind')
     expect(reframed).not.toHaveProperty('sizePlan')
     expect(reframed).not.toHaveProperty('taskReadiness')

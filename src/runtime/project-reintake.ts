@@ -631,9 +631,11 @@ function clearStaleReintakeDerivedFields(task: Record<string, unknown>): void {
     'productBrief',
     'requestIntake',
     'sizePlan',
+    'structuredSpec',
     'taskKind',
     'taskReadiness',
     'workUnitAnalysis',
+    'acceptanceCriteriaProofState',
   ]) {
     delete task[key]
   }
