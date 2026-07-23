@@ -51905,3 +51905,20 @@ Repair:
 - Proof provided: focused suite and typecheck; installed replay pending.
 - Apply/revert: revert only with a replacement shared proof predicate; do not
       reintroduce a local generic-proof interpretation.
+
+## 2026-07-23 Reconciled releases retain their durable proof mode
+
+- [x] Re-intake selected the active reconciliation release but discarded its
+      durable `proofStyle`, causing script-only proof requirements to vanish.
+- [x] The selected release now inherits `proofStyle` from the existing
+      reconciliation release whenever the source plan does not restate it.
+
+### Contract Touch Decision
+
+- Work id: `0.13.65/reintake-release-proof-style-inheritance`.
+- Touched contracts: re-intake release selection and durable proof style.
+- Proof required: typecheck and re-intake suite pass; installed replay exposes
+      stale script-only work as reconciliation rather than preserved progress.
+- Proof provided: local suites; installed replay pending.
+- Apply/revert: revert only with a replacement inheritance path; source-plan
+      omission must never silently weaken an active release contract.

@@ -32,7 +32,7 @@ export interface ProjectReintakeInput {
   projectPath?: string
   sources: ProjectReintakeSource[]
   tasks: Array<Record<string, unknown>>
-  releases?: Array<Pick<ProjectRelease, 'id' | 'label' | 'state' | 'nodeIds' | 'deferredNodeIds' | 'supersedesReleaseId'>>
+  releases?: Array<Pick<ProjectRelease, 'id' | 'label' | 'state' | 'nodeIds' | 'deferredNodeIds' | 'supersedesReleaseId'> & Pick<Partial<ProjectRelease>, 'proofStyle'>>
 }
 
 export interface ProjectReintakeDraft {
@@ -1674,6 +1674,7 @@ function selectReintakeRelease(
       id: reconciled.id,
       label: reconciled.label,
       supersedesReleaseId: reconciled.supersedesReleaseId,
+      ...(selectedRelease.proofStyle ? {} : reconciled.proofStyle ? { proofStyle: reconciled.proofStyle } : {}),
     }
   }
 
