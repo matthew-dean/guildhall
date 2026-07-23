@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { parse as parseYaml } from 'yaml'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
-import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabaseDetailPathFromTasksPath, projectStateDatabasePath, promoteProjectStateDatabaseAuthority, readProjectStateDatabaseCurrentProofReadModelStatus, readProjectStateDatabaseInventory, readProjectStateDatabaseMetadata, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseSummary, readProjectStateDatabaseTaskOverlay, readProjectStateDatabaseTaskEvidenceAuthority, readProjectStateDatabaseTaskEvidenceCurrent, readProjectStateDatabaseTaskEvidenceHistory, readProjectStateDatabaseTaskPoint, readProjectStateDatabaseTaskOverlayStores, replaceProjectStateDatabaseTaskRuntimes, writeProjectStateDatabaseSnapshot, PROJECT_STATE_DATABASE_SCHEMA_VERSION } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabaseDetailPathFromTasksPath, projectStateDatabasePath, promoteProjectStateDatabaseAuthority, readProjectStateDatabaseCurrentProofReadModelStatus, readProjectStateDatabaseDiagnosticProjection, readProjectStateDatabaseInventory, readProjectStateDatabaseMetadata, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseSummary, readProjectStateDatabaseTaskOverlay, readProjectStateDatabaseTaskEvidenceAuthority, readProjectStateDatabaseTaskEvidenceCurrent, readProjectStateDatabaseTaskEvidenceHistory, readProjectStateDatabaseTaskPoint, readProjectStateDatabaseTaskOverlayStores, replaceProjectStateDatabaseTaskRuntimes, writeProjectStateDatabaseDiagnosticProjection, writeProjectStateDatabaseSnapshot, PROJECT_STATE_DATABASE_SCHEMA_VERSION } from '@guildhall/sessions'
 import {
   applyProjectMigrations,
   getProjectMigrationStatus,
@@ -1795,6 +1795,54 @@ describe('applyProjectMigrations', () => {
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.13.0/project-decision-projection'],
+    })).applied).toEqual([])
+  })
+
+  it('attaches task identity to legacy diagnostic blockers only when the task inventory proves it', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-23T12:00:00.000Z',
+        tasks: [{ id: 'task-proven', title: 'Proven task', status: 'done' }],
+      },
+      summary: { generatedAt: '2026-07-23T12:00:00.000Z', freshness: 'current' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const revision = readProjectStateDatabaseMetadata(projectRoot)?.revision
+    expect(revision).toBeTypeOf('number')
+    writeProjectStateDatabaseDiagnosticProjection(projectRoot, {
+      sourceRevision: revision!,
+      freshness: 'current',
+      generatedAt: '2026-07-23T12:01:00.000Z',
+      git: null,
+      readiness: {
+        ready: false,
+        code: 'proof_evidence_missing',
+        message: 'Proof is missing.',
+        blockerCount: 2,
+        unfinishedCount: 0,
+        blockers: [
+          { id: 'task-proven', label: 'Proof is missing.' },
+          { id: 'external-check', label: 'External verification is pending.' },
+        ],
+      },
+    })
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.58/diagnostic-readiness-task-identity'],
+    })
+
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.58/diagnostic-readiness-task-identity'])
+    expect(readProjectStateDatabaseDiagnosticProjection(projectRoot)?.readiness?.blockers).toEqual([
+      expect.objectContaining({ id: 'task-proven', taskId: 'task-proven' }),
+      expect.objectContaining({ id: 'external-check' }),
+    ])
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.58/diagnostic-readiness-task-identity'],
     })).applied).toEqual([])
   })
 

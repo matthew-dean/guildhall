@@ -9,11 +9,13 @@ import type { Task, TaskQueue } from '@guildhall/core'
 import {
   appendTaskEvidence,
   projectStatePath,
+  readProjectStateDatabaseMetadata,
   readProjectStateDatabaseQueueDefinition,
   promoteProjectStateDatabaseAuthority,
   updateProjectStateDatabaseSummary,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
+  writeProjectStateDatabaseDiagnosticProjection,
   writeProjectStateJsonAsync,
   writeProjectStateTextAsync,
 } from '@guildhall/sessions'
@@ -323,6 +325,67 @@ describe('GET /api/project/release-readiness', () => {
     expect(liveBody.diagnostics.freshness).toBe('request_time')
   })
 
+  it('reports a saved diagnostic disagreement without letting it replace the project decision', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-ready'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [makeTask({
+        id: 'task-ready',
+        title: 'Ready task',
+        status: 'done',
+        completedAt: '2026-07-23T12:00:00.000Z',
+        releaseIds: ['headless-mvp'],
+        ...modeledScriptProof(),
+      })],
+    })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
+    const revision = readProjectStateDatabaseMetadata(tmpDir)?.revision
+    expect(revision).toBeTypeOf('number')
+    writeProjectStateDatabaseDiagnosticProjection(tmpDir, {
+      sourceRevision: revision!,
+      freshness: 'current',
+      generatedAt: new Date().toISOString(),
+      git: null,
+      readiness: {
+        ready: false,
+        code: 'proof_evidence_missing',
+        message: 'A diagnostic claims proof is missing.',
+        blockerCount: 1,
+        unfinishedCount: 0,
+        blockers: [{ id: 'task-ready', taskId: 'task-ready', label: 'A diagnostic claims proof is missing.' }],
+      },
+    })
+
+    const url = new URL('http://localhost/api/project/release-readiness')
+    url.searchParams.set('projectId', projectId)
+    const body = await (await app.fetch(new Request(url))).json() as any
+
+    expect(body).toMatchObject({
+      stateConsistency: 'contradictory',
+      decision: { release: { blockerTaskIds: [] } },
+      releaseBlockers: [],
+      diagnostics: {
+        releaseBlockers: [],
+        observation: {
+          agreement: { state: 'contradictory', reconciliation: 'inspect_canonical_state' },
+          releaseBlockers: [expect.objectContaining({ taskId: 'task-ready' })],
+        },
+      },
+    })
+  })
+
   it('keeps diagnostic repository follow-up out of the saved release answer', async () => {
     await seedQueue({
       version: 1,
@@ -352,9 +415,13 @@ describe('GET /api/project/release-readiness', () => {
     const body = await (await app.fetch(new Request(savedUrl))).json() as any
 
     expect(body.releaseBlockers).toEqual([])
-    expect(body.diagnostics.releaseBlockers).toEqual([
-      expect.objectContaining({ id: 'repository-followup:repo:0' }),
-    ])
+    expect(body.diagnostics.releaseBlockers).toEqual([])
+    expect(body.diagnostics.observation).toMatchObject({
+      agreement: { state: 'confirmed' },
+      releaseBlockers: [
+        expect.objectContaining({ id: 'repository-followup:repo:0' }),
+      ],
+    })
 
     const liveUrl = new URL(savedUrl)
     liveUrl.searchParams.set('live', 'true')
@@ -1335,7 +1402,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'no_unattended_progress',
-      message: '"Current proof recovery lane" is blocked before unattended work can run: provider_missing: DEEPINFRA_API_TOKEN is required.',
+      message: '"Current proof recovery lane" is blocked before unattended work can run: Run the real provider proof and attach the evidence.',
       actionHref: '/work?task=task-current',
       focusTaskId: 'task-current',
       focusTaskTitle: 'Current proof recovery lane',

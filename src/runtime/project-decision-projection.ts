@@ -44,6 +44,13 @@ export interface ResolvedProjectStateClaim<T = unknown> {
   conflict?: ProjectStateConflict
 }
 
+export interface ProjectStateObservationAgreement {
+  state: 'confirmed' | 'stale' | 'contradictory' | 'unavailable'
+  reconciliation?: ProjectStateClaimPolicy['reconciliation']
+  canonicalClaimIds: string[]
+  observationClaimId: string
+}
+
 const DEFAULT_CLAIM_AUTHORITIES: readonly ProjectStateClaimAuthority[] = [
   'owner_selection',
   'canonical_mutation',
@@ -128,6 +135,54 @@ export function resolveProjectStateClaims(
     })
   }
   return resolved.sort((left, right) => claimKey(left).localeCompare(claimKey(right)))
+}
+
+/**
+ * Compare an agent/runtime observation against the resolved fact for the same
+ * field. A lower-authority observation cannot replace canonical state, but a
+ * disagreement is still explicit and carries the policy's repair action.
+ */
+export function reconcileProjectStateObservation(input: {
+  projectRevision: number
+  canonicalClaim: ProjectStateClaim
+  observationClaim: ProjectStateClaim
+  policy: ProjectStateClaimPolicy
+}): ProjectStateObservationAgreement {
+  const fallback = {
+    canonicalClaimIds: [input.canonicalClaim.id],
+    observationClaimId: input.observationClaim.id,
+  }
+  if (input.canonicalClaim.projectRevision !== input.projectRevision ||
+    input.observationClaim.projectRevision !== input.projectRevision) {
+    return { state: 'stale', reconciliation: input.policy.reconciliation, ...fallback }
+  }
+  const resolved = resolveProjectStateClaims({
+    projectRevision: input.projectRevision,
+    claims: [input.canonicalClaim, input.observationClaim],
+    policies: [input.policy],
+  }).find(candidate =>
+    candidate.subject.kind === input.canonicalClaim.subject.kind &&
+    candidate.subject.id === input.canonicalClaim.subject.id &&
+    candidate.field === input.canonicalClaim.field,
+  )
+  if (!resolved || resolved.value === undefined) {
+    return { state: 'unavailable', reconciliation: input.policy.reconciliation, ...fallback }
+  }
+  if (resolved.conflict) {
+    return {
+      state: 'contradictory',
+      reconciliation: resolved.conflict.reconciliation,
+      canonicalClaimIds: resolved.claimIds,
+      observationClaimId: input.observationClaim.id,
+    }
+  }
+  return stableJson(resolved.value) === stableJson(input.observationClaim.value)
+    ? {
+        state: 'confirmed',
+        canonicalClaimIds: resolved.claimIds,
+        observationClaimId: input.observationClaim.id,
+      }
+    : { state: 'contradictory', reconciliation: input.policy.reconciliation, ...fallback }
 }
 
 export interface ProjectDecisionProjection {

@@ -52647,7 +52647,11 @@ Repair:
       routes can produce incompatible answers from the same project revision.
       The route user job is to tell whether work can proceed, whether the
       selected release can ship, what action matters now, and what evidence
-      makes that answer trustworthy.
+      makes that answer trustworthy. Live replay found a saved decision with
+      no proof blockers beside a same-revision diagnostic naming four proof
+      blockers while the route labeled the pair `aligned`; repair this as an
+      explicit decision-versus-observation disagreement, never as a timestamp
+      comparison or a second readiness authority.
 - [ ] Replace overlapping persisted `nextAction`, `actionModel`, and
       independently rebuilt readiness with one revisioned
       `ProjectDecisionProjection`. It must distinguish execution from release
@@ -52700,15 +52704,17 @@ Repair:
       projection-version bump and are rebuilt from current typed state. The
       blocker fact is refreshed from existing task/runtime state; task, proof,
       and release records are not rewritten.
-- Migration id: `0.13.0/project-decision-projection`.
+- Migration ids: `0.13.0/project-decision-projection` and
+      `0.13.58/diagnostic-readiness-task-identity`.
 - Safety: execution and release are separate fields; equal-authority conflict
       returns explicit uncertainty rather than selecting arbitrary state.
 - Compatibility reader: current transitional readers may display old fields
       only when the new projection is unavailable; they cannot recompute or
       override a current decision projection. Remove them after migration.
 - Fixtures/tests: version-current-but-decision-missing migration regression,
-      compact-versus-effective proof-recovery blocker regression, plus the
-      response matrix and conflict-resolution fixtures listed above.
+      legacy diagnostic task-identity repair, compact-versus-effective
+      proof-recovery blocker regression, plus the response matrix and
+      conflict-resolution fixtures listed above.
 - Owner-facing plan text: a project may continue runnable work while its
       release remains unshippable, and the UI will say both plainly.
 - Rollback/revert: rebuild the previous derived projection from canonical

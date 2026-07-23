@@ -24,6 +24,7 @@ import {
   readProjectStateDatabaseQueueDefinitionForMigration,
   readProjectStateDatabaseQueueWithRevision,
   readProjectStateDatabaseInventory,
+  readProjectStateDatabaseDiagnosticProjection,
   readProjectStateDatabaseSummary,
   migrateProjectStateDatabaseQueueDetail,
   migrateProjectStateDatabaseWorkItemDetails,
@@ -51,6 +52,7 @@ import {
   upsertTaskRuntimeState,
   rewriteProjectStateDatabaseTaskSummaries,
   projectStateDatabaseTaskSummary,
+  writeProjectStateDatabaseDiagnosticProjection,
 } from '@guildhall/sessions'
 import type { ProjectStateDatabaseScopeRow } from '@guildhall/sessions'
 import { Task as TaskSchema, TaskRuntimeState, type ProjectRelease } from '@guildhall/core'
@@ -223,6 +225,7 @@ const PROOF_SETUP_EXECUTION_BLUEPRINT_MIGRATION_ID = '0.13.41/proof-setup-execut
 const PROOF_SETUP_ACCEPTANCE_CONTRACT_MIGRATION_ID = '0.13.55/proof-setup-acceptance-contract'
 const PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID = '0.13.56/proof-setup-projection-refresh'
 const PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID = '0.13.57/proof-setup-effective-projection'
+const DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID = '0.13.58/diagnostic-readiness-task-identity'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -986,6 +989,28 @@ async function effectiveCurrentProofReadModelStatus(projectRoot: string): Promis
     taskCount: inventory.tasks.length,
     mismatchedCount,
   }
+}
+
+/**
+ * Older diagnostic snapshots stored task-owned release blockers without the
+ * typed task relation. Repair only IDs that the normalized task inventory can
+ * prove are task IDs; unknown diagnostic observations stay unclassified.
+ */
+function diagnosticReadinessTaskIdentityStatus(projectRoot: string): {
+  taskIds: Set<string>
+  diagnostic: ReturnType<typeof readProjectStateDatabaseDiagnosticProjection>
+  missingTaskIdentityCount: number
+} {
+  const inventory = readProjectStateDatabaseInventory(
+    getProjectSystemStatePath(projectRoot, 'TASKS.json'),
+    { includeDefinitions: false },
+  )
+  const diagnostic = readProjectStateDatabaseDiagnosticProjection(projectRoot)
+  const taskIds = new Set(inventory?.tasks.map(task => task.id) ?? [])
+  const missingTaskIdentityCount = diagnostic?.readiness?.blockers?.filter(blocker =>
+    !blocker.taskId && taskIds.has(blocker.id),
+  ).length ?? 0
+  return { taskIds, diagnostic, missingTaskIdentityCount }
 }
 
 /**
@@ -4731,6 +4756,48 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID,
+    title: 'Type task-owned diagnostic blockers',
+    introducedIn: '0.13.58',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Adds the normalized task relation to older diagnostic readiness blockers only when the current task inventory proves the blocker ID belongs to a task, so observations can be compared deterministically with the project decision.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const status = diagnosticReadinessTaskIdentityStatus(projectRoot)
+      return {
+        needed: status.missingTaskIdentityCount > 0,
+        affectedPaths: status.missingTaskIdentityCount > 0
+          ? [projectStateDatabasePath(projectRoot), `diagnostic readiness (${status.missingTaskIdentityCount} task blocker${status.missingTaskIdentityCount === 1 ? '' : 's'} missing typed ownership)`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const status = diagnosticReadinessTaskIdentityStatus(projectRoot)
+      const diagnostic = status.diagnostic
+      if (!diagnostic?.readiness) {
+        return { summary: 'No saved readiness diagnostic needed task-ownership repair.', affectedPaths: [] }
+      }
+      const blockers = diagnostic.readiness.blockers?.map(blocker =>
+        !blocker.taskId && status.taskIds.has(blocker.id)
+          ? { ...blocker, taskId: blocker.id }
+          : blocker,
+      )
+      writeProjectStateDatabaseDiagnosticProjection(projectRoot, {
+        sourceRevision: diagnostic.sourceRevision,
+        freshness: diagnostic.freshness,
+        generatedAt: diagnostic.generatedAt,
+        git: diagnostic.git,
+        readiness: { ...diagnostic.readiness, ...(blockers ? { blockers } : {}) },
+      })
+      return {
+        summary: `Attached typed task ownership to ${status.missingTaskIdentityCount} saved diagnostic readiness blocker${status.missingTaskIdentityCount === 1 ? '' : 's'} without changing task, proof, release, or runtime state.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
 ]
 
 const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
@@ -4824,6 +4891,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [PROOF_SETUP_ACCEPTANCE_CONTRACT_MIGRATION_ID]: 'migrations.test.ts: canonicalizes proof-setup acceptance criteria without changing release membership',
   [PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID]: 'migrations.test.ts: refreshes release readiness after proof-setup contract normalization',
   [PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: projects proof from the canonical task snapshot and current typed evidence',
+  [DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID]: 'migrations.test.ts: attaches task identity to legacy diagnostic blockers only when the task inventory proves it',
   '0.11.0/project-summary-projection': 'migrations.test.ts: project summary backfill is idempotent and preserves task history',
   '0.11.1/project-summary-projection-v2': 'migrations.test.ts: project summary shape refresh is idempotent and preserves task history',
   '0.11.2/project-summary-projection-setup-state': 'migrations.test.ts: project summary setup-state refresh is idempotent and preserves task history',

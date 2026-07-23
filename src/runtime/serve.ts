@@ -45,7 +45,7 @@ import { normalizeReviewPlanForTask } from './review-planner.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { readPersistedStructuredSelfCritique, reviewVerdictHasStructuredApproval } from './review-contract.js'
 import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
-import { projectDecisionStartReadiness, type ProjectDecisionProjection } from './project-decision-projection.js'
+import { projectDecisionStartReadiness, reconcileProjectStateObservation, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
 import { readCurrentThreadTaskIdsAtBoundary, readThreadHistoryReadProjection, readThreadReadProjection, threadReadProjectionFromBoundary } from './thread-read-projection.js'
@@ -17053,7 +17053,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
         gitStoryBlockingCount: git?.blockerCount ?? 0,
         done: savedCounts.done,
       }
-      const stateConsistency = diagnostic && diagnostic.sourceRevision === state.projectRevision ? 'aligned' : 'stale'
+      const decision = state.summary?.decision
+      const diagnosticTaskBlockerIds = diagnostic?.readiness?.blockers
+        ?.flatMap(blocker => blocker.taskId ? [blocker.taskId] : []) ?? []
+      const decisionAgreement = decision && diagnostic && state.projectRevision !== null
+        ? reconcileProjectStateObservation({
+            projectRevision: state.projectRevision,
+            canonicalClaim: {
+              id: `project-decision:${decision.projectRevision ?? state.projectRevision}:release.blockerTaskIds`,
+              projectRevision: decision.projectRevision ?? state.projectRevision,
+              subject: { kind: 'release', id: decision.release.releaseId ?? 'current-work' },
+              field: 'release.blockerTaskIds',
+              value: decision.release.blockerTaskIds,
+              authority: 'canonical_mutation',
+              actor: 'project-decision',
+              observedAt: decision.generatedAt,
+              evidenceRefs: decision.release.blockerTaskIds.map(taskId => `task:${taskId}`),
+            },
+            observationClaim: {
+              id: `diagnostic:${diagnostic.sourceRevision}:release.blockerTaskIds`,
+              projectRevision: diagnostic.sourceRevision,
+              subject: { kind: 'release', id: decision.release.releaseId ?? 'current-work' },
+              field: 'release.blockerTaskIds',
+              value: diagnosticTaskBlockerIds,
+              authority: 'agent_derivation',
+              actor: 'diagnostic-projector',
+              observedAt: diagnostic.generatedAt,
+              evidenceRefs: diagnosticTaskBlockerIds.map(taskId => `task:${taskId}`),
+            },
+            policy: {
+              field: 'release.blockerTaskIds',
+              authorities: ['canonical_mutation', 'agent_derivation'],
+              reconciliation: 'inspect_canonical_state',
+            },
+          })
+        : null
+      const stateConsistency = decisionAgreement?.state ?? (diagnostic && diagnostic.sourceRevision === state.projectRevision ? 'unavailable' : 'stale')
       return {
         checksLoaded: Boolean(diagnostic),
         release: savedRelease,
@@ -17067,7 +17102,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         queueRevision: state.queueRevision,
         projectRevision: state.projectRevision,
         stateConsistency,
-        ...(state.summary?.decision ? { decision: state.summary.decision } : {}),
+        ...(decision ? { decision } : {}),
         ...(summaryFreshness !== 'current' && savedReleaseSummary
           ? { notReadyReason: 'The saved project summary is refreshing.' }
           : savedCounts.total === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
@@ -17086,7 +17121,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           sourceRevision: diagnostic?.sourceRevision ?? null,
           currentStateAuthority: state.authority,
           stateConsistency,
-          ready: diagnostic?.readiness?.ready ?? savedReady,
+          ready: savedReady,
           statusCounts,
           proofStyle: savedRelease?.proofStyle ?? 'unspecified',
           gitStory: git
@@ -17094,7 +17129,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
             : null,
           dirtyCheckout: { ownedCount: 0, files: [], freshness: 'not_projected' },
           totals: diagnosticTotals,
-          releaseBlockers: savedDiagnosticReleaseBlockers,
+          releaseBlockers: savedBlockers,
+          ...(decisionAgreement ? {
+            observation: {
+              agreement: decisionAgreement,
+              ready: diagnostic?.readiness?.ready ?? null,
+              releaseBlockers: savedDiagnosticReleaseBlockers,
+            },
+          } : {}),
           message: diagnostic
             ? 'Showing the latest saved repository and readiness observation.'
             : 'Repository and readiness observation is not available yet; refresh is queued.',
@@ -17298,7 +17340,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       blockedByAgent,
       proofMissingDoneTasks: effectiveProofMissingDoneTasks,
       releaseBlockers: [
-        ...effectiveReleaseBlockers,
+        ...effectiveReleaseBlockers.map(blocker => ({ ...blocker, taskId: blocker.id })),
         ...repositoryFollowupBlockers,
         ...designSystemBlockers,
         ...dirtyCheckoutBlockers,

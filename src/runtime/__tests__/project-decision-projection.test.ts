@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildProjectDecisionProjection, resolveProjectStateClaims } from '../project-decision-projection.js'
+import { buildProjectDecisionProjection, reconcileProjectStateObservation, resolveProjectStateClaims } from '../project-decision-projection.js'
 
 describe('project decision projection', () => {
   it('keeps runnable work distinct from release proof debt', () => {
@@ -105,5 +105,45 @@ describe('project decision projection', () => {
       claimIds: ['runtime-a', 'runtime-b'],
     })])
     expect(resolved[0]).not.toHaveProperty('conflict')
+  })
+
+  it('makes a lower-authority diagnostic disagreement explicit without letting it replace canonical state', () => {
+    const agreement = reconcileProjectStateObservation({
+      projectRevision: 42,
+      canonicalClaim: {
+        id: 'summary-release-blockers',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.blockerTaskIds',
+        value: ['task-proof'],
+        authority: 'canonical_mutation',
+        actor: 'project-summary',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['task:task-proof'],
+      },
+      observationClaim: {
+        id: 'diagnostic-release-blockers',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.blockerTaskIds',
+        value: [],
+        authority: 'agent_derivation',
+        actor: 'diagnostic-projector',
+        observedAt: '2026-07-23T12:01:00.000Z',
+        evidenceRefs: ['diagnostic:42'],
+      },
+      policy: {
+        field: 'release.blockerTaskIds',
+        authorities: ['canonical_mutation', 'agent_derivation'],
+        reconciliation: 'inspect_canonical_state',
+      },
+    })
+
+    expect(agreement).toEqual({
+      state: 'contradictory',
+      reconciliation: 'inspect_canonical_state',
+      canonicalClaimIds: ['summary-release-blockers'],
+      observationClaimId: 'diagnostic-release-blockers',
+    })
   })
 })
