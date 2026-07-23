@@ -511,7 +511,7 @@ function buildEffectiveTaskFromState(
       : base
     if (!lifecycleBase || !hasActiveProofRecovery(proofRecoveryInput)) return lifecycleBase
     const supersededEscalationIds = new Set(
-      (task.escalations ?? [])
+      (proofRecoveryInput.escalations ?? [])
         .filter((escalation) => escalation.reason === 'max_revisions_exceeded')
         .map((escalation) => escalation.id),
     )

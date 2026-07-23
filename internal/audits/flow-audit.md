@@ -51,6 +51,28 @@ help_summary: |
   scope contract, and the canonical terminal proof result overrides compact
   summary fallback before release review gates return. The same selected-release
   identity therefore governs visible state and the mutation decision.
+- Follow-up finding: selected-release review duplicated task readiness and
+  stopped the entire release for one unapproved spec even after proof recovery
+  had created runnable internal work. Task readiness now solely owns task-level
+  approval and brief state; the release guard runs afterward and owns only
+  release-level blockers. The coupled regression keeps a `spec_review` task
+  untouched while proving global Resume starts the recovered proof batch.
+- Full-suite follow-up: the effective-task projection rebuilt escalation
+  evidence from SQLite but then used the stripped task definition to decide
+  whether a max-revision escalation was superseded by active proof recovery.
+  That left a stale runtime escalation visible beside the current proof
+  blocker. The same evidence-backed effective projection now supplies both
+  facts.
+- Cross-surface follow-up: Overview consumed the saved decision/spine while
+  Work rebuilt the same next action from a deliberately compact task page.
+  The two surfaces then gave incompatible instructions at the same revision.
+  Compact product surfaces now present the shared saved decision and spine;
+  detail inventory can add rows, but cannot re-decide status, readiness, or
+  progress.
+- Decision-contract follow-up: a blocker count existed only in the separate
+  action presentation record, so routes reading the decision packet lost it.
+  Count now travels as an optional typed execution fact in the one shared
+  decision contract and is read directly by every surface.
 - Apply/revert: code-only. Revert the queue/runtime transition and migration
   predicate together; no historical task or release data is rewritten.
 

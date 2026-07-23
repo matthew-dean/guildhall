@@ -595,6 +595,7 @@ export interface ProjectDecisionProjection {
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: string
+    count?: number
     message?: string
   }
   release: {
@@ -616,7 +617,7 @@ export interface ProjectDecisionProjectionInput {
   projectRevision?: number | null
   queueRevision?: number | null
   generatedAt: string
-  start: Pick<ProjectScopeProjection['start'], 'canStart' | 'code' | 'focusTaskId' | 'focusTaskTitle' | 'focusKind' | 'message'>
+  start: Pick<ProjectScopeProjection['start'], 'canStart' | 'code' | 'focusTaskId' | 'focusTaskTitle' | 'focusKind' | 'count' | 'message'>
   release: {
     scopeMode: 'named_release' | 'unreleased' | 'unavailable'
     state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
@@ -640,6 +641,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionP
       ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
       ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
       ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+      ...(typeof start.count === 'number' ? { count: start.count } : {}),
       ...(start.message ? { message: start.message } : {}),
     }
   }
@@ -650,6 +652,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionP
       ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
       ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
       ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+      ...(typeof start.count === 'number' ? { count: start.count } : {}),
       ...(start.message ? { message: start.message } : {}),
     }
   }
@@ -660,6 +663,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionP
       ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
       ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
       ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+      ...(typeof start.count === 'number' ? { count: start.count } : {}),
       ...(start.message ? { message: start.message } : {}),
     }
   }
@@ -670,6 +674,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionP
     ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
     ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
     ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+    ...(typeof start.count === 'number' ? { count: start.count } : {}),
     ...(start.message ? { message: start.message } : {}),
   }
 }
@@ -685,6 +690,7 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
   focusTaskId?: string
   focusTaskTitle?: string
   focusKind?: string
+  count?: number
 } {
   return {
     canStart: decision.execution.state === 'runnable' ||
@@ -695,6 +701,7 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
     ...(decision.execution.focusTaskId ? { focusTaskId: decision.execution.focusTaskId } : {}),
     ...(decision.execution.focusTaskTitle ? { focusTaskTitle: decision.execution.focusTaskTitle } : {}),
     ...(decision.execution.focusKind ? { focusKind: decision.execution.focusKind } : {}),
+    ...(typeof decision.execution.count === 'number' ? { count: decision.execution.count } : {}),
   }
 }
 

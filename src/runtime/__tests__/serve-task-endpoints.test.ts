@@ -2632,7 +2632,7 @@ describe('POST /api/project/task/:id/start', () => {
         state: 'active',
         source: 'release_plan',
         proofStyle: 'script_only',
-        nodeIds: ['work:task-1', 'work:task-2'],
+        nodeIds: ['work:task-1', 'work:task-2', 'work:task-review'],
         deferredNodeIds: [],
       }],
       tasks: [{
@@ -2687,6 +2687,19 @@ describe('POST /api/project/task/:id/start', () => {
         createdAt: now,
         updatedAt: now,
         completedAt: now,
+      }, {
+        id: 'task-review',
+        title: 'Review an unrelated release spec',
+        description: 'This task needs an owner review, but must not stop runnable proof work.',
+        domain: 'harness',
+        projectPath: tmpDir,
+        status: 'spec_review',
+        priority: 'normal',
+        releaseIds: ['release-1'],
+        spec: '## Summary\nReview the unrelated task.\n\n## Acceptance Criteria\n1. The task is approved.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'The task is approved.', verifiedBy: 'review', met: false }],
+        createdAt: now,
+        updatedAt: now,
       }],
     })
     await applyProjectMigrations({
@@ -2718,6 +2731,9 @@ describe('POST /api/project/task/:id/start', () => {
       const runtime = await readTaskRuntimeStore(tmpDir)
       expect(runtime.tasks['task-1-proof-setup']?.proofRecovery).toMatchObject({ kind: 'proof' })
       expect(runtime.tasks['task-2-proof-setup']?.proofRecovery).toBeUndefined()
+      expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-review')).toMatchObject({
+        status: 'spec_review',
+      })
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }

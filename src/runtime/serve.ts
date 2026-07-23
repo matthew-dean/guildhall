@@ -7149,32 +7149,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // The saved spine is the Overview authority. Its selected-scope summary
     // is already materialized with the full task set; rebuilding it from the
     // deliberately absent inventory would turn real membership into zero.
-    const liveOrientationPreview = input.surface === 'overview'
-      ? { summary: surfaceOrientationSource.summary }
-      : buildOverviewOrientationPreviewSpine({
-          projectId: project.id,
-          rawQueue: {
-            tasks: (indexedInventory?.tasks ?? tasks) as unknown as Array<Record<string, unknown>>,
-            releases: scopeQueue.releases as unknown as ProjectRelease[],
-            ...(scopeQueue.selectedReleaseId ? { selectedReleaseId: scopeQueue.selectedReleaseId } : {}),
-          },
-          charter: projection.orientation?.charter ?? null,
-          startReadiness: summary.startReadiness,
-          sourceSpine: surfaceOrientationSource,
-        })
     const reconciledLiveSummarySpine = reconcileOrientationSpineWithReleaseTruth(
-      {
-        ...surfaceOrientationSource,
-        summary: liveOrientationPreview.summary as ProjectOrientationSpine['summary'],
-      },
+      surfaceOrientationSource,
       {
         ...orientationReleaseTruthFromSummary(projection.releaseSummary, scopeQueue),
       },
     )
-    // Reconciliation is the shared authority for release membership and
-    // progress. Do not overwrite its summary with a route-local preview: that
-    // would make Overview report zero work whenever it intentionally omitted
-    // the full inventory.
+    // The saved decision/spine is the shared authority for status and next
+    // action. Work can request a denser task inventory, but that inventory is
+    // intentionally compact and cannot reinterpret readiness, approval, or
+    // progress differently from Overview and Map.
     const liveSummarySpine = reconciledLiveSummarySpine as unknown as Record<string, unknown>
     const initialOrientationSpine = input.surface === 'overview'
       ? compactOrientationSpineForOverviewSurface(liveSummarySpine)
@@ -9278,15 +9262,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       input.requestedTaskId,
       startStateOptions,
     ))
-    if (input.allowTaskReadinessBlocker !== false) {
-      const selectedReleaseReviewBlocker = await time('release_review', () => startBlockerForSelectedReleaseReview(
-        input.projectPath,
-        input.resolvedConfig,
-        startStateOptions,
-      ))
-      if (selectedReleaseReviewBlocker) return attachExecutionScope(selectedReleaseReviewBlocker)
-    }
-
     if (orientationShapingBlocker) return attachExecutionScope(orientationShapingBlocker)
 
     const importDraftBlocker = await time('drafts', () => startBlockerForImportDrafts(
@@ -9319,6 +9294,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         scope: input.scope,
       }))
       if (taskReadinessBlocker) return attachExecutionScope(taskReadinessBlocker)
+
+      // Task readiness owns task-level brief and approval gates. A release
+      // guard may still stop genuinely release-level work, but it cannot let
+      // one unapproved task hide other runnable work in the same release.
+      const selectedReleaseBlocker = await time('release_blockers', () => startBlockerForSelectedRelease(
+        input.projectPath,
+        startStateOptions,
+      ))
+      if (selectedReleaseBlocker) return attachExecutionScope(selectedReleaseBlocker)
     }
 
     // Missing proof can prevent release shipment while other selected work is
@@ -10866,13 +10850,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return null
   }
 
-  async function startBlockerForSelectedReleaseReview(
+  async function startBlockerForSelectedRelease(
     projectPath: string,
-    resolvedConfig: ReturnType<typeof resolveConfig>,
     options: StartStateSnapshot = {},
   ): Promise<{
     canStart: false
-    code: 'no_unattended_progress' | 'repository_followup_required'
+    code: 'no_unattended_progress'
     message: string
     actionHref: string
     focusTaskId?: string
@@ -10894,7 +10877,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       rawQueue.tasks.some(task => ((task as Task).releaseIds?.length ?? 0) > 0)
     if (!hasReleaseBoundary) return null
     const tasks = (options.effectiveTasks ?? canonicalState?.tasks ?? await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(projectPath, task as Task)))) as unknown as Task[]
-    const { orientationSpine, releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
+    const { releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
       projectId: basename(projectPath),
       charter: inferProjectCharterFromExistingSources(projectPath, null),
       selectedReleaseId: rawQueue.selectedReleaseId,
@@ -10902,135 +10885,28 @@ export function buildServeApp(opts: ServeOptions = {}): {
       tasks,
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
-    const selectedReleaseScope = options.scope !== undefined
-      ? options.scope
-      : canonicalState
-        ? canonicalState.scope
-        : (
-          (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
-          (orientationSpine.scope as OrientationScope | null | undefined) ??
-          selectedReleaseScopeFromQueueLike({
-            tasks,
-            releases: rawQueue.releases,
-            ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
-          })
-        )
-    const scopedTasks = tasksEligibleForScopeExecution(tasks, selectedReleaseScope)
-    const gitStory = await buildProjectGitStorySummary(projectPath, releaseTruth.gitStoryTasks)
-    const firstBlocked = scopedTasks.find(task => {
-      const status = String(task.status ?? '')
-      return status === 'blocked' || deriveWorkExecutionState(tasks, task.id).summaryState === 'blocked'
-    })
-    if (firstBlocked) {
-      const focusTitle = typeof firstBlocked.title === 'string' && firstBlocked.title.trim()
-        ? firstBlocked.title.trim()
-        : firstBlocked.id
-      const matchingRepositoryBlocker = gitStory.blockers.find(blocker =>
-        blocker.taskId === firstBlocked.id && gitStoryBlocksUnattendedStart(blocker),
-      )
-      if (matchingRepositoryBlocker) {
-        return {
-          canStart: false,
-          code: 'repository_followup_required',
-          message: `"${focusTitle}" cannot resume until repository follow-up is finished: ${matchingRepositoryBlocker.reason}`,
-          actionHref: '/release',
-          focusTaskId: firstBlocked.id,
-          focusTaskTitle: focusTitle,
-          focusKind: 'repository_followup',
-          count: 1,
-        }
-      }
-      const blockReason = taskBlockerSummary(firstBlocked)
-      const blockedCount = scopedTasks.filter(task =>
-        String(task.status ?? '') === 'blocked' ||
-        deriveWorkExecutionState(tasks, task.id).summaryState === 'blocked'
-      ).length
-      return {
-        canStart: false,
-        code: 'no_unattended_progress',
-        message: blockedCount === 1
-          ? `"${focusTitle}" is blocked before unattended work can run${blockReason ? `: ${blockReason}` : '.'}`
-          : `${blockedCount} work items are blocked before unattended work can run. Start with "${focusTitle}".`,
-        actionHref: `/work?task=${encodeURIComponent(firstBlocked.id)}`,
-        focusTaskId: firstBlocked.id,
-        focusTaskTitle: focusTitle,
-        focusKind: 'blocked_work',
-        count: blockedCount,
-      }
-    }
-    const specsWaiting = scopedTasks.filter(task => {
-      const status = String(task.status ?? '')
-      const hasSpecDraft = typeof task.spec === 'string' && task.spec.trim().length > 0
-      return status === 'spec_review' && (selectedReleaseScope || hasSpecDraft || specReviewRequiresOwnerApproval({ id: task.id }))
-    })
-    if (specsWaiting.length > 0) {
-      const first = specsWaiting[0]!
-      const focusTitle = typeof first.title === 'string' && first.title.trim() ? first.title.trim() : first.id
-      return {
-        canStart: false,
-        code: 'no_unattended_progress',
-        message: specsWaiting.length === 1
-          ? `"${focusTitle}" is waiting for review before work can start.`
-          : `${specsWaiting.length} specs are waiting for review before work can start. Start with "${focusTitle}".`,
-        actionHref: `/thread?thread=${encodeURIComponent(`task:${first.id}`)}`,
-        focusTaskId: first.id,
-        focusTaskTitle: focusTitle,
-        focusKind: 'spec_review',
-        count: specsWaiting.length,
-      }
-    }
     const startBlockingReleaseBlockers = releaseTruth.releaseBlockers.filter(blocker =>
       !['proof_evidence_missing', 'imported_scope_shaping', 'brief_cleanup', 'brief_approval_required', 'spec_review_required'].includes(blocker.code ?? ''),
     )
-    if (releaseTruth.unapprovedSpecs.length === 0 && startBlockingReleaseBlockers.length === 0) return null
+    if (startBlockingReleaseBlockers.length === 0) return null
 
     const blocker = startBlockingReleaseBlockers[0]
-    if (!blocker) {
-      const first = releaseTruth.unapprovedSpecs[0]
-      if (!first) return null
-      const focusTitle = first.title ?? 'the first spec'
-      return {
-        canStart: false,
-        code: 'no_unattended_progress',
-        message:
-          releaseTruth.unapprovedSpecs.length === 1
-            ? `"${focusTitle}" is waiting for review before work can start.`
-            : `${releaseTruth.unapprovedSpecs.length} specs are waiting for review before work can start. Start with "${focusTitle}".`,
-        actionHref: first.id
-          ? `/thread?thread=${encodeURIComponent(`task:${first.id}`)}`
-          : '/thread',
-        focusTaskId: first.id,
-        focusTaskTitle: first.title,
-        focusKind: 'spec_review',
-        count: releaseTruth.unapprovedSpecs.length,
-      }
-    }
+    if (!blocker) return null
     const focusTitle = blocker.title?.trim() || 'the first blocker'
-    const focusKind = blocker.code === 'spec_review_required'
-      ? 'spec_review'
-      : blocker.code === 'imported_scope_shaping' || blocker.code === 'brief_cleanup'
-        ? 'brief_cleanup'
-        : 'blocked_work'
-    const specReviewMessage = focusKind === 'spec_review'
-      ? releaseTruth.unapprovedSpecs.length === 1
-        ? `"${focusTitle}" is waiting for review before work can start.`
-        : `${releaseTruth.unapprovedSpecs.length} specs are waiting for review before work can start. Start with "${focusTitle}".`
-      : null
+    const focusKind = blocker.code === 'imported_scope_shaping' || blocker.code === 'brief_cleanup'
+      ? 'brief_cleanup'
+      : 'blocked_work'
     const blockerMessage = blocker.nextAction
       ? `${blocker.label} Next: ${blocker.nextAction}`
       : blocker.label
     return {
       canStart: false,
       code: 'no_unattended_progress',
-      message: specReviewMessage ?? (
-        startBlockingReleaseBlockers.length === 1
-          ? blockerMessage
-          : `${startBlockingReleaseBlockers.length} release blockers remain. Start with "${focusTitle}".`
-      ),
+      message: startBlockingReleaseBlockers.length === 1
+        ? blockerMessage
+        : `${startBlockingReleaseBlockers.length} release blockers remain. Start with "${focusTitle}".`,
       actionHref: blocker.id
-        ? (focusKind === 'spec_review'
-            ? `/thread?thread=${encodeURIComponent(`task:${blocker.id}`)}`
-            : `/work?task=${encodeURIComponent(blocker.id)}`)
+        ? `/work?task=${encodeURIComponent(blocker.id)}`
         : '/work',
       focusTaskId: blocker.id,
       focusTaskTitle: blocker.title,
