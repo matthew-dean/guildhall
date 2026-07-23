@@ -173,6 +173,7 @@ export function legacyRuntimeFromTask(task: LegacyTask): TaskRuntimeState | unde
     (task.workerRecovery && typeof task.workerRecovery === 'object') ||
     task.retryWindow !== undefined ||
     task.proofRecovery !== undefined ||
+    task.currentLifecycle !== undefined ||
     typeof task.handoffStep === 'number' ||
     task.shelveReason !== undefined ||
     (task.escalations ?? []).some((escalation) => !escalation.resolvedAt) ||
@@ -184,6 +185,7 @@ export function legacyRuntimeFromTask(task: LegacyTask): TaskRuntimeState | unde
     ...(typeof task.revisionCount === 'number' ? { revisionCount: task.revisionCount } : {}),
     ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
     ...(task.proofRecovery ? { proofRecovery: task.proofRecovery as TaskRuntimeState['proofRecovery'] } : {}),
+    ...(task.currentLifecycle ? { currentLifecycle: task.currentLifecycle as TaskRuntimeState['currentLifecycle'] } : {}),
     ...(typeof task.remediationAttempts === 'number' ? { remediationAttempts: task.remediationAttempts } : {}),
     ...(task.workerRecovery && typeof task.workerRecovery === 'object'
       ? { workerRecovery: task.workerRecovery as TaskRuntimeState['workerRecovery'] }
@@ -344,6 +346,7 @@ export function stripLegacyRuntimeFields<T extends Record<string, unknown>>(task
     handoffStep: _handoffStep,
     shelveReason: _shelveReason,
     proofRecovery: _proofRecovery,
+    currentLifecycle: _currentLifecycle,
     doneSummaryBundle: _doneSummaryBundle,
     worktreePath: _worktreePath,
     branchName: _branchName,
@@ -492,7 +495,21 @@ function buildEffectiveTaskFromState(
     const base = runtime?.proofRecovery && !hasActiveProofRecovery(proofRecoveryInput)
       ? { ...runtime, proofRecovery: undefined }
       : runtime
-    if (!base || !hasActiveProofRecovery(proofRecoveryInput)) return base
+    const currentLifecycle = base?.currentLifecycle
+    const hasNewCompletion = currentLifecycle
+      ? evidence.some(event => {
+          if (event.kind !== 'completion_summary') return false
+          const recordedAt = Date.parse(event.recordedAt)
+          const reopenedAt = Date.parse(currentLifecycle.reopenedAt)
+          const payload = event.payload as Record<string, unknown>
+          return Number.isFinite(recordedAt) && Number.isFinite(reopenedAt) &&
+            recordedAt > reopenedAt && payload.status === 'done'
+        })
+      : false
+    const lifecycleBase = currentLifecycle && hasNewCompletion
+      ? { ...base, currentLifecycle: undefined }
+      : base
+    if (!lifecycleBase || !hasActiveProofRecovery(proofRecoveryInput)) return lifecycleBase
     const supersededEscalationIds = new Set(
       (task.escalations ?? [])
         .filter((escalation) => escalation.reason === 'max_revisions_exceeded')
@@ -502,10 +519,10 @@ function buildEffectiveTaskFromState(
     // In that case there is no authoritative basis for clearing runtime IDs;
     // retain them until a durable task definition explicitly supersedes them.
     const openEscalationIds = supersededEscalationIds.size > 0
-      ? (base.openEscalationIds ?? []).filter((id) => !supersededEscalationIds.has(id))
-      : base.openEscalationIds
+      ? (lifecycleBase.openEscalationIds ?? []).filter((id) => !supersededEscalationIds.has(id))
+      : lifecycleBase.openEscalationIds
     return {
-      ...base,
+      ...lifecycleBase,
       openEscalationIds,
     }
   })()
@@ -520,11 +537,18 @@ function buildEffectiveTaskFromState(
     ...(effectiveRuntime?.proofRecovery ? { proofRecovery: effectiveRuntime.proofRecovery } : {}),
     ...normalized,
   }
-  const proofAware = normalizeAcceptanceCriteriaForCurrentProof(effectiveDefinition)
+  const currentLifecycleStatus = effectiveRuntime?.currentLifecycle &&
+    ['done', 'pending_pr'].includes(String(effectiveDefinition.status))
+    ? effectiveRuntime.currentLifecycle.status
+    : undefined
+  const lifecycleDefinition = currentLifecycleStatus
+    ? { ...effectiveDefinition, status: currentLifecycleStatus, assignedTo: null, completedAt: undefined }
+    : effectiveDefinition
+  const proofAware = normalizeAcceptanceCriteriaForCurrentProof(lifecycleDefinition)
   const proofAwareRecord = proofAware as Record<string, unknown>
-  const effectiveDefinitionRecord = effectiveDefinition as Record<string, unknown>
+  const effectiveDefinitionRecord = lifecycleDefinition as Record<string, unknown>
   const proofAwarenessProjection = {
-    ...(proofAware.acceptanceCriteria !== effectiveDefinition.acceptanceCriteria
+    ...(proofAware.acceptanceCriteria !== lifecycleDefinition.acceptanceCriteria
       ? { acceptanceCriteria: proofAware.acceptanceCriteria }
       : {}),
     ...(proofAwareRecord.acceptanceCriteriaProofState !== effectiveDefinitionRecord.acceptanceCriteriaProofState
@@ -532,7 +556,7 @@ function buildEffectiveTaskFromState(
       : {}),
   }
   const proofPathStatusProjection = normalizeProofPathStatuses({
-    ...effectiveDefinition,
+    ...lifecycleDefinition,
     ...proofAwarenessProjection,
   })
   const effectiveTask = {
@@ -547,23 +571,25 @@ function buildEffectiveTaskFromState(
     ...(effectiveRuntime?.handoffStep !== undefined ? { handoffStep: effectiveRuntime.handoffStep } : {}),
     ...(effectiveRuntime?.shelveReason !== undefined ? { shelveReason: effectiveRuntime.shelveReason } : {}),
     ...(effectiveRuntime?.proofRecovery ? { proofRecovery: effectiveRuntime.proofRecovery } : {}),
+    ...(effectiveRuntime?.currentLifecycle ? { currentLifecycle: effectiveRuntime.currentLifecycle } : {}),
     ...(workspace?.worktreePath !== undefined ? { worktreePath: workspace.worktreePath } : {}),
     ...(workspace?.branchName !== undefined ? { branchName: workspace.branchName } : {}),
     ...(workspace?.baseBranch !== undefined ? { baseBranch: workspace.baseBranch } : {}),
     ...(effectiveRuntime ? { runtime: effectiveRuntime } : {}),
     ...(workspace ? { workspace } : {}),
     ...normalized,
+    ...(currentLifecycleStatus ? { status: currentLifecycleStatus, assignedTo: null, completedAt: undefined } : {}),
     ...proofAwarenessProjection,
     ...proofPathStatusProjection,
     // EffectiveTask is the runtime contract. Current SQLite definitions omit
     // evidence-owned collections by design, so every consumer gets explicit
     // empty collections when the bounded projection has no entries.
-    notes: Array.isArray(effectiveDefinition.notes) ? effectiveDefinition.notes : [],
-    gateResults: Array.isArray(effectiveDefinition.gateResults) ? effectiveDefinition.gateResults : [],
-    reviewVerdicts: Array.isArray(effectiveDefinition.reviewVerdicts) ? effectiveDefinition.reviewVerdicts : [],
-    adjudications: Array.isArray(effectiveDefinition.adjudications) ? effectiveDefinition.adjudications : [],
-    escalations: Array.isArray(effectiveDefinition.escalations) ? effectiveDefinition.escalations : [],
-    agentIssues: Array.isArray(effectiveDefinition.agentIssues) ? effectiveDefinition.agentIssues : [],
+    notes: Array.isArray(lifecycleDefinition.notes) ? lifecycleDefinition.notes : [],
+    gateResults: Array.isArray(lifecycleDefinition.gateResults) ? lifecycleDefinition.gateResults : [],
+    reviewVerdicts: Array.isArray(lifecycleDefinition.reviewVerdicts) ? lifecycleDefinition.reviewVerdicts : [],
+    adjudications: Array.isArray(lifecycleDefinition.adjudications) ? lifecycleDefinition.adjudications : [],
+    escalations: Array.isArray(lifecycleDefinition.escalations) ? lifecycleDefinition.escalations : [],
+    agentIssues: Array.isArray(lifecycleDefinition.agentIssues) ? lifecycleDefinition.agentIssues : [],
     evidence,
   }
   const status = effectiveTaskStatus(effectiveTask)

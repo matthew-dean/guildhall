@@ -52089,6 +52089,39 @@ Repair:
       release-delivery state model; do not add a view-local exception for
       reopened work.
 
+### Follow-up: stale compact completion status
+
+- [x] The installed Narrative Harness run showed a stale raw `done` point can
+      bypass effective-status hydration before landing reconciliation, letting
+      old merge evidence immediately consume reopened current-release work.
+- [x] Replace the derived queue-point repair with a normalized current-lifecycle
+      overlay so every reader sees reopened work before historical completion.
+- Proof required: focused orchestrator regression must dispatch the spec lane
+      rather than complete the task from an old merge record; installed replay
+      must remain in shaping after Start.
+
+### Schema Migration Decision
+
+- Work id: `0.13.74/current-lifecycle-runtime-overlay`.
+- Persisted schema touched: normalized `TaskRuntimeState` overlay only.
+- Change class: additive, first-class current-lifecycle marker for a rerun
+      that supersedes historical completion evidence.
+- Existing data impact: none; absent markers retain existing behavior. A
+      marker becomes inactive when a newer `completion_summary` evidence event
+      records the new lifecycle's completion.
+- Migration id: none required; the Zod-backed overlay accepts the optional
+      field and legacy task readers continue to work without it.
+- Safety: task definitions and release membership remain untouched; historical
+      evidence is preserved rather than rewritten.
+- Compatibility reader: effective-task projection recognizes the optional
+      overlay and never exposes it as task-definition state.
+- Fixtures and tests: effective projection proves reopen and later settlement;
+      orchestrator regression proves stale `done` dispatches spec shaping.
+- Owner-facing plan text: a fresh spec rerun starts current work and cannot be
+      satisfied by evidence from the previous delivery.
+- Apply/revert: removing the overlay restores historical behavior only for
+      future reads; it does not remove completion evidence or modify releases.
+
 ## 2026-07-23 Briefs carry their documented scope boundary
 
 - [x] The normal brief mutation could add a job, target, and criterion but

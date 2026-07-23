@@ -1414,9 +1414,14 @@ export async function rerunTaskStage(
       content:
         'Human requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
     })
-    if (input.recoveryKind === 'proof') {
-      await upsertTaskRuntimeState(projectRoot, task.id, {
-        assignedTo: null,
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      assignedTo: null,
+      currentLifecycle: {
+        reopenedAt: now,
+        status: 'exploring',
+        source: 'rerun_spec',
+      },
+      ...(input.recoveryKind === 'proof' ? {
         proofRecovery: {
           reopenedAt: now,
           kind: 'proof',
@@ -1424,9 +1429,9 @@ export async function rerunTaskStage(
             input.recoveryReason?.trim() ||
             'The current proof plan was cleared for a fresh source-backed spec pass.',
         },
-        updatedAt: now,
-      })
-    }
+      } : {}),
+      updatedAt: now,
+    })
     return { success: true, newStatus: 'exploring' }
   }
 

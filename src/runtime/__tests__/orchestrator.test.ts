@@ -14617,6 +14617,63 @@ describe('Orchestrator.run — full loops', () => {
     expect((await readQueue()).tasks[0]?.status).toBe('exploring')
   })
 
+  it('repairs a stale raw done status before a reopened lifecycle reaches landing reconciliation', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-stale-done-reopened',
+        status: 'done',
+        doneSummaryBundle: {
+          taskId: 'task-stale-done-reopened',
+          status: 'reopened',
+          reopenedAt: '2026-04-01T00:30:00.000Z',
+          summary: {
+            journey: 'A previous release completed this work.',
+            decision: 'The current lifecycle is reopened.',
+            evidence: 'Historical proof passed.',
+            learningCandidates: [],
+            openResidue: 'Fresh spec shaping is required.',
+          },
+          retention: {
+            transcriptPrimaryArtifact: false,
+            compactedFullTranscript: false,
+            fullEvidenceAvailable: true,
+          },
+          evidenceRefs: [],
+          createdAt: '2026-04-01T00:30:00.000Z',
+          createdBy: 'rerun-stage',
+        },
+        mergeRecord: {
+          fromBranch: 'guildhall/task-stale-done-reopened',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'merged',
+          mergedAt: '2026-04-01T00:21:00.000Z',
+          detail: 'Historical completion from the prior release.',
+        },
+      }),
+    ])
+    await upsertTaskRuntimeState(tmpDir, 'task-stale-done-reopened', {
+      currentLifecycle: {
+        reopenedAt: '2026-04-01T00:30:00.000Z',
+        status: 'exploring',
+        source: 'rerun_spec',
+      },
+      updatedAt: '2026-04-01T00:30:00.000Z',
+    })
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({ kind: 'processed', taskId: 'task-stale-done-reopened', agent: 'spec-agent' })
+    expect(spec.calls).toHaveLength(1)
+    expect((await readQueue()).tasks[0]?.status).toBe('exploring')
+  })
+
   it('does not complete approved gate-check work when the proof path remains missing', async () => {
     await writeQueue([
       mkTask({

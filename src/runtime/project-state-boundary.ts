@@ -100,6 +100,7 @@ export const FORBIDDEN_PROJECT_TASK_FIELDS = [
   'workerRecovery',
   'handoffStep',
   'proofRecovery',
+  'currentLifecycle',
   'shelveReason',
   // Effective-task read models carry these fields for consumers, but they
   // are never part of the authoritative task definition row.
@@ -1931,6 +1932,7 @@ export async function writeProjectTaskQueueAtCurrentStateBoundary(
     if (isRecord(task.workerRecovery)) runtime.workerRecovery = task.workerRecovery
     if (typeof task.handoffStep === 'number' && task.handoffStep > 0) runtime.handoffStep = task.handoffStep
     if (isRecord(task.proofRecovery)) runtime.proofRecovery = task.proofRecovery
+    if (isRecord(task.currentLifecycle)) runtime.currentLifecycle = task.currentLifecycle
     if (isRecord(task.shelveReason)) runtime.shelveReason = task.shelveReason
     if (Array.isArray(task.escalations)) {
       const ids = task.escalations

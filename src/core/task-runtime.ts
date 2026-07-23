@@ -18,6 +18,15 @@ export const TaskRuntimeState = z.object({
     // not another pass in the historical worktree that produced the landing.
     freshWorktree: z.boolean().optional(),
   }).optional(),
+  // A fresh current lifecycle may supersede a historical completion without
+  // deleting that completion's evidence. This is intentionally general rather
+  // than a proof-recovery flag: spec reruns and later-release work need the
+  // same durable lifecycle boundary.
+  currentLifecycle: z.object({
+    reopenedAt: z.string(),
+    status: z.enum(['exploring']),
+    source: z.enum(['rerun_spec']),
+  }).optional(),
   remediationAttempts: z.number().int().nonnegative().optional(),
   // Current worker recovery state belongs in the normalized runtime overlay,
   // not in bounded note projections. These counters survive orchestrator
