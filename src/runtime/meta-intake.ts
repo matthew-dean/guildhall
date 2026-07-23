@@ -13,7 +13,7 @@ import {
 } from '@guildhall/sessions'
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { appendExploringTranscript, replaceExploringTranscript } from '@guildhall/tools'
-import { readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
+import { preserveRuntimeOverlayOnTaskQueueParse, readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
 import { META_INTAKE_TASK_ID } from './project-reserved-task-ids.js'
 import {
   AGENT_SETTINGS_FILENAME,
@@ -77,10 +77,10 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
     })
   }
   const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-  if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-  }
-  return TaskQueue.parse(parsed)
+  const queue = TaskQueue.parse(Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : parsed)
+  return preserveRuntimeOverlayOnTaskQueueParse(parsed, queue)
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {

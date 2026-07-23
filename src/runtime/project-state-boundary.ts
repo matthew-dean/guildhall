@@ -50,6 +50,7 @@ import {
 import type {
   ProjectRelease,
   Task,
+  TaskQueue,
   TaskEvidenceEvent as TaskEvidenceEventRecord,
   TaskEvidenceKind,
 } from '@guildhall/core'
@@ -108,6 +109,23 @@ export const FORBIDDEN_PROJECT_TASK_FIELDS = [
   'runtime',
   'workspace',
   'evidence',
+] as const
+
+// Runtime-owned fields may appear on an effective task read but never belong
+// to a persisted task definition. Keep this list at the current-state boundary
+// so every read/mutate/write flow carries exactly the same envelope.
+const TaskRuntimeOverlayFieldNames = [
+  'assignedTo',
+  'revisionCount',
+  'retryWindow',
+  'proofRecovery',
+  'currentLifecycle',
+  'remediationAttempts',
+  'workerRecovery',
+  'handoffStep',
+  'shelveReason',
+  'openEscalationIds',
+  'openIssueIds',
 ] as const
 
 export type ForbiddenProjectTaskField = typeof FORBIDDEN_PROJECT_TASK_FIELDS[number]
@@ -363,6 +381,36 @@ export async function readProjectTaskQueueForRichMutation(
     }
   }
   return readProjectTaskQueue(tasksPath)
+}
+
+/**
+ * Rich mutation readers return effective tasks so callers can make one
+ * coherent decision. Parsing that result through the definition schema must
+ * not silently discard its runtime envelope before the caller writes the
+ * definition mutation. This adapter preserves only the typed overlay fields;
+ * evidence remains owned by its separate ledger.
+ */
+export function preserveRuntimeOverlayOnTaskQueueParse(raw: unknown, queue: TaskQueue): TaskQueue {
+  const rawTasks = raw && typeof raw === 'object' && !Array.isArray(raw) && Array.isArray((raw as { tasks?: unknown }).tasks)
+    ? (raw as { tasks: Array<Record<string, unknown>> }).tasks
+    : []
+  const runtimeByTaskId = new Map(rawTasks.flatMap(rawTask => {
+    if (typeof rawTask?.id !== 'string') return []
+    const runtime = rawTask.runtime && typeof rawTask.runtime === 'object' && !Array.isArray(rawTask.runtime)
+      ? rawTask.runtime as Record<string, unknown>
+      : rawTask
+    const fields = Object.fromEntries(TaskRuntimeOverlayFieldNames.flatMap(field => (
+      Object.prototype.hasOwnProperty.call(runtime, field) ? [[field, runtime[field]]] : []
+    )))
+    return [[rawTask.id, fields] as const]
+  }))
+  return {
+    ...queue,
+    tasks: queue.tasks.map(task => ({
+      ...task,
+      ...(runtimeByTaskId.get(task.id) ?? {}),
+    })) as Task[],
+  }
 }
 
 /**

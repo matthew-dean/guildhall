@@ -40,7 +40,7 @@ import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup
 import {
   contractShapedImportHasNoConcreteContracts,
 } from './imported-work-integrity.js'
-import { readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
+import { preserveRuntimeOverlayOnTaskQueueParse, readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './project-reserved-task-ids.js'
 import { writeProjectSummaryProjectionFromUnknownQueue } from './project-summary-projection.js'
 import type { OrientationWorkspaceImportDraftContext } from './project-orientation-spine.js'
@@ -92,11 +92,12 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
     })
   }
   const parsed = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw
-  const queue = Array.isArray(parsed)
+  const queue = TaskQueue.parse(Array.isArray(parsed)
     ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-    : TaskQueue.parse(parsed)
-  for (const task of queue.tasks) normalizeImportedDraftTask(task)
-  return queue
+    : parsed)
+  const queueWithRuntime = preserveRuntimeOverlayOnTaskQueueParse(parsed, queue)
+  for (const task of queueWithRuntime.tasks) normalizeImportedDraftTask(task)
+  return queueWithRuntime
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {

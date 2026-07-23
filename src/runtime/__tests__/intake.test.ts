@@ -19,6 +19,7 @@ import {
   getProjectSystemStatePathFromMemoryDir,
   getProjectTranscriptPath,
   readTaskRuntimeStore,
+  upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 import { listOwnerInputRequests } from '../owner-input-store.js'
 import { buildEffectiveTask } from '../effective-task.js'
@@ -500,6 +501,28 @@ describe('approveSpec', () => {
     expect(result.newStatus).toBe('ready')
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('ready')
+  })
+
+  it('preserves a fresh lifecycle fence while approving its new spec', async () => {
+    const reopenedAt = '2026-07-23T04:27:00.000Z'
+    await upsertTaskRuntimeState(tmpDir, 'task-001', {
+      currentLifecycle: {
+        reopenedAt,
+        status: 'exploring',
+        source: 'rerun_spec',
+      },
+      updatedAt: reopenedAt,
+    })
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result).toEqual({ success: true, newStatus: 'ready' })
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks['task-001']?.currentLifecycle).toEqual({
+      reopenedAt,
+      status: 'exploring',
+      source: 'rerun_spec',
+    })
   })
 
   it('keeps the approved spec and materializes missing script proof as linked verification work', async () => {

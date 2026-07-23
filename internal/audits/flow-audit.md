@@ -52499,3 +52499,58 @@ Repair:
       rather than preventing an otherwise valid spec from being saved.
 - Apply/revert: reverting stops future tolerant writes but leaves saved values
       valid under the existing reader.
+
+## 2026-07-23 Definition mutations preserve the observed runtime envelope
+
+- [x] Installed Narrative Harness replay exposed a false terminal state after
+      a fresh spec approval. `readQueue()` read effective task state, then
+      `TaskQueue.parse()` removed runtime-only fields before its normal
+      definition write replaced normalized overlays. The current lifecycle
+      fence vanished, leaving earlier completion evidence eligible again.
+- [x] The project-state boundary now carries the same typed runtime envelope
+      across every rich queue parse used by intake, meta intake, and workspace
+      import. Evidence stays in its ledger; this is not an aggregate-state
+      compatibility layer.
+
+### Contract Touch Decision
+
+- Work id: `0.13.84/runtime-envelope-preservation`.
+- Touched contracts: effective-task read envelope, promoted definition-write
+      boundary, and runtime lifecycle continuity across intake approval.
+- Considered but not touched: task-definition schema, completion-evidence
+      schema, release membership, approval authority, raw transcript retention,
+      and model prose.
+- Existing data impact: no task is rewritten. Future rich read/mutate/write
+      operations preserve current runtime fields for surviving task IDs; a
+      deliberate re-intake that removes a task continues to remove its overlay.
+- Required follow-up: replay the Narrative Harness task through a fresh
+      installed build and verify historical completion cannot settle it until
+      a new lifecycle has a new typed completion record. Extend this envelope
+      boundary into the planned shared claim resolver rather than adding
+      consumer-specific precedence rules.
+- Proof required: approval regression with a current lifecycle, boundary
+      re-intake regression, typecheck, model-independence, contract lint, and
+      installed Narrative Harness replay.
+- Apply/revert: do not replace this with per-caller field copying. Any future
+      current-state reader that parses effective tasks must use this boundary.
+
+### Schema Migration Decision
+
+- Work id: `0.13.84/runtime-envelope-preservation`.
+- Persisted schema touched: none. This repairs how existing normalized
+      `task_execution` overlay rows survive an ordinary definition mutation.
+- Change class: current-state write-path correction.
+- Existing data impact: no migration is needed and historical evidence is not
+      changed. Existing overlays begin surviving the next normal mutation.
+- Migration id: none.
+- Safety: only the declared runtime-overlay fields are carried forward; task
+      definitions remain sanitized, and evidence remains separately owned.
+- Compatibility reader: existing effective-task readers already expose this
+      runtime envelope; no legacy reader is added.
+- Fixtures and tests: promoted spec-approval lifecycle regression and existing
+      re-intake overlay replacement regression.
+- Owner-facing plan text: approving a newly shaped task does not let an old
+      run silently take it back to done.
+- Apply/revert: removing this restores a false-completion path and is not an
+      acceptable rollback without an equivalent atomic definition/overlay
+      mutation contract.

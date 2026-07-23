@@ -53,6 +53,7 @@ import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
 import {
   sanitizeTaskQueueForProjectWrite,
   readProjectStateAuthorityAtBoundary,
+  preserveRuntimeOverlayOnTaskQueueParse,
   writeProjectTaskQueueAtCurrentStateBoundary,
   writePromotedTaskDetailMutation,
   writeProjectTaskQueueWithSummary,
@@ -105,8 +106,9 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
   const queue = TaskQueue.parse(Array.isArray(parsed)
     ? { version: 1, lastUpdated: now, tasks: parsed }
     : parsed)
-  for (const task of queue.tasks) normalizeImportedDraftTask(task)
-  return queue
+  const queueWithRuntime = preserveRuntimeOverlayOnTaskQueueParse(parsed, queue)
+  for (const task of queueWithRuntime.tasks) normalizeImportedDraftTask(task)
+  return queueWithRuntime
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
