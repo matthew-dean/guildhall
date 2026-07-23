@@ -153,6 +153,92 @@ describe('project decision projection', () => {
     expect(resolution.rejected).toEqual([{ claimId: 'agent-made-up-action', code: 'unregistered_field' }])
   })
 
+  it('resolves canonical release membership over a contradictory agent-derived observation', () => {
+    const resolution = resolveRegisteredProjectStateClaimSet({ projectRevision: 42, claims: [
+      {
+        id: 'canonical-release-membership',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.membershipTaskIds',
+        value: ['task-outline', 'task-synopsis'],
+        authority: 'canonical_mutation',
+        actor: 'release-membership-store',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['release:release-1'],
+      },
+      {
+        id: 'agent-derived-release-membership',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.membershipTaskIds',
+        value: ['task-synopsis', 'task-chapter'],
+        authority: 'agent_derivation',
+        actor: 'scope-agent',
+        observedAt: '2026-07-23T12:01:00.000Z',
+        evidenceRefs: ['agent-run:scope-agent'],
+      },
+    ] })
+
+    expect(resolution).toEqual({
+      resolved: [expect.objectContaining({
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.membershipTaskIds',
+        value: ['task-outline', 'task-synopsis'],
+        claimIds: ['canonical-release-membership'],
+      })],
+      rejected: [],
+      disagreements: [expect.objectContaining({
+        canonicalClaimIds: ['canonical-release-membership'],
+        contradictoryClaimIds: ['agent-derived-release-membership'],
+        state: 'resolved_by_authority',
+        reconciliation: 'inspect_canonical_state',
+      })],
+    })
+  })
+
+  it('leaves contradictory canonical release membership claims unresolved', () => {
+    const resolution = resolveRegisteredProjectStateClaimSet({ projectRevision: 42, claims: [
+      {
+        id: 'canonical-release-membership-a',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.membershipTaskIds',
+        value: ['task-outline'],
+        authority: 'canonical_mutation',
+        actor: 'release-membership-store-a',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['release:release-1:a'],
+      },
+      {
+        id: 'canonical-release-membership-b',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.membershipTaskIds',
+        value: ['task-synopsis'],
+        authority: 'canonical_mutation',
+        actor: 'release-membership-store-b',
+        observedAt: '2026-07-23T12:01:00.000Z',
+        evidenceRefs: ['release:release-1:b'],
+      },
+    ] })
+
+    expect(resolution).toEqual({
+      resolved: [expect.objectContaining({
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.membershipTaskIds',
+        claimIds: ['canonical-release-membership-a', 'canonical-release-membership-b'],
+        conflict: expect.objectContaining({ reconciliation: 'inspect_canonical_state' }),
+      })],
+      rejected: [],
+      disagreements: [expect.objectContaining({
+        canonicalClaimIds: [],
+        contradictoryClaimIds: ['canonical-release-membership-a', 'canonical-release-membership-b'],
+        state: 'unresolved',
+        reconciliation: 'inspect_canonical_state',
+      })],
+    })
+  })
+
   it('does not let the route choose a custom policy for a registered observation', () => {
     const agreement = reconcileRegisteredProjectStateObservation({
       projectRevision: 42,

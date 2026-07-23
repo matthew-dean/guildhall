@@ -52,6 +52,7 @@ export type ProjectStateClaimField =
   | 'project.selectedReleaseId'
   | 'project.scopeSelection'
   | 'project.charterConfirmation'
+  | 'release.membershipTaskIds'
   | 'release.blockerTaskIds'
   | 'task.lifecycleStatus'
   | 'task.hierarchy'
@@ -83,6 +84,12 @@ export const PROJECT_STATE_CLAIM_POLICIES: Readonly<Record<ProjectStateClaimFiel
     field: 'project.charterConfirmation',
     authorities: ['owner_selection', 'canonical_mutation', 'imported_record', 'agent_derivation'],
     reconciliation: 'owner_scope_decision',
+  },
+  'release.membershipTaskIds': {
+    field: 'release.membershipTaskIds',
+    authorities: ['canonical_mutation'],
+    reconciliation: 'inspect_canonical_state',
+    valueSemantics: 'unordered_string_set',
   },
   'release.blockerTaskIds': {
     field: 'release.blockerTaskIds',
@@ -442,7 +449,9 @@ export function resolveProjectStateClaimSet(
     if (values.size === 1) {
       const winner = [...strongest].sort((left, right) => left.id.localeCompare(right.id))[0]!
       const winnerValue = stableClaimValue(winner.value, policy)
-      const contradictoryClaimIds = eligible
+      // A claim without authority cannot replace the resolved fact, but it is
+      // still an observed disagreement that must remain inspectable.
+      const contradictoryClaimIds = group
         .filter(claim => stableClaimValue(claim.value, policy) !== winnerValue)
         .map(claim => claim.id)
         .sort()
