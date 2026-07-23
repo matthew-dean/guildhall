@@ -52771,7 +52771,7 @@ Repair:
       writer currently requires the same note again on the later `review`
       mutation. Repair this one durable handoff contract rather than making
       the model repeat or prose-format state.
-- [ ] The selected `script_only` release must expose a concrete typed proof
+- [x] The selected `script_only` release must expose a concrete typed proof
       requirement in the worker context when source-backed task state already
       names a command or accepted proof child. A blank `requiredProof` packet
       is a planning/context projection defect, not an invitation for a worker
@@ -52814,3 +52814,42 @@ Repair:
       normalized equivalent of its sparse stored acceptance criteria.
 - Apply/revert: apply through the ordinary point writer. A revert must not
       restore comparison of raw storage shape to hydrated runtime shape.
+
+## 2026-07-23 Selected release proof policy must survive into worker context
+
+- [ ] User job: when a worker opens a task in the selected `script_only`
+      release, it can tell whether the release requires a script proof and
+      whether this task has a typed proof contract. It must never be told that
+      work is simply runnable while a separate release surface calls the same
+      task unproven.
+
+### Contract Touch Decision
+
+- Work id: `0.13.89/selected-release-proof-context`.
+- Touched contracts: delivery-read projection snapshot, selected release proof
+      policy, task context packet, and rendered worker context.
+- Considered but not touched: task source references, model prose, raw agent
+      output, and primitive-only proof obligations. A cited script filename is
+      not itself a task proof contract.
+- Required behavior: use the normalized selected-release policy from the same
+      SQLite snapshot as the delivery projection. For an included script-only
+      task, emit typed `attached` or `missing_contract` state; only an explicit
+      task contract may name a command.
+- Proof required: projection regression for selected script-only scope,
+      delivery context regression for both typed states, and installed
+      Narrative Harness context packet showing the missing-contract state
+      rather than an empty/no-op proof packet.
+- Apply/revert: one projection-derived context field, not a route-local scope
+      scan. Revert only with an equivalent shared context contract.
+
+### Schema Migration Decision
+
+- Work id: `0.13.89/selected-release-proof-context`.
+- Persisted schema touched: none. The existing normalized `scopes.proof_style`
+      record is read inside the delivery projection's snapshot transaction.
+- Change class: compact read-model enrichment; no release, task, or evidence
+      record is rewritten.
+- Safety: a missing task proof contract remains missing. Guildhall displays the
+      typed repair state and does not derive a command from documentation.
+- Apply/revert: no data migration. The projection revision already invalidates
+      when selected release state changes.

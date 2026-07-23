@@ -13,6 +13,7 @@ import {
   type DeliveryReadProjectionPage,
   type DeliveryReadProjectionPrimitiveRow,
   type DeliveryReadProjectionReadOptions as SessionDeliveryReadProjectionReadOptions,
+  type DeliveryReadProjectionSelectedRelease,
   type DeliveryReadProjectionSnapshot,
   type DeliveryReadProjectionTaskRow,
 } from '@guildhall/sessions'
@@ -78,6 +79,7 @@ export interface DeliveryTaskSummary {
   sourceRefs: string[]
   updatedAt: string | null
   completedAt: string | null
+  proof?: { hasExecutablePath: boolean }
   delivery?: {
     driver?: string
     provider?: string
@@ -171,6 +173,7 @@ export interface DeliveryReadProjectionCurrent {
   model: ProjectDeliveryModelRecord
   validation: DeliveryModelValidation
   selectedReleaseId: string | null
+  selectedRelease: DeliveryReadProjectionSelectedRelease | null
   queue: DeliveryQueuePage | null
   primitives: DeliveryPrimitivePage
   task: DeliveryTaskSummary | null
@@ -235,8 +238,15 @@ function compactDelivery(summary: JsonRecord): DeliveryTaskSummary['delivery'] |
   return delivery
 }
 
+function compactProof(summary: JsonRecord): DeliveryTaskSummary['proof'] | undefined {
+  const current = isRecord(summary.currentSummary) ? summary.currentSummary : null
+  const proof = current && isRecord(current.proof) ? current.proof : null
+  return proof ? { hasExecutablePath: proof.hasExecutablePath === true } : undefined
+}
+
 function taskSummary(row: DeliveryReadProjectionTaskRow): DeliveryTaskSummary {
   const delivery = compactDelivery(row.summary)
+  const proof = compactProof(row.summary)
   return {
     id: row.id,
     title: row.title,
@@ -252,6 +262,7 @@ function taskSummary(row: DeliveryReadProjectionTaskRow): DeliveryTaskSummary {
     sourceRefs: [...row.sourceRefs],
     updatedAt: row.updatedAt,
     completedAt: row.completedAt,
+    ...(proof ? { proof } : {}),
     ...(delivery ? { delivery } : {}),
   }
 }
@@ -412,6 +423,7 @@ function projectSnapshot(
     model,
     validation: snapshot.meta.validation as unknown as DeliveryModelValidation,
     selectedReleaseId: snapshot.meta.selectedReleaseId,
+    selectedRelease: snapshot.selectedRelease,
     queue: queuePage(snapshot.queue, summaries),
     primitives: primitivePage(snapshot.primitives),
     task,
@@ -477,7 +489,21 @@ export function contextPacketFromDeliveryReadProjection(
         .map(([primitiveId, tasks]) => [primitiveId, tasks as Array<Pick<Task, 'id' | 'title' | 'status'>>])),
     },
   }
-  return buildTaskContextPacket({ model: projection.model, tasks: [task], taskId: task.id, relationships })
+  const packet = buildTaskContextPacket({ model: projection.model, tasks: [task], taskId: task.id, relationships })
+  const selectedRelease = projection.selectedRelease
+  if (selectedRelease?.proofStyle !== 'script_only' || !projection.task.releaseIds.includes(selectedRelease.id)) return packet
+  const hasTypedTaskProofContract = projection.task.proof?.hasExecutablePath === true
+  return {
+    ...packet,
+    proofContext: {
+      ...packet.proofContext,
+      releaseRequirement: {
+        releaseId: selectedRelease.id,
+        proofStyle: 'script_only',
+        taskContract: hasTypedTaskProofContract ? 'attached' : 'missing_contract',
+      },
+    },
+  }
 }
 
 export interface DeliveryReadProjectionRefreshResult {

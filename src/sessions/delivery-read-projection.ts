@@ -104,6 +104,13 @@ export interface DeliveryReadProjectionMeta {
   validation: JsonRecord
 }
 
+export type DeliveryReadProjectionProofStyle = 'script_only' | 'manual' | 'mixed' | 'unspecified'
+
+export interface DeliveryReadProjectionSelectedRelease {
+  id: string
+  proofStyle: DeliveryReadProjectionProofStyle
+}
+
 export interface DeliveryReadProjectionReadOptions {
   queue?: false | { limit?: number; after?: { rank: number; taskId: string } }
   taskId?: string
@@ -132,6 +139,7 @@ export interface DeliveryReadProjectionSnapshotCurrent {
   source: DeliveryReadProjectionRevision
   current: DeliveryReadProjectionCurrentRevision
   meta: DeliveryReadProjectionMeta
+  selectedRelease: DeliveryReadProjectionSelectedRelease | null
   queue: DeliveryReadProjectionPage<DeliveryReadProjectionCandidateRow> | null
   primitives: DeliveryReadProjectionPage<DeliveryReadProjectionPrimitiveRow, string>
   taskRows: DeliveryReadProjectionTaskRow[]
@@ -249,6 +257,20 @@ function readSource(database: DatabaseSync): DeliveryReadProjectionCurrentRevisi
 function selectedReleaseId(database: DatabaseSync): string | null {
   const row = database.prepare('SELECT selected_release_id FROM queue_state WHERE id = 1').get() as JsonRecord | undefined
   return stringValue(row?.selected_release_id)
+}
+
+function selectedRelease(database: DatabaseSync): DeliveryReadProjectionSelectedRelease | null {
+  const id = selectedReleaseId(database)
+  if (!id) return null
+  const proofStyle = tableExists(database, 'scopes')
+    ? stringValue((database.prepare('SELECT proof_style FROM scopes WHERE id = ?').get(id) as JsonRecord | undefined)?.proof_style)
+    : null
+  return {
+    id,
+    proofStyle: proofStyle === 'script_only' || proofStyle === 'manual' || proofStyle === 'mixed'
+      ? proofStyle
+      : 'unspecified',
+  }
 }
 
 function deliveryRowColumns(): string {
@@ -687,6 +709,7 @@ export function readProjectDeliveryReadProjectionSnapshot(
       source,
       current,
       meta,
+      selectedRelease: selectedRelease(database),
       queue,
       primitives: readPrimitivePage(database, options.primitiveLimit, options.primitiveAfter),
       taskRows,
