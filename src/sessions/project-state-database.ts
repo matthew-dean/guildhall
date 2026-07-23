@@ -1195,11 +1195,13 @@ function releaseDefinitionsWithTaskMembership(
     // definition while the task's legacy releaseIds array is empty.
     if (options.clearUnlistedTaskMembership === true) {
       for (const release of byId.values()) {
+        if (stringValue(release.state) === 'shipped') continue
         release.nodeIds = stringArray(release.nodeIds).filter(value => value !== nodeId)
         release.deferredNodeIds = stringArray(release.deferredNodeIds).filter(value => value !== nodeId)
       }
     } else if (releaseIds.length > 0) {
       for (const release of byId.values()) {
+        if (stringValue(release.state) === 'shipped') continue
         if (releaseIds.includes(String(release.id))) continue
         release.nodeIds = stringArray(release.nodeIds).filter(value => value !== nodeId)
         release.deferredNodeIds = stringArray(release.deferredNodeIds).filter(value => value !== nodeId)

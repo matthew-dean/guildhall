@@ -110,6 +110,10 @@ help_summary: |
   could prepare a release rewrite that the canonical shipped-snapshot guard
   correctly rejected. Promoted migrations now read the same normalized
   task/release boundary as runtime; aggregate queue detail is bootstrap-only.
+- Write-boundary follow-up: release normalization now preserves every shipped
+  node when task membership is rewritten. Historical delivery membership is a
+  snapshot, not a task's current assignment; only attempts to add new shipped
+  membership remain invalid.
 - Compatibility reader: none. Rich task detail reads the typed scope; compact
   release projections read normalized visible membership. No surface is
   permitted to reconstruct one from the other.
