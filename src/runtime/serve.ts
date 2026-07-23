@@ -48,7 +48,7 @@ import { taskBlockerSummary } from './task-blocker-summary.js'
 import { readPersistedStructuredSelfCritique, reviewVerdictHasStructuredApproval } from './review-contract.js'
 import { validateProductBriefGrounding } from './spec-quality.js'
 import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
-import { projectDecisionStartReadiness, reconcileRegisteredProjectStateObservation, type ProjectDecisionProjection } from './project-decision-projection.js'
+import { projectDecisionInFlight, projectDecisionStartReadiness, reconcileRegisteredProjectStateObservation, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
 import { readCurrentThreadTaskIdsAtBoundary, readThreadHistoryReadProjection, readThreadReadProjection, threadReadProjectionFromBoundary } from './thread-read-projection.js'
@@ -16534,9 +16534,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const compactSummary = projectionIsCurrent
         ? summarizeProjectFromProjection({ id: project.id, path: project.path }, project, run, projection)
         : null
-      const projectedInFlight = inFlight
       const actionModel = compactSummary?.actionModel ?? null
       const decision = compactSummary?.decision ?? projection?.decision ?? null
+      const projectedInFlight = projectDecisionInFlight(decision, inFlight)
       const topAction = activityActionFromDecision(project.id, decision)
       return c.json({
         running: run?.status === 'running',

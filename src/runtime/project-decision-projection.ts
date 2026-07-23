@@ -745,6 +745,41 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
   }
 }
 
+/**
+ * Compose a compact live-work list from the shared decision packet. The
+ * supervisor-owned active task always leads; saved rows remain historical
+ * context and may not displace it with a stale local status.
+ */
+export function projectDecisionInFlight<T extends {
+  id: string
+  title: string
+  status: string
+  domain: string
+  lastActivityAt?: string
+}>(
+  decision: ProjectDecisionProjection | null | undefined,
+  items: readonly T[],
+): T[] {
+  const activeTaskId = decision?.execution.state === 'running'
+    ? decision.execution.focusTaskId
+    : undefined
+  if (!activeTaskId) return [...items]
+  const active = items.find(item => item.id === activeTaskId)
+  const activeItem = {
+    ...(active ?? {
+      id: activeTaskId,
+      title: decision?.execution.focusTaskTitle ?? activeTaskId,
+      status: 'in_progress',
+      domain: '',
+    }),
+    id: activeTaskId,
+    title: decision?.execution.focusTaskTitle ?? active?.title ?? activeTaskId,
+    status: 'in_progress',
+    ...(decision?.generatedAt ? { lastActivityAt: decision.generatedAt } : {}),
+  } as T
+  return [activeItem, ...items.filter(item => item.id !== activeTaskId)]
+}
+
 function primaryActionForDecision(input: {
   conflicts: ProjectStateConflict[]
   ownerInput: ProjectDecisionProjection['ownerInput']

@@ -53539,6 +53539,9 @@ Repair:
 - [x] The shared claim resolver now carries a typed basis identity. A claim
       from a different task-worktree attempt is stale evidence, not a
       same-revision tie that another agent can win by wording or timing.
+- [x] Activity's compact live-work list now leads with the supervisor task
+      from the same decision packet as its primary action; saved in-flight
+      rows are retained as context and cannot displace the live task.
 - [ ] Extend the compact shared project decision/action projection and its
       Overview, Work, Thread, Activity, and release consumers so a live
       workspace reconciliation is visible identically everywhere. Do this as

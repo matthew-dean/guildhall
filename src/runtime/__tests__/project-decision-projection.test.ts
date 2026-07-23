@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   applyRuntimeExecutionToProjectDecision,
   buildProjectDecisionProjection,
+  projectDecisionInFlight,
   reconcileRegisteredProjectStateObservation,
   resolveRegisteredProjectStateClaimSet,
   reconcileProjectStateObservation,
@@ -649,5 +650,43 @@ describe('project decision projection', () => {
       canonicalClaimIds: ['workspace-attempt-two'],
       observationClaimId: 'workspace-attempt-one-conflict',
     })
+  })
+
+  it('puts the supervisor-owned active task ahead of stale compact in-flight rows', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-07-23T12:00:00.000Z',
+      start: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'stale-task',
+        focusTaskTitle: 'Old task',
+        message: 'Old task is paused.',
+      },
+      release: { scopeMode: 'unreleased', state: 'active', release: null, blockers: [] },
+      runStatus: 'running',
+      runtimeExecution: { activeTaskId: 'live-task', activeTaskTitle: 'Live task' },
+    })
+    expect(projectDecisionInFlight(decision, [{
+      id: 'stale-task',
+      title: 'Old task',
+      status: 'review',
+      domain: 'docs',
+      lastActivityAt: '2026-07-23T11:00:00.000Z',
+    }])).toEqual([
+      {
+        id: 'live-task',
+        title: 'Live task',
+        status: 'in_progress',
+        domain: '',
+        lastActivityAt: '2026-07-23T12:00:00.000Z',
+      },
+      {
+        id: 'stale-task',
+        title: 'Old task',
+        status: 'review',
+        domain: 'docs',
+        lastActivityAt: '2026-07-23T11:00:00.000Z',
+      },
+    ])
   })
 })
