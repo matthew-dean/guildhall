@@ -826,6 +826,8 @@ function findExistingTaskForUnit(unit: EvidenceUnit, existingTasks: Array<Record
   if (exactIdentity) return existingTaskMatch(exactIdentity)
   const claimedSourceIdentity = existingTasks.find(task => taskHasSourceClaimForUnit(task, unit))
   if (claimedSourceIdentity) return existingTaskMatch(claimedSourceIdentity)
+  const canonicalLegacyIdentity = existingTasks.find(task => taskHasCanonicalLegacyIdentityForUnit(task, unit))
+  if (canonicalLegacyIdentity) return existingTaskMatch(canonicalLegacyIdentity)
   return findExistingTaskByDeliverable(unit.name, existingTasks)
 }
 
@@ -852,6 +854,15 @@ function sourcePathMatches(left: string, right: string): boolean {
   const normalizedLeft = normalizePath(left)
   const normalizedRight = normalizePath(right)
   return normalizedLeft === normalizedRight || normalizedLeft.endsWith(`/${normalizedRight}`)
+}
+
+function taskHasCanonicalLegacyIdentityForUnit(task: Record<string, unknown>, unit: EvidenceUnit): boolean {
+  const id = typeof task.id === 'string' ? task.id : ''
+  if (normalizeForMatch(id) !== `task${normalizeForMatch(unit.name)}`) return false
+  const references = Array.isArray(task.references)
+    ? task.references.filter((value): value is string => typeof value === 'string')
+    : []
+  return references.some(ref => unit.sourceRefs.some(source => sourcePathMatches(ref, source.path)))
 }
 
 function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array<Record<string, unknown>>): ExistingTaskMatch | undefined {

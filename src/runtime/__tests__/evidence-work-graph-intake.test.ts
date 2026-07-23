@@ -476,6 +476,21 @@ describe('evidence-to-work-graph intake', () => {
     ]))
   })
 
+  it('reconciles a legacy canonical task id only when it cites the same source', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [loomaComponentSource],
+      existingTasks: [{
+        id: 'task-alertdialog',
+        status: 'done',
+        references: ['looma/docs/component-library-audit.md'],
+      }],
+      refreshStructuredExisting: true,
+    })
+
+    const alertDialog = plan.tasks.find(task => task.deliverableName === 'AlertDialog' && task.kind === 'implementation')
+    expect(alertDialog?.id).toBe('task-alertdialog')
+  })
+
   it('keeps reusable component work split from consumer integration with dependency proof', () => {
     const plan = planEvidenceWorkGraph({
       sources: [releaseMatrixSource],

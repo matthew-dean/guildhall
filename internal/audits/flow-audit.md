@@ -51868,3 +51868,21 @@ Repair:
       the next required proof.
 - Apply/revert: revert the claim matcher and proof-gap eligibility together.
       Do not use title/description prose as an alternate identity join.
+
+## 2026-07-23 Re-intake bridges canonical legacy task IDs
+
+- [x] Some older source-backed rows predate both source claims and
+      `sourceIdentity`, but retain a canonical system task ID plus the cited
+      source path. Re-intake now recognizes that pair as a structural identity
+      join. Title and description remain excluded from matching.
+
+### Contract Touch Decision
+
+- Work id: `0.13.63/reintake-canonical-legacy-id`.
+- Touched contracts: historical task identity reconciliation.
+- Proof required: matching source plus canonical ID reuses the task; the graph
+      suite and typecheck pass; installed replay has zero creates.
+- Proof provided: focused regression and suite; installed zero-create replay
+      remains required after this commit.
+- Apply/revert: remove this narrow bridge rather than broadening to prose
+      matching.
