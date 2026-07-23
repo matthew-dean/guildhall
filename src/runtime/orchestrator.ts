@@ -635,6 +635,7 @@ export function repairWeakRecoverySpecReviewSeedInQueue(
     : queue.tasks.find((candidate) => shouldRepairWeakRecoverySpecReviewSeed(candidate, queue))
   if (!liveTask || !shouldRepairWeakRecoverySpecReviewSeed(liveTask, queue)) return null
   const seed = buildRecoverySpecSeedForTask(liveTask, queue, input.now)
+  if (!seed.references?.length) return null
   if (!seed.productBrief || !validateProductBriefGrounding(liveTask, seed.productBrief).ok) return null
 
   liveTask.structuredSpec = seed.structuredSpec
@@ -12075,6 +12076,7 @@ export class Orchestrator {
     if (!isDurableDraftRecoveryRetry && !shouldSeedFromParent && !titleWasRepaired && opts.force !== true) return null
 
     const seed = buildRecoverySpecSeedForTask(liveTask, queue, now)
+    if (!seed.references?.length) return null
     const parentId = liveTask.hierarchy?.parentId ?? liveTask.delivery?.supports?.[0]
     const parentTask = parentId ? queue.tasks.find((candidate) => candidate.id === parentId) : undefined
     if (!seed.productBrief || !validateProductBriefGrounding(liveTask, seed.productBrief).ok) return null

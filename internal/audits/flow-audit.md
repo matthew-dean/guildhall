@@ -51718,3 +51718,33 @@ Contract Touch Decision
       no task, release, or execution record is rewritten.
 - Apply/revert: remove the adapter and its regressions together. Do not
       replace it by promoting extracted prose into task rows.
+
+## 2026-07-23 Uncited recovery cannot manufacture a spec
+
+Finding:
+
+- [x] A real Narrative Harness re-intake request without an explicit title
+      stored its full request body as a task title. With a title supplied, a
+      coordinator recovery path then advanced the uncited request to
+      `spec_review` using generic acceptance criteria. This is not a plan and
+      cannot be approved or treated as a release boundary.
+
+Repair:
+
+- [x] The CLI now exposes its existing explicit `--title` field in usage.
+- [x] Deterministic recovery requires durable source references inherited from
+      the task graph before it can write a spec, acceptance criteria, or a
+      `spec_review` state. Uncited work returns to the source-backed spec lane.
+
+Contract Touch Decision
+
+- Work id: `0.13.59/source-grounded-recovery-specs`.
+- Touched contracts: run-once request title affordance and coordinator
+      recovery-spec state transition.
+- Considered but not touched: source extraction, task/release schema,
+      provider prompts, owner approval, and task execution.
+- Proof required: one uncited recovery case must not create a synthetic spec;
+      one cited parent-child case must retain bounded recovery.
+- Proof provided: targeted orchestrator regressions.
+- Apply/revert: revert the source gate and its two regressions together; do
+      not restore generic acceptance criteria as a fallback.

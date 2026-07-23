@@ -3428,7 +3428,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.notes.some(note => note.content.includes('deterministic recovery spec seed'))).toBe(false)
   })
 
-  it('writes a deterministic recovery spec seed after repeated durable-draft recovery', async () => {
+  it('does not write a deterministic recovery spec seed without durable source references', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -3455,17 +3455,16 @@ describe('Orchestrator.tick — routing', () => {
     expect(out).toMatchObject({
       kind: 'processed',
       taskId: 'a',
-      agent: 'coordinator-recovery',
-      beforeStatus: 'exploring',
-      afterStatus: 'spec_review',
-      transitioned: true,
+      agent: 'spec-agent',
+      afterStatus: 'exploring',
+      transitioned: false,
     })
-    expect(spec.calls).toHaveLength(0)
+    expect(spec.calls).toHaveLength(1)
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('spec_review')
-    expect(task.spec).toContain('## Completion Boundary')
-    expect(task.acceptanceCriteria).toHaveLength(3)
+    expect(task.status).toBe('exploring')
+    expect(task.spec).toBeUndefined()
+    expect(task.acceptanceCriteria).toEqual([])
   })
 
   it('does not let recovery prose seed work without structured recovery state', async () => {
@@ -3510,6 +3509,7 @@ describe('Orchestrator.tick — routing', () => {
         title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
         semanticKind: 'contract',
         contractNames: ['FixtureManifest', 'ExpectedRecordSet', 'ExpectedSignal', 'PrototypeRun', 'RunEvaluation', 'PacketQualityScore'],
+        references: ['docs/harness/fixture-evaluation-contracts.md'],
         spec: [
           '## Acceptance Criteria',
           '1. The cited contracts are explicitly defined and usable in code: `FixtureManifest`, `ExpectedRecordSet`, `ExpectedSignal`.',

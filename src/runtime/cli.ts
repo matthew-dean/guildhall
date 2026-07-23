@@ -883,7 +883,7 @@ async function cmdTask() {
   const pos = positionals()
   const subcommand = pos[0]
   if (subcommand !== 'run-once') {
-    console.error('[guildhall] Usage: guildhall task run-once "<prompt>" [--from-file prompt.md] [--automation fully-automated] [--proof browser] [--output report.json]')
+    console.error('[guildhall] Usage: guildhall task run-once "<prompt>" [--title "Short request title"] [--from-file prompt.md] [--automation fully-automated] [--proof browser] [--output report.json]')
     process.exit(1)
   }
 
