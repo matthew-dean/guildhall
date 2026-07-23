@@ -2391,7 +2391,11 @@ describe('project-state database', () => {
       payload: {
         agentId: 'worker-agent',
         role: 'self-critique',
-        content: `${'model prose '.repeat(300)}\n\`\`\`json\n${JSON.stringify(machineSelfCritique)}\n\`\`\``,
+        // Operational review data arrives as structured data. The narrative
+        // stream is retained only as bounded audit material and is never
+        // reparsed to recover a hidden contract.
+        structured: { kind: 'worker_self_critique', ...machineSelfCritique },
+        content: 'model prose '.repeat(300),
         timestamp: '2026-07-14T00:01:00.000Z',
       },
     })
@@ -2403,7 +2407,7 @@ describe('project-state database', () => {
         ...machineSelfCritique,
       },
     })
-    expect(String(current?.byKind.note?.[0]?.payload.content)).not.toContain(JSON.stringify(machineSelfCritique))
+    expect(String(current?.byKind.note?.[0]?.payload.content)).toContain('[current evidence detail omitted]')
 
     upsertProjectStateDatabaseTaskProof(projectRoot, {
       taskId: 'task-1',
