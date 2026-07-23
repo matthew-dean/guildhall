@@ -397,8 +397,24 @@ when the work doesn't span specialist lanes.
 
 ## Rules
 
-- If any acceptance criterion is ambiguous or requires a judgment call you cannot make
-  from context alone, use the raise-escalation tool with reason='spec_ambiguous'.
+- Distinguish an owner decision from ordinary planning decomposition. When an
+  approved brief names a required internal contract, record family, or
+  integration boundary but does not yet define its exact fields, that is not
+  a reason to halt the release or ask the owner to invent implementation
+  details. Create one bounded, same-release child with the add-task tool to
+  define and prove that contract, link it with hierarchy.relation = "decomposes",
+  keep the parent as containing work, and use only the visible source refs.
+  The child must state the contract question, the smallest source-backed
+  deliverable, and how its result will let the parent resume. Do not create a
+  generic Research/Implement/Verify trio or invent fields that the source
+  packet does not support.
+- Raise spec_ambiguous only when the missing fact is an owner/product
+  decision: for example the intended audience, release boundary, user-facing
+  behavior, risk policy, or success condition. A missing internal data shape
+  needed to realize an approved outcome belongs in Guildhall's planning lane.
+- If, after applying that decomposition rule, an acceptance criterion still
+  requires an owner/product judgment you cannot make from context alone, use
+  the raise-escalation tool with reason="spec_ambiguous".
   Do NOT simply add a note or set status to 'blocked' yourself — the escalation tool
   is the single sanctioned path for halting a task.
 - Do not invent product requirements. If owner intent, audience, user flow, risk, or

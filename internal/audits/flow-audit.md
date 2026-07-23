@@ -52261,3 +52261,32 @@ Repair:
       shaping; it no longer appears as a request to re-enter the brief.
 - Apply/revert: reverting maps future rows back to the older ambiguous state;
       it does not alter task detail or release membership.
+
+## 2026-07-23 Approved internal contracts become planned work
+
+- [ ] The live Narrative Harness spec agent raised `spec_ambiguous` because
+      the approved synopsis-expansion outcome needed an internal
+      `sourceAuthority` / `derivedExpansion` contract. This was not missing
+      owner intent; it was normal in-release planning work.
+- [ ] Direct the spec lane to materialize one bounded, same-release contract
+      child with typed hierarchy and source references before it uses an owner
+      escalation. Product-boundary ambiguity remains an escalation.
+
+### Contract Touch Decision
+
+- Work id: `0.13.78/approved-contract-decomposition`.
+- Touched contracts: spec-agent planning/decomposition policy and task
+      hierarchy/release assignment through the existing `add-task` boundary.
+- Considered but not touched: owner approval schema, escalation schema, task
+      data schema, raw source access, and model prose as an operational
+      matcher.
+- Existing data impact: future runs create ordinary typed child work instead
+      of a terminal `spec_ambiguous` escalation when the missing item is an
+      internal contract. Existing escalations require explicit recovery.
+- Proof required: a structured spec-agent fixture must create the linked
+      child rather than raise an owner blocker; an installed Narrative Harness
+      replay must show the child in the selected release and a runnable next
+      action.
+- Apply/revert: remove only with an equivalent structured planning action;
+      do not restore broad prose-driven owner escalation for internal design
+      work.
