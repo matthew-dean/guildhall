@@ -5407,7 +5407,11 @@ describe('POST /api/project/task/:id/set-acceptance-command', () => {
       new Request(projectUrl('/api/project/task/task-1/set-acceptance-command'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ criterionId: 'AC-1', command: 'pnpm test -- --runInBand' }),
+        body: JSON.stringify({
+          criterionId: 'AC-1',
+          command: 'pnpm test -- --runInBand',
+          approvalActor: 'codex_delegated_owner',
+        }),
       }),
     )
     const body = (await res.json()) as Record<string, any>
@@ -5425,6 +5429,8 @@ describe('POST /api/project/task/:id/set-acceptance-command', () => {
     }])
     const evidence = await readTaskEvidence(tmpDir, 'task-1')
     expect(evidence.at(-1)?.payload).toMatchObject({
+      agentId: 'system:codex_delegated_owner',
+      role: 'codex_delegated_owner',
       criterionId: 'AC-1',
       command: 'pnpm test -- --runInBand',
     })

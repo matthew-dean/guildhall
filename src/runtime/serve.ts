@@ -14461,6 +14461,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   update-brief       → fill missing task-brief fields from human input
   //   add-acceptance     → append a human-written acceptance criterion
   //   set-acceptance-command → bind one exact executable proof command to a criterion
+  //                            (body: {criterionId, command, approvalActor?})
   //   set-acceptance-proof-expectation → record expected command exit/output for a criterion
   //   resume             → append a follow-up message to an exploring transcript
   //                        (body: {message?, resolveEscalationId?, resolution?})
@@ -15395,9 +15396,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const body = await c.req.json().catch(() => ({})) as {
           criterionId?: string
           command?: string
+          approvalActor?: unknown
         }
         const criterionId = typeof body.criterionId === 'string' ? body.criterionId.trim() : ''
         const command = typeof body.command === 'string' ? body.command.trim() : ''
+        const approvalActor = body.approvalActor === 'codex_delegated_owner'
+          ? 'codex_delegated_owner'
+          : 'human'
         if (!criterionId) return c.json({ error: 'criterionId required' }, 400)
         if (!command) return c.json({ error: 'command required' }, 400)
         if (/\r|\n/.test(command)) return c.json({ error: 'command must be a single line' }, 400)
@@ -15466,8 +15471,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
               action: 'set-acceptance-command',
               now,
               note: {
-                agentId: 'system:human',
-                role: 'human',
+                agentId: `system:${approvalActor}`,
+                role: approvalActor,
                 content: `Bound executable proof command to acceptance criterion ${criterionId}. Existing completion evidence must be re-run.`,
                 timestamp: now,
                 criterionId,
@@ -15520,8 +15525,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           queue.lastUpdated = now
           const notes = Array.isArray(task.notes) ? [...task.notes as Array<Record<string, unknown>>] : []
           notes.push({
-            agentId: 'system:human',
-            role: 'human',
+            agentId: `system:${approvalActor}`,
+            role: approvalActor,
             content: `Bound executable proof command to acceptance criterion ${criterionId}. Existing completion evidence must be re-run.`,
             timestamp: now,
             criterionId,
