@@ -371,7 +371,7 @@ import {
 import { attentionItemsForReleaseTruth, attentionProjectionNeedsReleaseReconciliation, materializeAttentionProjection, previewAttentionProjection, readSavedAttentionSurface, readSavedAttentionSurfaceFromBoundary, type AttentionReleaseTruth } from './attention-projection.js'
 import { createProjectProjectionRefreshScheduler, shouldRefreshProjectAtStartup, type ProjectProjectionInvalidation, type ProjectProjectionRefreshScheduler } from './project-projection-refresh.js'
 import { createProjectProjectionFreshnessWatcher } from './project-projection-freshness-watcher.js'
-import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
+import { projectRuntimeCompatibilityBlocker, readRuntimePackageVersion } from './runtime-compatibility.js'
 import { ProjectRuntimeSupervisor } from './project-runtime-supervisor.js'
 import {
   findStaleGuildhallProcesses,
@@ -6694,22 +6694,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   function readRuntimeVersion(): string {
     if (_cachedVersion !== null) return _cachedVersion
-    try {
-      const root = runtimePackageRoot()
-      if (root) {
-        const candidate = join(root, 'package.json')
-        if (existsSync(candidate)) {
-          const pkg = JSON.parse(readManagedTextFileSync(candidate, 'utf-8')) as {
-            version?: string
-          }
-          _cachedVersion = pkg.version ?? 'unknown'
-          return _cachedVersion
-        }
-      }
-    } catch {
-      /* fall through */
-    }
-    _cachedVersion = 'unknown'
+    _cachedVersion = readRuntimePackageVersion()
     return _cachedVersion
   }
 

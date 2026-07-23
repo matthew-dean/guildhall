@@ -53546,3 +53546,32 @@ Repair:
       Overview, Work, Thread, Activity, and release consumers so a live
       workspace reconciliation is visible identically everywhere. Do this as
       one shared projection change, not independent route logic.
+
+## 2026-07-23 Installed runtime identity is one shared authority
+
+- [ ] User job: after Guildhall installs an app bundle, starting a project
+      must use the same version the About surface reports. A valid installed
+      runtime must never call itself `unknown` on one route and `0.12.1` on
+      another.
+- Finding: `/api/version` found the deployed package through its package-root
+      lookup, while the project compatibility gate only searched upward from a
+      bundled chunk. The resulting disagreement blocked Narrative Harness
+      before the selected release could resume.
+
+### Contract Touch Decision
+
+- Work id: `0.13.96/runtime-identity-authority`.
+- Touched contracts: runtime package identity lookup and the project runtime
+      compatibility gate.
+- Considered but not touched: project runtime manifests, task/release state,
+      installer layout, and project mutation. This repair changes how the
+      runtime reads its own immutable package metadata; it does not relax a
+      real version or feature requirement.
+- Required behavior: package identity is discovered from both the module
+      location and process root, using the same `guildhall` / `@guildhall/cli`
+      package predicate as the service version endpoint. An unresolved identity
+      remains fail-closed for a real compatibility requirement.
+- Proof required: unit coverage for a process-root package lookup and an
+      installed-app replay in which `/api/version` and project start agree.
+- Apply/revert: no persisted schema change. Revert restores the old lookup
+      only; project manifests and data remain untouched.
