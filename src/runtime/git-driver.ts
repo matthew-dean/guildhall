@@ -114,6 +114,15 @@ function isNotGitRepositoryError(err: unknown): boolean {
   return /not a git repository|cannot find git repository/i.test(detail)
 }
 
+async function gitRefSha(repoRoot: string, ref: string): Promise<string | null> {
+  try {
+    const { stdout } = await execGit(['rev-parse', '--verify', '--quiet', ref], { cwd: repoRoot })
+    return stdout.trim() || null
+  } catch {
+    return null
+  }
+}
+
 export interface CreateWorktreeOptions {
   worktreePath: string
   branch: string
@@ -147,6 +156,21 @@ export interface WorktreeSyncResult {
   detail?: string
   /** True when the base update could not be applied without a conflict. */
   conflict?: boolean
+  /** Git's exact unmerged paths when `conflict` is true. */
+  conflictPaths?: string[]
+  /** True when the worktree remains in Git's merge state for recovery. */
+  mergeInProgress?: boolean
+  /** Immutable refs observed with the sync attempt. */
+  baseSha?: string | null
+  headSha?: string | null
+}
+
+/** Current merge state from Git, not from agent narration or task copy. */
+export interface WorktreeMergeState {
+  mergeInProgress: boolean
+  conflictPaths: string[]
+  baseSha: string | null
+  headSha: string | null
 }
 
 export interface PushResult {
@@ -210,8 +234,9 @@ export interface GitDriver {
     worktreePath: string,
     baseBranch: string,
     commitMessage: string,
-    opts?: { conflictStrategy?: 'fail' | 'prefer_task' },
   ): Promise<WorktreeSyncResult>
+  /** Inspect whether a reusable worktree still has an active merge. */
+  worktreeMergeState(worktreePath: string, baseBranch: string): Promise<WorktreeMergeState>
   /** Remove a worktree (and its branch ref). Safe to call on missing paths. */
   removeWorktree(repoRoot: string, worktreePath: string): Promise<void>
   /** Package dirty shared-checkout changes into a task branch commit. */
@@ -431,7 +456,6 @@ export class NodeGitDriver implements GitDriver {
     worktreePath: string,
     baseBranch: string,
     commitMessage: string,
-    opts: { conflictStrategy?: 'fail' | 'prefer_task' } = {},
   ): Promise<WorktreeSyncResult> {
     const resolvedWorktreePath = resolveRuntimePath(worktreePath)
     let checkpoint: CheckpointResult | undefined
@@ -452,30 +476,24 @@ export class NodeGitDriver implements GitDriver {
       }
     } catch (err) {
       const detail = errorDetail(err)
-      if (opts.conflictStrategy === 'prefer_task' && /conflict|automatic merge failed|not something we can merge/i.test(detail)) {
-        try {
-          const { stdout: conflictedPathsOutput } = await execGit(
-            ['diff', '--name-only', '--diff-filter=U', '-z'],
-            { cwd: resolvedWorktreePath },
-          )
-          const conflictedPaths = conflictedPathsOutput.split('\0').filter(Boolean)
-          if (conflictedPaths.length > 0) {
-            // The task worktree is the authoritative lane for Guildhall-owned
-            // proof artifacts. Resolve only the files Git marked conflicted;
-            // untouched base changes still arrive through the normal merge.
-            await execGit(['checkout', '--ours', '--', ...conflictedPaths], { cwd: resolvedWorktreePath })
-            await execGit(['add', '--', ...conflictedPaths], { cwd: resolvedWorktreePath })
-            await execGit(['commit', '--no-edit'], { cwd: resolvedWorktreePath })
-            const { stdout } = await execGit(['rev-parse', 'HEAD'], { cwd: resolvedWorktreePath })
-            return {
-              ok: true,
-              changed: true,
-              ...(stdout.trim() ? { commitSha: stdout.trim() } : {}),
-              detail: `Resolved ${conflictedPaths.length} Guildhall-owned proof conflict(s) in favor of the task branch.`,
-            }
-          }
-        } catch {
-          // Fall through to the ordinary abort-and-report path.
+      const conflict = /conflict|automatic merge failed|not something we can merge/i.test(detail)
+      if (conflict) {
+        const mergeState = await this.worktreeMergeState(resolvedWorktreePath, baseBranch).catch(() => ({
+          mergeInProgress: true,
+          conflictPaths: [],
+          baseSha: null,
+          headSha: null,
+        }))
+        // Leave the merge intact. Its exact conflict state is the canonical
+        // recovery input for the worker; aborting would turn it into prose.
+        return {
+          ok: false,
+          detail,
+          conflict: true,
+          conflictPaths: mergeState.conflictPaths,
+          mergeInProgress: mergeState.mergeInProgress,
+          baseSha: mergeState.baseSha,
+          headSha: mergeState.headSha,
         }
       }
       try {
@@ -487,8 +505,30 @@ export class NodeGitDriver implements GitDriver {
       return {
         ok: false,
         detail,
-        conflict: /conflict|automatic merge failed|not something we can merge/i.test(detail),
       }
+    }
+  }
+
+  async worktreeMergeState(worktreePath: string, baseBranch: string): Promise<WorktreeMergeState> {
+    const resolvedWorktreePath = resolveRuntimePath(worktreePath)
+    const { stdout: conflictOutput } = await execGit(
+      ['diff', '--name-only', '--diff-filter=U', '-z'],
+      { cwd: resolvedWorktreePath },
+    )
+    let mergeInProgress = false
+    try {
+      await execGit(['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'], {
+        cwd: resolvedWorktreePath,
+      })
+      mergeInProgress = true
+    } catch {
+      // `MERGE_HEAD` is absent after the recovery commit finishes.
+    }
+    return {
+      mergeInProgress,
+      conflictPaths: conflictOutput.split('\0').filter(Boolean).sort(),
+      baseSha: await gitRefSha(resolvedWorktreePath, baseBranch),
+      headSha: await gitRefSha(resolvedWorktreePath, 'HEAD'),
     }
   }
 
@@ -822,6 +862,7 @@ export interface InMemoryGitDriverOptions {
   nextPrResult?: PullRequestResult
   /** If set, the next task-worktree synchronization returns this result. */
   nextWorktreeSyncResult?: WorktreeSyncResult
+  nextWorktreeMergeState?: WorktreeMergeState
 }
 
 export class InMemoryGitDriver implements GitDriver {
@@ -831,6 +872,7 @@ export class InMemoryGitDriver implements GitDriver {
   private nextPush: PushResult | undefined
   private nextPr: PullRequestResult | undefined
   private nextWorktreeSync: WorktreeSyncResult | undefined
+  private nextWorktreeMerge: WorktreeMergeState | undefined
 
   constructor(opts: InMemoryGitDriverOptions = {}) {
     this.state = {
@@ -856,6 +898,7 @@ export class InMemoryGitDriver implements GitDriver {
     this.nextPush = opts.nextPushResult
     this.nextPr = opts.nextPrResult
     this.nextWorktreeSync = opts.nextWorktreeSyncResult
+    this.nextWorktreeMerge = opts.nextWorktreeMergeState
   }
 
   /** Seed the next merge outcome; clears after one call. */
@@ -870,6 +913,9 @@ export class InMemoryGitDriver implements GitDriver {
   }
   setNextWorktreeSyncResult(r: WorktreeSyncResult): void {
     this.nextWorktreeSync = r
+  }
+  setNextWorktreeMergeState(state: WorktreeMergeState): void {
+    this.nextWorktreeMerge = state
   }
   setClean(clean: boolean): void {
     this.clean = clean
@@ -977,12 +1023,20 @@ export class InMemoryGitDriver implements GitDriver {
     worktreePath: string,
     baseBranch: string,
     commitMessage: string,
-    _opts?: { conflictStrategy?: 'fail' | 'prefer_task' },
   ): Promise<WorktreeSyncResult> {
     const result = this.nextWorktreeSync ?? { ok: true, changed: false }
     this.nextWorktreeSync = undefined
     this.state.worktreeSyncs.push({ worktreePath, baseBranch, commitMessage, result })
     return result
+  }
+
+  async worktreeMergeState(_worktreePath: string, _baseBranch: string): Promise<WorktreeMergeState> {
+    return this.nextWorktreeMerge ?? {
+      mergeInProgress: false,
+      conflictPaths: [],
+      baseSha: 'base',
+      headSha: 'head',
+    }
   }
 
   async removeWorktree(_repoRoot: string, worktreePath: string): Promise<void> {

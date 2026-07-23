@@ -216,9 +216,15 @@ describe('NodeGitDriver.syncWorktreeWithBase', () => {
 
     expect(result.ok).toBe(false)
     expect(result.conflict).toBe(true)
+    expect(result.mergeInProgress).toBe(true)
+    expect(result.conflictPaths).toEqual(['README.md'])
+    await expect(driver.worktreeMergeState(worktreePath, 'main')).resolves.toMatchObject({
+      mergeInProgress: true,
+      conflictPaths: ['README.md'],
+    })
   })
 
-  it('can resolve a Guildhall-owned proof conflict in favor of the task branch', async () => {
+  it('retains a proof-task conflict for typed worker recovery instead of silently choosing a side', async () => {
     const driver = new NodeGitDriver()
     const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'proof-sync-conflict')
     await driver.createWorktree(repoRoot, {
@@ -238,11 +244,18 @@ describe('NodeGitDriver.syncWorktreeWithBase', () => {
       worktreePath,
       'main',
       'Guildhall: checkpoint proof task before synchronizing',
-      { conflictStrategy: 'prefer_task' },
     )
 
-    expect(result.ok).toBe(true)
-    await expect(fs.readFile(path.join(worktreePath, 'README.md'), 'utf-8')).resolves.toBe('# Task proof\n')
+    expect(result).toMatchObject({
+      ok: false,
+      conflict: true,
+      mergeInProgress: true,
+      conflictPaths: ['README.md'],
+    })
+    await expect(driver.worktreeMergeState(worktreePath, 'main')).resolves.toMatchObject({
+      mergeInProgress: true,
+      conflictPaths: ['README.md'],
+    })
   })
 })
 

@@ -91,7 +91,20 @@ export const TaskWorkspaceState = z.object({
   worktreePath: z.string().optional(),
   branchName: z.string().optional(),
   baseBranch: z.string().optional(),
+  /** Stable identity for one physical task-worktree attempt. */
+  workspaceAttemptId: z.string().optional(),
   mode: z.enum(['none', 'per_task', 'per_attempt']).optional(),
+  // A Git-observed recovery boundary. The worker receives these exact paths,
+  // but its prose never decides whether the merge is actually resolved.
+  syncRecovery: z.object({
+    kind: z.literal('base_merge_conflict'),
+    workspaceAttemptId: z.string(),
+    baseBranch: z.string(),
+    baseSha: z.string().nullable(),
+    headSha: z.string().nullable(),
+    conflictPaths: z.array(z.string()).min(1).max(128),
+    detectedAt: z.string(),
+  }).optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string(),
 })

@@ -53474,3 +53474,69 @@ Repair:
       catalog API, and proves the current task inventory is unchanged.
 - Apply/revert: one new explicit boundary; reverting it leaves existing task
       writes untouched and removes only catalog-only adapter intake.
+
+## 2026-07-23 Git recovery is an internal, typed worktree state
+
+- [ ] User job: when the selected task's reusable worktree cannot merge the
+      current base, Guildhall says what is actually happening, dispatches
+      bounded recovery work against the named conflicted paths, and does not
+      ask the owner to repair a normal Git conflict. The same task must not
+      reach review, gate check, or completion until Git reports the merge is
+      finished.
+- [ ] Cross-surface rule: Work, Activity, the selected release, and the
+      primary action consume one workspace `syncRecovery` fact. Git's index
+      and `MERGE_HEAD` are the authority; worker/coordinator prose is only
+      evidence. A second agent can submit a conflicting observation, but it
+      cannot clear the recovery without the Git authority agreeing.
+
+### Contract Touch Decision
+
+- Work id: `0.13.95/worktree-sync-recovery-authority`.
+- Touched contracts: Git driver sync/inspection result, normalized task
+      workspace state, task dispatch, worker recovery metadata, and lifecycle
+      admission before review/gate work.
+- Considered but not touched: task title/spec/notes, release membership,
+      owner approval, provider prose, and generic blocker rendering. None may
+      decide whether a merge is active or resolved.
+- Required behavior: a base-merge conflict is retained as Git state with its
+      exact paths, task-worktree attempt identity, and observed base/head
+      refs. Guildhall persists an additive typed recovery fact, hands it to a
+      worker, and rechecks Git before clearing it. A claim for a replaced
+      attempt or a different observed ref is stale, not competing truth.
+      Non-conflict setup failures still fail closed through their existing
+      typed path.
+- Proof required: real Git conflict state survives sync; manager returns the
+      typed recovery rather than a human blocker; worker prompt/metadata name
+      only the observed paths; an unresolved merge cannot remain in review;
+      a completed merge clears the recovery and resumes ordinary dispatch.
+- Apply/revert: this changes no task definition or release scope. Proof tasks
+      now use the same recovery path as all other work; no task class may
+      silently choose either side of a conflict.
+
+### Schema Migration Decision
+
+- Work id: `0.13.95/worktree-sync-recovery-authority`.
+- Persisted schema touched: normalized `TaskWorkspaceState` in the project
+      state database.
+- Change class: additive optional `syncRecovery` object.
+- Existing data impact: existing workspace rows remain valid. Historical
+      `task_worktree_sync_conflict` blockers are reopened through the existing
+      recovery path and receive the new state only when Git observes a live
+      conflict.
+- Safety: no compatibility reader is required; absent means no active
+      recovery. Clearing the object requires a fresh Git inspection.
+
+### Implementation checkpoint
+
+- [x] The Git driver retains a real merge conflict and reports exact unmerged
+      paths plus observed base/head refs; it no longer aborts the merge or
+      gives proof tasks a hidden branch-preference rule.
+- [x] The normalized workspace record persists one worktree attempt identity
+      and its typed recovery fact. Dispatch, worker metadata, and task
+      lifecycle recovery consume that fact and re-read Git before clearing it.
+- [x] Focused real-Git, manager, and orchestrator regressions prove path/ref
+      capture, no human blocker, review bounce, and verified recovery clear.
+- [ ] Extend the compact shared project decision/action projection and its
+      Overview, Work, Thread, Activity, and release consumers so a live
+      workspace reconciliation is visible identically everywhere. Do this as
+      one shared projection change, not independent route logic.

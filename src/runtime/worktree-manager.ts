@@ -95,6 +95,13 @@ export interface EnsureWorktreeResult {
   baseBranch: string
   /** True when a worktree was created on this call (vs. reused). */
   created: boolean
+  /** A Git-observed merge the worker must resolve before ordinary work. */
+  mergeRecovery?: {
+    baseBranch: string
+    conflictPaths: string[]
+    baseSha: string | null
+    headSha: string | null
+  }
 }
 
 export class WorktreeSyncError extends Error {
@@ -146,12 +153,21 @@ export async function ensureWorktreeForDispatch(
     existsSync(resolveRuntimePath(task.worktreePath))
   ) {
     const existingWorktreePath = resolveRuntimePath(task.worktreePath)
-    await synchronizeReusableWorktree({
+    const mergeRecovery = await synchronizeReusableWorktree({
       task,
       worktreePath: existingWorktreePath,
       baseBranch: task.baseBranch ?? baseBranch,
       gitDriver,
     })
+    if (mergeRecovery) {
+      return {
+        worktreePath: existingWorktreePath,
+        branchName: expectedBranch,
+        baseBranch: task.baseBranch ?? baseBranch,
+        created: false,
+        mergeRecovery,
+      }
+    }
     await pruneProjectRuntimeLinks({
       projectPath,
       worktreePath: existingWorktreePath,
@@ -179,12 +195,21 @@ export async function ensureWorktreeForDispatch(
       worktreePath: expectedPath,
       branch: expectedBranch,
     })
-    await synchronizeReusableWorktree({
+    const mergeRecovery = await synchronizeReusableWorktree({
       task,
       worktreePath: expectedPath,
       baseBranch: task.baseBranch ?? baseBranch,
       gitDriver,
     })
+    if (mergeRecovery) {
+      return {
+        worktreePath: expectedPath,
+        branchName: expectedBranch,
+        baseBranch: task.baseBranch ?? baseBranch,
+        created: true,
+        mergeRecovery,
+      }
+    }
     await pruneProjectRuntimeLinks({
       projectPath,
       worktreePath: expectedPath,
@@ -315,16 +340,21 @@ async function synchronizeReusableWorktree(input: {
   worktreePath: string
   baseBranch: string
   gitDriver: GitDriver
-}): Promise<void> {
+}): Promise<EnsureWorktreeResult['mergeRecovery'] | undefined> {
   const result = await input.gitDriver.syncWorktreeWithBase(
     input.worktreePath,
     input.baseBranch,
     `Guildhall: checkpoint task work before synchronizing ${input.task.id}`,
-    input.task.semanticKind === 'proof_setup'
-      ? { conflictStrategy: 'prefer_task' }
-      : undefined,
   )
-  if (result.ok) return
+  if (result.ok) return undefined
+  if (result.conflict === true && result.mergeInProgress === true && (result.conflictPaths?.length ?? 0) > 0) {
+    return {
+      baseBranch: input.baseBranch,
+      conflictPaths: [...result.conflictPaths!].sort(),
+      baseSha: result.baseSha ?? null,
+      headSha: result.headSha ?? null,
+    }
+  }
   const detail = result.detail ?? 'unknown worktree synchronization error'
   throw new WorktreeSyncError(input.task.id, input.baseBranch, detail, result.conflict === true)
 }

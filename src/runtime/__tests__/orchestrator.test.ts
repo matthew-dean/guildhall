@@ -49,6 +49,7 @@ import {
   writeProjectStateDatabaseSnapshot,
   readTaskEvidence,
   readTaskRuntimeStore,
+  readTaskWorkspaceStore,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
@@ -10813,6 +10814,82 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.status).toBe('blocked')
     expect(task?.assignedTo).toBeNull()
     expect(task?.blockReason).toContain(`base repo has uncommitted changes at ${subrepo}`)
+  })
+
+  it('keeps a Git merge conflict in the worker lane until Git confirms it is resolved', async () => {
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'exercise typed worktree sync recovery',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({ path: agentSettingsPath, settings })
+    const worktreePath = path.join(tmpDir, 'worktree-sync-recovery')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'sync-recovery',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        spec: VALID_SPEC,
+        worktreePath,
+        branchName: 'guildhall/task-sync-recovery',
+        baseBranch: 'main',
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask('sync-recovery', { status: 'review', assignedTo: 'reviewer-agent' })
+    })
+    const gitDriver = new InMemoryGitDriver({
+      nextWorktreeSyncResult: {
+        ok: false,
+        conflict: true,
+        mergeInProgress: true,
+        conflictPaths: ['jest.config.js'],
+        baseSha: 'base-before-merge',
+        headSha: 'task-before-merge',
+      },
+      nextWorktreeMergeState: {
+        mergeInProgress: true,
+        conflictPaths: ['jest.config.js'],
+        baseSha: 'base-before-merge',
+        headSha: 'task-before-merge',
+      },
+    })
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet({ worker }), gitDriver })
+
+    await orch.tick()
+    expect(worker.calls).toHaveLength(1)
+    expect(worker.calls[0]?.prompt).toContain('Worktree merge recovery')
+    expect(worker.calls[0]?.prompt).toContain('jest.config.js')
+    expect((await readQueue()).tasks[0]?.status).toBe('review')
+    expect((await readTaskWorkspaceStore(tmpDir)).workspaces['sync-recovery']?.syncRecovery).toMatchObject({
+      kind: 'base_merge_conflict',
+      baseBranch: 'main',
+      workspaceAttemptId: expect.stringContaining('guildhall/task-sync-recovery:'),
+      baseSha: 'base-before-merge',
+      headSha: 'task-before-merge',
+      conflictPaths: ['jest.config.js'],
+    })
+
+    const recoveryTick = await orch.tick()
+    expect(recoveryTick).toMatchObject({
+      kind: 'processed',
+      agent: 'worktree-sync-recovery',
+      afterStatus: 'in_progress',
+    })
+    expect(worker.calls).toHaveLength(1)
+    expect((await readQueue()).tasks[0]?.status).toBe('in_progress')
+
+    gitDriver.setNextWorktreeMergeState({
+      mergeInProgress: false,
+      conflictPaths: [],
+      baseSha: 'base-after-merge',
+      headSha: 'merge-commit',
+    })
+    await orch.tick()
+    expect((await readTaskWorkspaceStore(tmpDir)).workspaces['sync-recovery']?.syncRecovery).toBeUndefined()
   })
 
   it('reopens a dirty-repo blocker when the shared Git authority reports the repo clean', async () => {

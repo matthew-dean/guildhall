@@ -36,6 +36,7 @@ import {
   type CoordinatorDomain,
   type ProgressEntry,
   TaskRuntimeState,
+  type TaskWorkspaceState,
   parseTaskRuntimeField,
 } from '@guildhall/core'
 import {
@@ -319,6 +320,7 @@ const PROPOSAL_PROMOTER_AGENT_ID = 'proposal-promoter'
 const PRE_REJECTION_POLICY_AGENT_ID = 'pre-rejection-policy'
 
 type AgentGenerateResult = Awaited<ReturnType<OrchestratorAgent['generate']>>
+type WorktreeSyncRecovery = NonNullable<TaskWorkspaceState['syncRecovery']>
 
 function isFrontendUiReviewTask(task: Task): boolean {
   return hasStructuredSurface(task, 'component')
@@ -3272,6 +3274,10 @@ export class Orchestrator {
     if (task.status === 'exploring' || task.status === 'spec_review' || task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
       task = await this.hydrateEffectiveTaskForDispatch(task)
     }
+    let activeWorktreeSyncRecovery = await this.refreshWorktreeSyncRecovery(task)
+    if (activeWorktreeSyncRecovery && task.status !== 'in_progress') {
+      return await this.returnTaskToWorktreeSyncRecovery(task, activeWorktreeSyncRecovery)
+    }
     // Execution is never valid without the current implementation contract.
     // This guard covers tasks that arrived through an older retry path or a
     // stale projection without the narrower proof-recovery marker.
@@ -3477,9 +3483,11 @@ export class Orchestrator {
       : proofRecoveryNeedsFreshWorktree(task)
         ? 'per_attempt'
       : configuredWorktreeMode
-    let activeWorktreePath = effectiveTaskProjectPath
+    let activeWorktreePath = activeWorktreeSyncRecovery
+      ? task.worktreePath ?? effectiveTaskProjectPath
+      : effectiveTaskProjectPath
     const baseBranch = await this.resolveBaseBranch(effectiveTaskProjectPath)
-    if (worktreeMode !== 'none' && !shouldSkipGitIsolation(task, agent.name)) {
+    if (!activeWorktreeSyncRecovery && worktreeMode !== 'none' && !shouldSkipGitIsolation(task, agent.name)) {
       if (!task.worktreePath) {
         const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
         if (!repoClean) {
@@ -3627,6 +3635,21 @@ export class Orchestrator {
           gitDriver: this.gitDriver,
         })
         activeWorktreePath = ensured.worktreePath
+        const persistedWorkspace = (task as Task & { workspace?: TaskWorkspaceState }).workspace
+        const workspaceAttemptId = (!ensured.created ? persistedWorkspace?.workspaceAttemptId : undefined) ??
+          `${ensured.branchName}:${this.now()}`
+        const syncRecovery = ensured.mergeRecovery
+          ? {
+              kind: 'base_merge_conflict' as const,
+              workspaceAttemptId,
+              baseBranch: ensured.mergeRecovery.baseBranch,
+              baseSha: ensured.mergeRecovery.baseSha,
+              headSha: ensured.mergeRecovery.headSha,
+              conflictPaths: ensured.mergeRecovery.conflictPaths,
+              detectedAt: this.now(),
+            }
+          : undefined
+        if (syncRecovery) activeWorktreeSyncRecovery = syncRecovery
         await upsertTaskWorkspaceState(
           inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
           task.id,
@@ -3634,7 +3657,9 @@ export class Orchestrator {
             worktreePath: ensured.worktreePath,
             branchName: ensured.branchName,
             baseBranch: ensured.baseBranch,
+            workspaceAttemptId,
             mode: worktreeMode,
+            ...(syncRecovery ? { syncRecovery } : {}),
             updatedAt: this.now(),
           },
         )
@@ -3742,6 +3767,7 @@ export class Orchestrator {
     })
     let handedOffBootstrapVerificationThisDispatch = false
     if (
+      !activeWorktreeSyncRecovery &&
       wtBootstrap &&
       wtBootstrap.commands.length > 0 &&
       activeWorktreePath !== effectiveTaskProjectPath
@@ -3955,6 +3981,13 @@ export class Orchestrator {
       effectiveTaskProjectPath,
       activeWorktreePath,
     )
+    const worktreeSyncRecoveryInstructions = activeWorktreeSyncRecovery
+      ? [
+          '**Worktree merge recovery:** Git has an unfinished merge from the current base branch.',
+          `Resolve only the reported conflict paths (${activeWorktreeSyncRecovery.conflictPaths.join(', ')}) in ${activeWorktreePath}, stage the resolution, and finish the merge commit before continuing ordinary task work.`,
+          `The base branch is ${activeWorktreeSyncRecovery.baseBranch}. Do not declare this resolved, move to review, or ask the owner to choose a side until \`git status\` shows the merge is complete.`,
+        ].join('\n')
+      : null
 
     const prompt = [
       ctx.formatted,
@@ -3984,6 +4017,7 @@ export class Orchestrator {
           })]
         : []),
       ...(immediateResumeInstructions ? ['', immediateResumeInstructions] : []),
+      ...(worktreeSyncRecoveryInstructions ? ['', worktreeSyncRecoveryInstructions] : []),
       ...(slotPromptRule ? ['', slotPromptRule] : []),
       '',
       promptSuffix,
@@ -4056,6 +4090,9 @@ export class Orchestrator {
         ...(activeWorktreePath ? { current_task_worktree_path: activeWorktreePath } : {}),
         ...(activeTaskWorktreeProjectPath !== activeWorktreePath
           ? { current_task_worktree_project_path: activeTaskWorktreeProjectPath }
+          : {}),
+        ...(activeWorktreeSyncRecovery
+          ? { current_task_worktree_sync_recovery: activeWorktreeSyncRecovery }
           : {}),
         ...(likelyTargetFiles.length > 0
           ? { current_task_likely_target_files: likelyTargetFiles }
@@ -9739,6 +9776,108 @@ export class Orchestrator {
   }
 
   /**
+   * Git owns merge completion. A worker may report that it resolved a conflict,
+   * but the normalized workspace fact clears only after a fresh Git read.
+   */
+  private async refreshWorktreeSyncRecovery(task: Task): Promise<WorktreeSyncRecovery | null> {
+    const workspace = (task as Task & { workspace?: TaskWorkspaceState }).workspace
+    const recovery = workspace?.syncRecovery
+    if (!recovery) return null
+    const worktreePath = task.worktreePath ?? workspace?.worktreePath
+    if (!worktreePath) return recovery
+    const observed = await this.gitDriver.worktreeMergeState(
+      resolveRuntimePath(worktreePath),
+      recovery.baseBranch,
+    )
+    if (observed.mergeInProgress || observed.conflictPaths.length > 0) {
+      const next: WorktreeSyncRecovery = {
+        ...recovery,
+        ...(observed.conflictPaths.length > 0
+          ? { conflictPaths: [...observed.conflictPaths].sort() }
+          : {}),
+        baseSha: observed.baseSha,
+        headSha: observed.headSha,
+      }
+      if (JSON.stringify(next) !== JSON.stringify(recovery)) {
+        await upsertTaskWorkspaceState(
+          inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+          task.id,
+          { syncRecovery: next, updatedAt: this.now() },
+        )
+        ;(task as Task & { workspace?: TaskWorkspaceState }).workspace = { ...workspace!, syncRecovery: next }
+      }
+      return next
+    }
+    await upsertTaskWorkspaceState(
+      inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+      task.id,
+      { syncRecovery: undefined, updatedAt: this.now() },
+    )
+    if (workspace) {
+      const { syncRecovery: _syncRecovery, ...clearedWorkspace } = workspace
+      ;(task as Task & { workspace?: TaskWorkspaceState }).workspace = clearedWorkspace
+    }
+    return null
+  }
+
+  private async returnTaskToWorktreeSyncRecovery(
+    task: Task,
+    recovery: WorktreeSyncRecovery,
+  ): Promise<TickOutcome> {
+    const queue = await this.readQueue()
+    const current = queue.tasks.find(candidate => candidate.id === task.id)
+    if (!current) {
+      return {
+        kind: 'agent-error',
+        taskId: task.id,
+        agent: 'worktree-sync-recovery',
+        error: `Task ${task.id} disappeared before worktree recovery could resume.`,
+      }
+    }
+    const beforeStatus = current.status
+    if (current.status === 'review' || current.status === 'gate_check') {
+      transitionTaskStatus({
+        task: current,
+        event: 'revise',
+        actor: 'worktree-sync-recovery',
+        evidenceRefs: ['task:worktree-sync:git-merge-still-active'],
+        now: this.now(),
+      })
+    } else if (current.status === 'blocked') {
+      transitionTaskStatus({
+        task: current,
+        event: 'recover_to_in_progress',
+        actor: 'worktree-sync-recovery',
+        evidenceRefs: ['task:worktree-sync:git-merge-still-active'],
+        now: this.now(),
+      })
+    }
+    current.assignedTo = 'worker-agent'
+    current.blockReason = undefined
+    current.recoveryCode = undefined
+    current.updatedAt = this.now()
+    queue.lastUpdated = current.updatedAt
+    await this.writeQueue(queue)
+    await this.logTickProgress({
+      task: current,
+      agent: 'worktree-sync-recovery',
+      beforeStatus,
+      afterStatus: current.status,
+      transitioned: beforeStatus !== current.status,
+      note: `Git merge remains active for ${recovery.conflictPaths.join(', ')}; returning work to the worker recovery lane.`,
+    })
+    return {
+      kind: 'processed',
+      taskId: current.id,
+      agent: 'worktree-sync-recovery',
+      beforeStatus,
+      afterStatus: current.status,
+      transitioned: beforeStatus !== current.status,
+      revisionCount: current.revisionCount,
+    }
+  }
+
+  /**
    * FR-24: read the `worktree_isolation` lever. Falls back to `'none'` on
    * error so a malformed lever file doesn't block progress.
    */
@@ -10215,6 +10354,12 @@ export class Orchestrator {
       } else if (task.recoveryCode === 'task_worktree_exists') {
         recoveryNote =
           'User restarted the project after Guildhall had already created the task branch. Reopened the task so Guildhall can attach that existing branch to a task worktree and continue.'
+      } else if (
+        task.recoveryCode === 'task_worktree_sync' ||
+        task.recoveryCode === 'task_worktree_sync_conflict'
+      ) {
+        recoveryNote =
+          'Guildhall reopened the historical worktree synchronization stop. It will inspect the Git worktree directly and either recover the active merge or resume normal synchronization without asking the owner to repair internal Git state.'
       } else {
         continue
       }

@@ -173,6 +173,40 @@ describe('ensureWorktreeForDispatch', () => {
     expect(driver.state.worktreeSyncs).toHaveLength(1)
   })
 
+  it('returns Git-observed merge recovery instead of turning a named conflict into a blocker', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worktree-sync-recovery-'))
+    const worktreePath = path.join(tmp, 'abc')
+    await fs.mkdir(worktreePath, { recursive: true })
+    const driver = new InMemoryGitDriver({
+      nextWorktreeSyncResult: {
+        ok: false,
+        conflict: true,
+        mergeInProgress: true,
+        conflictPaths: ['package.json', 'src/runtime.ts'],
+      },
+    })
+
+    const result = await ensureWorktreeForDispatch({
+      task: task({
+        id: 'abc',
+        worktreePath,
+        branchName: 'guildhall/task-abc',
+        baseBranch: 'main',
+      }),
+      mode: 'per_task',
+      projectId: 'demo-project',
+      projectPath: '/repo',
+      baseBranch: 'main',
+      gitDriver: driver,
+    })
+
+    expect(result.mergeRecovery).toMatchObject({
+      baseBranch: 'main',
+      conflictPaths: ['package.json', 'src/runtime.ts'],
+    })
+    expect(driver.state.worktreeSyncs).toHaveLength(1)
+  })
+
   it('reattaches when a recorded worktree path no longer exists', async () => {
     const missingPath = path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc')
     await fs.rm(missingPath, { recursive: true, force: true })
