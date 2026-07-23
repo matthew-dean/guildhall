@@ -714,6 +714,8 @@ export interface ProjectStateDatabaseReadBundle<T = unknown> {
   authority: 'database' | 'legacy'
   queueRevision: number | null
   projectRevision: number | null
+  /** Small queue envelope: release definitions and selection, never task detail. */
+  queue: ProjectStateDatabaseQueue | null
   queueDefinition: ProjectStateDatabaseQueueDefinition | null
   projection: ProjectStateDatabaseProjectionState<T> | null
   taskDetail: ProjectStateDatabaseTaskDetailState<T> | null
@@ -5320,6 +5322,9 @@ export function readProjectStateDatabaseReadBundle<T = unknown>(
       options.includeRepositories === true ||
       options.includeDiagnostics === true ||
       options.includeScopeRows === true
+    const queue = includeStructuredState && hasQueue
+      ? readProjectStateDatabaseQueueEnvelopeFromDatabase(database)
+      : null
     const queueDefinition = options.includeQueueDefinition === true && hasQueue && queueRevision !== null
       ? readQueueDetailsForRevision(tasksPath, queueRevision, database)
       : null
@@ -5342,6 +5347,7 @@ export function readProjectStateDatabaseReadBundle<T = unknown>(
       authority,
       queueRevision,
       projectRevision,
+      queue,
       queueDefinition,
       projection,
       taskDetail,

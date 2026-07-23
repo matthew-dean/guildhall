@@ -54,6 +54,56 @@ import {
 import { readProjectSummaryProjection } from '../project-summary-projection.js'
 
 describe('project-state-boundary', () => {
+  it('uses normalized queue selection for Overview when the orientation projection is stale', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-overview-scope-authority-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    try {
+      writeProjectStateDatabaseSnapshot(tasksPath, {
+        projectRoot: root,
+        queue: {
+          version: 1,
+          selectedReleaseId: 'release-queue',
+          releases: [{
+            id: 'release-queue',
+            label: 'Queue release',
+            kind: 'release',
+            state: 'active',
+            source: 'owner_approved',
+            nodeIds: ['work:task-queue'],
+            deferredNodeIds: [],
+          }],
+          tasks: [{ id: 'task-queue', title: 'Queue task', status: 'ready' }],
+        },
+        summary: {
+          freshness: 'current',
+          orientationSpine: {
+            selectedRelease: { id: 'release-stale', label: 'Stale orientation release' },
+            releases: [{ id: 'release-stale', label: 'Stale orientation release' }],
+          },
+        },
+        scopeRows: [{
+          taskId: 'task-queue',
+          scope: 'included',
+          eligibilityReason: 'selected release membership',
+          hierarchyRole: 'primary',
+          handoffState: 'ready',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: [],
+        }],
+      })
+      promoteProjectStateDatabaseAuthority(root)
+
+      expect(readProjectOverviewStateAtBoundary(root)?.scope).toMatchObject({
+        id: 'release-queue',
+        nodeIds: ['work:task-queue'],
+      })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('uses normalized release membership for selected-release proof obligations and reports stale scope rows', () => {
     const state = {
       rawQueue: {

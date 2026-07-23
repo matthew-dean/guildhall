@@ -53579,3 +53579,34 @@ Repair:
       installed-app replay in which `/api/version` and project start agree.
 - Apply/revert: no persisted schema change. Revert restores the old lookup
       only; project manifests and data remain untouched.
+
+## 2026-07-23 Scope identity cannot come from a presentation projection
+
+- [ ] User job: every surface must name and count the same selected scope,
+      even while a saved orientation projection is catching up after a release
+      mutation. A user must never see one release in Overview and a different
+      release in Start or Release detail.
+- Finding: the Overview boundary read selected-release identity from the
+      orientation summary while other boundaries read normalized queue and
+      membership rows. That gave two durable snapshots authority over one
+      field, which is exactly the kind of agent disagreement the product must
+      resolve deterministically.
+
+### Contract Touch Decision
+
+- Work id: `0.13.97/scope-identity-authority`.
+- Touched contracts: Overview state boundary and selected-release/scope
+      identity ownership.
+- Considered but not touched: release definitions, membership rows, summary
+      projection format, task statuses, and release scheduling.
+- Required behavior: `queue.selectedReleaseId` plus normalized release
+      membership and scope rows own selected-scope identity. Orientation is
+      display material and may describe that scope, but cannot select,
+      rename, or replace it. A stale/mismatched orientation becomes stale
+      evidence rather than a competing answer.
+- Proof required: a boundary regression seeds a stale orientation pointing at
+      a different release and proves Overview resolves the queue-selected
+      release; installed NH replay must show consistent selected release and
+      scope counts across Overview, Activity, Start, and Release.
+- Apply/revert: no persisted schema change. Revert restores only an invalid
+      reader choice; queue membership remains the canonical release model.

@@ -773,11 +773,17 @@ export function readProjectOverviewStateAtBoundary(
     },
   )
   if (!current) return null
+  if (!current.queue) return null
   const summary = current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null
-  const releases = Array.isArray(summary?.orientationSpine?.releases)
-    ? summary.orientationSpine.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
+  // Release selection and membership are normalized queue facts. The saved
+  // orientation is a presentation projection and may lag a queue mutation;
+  // it must never choose a competing selected scope for Overview.
+  const releases = Array.isArray(current.queue.releases)
+    ? current.queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
     : []
-  const selectedReleaseId = summary?.orientationSpine?.selectedRelease?.id
+  const selectedReleaseId = typeof current.queue.selectedReleaseId === 'string'
+    ? current.queue.selectedReleaseId
+    : undefined
   return {
     authority: current.authority,
     summary,
