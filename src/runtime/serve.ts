@@ -12339,12 +12339,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const memoryDir = getProjectStateDir(project.path)
       const queue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
-      const effectiveTasks = await buildEffectiveTasks(project.path, queue.tasks as Task[], { evidence: 'current' })
+      const currentTasks = await readProjectTaskCurrentRecordsAtBoundary(
+        project.path,
+        queue.tasks.map(task => String(task.id ?? '')).filter(Boolean),
+        { includeDefinitions: true },
+      )
       const sources = await collectProjectReintakeSources(project.path)
       const draft = planProjectReintake({
         projectPath: project.path,
         sources,
-        tasks: effectiveTasks as unknown as Array<Record<string, unknown>>,
+        tasks: currentTasks.effectiveRecords,
         taskQueueFingerprintTasks: queue.tasks,
         releases: queue.releases,
       })

@@ -51942,3 +51942,20 @@ Repair:
 - Proof provided: typecheck and focused suite; installed replay pending.
 - Apply/revert: revert the effective read and fingerprint override together.
       Do not reintroduce compact task reads for proof/release decisions.
+
+## 2026-07-23 Re-intake reads full current task definitions
+
+- [x] The prior effective-task repair still fed the builder compact queue rows,
+      so omitted definitions (including proof paths) could not be recovered.
+- [x] The endpoint now uses the bounded current-task SQLite read with full
+      definitions, overlays, and evidence captured at one revision.
+
+### Contract Touch Decision
+
+- Work id: `0.13.67/reintake-current-task-definition-read`.
+- Touched contracts: authoritative re-intake task snapshot.
+- Proof required: typecheck and re-intake suite pass; installed replay sees
+      stale proof and proposes no duplicate creates.
+- Proof provided: local checks; installed replay pending.
+- Apply/revert: retain the raw fingerprint guard; do not fall back to compact
+      queue definitions for re-intake planning.
