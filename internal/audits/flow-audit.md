@@ -53147,6 +53147,11 @@ Repair:
       delegated intake can record capability scope without creating a task,
       changing a release, or silently granting approval; the API regression
       proves the existing queue remains unchanged.
+- [x] Map now reports catalog readiness in the existing source trail: it
+      distinguishes structured scope that can safely be allocated from source
+      documents that are merely visible evidence. This is informational rather
+      than a lookalike action card, and has a rendered regression for both the
+      empty and ready states.
 
 ### Contract Touch Decision: catalog-only adapter write
 

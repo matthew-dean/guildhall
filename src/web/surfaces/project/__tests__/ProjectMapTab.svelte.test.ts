@@ -1,15 +1,48 @@
 // @vitest-environment happy-dom
 import '@testing-library/jest-dom/vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { path } from '../../../lib/nav.svelte.js'
 import ProjectMapTab from '../ProjectMapTab.svelte'
 
 describe('ProjectMapTab', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/project/source-capabilities')) {
+        return new Response(JSON.stringify({ availability: 'empty', capabilities: [] }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ error: 'not mocked' }), { status: 404 })
+    }))
+  })
+
   afterEach(() => {
     cleanup()
     path.value = '/'
     vi.restoreAllMocks()
+  })
+
+  it('distinguishes structured capability scope from visible source evidence', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      availability: 'ready',
+      capabilities: [{ id: 'story:voice' }, { id: 'story:world-state' }],
+    }), { status: 200 })))
+    render(ProjectMapTab, {
+      activeProjectId: 'narrative-harness',
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        orientationSpine: {
+          summary: { includedWorkCount: 0, deferredWorkCount: 0 },
+          roots: [],
+          nodes: {},
+          sourceTrail: [{ label: 'Source docs', value: '1 source document', detail: 'release-plan.md', tone: 'ok' }],
+        },
+      },
+    })
+
+    expect(await screen.findByText('2 structured capabilities')).toBeInTheDocument()
+    expect(screen.getByText('Typed source scope can be allocated to planning work without reading document prose as authority.')).toBeInTheDocument()
   })
 
   it('renders the 1,000-foot capability lanes and honest source trail from the orientation spine', async () => {
@@ -203,7 +236,7 @@ describe('ProjectMapTab', () => {
     expect(screen.getByText('Document-level artifact references are not attached to every lane yet.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Gaps to resolve' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Open questions' })).not.toBeInTheDocument()
-    expect(container.querySelectorAll('.source-fact')).toHaveLength(5)
+    expect(container.querySelectorAll('.source-fact')).toHaveLength(6)
     expect(container.querySelector('.source-row')).toBeNull()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Coherence reviewer MVP Active' }))
@@ -274,7 +307,7 @@ describe('ProjectMapTab', () => {
       name: 'Keep "Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing."',
     }))
 
-    expect(fetchCalls).toEqual([{
+    expect(fetchCalls.filter(call => call.url.includes('/api/project/source-conflicts/reconcile'))).toEqual([{
       url: '/api/project/source-conflicts/reconcile?projectId=narrative-harness',
       body: {
         keepTaskId: 'task-rich',
@@ -781,7 +814,7 @@ describe('ProjectMapTab', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Select' }))
 
-    expect(fetchCalls).toEqual([
+    expect(fetchCalls.filter(call => call.url.includes('/api/project/release/select'))).toEqual([
       {
         url: '/api/project/release/select?projectId=narrative-harness',
         body: { releaseId: 'release-2', projectId: 'narrative-harness' },

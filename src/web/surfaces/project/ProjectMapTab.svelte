@@ -24,6 +24,7 @@
   let releaseSelectionError = $state<string | null>(null)
   let reconcilingSourceConflict = $state<string | null>(null)
   let sourceConflictError = $state<string | null>(null)
+  let sourceCapabilityCatalog = $state<{ availability: 'unavailable' | 'empty' | 'ready'; count: number } | null>(null)
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent'
   const MAX_SKELETON_ROOTS = 12
@@ -141,13 +142,27 @@
   })
   const sourceRows = $derived.by(() => {
     if (!spine) return []
+    const catalogRow = {
+      label: 'Capability catalog',
+      value: sourceCapabilityCatalog?.availability === 'ready'
+        ? countLabel(sourceCapabilityCatalog.count, 'structured capability', 'structured capabilities')
+        : sourceCapabilityCatalog?.availability === 'empty'
+          ? 'Needs intake'
+          : 'Unavailable',
+      detail: sourceCapabilityCatalog?.availability === 'ready'
+        ? 'Typed source scope can be allocated to planning work without reading document prose as authority.'
+        : sourceCapabilityCatalog?.availability === 'empty'
+          ? 'Guildhall has visible source evidence, but it cannot safely create or reshape work until structured capability intake is recorded.'
+          : 'Guildhall could not read the structured source-capability catalog.',
+      tone: sourceCapabilityCatalog?.availability === 'ready' ? 'ok' as Tone : 'warn' as Tone,
+    }
     if ((spine.sourceTrail?.length ?? 0) > 0) {
-      return spine.sourceTrail!.map(row => ({
+      return [catalogRow, ...spine.sourceTrail!.map(row => ({
         label: row.label ?? 'Source',
         value: row.value ?? 'Missing',
         detail: row.detail ?? 'No source detail is available yet.',
         tone: normalizeSourceTrailTone(row.tone),
-      }))
+      }))]
     }
     const taskRefs = new Set<string>()
     const artifactRefs = new Set<string>()
@@ -163,6 +178,7 @@
     }
     const sourceDocNames = [...importRefs].map(sourceRefLabel).filter(Boolean)
     return [
+      catalogRow,
       {
         label: 'Charter',
         value: sourceLabelFor(spine.charter?.source),
@@ -200,6 +216,27 @@
         tone: executionBoundaryTone(executionBoundary?.mode),
       },
     ]
+  })
+
+  $effect(() => {
+    const projectId = activeProjectId
+    let cancelled = false
+    void projectFetch('/api/project/source-capabilities', { cache: 'no-store' }, projectId)
+      .then(async response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return await response.json() as { availability?: 'unavailable' | 'empty' | 'ready'; capabilities?: unknown[] }
+      })
+      .then(payload => {
+        if (cancelled) return
+        const availability = payload.availability === 'ready' || payload.availability === 'empty'
+          ? payload.availability
+          : 'unavailable'
+        sourceCapabilityCatalog = { availability, count: Array.isArray(payload.capabilities) ? payload.capabilities.length : 0 }
+      })
+      .catch(() => {
+        if (!cancelled) sourceCapabilityCatalog = { availability: 'unavailable', count: 0 }
+      })
+    return () => { cancelled = true }
   })
 
   function normalizeSourceTrailTone(tone: unknown): Tone {
