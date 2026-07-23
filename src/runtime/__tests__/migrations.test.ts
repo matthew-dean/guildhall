@@ -71,6 +71,40 @@ describe('project migration ledger', () => {
 })
 
 describe('getProjectMigrationStatus', () => {
+  it('rebuilds an old compact summary with the canonical source-catalog digest', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      tasks: [{ id: 'task-current', title: 'Current work', status: 'ready' }],
+      releases: [],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const row = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const legacy = JSON.parse(row.payload_json) as Record<string, unknown>
+    legacy.version = 21
+    delete legacy.sourceCapabilityCatalog
+    database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(legacy))
+    database.close()
+
+    const first = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.60/source-capability-summary'],
+    })
+    expect(first.failed).toEqual([])
+    expect(first.applied.map(item => item.id)).toEqual(['0.13.60/source-capability-summary'])
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
+      version: PROJECT_SUMMARY_PROJECTION_VERSION,
+      sourceCapabilityCatalog: { availability: 'empty', total: 0, planned: 0, retired: 0 },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.60/source-capability-summary'],
+    })).applied).toEqual([])
+  })
+
   it('does not re-block an applied scope migration for valid non-task release nodes', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     const now = '2026-07-15T12:00:00.000Z'

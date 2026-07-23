@@ -22,16 +22,15 @@ describe('ProjectMapTab', () => {
     vi.restoreAllMocks()
   })
 
-  it('distinguishes structured capability scope from visible source evidence', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      availability: 'ready',
-      capabilities: [{ id: 'story:voice' }, { id: 'story:world-state' }],
-    }), { status: 200 })))
+  it('distinguishes structured capability scope from visible source evidence without a second catalog read', () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ error: 'not mocked' }), { status: 404 }))
+    vi.stubGlobal('fetch', fetch)
     render(ProjectMapTab, {
       activeProjectId: 'narrative-harness',
       detail: {
         id: 'narrative-harness',
         name: 'Narrative Harness',
+        sourceCapabilityCatalog: { availability: 'ready', total: 2, planned: 2, retired: 0 },
         orientationSpine: {
           summary: { includedWorkCount: 0, deferredWorkCount: 0 },
           roots: [],
@@ -41,8 +40,9 @@ describe('ProjectMapTab', () => {
       },
     })
 
-    expect(await screen.findByText('2 structured capabilities')).toBeInTheDocument()
+    expect(screen.getByText('2 structured capabilities')).toBeInTheDocument()
     expect(screen.getByText('Typed source scope can be allocated to planning work without reading document prose as authority.')).toBeInTheDocument()
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('renders the 1,000-foot capability lanes and honest source trail from the orientation spine', async () => {

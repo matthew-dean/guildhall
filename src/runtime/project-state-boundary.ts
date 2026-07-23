@@ -1801,6 +1801,7 @@ export function upsertProjectSourceCapabilitiesAtBoundary(
     projectionTasks: isRecord(projectionQueue) && Array.isArray(projectionQueue.tasks)
       ? projectionQueue.tasks as Task[]
       : undefined,
+    sourceCapabilities,
   })
   if (!prepared.parsedQueue || !prepared.scopeRows) return false
   writeProjectStateDatabaseTaskBatchMutation(tasksPath, {

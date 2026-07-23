@@ -606,6 +606,7 @@ interface ServiceProjectSummary {
     shelved: number
   }
   releaseSummary?: ProjectSummaryProjection['releaseSummary']
+  sourceCapabilityCatalog?: ProjectSummaryProjection['sourceCapabilityCatalog']
   decision?: ProjectDecisionProjection
   workProgress?: ProjectWorkProgress
   highlights?: {
@@ -2517,6 +2518,7 @@ function summarizeProjectFromProjection(
         },
         workProgress: workProgressFromProjectSummaryProjection(projection),
         releaseSummary: projection.releaseSummary,
+        sourceCapabilityCatalog: projection.sourceCapabilityCatalog,
         ...(projection.execution ? { execution: projection.execution } : {}),
         ...(projection.runtime ? { runtime: projection.runtime } : {}),
         ...(projection.ownerInput ? { ownerInput: projection.ownerInput } : {}),
@@ -2635,6 +2637,7 @@ function summarizeProjectFromProjection(
     },
     workProgress: workProgressFromProjectSummaryProjection(projection),
     ...(projection.releaseSummary ? { releaseSummary: projection.releaseSummary } : {}),
+    sourceCapabilityCatalog: projection.sourceCapabilityCatalog,
     ...(projection.decision ? { decision: projection.decision } : {}),
     ...(projection.execution ? { execution: projection.execution } : {}),
     ...(projection.runtime ? { runtime: projection.runtime } : {}),

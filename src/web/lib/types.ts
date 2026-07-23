@@ -490,6 +490,13 @@ export interface ProjectSummaryRelease {
   updatedAt?: string
 }
 
+export interface ProjectSourceCapabilityCatalog {
+  availability?: 'unavailable' | 'empty' | 'ready' | string
+  total?: number
+  planned?: number
+  retired?: number
+}
+
 export interface ProjectSummaryApprovedPlan {
   source?: 'workspace_import' | string
   recordedAt?: string
@@ -1624,6 +1631,7 @@ export interface ProjectDetail {
   }
   workProgress?: ServiceProjectSummary['workProgress']
   releaseSummary?: ProjectSummaryRelease | null
+  sourceCapabilityCatalog?: ProjectSourceCapabilityCatalog | null
   approvedPlan?: ProjectSummaryApprovedPlan | null
   inbox?: ProjectInbox
   run?: ProjectRun | null
@@ -1724,6 +1732,7 @@ export interface ServiceProjectSummary {
     byTaskId: Record<string, unknown>
   }
   releaseSummary?: ProjectSummaryRelease | null
+  sourceCapabilityCatalog?: ProjectSourceCapabilityCatalog | null
   approvedPlan?: ProjectSummaryApprovedPlan | null
   highlights?: {
     activeTaskTitle?: string | null

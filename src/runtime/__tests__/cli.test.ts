@@ -348,6 +348,7 @@ describe('Guildhall CLI surface', () => {
         scope: { id: 'release-1', label: 'Release 1', kind: 'release' as const, source: 'release_plan', included: 1, deferred: 1 },
         orientation: null,
         documentedStructure: [],
+        sourceCapabilityCatalog: { availability: 'empty' as const, total: 0, planned: 0, retired: 0 },
         orientationSpine: null,
         approvedPlan: null,
         releaseSummary: {

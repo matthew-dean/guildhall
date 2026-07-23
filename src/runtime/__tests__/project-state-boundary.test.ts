@@ -82,6 +82,12 @@ describe('project-state-boundary', () => {
       expect(readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks).toEqual([
         expect.objectContaining({ id: 'task-existing' }),
       ])
+      expect(readProjectSummaryProjection(tasksPath)?.sourceCapabilityCatalog).toEqual({
+        availability: 'ready',
+        total: 1,
+        planned: 1,
+        retired: 0,
+      })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

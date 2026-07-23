@@ -69,6 +69,13 @@ carry a hydrated read projection for compatibility only; it is never the
 authoritative binding store. A point task mutation must strip binding fields
 from the detail payload and rehydrate them from SQLite on read.
 
+The compact summary carries only a revision-aligned catalog digest:
+availability (`unavailable`, `empty`, or `ready`) and planned/retired/total
+counts. It deliberately does not embed labels, source text, or capability
+lists. Map, Overview, Work, Release, Thread, and fleet surfaces receive that
+one digest with the same project revision as their action and scope state;
+they must not each fetch the catalog or reinterpret source documents.
+
 ## Split And Delegation
 
 No recommendation is persisted merely to say work should split. A coordinator
@@ -100,3 +107,5 @@ does not require a fixed feature/task/step taxonomy.
 - Legacy text cannot produce catalog rows or executable work.
 - Catalog, bindings, task details, release summary, and Map are identical at
   the same project revision after restart.
+- A catalog-only write changes the shared summary digest atomically, while
+  leaving task rows and release membership untouched.

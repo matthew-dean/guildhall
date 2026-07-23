@@ -7,6 +7,7 @@ import {
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseProjectionState,
   readProjectStateDatabaseQueue,
+  readProjectStateDatabaseSourceCapabilities,
   readProjectStateDatabaseSummary,
   readProjectStateDatabaseRevisionFromTasksPath,
   readProjectStateDatabaseQueueDefinitionForMigration,
@@ -14,6 +15,7 @@ import {
   updateProjectStateDatabaseSummaryAndCurrentState,
   writeProjectStateDatabaseSnapshot,
   type ProjectStateDatabaseScopeRow,
+  type ProjectStateDatabaseSourceCapability,
   type ProjectStateDatabaseTask,
   type ProjectStateDatabaseTaskEvidenceRetentionInput,
   type ProjectStateDatabaseTaskRuntime,
@@ -48,9 +50,9 @@ import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 21 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 22 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -117,6 +119,12 @@ export interface ProjectSummaryProjection {
    * not reopen a workspace-import scan on every request.
    */
   documentedStructure: OrientationWorkspaceImportDraftContext[]
+  /**
+   * Compact, revision-aligned status of the adapter-owned source catalog.
+   * Consumers use this instead of independently reading or interpreting
+   * source documents when explaining whether scope can be scheduled.
+   */
+  sourceCapabilityCatalog: ProjectSummarySourceCapabilityCatalog
   orientationSpine: ProjectOrientationSpine | null
   approvedPlan: ProjectSummaryApprovedPlan | null
   releaseSummary: ProjectSummaryReleaseSummary
@@ -178,6 +186,13 @@ export interface ProjectSummaryProjection {
   }>
   actionModel?: ProjectActionModel | null
   error?: string
+}
+
+export interface ProjectSummarySourceCapabilityCatalog {
+  availability: 'unavailable' | 'empty' | 'ready'
+  total: number
+  planned: number
+  retired: number
 }
 
 export interface ProjectSummaryReleaseSummary {
@@ -371,6 +386,8 @@ export interface ProjectSummaryProjectionInput {
   approvedPlan?: ProjectSummaryApprovedPlan | null
   orientation?: ProjectOrientationSnapshot | null
   documentedStructure?: OrientationWorkspaceImportDraftContext[]
+  /** Structured source authority captured with this summary revision. */
+  sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[] | null
   execution?: ProjectSummaryProjection['execution']
   runtime?: ProjectSummaryProjection['runtime']
   ownerInput?: ProjectSummaryProjection['ownerInput']
@@ -379,6 +396,22 @@ export interface ProjectSummaryProjectionInput {
   currentStateAuthority?: 'database' | 'legacy'
   /** Migration-only request to preserve the retired queue sidecar. */
   compatibilityExport?: 'full' | 'compact'
+}
+
+function summarizeSourceCapabilityCatalog(
+  capabilities: readonly ProjectStateDatabaseSourceCapability[] | null | undefined,
+): ProjectSummarySourceCapabilityCatalog {
+  if (capabilities === null || capabilities === undefined) {
+    return { availability: 'unavailable', total: 0, planned: 0, retired: 0 }
+  }
+  const planned = capabilities.filter(capability => capability.state === 'planned').length
+  const retired = capabilities.filter(capability => capability.state === 'retired').length
+  return {
+    availability: capabilities.length === 0 ? 'empty' : 'ready',
+    total: capabilities.length,
+    planned,
+    retired,
+  }
 }
 
 export function projectSummaryProjectionPath(tasksPath: string): string {
@@ -580,6 +613,7 @@ export function buildProjectSummaryProjection(
         }
       : {}),
   }))
+  const sourceCapabilityCatalog = summarizeSourceCapabilityCatalog(input.sourceCapabilities)
   const recentWork = recentWorkForTasks(tasks)
   const decision = buildProjectDecisionProjection({
     generatedAt,
@@ -687,6 +721,7 @@ export function buildProjectSummaryProjection(
       ...(context.releaseIds ? { releaseIds: [...context.releaseIds] } : {}),
       ...(context.linkedTaskHints ? { linkedTaskHints: [...context.linkedTaskHints] } : {}),
     })),
+    sourceCapabilityCatalog,
     orientationSpine,
     approvedPlan,
     releaseSummary,
@@ -970,6 +1005,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   })
   if (!current?.summary) return null
   const base = current.summary.payload
+  const sourceCapabilityCatalog = summarizeSourceCapabilityCatalog(readProjectStateDatabaseSourceCapabilities(tasksPath))
   const generatedAt = input.generatedAt ?? new Date().toISOString()
   // Indexed refreshes cannot rebuild the rich orientation tree, but that is
   // not a reason to skip the compact summary. Promoted projects can predate
@@ -1186,6 +1222,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
       proofBlocked: includedRows.filter(row => row.proofBlocked).length,
     },
     scope,
+    sourceCapabilityCatalog,
     orientationSpine: currentOrientationSpine,
     releaseSummary,
     decision,
@@ -1500,6 +1537,7 @@ export function buildProjectSummaryProjectionError(input: {
   approvedPlan?: ProjectSummaryApprovedPlan | null
   orientation?: ProjectOrientationSnapshot | null
   documentedStructure?: OrientationWorkspaceImportDraftContext[]
+  sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[] | null
   error: unknown
   generatedAt?: string
   execution?: ProjectSummaryProjection['execution']
@@ -1539,6 +1577,7 @@ export function buildProjectSummaryProjectionError(input: {
       ...(context.releaseIds ? { releaseIds: [...context.releaseIds] } : {}),
       ...(context.linkedTaskHints ? { linkedTaskHints: [...context.linkedTaskHints] } : {}),
     })),
+    sourceCapabilityCatalog: summarizeSourceCapabilityCatalog(input.sourceCapabilities),
     orientationSpine: null,
     approvedPlan: input.approvedPlan ?? null,
     releaseSummary: {
@@ -1604,6 +1643,7 @@ export function writeProjectSummaryProjection(
     taskQueueMtimeMs: input.taskQueueMtimeMs ?? taskQueueMtimeMs(tasksPath),
     workspaceGoalsMtimeMs: input.workspaceGoalsMtimeMs ?? workspaceGoalsMtimeMs(tasksPath),
     approvedPlan: input.approvedPlan ?? readApprovedPlan(tasksPath),
+    sourceCapabilities: input.sourceCapabilities ?? readProjectStateDatabaseSourceCapabilities(tasksPath),
   })
   writeProjectStateDatabaseSnapshot(tasksPath, {
     queue: input.queue,
@@ -1643,6 +1683,7 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
     projectionTasks?: TaskQueueModel['tasks']
     /** Compact source-backed project skeleton, never a raw intake scan. */
     documentedStructure?: OrientationWorkspaceImportDraftContext[]
+    sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[] | null
     generatedAt?: string
     /** Migration-only seed for importing the historical summary export. */
     existingSummary?: ProjectSummaryProjection | null
@@ -1692,6 +1733,7 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
         projectionTasks,
         ...supplemental,
         documentedStructure: input.documentedStructure ?? supplemental.documentedStructure,
+        sourceCapabilities: input.sourceCapabilities ?? readProjectStateDatabaseSourceCapabilities(tasksPath),
         orientation,
       })
     : buildProjectSummaryProjectionError({
@@ -1703,6 +1745,7 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
         approvedPlan,
         ...supplemental,
         documentedStructure: input.documentedStructure ?? supplemental.documentedStructure,
+        sourceCapabilities: input.sourceCapabilities ?? readProjectStateDatabaseSourceCapabilities(tasksPath),
         orientation,
       })
   const detailQueue = parsed.success
@@ -1992,14 +2035,19 @@ export function readProjectSummaryShellProjection(tasksPath: string): ProjectSum
  * shared decision packet must refresh instead of presenting old caches as
  * current project state.
  */
-export function projectSummaryProjectionIsCurrent(value: Pick<ProjectSummaryProjection, 'version' | 'decision'> | Record<string, unknown>): boolean {
+export function projectSummaryProjectionIsCurrent(value: Pick<ProjectSummaryProjection, 'version' | 'decision' | 'sourceCapabilityCatalog'> | Record<string, unknown>): boolean {
   if (value.version !== PROJECT_SUMMARY_PROJECTION_VERSION) return false
   const decision = value.decision
+  const sourceCapabilityCatalog = value.sourceCapabilityCatalog
   return Boolean(
     decision &&
     typeof decision === 'object' &&
     !Array.isArray(decision) &&
-    (decision as { version?: unknown }).version === 1,
+    (decision as { version?: unknown }).version === 1 &&
+    sourceCapabilityCatalog &&
+    typeof sourceCapabilityCatalog === 'object' &&
+    !Array.isArray(sourceCapabilityCatalog) &&
+    ['unavailable', 'empty', 'ready'].includes((sourceCapabilityCatalog as { availability?: unknown }).availability as string),
   )
 }
 

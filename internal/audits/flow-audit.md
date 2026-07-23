@@ -53130,9 +53130,10 @@ Repair:
       structured adapter snapshots. Until that is complete, no Narrative
       Harness re-intake may claim source-capability coverage from its existing
       prose claims.
-- [ ] Bind the catalog to Map, Release, Overview, and Work through the shared
-      summary projection, then verify their displayed scope is identical at a
-      single project revision.
+- [ ] Verify catalog availability/counts across Map, Release, Overview, and
+      Work from the revisioned shared summary. Map is the first proved consumer
+      and no longer issues its own catalog read; Release, Overview, and Work
+      still need explicit rendered shared-summary coverage.
 
 ### Implementation checkpoint: live re-intake gate
 
@@ -53152,6 +53153,44 @@ Repair:
       documents that are merely visible evidence. This is informational rather
       than a lookalike action card, and has a rendered regression for both the
       empty and ready states.
+- [x] Catalog-only writes now persist the compact availability/count digest in
+      the same CAS transaction as the project summary. The catalog API remains
+      a detail endpoint, not an alternate summary authority; the Map regression
+      proves it performs no second request.
+
+### Contract Touch Decision: source catalog in the shared summary
+
+- Work id: `0.13.60/source-capability-summary`.
+- Touched contracts: compact project-summary projection, Map detail payload,
+      catalog-only mutation boundary, and project-summary migration.
+- Considered but not touched: source capability rows/bindings, task rows,
+      release membership, raw source documents, and task prose. No new source
+      parsing or scheduling behavior is introduced.
+- Required behavior: every catalog mutation writes its compact status into the
+      summary at the same project revision. A surface may present that status
+      but may not fetch/re-rank it independently.
+- Proof required: ready/empty summary regression, catalog-only transaction
+      regression showing task work unchanged, Map rendered regression proving
+      no catalog fetch, projection migration idempotence, and installed app
+      replay after the migration.
+- Proof provided: compact summary and catalog-only transaction regressions;
+      Map no-second-fetch rendered regression. Installed replay and the rest
+      of the cross-surface matrix remain pending.
+- Apply/revert: migration rebuilds a derived summary only. Revert removes the
+      digest and Map presentation but does not modify catalog or task data.
+
+### Schema Migration Decision: source catalog summary digest
+
+- Persisted schema touched: the derived `project_summary` JSON payload only.
+- Change class: additive compact projection field with version bump from 21 to
+      22 and automatic rebuild migration `0.13.60/source-capability-summary`.
+- Existing data impact: old summaries are stale until rebuilt from the
+      canonical SQLite catalog. Catalog rows, bindings, task details, releases,
+      and evidence are unchanged.
+- Compatibility reader: old summaries display as stale; no route may invent
+      an empty/ready catalog answer from documents or task text.
+- Rollback/revert: rebuild the prior summary projection from canonical state;
+      do not delete or rewrite catalog records.
 
 ### Contract Touch Decision: catalog-only adapter write
 

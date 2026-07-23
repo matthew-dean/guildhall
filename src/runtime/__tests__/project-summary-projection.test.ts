@@ -119,6 +119,43 @@ describe('project-summary-projection', () => {
     ])
   })
 
+  it('carries only compact structured source authority into the shared summary', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([]),
+      generatedAt: now,
+      sourceCapabilities: [{
+        id: 'narrative:voice-shaping',
+        adapterId: 'narrative-release-plan',
+        adapterSchemaVersion: 1,
+        sourceRevision: 'v1',
+        label: 'Shape author voice',
+        state: 'planned',
+        releaseIds: ['headless-mvp'],
+        dependsOnCapabilityIds: [],
+        evidenceRefs: ['artifact:release-plan'],
+      }, {
+        id: 'narrative:retired-ui',
+        adapterId: 'narrative-release-plan',
+        adapterSchemaVersion: 1,
+        sourceRevision: 'v1',
+        label: 'Retired UI experiment',
+        state: 'retired',
+        releaseIds: [],
+        dependsOnCapabilityIds: [],
+        evidenceRefs: [],
+      }],
+    })
+
+    expect(projection.sourceCapabilityCatalog).toEqual({
+      availability: 'ready',
+      total: 2,
+      planned: 1,
+      retired: 1,
+    })
+    expect(JSON.stringify(projection)).not.toContain('Shape author voice')
+  })
+
   it('keeps indexed summary refresh aligned with the full projection for task-state facts', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-index-parity-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')

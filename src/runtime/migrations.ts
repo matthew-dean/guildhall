@@ -227,6 +227,7 @@ const PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID = '0.13.56/proof-setup-project
 const PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID = '0.13.57/proof-setup-effective-projection'
 const DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID = '0.13.58/diagnostic-readiness-task-identity'
 const SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID = '0.13.59/script-only-proof-projection'
+const SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID = '0.13.60/source-capability-summary'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -4826,6 +4827,45 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID,
+    title: 'Add structured source authority to the shared project summary',
+    introducedIn: '0.13.60',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Rebuilds the compact project summary with the structured source-catalog status so project surfaces do not independently interpret source documents.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = readProjectSummaryProjectionForMigration(tasksPath)
+      const catalog = projection?.sourceCapabilityCatalog
+      const present = Boolean(
+        catalog &&
+        typeof catalog === 'object' &&
+        !Array.isArray(catalog) &&
+        ['unavailable', 'empty', 'ready'].includes((catalog as { availability?: unknown }).availability as string),
+      )
+      return {
+        needed: !present || projection?.version !== PROJECT_SUMMARY_PROJECTION_VERSION,
+        affectedPaths: !present || projection?.version !== PROJECT_SUMMARY_PROJECTION_VERSION
+          ? [projectStateDatabasePath(projectRoot)]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection?.sourceCapabilityCatalog || !projectSummaryProjectionIsCurrent(projection)) {
+        throw new Error('The shared source-catalog summary could not be persisted.')
+      }
+      return {
+        summary: 'Added structured source-catalog status to the shared project summary without changing source capabilities or work.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
 ]
 
 const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
@@ -4921,6 +4961,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: projects proof from the canonical task snapshot and current typed evidence',
   [DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID]: 'migrations.test.ts: attaches task identity to legacy diagnostic blockers only when the task inventory proves it',
   [SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects a completed script-only task without proof as a release blocker',
+  [SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID]: 'project-summary-projection.test.ts: publishes source-catalog status from the canonical SQLite catalog',
   '0.11.0/project-summary-projection': 'migrations.test.ts: project summary backfill is idempotent and preserves task history',
   '0.11.1/project-summary-projection-v2': 'migrations.test.ts: project summary shape refresh is idempotent and preserves task history',
   '0.11.2/project-summary-projection-setup-state': 'migrations.test.ts: project summary setup-state refresh is idempotent and preserves task history',
