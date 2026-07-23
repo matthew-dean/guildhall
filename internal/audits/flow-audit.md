@@ -52853,3 +52853,47 @@ Repair:
       typed repair state and does not derive a command from documentation.
 - Apply/revert: no data migration. The projection revision already invalidates
       when selected release state changes.
+
+## 2026-07-23 Agent claims must reconcile as a deterministic protocol
+
+- [x] User job: when two agents, diagnostics, or product surfaces make a
+      different typed claim about the same project fact, Guildhall should
+      either show one policy-authorized fact with its evidence or show one
+      explicit conflict and its prescribed recovery. It must not decide by
+      agent identity, prose, timestamp, input order, or whichever route ran
+      last. Claims about different fields or subjects are not comparable and
+      must never be presented as agreement.
+
+### Contract Touch Decision
+
+- Work id: `0.13.90/deterministic-agent-claim-reconciliation`.
+- Touched contracts: `ProjectStateClaim`, shared claim resolver, observation
+      agreement envelope, conflict/recovery metadata, and every future agent
+      or diagnostic producer using this shared boundary.
+- Considered but not touched: task/release/evidence persistence remains the
+      canonical source. This is not a second claim ledger or an agent vote.
+- Required behavior: reject malformed/incomparable claims from agreement;
+      apply explicit same-field supersession only; canonicalize resolved
+      values; and return an explicit typed conflict for equal-ranked different
+      values. The complete result must be permutation-invariant.
+- Proof required: permutations of the same claims resolve identically;
+      different subject/field observations cannot be marked confirmed;
+      explicit supersession retires only its matching predecessor; malformed
+      claims are exposed as typed rejections; typecheck and model-independence
+      gate.
+- Apply/revert: pure shared-resolution behavior, with no historical project
+      state rewrite. Revert only as one resolver contract change; do not add
+      route-local winner selection.
+
+### Schema Migration Decision
+
+- Work id: `0.13.90/deterministic-agent-claim-reconciliation`.
+- Persisted schema touched: none. Claims are transient, bounded inputs to the
+      existing current project projection.
+- Change class: read-contract hardening.
+- Existing data impact: a malformed or wrong-subject diagnostic is reported as
+      unavailable/contradictory rather than being allowed to imply agreement.
+- Safety: no agent prose is parsed and no source task/release/evidence record
+      is rewritten. A claim can retire another only through its explicit
+      `supersedes` identity within the same subject/field/revision.
+- Apply/revert: project summaries rebuild from their existing canonical facts.

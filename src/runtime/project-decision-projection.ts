@@ -42,6 +42,21 @@ export interface ProjectStateConflict {
   reconciliation: ProjectStateClaimPolicy['reconciliation']
 }
 
+export type ProjectStateClaimRejectionCode =
+  | 'invalid_claim'
+  | 'duplicate_claim_id'
+  | 'invalid_supersession'
+
+export interface RejectedProjectStateClaim {
+  claimId: string
+  code: ProjectStateClaimRejectionCode
+}
+
+export interface ProjectStateClaimResolution {
+  resolved: ResolvedProjectStateClaim[]
+  rejected: RejectedProjectStateClaim[]
+}
+
 export interface ResolvedProjectStateClaim<T = unknown> {
   subject: { kind: string; id: string }
   field: string
@@ -55,6 +70,7 @@ export interface ProjectStateObservationAgreement {
   reconciliation?: ProjectStateClaimPolicy['reconciliation']
   canonicalClaimIds: string[]
   observationClaimId: string
+  reason?: 'incomparable_subject_or_field' | 'invalid_canonical_claim' | 'invalid_observation_claim'
 }
 
 const DEFAULT_CLAIM_AUTHORITIES: readonly ProjectStateClaimAuthority[] = [
@@ -86,23 +102,125 @@ function claimConflictId(claims: readonly ProjectStateClaim[]): string {
   return `conflict:${first.subject.kind}:${first.subject.id}:${first.field}:${[...claims].map(claim => claim.id).sort().join(',')}`
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function claimFingerprint(claim: ProjectStateClaim): string | null {
+  try {
+    const value = stableJson(claim.value)
+    if (typeof value !== 'string') return null
+    JSON.parse(value)
+    return stableJson({
+      projectRevision: claim.projectRevision,
+      subject: claim.subject,
+      field: claim.field,
+      value,
+      authority: claim.authority,
+      actor: claim.actor,
+      observedAt: claim.observedAt,
+      evidenceRefs: claim.evidenceRefs,
+      supersedes: claim.supersedes,
+    })
+  } catch {
+    return null
+  }
+}
+
+function isStructurallyValidClaim(claim: ProjectStateClaim, projectRevision: number): boolean {
+  return claim.projectRevision === projectRevision &&
+    isNonEmptyString(claim.id) &&
+    isNonEmptyString(claim.subject?.kind) &&
+    isNonEmptyString(claim.subject?.id) &&
+    isNonEmptyString(claim.field) &&
+    isNonEmptyString(claim.actor) &&
+    Number.isFinite(Date.parse(claim.observedAt)) &&
+    Array.isArray(claim.evidenceRefs) &&
+    claim.evidenceRefs.every(isNonEmptyString) &&
+    claimFingerprint(claim) !== null
+}
+
+function canonicalClaimValue(value: unknown, policy: ProjectStateClaimPolicy | undefined): unknown {
+  return JSON.parse(stableClaimValue(value, policy))
+}
+
+function policyAuthorities(policy: ProjectStateClaimPolicy | undefined): readonly ProjectStateClaimAuthority[] {
+  return policy?.authorities ?? DEFAULT_CLAIM_AUTHORITIES
+}
+
+function canSupersedeClaim(input: {
+  successor: ProjectStateClaim
+  predecessor: ProjectStateClaim
+  policy: ProjectStateClaimPolicy | undefined
+}): boolean {
+  const { successor, predecessor } = input
+  if (successor.id === predecessor.id ||
+    successor.projectRevision !== predecessor.projectRevision ||
+    claimKey(successor) !== claimKey(predecessor)) return false
+  const authorities = policyAuthorities(input.policy)
+  const successorRank = authorities.indexOf(successor.authority)
+  const predecessorRank = authorities.indexOf(predecessor.authority)
+  return successorRank !== -1 && predecessorRank !== -1 && successorRank <= predecessorRank
+}
+
 /**
  * Resolve only claims from one project revision. Same-ranked incompatible
  * claims remain explicit conflicts; the resolver never uses prose, actor name,
  * or an arbitrary write order to settle project state.
  */
-export function resolveProjectStateClaims(
+export function resolveProjectStateClaimSet(
   input: {
     projectRevision: number
     claims: readonly ProjectStateClaim[]
     policies: readonly ProjectStateClaimPolicy[]
   },
-): ResolvedProjectStateClaim[] {
+): ProjectStateClaimResolution {
   const policiesByField = new Map(input.policies.map(policy => [policy.field, policy]))
+  const rejected = new Map<string, ProjectStateClaimRejectionCode>()
+  const reject = (claim: ProjectStateClaim, code: ProjectStateClaimRejectionCode) => {
+    rejected.set(claim.id || '<missing-claim-id>', code)
+  }
+  const structurallyValid = input.claims.filter(claim => {
+    if (isStructurallyValidClaim(claim, input.projectRevision)) return true
+    reject(claim, 'invalid_claim')
+    return false
+  })
+  const claimsById = new Map<string, ProjectStateClaim[]>()
+  for (const claim of structurallyValid) {
+    const existing = claimsById.get(claim.id) ?? []
+    existing.push(claim)
+    claimsById.set(claim.id, existing)
+  }
+  for (const claims of claimsById.values()) {
+    const fingerprints = new Set(claims.map(claimFingerprint))
+    if (fingerprints.size > 1) {
+      for (const claim of claims) reject(claim, 'duplicate_claim_id')
+    }
+  }
+  let eligibleClaims = [...claimsById.values()]
+    .filter(claims => !rejected.has(claims[0]!.id))
+    // Replaying the exact same durable claim is idempotent, not a second
+    // opinion. Divergent payloads for one ID were rejected above.
+    .map(claims => [...claims].sort((left, right) => claimFingerprint(left)!.localeCompare(claimFingerprint(right)!))[0]!)
+  const eligibleById = new Map(eligibleClaims.map(claim => [claim.id, claim]))
+  for (const claim of eligibleClaims) {
+    if (!claim.supersedes) continue
+    const predecessor = eligibleById.get(claim.supersedes)
+    if (predecessor && !canSupersedeClaim({
+      successor: claim,
+      predecessor,
+      policy: policiesByField.get(claim.field),
+    })) {
+      reject(claim, 'invalid_supersession')
+    }
+  }
+  eligibleClaims = eligibleClaims.filter(claim => !rejected.has(claim.id))
+  const supersededClaimIds = new Set(eligibleClaims
+    .map(claim => claim.supersedes)
+    .filter((claimId): claimId is string => isNonEmptyString(claimId)))
   const groups = new Map<string, ProjectStateClaim[]>()
-  for (const claim of input.claims) {
-    if (claim.projectRevision !== input.projectRevision) continue
-    if (!claim.id || !claim.subject.kind || !claim.subject.id || !claim.field || !claim.actor) continue
+  for (const claim of eligibleClaims) {
+    if (supersededClaimIds.has(claim.id)) continue
     const key = claimKey(claim)
     const existing = groups.get(key) ?? []
     existing.push(claim)
@@ -112,7 +230,7 @@ export function resolveProjectStateClaims(
   for (const group of groups.values()) {
     const first = group[0]!
     const policy = policiesByField.get(first.field)
-    const authorities = policy?.authorities ?? DEFAULT_CLAIM_AUTHORITIES
+    const authorities = policyAuthorities(policy)
     const eligible = group.filter(claim => authorities.includes(claim.authority))
     if (eligible.length === 0) continue
     const rank = (claim: ProjectStateClaim): number => authorities.indexOf(claim.authority)
@@ -120,11 +238,11 @@ export function resolveProjectStateClaims(
     const strongest = eligible.filter(claim => rank(claim) === highestRank)
     const values = new Set(strongest.map(claim => stableClaimValue(claim.value, policy)))
     if (values.size === 1) {
-      const winner = strongest[0]!
+      const winner = [...strongest].sort((left, right) => left.id.localeCompare(right.id))[0]!
       resolved.push({
         subject: winner.subject,
         field: winner.field,
-        value: winner.value,
+        value: canonicalClaimValue(winner.value, policy),
         claimIds: strongest.map(claim => claim.id).sort(),
       })
       continue
@@ -143,7 +261,22 @@ export function resolveProjectStateClaims(
       conflict,
     })
   }
-  return resolved.sort((left, right) => claimKey(left).localeCompare(claimKey(right)))
+  return {
+    resolved: resolved.sort((left, right) => claimKey(left).localeCompare(claimKey(right))),
+    rejected: [...rejected.entries()]
+      .map(([claimId, code]) => ({ claimId, code }))
+      .sort((left, right) => left.claimId.localeCompare(right.claimId) || left.code.localeCompare(right.code)),
+  }
+}
+
+export function resolveProjectStateClaims(
+  input: {
+    projectRevision: number
+    claims: readonly ProjectStateClaim[]
+    policies: readonly ProjectStateClaimPolicy[]
+  },
+): ResolvedProjectStateClaim[] {
+  return resolveProjectStateClaimSet(input).resolved
 }
 
 /**
@@ -165,11 +298,26 @@ export function reconcileProjectStateObservation(input: {
     input.observationClaim.projectRevision !== input.projectRevision) {
     return { state: 'stale', reconciliation: input.policy.reconciliation, ...fallback }
   }
-  const resolved = resolveProjectStateClaims({
+  if (claimKey(input.canonicalClaim) !== claimKey(input.observationClaim)) {
+    return {
+      state: 'unavailable',
+      reconciliation: input.policy.reconciliation,
+      reason: 'incomparable_subject_or_field',
+      ...fallback,
+    }
+  }
+  const resolution = resolveProjectStateClaimSet({
     projectRevision: input.projectRevision,
     claims: [input.canonicalClaim, input.observationClaim],
     policies: [input.policy],
-  }).find(candidate =>
+  })
+  if (resolution.rejected.some(rejection => rejection.claimId === input.canonicalClaim.id)) {
+    return { state: 'unavailable', reconciliation: input.policy.reconciliation, reason: 'invalid_canonical_claim', ...fallback }
+  }
+  if (resolution.rejected.some(rejection => rejection.claimId === input.observationClaim.id)) {
+    return { state: 'unavailable', reconciliation: input.policy.reconciliation, reason: 'invalid_observation_claim', ...fallback }
+  }
+  const resolved = resolution.resolved.find(candidate =>
     candidate.subject.kind === input.canonicalClaim.subject.kind &&
     candidate.subject.id === input.canonicalClaim.subject.id &&
     candidate.field === input.canonicalClaim.field,
