@@ -66,6 +66,29 @@ help_summary: |
   structurally valid spec left in `exploring`. It moves only that typed state
   into an owner review gate; it never approves the spec or invents a decision.
 
+### Authority Boundary Finding: Point and Aggregate State Diverged
+
+- Live proof: the Narrative Harness task-detail endpoint returned
+  `task-synopsis-expansion-into-story-records` as an approved, structured,
+  runnable-looking effective task in `exploring`; the migration scanner did
+  not detect the same handoff in its aggregate queue read. Both reads claimed
+  promoted SQLite authority. The result is a real cross-agent disagreement,
+  not an ordinary stale-view condition.
+- Root condition: task-detail materializes a task point plus its overlays,
+  while migrations and some project projections read a separate aggregate
+  queue-detail representation. A shared project revision is insufficient when
+  two representations can encode different definitions for the same task.
+- Required correction: register canonical state subjects and fields, then
+  materialize each subject once from the normalized task-definition store for
+  a captured project revision. List, detail, migration, coordinator, summary,
+  and agent claims must consume that materialization. A conflicting duplicate
+  representation is an explicit reconciliation conflict with evidence, and it
+  blocks decisions instead of selecting whichever reader happened to run.
+- Proof required: seed incompatible point and aggregate definitions for one
+  task at one revision; every current-state reader and mutation planner must
+  return the same typed conflict, no action may run, and a single canonical
+  repair must make all readers agree at a newer revision.
+
 ## 2026-07-23 Release Resume Preserves Release Scope During Proof Recovery
 
 - Work id: `0.13.64/release-proof-recovery-batch`.
