@@ -2983,16 +2983,18 @@ function importedTaskHasBlueprintSeed(task: MaterializedImportTask, evidenceDeta
   })) {
     return false
   }
+  const hasTypedTaskContract = (
+    (task.contractNames?.length ?? 0) > 0 ||
+    task.proofPaths?.some(path => path.source === 'documented') === true ||
+    importedPrototypeTaskKind(task) !== null ||
+    task.semanticKind === 'contract' ||
+    task.semanticKind === 'reviewer_lane' ||
+    task.semanticKind === 'workflow'
+  )
   return (
-    Boolean(task.evidenceGraphTask) ||
-    (
-      (task.references?.length ?? 0) > 0 &&
-      (task.acceptanceCriteria?.length ?? 0) > 0 &&
-      (
-        (task.proofPaths?.length ?? 0) > 0 ||
-        typeof task.whyThisMayMatter === 'string'
-      )
-    )
+    (task.references?.length ?? 0) > 0 &&
+    (task.acceptanceCriteria?.length ?? 0) > 0 &&
+    hasTypedTaskContract
   )
 }
 
@@ -4326,6 +4328,7 @@ function importedReferenceSlug(reference: string): string | null {
 function extractReferenceEvidenceDetail(
   task: MaterializedImportTask,
   workspaceProjectPath: string,
+  referenceContents?: ReadonlyMap<string, string>,
 ): ImportedEvidenceDetail {
   // Source evidence is selected from explicit references and structured
   // sections. A task title is display text, not a source-retrieval key.
@@ -4354,9 +4357,11 @@ function extractReferenceEvidenceDetail(
   const titleSuggestsContracts = task.semanticKind === 'contract'
 
   for (const reference of task.references) {
-    const content = readImportedReferenceContent(reference, workspaceProjectPath)
-    if (!content) continue
     const normalizedReference = reference.replace(/\\/g, '/')
+    const content = referenceContents?.get(reference) ??
+      referenceContents?.get(normalizedReference) ??
+      readImportedReferenceContent(reference, workspaceProjectPath)
+    if (!content) continue
     const inventoryStyleReference = /remaining-spec-decomposition-inventory\.md$/i.test(normalizedReference)
     for (const statement of extractGoalStatements(content)) {
       if (!goalStatements.includes(statement)) goalStatements.push(statement)
@@ -5387,12 +5392,13 @@ export function buildImportedBlueprintSeed(
   normalizedReferences: readonly string[],
   workspaceProjectPath: string,
   now: string,
+  referenceContents?: ReadonlyMap<string, string>,
 ): ImportedBlueprintSeed {
   const normalizedTask: MaterializedImportTask = {
     ...task,
     references: [...normalizedReferences],
   }
-  const evidenceDetail = extractReferenceEvidenceDetail(normalizedTask, workspaceProjectPath)
+  const evidenceDetail = extractReferenceEvidenceDetail(normalizedTask, workspaceProjectPath, referenceContents)
   const acceptanceCriteria = materializedAcceptanceCriteria(normalizedTask, evidenceDetail)
   const evidenceRefs = normalizedReferences.map(ref => `import:${ref}`)
   const sourceClaims = task.sourceClaims && task.sourceClaims.length > 0

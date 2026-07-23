@@ -68,7 +68,7 @@ export interface ReintakeChangeGroup {
 
 export type ReintakeChange =
   | { kind: 'keep'; taskId: string; reason: string }
-  | { kind: 'reframe'; taskId: string; before: TaskSummary; after: ReintakeTaskDraft; reason: string }
+  | { kind: 'reframe'; taskId: string; before: TaskSummary; after: ReintakeTaskDraft; reopenForProof?: boolean; reason: string }
   | ReintakeMergeChange
   | { kind: 'archive'; taskId: string; reason: string; archiveCode?: 'unsupported_weak_preimplementation' | string }
   | { kind: 'create'; task: ReintakeTaskDraft; reason: string }
@@ -480,9 +480,9 @@ function applyChange(
       ...withHistoricalReleaseMembership(change.after, shippedReleaseIdsByTask.get(change.taskId)),
       id: change.taskId,
       // Keep active work active. A completed task with no current proof is
-      // intentionally reopened into review; its historical notes/evidence
+      // intentionally reopened; its historical notes/evidence
       // remain attached to the same task record.
-      status: change.reopenForProof ? 'review' : (stringField(existing, 'status') ?? change.after.status),
+      status: change.reopenForProof ? change.after.status : (stringField(existing, 'status') ?? change.after.status),
       updatedAt: now,
       notes: [
         ...notes,
@@ -507,6 +507,10 @@ function applyChange(
     Object.assign(existing, {
       ...withHistoricalReleaseMembership(change.after, shippedReleaseIdsByTask.get(change.taskId)),
       id: change.taskId,
+      // Reframe is only planned for non-running work. Its regenerated source
+      // contract owns the planning status so stale `done`, `blocked`, or
+      // `spec_review` labels cannot outvote the new intake boundary.
+      status: change.after.status,
       updatedAt: now,
       notes: [
         ...notes,
@@ -790,6 +794,9 @@ function graphTaskChange(
         status: stringField(existing ?? {}, 'status') ?? 'unknown',
       },
       after,
+      // A historical completion without the selected release's required proof
+      // cannot survive a re-intake merely because the task identity matched.
+      ...(taskNeedsCurrentScopeProof(existing, selectedRelease) ? { reopenForProof: true } : {}),
       reason: `Reframe from current evidence: ${reframe?.reason ?? task.title}`,
     }
   }
@@ -956,18 +963,31 @@ function evidenceTaskToDraft(
       spec: evidenceTaskSpec({ task, references, acceptanceCriteria: [], sources, contractNames }),
     }, now)
     : undefined
-  const importedBlueprint = projectPath && hasConcreteSourceEvidence
+  const importedBlueprint = hasConcreteSourceEvidence
     ? buildImportedBlueprintSeed(
       evidenceTaskToMaterializedImportTask(task, normalizedReferences, hasConcreteSourceEvidence),
       normalizedReferences,
-      projectPath,
+      projectPath ?? '',
       now,
+      sourceContentsByReference(sources, projectPath ?? ''),
     )
     : null
+  // A document reference or a roadmap table row grounds the task's identity,
+  // but it is not a complete implementation contract. Only a blueprint with
+  // documented proof or non-generic typed criteria can move work to review.
+  // This keeps re-intake from laundering generic importer prose into a
+  // seemingly executable spec.
+  const reviewableBlueprint = Boolean(
+    importedBlueprint &&
+    importedBlueprint.status === 'spec_review' &&
+    hasConcreteReintakeBlueprint(importedBlueprint),
+  )
   const sourceShapedCriteria = reintakeAcceptanceCriteria(task, contractNames)
-  const acceptanceCriteriaSource = reintakePrototypeTaskKind(task)
-    ? sourceShapedCriteria
-    : importedBlueprint?.acceptanceCriteria ?? sourceShapedCriteria
+  const acceptanceCriteriaSource = reviewableBlueprint
+    ? (reintakePrototypeTaskKind(task)
+        ? sourceShapedCriteria
+        : importedBlueprint?.acceptanceCriteria ?? sourceShapedCriteria)
+    : []
   const acceptanceCriteria = AcceptanceCriteria.array().parse(acceptanceCriteriaSource.map(criterion => ({
     ...criterion,
     id: criterion.id,
@@ -976,16 +996,6 @@ function evidenceTaskToDraft(
     source: criterion.source ?? 'inferred',
     met: false,
   })))
-  const evidenceReviewable = hasReviewableReintakeBlueprint(
-    task,
-    references,
-    acceptanceCriteria,
-    contractNames,
-    hasConcreteSourceEvidence,
-  )
-  const reviewableBlueprint = importedBlueprint
-    ? (importedBlueprint.status === 'spec_review' && hasConcreteReintakeBlueprint(importedBlueprint)) || evidenceReviewable
-    : evidenceReviewable
   return {
     id: task.id,
     title: task.title,
@@ -1012,7 +1022,9 @@ function evidenceTaskToDraft(
     ...(releaseIds?.length ? { releaseIds } : {}),
     ...(importedBlueprint?.sourceClaims?.length ? { sourceClaims: importedBlueprint.sourceClaims } : {}),
     ...(task.stageAlignment ? { stageAlignment: task.stageAlignment } : {}),
-    spec: importedBlueprint?.spec ?? evidenceTaskSpec({ task, references, acceptanceCriteria, sources, contractNames }),
+    spec: reviewableBlueprint
+      ? importedBlueprint?.spec ?? evidenceTaskSpec({ task, references, acceptanceCriteria, sources, contractNames })
+      : evidenceTaskIntakeDraftSpec(task, references),
     ...(importedBlueprint?.structuredSpec ? { structuredSpec: importedBlueprint.structuredSpec } : {}),
     ...(reviewableBlueprint ? { productBrief: reintakeOwnedProductBrief(importedBlueprint?.productBrief) ?? reintakeProductBrief(task, contractNames) } : {}),
     proofPaths: (reviewableBlueprint
@@ -1032,6 +1044,34 @@ function evidenceTaskToDraft(
     ...(importedBlueprint?.blockerPlans ? { blockerPlans: importedBlueprint.blockerPlans } : {}),
     ...(importedBlueprint?.contextBudget ? { contextBudget: importedBlueprint.contextBudget } : {}),
   }
+}
+
+function sourceContentsByReference(
+  sources: ProjectReintakeSource[],
+  projectPath: string,
+): ReadonlyMap<string, string> {
+  const contents = new Map<string, string>()
+  for (const source of sources) {
+    contents.set(source.path, source.content)
+    contents.set(source.path.replace(/\\/g, '/'), source.content)
+    if (!path.isAbsolute(source.path)) {
+      contents.set(path.resolve(projectPath, source.path), source.content)
+    }
+  }
+  return contents
+}
+
+function evidenceTaskIntakeDraftSpec(task: EvidenceTask, references: string[]): string {
+  return [
+    '## Intake needed',
+    `The cited sources establish **${task.title}** as scoped work, but they do not yet provide a task-specific proof contract.`,
+    '',
+    '## Source trail',
+    ...(references.length > 0 ? references.map(reference => `- ${reference}`) : ['- No source reference was retained.']),
+    '',
+    '## Next action',
+    'Shape a bounded spec with the concrete behavior, acceptance criteria, and proof path before this task can enter review.',
+  ].join('\n')
 }
 
 function sourceEvidenceSupportsBlueprint(
@@ -1367,25 +1407,6 @@ function reintakePrototypeTaskKind(
       kind === 'schema_prune' || kind === 'drafting_model' || kind === 'author_intent' ||
       kind === 'chapter_draft' || kind === 'world_state_review' || kind === 'spatial_review') return kind
   return null
-}
-
-function hasReviewableReintakeBlueprint(
-  task: EvidenceTask,
-  references: string[],
-  acceptanceCriteria: Task['acceptanceCriteria'],
-  contractNames: string[],
-  sourceEvidenceIsConcrete = false,
-): boolean {
-  if (contractShapedImportHasNoConcreteContracts({ semanticKind: task.semanticKind, contractNames })) return false
-  return (
-    references.length > 0 &&
-    acceptanceCriteria.length > 0 &&
-    (
-      contractNames.length > 0 ||
-      task.proofPaths.some(path => path.source === 'documented') ||
-      sourceEvidenceIsConcrete
-    )
-  )
 }
 
 function reintakeProductBrief(task: EvidenceTask, contractNames: string[]): NonNullable<Task['productBrief']> {

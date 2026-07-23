@@ -51996,3 +51996,43 @@ Repair:
 - Proof provided: local checks; installed replay pending.
 - Apply/revert: never restore matched-task creation; add a new source identity
       bridge when a historical row cannot be matched.
+
+## 2026-07-23 Re-intake consumes its source snapshot once
+
+- [x] Re-intake had two authorities for source content: the planner's loaded
+      project snapshot and a later importer filesystem re-read. The second
+      path could lose the exact evidence that produced a task and then fill
+      the gap with generic implementation and proof language.
+- [x] The planner now passes its normalized source-content snapshot into the
+      blueprint builder. A source row establishes task identity only; it moves
+      to `spec_review` only when the same snapshot contains a typed contract
+      or documented proof. Otherwise it remains an `import_draft` with an
+      explicit source trail and intake boundary.
+- [x] Reframing non-running work now applies the regenerated planning status,
+      so a stale `done`, `blocked`, or `spec_review` label cannot outweigh the
+      current selected release's evidence and proof contract.
+
+### Contract Touch Decision
+
+- Work id: `0.13.70/reintake-single-source-snapshot`.
+- Touched contracts: workspace-import blueprint eligibility, re-intake task
+      status authority, and source-snapshot handoff.
+- Considered but not touched: task identity, release membership, raw queue
+      fingerprint, persistent schema, and historical evidence retention.
+- Required follow-up: verify the installed Narrative Harness draft has zero
+      duplicate creates and reports thin source rows as intake instead of
+      generated executable specs; then shape the retained source-backed tasks
+      through the normal review flow.
+- Proof required: typecheck; importer and re-intake suites; contract and
+      model-independence gates; installed app replay.
+- Proof provided: `pnpm typecheck`; 135 focused importer/re-intake tests;
+      `pnpm lint:contracts`; `pnpm model:independence`; and installed
+      Narrative Harness replay with `stale:false`, zero created tasks, and 13
+      existing tasks honestly reframed to `import_draft` with zero generated
+      criteria and proof paths.
+- Waivers: none.
+- Owner-review items: none. This does not approve work; it prevents weak
+      sources from pretending they were approved specs.
+- Apply/revert: applying a re-intake draft may reopen stale selected-release
+      work as `import_draft`; revert only by replacing the shared proof and
+      snapshot boundary, never by restoring a filesystem-only fallback.
