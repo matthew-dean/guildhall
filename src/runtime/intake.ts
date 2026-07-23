@@ -1116,6 +1116,19 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
 
   delete task.blockReason
   delete task.recoveryCode
+  // Reframing begins a new current lifecycle. Historical completion stays in
+  // the evidence ledger, but it must not settle the newly reopened task.
+  if (task.doneSummaryBundle?.status === 'done') {
+    task.doneSummaryBundle = {
+      ...task.doneSummaryBundle,
+      status: 'reopened',
+      reopenedAt: now,
+      reopenReason: 'A task reframe requested a fresh source-backed plan.',
+      createdAt: now,
+      createdBy: 'reframe-task',
+    }
+  }
+  task.completedAt = undefined
   task.status = 'exploring'
   task.assignedTo = 'spec-agent'
   task.productBrief = undefined
@@ -1162,6 +1175,11 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   // so this reframe cannot immediately erase its own proof marker.
   await upsertTaskRuntimeState(projectRoot, task.id, {
     assignedTo: 'spec-agent',
+    currentLifecycle: {
+      reopenedAt: now,
+      status: 'exploring',
+      source: 'rerun_spec',
+    },
     ...(input.recoveryKind === 'proof'
       ? {
           proofRecovery: {

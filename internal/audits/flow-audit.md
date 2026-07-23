@@ -52369,3 +52369,29 @@ Repair:
 - Apply/revert: removing the optional request field restores the ordinary human
       default for future requests without changing history. Do not use this
       actor label to let Guildhall approve a spec or broaden a release.
+
+## 2026-07-23 Reframing fences historical completion from current work
+
+- [x] Installed Narrative Harness replay exposed a task that had been reframed
+      from a generic spec and then appeared `done` with no current spec,
+      acceptance criteria, proof path, or fresh evidence. The reframe mutation
+      cleared planning fields but did not establish a new lifecycle boundary,
+      allowing historical completion evidence to settle the new work.
+
+### Contract Touch Decision
+
+- Work id: `0.13.81/reframe-current-lifecycle`.
+- Touched contracts: task reframe lifecycle state, completion-summary
+      supersession, and effective-task terminal-status derivation.
+- Considered but not touched: task history retention, release membership,
+      proof output parsing, approval authority, and model prose.
+- Existing data impact: future reframes persist a `currentLifecycle` overlay
+      and mark an inline old done summary as reopened. Historical evidence is
+      retained and is never deleted or reinterpreted.
+- Required follow-up: rerun the affected Narrative Harness shaping task through
+      the installed application and verify it remains `exploring` until a fresh
+      spec is recorded.
+- Proof required: intake/effective-status regression, typecheck, contract lint,
+      and installed replay.
+- Apply/revert: do not remove this boundary without another durable lifecycle
+      model; reverting it reintroduces false completion from historical state.

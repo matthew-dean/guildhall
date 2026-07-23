@@ -439,6 +439,11 @@ describe('reframeTask', () => {
         structured: expect.objectContaining({ source: 'codex_delegated_owner' }),
       }),
     ]))
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks[result.taskId]?.currentLifecycle).toMatchObject({
+      status: 'exploring',
+      source: 'rerun_spec',
+    })
   })
 
   it('keeps proof-specific recovery attached to a proof reframe', async () => {
