@@ -774,6 +774,14 @@ function indexedActionTasks(
     const briefSummary: Record<string, unknown> = isRecord(currentSummary.brief) ? currentSummary.brief : {}
     const acceptanceCount = Number(currentSummary.acceptanceCriteriaCount ?? taskRecord.acceptanceCriteriaCount ?? 0)
     const row = rowsByTaskId.get(task.id)
+    const approvedBriefNeedsSpec = Boolean(
+      briefSummary.present &&
+      typeof briefSummary.approvedAt === 'string' &&
+      briefSummary.approvedAt.trim().length > 0 &&
+      briefSummary.shaped &&
+      task.status === 'exploring' &&
+      taskRecord.spec !== 'present',
+    )
     return {
       id: task.id,
       title: task.title,
@@ -787,7 +795,8 @@ function indexedActionTasks(
         parentId: typeof task.hierarchy.parentId === 'string' ? task.hierarchy.parentId : undefined,
         childIds: Array.isArray(task.hierarchy.childIds) ? task.hierarchy.childIds.filter((id): id is string => typeof id === 'string') : undefined,
       } : undefined,
-      needsBriefCleanup: row?.handoffState === 'brief_cleanup' || row?.handoffState === 'not_shaped',
+      needsBriefCleanup: row?.handoffState === 'brief_cleanup' ||
+        (row?.handoffState === 'not_shaped' && !approvedBriefNeedsSpec),
       spec: taskRecord.spec === 'present' || row?.handoffState === 'ready' ? 'indexed-present' : undefined,
       acceptanceCriteria: Array.from({ length: Number.isFinite(acceptanceCount) ? acceptanceCount : 0 }, () => ({})),
       productBrief: briefSummary.present

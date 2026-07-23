@@ -452,6 +452,11 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
   const task = ranked[0]
   if (!task) return null
   const cleanup = needsBriefCleanup(task)
+  const approvedBriefNeedsSpec =
+    task.status === 'exploring' &&
+    hasApprovedProductBrief(task) &&
+    hasCompleteProductBrief(task) &&
+    !hasSpecDraft(task)
   const blockedReason = taskBlockedReason(task)
   const blocked = task.status === 'blocked' || blockedReason !== null
   return {
@@ -459,6 +464,8 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
     label: taskLabel(task),
     detail: blockedReason
       ? blockedReason
+      : approvedBriefNeedsSpec
+      ? 'Guildhall is shaping a source-backed spec from the approved brief.'
       : cleanup
       ? 'Needs brief: finish the handoff before a worker can start.'
       : task.description,

@@ -20,6 +20,36 @@ describe('applyRunStatusToStartReadiness', () => {
 })
 
 describe('buildProjectActionModel', () => {
+  it('labels an approved brief without a spec as source-backed shaping', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-story-context',
+      },
+      tasks: [{
+        id: 'task-story-context',
+        title: 'Build story context',
+        status: 'exploring',
+        productBrief: {
+          approvedAt: '2026-07-23T02:00:00.000Z',
+          userJob: 'Keep author records immutable.',
+          whyItMattersNow: 'Drafting needs trustworthy context.',
+          successMetric: 'Derived records retain source links.',
+          nonGoals: ['Do not replace author records.'],
+        },
+        acceptanceCriteria: [],
+      }],
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      label: 'Build story context',
+      detail: 'Guildhall is shaping a source-backed spec from the approved brief.',
+      buttonLabel: 'Open Work',
+    })
+  })
+
   it('normalizes risky start blockers into terse shared actions', () => {
     const importDrafts = buildProjectActionModel({
       startReadiness: {

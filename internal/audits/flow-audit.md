@@ -52104,6 +52104,8 @@ Repair:
 - [x] A blueprint rerun now clears an obsolete executable contract while
       retaining the approved product brief. This gives existing generic-seed
       records a typed recovery path without discarding owner-approved scope.
+- [x] Compact action projection retains the typed approved-brief summary needed
+      to distinguish source-backed spec shaping from an incomplete brief.
 
 ### Contract Touch Decision
 
