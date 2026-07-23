@@ -151,6 +151,11 @@ export interface IntakeInput {
   taskId?: string
   /** Optional explicit title; defaults to a complete first-line ask or generic fallback. */
   title?: string
+  /**
+   * Durable project sources selected by the invoking surface. They are copied
+   * onto the task so the coordinator sees the same grounding the UI shows.
+   */
+  sourceRefs?: string[]
   /** User-facing routed request metadata for Thread projection. */
   request?: TaskRequest
   /** Optional precomputed intake state when another flow already resolved routing questions. */
@@ -186,6 +191,7 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
   const ownerInput = input.ownerInputOverride !== undefined
     ? input.ownerInputOverride
     : requestIntakeAnalysis.ownerInput
+  const sourceRefs = [...new Set((input.sourceRefs ?? []).map(ref => ref.trim()).filter(Boolean))]
 
   const task: Task = {
     id,
@@ -193,7 +199,7 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     description: input.ask,
     domain: input.domain,
     projectPath: input.projectPath,
-    references: [],
+    references: sourceRefs,
     sourceClaims: [],
     status: 'exploring',
     priority: 'normal',

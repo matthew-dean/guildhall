@@ -51806,3 +51806,33 @@ Repair:
 - Rollback/revert: restore rechecking only alongside a replacement, typed,
       active-proof invariant owner. Do not reintroduce a legacy task scan as a
       runtime gate.
+
+## 2026-07-23 Run-once persists the project sources it shows
+
+Finding:
+
+- [x] Narrative Harness visibly exposed a source-backed Map and release plan,
+      but `guildhall task run-once` created its re-intake task with no durable
+      source references. The UI could decorate a response with source labels,
+      while the coordinator read the raw task and correctly refused to invent
+      a spec from it.
+
+Repair:
+
+- [x] Run-once now copies the bounded, persisted orientation source list onto
+      the new task at intake. The coordinator, task detail, and project views
+      therefore share one source trail; no agent or request-time surface scans
+      a workspace to recreate it.
+
+### Contract Touch Decision
+
+- Work id: `0.13.61/run-once-source-grounding`.
+- Touched contracts: task-intake references and run-once project-summary read.
+- Considered but not touched: workspace importer, raw transcript retention,
+      task/release membership, owner approval, and provider prompts.
+- Proof required: explicit intake references persist without duplication; a
+      run-once task receives the persisted orientation source set; generated
+      proof setup remains immediately runnable.
+- Proof provided: focused intake and run-once regressions plus typecheck.
+- Apply/revert: revert the intake field and run-once reader together. Do not
+      replace the durable reference with UI-only backfill or a repository scan.

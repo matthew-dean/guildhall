@@ -5,7 +5,7 @@ import path from 'node:path'
 import type { Task } from '@guildhall/core'
 import { describe, expect, it } from 'vitest'
 import { AGENT_SETTINGS_FILENAME, loadLeverSettings } from '@guildhall/levers'
-import { getProjectSystemStatePath, promoteProjectStateDatabaseAuthority, readTaskEvidence } from '@guildhall/sessions'
+import { getProjectSystemStatePath, promoteProjectStateDatabaseAuthority, readTaskEvidence, writeProjectStateDatabaseSummarySnapshot } from '@guildhall/sessions'
 
 import { buildEffectiveTask } from '../effective-task.js'
 import * as projectStateBoundary from '../project-state-boundary.js'
@@ -123,6 +123,42 @@ describe('runGuildhallTaskOnce', () => {
     expect(report.title).not.toBe('New request')
     expect(queue.tasks[0].title).toBe(report.title)
     expect(queue.tasks[0].title).not.toBe('New request')
+  })
+
+  it('grounds run-once work in the persisted project orientation sources', async () => {
+    const projectRoot = await seedProject()
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: {
+        version: 18,
+        projectId: 'run-once-test',
+        generatedAt: '2026-05-29T09:00:00.000Z',
+        freshness: 'current',
+        orientation: {
+          charter: null,
+          sourceRefs: ['docs/project-brief.md', 'docs/releases/first-release.md'],
+          refreshedAt: '2026-05-29T09:00:00.000Z',
+        },
+      } as never,
+    })
+
+    await runGuildhallTaskOnce({
+      projectRoot,
+      prompt: 'Re-intake the documented release.',
+      runOrchestratorImpl: async () => ({
+        ticks: 0,
+        processedTaskIds: [],
+        stopReason: 'awaiting_human',
+        stopMessage: 'Test stop.',
+      }),
+      now: () => '2026-05-29T10:00:00.000Z',
+    })
+
+    const queue = projectStateBoundary.readProjectTaskQueueSync(tasksPath) as { tasks: Task[] }
+    expect(queue.tasks[0]?.references).toEqual([
+      'docs/project-brief.md',
+      'docs/releases/first-release.md',
+    ])
   })
 
   it('can read the run-once prompt from a file', async () => {

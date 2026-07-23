@@ -166,6 +166,22 @@ describe('createExploringTask', () => {
     expect(transcript).toContain('user')
   })
 
+  it('persists invoking-surface source references on a new task', async () => {
+    await createExploringTask({
+      memoryDir,
+      ask: 'Re-intake the current release from its documented project sources.',
+      domain: 'looma',
+      projectPath: '/projects/looma',
+      sourceRefs: ['docs/project-brief.md', 'docs/current-release.md', 'docs/project-brief.md'],
+    })
+
+    const queue = await readQueue()
+    expect(queue.tasks[0]?.references).toEqual([
+      'docs/project-brief.md',
+      'docs/current-release.md',
+    ])
+  })
+
   it('attaches an automatic pressure-test summary to small tasks', async () => {
     const result = await createExploringTask({
       memoryDir,
@@ -510,7 +526,9 @@ describe('approveSpec', () => {
     expect(parent.acceptanceCriteria[0]?.verificationState).toBe('stale')
     expect(proofSetup).toMatchObject({
       title: 'Establish concrete proof for Add ghost button',
-      status: 'exploring',
+      // This is generated, bounded verification work, not a fresh request
+      // that needs another exploratory/spec loop.
+      status: 'ready',
       hierarchy: { parentId: task.id },
       releaseIds: ['release-1'],
       workVisibility: { kind: 'internal_step', countInProjectTotals: false },

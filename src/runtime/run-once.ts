@@ -8,6 +8,7 @@ import { appendTaskEvidence, getProjectSystemStatePath, inferProjectRootFromMemo
 
 import { createExploringTask } from './intake.js'
 import { runOrchestrator, type OrchestratorRunOptions, type OrchestratorRunResult } from './orchestrator.js'
+import { readProjectSummaryProjection } from './project-summary-projection.js'
 import { summarizeScopedRun } from './run-automation.js'
 import { loadWorkspace } from './workspace-loader.js'
 
@@ -57,6 +58,10 @@ export async function runGuildhallTaskOnce(input: RunOnceInput): Promise<RunOnce
   const proof = input.proof ?? 'auto'
   const createdAt = input.now?.() ?? new Date().toISOString()
   const domain = workspace.config.coordinators[0]?.domain ?? 'general'
+  // Run-once is a project action, not an ungrounded chat. Reuse the compact,
+  // persisted orientation sources that already power the project views rather
+  // than making the coordinator rediscover or scan the workspace.
+  const sourceRefs = projectOrientationSourceRefs(projectRoot)
 
   if (automationPolicy === 'fully_automated') {
     await enableFullyAutomatedRunLever({
@@ -73,6 +78,7 @@ export async function runGuildhallTaskOnce(input: RunOnceInput): Promise<RunOnce
     domain,
     ask: prompt,
     title,
+    sourceRefs,
   })
 
   await appendRunOnceNote({
@@ -123,6 +129,14 @@ export async function runGuildhallTaskOnce(input: RunOnceInput): Promise<RunOnce
   }
 
   return report
+}
+
+function projectOrientationSourceRefs(projectRoot: string): string[] {
+  const summary = readProjectSummaryProjection(getProjectSystemStatePath(projectRoot, 'TASKS.json'))
+  return [...new Set((summary?.orientation?.sourceRefs ?? [])
+    .map(ref => ref.trim())
+    .filter(Boolean))]
+    .slice(0, 8)
 }
 
 async function resolvePrompt(input: RunOnceInput): Promise<string> {
