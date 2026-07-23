@@ -1,5 +1,5 @@
 import { TaskQueue, type ProjectRelease, type Task, type TaskQueue as TaskQueueModel } from '@guildhall/core'
-import { readManagedTextFileSync } from '@guildhall/persistence'
+import { readManagedTextFileSync, stableJson } from '@guildhall/persistence'
 import {
   readProjectStateDatabaseAuthorityFromTasksPath,
   readProjectStateDatabaseAuthority,
@@ -12,6 +12,7 @@ import {
   readProjectStateDatabaseSummary,
   readProjectStateDatabaseRevisionFromTasksPath,
   readProjectStateDatabaseQueueDefinitionForMigration,
+  readProjectStateDatabaseQueueRevision,
   writeProjectStateDatabaseSummarySnapshot,
   updateProjectStateDatabaseSummaryAndCurrentState,
   writeProjectStateDatabaseSnapshot,
@@ -21,6 +22,7 @@ import {
   type ProjectStateDatabaseTaskEvidenceRetentionInput,
   type ProjectStateDatabaseTaskRuntime,
   type ProjectStateDatabaseTaskStatusRow,
+  type ProjectStateDatabaseStateResolutionSnapshot,
 } from '@guildhall/sessions'
 import { dirname, join } from 'node:path'
 import { statSync } from 'node:fs'
@@ -46,7 +48,16 @@ import {
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
 import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
-import { applyProjectActionModelPrimaryAction, applyRuntimeExecutionToProjectDecision, buildProjectDecisionProjection, projectDecisionStartReadiness, type ProjectDecisionProjection, type ProjectDecisionTaskRef } from './project-decision-projection.js'
+import {
+  applyProjectActionModelPrimaryAction,
+  applyRuntimeExecutionToProjectDecision,
+  buildProjectDecisionProjection,
+  projectDecisionStartReadiness,
+  resolveRegisteredProjectStateClaimSet,
+  type ProjectDecisionProjection,
+  type ProjectDecisionTaskRef,
+  type ProjectStateClaim,
+} from './project-decision-projection.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
@@ -1662,6 +1673,82 @@ function synchronizeIndexedOrientationSpine(
   )
 }
 
+function canonicalDecisionClaimId(
+  projectRevision: number,
+  subject: { kind: string; id: string },
+  field: string,
+): string {
+  return `canonical:${projectRevision}:${subject.kind}:${subject.id}:${field}`
+}
+
+/**
+ * Materialize only the compact facts which the shared decision packet needs.
+ * Task/release/runtime rows remain canonical; this ledger makes it explicit
+ * which revision and registered facts produced a cross-surface action.
+ */
+function canonicalDecisionStateResolution(input: {
+  projectId: string | null
+  projectRevision: number
+  queueRevision: number | null
+  selectedReleaseId: string | null
+  decision: ProjectDecisionProjection
+  generatedAt: string
+}): ProjectStateDatabaseStateResolutionSnapshot {
+  const project = { kind: 'project', id: input.projectId ?? 'unknown-project' }
+  const claim = <T>(field: ProjectStateClaim['field'], value: T): ProjectStateClaim<T> => ({
+    id: canonicalDecisionClaimId(input.projectRevision, project, field),
+    projectRevision: input.projectRevision,
+    subject: project,
+    field,
+    value,
+    authority: 'canonical_mutation',
+    actor: 'project-state-boundary',
+    observedAt: input.generatedAt,
+    evidenceRefs: [],
+  })
+  const focus = input.decision.planExecution?.focus ?? input.decision.execution.focus
+  const claims: ProjectStateClaim[] = [
+    claim('project.selectedReleaseId', input.selectedReleaseId),
+    claim('project.executionFocus', focus
+      ? { taskId: focus.taskId, taskRevision: focus.taskRevision ?? input.projectRevision }
+      : null),
+    claim('project.executionEligibility', {
+      state: input.decision.planExecution?.state ?? input.decision.execution.state,
+      code: input.decision.planExecution?.code ?? input.decision.execution.code,
+      primaryAction: input.decision.primaryAction,
+    }),
+  ]
+  const resolution = resolveRegisteredProjectStateClaimSet({
+    projectRevision: input.projectRevision,
+    claims,
+  })
+  const disagreements = resolution.disagreements.map(disagreement => ({
+    id: disagreement.id,
+    subject: disagreement.subject,
+    field: disagreement.field,
+    canonicalClaimIds: disagreement.canonicalClaimIds,
+    contradictoryClaimIds: disagreement.contradictoryClaimIds,
+    state: disagreement.state,
+    reconciliation: disagreement.reconciliation,
+  }))
+  const fingerprint = stableJson({
+    claims,
+    resolved: resolution.resolved,
+    rejected: resolution.rejected,
+    disagreements,
+    decision: input.decision,
+  })
+  return {
+    projectRevision: input.projectRevision,
+    queueRevision: input.queueRevision,
+    generatedAt: input.generatedAt,
+    claims,
+    disagreements,
+    decision: input.decision,
+    fingerprint,
+  }
+}
+
 /**
  * Publish the compact summary from normalized current rows without opening
  * task detail blobs. This is the normal promoted-project refresh boundary;
@@ -1764,6 +1851,16 @@ export function writeProjectSummaryProjectionFromIndexedState(
   const snapshotProjection = currentProjection
     ? { currentProjection }
     : statusProjection
+  const stateResolution = expectedProjectRevision === null
+    ? undefined
+    : canonicalDecisionStateResolution({
+        projectId: projection.projectId,
+        projectRevision: expectedProjectRevision,
+        queueRevision: indexedState?.queueRevision ?? null,
+        selectedReleaseId: indexedState?.queue.selectedReleaseId ?? null,
+        decision: projection.decision,
+        generatedAt: projection.generatedAt,
+      })
   /*
    * Indexed proof refreshes must publish the corrected scope rows as well as
    * the compact summary. Otherwise Release/Overview can be current while
@@ -1772,6 +1869,7 @@ export function writeProjectSummaryProjectionFromIndexedState(
   writeProjectStateDatabaseSummarySnapshot(tasksPath, {
     summary: projection,
     ...snapshotProjection,
+    ...(stateResolution ? { stateResolution } : {}),
     ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
       ? { expectedQueueRevision: input.expectedQueueRevision }
       : {}),
@@ -1915,10 +2013,21 @@ export function writeProjectSummaryProjection(
   const scopeRows = projectSummaryScopeRowsForQueue(projectedQueue, projection.approvedPlan, input.projectionTasks, {
     currentStateAuthority,
   })
+  const stateResolution = capturedProjectRevision === null
+    ? undefined
+    : canonicalDecisionStateResolution({
+        projectId: projection.projectId,
+        projectRevision: capturedProjectRevision,
+        queueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
+        selectedReleaseId: (canonicalQueue as { selectedReleaseId?: string } | null)?.selectedReleaseId ?? null,
+        decision: projection.decision,
+        generatedAt: projection.generatedAt,
+      })
   if (currentStateAuthority === 'database') {
     writeProjectStateDatabaseSummarySnapshot(tasksPath, {
       summary: projection,
       scopeRows,
+      ...(stateResolution ? { stateResolution } : {}),
       ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
         ? { expectedQueueRevision: input.expectedQueueRevision }
         : {}),

@@ -21,6 +21,7 @@ import {
   PROJECT_STATE_DATABASE_SCHEMA_VERSION,
   readProjectStateDatabaseMetadata,
   readProjectStateDatabaseAuthority,
+  readProjectStateDatabaseReadBundle,
   readProjectStateDatabaseQueueDefinitionForMigration,
   readProjectStateDatabaseQueueWithRevision,
   readProjectStateDatabaseInventory,
@@ -239,6 +240,7 @@ const SPEC_REVIEW_GATE_MIGRATION_ID = '0.13.67/explicit-spec-review-gates'
 const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
 const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-authority'
 const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
+const DURABLE_DECISION_SNAPSHOT_MIGRATION_ID = '0.13.71/durable-decision-snapshot'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -5102,6 +5104,41 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: DURABLE_DECISION_SNAPSHOT_MIGRATION_ID,
+    title: 'Materialize the durable project decision snapshot',
+    introducedIn: '0.13.71',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Records the typed canonical claims and one revision-bound decision packet that Overview, Work, Map, Thread, Release, Activity, and Start share.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const bundle = readProjectStateDatabaseReadBundle(tasksPath)
+      const needed = Boolean(bundle?.summary && bundle.stateResolution === null)
+      return {
+        needed,
+        affectedPaths: needed
+          ? [projectStateDatabasePath(projectRoot), 'shared project decision snapshot']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      const bundle = readProjectStateDatabaseReadBundle(tasksPath)
+      if (!projection || !bundle?.stateResolution || bundle.stateResolution.projectRevision !== bundle.projectRevision) {
+        throw new Error('The durable project decision snapshot could not be rebuilt from the current normalized state.')
+      }
+      return {
+        summary: 'Recorded the current normalized release, execution focus, and eligibility as one shared decision snapshot.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
     id: PROOF_SETUP_EXECUTION_BLUEPRINT_MIGRATION_ID,
     title: 'Restore proof-setup execution blueprints',
     introducedIn: '0.13.41',
@@ -5493,6 +5530,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID]: 'project-summary-projection.test.ts: publishes source-catalog status from the canonical SQLite catalog',
   [SPEC_REVIEW_GATE_MIGRATION_ID]: 'migrations.test.ts: backfills only legacy spec-review gates and remains idempotent after canonical task writes',
   [DURABLE_SPEC_HANDOFF_MIGRATION_ID]: 'migrations.test.ts: settles only an approved, structurally valid spec handoff and never auto-approves it',
+  [DURABLE_DECISION_SNAPSHOT_MIGRATION_ID]: 'migrations.test.ts: rebuilds a missing revision-bound decision packet from normalized state',
   '0.11.0/project-summary-projection': 'migrations.test.ts: project summary backfill is idempotent and preserves task history',
   '0.11.1/project-summary-projection-v2': 'migrations.test.ts: project summary shape refresh is idempotent and preserves task history',
   '0.11.2/project-summary-projection-setup-state': 'migrations.test.ts: project summary setup-state refresh is idempotent and preserves task history',

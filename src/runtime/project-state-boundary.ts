@@ -1,4 +1,4 @@
-import { readManagedTextFileSync, writeManagedTextFileSync } from '@guildhall/persistence'
+import { readManagedTextFileSync, stableJson, writeManagedTextFileSync } from '@guildhall/persistence'
 import {
   compactProjectStateQueueForCompatibility,
   getProjectSystemStatePath,
@@ -30,6 +30,7 @@ import {
   writeProjectStateDatabaseReleaseSelectionMutation,
   writeProjectStateDatabaseTaskBatchMutation,
   writeProjectStateDatabaseTaskMutation,
+  writeProjectStateDatabaseStateResolutionSnapshot,
   type ProjectStateDatabaseTaskEvidenceRetentionInput,
   type ProjectStateDatabaseInventory,
   type ProjectStateDatabaseProjectionReadOptions,
@@ -47,6 +48,8 @@ import {
   type ProjectStateDatabaseSurfaceReadOptions,
   type ProjectStateDatabaseSurfaceState,
   type ProjectStateDatabaseTaskEvidenceCurrentManyRead,
+  type ProjectStateDatabaseStateClaim,
+  type ProjectStateDatabaseStateResolutionSnapshot,
 } from '@guildhall/sessions'
 import type {
   ProjectRelease,
@@ -70,6 +73,12 @@ import { executionScopeRows, taskScopeNodeId, type ProjectScope } from './projec
 import { buildEffectiveTask, buildEffectiveTasks } from './effective-task.js'
 import { appendTaskEvidence, TASK_EVIDENCE_RETENTION } from './task-state-store.js'
 import { recoverClippedTitle } from '@guildhall/shared'
+import {
+  resolveRegisteredProjectStateClaimSet,
+  type ProjectDecisionProjection,
+  type ProjectStateClaim,
+  type ProjectStateDisagreement,
+} from './project-decision-projection.js'
 
 function projectSummaryAtRuntimeVersion(
   summary: ProjectStateDatabaseSummary<ProjectSummaryProjection> | ProjectSummaryProjection,
@@ -81,6 +90,140 @@ function projectSummaryAtRuntimeVersion(
       ? summary.freshness
       : 'stale',
   }
+}
+
+function decisionAfterStateResolution(
+  decision: ProjectDecisionProjection,
+  disagreements: readonly ProjectStateDisagreement[],
+): ProjectDecisionProjection {
+  const conflict = disagreements.find(disagreement => disagreement.state === 'unresolved')
+  if (!conflict) return decision
+  const code = 'project_state_conflict'
+  const conflictedExecution = {
+    ...decision.execution,
+    state: 'conflicted' as const,
+    code,
+    message: 'Guildhall found incompatible same-authority project state and needs to reconcile it before work can run.',
+  }
+  return {
+    ...decision,
+    planExecution: decision.planExecution
+      ? { ...decision.planExecution, state: 'conflicted', code, message: conflictedExecution.message }
+      : decision.planExecution,
+    execution: conflictedExecution,
+    release: { ...decision.release, state: 'conflicted' },
+    primaryAction: {
+      kind: 'resolve_conflict',
+      targetId: conflict.id,
+      reasonCode: code,
+    },
+    conflicts: [
+      ...decision.conflicts.filter(existing => existing.id !== conflict.id),
+      {
+        id: conflict.id,
+        subject: conflict.subject,
+        field: conflict.field,
+        claimIds: [...conflict.contradictoryClaimIds],
+        reconciliation: conflict.reconciliation,
+      },
+    ],
+  }
+}
+
+/**
+ * Broker one agent/runtime observation through the registered claim resolver.
+ * The caller cannot choose a winner: it supplies a typed observation at the
+ * revision it actually read, and the closed policy registry determines the
+ * resolved packet or an execution-blocking conflict.
+ */
+export interface ProjectStateObservationInput {
+  id: string
+  projectRevision: number
+  subject: ProjectStateClaim['subject']
+  field: ProjectStateClaim['field']
+  value: unknown
+  observedAt: string
+  evidenceRefs: string[]
+  basis?: ProjectStateClaim['basis']
+  supersedes?: string
+  /** The broker assigns authority; callers cannot declare themselves canonical. */
+  producer: 'agent' | 'runtime' | 'verifier' | 'import'
+}
+
+export function resolveProjectStateObservationAtBoundary(
+  tasksPath: string,
+  input: ProjectStateObservationInput,
+): { decision: ProjectDecisionProjection; disagreements: ProjectStateDisagreement[] } {
+  const bundle = readProjectStateDatabaseReadBundle<ProjectSummaryProjection>(tasksPath, {
+    includeStateClaims: true,
+  })
+  const current = bundle?.stateResolution
+  if (!bundle || bundle.projectRevision === null || !current || !current.claims) {
+    throw new Error('Project-state arbitration requires a current durable decision snapshot.')
+  }
+  if (input.projectRevision !== bundle.projectRevision) {
+    throw new Error('Stale project-state observation: reread the shared project snapshot before resolving a disagreement.')
+  }
+  const authorityByProducer = {
+    agent: 'agent_derivation',
+    runtime: 'runtime_observation',
+    verifier: 'verified_observation',
+    import: 'imported_record',
+  } as const
+  const observation: ProjectStateClaim = {
+    id: input.id,
+    projectRevision: input.projectRevision,
+    subject: input.subject,
+    field: input.field,
+    value: input.value,
+    authority: authorityByProducer[input.producer],
+    actor: `project-state-broker:${input.producer}`,
+    observedAt: input.observedAt,
+    evidenceRefs: input.evidenceRefs,
+    ...(input.basis ? { basis: input.basis } : {}),
+    ...(input.supersedes ? { supersedes: input.supersedes } : {}),
+  }
+  const claims: ProjectStateClaim[] = [
+    ...current.claims.map(claim => ({
+      id: claim.id,
+      projectRevision: claim.projectRevision,
+      subject: claim.subject,
+      field: claim.field,
+      value: claim.value,
+      authority: claim.authority,
+      actor: claim.actor,
+      observedAt: claim.observedAt,
+      evidenceRefs: [...claim.evidenceRefs],
+      ...(claim.basis ? { basis: claim.basis } : {}),
+      ...(claim.supersedes ? { supersedes: claim.supersedes } : {}),
+    })),
+    observation,
+  ]
+  const resolution = resolveRegisteredProjectStateClaimSet({
+    projectRevision: bundle.projectRevision,
+    claims,
+  })
+  const decision = decisionAfterStateResolution(
+    current.decision as ProjectDecisionProjection,
+    resolution.disagreements,
+  )
+  const snapshot: ProjectStateDatabaseStateResolutionSnapshot = {
+    projectRevision: bundle.projectRevision,
+    queueRevision: bundle.queueRevision,
+    generatedAt: new Date().toISOString(),
+    claims: claims as ProjectStateDatabaseStateClaim[],
+    disagreements: resolution.disagreements,
+    decision,
+    fingerprint: stableJson({
+      claims,
+      resolved: resolution.resolved,
+      rejected: resolution.rejected,
+      disagreements: resolution.disagreements,
+      decision,
+    }),
+  }
+  writeProjectStateDatabaseStateResolutionSnapshot(tasksPath, snapshot)
+  return { decision, disagreements: resolution.disagreements }
 }
 
 export const FORBIDDEN_PROJECT_TASK_FIELDS = [

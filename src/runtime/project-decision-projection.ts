@@ -63,6 +63,7 @@ export type ProjectStateClaimField =
   | 'task.reviewEvidenceDisposition'
   | 'proof.status'
   | 'runtime.status'
+  | 'runtime.activeTaskId'
   | 'project.executionFocus'
   | 'project.executionEligibility'
   | 'workspace.syncState'
@@ -146,9 +147,15 @@ export const PROJECT_STATE_CLAIM_POLICIES: Readonly<Record<ProjectStateClaimFiel
     authorities: ['runtime_observation'],
     reconciliation: 'refresh_runtime',
   },
+  'runtime.activeTaskId': {
+    field: 'runtime.activeTaskId',
+    authorities: ['runtime_observation'],
+    reconciliation: 'refresh_runtime',
+  },
   'project.executionFocus': {
     field: 'project.executionFocus',
-    authorities: ['canonical_mutation', 'runtime_observation'],
+    // Planned scope focus and a live worker's active task are different facts.
+    authorities: ['canonical_mutation'],
     reconciliation: 'inspect_canonical_state',
   },
   'project.executionEligibility': {

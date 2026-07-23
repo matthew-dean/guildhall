@@ -96,6 +96,94 @@ cannot be found, the decision must refresh or conflict rather than inventing a
 label. The migration invalidates old summaries and rebuilds their shared
 decision from indexed task points.
 
+## Durable Decision Snapshot: First Vertical Slice
+
+`0.13.71/durable-decision-snapshot` moves the existing closed claim resolver
+from a testable runtime helper into the project-state boundary. It does **not**
+create a second source of task or release truth.
+
+### Stored Rows
+
+The additive SQLite schema has three bounded tables:
+
+1. `project_state_claims`: immutable typed observations. A row carries the
+   claim id and fingerprint, project revision, subject, registered field,
+   typed JSON value, broker-assigned authority/actor, observed time, evidence
+   locators, basis, and optional supersession id. The value is structured data;
+   raw agent prose is neither stored nor accepted as a field value.
+2. `project_state_disagreements`: the resolver's compact result for active
+   contradictory claims. It records the revision, registered subject/field,
+   canonical/contradictory ids, state, and the policy reconciliation action.
+   It is replaceable derived state, not a competing fact ledger.
+3. `project_state_decisions`: exactly one compact decision packet for a
+   project revision. It stores the resolved decision JSON plus a deterministic
+   digest of the claim set and its resolution. It is intentionally one row per
+   current project: fleet reads get no task inventory or evidence bodies.
+
+Claims and the resolved packet are committed in the same SQLite transaction as
+the current summary/scope projection. The packet's `projectRevision` and
+`queueRevision` must match that transaction's canonical snapshot. The read
+bundle returns it from the same read transaction as queue, summary, scope, and
+runtime. A mismatched, absent, or malformed packet means the summary is stale;
+routes do not reconstruct a competing decision from individual cards.
+
+### Initial Claim Producers
+
+This first slice materializes only canonical facts already owned by the
+normalized snapshot: selected release, the planned execution focus, and
+execution eligibility. Their producer is the project-state boundary with
+`canonical_mutation` authority. It is a snapshot derivation, not an agent
+claiming authority for itself.
+
+The planned focus is deliberately distinct from `runtime.activeTaskId`. The
+former is a selected-scope planning fact; the latter is a live supervisor fact.
+They can differ without being a disagreement, and neither is allowed to rename
+the other.
+
+External agents are deliberately not accepted by this migration. The next
+slice adds a broker append API with authenticated producer identity and policy
+validation for verifier/runtime/Git observations. Until then, agent prose
+cannot create an operational disagreement record by itself.
+
+### Conflict Behavior
+
+For any two claims with the same revision, subject, field, and basis:
+
+- a stronger registered authority wins, while the losing observation remains a
+  visible `resolved_by_authority` disagreement;
+- same-authority incompatible values create `unresolved`; the decision is
+  `conflicted`, Start is unavailable, and every surface points to the
+  registry's one reconciliation action;
+- stale revisions, unknown fields, malformed evidence, and invalid
+  supersession are rejected, never guessed around;
+- an owner decision is valid only for registered scope choices. Work sizing,
+  execution focus, review state, proof, runtime, and repository facts resolve
+  through their owning machine-readable source.
+
+### Schema Migration Decision
+
+- Persisted schema: additive v36 tables `project_state_claims`,
+  `project_state_disagreements`, and `project_state_decisions` with revision
+  and subject/field indexes.
+- Migration id: `0.13.71/durable-decision-snapshot`.
+- Existing-data impact: current normalized task/release rows are backfilled as
+  broker-owned canonical claims during the next summary refresh. Existing
+  summaries without a same-revision decision packet are stale; no transcript
+  or old summary prose is backfilled.
+- Safety: every writer uses its existing project/queue revision compare-and-
+  swap, then writes canonical claims, resolution, summary, scope, and decision
+  in one SQLite transaction. A stale writer rolls back as a unit.
+- Compatibility: legacy readers may see their existing summary during rollout,
+  but promoted read bundles reject a current summary whose decision packet is
+  absent or revision-mismatched. There is no reader-side decision fallback.
+- Fixtures/tests: a compact fixture proves canonical task/release claims and a
+  matching packet; a lower-authority disagreement remains inspectable; an
+  equal-authority contradiction fails closed; a stale packet cannot be served
+  as current.
+- Apply/revert: apply by opening the database and refreshing the compact
+  projection. Revert by disabling packet consumption and rebuilding summaries;
+  additive rows remain inert audit data and no task/release mutation is lost.
+
 ## Proof
 
 - Seed a promoted task whose old detail `status` conflicts with its indexed

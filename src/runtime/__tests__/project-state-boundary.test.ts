@@ -11,6 +11,7 @@ import {
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseTaskOverlay,
   readProjectStateDatabaseSourceCapabilities,
+  readProjectStateDatabaseReadBundle,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
   writeProjectStateDatabaseAvailability,
@@ -50,10 +51,70 @@ import {
   writeProjectTaskQueueAtCurrentStateBoundary,
   writeProjectTaskQueueWithSummary,
   upsertProjectSourceCapabilitiesAtBoundary,
+  resolveProjectStateObservationAtBoundary,
 } from '../project-state-boundary.js'
-import { readProjectSummaryProjection } from '../project-summary-projection.js'
+import { readProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState } from '../project-summary-projection.js'
 
 describe('project-state-boundary', () => {
+  it('resolves two verifier observations deterministically and fails closed on an equal-authority conflict', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-state-arbitration-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, {
+        version: 1,
+        lastUpdated: '2026-07-23T00:00:00.000Z',
+        tasks: [{ id: 'task-proof', title: 'Prove state arbitration', status: 'ready' }],
+        releases: [],
+      }, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+      writeProjectSummaryProjectionFromIndexedState(tasksPath, { projectId: 'state-arbitration' })
+      const revision = readProjectStateDatabaseReadBundle(tasksPath)?.projectRevision
+      expect(revision).toBeTypeOf('number')
+
+      const first = resolveProjectStateObservationAtBoundary(tasksPath, {
+        id: 'verifier:proof:passed',
+        projectRevision: revision!,
+        subject: { kind: 'task', id: 'task-proof' },
+        field: 'proof.status',
+        value: { state: 'passed' },
+        observedAt: '2026-07-23T00:01:00.000Z',
+        evidenceRefs: ['proof:task-proof:passed'],
+        producer: 'verifier',
+      })
+      expect(first.disagreements).toEqual([])
+
+      const second = resolveProjectStateObservationAtBoundary(tasksPath, {
+        id: 'verifier:proof:failed',
+        projectRevision: revision!,
+        subject: { kind: 'task', id: 'task-proof' },
+        field: 'proof.status',
+        value: { state: 'failed' },
+        observedAt: '2026-07-23T00:02:00.000Z',
+        evidenceRefs: ['proof:task-proof:failed'],
+        producer: 'verifier',
+      })
+      expect(second.decision).toMatchObject({
+        execution: { state: 'conflicted', code: 'project_state_conflict' },
+        primaryAction: { kind: 'resolve_conflict', reasonCode: 'project_state_conflict' },
+        conflicts: [expect.objectContaining({ field: 'proof.status', reconciliation: 'rerun_verification' })],
+      })
+      expect(second.disagreements).toEqual([
+        expect.objectContaining({
+          field: 'proof.status',
+          state: 'unresolved',
+          reconciliation: 'rerun_verification',
+          contradictoryClaimIds: ['verifier:proof:failed', 'verifier:proof:passed'],
+        }),
+      ])
+      expect(readProjectSummaryProjection(tasksPath)?.decision).toMatchObject({
+        execution: { state: 'conflicted' },
+        primaryAction: { kind: 'resolve_conflict' },
+      })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('uses normalized queue selection for Overview when the orientation projection is stale', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-overview-scope-authority-'))
     const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')

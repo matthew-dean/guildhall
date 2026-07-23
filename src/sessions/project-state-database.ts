@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { assertShippedReleaseMutation, compactTaskEvidenceEvent, compactTaskEvidencePayload, TaskEvidenceEvent } from '@guildhall/core'
 import type { TaskEvidenceEvent as TaskEvidenceEventRecord } from '@guildhall/core'
 import { ownerInputObjectiveLabel, summarizeCurrentProof, taskExecutionBlocker } from '@guildhall/shared'
+import { stableJson } from '@guildhall/persistence'
 import { ensureProjectLocalHistoryDir, getProjectLocalHistoryDir, getProjectSystemStatePath } from './local-history.js'
 import { atomicWriteBytes, atomicWriteText } from './atomic.js'
 import { emitProjectSummaryInvalidation, type ProjectStateDomain } from './project-summary-invalidation.js'
@@ -70,7 +71,7 @@ export const PROJECT_STATE_DATABASE_FILE = 'project-state.db'
  * persistence. Existing prose/source claims are not backfilled because they
  * cannot author stable capability identities.
  */
-export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 35
+export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 36
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_TURNS = 2_000
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_BYTES = 512 * 1024
 export const PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN = 'diagnostics'
@@ -250,6 +251,12 @@ export interface ProjectStateDatabaseTaskCapabilityBinding {
 export interface ProjectStateDatabaseSummarySnapshot {
   summary: unknown
   /**
+   * One revision-bound result from the registered project-state claim
+   * resolver. This is an audit/read projection; normalized task, release, and
+   * runtime rows remain the owners of their facts.
+   */
+  stateResolution?: ProjectStateDatabaseStateResolutionSnapshot
+  /**
    * The task-status and scope rows produced by one current projection pass.
    * Keeping them in one value makes it explicit that compact status and scope
    * are a pair, not independently authored summaries.
@@ -266,6 +273,67 @@ export interface ProjectStateDatabaseSummarySnapshot {
   /** Compare-and-swap guard for evidence/runtime writes that do not change the queue revision. */
   expectedProjectRevision?: number | null
   expectedQueueRevision?: number | null
+}
+
+export type ProjectStateDatabaseClaimAuthority =
+  | 'owner_selection'
+  | 'canonical_mutation'
+  | 'verified_observation'
+  | 'runtime_observation'
+  | 'imported_record'
+  | 'agent_derivation'
+  | 'agent_proposal'
+
+export interface ProjectStateDatabaseStateClaim {
+  id: string
+  projectRevision: number
+  subject: { kind: string; id: string }
+  field: string
+  value: unknown
+  authority: ProjectStateDatabaseClaimAuthority
+  actor: string
+  observedAt: string
+  evidenceRefs: readonly string[]
+  basis?: { kind: string; id: string }
+  supersedes?: string
+  /** Resolver rejection retained for audit; rejected claims never decide state. */
+  rejectionCode?: string
+}
+
+export interface ProjectStateDatabaseStateDisagreement {
+  id: string
+  subject: { kind: string; id: string }
+  field: string
+  canonicalClaimIds: readonly string[]
+  contradictoryClaimIds: readonly string[]
+  state: 'resolved_by_authority' | 'unresolved'
+  reconciliation: 'rerun_verification' | 'refresh_runtime' | 'inspect_canonical_state' | 'owner_scope_decision'
+}
+
+/**
+ * The one decision packet a promoted project may serve for a revision. The
+ * packet is derived by runtime policy, then stored beside its claim audit so
+ * session storage does not duplicate policy ownership.
+ */
+export interface ProjectStateDatabaseStateResolutionSnapshot {
+  projectRevision: number
+  queueRevision: number | null
+  generatedAt: string
+  claims: readonly ProjectStateDatabaseStateClaim[]
+  disagreements: readonly ProjectStateDatabaseStateDisagreement[]
+  decision: unknown
+  fingerprint: string
+}
+
+export interface ProjectStateDatabaseStateResolutionRead {
+  projectRevision: number
+  queueRevision: number | null
+  generatedAt: string
+  fingerprint: string
+  decision: unknown
+  disagreements: ProjectStateDatabaseStateDisagreement[]
+  /** Immutable typed observations, opt-in for audit/detail readers. */
+  claims?: ProjectStateDatabaseStateClaim[]
 }
 
 export interface ProjectStateDatabaseCurrentProjection {
@@ -732,6 +800,8 @@ export interface ProjectStateDatabaseReadBundle<T = unknown> {
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
   memoryHealth: ProjectStateDatabaseMemoryHealthProjection | null
   summary: ProjectStateDatabaseSummary<T> | null
+  /** The shared decision packet and active disagreements for this read revision. */
+  stateResolution: ProjectStateDatabaseStateResolutionRead | null
   /** Bounded current evidence for summary-selected work, when requested. */
   currentEvidence: Map<string, ProjectStateDatabaseTaskEvidenceCurrent> | null
   taskOverlays: ProjectStateDatabaseTaskOverlayStores | null
@@ -754,6 +824,8 @@ export interface ProjectStateDatabaseReadBundleOptions extends ProjectStateDatab
   includeAvailability?: boolean
   includeCurrentEvidence?: boolean
   includeMemoryHealth?: boolean
+  /** Include immutable state-claim envelopes for an audit/detail reader. */
+  includeStateClaims?: boolean
   /** Include normalized scope membership without expanding the work inventory. */
   includeScopeRows?: boolean
   currentEvidenceTaskIds?: readonly string[]
@@ -1945,6 +2017,55 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
       source_queue_mtime_ms REAL,
       source_workspace_goals_mtime_ms REAL
     );
+    -- Claims are immutable typed observations. They audit how an agent or
+    -- canonical boundary saw a registered fact; they never replace normalized
+    -- task, release, or runtime ownership.
+    CREATE TABLE IF NOT EXISTS project_state_claims (
+      claim_id TEXT PRIMARY KEY,
+      project_revision INTEGER NOT NULL,
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      field TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      authority TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      observed_at TEXT NOT NULL,
+      basis_kind TEXT,
+      basis_id TEXT,
+      evidence_refs_json TEXT NOT NULL,
+      supersedes_claim_id TEXT,
+      fingerprint TEXT NOT NULL,
+      rejection_code TEXT
+    );
+    CREATE INDEX IF NOT EXISTS project_state_claims_lookup_idx
+      ON project_state_claims(project_revision, subject_kind, subject_id, field);
+    -- This is replaceable resolver output for one observed revision, rather
+    -- than a second mutable source of project truth.
+    CREATE TABLE IF NOT EXISTS project_state_disagreements (
+      disagreement_id TEXT PRIMARY KEY,
+      project_revision INTEGER NOT NULL,
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      field TEXT NOT NULL,
+      canonical_claim_ids_json TEXT NOT NULL,
+      contradictory_claim_ids_json TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('resolved_by_authority', 'unresolved')),
+      reconciliation TEXT NOT NULL,
+      detected_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS project_state_disagreements_current_idx
+      ON project_state_disagreements(project_revision, state, field);
+    -- A compact decision is kept outside the broad summary payload so every
+    -- current surface consumes one revision-bound packet rather than an
+    -- independently copied decision branch.
+    CREATE TABLE IF NOT EXISTS project_state_decisions (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      project_revision INTEGER NOT NULL,
+      queue_revision INTEGER,
+      generated_at TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS project_orientation (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       payload_json TEXT NOT NULL,
@@ -2230,6 +2351,144 @@ function transaction(database: DatabaseSync, work: () => void): void {
     }
     throw error
   }
+}
+
+function projectStateClaimFingerprint(claim: ProjectStateDatabaseStateClaim): string {
+  return stableJson({
+    projectRevision: claim.projectRevision,
+    subject: claim.subject,
+    field: claim.field,
+    value: claim.value,
+    authority: claim.authority,
+    actor: claim.actor,
+    observedAt: claim.observedAt,
+    evidenceRefs: [...claim.evidenceRefs],
+    basis: claim.basis,
+    supersedes: claim.supersedes,
+    rejectionCode: claim.rejectionCode,
+  })
+}
+
+function assertProjectStateResolutionSnapshot(
+  snapshot: ProjectStateDatabaseStateResolutionSnapshot,
+  projectRevision: number,
+  queueRevision: number | null,
+): void {
+  if (snapshot.projectRevision !== projectRevision || snapshot.queueRevision !== queueRevision) {
+    throw new Error('Project-state resolution must describe the same project and queue revision as its summary write.')
+  }
+  if (!snapshot.fingerprint.trim() || !Number.isFinite(Date.parse(snapshot.generatedAt))) {
+    throw new Error('Project-state resolution requires a fingerprint and generated timestamp.')
+  }
+  const claimIds = new Set<string>()
+  for (const claim of snapshot.claims) {
+    if (!claim.id.trim() || claimIds.has(claim.id)) {
+      throw new Error('Project-state resolution contains a missing or duplicate claim id.')
+    }
+    claimIds.add(claim.id)
+    if (claim.projectRevision !== projectRevision || !claim.subject.kind.trim() || !claim.subject.id.trim() ||
+      !claim.field.trim() || !claim.actor.trim() || !Number.isFinite(Date.parse(claim.observedAt)) ||
+      !Array.isArray(claim.evidenceRefs) || !claim.evidenceRefs.every(ref => ref.trim().length > 0)) {
+      throw new Error(`Project-state claim ${claim.id} is malformed for its snapshot.`)
+    }
+  }
+  for (const disagreement of snapshot.disagreements) {
+    if (!disagreement.id.trim() || !disagreement.subject.kind.trim() || !disagreement.subject.id.trim() ||
+      !disagreement.field.trim() ||
+      !['resolved_by_authority', 'unresolved'].includes(disagreement.state)) {
+      throw new Error(`Project-state disagreement ${disagreement.id || '<missing>'} is malformed.`)
+    }
+  }
+}
+
+/**
+ * Persist resolver input and output with the snapshot they describe. Claims
+ * are append-only/idempotent; disagreement and decision rows are the current
+ * deterministic resolution for one revision.
+ */
+function writeProjectStateResolution(
+  database: DatabaseSync,
+  snapshot: ProjectStateDatabaseStateResolutionSnapshot,
+  projectRevision: number,
+  queueRevision: number | null,
+): void {
+  assertProjectStateResolutionSnapshot(snapshot, projectRevision, queueRevision)
+  const findClaim = database.prepare('SELECT fingerprint FROM project_state_claims WHERE claim_id = ?')
+  const insertClaim = database.prepare(`
+    INSERT INTO project_state_claims (
+      claim_id, project_revision, subject_kind, subject_id, field, value_json,
+      authority, actor, observed_at, basis_kind, basis_id, evidence_refs_json,
+      supersedes_claim_id, fingerprint, rejection_code
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  for (const claim of snapshot.claims) {
+    const fingerprint = projectStateClaimFingerprint(claim)
+    const existing = findClaim.get(claim.id) as JsonRecord | undefined
+    if (existing && stringValue(existing.fingerprint) !== fingerprint) {
+      throw new Error(`Project-state claim ${claim.id} was replayed with different content.`)
+    }
+    if (existing) continue
+    insertClaim.run(
+      claim.id,
+      claim.projectRevision,
+      claim.subject.kind,
+      claim.subject.id,
+      claim.field,
+      json(claim.value),
+      claim.authority,
+      claim.actor,
+      claim.observedAt,
+      claim.basis?.kind ?? null,
+      claim.basis?.id ?? null,
+      json(claim.evidenceRefs),
+      claim.supersedes ?? null,
+      fingerprint,
+      claim.rejectionCode ?? null,
+    )
+  }
+  database.prepare('DELETE FROM project_state_disagreements WHERE project_revision = ?').run(projectRevision)
+  const insertDisagreement = database.prepare(`
+    INSERT INTO project_state_disagreements (
+      disagreement_id, project_revision, subject_kind, subject_id, field,
+      canonical_claim_ids_json, contradictory_claim_ids_json, state,
+      reconciliation, detected_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  for (const disagreement of snapshot.disagreements) {
+    insertDisagreement.run(
+      disagreement.id,
+      projectRevision,
+      disagreement.subject.kind,
+      disagreement.subject.id,
+      disagreement.field,
+      json(disagreement.canonicalClaimIds),
+      json(disagreement.contradictoryClaimIds),
+      disagreement.state,
+      disagreement.reconciliation,
+      snapshot.generatedAt,
+    )
+  }
+  // A project revision may receive additional verifier/runtime observations.
+  // Claim IDs remain immutable and idempotent above; the decision is the
+  // resolver's current compact answer over that growing ledger, so it may
+  // legitimately change from runnable to conflicted without a task mutation.
+  database.prepare(`
+    INSERT INTO project_state_decisions (
+      id, project_revision, queue_revision, generated_at, fingerprint, payload_json
+    ) VALUES (1, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      project_revision = excluded.project_revision,
+      queue_revision = excluded.queue_revision,
+      generated_at = excluded.generated_at,
+      fingerprint = excluded.fingerprint,
+      payload_json = excluded.payload_json
+  `).run(
+    projectRevision,
+    queueRevision,
+    snapshot.generatedAt,
+    snapshot.fingerprint,
+    json(snapshot.decision),
+  )
 }
 
 function bumpRevision(database: DatabaseSync, updatedAt: string): number {
@@ -5111,8 +5370,47 @@ export function writeProjectStateDatabaseSummarySnapshot(
         }
       }
 
+      if (snapshot.stateResolution) {
+        writeProjectStateResolution(
+          database,
+          snapshot.stateResolution,
+          revision,
+          actualRevision,
+        )
+      }
+
       writeProjectOrientationProjection(database, orientation, generatedAt, revision, { preserveOmitted: true })
       markProjectionCurrent(database, 'summary', revision, generatedAt)
+    })
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Commit a resolver-produced observation result without reopening or
+ * reinterpreting task/release state. Callers must first read one bundle and
+ * produce a packet for exactly that revision; a stale observation is refused.
+ */
+export function writeProjectStateDatabaseStateResolutionSnapshot(
+  tasksPath: string,
+  snapshot: ProjectStateDatabaseStateResolutionSnapshot,
+): void {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    throw new Error('Cannot record a project-state observation before project state exists.')
+  }
+  const database = openDatabase(databasePath)
+  try {
+    transaction(database, () => {
+      const projectRevision = currentRevision(database)
+      const queueRevision = tableExists(database, 'queue_state') ? currentQueueRevision(database) : null
+      if (snapshot.projectRevision !== projectRevision || snapshot.queueRevision !== queueRevision) {
+        throw new Error('Stale project-state observation: reread the shared project snapshot before resolving a disagreement.')
+      }
+      writeProjectStateResolution(database, snapshot, projectRevision, queueRevision)
     })
   } finally {
     database.close()
@@ -5312,6 +5610,70 @@ export function readProjectStateDatabaseShellState<T = unknown>(
   }
 }
 
+function readProjectStateResolutionFromDatabase(
+  database: DatabaseSync,
+  projectRevision: number,
+  options: { includeClaims?: boolean } = {},
+): ProjectStateDatabaseStateResolutionRead | null {
+  if (!tableExists(database, 'project_state_decisions')) return null
+  const row = database.prepare(`
+    SELECT project_revision, queue_revision, generated_at, fingerprint, payload_json
+    FROM project_state_decisions WHERE id = 1
+  `).get() as JsonRecord | undefined
+  if (!row || Number(row.project_revision) !== projectRevision) return null
+  const disagreements = tableExists(database, 'project_state_disagreements')
+    ? (database.prepare(`
+        SELECT disagreement_id, subject_kind, subject_id, field,
+          canonical_claim_ids_json, contradictory_claim_ids_json, state, reconciliation
+        FROM project_state_disagreements
+        WHERE project_revision = ?
+        ORDER BY disagreement_id
+      `).all(projectRevision) as JsonRecord[]).map(record => ({
+        id: String(record.disagreement_id ?? ''),
+        subject: { kind: String(record.subject_kind ?? ''), id: String(record.subject_id ?? '') },
+        field: String(record.field ?? ''),
+        canonicalClaimIds: stringArray(parseJson<unknown>(record.canonical_claim_ids_json, [])),
+        contradictoryClaimIds: stringArray(parseJson<unknown>(record.contradictory_claim_ids_json, [])),
+        state: (record.state === 'unresolved' ? 'unresolved' : 'resolved_by_authority') as ProjectStateDatabaseStateDisagreement['state'],
+        reconciliation: String(record.reconciliation ?? 'inspect_canonical_state') as ProjectStateDatabaseStateDisagreement['reconciliation'],
+      }))
+    : []
+  const claims = options.includeClaims === true && tableExists(database, 'project_state_claims')
+    ? (database.prepare(`
+        SELECT claim_id, project_revision, subject_kind, subject_id, field, value_json,
+          authority, actor, observed_at, basis_kind, basis_id, evidence_refs_json,
+          supersedes_claim_id, rejection_code
+        FROM project_state_claims
+        WHERE project_revision = ?
+        ORDER BY claim_id
+      `).all(projectRevision) as JsonRecord[]).map(record => ({
+        id: String(record.claim_id ?? ''),
+        projectRevision: Number(record.project_revision ?? 0),
+        subject: { kind: String(record.subject_kind ?? ''), id: String(record.subject_id ?? '') },
+        field: String(record.field ?? ''),
+        value: parseJson<unknown>(record.value_json, null),
+        authority: String(record.authority ?? '') as ProjectStateDatabaseClaimAuthority,
+        actor: String(record.actor ?? ''),
+        observedAt: String(record.observed_at ?? ''),
+        evidenceRefs: stringArray(parseJson<unknown>(record.evidence_refs_json, [])),
+        ...(stringValue(record.basis_kind) && stringValue(record.basis_id)
+          ? { basis: { kind: stringValue(record.basis_kind)!, id: stringValue(record.basis_id)! } }
+          : {}),
+        ...(stringValue(record.supersedes_claim_id) ? { supersedes: stringValue(record.supersedes_claim_id)! } : {}),
+        ...(stringValue(record.rejection_code) ? { rejectionCode: stringValue(record.rejection_code)! } : {}),
+      }))
+    : undefined
+  return {
+    projectRevision,
+    queueRevision: typeof row.queue_revision === 'number' ? row.queue_revision : null,
+    generatedAt: String(row.generated_at ?? ''),
+    fingerprint: String(row.fingerprint ?? ''),
+    decision: parseJson<unknown>(row.payload_json, null),
+    disagreements,
+    ...(claims ? { claims } : {}),
+  }
+}
+
 function readProjectStateDatabaseSummaryFromDatabase<T = unknown>(
   database: DatabaseSync,
   tasksPath: string,
@@ -5340,6 +5702,26 @@ function readProjectStateDatabaseSummaryFromDatabase<T = unknown>(
     database,
     parseJson<JsonRecord>(row.payload_json, {}),
   )
+  const stateResolution = readProjectStateResolutionFromDatabase(database, databaseRevision)
+  // The decision has a dedicated compact owner. Old summaries may retain a
+  // compatibility copy until their next refresh, but a matching durable packet
+  // always wins and keeps every surface on the same resolved state.
+  if (stateResolution && stateResolution.decision !== null) storedSummary.decision = stateResolution.decision
+  const decisionProjectRevision = isRecord(storedSummary.decision)
+    ? Number(storedSummary.decision.projectRevision)
+    : null
+  // Compatibility snapshot writers created a v26 summary before the compact
+  // decision had a snapshot token. They remain readable until their next
+  // indexed refresh. A revision-bound decision, however, must have its
+  // dedicated packet; a copied JSON branch is not enough.
+  const requiresStateResolution = authority === 'database' &&
+    Number(storedSummary.version) >= 26 &&
+    Number.isInteger(decisionProjectRevision) &&
+    decisionProjectRevision === databaseRevision
+  const resolutionMatches = !requiresStateResolution || (
+    stateResolution !== null &&
+    stateResolution.queueRevision === (tableExists(database, 'queue_state') ? currentQueueRevision(database) : null)
+  )
   const membershipState = readReleaseMembershipStateFromDatabase(database)
   const summaryMembershipRevision = Number(storedSummary.releaseMembershipRevision)
   const membershipMatches = membershipState !== null &&
@@ -5358,7 +5740,7 @@ function readProjectStateDatabaseSummaryFromDatabase<T = unknown>(
   }
   return {
     payload: storedSummary as T,
-    freshness: row.freshness === 'current' && !sourceChanged && summaryRevision === databaseRevision && membershipMatches
+    freshness: row.freshness === 'current' && !sourceChanged && summaryRevision === databaseRevision && membershipMatches && resolutionMatches
       ? 'current'
       : 'stale',
     generatedAt: String(row.generated_at ?? ''),
@@ -5493,6 +5875,11 @@ export function readProjectStateDatabaseReadBundle<T = unknown>(
       ? readProjectStateDatabaseTaskDetailStateFromDatabase<T>(database, tasksPath, options.taskDetailId, options)
       : null
     const summary = readProjectStateDatabaseSummaryFromDatabase<T>(database, tasksPath, options)
+    const stateResolution = projectRevision === null
+      ? null
+      : readProjectStateResolutionFromDatabase(database, projectRevision, {
+          includeClaims: options.includeStateClaims === true,
+        })
     const requestedEvidenceIds = options.currentEvidenceTaskIds ?? summaryEvidenceTaskIds(summary?.payload)
     const currentEvidence = options.includeCurrentEvidence === true && hasQueue
       ? tableExists(database, 'task_evidence_current')
@@ -5520,6 +5907,7 @@ export function readProjectStateDatabaseReadBundle<T = unknown>(
         ? readProjectStateDatabaseMemoryHealthFromDatabase(database)
         : null,
       summary,
+      stateResolution,
       currentEvidence,
       taskOverlays: options.includeTaskOverlays === true && hasQueue
         ? readProjectStateDatabaseTaskOverlayStoresFromDatabase(database)

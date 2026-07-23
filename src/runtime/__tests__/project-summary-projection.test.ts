@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TaskQueue, type Task } from '@guildhall/core'
-import { appendTaskEvidence, getProjectSystemStatePath, markProjectSummaryStale, promoteProjectStateDatabaseAuthority, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabasePath, readProjectStateDatabaseQueue, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseInventory, readProjectStateDatabaseSummary, writeProjectStateDatabaseSummarySnapshot } from '@guildhall/sessions'
+import { appendTaskEvidence, getProjectSystemStatePath, markProjectSummaryStale, promoteProjectStateDatabaseAuthority, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabasePath, readProjectStateDatabaseQueue, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseInventory, readProjectStateDatabaseReadBundle, readProjectStateDatabaseSummary, writeProjectStateDatabaseSummarySnapshot } from '@guildhall/sessions'
 
 import {
   buildProjectSummaryProjection,
@@ -1363,7 +1363,7 @@ describe('project-summary-projection', () => {
     expect(readProjectSummaryProjection(tasksPath)).toMatchObject({ freshness: 'current' })
   })
 
-  it('treats a matching-version summary without its decision packet as stale', async () => {
+  it('serves its dedicated decision packet and fails closed when that packet is missing', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-decision-required-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
     writeProjectTaskQueue(tasksPath, queue([task('decision-ready', 'ready')]), {
@@ -1380,6 +1380,25 @@ describe('project-summary-projection', () => {
     database.prepare('UPDATE project_summary SET payload_json = ?, freshness = ? WHERE id = 1')
       .run(JSON.stringify(invalidProjection), 'current')
     database.close()
+
+    // The compact summary no longer owns a duplicate decision branch. A
+    // matching packet from the same SQLite snapshot still makes the project
+    // current.
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({ freshness: 'current' })
+    const bundle = readProjectStateDatabaseReadBundle(tasksPath, { includeStateClaims: true })
+    expect(bundle?.stateResolution).toMatchObject({
+      projectRevision: bundle?.projectRevision,
+      queueRevision: bundle?.queueRevision,
+      decision: projection.decision,
+      claims: expect.arrayContaining([
+        expect.objectContaining({ field: 'project.selectedReleaseId', authority: 'canonical_mutation' }),
+        expect.objectContaining({ field: 'project.executionFocus', authority: 'canonical_mutation' }),
+        expect.objectContaining({ field: 'project.executionEligibility', authority: 'canonical_mutation' }),
+      ]),
+    })
+    const decisionDatabase = new DatabaseSync(projectStateDatabasePath(temp))
+    decisionDatabase.prepare('DELETE FROM project_state_decisions').run()
+    decisionDatabase.close()
 
     expect(readProjectSummaryProjection(tasksPath)).toMatchObject({ freshness: 'stale' })
   })

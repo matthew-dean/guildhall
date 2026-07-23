@@ -54039,3 +54039,49 @@ Repair:
       it never reuses a stale `running`/`stopping` execution branch.
 - Rollback/revert: remove the derived field after rebuilding summaries; the
       canonical queue/scope/runtime rows remain intact.
+
+### Durable Disagreement Resolution Decision
+
+- Work id: `0.13.71/durable-decision-snapshot`.
+- User job: when two agents or two product surfaces report incompatible state,
+      the user can rely on one revision-bound result, see that a disagreement
+      occurred, understand the one automatic reconciliation path, and never
+      have Start proceed on an arbitrary answer.
+- Finding: `ProjectStateClaim` already has a deterministic closed registry and
+      resolver, but it was a runtime-only utility. A saved summary and a task
+      reader could still each look authoritative without either recording or
+      consuming a resolved claim set.
+- Touched contracts: registered `ProjectStateClaim` facts, `ProjectDecisionProjection`,
+      the atomic project read bundle, compact-summary freshness, and Start
+      eligibility. Considered but not touched: raw agent transcripts, prose
+      imports, release/task data ownership, owner approval, and route-local
+      ranking.
+- Persisted schema: additive v36 `project_state_claims`,
+      `project_state_disagreements`, and singleton `project_state_decisions`.
+      Rows are typed and bounded; evidence is locator-only. The decision packet
+      is revision- and digest-stamped, so fleet reads do not inflate task detail.
+- Required follow-up: materialize normalized canonical task/release/focus
+      facts with the summary projection; consume the persisted packet from the
+      shared read bundle; then add brokered verifier/runtime/Git observations.
+- [x] First vertical slice: promoted summary refreshes materialize the selected
+      release, planned focus, and execution eligibility as canonical claims;
+      the same SQLite transaction stores their resolver output and one compact
+      decision packet. Read bundles hydrate the decision from that packet and
+      reject a missing packet for revision-bound summaries.
+- [x] Broker seam: an observation supplies its producer and typed evidence,
+      never its own authority. The boundary assigns the registered authority,
+      compare-and-swaps the project/queue revision, persists the observation,
+      and turns equal-authority conflicts into a shared `resolve_conflict`
+      decision with a typed reconciliation action.
+- [ ] Follow-up: connect real verifier, runtime supervisor, Git, and importer
+      producers to the broker; normalize `runtime.activeTaskId` before routing
+      live execution observations. Do not expose raw claim payloads in fleet
+      reads; use a paged audit/detail response for noncanonical dissent.
+- Proof required: a canonical snapshot produces an exact matching decision;
+      stale/absent packets make the projection stale; lower-authority dissent
+      is visible; equal authority contradiction produces one conflict and
+      blocks Start; every route uses the shared packet rather than re-solving.
+- Safety/apply/revert: existing compare-and-swap revisions cover the complete
+      transaction. Existing summaries are refreshed rather than guessed from
+      history. Reverting leaves additive audit rows inert and preserves current
+      task/release records.

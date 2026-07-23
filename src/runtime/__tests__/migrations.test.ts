@@ -2134,7 +2134,7 @@ describe('applyProjectMigrations', () => {
     })).applied).toEqual([])
   })
 
-  it('rebuilds an otherwise version-current summary when the shared decision is absent', async () => {
+  it('rebuilds an otherwise version-current summary when the durable decision packet is absent', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     const now = '2026-07-23T12:00:00.000Z'
     writeProjectStateDatabaseSnapshot(tasksPath, {
@@ -2169,6 +2169,7 @@ describe('applyProjectMigrations', () => {
     const summary = JSON.parse(row.payload_json) as Record<string, unknown>
     delete summary.decision
     database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(summary))
+    database.prepare('DELETE FROM project_state_decisions').run()
     database.close()
 
     const before = readProjectSummaryProjection(tasksPath)
@@ -2176,10 +2177,10 @@ describe('applyProjectMigrations', () => {
 
     const result = await applyProjectMigrations({
       projectRoot,
-      only: ['0.13.0/project-decision-projection'],
+      only: ['0.13.71/durable-decision-snapshot'],
     })
     expect(result.failed).toEqual([])
-    expect(result.applied.map(item => item.id)).toEqual(['0.13.0/project-decision-projection'])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.71/durable-decision-snapshot'])
     expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
       version: PROJECT_SUMMARY_PROJECTION_VERSION,
       freshness: 'current',
@@ -2187,7 +2188,7 @@ describe('applyProjectMigrations', () => {
     })
     expect((await applyProjectMigrations({
       projectRoot,
-      only: ['0.13.0/project-decision-projection'],
+      only: ['0.13.71/durable-decision-snapshot'],
     })).applied).toEqual([])
   })
 
