@@ -52,9 +52,9 @@ import { stripLegacyRuntimeFields } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 23 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 24 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
