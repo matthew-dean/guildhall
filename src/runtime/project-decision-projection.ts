@@ -1,4 +1,5 @@
 import type { ProjectScopeProjection } from './project-scope-projection.js'
+import { stableJson } from '@guildhall/persistence'
 
 export type ProjectStateClaimAuthority =
   | 'owner_selection'
@@ -65,13 +66,6 @@ const DEFAULT_CLAIM_AUTHORITIES: readonly ProjectStateClaimAuthority[] = [
   'agent_derivation',
   'agent_proposal',
 ]
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
-  const record = value as Record<string, unknown>
-  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`
-}
 
 function stableClaimValue(value: unknown, policy: ProjectStateClaimPolicy | undefined): string {
   if (policy?.valueSemantics === 'unordered_string_set') {

@@ -1,6 +1,7 @@
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, stableJson, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
@@ -166,6 +167,63 @@ function normalizeUpdateTaskNote(
   const agentId = runtimeAgentId || 'agent'
   const role = runtimeAgentId ? runtimeRole : 'note'
   return { agentId, role, content }
+}
+
+/**
+ * A worker may save its machine handoff as one durable mutation and move to
+ * review in the next mutation. Review admission reads the compact current
+ * evidence projection rather than requiring the agent to repeat the packet
+ * or reconstruct it from prose.
+ */
+function workerHandoffContractFingerprint(task: z.infer<typeof Task>): string {
+  // This is an opaque system stamp, not a model-authored field. It binds a
+  // worker's self-critique to exactly the acceptance and proof contract that
+  // Guildhall will evaluate at review admission.
+  const contract = {
+    taskId: task.id,
+    acceptanceCriteria: task.acceptanceCriteria,
+    proofPaths: task.proofPaths ?? [],
+    delivery: task.delivery ?? null,
+    parentAcceptanceCriterionIds: task.parentAcceptanceCriterionIds ?? [],
+  }
+  return createHash('sha256').update(stableJson(contract)).digest('hex')
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function stampWorkerSelfCritiqueContract(
+  note: NonNullable<TaskModel['notes']>[number],
+  task: z.infer<typeof Task>,
+): NonNullable<TaskModel['notes']>[number] {
+  if (note.agentId !== 'worker-agent' || note.role !== 'self-critique' || !isRecord(note.structured)) return note
+  if (extractStructuredSelfCritique({ content: '', structured: note.structured }) === null) return note
+  return {
+    ...note,
+    structured: {
+      ...note.structured,
+      guildhallHandoffContract: workerHandoffContractFingerprint(task),
+    },
+  }
+}
+
+function persistedWorkerSelfCritique(
+  projectRoot: string,
+  task: z.infer<typeof Task>,
+): Record<string, unknown> | null {
+  const notes = readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, task.id)?.byKind.note ?? []
+  const expectedContract = workerHandoffContractFingerprint(task)
+  for (const record of [...notes].reverse()) {
+    const payload = record.payload
+    const agentId = typeof payload.agentId === 'string' ? payload.agentId.trim() : ''
+    const role = typeof payload.role === 'string' ? payload.role.trim() : ''
+    if (agentId !== 'worker-agent' || role !== 'self-critique') continue
+    if (!isRecord(payload.structured) || payload.structured.guildhallHandoffContract !== expectedContract) continue
+    const structured = extractStructuredSelfCritique({ content: '', structured: payload.structured })
+    if (structured !== null) return structured
+  }
+  return null
 }
 
 function normalizeStructuredSpecDisplayField(value: unknown): unknown {
@@ -426,22 +484,6 @@ async function updateTaskUnlocked(
     const normalizedNote = normalizeUpdateTaskNote(input.note, metadata)
     if (
       currentAgentId === 'worker-agent' &&
-      normalizedNote?.role === 'self-critique' &&
-      input.status === 'review' &&
-      extractStructuredSelfCritique({
-        content: '',
-        structured: normalizedNote.structured,
-      }) === null
-    ) {
-      return {
-        success: false,
-        taskId,
-        error:
-          'Worker self-critique requires note.structured with acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds. Keep prose in note.content; Guildhall never derives state from it.',
-      }
-    }
-    if (
-      currentAgentId === 'worker-agent' &&
       input.gateResults?.some((result) => result.type === 'hard')
     ) {
       return {
@@ -511,9 +553,14 @@ async function updateTaskUnlocked(
       }
     }
     const baseAcceptanceCriteria = normalizedAcceptanceCriteria ?? task.acceptanceCriteria
-    const workerSelfCritique = currentAgentId === 'worker-agent' && normalizedNote?.role === 'self-critique'
+    const workerSelfCritiqueFromMutation = currentAgentId === 'worker-agent' && normalizedNote?.role === 'self-critique'
       ? extractStructuredSelfCritique({ content: '', structured: normalizedNote.structured })
       : null
+    const workerSelfCritique = workerSelfCritiqueFromMutation ?? (
+      currentAgentId === 'worker-agent' && input.status === 'review'
+        ? persistedWorkerSelfCritique(projectRootForTaskState(input.tasksPath, task), task)
+        : null
+    )
     const effectiveAcceptanceCriteria = materializeProofCommandFromWorkerHandoff(
       task,
       baseAcceptanceCriteria,
@@ -523,20 +570,12 @@ async function updateTaskUnlocked(
       ? effectiveAcceptanceCriteria
       : undefined
     if (currentAgentId === 'worker-agent' && input.status === 'review') {
-      if (normalizedNote?.role !== 'self-critique') {
-        return {
-          success: false,
-          taskId,
-          error:
-            'Worker review handoff requires a self-critique note with typed acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds fields. Guildhall never derives a handoff from prose.',
-        }
-      }
       if (!workerSelfCritique) {
         return {
           success: false,
           taskId,
           error:
-            'Worker self-critique requires note.structured with the typed acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds fields. Guildhall never derives a handoff from prose.',
+            'Worker review handoff requires one durable self-critique with typed acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds. Persist it in this update or an earlier worker update; Guildhall never derives a handoff from prose.',
         }
       }
       const expectedIds = effectiveAcceptanceCriteria.map((criterion) => criterion.id)
@@ -765,9 +804,6 @@ async function updateTaskUnlocked(
       ? z.array(GateResult).parse(input.gateResults)
       : []
     if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
-    const noteEvidence = normalizedNote
-      ? { ...normalizedNote, timestamp: new Date().toISOString() }
-      : null
     const shouldRefreshSizePlan =
       (nextSpec !== undefined && nextSpec.trim() !== '') ||
       input.workUnitAnalysis !== undefined
@@ -789,6 +825,9 @@ async function updateTaskUnlocked(
     }
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
+    const noteEvidence = normalizedNote
+      ? stampWorkerSelfCritiqueContract({ ...normalizedNote, timestamp: task.updatedAt }, task)
+      : null
 
     const taskProjectRoot = projectRootForTaskState(input.tasksPath, task, metadata)
     const taskIdsUnchanged = queue.tasks.length === originalTaskIds.size &&
@@ -846,6 +885,13 @@ function sameDefinitionValue(key: string, left: unknown, right: unknown): boolea
     ((left === undefined && Array.isArray(right) && right.length === 0) ||
       (right === undefined && Array.isArray(left) && left.length === 0))
   ) return true
+  if (key === 'acceptanceCriteria') {
+    const normalized = (value: unknown): unknown => {
+      const parsed = z.array(AcceptanceCriteria).safeParse(value)
+      return parsed.success ? parsed.data : value
+    }
+    return sameJson(normalized(left), normalized(right))
+  }
   return sameJson(left, right)
 }
 

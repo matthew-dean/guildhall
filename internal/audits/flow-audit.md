@@ -52757,3 +52757,60 @@ Repair:
 - Apply/revert: rebuild from canonical task/evidence/release state. A revert
       does not alter source facts and must not restore the old implicit-pass
       rule.
+
+## 2026-07-23 Worker handoff must accept its own durable proof packet
+
+- [x] User job: when a worker has implemented and verified one scoped task,
+      it should be able to persist its typed self-critique and hand the task to
+      review without an owner intervention or a stranded active run. Narrative
+      Harness replay started the selected `Build Synopsis expansion into story
+      records` task, observed a cited proof command but an empty delivery proof
+      packet, then ended `blocked` after the worker persisted/attempted the
+      required self-critique flow. The worker guidance says to save the typed
+      note while `in_progress` and transition to `review` separately; the task
+      writer currently requires the same note again on the later `review`
+      mutation. Repair this one durable handoff contract rather than making
+      the model repeat or prose-format state.
+- [ ] The selected `script_only` release must expose a concrete typed proof
+      requirement in the worker context when source-backed task state already
+      names a command or accepted proof child. A blank `requiredProof` packet
+      is a planning/context projection defect, not an invitation for a worker
+      to invent a command.
+
+### Contract Touch Decision
+
+- Work id: `0.13.88/durable-worker-handoff`.
+- Touched contracts: worker `update-task` transition, current typed
+      self-critique evidence, review admission, promoted task-definition
+      mutation equivalence, and shared canonical typed-value serialization.
+- Considered but not touched: task prose, raw transcripts, owner approval,
+      release membership, and model wording remain non-authoritative.
+- Proof required: a worker can persist one structured self-critique then move
+      to review in a separate mutation; changing the typed task contract
+      invalidates the earlier handoff; installed Narrative Harness replay does
+      not end as `spec_ambiguous` from this validation mismatch.
+- Required follow-up: `0.13.89/selected-release-proof-context` will make a
+      selected `script_only` release expose its typed proof contract through
+      the shared delivery context projection.
+- Apply/revert: a review mutation may consume existing typed current evidence,
+      but never prose or an untyped historical note. Revert only with another
+      single durable handoff boundary.
+
+### Schema Migration Decision
+
+- Work id: `0.13.88/durable-worker-handoff`.
+- Persisted schema touched: no new table or task field. The writer stamps an
+      existing typed self-critique payload with an opaque, system-generated
+      contract fingerprint; older sparse acceptance-criterion records are
+      normalized before CAS comparison.
+- Change class: compatible write-boundary correction. Existing handoffs without
+      the system stamp cannot be reused for a later review; the worker records
+      a fresh typed handoff instead. An ordinary task update rewrites legacy
+      acceptance criteria into the normalized shape already used in runtime.
+- Safety: no worker prose is read, and an old handoff cannot satisfy a changed
+      task. No compatibility reader or fallback is added.
+- Proof required: regression for a separate handoff/review mutation, a changed
+      contract invalidating that handoff, and a promoted task accepting the
+      normalized equivalent of its sparse stored acceptance criteria.
+- Apply/revert: apply through the ordinary point writer. A revert must not
+      restore comparison of raw storage shape to hydrated runtime shape.

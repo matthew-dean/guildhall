@@ -37,7 +37,8 @@ function nowIso(input?: () => Date): string {
   return (input?.() ?? new Date()).toISOString()
 }
 
-function stableJson(value: unknown): string {
+/** Deterministic serialization for typed state identity and content hashes. */
+export function stableJson(value: unknown): string {
   return JSON.stringify(sortValue(value))
 }
 

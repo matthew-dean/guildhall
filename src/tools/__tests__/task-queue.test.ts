@@ -345,7 +345,97 @@ describe('updateTask', () => {
     }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
 
     expect(result.success).toBe(false)
-    expect(result.error).toContain('requires note.structured')
+    expect(result.error).toContain('requires one durable self-critique')
+  })
+
+  it('admits review from a previously persisted typed worker self-critique', async () => {
+    seedQueue.tasks[0]!.status = 'in_progress'
+    ;(seedQueue.tasks[0]! as unknown as TaskQueue['tasks'][number]).acceptanceCriteria = [{
+      id: 'AC-1',
+      description: 'Focused task behavior is verified.',
+      verifiedBy: 'automated',
+      met: false,
+    }] as TaskQueue['tasks'][number]['acceptanceCriteria']
+    writeProjectTaskQueue(tasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const metadata = { current_agent_id: 'worker-agent', current_task_project_path: tmpDir }
+
+    const noteResult = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'in_progress',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: 'Implementation and focused verification are ready for review.',
+        structured: {
+          acceptanceCriteria: [{ id: 'AC-1', status: 'met' }],
+          changedFiles: ['src/index.ts'],
+          verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+          proofEvidenceIds: [],
+        },
+      },
+    }, metadata)
+    expect(noteResult.success).toBe(true)
+
+    const reviewResult = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'review',
+    }, metadata)
+
+    expect(reviewResult.success).toBe(true)
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]).toMatchObject({ status: 'review' })
+  })
+
+  it('does not reuse a typed worker self-critique after its task contract changes', async () => {
+    seedQueue.tasks[0]!.status = 'in_progress'
+    ;(seedQueue.tasks[0]! as unknown as TaskQueue['tasks'][number]).acceptanceCriteria = [{
+      id: 'AC-1',
+      description: 'The focused behavior is verified.',
+      verifiedBy: 'automated',
+      met: false,
+    }] as TaskQueue['tasks'][number]['acceptanceCriteria']
+    writeProjectTaskQueue(tasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const workerMetadata = { current_agent_id: 'worker-agent', current_task_project_path: tmpDir }
+
+    expect((await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: 'Typed handoff is ready.',
+        structured: {
+          acceptanceCriteria: [{ id: 'AC-1', status: 'met' }],
+          changedFiles: ['src/index.ts'],
+          verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+          proofEvidenceIds: [],
+        },
+      },
+    }, workerMetadata)).success).toBe(true)
+
+    const contractUpdate = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'The focused behavior and its edge condition are verified.',
+        verifiedBy: 'automated',
+        met: false,
+      }],
+    }, { current_agent_id: 'spec-agent', current_task_project_path: tmpDir })
+    expect(contractUpdate.success, contractUpdate.error).toBe(true)
+
+    const reviewResult = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'review',
+    }, workerMetadata)
+
+    expect(reviewResult.success).toBe(false)
+    expect(reviewResult.error).toContain('requires one durable self-critique')
   })
 
   it('rejects a worker handoff whose structured criterion IDs do not match the task', async () => {
@@ -583,7 +673,7 @@ describe('updateTask', () => {
     }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
 
     expect(result.success).toBe(false)
-    expect(result.error).toContain('requires a self-critique note')
+    expect(result.error).toContain('requires one durable self-critique')
     expect(readProjectTaskQueueSync(tasksPath).tasks.find((task) => task.id === child.childTaskId)?.status)
       .toBe('in_progress')
   })
