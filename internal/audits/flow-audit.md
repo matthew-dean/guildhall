@@ -52643,25 +52643,32 @@ Repair:
 
 ## 2026-07-23 Project decisions must resolve claims, not competing summaries
 
-- [ ] Narrative Harness currently proves that compact, diagnostic, and release
-      routes can produce incompatible answers from the same project revision.
-      The route user job is to tell whether work can proceed, whether the
-      selected release can ship, what action matters now, and what evidence
-      makes that answer trustworthy. Live replay found a saved decision with
-      no proof blockers beside a same-revision diagnostic naming four proof
-      blockers while the route labeled the pair `aligned`; repair this as an
-      explicit decision-versus-observation disagreement, never as a timestamp
-      comparison or a second readiness authority.
+- [x] Narrative Harness proved that compact, diagnostic, and release routes
+      could produce incompatible answers from the same project revision. The
+      route user job is to tell whether work can proceed, whether the selected
+      release can ship, what action matters now, and what evidence makes that
+      answer trustworthy. The saved and live installed reads now report the
+      same four proof blockers, the same release decision, and
+      `stateConsistency: confirmed`; they preserve runnable execution as a
+      separate fact from an unready release.
 - [ ] Replace overlapping persisted `nextAction`, `actionModel`, and
       independently rebuilt readiness with one revisioned
       `ProjectDecisionProjection`. It must distinguish execution from release
       delivery rather than treating them as competing descriptions of one
       status.
-- [ ] Add an evidence-backed claim and field-policy contract at the existing
+- [x] Narrative Harness root cause: the compact proof helper treated an absent
+      compact proof record as no proof gap, while the selected `script_only`
+      release contract requires proof for completed work. The shared compact
+      scope/projection boundary now applies the typed release contract, and
+      `0.13.59/script-only-proof-projection` rebuilds existing compact state
+      from canonical current task/evidence records.
+- [x] Add an evidence-backed claim and field-policy contract at the existing
       canonical mutation/observation boundary. Do not add a generic durable
       claim store or a second project-state system. Same-authority conflicts
-      must remain visible with a typed reconciliation action; no agent, route,
-      or timestamp silently chooses a winner.
+      remain visible with a typed reconciliation action; no agent, route, or
+      timestamp silently chooses a winner. A policy now also declares value
+      semantics, so a declared set of stable IDs is compared as a set rather
+      than producer ordering while exact structured fields remain exact.
 - [ ] Verify one decision packet across Overview, Work, Map, Thread,
       diagnostic API, release readiness, Start, restart, and the installed
       Narrative Harness UI.
@@ -52683,8 +52690,10 @@ Repair:
 - Proof required: cross-surface response matrix, contradictory-claim fixture,
       lifecycle invalidation fixture, compact/read-boundary tests, typecheck,
       contract lint, and installed Narrative Harness replay.
-- Proof provided: live API evidence has established the current disagreement;
-      implementation and replay are pending.
+- Proof provided: contradictory-claim, equal-value, unordered-set, compact
+      proof-projection, and migration-idempotence regressions; typecheck,
+      contract lint, model-independence gate; and installed Narrative Harness
+      saved/live API replay with `stale:false` and confirmed shared decision.
 - Waivers: none.
 - Owner-review items: only fields whose policy explicitly names owner scope
       selection may request owner input. Agent work-scope reasoning is not an
@@ -52704,8 +52713,9 @@ Repair:
       projection-version bump and are rebuilt from current typed state. The
       blocker fact is refreshed from existing task/runtime state; task, proof,
       and release records are not rewritten.
-- Migration ids: `0.13.0/project-decision-projection` and
-      `0.13.58/diagnostic-readiness-task-identity`.
+- Migration ids: `0.13.0/project-decision-projection`,
+      `0.13.58/diagnostic-readiness-task-identity`, and
+      `0.13.59/script-only-proof-projection`.
 - Safety: execution and release are separate fields; equal-authority conflict
       returns explicit uncertainty rather than selecting arbitrary state.
 - Compatibility reader: current transitional readers may display old fields
@@ -52720,3 +52730,30 @@ Repair:
 - Rollback/revert: rebuild the previous derived projection from canonical
       task/runtime/evidence records; never write a route-local decision back
       into canonical state.
+
+### Schema Migration Decision: compact script-only proof projection
+
+- Work id: `0.13.59/script-only-proof-projection`.
+- Persisted schema touched: derived compact task proof summaries, selected
+      scope rows, and project-summary release facts in the existing SQLite
+      projection. Task definitions, evidence history, and release membership
+      are not changed.
+- Change class: semantic projection repair. A `script_only` release makes a
+      completed task without a current executable proof path a typed proof
+      gap, including when the older compact row has no proof summary.
+- Existing data impact: promoted projects rebuild bounded current summaries
+      and their release projection exactly once. This corrects stale derived
+      facts without reopening raw transcript history or rewriting source task
+      detail.
+- Migration id and safety: `0.13.59/script-only-proof-projection`, project
+      scope, automatic and required before a release readiness decision.
+- Compatibility reader: old summaries remain readable only as stale
+      projection data; no route may treat their absent proof record as an
+      implicit pass.
+- Fixtures/tests: indexed absent-proof regression, evidence-arrival
+      regression, and migration idempotence coverage.
+- Owner-facing plan text: a completed task still needs its promised proof
+      before a script-only release is ready.
+- Apply/revert: rebuild from canonical task/evidence/release state. A revert
+      does not alter source facts and must not restore the old implicit-pass
+      rule.

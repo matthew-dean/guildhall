@@ -1846,6 +1846,62 @@ describe('applyProjectMigrations', () => {
     })).applied).toEqual([])
   })
 
+  it('reprojects a completed script-only task without proof as a release blocker', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T12:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-without-proof'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'task-without-proof',
+          title: 'Completed task without proof',
+          status: 'done',
+          releaseIds: ['release-current'],
+          createdAt: now,
+          updatedAt: now,
+          completedAt: now,
+        }],
+      },
+      summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.59/script-only-proof-projection'],
+    })
+
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.59/script-only-proof-projection'])
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
+      freshness: 'current',
+      releaseSummary: {
+        state: 'blocked',
+        counts: { total: 1, done: 1, proofBlocked: 1 },
+        blockers: [expect.objectContaining({
+          id: 'task-without-proof',
+          code: 'proof_evidence_missing',
+        })],
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.59/script-only-proof-projection'],
+    })).applied).toEqual([])
+  })
+
   it('runs the current-evidence backfill after an earlier migration has already advanced the database schema', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     await fs.mkdir(path.dirname(tasksPath), { recursive: true })

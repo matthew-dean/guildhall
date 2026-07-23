@@ -17085,6 +17085,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               field: 'release.blockerTaskIds',
               authorities: ['canonical_mutation', 'agent_derivation'],
               reconciliation: 'inspect_canonical_state',
+              valueSemantics: 'unordered_string_set',
             },
           })
         : null
@@ -17208,7 +17209,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       savedTaskBlockerIds.size === dynamicTaskBlockerIds.size &&
       [...savedTaskBlockerIds].every(id => dynamicTaskBlockerIds.has(id))
     )
-    const stateConsistency = !savedReleaseSummary ? 'missing' : savedCoreMatchesDynamic ? 'aligned' : 'mismatch'
+    const savedCoreStateConsistency = !savedReleaseSummary ? 'missing' : savedCoreMatchesDynamic ? 'aligned' : 'mismatch'
     const repositoryFollowup = await buildReleaseRepositoryFollowup(projectPath, gitStoryTasks)
     const { dirtyCheckout, gitStory } = repositoryFollowup
     const readinessProofStyle = savedRelease?.proofStyle && savedRelease.proofStyle !== 'unspecified'
@@ -17243,6 +17244,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
           label: `${task.title.trim().replace(/[.?!:;,\s]+$/g, '')} needs proof evidence before the release is complete.`,
         })),
     ].filter(blocker => scopedTaskIds.has(blocker.id))
+    const decision = state.summary?.decision
+    const diagnosticTaskBlockerIds = effectiveReleaseBlockers.map(blocker => blocker.id)
+    const decisionAgreement = decision && state.projectRevision !== null
+      ? reconcileProjectStateObservation({
+          projectRevision: state.projectRevision,
+          canonicalClaim: {
+            id: `project-decision:${decision.projectRevision ?? state.projectRevision}:release.blockerTaskIds`,
+            projectRevision: decision.projectRevision ?? state.projectRevision,
+            subject: { kind: 'release', id: decision.release.releaseId ?? 'current-work' },
+            field: 'release.blockerTaskIds',
+            value: decision.release.blockerTaskIds,
+            authority: 'canonical_mutation',
+            actor: 'project-decision',
+            observedAt: decision.generatedAt,
+            evidenceRefs: decision.release.blockerTaskIds.map(taskId => `task:${taskId}`),
+          },
+          observationClaim: {
+            id: `live-diagnostic:${state.projectRevision}:release.blockerTaskIds`,
+            projectRevision: state.projectRevision,
+            subject: { kind: 'release', id: decision.release.releaseId ?? 'current-work' },
+            field: 'release.blockerTaskIds',
+            value: diagnosticTaskBlockerIds,
+            authority: 'agent_derivation',
+            actor: 'live-diagnostic-projector',
+            observedAt: new Date().toISOString(),
+            evidenceRefs: diagnosticTaskBlockerIds.map(taskId => `task:${taskId}`),
+          },
+          policy: {
+            field: 'release.blockerTaskIds',
+            authorities: ['canonical_mutation', 'agent_derivation'],
+            reconciliation: 'inspect_canonical_state',
+            valueSemantics: 'unordered_string_set',
+          },
+        })
+      : null
+    const stateConsistency = decisionAgreement?.state ?? savedCoreStateConsistency
     const designSystemBlockingCount =
       scopedTasks.length > 0 &&
       scopedWorkNeedsDesignSystem(scopedTasks, { proofStyle: readinessProofStyle }) &&
@@ -17345,6 +17382,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...designSystemBlockers,
         ...dirtyCheckoutBlockers,
       ],
+      ...(decisionAgreement ? {
+        observation: {
+          agreement: decisionAgreement,
+          ready: diagnosticReady,
+          releaseBlockers: effectiveReleaseBlockers.map(blocker => ({ ...blocker, taskId: blocker.id })),
+        },
+      } : {}),
       designSystem,
       dirtyCheckout,
       gitStory,
@@ -17403,6 +17447,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       queueRevision: state.queueRevision,
       projectRevision: state.projectRevision,
       stateConsistency,
+      ...(decision ? { decision } : {}),
       ...(summaryFreshness !== 'current' && savedReleaseSummary
         ? { notReadyReason: 'The saved project summary is refreshing.' }
         : savedCounts.total === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),

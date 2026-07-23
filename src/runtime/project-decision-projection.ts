@@ -26,6 +26,11 @@ export interface ProjectStateClaimPolicy {
   field: string
   authorities: readonly ProjectStateClaimAuthority[]
   reconciliation: 'rerun_verification' | 'refresh_runtime' | 'inspect_canonical_state' | 'owner_scope_decision'
+  /**
+   * Claim values are normally exact structured values. A declared set field
+   * compares its stable members rather than incidental producer ordering.
+   */
+  valueSemantics?: 'exact' | 'unordered_string_set'
 }
 
 export interface ProjectStateConflict {
@@ -66,6 +71,16 @@ function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
   const record = value as Record<string, unknown>
   return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`
+}
+
+function stableClaimValue(value: unknown, policy: ProjectStateClaimPolicy | undefined): string {
+  if (policy?.valueSemantics === 'unordered_string_set') {
+    const members = Array.isArray(value)
+      ? [...new Set(value.filter((member): member is string => typeof member === 'string'))].sort()
+      : []
+    return stableJson(members)
+  }
+  return stableJson(value)
 }
 
 function claimKey(claim: Pick<ProjectStateClaim, 'subject' | 'field'>): string {
@@ -109,7 +124,7 @@ export function resolveProjectStateClaims(
     const rank = (claim: ProjectStateClaim): number => authorities.indexOf(claim.authority)
     const highestRank = Math.min(...eligible.map(rank))
     const strongest = eligible.filter(claim => rank(claim) === highestRank)
-    const values = new Set(strongest.map(claim => stableJson(claim.value)))
+    const values = new Set(strongest.map(claim => stableClaimValue(claim.value, policy)))
     if (values.size === 1) {
       const winner = strongest[0]!
       resolved.push({
@@ -176,7 +191,7 @@ export function reconcileProjectStateObservation(input: {
       observationClaimId: input.observationClaim.id,
     }
   }
-  return stableJson(resolved.value) === stableJson(input.observationClaim.value)
+  return stableClaimValue(resolved.value, input.policy) === stableClaimValue(input.observationClaim.value, input.policy)
     ? {
         state: 'confirmed',
         canonicalClaimIds: resolved.claimIds,

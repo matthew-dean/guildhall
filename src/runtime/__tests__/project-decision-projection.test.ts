@@ -146,4 +146,44 @@ describe('project decision projection', () => {
       observationClaimId: 'diagnostic-release-blockers',
     })
   })
+
+  it('compares declared blocker sets independently of producer ordering', () => {
+    const agreement = reconcileProjectStateObservation({
+      projectRevision: 42,
+      canonicalClaim: {
+        id: 'summary-release-blockers',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.blockerTaskIds',
+        value: ['task-proof-a', 'task-proof-b'],
+        authority: 'canonical_mutation',
+        actor: 'project-summary',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['task:task-proof-a', 'task:task-proof-b'],
+      },
+      observationClaim: {
+        id: 'diagnostic-release-blockers',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.blockerTaskIds',
+        value: ['task-proof-b', 'task-proof-a'],
+        authority: 'agent_derivation',
+        actor: 'diagnostic-projector',
+        observedAt: '2026-07-23T12:01:00.000Z',
+        evidenceRefs: ['task:task-proof-b', 'task:task-proof-a'],
+      },
+      policy: {
+        field: 'release.blockerTaskIds',
+        authorities: ['canonical_mutation', 'agent_derivation'],
+        reconciliation: 'inspect_canonical_state',
+        valueSemantics: 'unordered_string_set',
+      },
+    })
+
+    expect(agreement).toEqual({
+      state: 'confirmed',
+      canonicalClaimIds: ['summary-release-blockers'],
+      observationClaimId: 'diagnostic-release-blockers',
+    })
+  })
 })

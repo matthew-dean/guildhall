@@ -354,6 +354,11 @@ describe('project-summary-projection', () => {
           verifiedBy: 'automated',
           met: false,
         }],
+        proofPaths: [{
+          kind: 'command',
+          command: 'pnpm prove:task-proof',
+          expectedEvidence: [{ id: 'ac-proof', required: true }],
+        }],
       }),
     ], {
       selectedReleaseId: 'release-current',
@@ -396,6 +401,45 @@ describe('project-summary-projection', () => {
     expect(refreshed?.releaseSummary.state).toBe('ready')
     expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks
       .find(indexed => indexed.id === 'task-proof')?.scopeRow?.proofBlocked).toBe(false)
+  })
+
+  it('keeps an absent proof record blocking for completed script-only release work', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-missing-proof-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('task-without-proof-record', 'done', {
+        releaseIds: ['release-current'],
+        completedAt: now,
+      }),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        proofStyle: 'script_only',
+        nodeIds: ['work:task-without-proof-record'],
+        deferredNodeIds: [],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'indexed-missing-proof', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    const refreshed = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'indexed-missing-proof',
+      generatedAt: now,
+      sourceQueueLastUpdated: now,
+    })
+
+    expect(refreshed?.releaseSummary).toMatchObject({
+      state: 'blocked',
+      counts: { total: 1, done: 1, unfinished: 0, proofBlocked: 1 },
+      blockers: [expect.objectContaining({ id: 'task-without-proof-record', code: 'proof_evidence_missing' })],
+    })
+    expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks
+      .find(indexed => indexed.id === 'task-without-proof-record')?.scopeRow?.proofBlocked).toBe(true)
   })
 
   it('uses proven decomposition children to satisfy a stale indexed parent proof', async () => {

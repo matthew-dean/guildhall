@@ -46,6 +46,7 @@ import { buildProjectActionModel, type ProjectActionModel } from './project-acti
 import { buildProjectDecisionProjection, projectDecisionStartReadiness, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
+import { taskDoneButProofMissingForScope } from './proof-health.js'
 
 export const PROJECT_SUMMARY_PROJECTION_VERSION = 21 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
@@ -237,9 +238,13 @@ function indexedCurrentProofForTask(task: ProjectStateDatabaseTask): IndexedCurr
 function indexedTaskHasCompletionProofGap(
   task: ProjectStateDatabaseTask,
   proof: IndexedCurrentProof | undefined,
+  proofStyle: ProjectScope['proofStyle'] | undefined,
 ): boolean {
   const status = String(task.status ?? '')
   if (status !== 'done' && status !== 'pending_pr') return false
+  // The selected release contract is part of the compact state. A script-only
+  // release makes an absent proof record an explicit gap, not an implicit pass.
+  if (taskDoneButProofMissingForScope(task, proofStyle)) return true
   if (!proof) return false
   if (['needed', 'partial'].includes(proof.state)) return true
   // A compact point can legitimately say `none` while still carrying the
@@ -305,6 +310,7 @@ function indexedTaskCompletionProofSatisfiedByLinkedChildren(
   tasksById: ReadonlyMap<string, ProjectStateDatabaseTask>,
   proofByTaskId: ReadonlyMap<string, IndexedCurrentProof>,
   selectedReleaseId: string | null,
+  proofStyle: ProjectScope['proofStyle'] | undefined,
   visiting = new Set<string>(),
 ): boolean {
   if (visiting.has(task.id)) return false
@@ -314,8 +320,8 @@ function indexedTaskCompletionProofSatisfiedByLinkedChildren(
   return children.every(child => {
     const status = String(child.status ?? '')
     if (status !== 'done' && status !== 'pending_pr') return false
-    if (!indexedTaskHasCompletionProofGap(child, proofByTaskId.get(child.id))) return true
-    return indexedTaskCompletionProofSatisfiedByLinkedChildren(child, tasksById, proofByTaskId, selectedReleaseId, nextVisiting)
+    if (!indexedTaskHasCompletionProofGap(child, proofByTaskId.get(child.id), proofStyle)) return true
+    return indexedTaskCompletionProofSatisfiedByLinkedChildren(child, tasksById, proofByTaskId, selectedReleaseId, proofStyle, nextVisiting)
   })
 }
 
@@ -325,9 +331,10 @@ function indexedTaskProofBlocked(
   tasksById: ReadonlyMap<string, ProjectStateDatabaseTask>,
   proofByTaskId: ReadonlyMap<string, IndexedCurrentProof>,
   selectedReleaseId: string | null,
+  proofStyle: ProjectScope['proofStyle'] | undefined,
 ): boolean {
-  if (indexedTaskCompletionProofSatisfiedByLinkedChildren(task, tasksById, proofByTaskId, selectedReleaseId)) return false
-  return indexedTaskHasCompletionProofGap(task, proof)
+  if (indexedTaskCompletionProofSatisfiedByLinkedChildren(task, tasksById, proofByTaskId, selectedReleaseId, proofStyle)) return false
+  return indexedTaskHasCompletionProofGap(task, proof, proofStyle)
 }
 
 export function applyOwnerInputToStartReadiness(
@@ -790,6 +797,7 @@ function rebuildScopeRowsFromIndexedState(
   tasks: readonly ProjectStateDatabaseTask[],
   savedScopeRows: readonly ProjectStateDatabaseScopeRow[],
 ): ProjectStateDatabaseScopeRow[] {
+  const selectedProofStyle = selectedReleaseProofStyle(queue.releases, queue.selectedReleaseId)
   const taskById = new Map(tasks.map(task => [task.id, task]))
   const proofByTaskId = new Map<string, IndexedCurrentProof>(
     tasks.flatMap(task => {
@@ -809,8 +817,8 @@ function rebuildScopeRowsFromIndexedState(
     const task = taskById.get(row.taskId)
     const proof = task ? indexedCurrentProofForTask(task) : undefined
     const saved = savedRowsByTaskId.get(row.taskId)
-    const proofBlocked = task && proof
-      ? indexedTaskProofBlocked(task, proof, taskById, proofByTaskId, queue.selectedReleaseId)
+    const proofBlocked = task
+      ? indexedTaskProofBlocked(task, proof, taskById, proofByTaskId, queue.selectedReleaseId, selectedProofStyle)
       : (saved?.proofBlocked ?? row.proofBlocked)
     return {
       ...row,
@@ -845,6 +853,14 @@ function indexedProofStyle(value: unknown): ProjectScope['proofStyle'] | undefin
   return value === 'script_only' || value === 'manual' || value === 'mixed' || value === 'unspecified'
     ? value
     : undefined
+}
+
+function selectedReleaseProofStyle(
+  releases: readonly Record<string, unknown>[],
+  selectedReleaseId: string | null,
+): ProjectScope['proofStyle'] | undefined {
+  if (!selectedReleaseId) return undefined
+  return indexedProofStyle(releases.find(release => release.id === selectedReleaseId)?.proofStyle)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -964,6 +980,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const queue = current.queue
   const releases = queue.releases as readonly Record<string, unknown>[]
   const selectedReleaseId = queue.selectedReleaseId ?? null
+  const selectedProofStyle = selectedReleaseProofStyle(releases, selectedReleaseId)
   const taskOverrides = new Map((input.taskOverrides ?? []).map(task => [task.id, task]))
   const tasks = inventory.tasks.map(task => taskOverrides.get(task.id) ?? task)
   const tasksById = new Map(tasks.map(task => [task.id, task]))
@@ -1001,9 +1018,9 @@ export function buildProjectSummaryProjectionFromIndexedState(
     const indexedTask = tasksById.get(row.taskId)
     const explicitRow = scopeRowOverrides.get(row.taskId)
     const indexedProofGap = indexedTask
-      ? indexedTaskProofBlocked(indexedTask, currentProofByTaskId.get(row.taskId), tasksById, currentProofByTaskId, selectedReleaseId)
+      ? indexedTaskProofBlocked(indexedTask, currentProofByTaskId.get(row.taskId), tasksById, currentProofByTaskId, selectedReleaseId, selectedProofStyle)
       : false
-    const proofBlocked = currentProofByTaskId.has(row.taskId)
+    const proofBlocked = indexedTask
       ? indexedProofGap
       : Boolean(explicitRow?.proofBlocked ?? row.proofBlocked)
     // Scope rows are persisted projections, not a second source of proof
@@ -1383,6 +1400,10 @@ export function writeProjectSummaryProjectionFromIndexedState(
     ...(indexedState?.inventory.tasks ?? []),
     ...(input.taskOverrides ?? []),
   ].map(task => [task.id, task]))
+  const selectedProofStyle = selectedReleaseProofStyle(
+    indexedState?.queue.releases ?? [],
+    indexedState?.queue.selectedReleaseId ?? null,
+  )
   const currentProofByTaskId = new Map<string, IndexedCurrentProof>(
     [...taskById.values()].flatMap(task => {
       const proof = indexedCurrentProofForTask(task)
@@ -1397,7 +1418,7 @@ export function writeProjectSummaryProjectionFromIndexedState(
     .map(row => {
       const task = taskById.get(row.taskId)
       const proof = task ? indexedCurrentProofForTask(task) : undefined
-      const proofBlocked = indexedTaskProofBlocked(task!, proof, taskById, currentProofByTaskId, indexedState?.queue.selectedReleaseId ?? null) ||
+      const proofBlocked = indexedTaskProofBlocked(task!, proof, taskById, currentProofByTaskId, indexedState?.queue.selectedReleaseId ?? null, selectedProofStyle) ||
         (!proof && !currentProofByTaskId.has(task!.id) && Boolean(row.proofBlocked))
       const normalized = normalizeProjectScopeRowReadModel({
         ...row,
