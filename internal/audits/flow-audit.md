@@ -53665,6 +53665,13 @@ Repair:
       queue membership is the durable release boundary. On Narrative Harness,
       Start therefore said 15 scoped / 1 deferred while Overview and Release
       correctly said 15 scoped / 33 deferred.
+- Deeper finding: `queueForProjectSummaryScope` can synthesize release-like
+      membership from an approved-plan snapshot while the normalized
+      `release_membership` relation has a different value. Saved scope rows
+      and orientation can retain that synthetic shape after the queue moves on,
+      and compact readiness then mixes stale summary counts with current
+      membership. This is a two-authority model defect, not a count formatter
+      defect.
 
 ### Contract Touch Decision
 
@@ -53675,15 +53682,46 @@ Repair:
       scheduling, work-item visibility, model output, and persisted release
       records.
 - Required behavior: the selected release's label and public scoped/deferred
-      counts always come from its normalized membership relation. The
-      executable scope remains a separately named scheduler input; it may
-      reduce runnable units but cannot overwrite membership counts.
+      counts always come from its normalized membership relation at one
+      membership revision. The executable scope remains a separately named
+      scheduler input; it may reduce runnable units but cannot overwrite
+      membership counts. A stale summary or accepted plan with different
+      membership must produce typed reconciliation/refresh state, never a
+      hybrid response.
 - Proof required: focused Start regression where executable compaction differs
-      from release membership, followed by installed Narrative Harness Start /
-      Overview / Release agreement.
-- Apply/revert: no persisted schema change. Revert removes the derived
-      presentation helper only; release membership and scheduler rows remain
-      intact.
+      from release membership; an approved-plan mismatch regression; then an
+      installed Narrative Harness Start / Overview / Release agreement from
+      one membership revision.
+- Apply/revert: migrate approved-plan membership through the normalized
+      relation in one transaction, then delete read-time membership synthesis.
+      Revert restores the prior normalized relation from the migration backup;
+      it never restores summary/orientation mirrors as current authority.
+
+### Schema Migration Decision
+
+- Persisted schema touched: the existing normalized `release_membership`
+      relation, its queue-revision provenance, and the derived summary/action
+      projection that records the membership revision it used.
+- Change class: authoritative relationship materialization plus derived
+      projection versioning. This does not add a second membership store.
+- Existing data impact: an approved plan may describe a different set than
+      existing normalized membership because earlier readers synthesized its
+      shape without a mutation. Such a difference becomes typed
+      `release_membership_reconciliation` state; Start fails closed until the
+      policy can materialize or reconcile it from provenance.
+- Migration id: `0.13.0/release-membership-snapshot`.
+- Safety: current membership and approved-plan inputs are captured with their
+      source revision before a compare-and-swap materialization. An equal or
+      newer explicit release edit wins; an older projection cannot overwrite
+      it.
+- Compatibility reader: during rollout, accepts an absent membership revision
+      only as stale/unavailable. It never combines it with current rows.
+- Fixtures/tests: promoted queue, stale approved-plan, hierarchy-compacted
+      execution, restart, Start, Release, Overview, Work, Thread, and
+      Activity agreement cases.
+- Rollback/revert: restore the captured normalized relation transactionally;
+      derived projections rebuild from it. Do not re-enable approved-plan
+      membership overlays as a fallback reader.
 
 ### Schema Migration Decision
 
