@@ -16536,7 +16536,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // stopped-run repair belongs to an explicit write/maintenance boundary,
       // never to a status chip request.
       const projectionIsCurrent = projection?.freshness === 'current'
-      const counts: Record<string, number> = projection
+      const counts: Record<string, number> = projectionIsCurrent
         ? { ...(projection?.counts.byStatus ?? {}) }
         : {}
       const inFlight: Array<{
@@ -16605,11 +16605,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : compactSummary?.actionModel ?? projection?.actionModel ?? null
       const projectedInFlight = projectDecisionInFlight(decision, inFlight)
       const topAction = activityActionFromDecision(project.id, decision)
+      const releaseSummary = projectionIsCurrent
+        ? projection?.releaseSummary ?? null
+        : projection?.releaseSummary?.release
+          ? {
+              scopeMode: projection.releaseSummary.scopeMode,
+              release: projection.releaseSummary.release,
+              state: 'unknown',
+            }
+          : null
       return c.json({
         running: run?.status === 'running',
         runStatus: run?.status ?? 'stopped',
         summaryFreshness: projection?.freshness ?? 'missing',
-        releaseSummary: projection?.releaseSummary ?? null,
+        releaseSummary,
         counts,
         inFlight: projectedInFlight.slice(0, 5),
         decision,

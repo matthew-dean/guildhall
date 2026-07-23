@@ -6182,6 +6182,12 @@ describe('GET /api/project/activity', () => {
 
     expect(response.status).toBe(200)
     expect(body.summaryFreshness).toBe('stale')
+    expect(body.counts).toEqual({})
+    expect(body.releaseSummary).toMatchObject({
+      release: { id: 'release-current' },
+      state: 'unknown',
+    })
+    expect(body.releaseSummary).not.toHaveProperty('counts')
     expect(body.decision.execution).toMatchObject({
       state: 'running',
       focusTaskId: 'live-task',

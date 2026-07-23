@@ -53831,6 +53831,10 @@ Repair:
       write by default. Only an explicit structural `queueCommit` may replace
       task or release state. A projection is therefore an observer of release
       membership, never an alternate writer for it.
+- Activity boundary: when a saved summary is stale, Activity may retain the
+      release identity and live worker state, but it omits release/task counts
+      and reports the release state as unknown. A polling chip must not pair a
+      fresh "running" observation with stale release progress.
 - Read ownership: the compact canonical release read exposes the current
       membership revision. A derived summary records the membership revision
       it used. Start, Overview, Release, Work, Thread, and Activity may show
