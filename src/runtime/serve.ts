@@ -6927,7 +6927,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // Overview has its own lean saved-summary transaction. Work and Map use
     // the richer surface projection; neither path reconstructs TASKS.json.
     const overviewState = input.surface === 'overview'
-      ? readProjectOverviewStateAtBoundary(project.path)
+      ? readProjectOverviewStateAtBoundary(project.path, {
+          includeMemoryHealth: input.includeDetailSections === true,
+        })
       : null
     const surfaceState = input.surface === 'overview' ? null : (input.surfaceState ?? readProjectSurfaceStateAtBoundary(project.path, {
       offset: inventoryOffset,
@@ -7316,7 +7318,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       : null
     const detailMemoryHealth = input.includeDetailSections
-      ? surfaceState?.memoryHealth?.payload ?? null
+      ? overviewState?.memoryHealth?.payload ?? surfaceState?.memoryHealth?.payload ?? null
       : null
     const detailRecentEvents = input.includeDetailSections
       ? supervisor.recent(project.id, undefined, project.path)

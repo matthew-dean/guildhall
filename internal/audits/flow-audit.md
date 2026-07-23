@@ -52665,9 +52665,10 @@ Repair:
 ### Contract Touch Decision
 
 - Work id: `0.13.87/project-decision-resolution`.
-- Touched contracts: project summary projection, compact project responses,
-      diagnostic readiness, release readiness, primary action, runtime and
-      owner-input envelopes, and future multi-agent state assertions.
+- Touched contracts: project summary projection, shared runtime summary
+      boundary, compact project responses, diagnostic readiness, release
+      readiness, primary action, runtime and owner-input envelopes, and future
+      multi-agent state assertions.
 - Considered but not touched: task-definition, evidence, release-membership,
       and approval writers remain canonical sources; this change consumes their
       typed facts rather than duplicating them.

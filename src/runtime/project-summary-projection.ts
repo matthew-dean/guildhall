@@ -1965,7 +1965,7 @@ export function readProjectSummaryShellProjection(tasksPath: string): ProjectSum
  * shared decision packet must refresh instead of presenting old caches as
  * current project state.
  */
-function projectSummaryProjectionIsCurrent(value: Pick<ProjectSummaryProjection, 'version' | 'decision'> | Record<string, unknown>): boolean {
+export function projectSummaryProjectionIsCurrent(value: Pick<ProjectSummaryProjection, 'version' | 'decision'> | Record<string, unknown>): boolean {
   if (value.version !== PROJECT_SUMMARY_PROJECTION_VERSION) return false
   const decision = value.decision
   return Boolean(

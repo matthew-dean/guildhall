@@ -57,6 +57,7 @@ import type {
 import {
   PROJECT_SUMMARY_PROJECTION_VERSION,
   buildProjectSummaryProjectionFromIndexedState,
+  projectSummaryProjectionIsCurrent,
   projectSummaryScopeRowsFromIndexedState,
   prepareProjectSummaryProjectionFromUnknownQueue,
   readProjectSummaryProjection,
@@ -72,12 +73,9 @@ function projectSummaryAtRuntimeVersion(
   summary: ProjectStateDatabaseSummary<ProjectSummaryProjection> | ProjectSummaryProjection,
 ): ProjectSummaryProjection {
   const payload = 'payload' in summary ? summary.payload : summary
-  const version = payload && typeof payload === 'object'
-    ? (payload as { version?: unknown }).version
-    : undefined
   return {
     ...payload,
-    freshness: typeof version !== 'number' || version === PROJECT_SUMMARY_PROJECTION_VERSION
+    freshness: projectSummaryProjectionIsCurrent(payload as ProjectSummaryProjection)
       ? summary.freshness
       : 'stale',
   }
@@ -703,12 +701,14 @@ export interface ProjectOverviewStateReadModel {
   /** Current normalized membership for the saved selected release only. */
   scope: ProjectScope | null
   availability: ProjectStateDatabaseSurfaceState['availability']
+  memoryHealth: ProjectStateDatabaseSurfaceState['memoryHealth']
   queueRevision: number | null
   projectRevision: number | null
 }
 
 export function readProjectOverviewStateAtBoundary(
   projectRoot: string,
+  options: { includeMemoryHealth?: boolean } = {},
 ): ProjectOverviewStateReadModel | null {
   const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
   const current = readProjectStateDatabaseReadBundle<ProjectSummaryProjection>(
@@ -716,6 +716,7 @@ export function readProjectOverviewStateAtBoundary(
     {
       includeAvailability: true,
       includeScopeRows: true,
+      ...(options.includeMemoryHealth ? { includeMemoryHealth: true } : {}),
     },
   )
   if (!current) return null
@@ -734,6 +735,7 @@ export function readProjectOverviewStateAtBoundary(
       scopeRows: current.scopeRows,
     }),
     availability: current.availability,
+    memoryHealth: current.memoryHealth,
     queueRevision: current.queueRevision,
     projectRevision: current.projectRevision,
   }
