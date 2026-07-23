@@ -1080,6 +1080,28 @@ describe('applyProjectMigrations', () => {
       projectRoot,
       only: ['0.13.30/proof-setup-completion-authority'],
     })).applied).toEqual([])
+
+    // A later regression must be owned by the later proof-health migrations,
+    // not by replaying this historical repair forever. In particular, a stale
+    // old task record cannot make an already-applied migration block every
+    // ordinary project action.
+    const queueAfterRepair = readProjectStateDatabaseQueueDefinition(tasksPath)
+    const staleHistoricalTask = queueAfterRepair?.tasks.find(candidate => candidate.id === 'proof-child')
+    if (!queueAfterRepair || !staleHistoricalTask) throw new Error('Expected proof setup fixture after migration.')
+    staleHistoricalTask.status = 'done'
+    staleHistoricalTask.completedAt = now
+    writeProjectTaskQueueWithSummary(tasksPath, queueAfterRepair, {
+      projectId: 'migration-test',
+      projectRoot,
+      compactCompatibility: true,
+    })
+    const statusAfterHistoricalDrift = await getProjectMigrationStatus({
+      projectRoot,
+      only: ['0.13.30/proof-setup-completion-authority'],
+    })
+    expect(statusAfterHistoricalDrift.blocked).toEqual([])
+    expect(statusAfterHistoricalDrift.applied.map(item => item.id))
+      .toEqual(['0.13.30/proof-setup-completion-authority'])
   })
 
   it('restores a cleared proof-setup execution blueprint without sending it through generic spec intake', async () => {

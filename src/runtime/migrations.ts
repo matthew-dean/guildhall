@@ -82,6 +82,7 @@ import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.
 import { restoreEvacuatedTaskState } from './evacuated-task-state-restore.js'
 import { migrateWorkDecompositionState } from './work-decomposition-migration.js'
 import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership } from './project-scope-projection.js'
+import { readProjectReleaseState } from './project-state-boundary.js'
 import { buildEffectiveTasks } from './effective-task.js'
 import {
   backfillProjectSummaryProjection,
@@ -473,8 +474,16 @@ function taskNeedsProofSetupRuntimeRecovery(
   return taskDoneButProofMissing(task)
 }
 
-function proofSetupRuntimeRecoveryIsActionable(task: Task, releases: readonly ProjectRelease[]): boolean {
+function proofSetupRuntimeRecoveryIsActionable(
+  task: Task,
+  releases: readonly ProjectRelease[],
+  selectedReleaseId: string | null | undefined,
+): boolean {
   const taskReleaseIds = task.releaseIds ?? []
+  // A proof repair is executable-release maintenance, never a retrospective
+  // rewrite of historical release evidence. Once a project has a selected
+  // release, only that release may make this migration actionable.
+  if (selectedReleaseId && taskReleaseIds.length > 0 && !taskReleaseIds.includes(selectedReleaseId)) return false
   return taskReleaseIds.length === 0 || taskReleaseIds.some(releaseId =>
     releases.some(release => release.id === releaseId && release.state !== 'shipped'),
   )
@@ -4051,7 +4060,10 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     scope: 'project',
     safety: 'automatic',
     requirement: 'required',
-    recheckAfterApply: true,
+    // This migration repairs the historical completion transition once. Later
+    // proof-history and projection migrations own newly discovered proof drift;
+    // rechecking this legacy repair would otherwise reopen shipped releases on
+    // every ordinary project action.
     summary: 'Restores the executable proof boundary when a proof-setup task was marked done before its current typed command evidence was verified. Historical shipped release records stay closed.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
@@ -4059,11 +4071,15 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
       const tasks = (queue?.tasks ?? []) as unknown as Task[]
       const releases = (queue?.releases ?? []) as unknown as ProjectRelease[]
+      const releaseState = await readProjectReleaseState(projectRoot)
+      const selectedReleaseId = releaseState.scope?.kind === 'release'
+        ? releaseState.scope.id
+        : releaseState.rawQueue.selectedReleaseId ?? queue?.selectedReleaseId
       const runtime = await readTaskRuntimeStore(projectRoot)
       const taskIds = tasks
         .filter(task =>
           taskNeedsProofSetupRuntimeRecovery(task, runtime) &&
-          proofSetupRuntimeRecoveryIsActionable(task, releases),
+          proofSetupRuntimeRecoveryIsActionable(task, releases, selectedReleaseId),
         )
         .map(task => task.id)
       return {

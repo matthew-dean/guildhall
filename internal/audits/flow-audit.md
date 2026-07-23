@@ -51748,3 +51748,61 @@ Contract Touch Decision
 - Proof provided: targeted orchestrator regressions.
 - Apply/revert: revert the source gate and its two regressions together; do
       not restore generic acceptance criteria as a fallback.
+
+## 2026-07-23 Retire one-time proof repair after it has repaired history
+
+Finding:
+
+- [x] `0.13.30/proof-setup-completion-authority` was both a historical repair
+      and a perpetual runtime detector. On Narrative Harness it repeatedly
+      rediscovered a proof task belonging only to a shipped release, attempted
+      to reopen it, and thereby blocked an unrelated current-release intake.
+
+Repair:
+
+- [x] The migration now runs once per project ledger. Current proof drift is
+      still owned by the later proof-history and projection migrations; the
+      historical migration cannot become a second, competing authority.
+- [x] Its release check reads the canonical release-state boundary, so an
+      unapplied project repair can only act within the selected executable
+      release and never retrospectively modify a shipped-only task.
+
+### Contract Touch Decision
+
+- Work id: `0.13.60/proof-repair-migration-lifecycle`.
+- Touched contracts: migration ledger application semantics and shared
+      release-state selection for proof recovery.
+- Considered but not touched: task completion schema, proof evidence schema,
+      release membership, owner approval, and coordinator planning.
+- Required follow-up: replay Narrative Harness intake through the installed
+      CLI and confirm no historical release migration blocks the current
+      task.
+- Proof required: an applied `0.13.30` record remains applied even when a
+      historical task snapshot is stale; an unapplied repair reads the
+      canonical selected release; typecheck and migration suite pass.
+- Proof provided: regression in `src/runtime/__tests__/migrations.test.ts`,
+      `pnpm typecheck`, and the focused migration suite.
+- Apply/revert: reverting this change restores legacy recheck behavior and is
+      not safe as a compatibility fallback; later proof migrations must remain
+      the sole ongoing authority.
+
+### Schema Migration Decision
+
+- Work id: `0.13.60/proof-repair-migration-lifecycle`.
+- Persisted schema touched: migration ledger semantics only; no new fields or
+      task/release rows are written.
+- Scope: projects with an existing applied `0.13.30` ledger entry.
+- Change class: lifecycle correction for a one-time migration.
+- Existing data impact: applied records stop being re-evaluated. Unapplied
+      projects still receive the repair once, scoped to the canonical selected
+      release.
+- Migration id: `0.13.30/proof-setup-completion-authority`.
+- Safety: prevents historical shipped-release repair attempts from becoming
+      run-wide blockers; it does not waive active proof validation.
+- Compatibility reader: none. The migration ledger is already authoritative.
+- Fixtures/tests: `src/runtime/__tests__/migrations.test.ts`.
+- Owner-facing plan text: none; this is Guildhall repair ownership, not an
+      approval decision.
+- Rollback/revert: restore rechecking only alongside a replacement, typed,
+      active-proof invariant owner. Do not reintroduce a legacy task scan as a
+      runtime gate.
