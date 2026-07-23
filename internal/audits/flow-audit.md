@@ -108,6 +108,11 @@ help_summary: |
   work where proof must continue. Historical proof nodes must not be treated
   as stale active-scope entries merely because the task now has typed proof
   context.
+- Recovery-state follow-up: a selected-release proof child in `review` is not
+  runnable when its command evidence is missing or failed. The shared proof
+  recovery transition returns that child to `ready` (while preserving genuine
+  `blocked` state), so global Start can advance the exact existing proof work
+  rather than repeatedly reporting the parent as missing proof.
 - Read-authority follow-up: promoted SQLite migrations previously preferred an
   aggregate compatibility queue when one happened to exist. That stale blob
   could prepare a release rewrite that the canonical shipped-snapshot guard

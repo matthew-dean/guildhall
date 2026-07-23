@@ -2702,6 +2702,49 @@ describe('prepareReleaseProofRecovery', () => {
     })
   })
 
+  it('returns a reviewed proof child to ready work when its current proof is missing', () => {
+    const timestamp = '2026-07-23T09:00:00.000Z'
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-001'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        id: 'task-001',
+        status: 'done',
+        releaseIds: ['release-1'],
+      }],
+    })
+    const historical = materializeProofSetupTask(queue, queue.tasks[0]!, timestamp, {
+      releaseIds: ['release-1'],
+    })
+    const proofTask = queue.tasks.find(task => task.id === historical.childTaskId)!
+    proofTask.status = 'review'
+
+    const result = prepareReleaseProofRecovery(queue, {
+      parentTaskIds: ['task-001'],
+      releaseId: 'release-1',
+      timestamp,
+    })
+
+    expect(result).toEqual({
+      materializedTaskIds: [],
+      reopenedTaskIds: ['task-001-proof-setup'],
+      representedTaskIds: ['task-001-proof-setup'],
+      rejectedParentTaskIds: [],
+    })
+    expect(queue.tasks.find(task => task.id === 'task-001-proof-setup')).toMatchObject({ status: 'ready' })
+  })
+
   it('rejects a blocker that is not a member of the selected release', () => {
     const queue = TaskQueue.parse({
       ...seedQueue,

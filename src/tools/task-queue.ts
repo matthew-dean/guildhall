@@ -1295,10 +1295,14 @@ export function prepareReleaseProofRecovery(
     if (result.status === 'materialized') materializedTaskIds.push(proofTask.id)
     else representedTaskIds.push(proofTask.id)
 
-    // A settled historical proof child is not reusable when the shared scope
-    // projection says its parent lacks current proof. Reopen the same bounded
-    // child; do not create a proof-setup chain or mutate the parent boundary.
-    if (['done', 'pending_pr'].includes(proofTask.status)) {
+    // A proof child in a terminal handoff or review state is not runnable when
+    // its parent still lacks current proof. The failed/absent proof is the
+    // authoritative outcome, so return that same bounded child to ready work
+    // instead of leaving Start to rediscover an already-represented blocker.
+    // Do not override genuinely blocked work: it may carry an external
+    // constraint that recovery cannot truthfully erase.
+    if (['done', 'pending_pr', 'review'].includes(proofTask.status)) {
+      const priorStatus = proofTask.status
       proofTask.status = 'ready'
       proofTask.assignedTo = null
       delete proofTask.completedAt
@@ -1306,7 +1310,7 @@ export function prepareReleaseProofRecovery(
       proofTask.notes.push({
         agentId: 'proof-recovery',
         role: 'coordinator',
-        content: `Reopened ${proofTask.id} because the selected release still lacks current proof for ${parent.id}.`,
+        content: `Returned ${proofTask.id} from ${priorStatus} because the selected release still lacks current proof for ${parent.id}.`,
         timestamp: input.timestamp,
       })
       reopenedTaskIds.push(proofTask.id)
