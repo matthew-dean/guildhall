@@ -121,6 +121,77 @@ describe('getProjectMigrationStatus', () => {
     })).applied).toEqual([])
   })
 
+  it('settles an approved durable spec handoff without approving the spec', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const structuredSpec = {
+      whatThisIs: 'A bounded migration fixture.',
+      problemContext: 'The project needs a settled review handoff.',
+      goals: ['Record the review gate.'],
+      nonGoals: ['Do not widen scope.'],
+      proposedDesign: 'Use the typed task state.',
+      keyDecisions: ['Keep authority explicit.'],
+      acceptanceCriteria: [{
+        scenario: 'Given the durable spec',
+        expectation: 'Then its review gate is recorded.',
+        verificationMode: 'review',
+      }],
+      verification: ['Review the typed task state.'],
+      completionBoundary: {
+        productOutcome: 'The review handoff is explicit.',
+        whatGuildhallCanCompleteInCode: 'Record the typed review gate.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'The local test process.',
+        whatCountsAsDone: 'The focused state test passes.',
+        whatMustBeSplitOrBlocked: 'Nothing.',
+        splitPolicy: 'none',
+      },
+    }
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      tasks: [{
+        id: 'task-stale-handoff',
+        title: 'Stale handoff',
+        status: 'exploring',
+        structuredSpec,
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The review gate is recorded.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        productBrief: {
+          userJob: 'Use the reviewable result.',
+          whyItMattersNow: 'The task has a finished spec and must stop pretending it is still shaping.',
+          successMetric: 'The task has a typed review gate.',
+          nonGoals: ['Do not approve the spec automatically.'],
+          antiPatterns: ['Do not approve the spec automatically.'],
+          approvedAt: '2026-07-23T00:00:00.000Z',
+          approvedBy: 'codex_delegated_owner',
+        },
+      }],
+      releases: [],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const first = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.68/settle-durable-spec-handoffs'],
+    })
+    expect(first.failed).toEqual([])
+    const task = readProjectStateDatabaseQueueDefinition(tasksPath)!.tasks[0] as Record<string, unknown>
+    expect(task.status).toBe('spec_review')
+    expect(task.specReviewGate).toMatchObject({
+      authority: 'owner',
+      requestedBy: 'durable-spec-handoff-migration',
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.68/settle-durable-spec-handoffs'],
+    })).applied).toEqual([])
+  })
+
   it('rebuilds an old compact summary with the canonical source-catalog digest', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     writeProjectTaskQueueWithSummary(tasksPath, {

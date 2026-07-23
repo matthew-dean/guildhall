@@ -61,6 +61,10 @@ help_summary: |
   in-process producer now write `specReviewGate`; legacy rows still read as
   owner-gated until the durable backfill is applied. The next migration unit
   will persist those fallback gates through the canonical task writer.
+- Follow-up migration `0.13.68/settle-durable-spec-handoffs` repairs the
+  separate malformed case exposed by Narrative Harness: an approved,
+  structurally valid spec left in `exploring`. It moves only that typed state
+  into an owner review gate; it never approves the spec or invents a decision.
 
 ## 2026-07-23 Release Resume Preserves Release Scope During Proof Recovery
 

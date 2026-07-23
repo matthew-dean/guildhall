@@ -85,6 +85,7 @@ import {
 import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.js'
 import { restoreEvacuatedTaskState } from './evacuated-task-state-restore.js'
 import { migrateWorkDecompositionState } from './work-decomposition-migration.js'
+import { validateSpecCompletionBoundary } from './spec-quality.js'
 import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership } from './project-scope-projection.js'
 import { readProjectReleaseState } from './project-state-boundary.js'
 import { buildEffectiveTasks } from './effective-task.js'
@@ -235,6 +236,7 @@ const SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID = '0.13.60/source-capability-summar
 const INTERNAL_PROOF_RELEASE_CONTEXT_MIGRATION_ID = '0.13.65/internal-proof-release-context'
 const RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID = '0.13.66/release-membership-snapshot'
 const SPEC_REVIEW_GATE_MIGRATION_ID = '0.13.67/explicit-spec-review-gates'
+const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -291,6 +293,28 @@ function migrateLegacySpecReviewGate(task: Task, now: string): boolean {
     authority: 'owner',
     requestedAt: task.updatedAt || now,
     requestedBy: 'legacy-spec-review-gate-migration',
+    reason: 'spec_handoff',
+  }
+  task.updatedAt = now
+  return true
+}
+
+function taskNeedsDurableSpecHandoffMigration(task: Task): boolean {
+  return task.status === 'exploring' &&
+    task.structuredSpec != null &&
+    typeof task.productBrief?.approvedAt === 'string' &&
+    task.productBrief.approvedAt.trim().length > 0 &&
+    !(task.openQuestions ?? []).some(question => !question.answeredAt) &&
+    validateSpecCompletionBoundary(task).ok
+}
+
+function settleDurableSpecHandoff(task: Task, now: string): boolean {
+  if (!taskNeedsDurableSpecHandoffMigration(task)) return false
+  task.status = 'spec_review'
+  task.specReviewGate = {
+    authority: 'owner',
+    requestedAt: now,
+    requestedBy: 'durable-spec-handoff-migration',
     reason: 'spec_handoff',
   }
   task.updatedAt = now
@@ -4922,6 +4946,55 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: DURABLE_SPEC_HANDOFF_MIGRATION_ID,
+    title: 'Settle durable spec handoffs',
+    introducedIn: '0.13.68',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Moves an already approved, structurally valid spec out of stale shaping and into its explicit owner review gate, so the coordinator and project summary do not disagree about whether it is runnable.',
+    async detect(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = (queue?.tasks as unknown as Task[] | undefined)
+        ?.filter(taskNeedsDurableSpecHandoffMigration)
+        .map(task => task.id) ?? []
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `durable spec handoffs awaiting typed review (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped durable spec handoff repair because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      const tasks = queue.tasks as unknown as Task[]
+      const settled = tasks.filter(task => settleDurableSpecHandoff(task, now))
+      if (settled.length > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: settled.length > 0
+          ? `Moved ${settled.length} durable spec handoff${settled.length === 1 ? '' : 's'} into explicit owner review; no task was approved or made runnable by this repair.`
+          : 'No durable specs were left in stale shaping state.',
+        affectedPaths: settled.length > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
     id: PROOF_SETUP_EXECUTION_BLUEPRINT_MIGRATION_ID,
     title: 'Restore proof-setup execution blueprints',
     introducedIn: '0.13.41',
@@ -5312,6 +5385,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects a completed script-only task without proof as a release blocker',
   [SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID]: 'project-summary-projection.test.ts: publishes source-catalog status from the canonical SQLite catalog',
   [SPEC_REVIEW_GATE_MIGRATION_ID]: 'migrations.test.ts: backfills only legacy spec-review gates and remains idempotent after canonical task writes',
+  [DURABLE_SPEC_HANDOFF_MIGRATION_ID]: 'migrations.test.ts: settles only an approved, structurally valid spec handoff and never auto-approves it',
   '0.11.0/project-summary-projection': 'migrations.test.ts: project summary backfill is idempotent and preserves task history',
   '0.11.1/project-summary-projection-v2': 'migrations.test.ts: project summary shape refresh is idempotent and preserves task history',
   '0.11.2/project-summary-projection-setup-state': 'migrations.test.ts: project summary setup-state refresh is idempotent and preserves task history',
