@@ -52584,7 +52584,9 @@ Repair:
       owner approval, release scope, evidence storage, and UI-local ranking.
 - Existing data impact: no persisted state changes. On the next projection
       refresh, an explicit `ready_work` focus renders from the shared
-      readiness result rather than a lossy task point.
+      readiness result rather than a lossy task point. Summary projection
+      version 19 marks existing version-18 summaries stale so startup rebuilds
+      this derived action state from indexed rows.
 - Required follow-up: install the build and verify Narrative Harness overview,
       Work, and the Start control agree on the focused task and its ready
       status.
@@ -52592,3 +52594,24 @@ Repair:
       and installed cross-surface replay.
 - Apply/revert: do not add brief/spec inference to compact view components.
       Any future readiness presentation must extend the shared action contract.
+
+### Schema Migration Decision
+
+- Work id: `0.13.85/shared-ready-action-authority`.
+- Persisted schema touched: `project_summary` payload projection version only.
+- Change class: derived-projection semantic version increment from 18 to 19.
+- Existing data impact: existing version-18 summaries remain readable as
+      stale compatibility payloads and refresh from indexed state; task,
+      evidence, release, and runtime rows are unchanged.
+- Migration id: none. The startup projection refresh is the deterministic
+      migration mechanism for derived summary state.
+- Safety: the refresh stays compact and revisioned; it does not reopen raw
+      transcripts or rich task detail just to correct a primary action.
+- Compatibility reader: version 18 is listed as compatible-stale so an older
+      saved summary can be inspected or refreshed without shape guessing.
+- Fixtures and tests: action-model compact-point regression plus the existing
+      summary version/read and startup refresh coverage.
+- Owner-facing plan text: after an update, a ready work item stays ready on
+      the overview instead of appearing to need a missing brief.
+- Apply/revert: reverting the version retains the rebuilt summaries; do not
+      downgrade their action semantics in place.
