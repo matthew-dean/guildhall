@@ -897,9 +897,8 @@ describe('project-state-boundary', () => {
       const primaryAction = summary?.actionModel?.primaryAction
       expect(primaryAction).not.toBeNull()
       expect(primaryAction!).toMatchObject({
-        source: 'task',
+        source: 'start_readiness',
         taskId: 'task-shaping',
-        detail: 'Guildhall is shaping a source-backed spec from the approved brief.',
       })
       expect(summary!.releaseSummary).toMatchObject({
         state: 'shaping',

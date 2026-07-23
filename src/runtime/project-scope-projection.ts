@@ -930,6 +930,25 @@ export function summarizeProjectScopeStart(
       actionHref: `/work?task=${encodeURIComponent(paused.taskId)}`,
     }
   }
+  // An exploring task is already in Guildhall's shaping lane. Let Start run
+  // that agent work before unrelated ready work. It is the live continuation
+  // of the selected scope, not merely another candidate in a task ranking.
+  const shapingWork = included.find(row => row.status === 'exploring' &&
+    (row.handoffState === 'spec_shaping' || row.handoffState === 'not_shaped'))
+  if (shapingWork) {
+    return {
+      canStart: true,
+      code: 'ready_work',
+      label: 'Start',
+      focusTaskId: shapingWork.taskId,
+      focusTaskTitle: shapingWork.title,
+      focusKind: 'ready_work',
+      message: shapingWork.handoffState === 'spec_shaping'
+        ? `Guildhall is shaping a source-backed spec for "${shapingWork.title}".`
+        : `Guildhall is shaping "${shapingWork.title}" from the visible project sources.`,
+      actionHref: `/work?task=${encodeURIComponent(shapingWork.taskId)}`,
+    }
+  }
   const ready = included.find(row => row.handoffState === 'ready')
   if (ready) {
     return {
@@ -954,25 +973,6 @@ export function summarizeProjectScopeStart(
       focusKind: 'ready_work',
       message: `"${specWork.title}" is ready for spec work.`,
       actionHref: `/work?task=${encodeURIComponent(specWork.taskId)}`,
-    }
-  }
-  // An exploring task is already in Guildhall's shaping lane. Let Start run
-  // that agent work; only raw import drafts, thin ready tasks, and owner-gated
-  // reviews should stop the selected scope before execution can begin.
-  const shapingWork = included.find(row => row.status === 'exploring' &&
-    (row.handoffState === 'spec_shaping' || row.handoffState === 'not_shaped'))
-  if (shapingWork) {
-    return {
-      canStart: true,
-      code: 'ready_work',
-      label: 'Start',
-      focusTaskId: shapingWork.taskId,
-      focusTaskTitle: shapingWork.title,
-      focusKind: 'ready_work',
-      message: shapingWork.handoffState === 'spec_shaping'
-        ? `Guildhall is shaping a source-backed spec for "${shapingWork.title}".`
-        : `Guildhall is shaping "${shapingWork.title}" from the visible project sources.`,
-      actionHref: `/work?task=${encodeURIComponent(shapingWork.taskId)}`,
     }
   }
   const blocked = included.find(row => row.handoffState === 'blocked')

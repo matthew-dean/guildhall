@@ -53192,6 +53192,31 @@ Repair:
 - Rollback/revert: rebuild the prior summary projection from canonical state;
       do not delete or rewrite catalog records.
 
+## 2026-07-23 Active scope continuation precedes untouched ready work
+
+- Work id: `0.13.61/selected-scope-action-order`.
+- User job: when a selected release already has active Guildhall planning work,
+      the primary action opens that work rather than silently jumping to a
+      different ready item.
+- Finding: `summarizeProjectScopeStart` ranked a ready row before an
+      `exploring` `spec_shaping` row. The action projection therefore named an
+      untouched task even though the scope/release projection correctly said
+      the approved brief was being shaped.
+- Fix: selected-scope start readiness now chooses a live spec-shaping lane
+      before unrelated ready or spec-review rows. This is a typed
+      handoff-state ordering rule, not a title/prose heuristic.
+
+### Contract Touch Decision
+
+- Touched contracts: shared selected-scope start-readiness ordering and the
+      action model derived from it.
+- Considered but not touched: task status storage, task detail, release
+      membership, model prose, and owner-input policy.
+- Proof: the promoted brief regression now asserts its shared action points to
+      the shaping task; later ready work remains available after shaping.
+- Apply/revert: no persisted data changes. Revert only restores the prior
+      deterministic ordering and must not add a view-local ranking override.
+
 ### Contract Touch Decision: catalog-only adapter write
 
 - Work id: `0.13.94/source-capability-boundary`.
