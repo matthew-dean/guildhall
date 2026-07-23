@@ -14998,6 +14998,38 @@ describe('Orchestrator.run — full loops', () => {
     expect(result.idleSummary?.counts.done).toBe(4)
   })
 
+  it('does not close a parent reopened for a fresh lifecycle from historical child completion', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'done',
+        hierarchy: { order: 0, childIds: ['historical-proof'] },
+      }),
+      mkTask({
+        id: 'historical-proof',
+        status: 'done',
+        hierarchy: { parentId: 'parent', childIds: [], order: 0 },
+      }),
+    ])
+    await upsertTaskRuntimeState(tmpDir, 'parent', {
+      currentLifecycle: {
+        reopenedAt: '2026-07-23T02:37:56.161Z',
+        status: 'exploring',
+        source: 'rerun_spec',
+      },
+      updatedAt: '2026-07-23T02:37:56.161Z',
+    })
+
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    await orch.run({ maxTicks: 1, tickDelayMs: 0 })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.id === 'parent')?.status).toBe('exploring')
+    expect(q.tasks.find(task => task.id === 'parent')?.notes.some(note =>
+      note.content.includes('Closed containing work after linked child tasks completed'),
+    )).toBe(false)
+  })
+
   it('stops with explicit blocked accounting when unattended work runs into a human question', async () => {
     const settings: LeverSettings = makeDefaultSettings(new Date('2026-05-02T00:00:00Z'))
     settings.project.worktree_isolation = {

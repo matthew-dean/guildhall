@@ -52150,3 +52150,30 @@ Repair:
       installed owner-delegated Narrative Harness brief update.
 - Apply/revert: remove the optional fields only with a replacement structured
       brief endpoint; do not restore approval-time boilerplate as task data.
+
+## 2026-07-23 Reopened work cannot inherit closure from a prior lifecycle
+
+- [x] A fresh spec lifecycle could be immediately re-closed because its
+      historical child work was terminal. The same historical hierarchy then
+      made the parent non-runnable, so the coordinator stopped before the
+      requested shaping pass.
+- [x] Shared execution and closure rules now read the normalized current
+      lifecycle through one runtime accessor. An active lifecycle can dispatch
+      its parent despite historical children, and closure waits for the new
+      lifecycle to settle through current completion evidence.
+
+### Contract Touch Decision
+
+- Work id: `0.13.75/current-lifecycle-hierarchy-execution`.
+- Touched contracts: effective task lifecycle projection, work execution
+      eligibility, and automatic parent closure.
+- Considered but not touched: task hierarchy persistence, release membership,
+      child identity, historical completion evidence, and model-provider prose.
+- Required follow-up: install the build and replay the selected Narrative
+      Harness task; it must reach the spec agent rather than stop or close
+      from its historical proof child.
+- Proof required: focused work-execution and orchestrator regressions,
+      typecheck, contract lint, model-independence gate, and installed replay.
+- Apply/revert: do not reintroduce a local task exception. Replace this only
+      with a richer lifecycle-aware hierarchy relation that preserves the same
+      current-versus-historical execution boundary.

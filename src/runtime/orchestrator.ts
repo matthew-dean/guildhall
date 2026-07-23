@@ -104,6 +104,7 @@ import { buildPromptCacheKey } from './prompt-cache.js'
 import { resolveModelApiPolicy, type ModelApiRole } from './model-api-policy.js'
 import { repairStaleBlockersInQueue } from './stale-blocker-repair.js'
 import { buildEffectiveTask } from './effective-task.js'
+import { currentLifecycleForTask } from './current-lifecycle.js'
 import { taskCompletionProofSatisfiedByLinkedChildren } from './project-scope-projection.js'
 import {
   hasActiveProofRecovery,
@@ -3137,6 +3138,10 @@ export class Orchestrator {
 
     for (const root of queue.tasks) {
       if (isSelectedTaskClosureDone(root)) continue
+      // A parent deliberately reopened for a fresh lifecycle needs a new
+      // shaping/worker result. Historical descendants are evidence of the old
+      // lifecycle, not completion of the current one.
+      if (currentLifecycleForTask(root) != null) continue
       const childIds = workSubtreeIds(queue.tasks, root.id).filter(id => id !== root.id)
       if (childIds.length === 0) continue
       const childrenComplete = childIds.every(id => {
