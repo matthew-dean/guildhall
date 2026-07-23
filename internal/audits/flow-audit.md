@@ -52036,3 +52036,33 @@ Repair:
 - Apply/revert: applying a re-intake draft may reopen stale selected-release
       work as `import_draft`; revert only by replacing the shared proof and
       snapshot boundary, never by restoring a filesystem-only fallback.
+
+## 2026-07-23 Release membership cannot carry execution state
+
+- [ ] Installed Narrative Harness apply failed at the authoritative write
+      boundary: a task belongs to both the active repaired release and an old
+      shipped release, while `Task.status` is global. Re-intake correctly
+      needs to reopen the active delivery, but the shipped-release invariant
+      sees the same global task change and rejects it.
+- [ ] This is a schema/model defect, not an intake exception. The normalized
+      `release_membership` relation currently stores only membership and
+      disposition; execution/proof status must become release-delivery state
+      (or an equivalent immutable delivery-attempt record) so historical
+      releases retain their completion snapshot while the same source work can
+      be planned again in a later release without a duplicate task definition.
+
+### Contract Touch Decision
+
+- Work id: `0.13.71/release-delivery-state`.
+- Touched contracts: release membership, task lifecycle, re-intake apply,
+      release readiness, and shipped-release immutability.
+- Required follow-up: introduce one authoritative release-delivery relation,
+      migrate existing membership/status data, remove the global-status
+      shipped-release collision, and replay this exact Narrative Harness
+      re-intake apply before any ordinary intake automation continues.
+- Proof required: migration fixture with a shipped and active release sharing
+      one source task; API/CLI/Map/Release agreement; restart persistence; and
+      installed Narrative Harness apply.
+- Apply/revert: no apply yet. Do not work around this by duplicating the task
+      card, mutating shipped release membership, or weakening shipped-release
+      immutability.
