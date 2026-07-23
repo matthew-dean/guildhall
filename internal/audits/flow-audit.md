@@ -49,7 +49,9 @@ help_summary: |
   decision used an internal scope variant while Start exposed the selected
   release through `executionScope`. Recovery now uses that shared execution
   scope contract, so the same release identity governs visible state and the
-  mutation decision.
+  mutation decision. Start also reuses the same helper against its canonical
+  snapshot if an early readiness return omitted the attached decision; it does
+  not re-rank or reinterpret blockers locally.
 - Apply/revert: code-only. Revert the queue/runtime transition and migration
   predicate together; no historical task or release data is rewritten.
 

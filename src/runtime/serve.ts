@@ -11305,10 +11305,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (
         !body.taskId &&
         canonicalState &&
-        startReadiness.releaseProofRecovery &&
+        (startReadiness.releaseProofRecovery ?? savedReleaseProofRecoveryDecision(
+          canonicalState.summary,
+          startReadiness.executionScope,
+        )) &&
         (startReadiness.canStart || startReadiness.code === 'proof_evidence_missing')
       ) {
-        const releaseProofRecovery = startReadiness.releaseProofRecovery
+        const releaseProofRecovery = startReadiness.releaseProofRecovery ?? savedReleaseProofRecoveryDecision(
+          canonicalState.summary,
+          startReadiness.executionScope,
+        )
+        if (!releaseProofRecovery) {
+          return c.json({
+            error: 'Guildhall could not resolve selected-release proof recovery from the canonical current state.',
+            code: 'proof_recovery_state_invalid',
+          }, 409)
+        }
         const richQueue = {
           ...canonicalState.rawQueue,
           tasks: canonicalState.tasks as unknown as Array<Record<string, unknown>>,
