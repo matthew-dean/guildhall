@@ -1741,6 +1741,63 @@ describe('applyProjectMigrations', () => {
     })).applied).toEqual([])
   })
 
+  it('rebuilds an otherwise version-current summary when the shared decision is absent', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T12:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        tasks: [{
+          id: 'task-decision-projection',
+          title: 'Decision projection task',
+          status: 'ready',
+          createdAt: now,
+          updatedAt: now,
+        }],
+      },
+      summary: {
+        projectId: 'migration-test',
+        generatedAt: now,
+        freshness: 'current',
+        source: {
+          taskQueueLastUpdated: now,
+          workspaceGoalsMtimeMs: null,
+        },
+      },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    expect(writeProjectSummaryProjectionFromIndexedState(tasksPath, { projectId: 'migration-test' })).toMatchObject({
+      decision: { version: 1 },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const row = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const summary = JSON.parse(row.payload_json) as Record<string, unknown>
+    delete summary.decision
+    database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(summary))
+    database.close()
+
+    const before = readProjectSummaryProjection(tasksPath)
+    expect(before?.freshness).toBe('stale')
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.0/project-decision-projection'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.0/project-decision-projection'])
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
+      version: PROJECT_SUMMARY_PROJECTION_VERSION,
+      freshness: 'current',
+      decision: { version: 1 },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.0/project-decision-projection'],
+    })).applied).toEqual([])
+  })
+
   it('runs the current-evidence backfill after an earlier migration has already advanced the database schema', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     await fs.mkdir(path.dirname(tasksPath), { recursive: true })

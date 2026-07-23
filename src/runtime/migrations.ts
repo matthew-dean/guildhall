@@ -88,6 +88,7 @@ import {
   backfillProjectSummaryProjection,
   buildProjectSummaryProjectionFromIndexedState,
   PROJECT_SUMMARY_PROJECTION_VERSION,
+  projectSummaryProjectionIsCurrent,
   projectSummaryProjectionNeedsBackfill,
   projectSummaryProjectionPath,
   readProjectSummaryProjectionForMigration,
@@ -2889,6 +2890,39 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: '0.13.0/project-decision-projection',
+    title: 'Materialize the shared project decision',
+    introducedIn: '0.13.0',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Builds one revisioned execution and release decision from current project facts so every surface starts from the same answer.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') {
+        return { needed: false, affectedPaths: [] }
+      }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = readProjectSummaryProjectionForMigration(tasksPath)
+      const needed = !projection || !projectSummaryProjectionIsCurrent(projection)
+      return {
+        needed,
+        affectedPaths: needed ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection || !projectSummaryProjectionIsCurrent(projection)) {
+        throw new Error('The shared project decision could not be persisted.')
+      }
+      return {
+        summary: `Materialized the shared execution and release decision for the ${projection.counts.total}-task project summary.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
     id: '0.12.31/task-evidence-current-projection',
     title: 'Materialize bounded current task evidence',
     introducedIn: '0.12.31',
@@ -4746,6 +4780,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.12.23/project-state-single-authority': 'migrations.test.ts: removes duplicate current-state files only after the database queue is readable',
   '0.12.24/project-summary-action-model': 'migrations.test.ts: persists one canonical action model after the database becomes authoritative',
   '0.12.25/project-summary-task-status-counts': 'migrations.test.ts: persists partitioned task-status counts without changing task or release records',
+  '0.13.0/project-decision-projection': 'migrations.test.ts: rebuilds an otherwise version-current summary when the shared decision projection is missing',
   '0.12.34/task-current-inbox-summary': 'migrations.test.ts: materializes current inbox facts without replaying task history',
   '0.12.35/task-essential-current-evidence': 'project-state-database.test.ts: collapses current evidence without deleting historical records',
   '0.12.36/project-summary-current-scope-authority': 'project-summary-projection.test.ts: ignores stale approved-plan identities and keeps replacement work current',

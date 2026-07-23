@@ -52698,14 +52698,14 @@ Repair:
 - Existing data impact: old action and next-action caches become stale on the
       projection-version bump and are rebuilt from current typed state. Existing
       task, proof, and release records are not rewritten.
-- Migration id: `project-decision-projection-v1`.
+- Migration id: `0.13.0/project-decision-projection`.
 - Safety: execution and release are separate fields; equal-authority conflict
       returns explicit uncertainty rather than selecting arbitrary state.
 - Compatibility reader: current transitional readers may display old fields
       only when the new projection is unavailable; they cannot recompute or
       override a current decision projection. Remove them after migration.
-- Fixtures/tests: response matrix and conflict-resolution fixtures listed
-      above.
+- Fixtures/tests: version-current-but-decision-missing migration regression,
+      plus the response matrix and conflict-resolution fixtures listed above.
 - Owner-facing plan text: a project may continue runnable work while its
       release remains unshippable, and the UI will say both plainly.
 - Rollback/revert: rebuild the previous derived projection from canonical
