@@ -52511,12 +52511,16 @@ Repair:
       across every rich queue parse used by intake, meta intake, and workspace
       import. Evidence stays in its ledger; this is not an aggregate-state
       compatibility layer.
+- [x] Reframe treats a `done` projection with a typed `reopened` completion
+      summary as historical state, so the corrective action is available
+      instead of being vetoed by the status it is meant to repair.
 
 ### Contract Touch Decision
 
 - Work id: `0.13.84/runtime-envelope-preservation`.
 - Touched contracts: effective-task read envelope, promoted definition-write
-      boundary, and runtime lifecycle continuity across intake approval.
+      boundary, runtime lifecycle continuity across intake approval, and
+      reframe eligibility for a superseded completion record.
 - Considered but not touched: task-definition schema, completion-evidence
       schema, release membership, approval authority, raw transcript retention,
       and model prose.
@@ -52547,8 +52551,8 @@ Repair:
       definitions remain sanitized, and evidence remains separately owned.
 - Compatibility reader: existing effective-task readers already expose this
       runtime envelope; no legacy reader is added.
-- Fixtures and tests: promoted spec-approval lifecycle regression and existing
-      re-intake overlay replacement regression.
+- Fixtures and tests: promoted spec-approval lifecycle regression, stale-done
+      reframe regression, and existing re-intake overlay replacement regression.
 - Owner-facing plan text: approving a newly shaped task does not let an old
       run silently take it back to done.
 - Apply/revert: removing this restores a false-completion path and is not an

@@ -19,6 +19,7 @@ import {
   getProjectSystemStatePathFromMemoryDir,
   getProjectTranscriptPath,
   readTaskRuntimeStore,
+  appendTaskEvidence,
   upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 import { listOwnerInputRequests } from '../owner-input-store.js'
@@ -466,6 +467,60 @@ describe('reframeTask', () => {
     const runtime = await readTaskRuntimeStore(tmpDir)
     expect(runtime.tasks[result.taskId]?.proofRecovery?.kind).toBe('proof')
     expect(runtime.tasks[result.taskId]?.proofRecovery?.reason).toContain('project-backed proof command')
+  })
+
+  it('reframes a stale done projection whose completion has already been reopened', async () => {
+    const result = await createExploringTask({
+      memoryDir,
+      ask: 'Rebuild the synopsis expansion plan',
+      domain: 'docs',
+      projectPath: '/projects/narrative-harness',
+    })
+    const reopenedAt = '2026-07-23T04:27:00.000Z'
+    const mutation = writePromotedTaskDetailMutation(tasksPath, result.taskId, {
+      projectRoot: tmpDir,
+      mutate: task => ({ ...task, status: 'done' }),
+    })
+    expect(mutation).not.toBeNull()
+    await appendTaskEvidence(tmpDir, result.taskId, {
+      id: 'historical-completion-reopened',
+      kind: 'completion_summary',
+      recordedAt: reopenedAt,
+      payload: {
+        taskId: result.taskId,
+        status: 'reopened',
+        reopenedAt,
+        summary: {
+          journey: 'Historical implementation completed in an earlier lifecycle.',
+          decision: 'Historical completion was superseded by a fresh plan.',
+          evidence: 'Earlier proof remains historical evidence.',
+          learningCandidates: [],
+          openResidue: 'Fresh planning remains open.',
+        },
+        retention: {
+          transcriptPrimaryArtifact: false,
+          compactedFullTranscript: false,
+          fullEvidenceAvailable: true,
+        },
+        evidenceRefs: [],
+        createdAt: reopenedAt,
+        createdBy: 'rerun-stage',
+      },
+    })
+
+    const reframed = await reframeTask({
+      memoryDir,
+      taskId: result.taskId,
+      reason: 'The terminal projection is historical, not current work.',
+      actor: 'codex_delegated_owner',
+    })
+
+    expect(reframed).toEqual({ success: true, newStatus: 'exploring' })
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks[result.taskId]?.currentLifecycle).toMatchObject({
+      status: 'exploring',
+      source: 'rerun_spec',
+    })
   })
 })
 

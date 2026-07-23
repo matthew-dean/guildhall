@@ -1039,7 +1039,9 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   if (Array.isArray(effectiveTask.escalations)) {
     task.escalations = [...effectiveTask.escalations]
   }
-  if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
+  const historicalCompletionAlreadyReopened = task.status === 'done' &&
+    effectiveTask.doneSummaryBundle?.status === 'reopened'
+  if ((task.status === 'done' && !historicalCompletionAlreadyReopened) || task.status === 'shelved' || task.status === 'pending_pr') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
   }
   if (
