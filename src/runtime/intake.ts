@@ -53,6 +53,7 @@ import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
 import {
   sanitizeTaskQueueForProjectWrite,
   readProjectStateAuthorityAtBoundary,
+  readProjectReleaseState,
   preserveRuntimeOverlayOnTaskQueueParse,
   writeProjectTaskQueueAtCurrentStateBoundary,
   writePromotedTaskDetailMutation,
@@ -450,10 +451,19 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     }
   }
 
-  const selectedRelease = (task.releaseIds ?? [])
-    .map(releaseId => queue.releases?.find(release => release.id === releaseId))
-    .find(release => release?.id === queue.selectedReleaseId)
-  const requiresScriptProof = selectedRelease?.proofStyle === 'script_only' && !isProofSetupTask(task)
+  // Scope rows are the release-membership authority. An imported task can be
+  // selected through normalized scope without carrying an old raw releaseIds
+  // copy; consulting that copy here made approval disagree with readiness.
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const releaseState = await readProjectReleaseState(projectRoot)
+  const selectedRelease = releaseState.scope
+    ? releaseState.rawQueue.releases.find(release => release.id === releaseState.scope?.id)
+    : undefined
+  const taskIsIncludedInSelectedRelease = Boolean(selectedRelease) &&
+    releaseState.scopeRows.some(row => row.taskId === task.id && row.scope === 'included')
+  const requiresScriptProof = taskIsIncludedInSelectedRelease &&
+    selectedRelease?.proofStyle === 'script_only' &&
+    !isProofSetupTask(task)
   let proofSetupTaskId: string | null = null
   const hasConcreteScriptProof = (task.proofPaths ?? []).some(path => (
     path &&
@@ -467,8 +477,9 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   ))
   if (requiresScriptProof && !hasConcreteScriptProof) {
     const now = new Date().toISOString()
-    const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
-    const proofSetup = materializeProofSetupTask(queue, task, now)
+    const proofSetup = materializeProofSetupTask(queue, task, now, {
+      releaseIds: selectedRelease?.id ? [selectedRelease.id] : [],
+    })
     proofSetupTaskId = proofSetup.childTaskId
     task.proofPaths = replaceGenericProjectProofPathsWithSetup(task)
     task.acceptanceCriteria = task.acceptanceCriteria.map((criterion) => {

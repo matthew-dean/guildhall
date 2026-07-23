@@ -52926,3 +52926,39 @@ Repair:
 - Change class: provenance correctness.
 - Safety: the route accepts one allowlisted delegated actor value. All other
       values remain `human`; no arbitrary caller-selected authority is stored.
+
+## 2026-07-23 Spec approval and release readiness must share scope membership
+
+- [x] User job: approving a spec inside the selected `script_only` release
+      either preserves its existing typed command proof or creates exactly one
+      linked proof-setup task. The result must be the same whether the task was
+      imported with legacy `releaseIds` or is included by the normalized scope
+      rows that every release/readiness surface already uses.
+
+### Contract Touch Decision
+
+- Work id: `0.13.92/spec-approval-scope-authority`.
+- Touched contracts: spec approval, selected release membership, script-proof
+      setup, hierarchy link, and current release projection.
+- Considered but not touched: a task's legacy `releaseIds` is not made a
+      second authority. Worker proof commands remain typed acceptance/proof
+      data, never inferred from source prose.
+- Required behavior: resolve selected release and included membership through
+      `readProjectReleaseState` and its normalized scope rows, then pass the
+      selected release identity into the proof-setup builder.
+- Proof required: an imported task with no raw `releaseIds` but an included
+      normalized selected-scope row produces one release-local proof-setup
+      child; Release readiness and task context agree after approval.
+- Apply/revert: no route may recompute release membership from raw task data.
+
+### Schema Migration Decision
+
+- Work id: `0.13.92/spec-approval-scope-authority`.
+- Persisted schema touched: no new schema. Existing selected-scope rows and
+      release records become the sole read authority for approval behavior.
+- Change class: current-state authority repair.
+- Existing data impact: the next approval of an imported selected-release task
+      correctly creates bounded proof work instead of approving into a state
+      the release projector must immediately block.
+- Safety: the new child carries the selected release ID explicitly; source
+      task membership is not guessed from prose or duplicated into the parent.

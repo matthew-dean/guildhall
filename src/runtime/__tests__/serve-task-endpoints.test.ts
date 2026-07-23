@@ -2839,12 +2839,15 @@ describe('POST /api/project/task/:id/approve-spec', () => {
         state: 'active',
         source: 'release_plan',
         proofStyle: 'script_only',
+        nodeIds: ['work:task-1'],
       }],
       tasks: [{
         id: 'task-1',
         title: 'Build the bounded runner',
         status: 'spec_review',
-        releaseIds: ['release-1'],
+        // Imported work may receive selected-release membership through the
+        // normalized scope row, without carrying a duplicated raw releaseIds
+        // field on the task definition.
         structuredSpec: structuredSpecForTest('Build the bounded runner'),
         createdAt: now,
         updatedAt: now,
