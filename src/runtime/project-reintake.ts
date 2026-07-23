@@ -22,7 +22,7 @@ import {
   importedContractStructuralRepairReadiness,
   importedContractWorkIsStructurallyIncomplete,
 } from './imported-work-integrity.js'
-import { taskDoneButProofMissing } from './proof-health.js'
+import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { readProjectTaskQueueForMutationSync, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
 
 export type ProjectReintakeSource = EvidenceSource
@@ -168,7 +168,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   })
   graphPlan = dedupeTasksCoveredBySelectedReleaseScope(graphPlan, selectedRelease)
   const completedTaskIds = new Set(input.tasks
-    .filter(task => stringField(task, 'status') === 'done' && !taskDoneButProofMissing(task))
+    .filter(task => stringField(task, 'status') === 'done' && !taskNeedsCurrentScopeProof(task, selectedRelease))
     .map(task => stringField(task, 'id'))
     .filter((id): id is string => Boolean(id)))
   const graphTaskIds = new Set(graphPlan.tasks.map(task => task.id))
@@ -1476,6 +1476,10 @@ type SelectedRelease = {
   supersedesReleaseId?: string
 }
 
+function taskNeedsCurrentScopeProof(task: unknown, selectedRelease: SelectedRelease | null): boolean {
+  return taskDoneButProofMissingForScope(task, selectedRelease?.proofStyle)
+}
+
 function releaseProofStyleFromSource(content: string): SelectedRelease['proofStyle'] {
   const explicit = /\bproof\s*style\s*[:=-]\s*(script[_ -]?only|manual|mixed|unspecified)\b/i.exec(content)?.[1]?.toLowerCase()
   if (explicit) {
@@ -1828,7 +1832,7 @@ function refreshCurrentEvidenceChanges(
         status: existingStatus,
       },
       after,
-      reopenForProof: existingStatus === 'done' && taskDoneButProofMissing(existing),
+      reopenForProof: existingStatus === 'done' && taskNeedsCurrentScopeProof(existing, selectedRelease),
       reason: 'The current source trail names a more concrete proof path than the saved task plan.',
     })
   }

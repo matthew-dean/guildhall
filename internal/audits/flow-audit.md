@@ -51886,3 +51886,22 @@ Repair:
       remains required after this commit.
 - Apply/revert: remove this narrow bridge rather than broadening to prose
       matching.
+
+## 2026-07-23 Re-intake uses the selected release proof authority
+
+- [x] Re-intake previously used the generic task proof check, while Map and
+      Release correctly enforced the selected release's `script_only` proof
+      contract. This let re-intake preserve rows that the shared scope model
+      called stale.
+- [x] Re-intake now calls `taskDoneButProofMissingForScope` with the selected
+      release proof style, so all surfaces use the same completion authority.
+
+### Contract Touch Decision
+
+- Work id: `0.13.64/reintake-selected-proof-authority`.
+- Touched contracts: re-intake completion eligibility and shared proof scope.
+- Proof required: project re-intake suite and typecheck pass; installed
+      Narrative Harness replay must refresh/reframe stale script-only work.
+- Proof provided: focused suite and typecheck; installed replay pending.
+- Apply/revert: revert only with a replacement shared proof predicate; do not
+      reintroduce a local generic-proof interpretation.
