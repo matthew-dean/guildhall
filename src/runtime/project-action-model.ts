@@ -276,6 +276,7 @@ function isProviderReadinessCode(code: string | undefined): boolean {
 }
 
 function startReadinessActionLabel(readiness: ProjectActionStartReadiness): string {
+  if (readiness.code === 'ready_work') return readiness.focusTaskTitle?.trim() || readiness.message || 'Ready work'
   if (readiness.code === 'required_migration_pending') return 'Required migration'
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs shaping'
@@ -483,7 +484,11 @@ function threadHrefForTask(taskId: string | undefined): string {
 
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
   const label = readiness.code === 'owner_input_required' ? 'Answer in Thread' : startReadinessActionLabel(readiness)
-  const detail = readiness.message && readiness.message !== label ? readiness.message : undefined
+  const detail = readiness.code === 'ready_work'
+    ? undefined
+    : readiness.message && readiness.message !== label
+      ? readiness.message
+      : undefined
   return {
     source: readiness.code === 'owner_input_required' ? 'owner_input' : 'start_readiness',
     label,
@@ -561,11 +566,10 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
         : startReadinessAction(startReadiness),
     )
   }
-  // A compact saved summary deliberately omits full brief/spec detail. When
-  // the shared start-readiness contract says this exact item is runnable, it
-  // must remain the primary action instead of letting a compact task point
-  // manufacture a competing "Needs brief" interpretation.
-  if (startReadiness?.canStart && startReadiness.code === 'ready_work' && startReadiness.focusKind === 'ready_work') {
+  // Start readiness owns whether work is runnable. Compact summaries omit
+  // brief/spec detail, so task ranking must never reinterpret a ready item as
+  // blocked or incomplete merely because that detail is intentionally absent.
+  if (startReadiness?.canStart && startReadiness.code === 'ready_work') {
     candidates.push(startReadinessAction(startReadiness))
   }
   if (setupBlocksStart && ownerInput.href) {

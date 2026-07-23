@@ -46,9 +46,9 @@ import { buildProjectActionModel, type ProjectActionModel } from './project-acti
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 19 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 20 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string

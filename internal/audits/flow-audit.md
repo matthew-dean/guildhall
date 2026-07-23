@@ -52585,7 +52585,7 @@ Repair:
 - Existing data impact: no persisted state changes. On the next projection
       refresh, an explicit `ready_work` focus renders from the shared
       readiness result rather than a lossy task point. Summary projection
-      version 19 marks existing version-18 summaries stale so startup rebuilds
+      version 20 marks existing version-18 and version-19 summaries stale so startup rebuilds
       this derived action state from indexed rows.
 - Required follow-up: install the build and verify Narrative Harness overview,
       Work, and the Start control agree on the focused task and its ready
@@ -52599,15 +52599,15 @@ Repair:
 
 - Work id: `0.13.85/shared-ready-action-authority`.
 - Persisted schema touched: `project_summary` payload projection version only.
-- Change class: derived-projection semantic version increment from 18 to 19.
-- Existing data impact: existing version-18 summaries remain readable as
+- Change class: derived-projection semantic version increment from 18 to 20.
+- Existing data impact: existing version-18 and version-19 summaries remain readable as
       stale compatibility payloads and refresh from indexed state; task,
       evidence, release, and runtime rows are unchanged.
 - Migration id: none. The startup projection refresh is the deterministic
       migration mechanism for derived summary state.
 - Safety: the refresh stays compact and revisioned; it does not reopen raw
       transcripts or rich task detail just to correct a primary action.
-- Compatibility reader: version 18 is listed as compatible-stale so an older
+- Compatibility reader: versions 18 and 19 are listed as compatible-stale so an older
       saved summary can be inspected or refreshed without shape guessing.
 - Fixtures and tests: action-model compact-point regression plus the existing
       summary version/read and startup refresh coverage.

@@ -36,7 +36,7 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: '"Build synopsis expansion" is ready to run.',
+      label: 'Build synopsis expansion',
       buttonLabel: 'Open Work',
       href: '/work?task=task-synopsis',
       tone: 'accent',
@@ -44,12 +44,13 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction?.detail).toBeUndefined()
   })
 
-  it('labels an approved brief without a spec as source-backed shaping', () => {
+  it('does not let a contradictory ready-work hint override the shared readiness authority', () => {
     const model = buildProjectActionModel({
       startReadiness: {
         canStart: true,
         code: 'ready_work',
         focusTaskId: 'task-story-context',
+        focusTaskTitle: 'Build story context',
       },
       tasks: [{
         id: 'task-story-context',
@@ -68,10 +69,11 @@ describe('buildProjectActionModel', () => {
     })
 
     expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
       label: 'Build story context',
-      detail: 'Guildhall is shaping a source-backed spec from the approved brief.',
       buttonLabel: 'Open Work',
     })
+    expect(model.primaryAction?.detail).toBeUndefined()
   })
 
   it('normalizes risky start blockers into terse shared actions', () => {
