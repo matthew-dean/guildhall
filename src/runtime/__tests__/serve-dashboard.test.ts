@@ -472,3 +472,46 @@ describe('GET /api/project/spine', () => {
     expect(body.spine?.gaps?.map(gap => gap.kind)).not.toContain('missing_charter')
   })
 })
+
+describe('project source capability API', () => {
+  it('records typed source scope without creating a task or release membership', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-capability-api-'))
+    tempDirs.push(tmpDir)
+    const projectId = bootstrapWorkspace(tmpDir, { name: `Capability API ${path.basename(tmpDir)}` }).id ?? path.basename(tmpDir)
+    await seedTasks(tmpDir, [makeTask(tmpDir, { id: 'task-existing', title: 'Existing task' })])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const write = await app.fetch(new Request(projectUrl(projectId, '/api/project/source-capabilities'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        capabilities: [{
+          id: 'story:temporal-continuity-review',
+          adapterId: 'narrative-release-plan',
+          adapterSchemaVersion: 1,
+          sourceRevision: 'v1',
+          label: 'Review temporal continuity',
+          state: 'planned',
+          releaseIds: ['headless-mvp'],
+          dependsOnCapabilityIds: [],
+          evidenceRefs: ['artifact:release-plan'],
+        }],
+      }),
+    }))
+    expect(write.status).toBe(200)
+    expect(await write.json()).toMatchObject({
+      ok: true,
+      capabilities: [expect.objectContaining({ id: 'story:temporal-continuity-review' })],
+    })
+
+    const read = await app.fetch(new Request(projectUrl(projectId, '/api/project/source-capabilities')))
+    expect(read.status).toBe(200)
+    expect(await read.json()).toMatchObject({
+      availability: 'ready',
+      capabilities: [expect.objectContaining({ id: 'story:temporal-continuity-review' })],
+    })
+    const queue = await app.fetch(new Request(projectUrl(projectId, '/api/project')))
+    const queueBody = await queue.json() as { tasks?: Array<{ id?: string }> }
+    expect(queueBody.tasks?.map(task => task.id)).toEqual(['task-existing'])
+  })
+})

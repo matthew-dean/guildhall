@@ -53143,6 +53143,10 @@ Repair:
       changes. A planned catalog capability creates only an `import_draft`
       planning task with a typed `plans` binding; it cannot become execution
       work until its brief/spec is shaped and approved through normal gates.
+- [x] The catalog has explicit read/write API boundaries. A typed adapter or
+      delegated intake can record capability scope without creating a task,
+      changing a release, or silently granting approval; the API regression
+      proves the existing queue remains unchanged.
 
 ### Contract Touch Decision: catalog-only adapter write
 

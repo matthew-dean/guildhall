@@ -36,6 +36,7 @@ import {
   type ProjectStateDatabaseDiagnosticProjectionSnapshot,
   type ProjectStateDatabaseTask,
   type ProjectStateDatabaseRepository,
+  type ProjectStateDatabaseSourceCapability,
 } from '@guildhall/sessions'
 import { readTaskRuntimeStore, readTaskWorkspaceStore, writeTaskRuntimeStore } from './task-state-store.js'
 import { classifyCompletionProof, latestRecordedCompletionProofAt, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
@@ -61,7 +62,7 @@ import {
   pruneFleetSummaryProjectionAtBoundary,
   readFleetSummaryProjectionPageAtBoundary,
 } from './fleet-summary-projection.js'
-import { ProjectStateRevisionMismatchError, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectOverviewStateAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
+import { ProjectStateRevisionMismatchError, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectOverviewStateAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, upsertProjectSourceCapabilitiesAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -7937,6 +7938,62 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/source-capabilities', c => {
+    try {
+      const tasksPath = projectTasksPath(project.path)
+      const capabilities = readProjectStateDatabaseSourceCapabilities(tasksPath)
+      const authority = readProjectStateAuthorityAtBoundary(tasksPath)
+      return c.json({
+        capabilities: capabilities ?? [],
+        availability: capabilities === null ? 'unavailable' : capabilities.length === 0 ? 'empty' : 'ready',
+        projectRevision: authority.projectRevision,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/source-capabilities', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      const body = await c.req.json().catch(() => ({})) as { capabilities?: unknown }
+      if (!Array.isArray(body.capabilities)) return c.json({ error: 'capabilities must be an array.' }, 400)
+      const capabilities: ProjectStateDatabaseSourceCapability[] = body.capabilities.map(value => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Each capability must be an object.')
+        const record = value as Record<string, unknown>
+        const strings = (field: string): string[] => Array.isArray(record[field])
+          ? record[field].filter((entry): entry is string => typeof entry === 'string')
+          : []
+        if (
+          typeof record.id !== 'string' || typeof record.adapterId !== 'string' ||
+          typeof record.adapterSchemaVersion !== 'number' || typeof record.sourceRevision !== 'string' ||
+          typeof record.label !== 'string' || (record.state !== 'planned' && record.state !== 'retired')
+        ) throw new Error('Each capability requires typed identity, adapter, revision, label, and state.')
+        return {
+          id: record.id,
+          adapterId: record.adapterId,
+          adapterSchemaVersion: record.adapterSchemaVersion,
+          sourceRevision: record.sourceRevision,
+          label: record.label,
+          state: record.state as ProjectStateDatabaseSourceCapability['state'],
+          releaseIds: strings('releaseIds'),
+          dependsOnCapabilityIds: strings('dependsOnCapabilityIds'),
+          evidenceRefs: strings('evidenceRefs'),
+        }
+      })
+      const tasksPath = projectTasksPath(project.path)
+      if (!upsertProjectSourceCapabilitiesAtBoundary(tasksPath, capabilities, { projectId: project.id, projectRoot: project.path })) {
+        return c.json({ error: 'Project state is not ready for a catalog write. Refresh project state and retry.' }, 409)
+      }
+      return c.json({
+        ok: true,
+        capabilities: readProjectStateDatabaseSourceCapabilities(tasksPath) ?? [],
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
     }
   })
 
