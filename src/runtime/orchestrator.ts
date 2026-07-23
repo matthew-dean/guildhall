@@ -8973,10 +8973,9 @@ export class Orchestrator {
       )
     }
 
-    // Policy selection + prior-rounds extraction for same-persona-repeat
-    // dissent detection. When the lever is
-    // `coordinator_adjudicates_on_conflict`, `aggregate.needsAdjudication`
-    // may flip true — we branch on it below.
+    // Policy selection plus prior-round extraction for audit and bounded retry
+    // accounting. `aggregate.needsAdjudication` can only come from opposite
+    // typed findings on one target, never from persona recurrence.
     const policy = await this.resolveReviewerFanoutPolicy(task.domain)
     const priorRounds = extractPriorVerdictRounds(task.reviewVerdicts)
     const aggregate = aggregateFanout(verdicts, { policy, priorRounds })
@@ -8994,7 +8993,7 @@ export class Orchestrator {
       // expert agreed and which objected.
       const now = this.now()
       for (const v of verdicts) {
-        t.reviewVerdicts.push(personaVerdictToReviewRecord(v, { now }))
+        t.reviewVerdicts.push(personaVerdictToReviewRecord(v, { now, taskId: t.id }))
       }
       await this.persistReviewerRuns({
         task: t,
@@ -9005,7 +9004,7 @@ export class Orchestrator {
 
       const repeatedAfterCoordinatorAdjudication =
         aggregate.verdict === 'revise' &&
-        hasPriorAdjudicationForDissent(t, aggregate.dissenting)
+        hasPriorAdjudicationForConflict(t, aggregate.conflicts)
       if (repeatedAfterCoordinatorAdjudication) {
         await this.writeQueue(queue)
         const dissenterSlugs = aggregate.dissenting.map((d) => d.guildSlug)
@@ -9039,20 +9038,13 @@ export class Orchestrator {
         } as TickOutcome
       }
 
-      // Under `coordinator_adjudicates_on_conflict`, recurrent same-persona
-      // dissent short-circuits to the domain coordinator instead of looping
-      // the worker. The worker will re-enter in_progress only after the
-      // coordinator lands a binding AdjudicationRecord with scoped
-      // instructions.
+      // A typed target conflict routes through the coordinator recovery
+      // boundary. Persona recurrence alone remains an audit signal, not a
+      // conflict or an automatic authority decision.
       const shouldInspectRepeatedHandoff =
         aggregate.verdict === 'revise' &&
-        (aggregate.needsAdjudication ||
-          hasOverlappingPriorDissent(aggregate.dissenting, priorRounds))
+        aggregate.needsAdjudication
       if (shouldInspectRepeatedHandoff) {
-        if (!aggregate.needsAdjudication) {
-          aggregate.needsAdjudication = true
-          aggregate.adjudicationTrigger = 'policy_conflict'
-        }
         const adjudicationOutcome = await this.routeToCoordinatorAdjudication({
           queue,
           task: t,
@@ -9114,6 +9106,10 @@ export class Orchestrator {
         proofEvidenceIds: [...new Set(
           aggregate.dissenting.flatMap(verdict => verdict.proofEvidenceIds ?? []),
         )],
+        findings: aggregate.dissenting.flatMap(verdict => verdict.findings ?? []),
+        // Kept in the audit record for historical inspection. Worker context
+        // renders typed findings only; model-authored revision strings cannot
+        // create executable work by themselves.
         revisionItems: aggregate.dissenting.flatMap(verdict => verdict.revisionItems ?? []),
         riskItems: aggregate.dissenting.flatMap(verdict => verdict.riskItems ?? []),
         followUpItems: aggregate.dissenting.flatMap(verdict => verdict.followUpItems ?? []),
@@ -9216,7 +9212,7 @@ export class Orchestrator {
       const effective = await buildEffectiveTask(projectRoot, current, { evidence: 'full' }) as unknown as Task
       const now = this.now()
       effective.reviewVerdicts.push(
-        ...verdicts.map((verdict) => personaVerdictToReviewRecord(verdict, { now })),
+        ...verdicts.map((verdict) => personaVerdictToReviewRecord(verdict, { now, taskId: effective.id })),
       )
       const failureCodes = [...new Set(verdicts.map((verdict) => verdict.failureCode ?? 'invalid_review_contract'))]
       effective.notes.push({
@@ -9279,10 +9275,10 @@ export class Orchestrator {
           recipeVersion: recipe.version,
           lanes: recipe.lanes,
           verdict: verdict.verdict,
-          findings: verdict.revisionItems.map((item) => ({
+          findings: (verdict.findings ?? []).map((finding) => ({
             lane: recipe.lanes[0] ?? 'test_adequacy',
-            severity: 'high',
-            summary: item,
+            severity: finding.disposition === 'unsatisfied' ? 'high' : 'low',
+            summary: finding.workerInstruction ?? `${finding.targetKind}:${finding.targetId} is ${finding.disposition}`,
           })),
           recordedAt: input.recordedAt,
           recordedBy: `reviewer-fanout:${verdict.guildSlug}`,
@@ -9302,26 +9298,10 @@ export class Orchestrator {
   }
 
   /**
-   * Route a fan-out aggregate with `needsAdjudication: true` to the domain
-   * coordinator. The coordinator receives the verdict set + dissent
-   * transcript, produces a binding AdjudicationRecord (appended to
-   * `task.adjudications`), and either:
-   *   - Advances the task to `gate_check` with superseded dissenters
-   *     recorded (coordinator resolved the conflict in favor of approving
-   *     the work).
-   *   - Bounces to `in_progress` with the coordinator's `scopeInstructions`
-   *     as the worker prompt, rather than the raw dissent (worker cannot
-   *     relitigate; it executes within the adjudicated scope).
-   *   - Raises an escalation if the coordinator cannot decide
-   *     autonomously under the current `remediation_autonomy` posture.
-   *
-   * This method builds the record deterministically from the aggregate; the
-   * live coordinator LLM pass will be layered on later (FR-32 remediation
-   * loop extension). For now we record a deterministic "keep the dissent's
-   * scoped instructions, mark recurrent-dissent as the trigger" decision
-   * and bounce to the worker with those instructions — which is still a
-   * meaningful improvement: the worker's prompt is the specific list of
-   * changes, not the full conflict transcript.
+   * Route a typed review-target conflict to its deterministic recovery action.
+   * Persona identity, response order, and reviewer prose cannot select a
+   * winner. The record names the exact findings in disagreement and either
+   * re-runs proof verification or returns a canonical target for inspection.
    */
   private async routeToCoordinatorAdjudication(input: {
     queue: TaskQueue
@@ -9335,36 +9315,50 @@ export class Orchestrator {
     const coord = this.opts.agents.coordinators[input.task.domain]
     const coordinatorId = coord?.name ?? 'coordinator-default'
 
-    // For v1: the deterministic adjudication record. Every dissenter is
-    // recorded as a "winning concern" (we treat all dissents as load-
-    // bearing until an LLM coordinator pass overrides). The worker gets
-    // scoped instructions = the union of dissent revision items, framed as
-    // the coordinator's decision.
     const dissenterSlugs = input.aggregate.dissenting.map(d => d.guildSlug)
+    const conflictKeys = new Set(input.aggregate.conflicts
+      .map(conflict => `${conflict.targetKind}:${conflict.targetId}`))
+    const conflictFindingRefs = input.task.reviewVerdicts
+      .filter(verdict => verdict.recordedAt === input.now)
+      .flatMap(verdict => (verdict.findings ?? [])
+        .filter(finding => conflictKeys.has(`${finding.targetKind}:${finding.targetId}`))
+        .map(finding => `${verdict.id ?? `review:${input.task.id}:${verdict.reviewerId ?? 'unknown'}:${input.now}`}:${finding.targetKind}:${finding.targetId}`))
+      .sort()
+    const resolution: AdjudicationRecord['resolution'] = input.aggregate.conflicts.length > 0 &&
+      input.aggregate.conflicts.every(conflict => conflict.targetKind === 'proof_evidence')
+      ? 'rerun_verification'
+      : 'inspect_canonical_task'
     const scopeInstructions = [...new Set(
       input.aggregate.dissenting
-        .flatMap(d => d.revisionItems)
-        .filter(item => item.trim().length > 0),
+        .flatMap(d => d.findings ?? [])
+        .filter(finding => finding.disposition === 'unsatisfied' && conflictKeys.has(`${finding.targetKind}:${finding.targetId}`))
+        .map(finding => finding.workerInstruction?.trim() || `Inspect ${finding.targetKind.replace(/_/g, ' ')} ${finding.targetId}.`),
     )]
 
     const rationale = [
-      `Reviewer fan-out round ${input.round} produced recurring dissent from`,
-      `${dissenterSlugs.join(', ')}. Guildhall routed this repeated handoff`,
-      `to the domain coordinator (${input.task.domain}) before bouncing the`,
-      'task back to the worker again.',
+      `Reviewer fan-out round ${input.round} produced incompatible typed`,
+      `findings for ${input.aggregate.conflicts.map(conflict => `${conflict.targetKind}:${conflict.targetId}`).join(', ')}.`,
+      `Guildhall routed the conflict to the domain coordinator (${input.task.domain}).`,
       '',
-      'Decision (deterministic v1): keep each dissenting persona\'s scoped',
-      'instructions. Worker executes the scoped list; the dissent transcript',
-      'is NOT in the worker prompt so the worker cannot relitigate.',
+      `Recovery action: ${resolution}. No reviewer or persona is recorded as`,
+      'a winner. The next transition is selected only from the contested target type.',
     ].join('\n')
 
     const adjudication: AdjudicationRecord = {
       round: input.round,
-      trigger: input.aggregate.adjudicationTrigger ?? 'same_persona_repeat_dissent',
+      trigger: input.aggregate.adjudicationTrigger ?? 'policy_conflict',
       dissenters: dissenterSlugs,
-      winningConcerns: dissenterSlugs,
+      winningConcerns: [],
       supersededConcerns: [],
-      summary: `Coordinator adjudicated: worker to address ${scopeInstructions.length} scoped item${scopeInstructions.length === 1 ? '' : 's'} from ${dissenterSlugs.join(', ')}`,
+      findingRefs: conflictFindingRefs,
+      contestedTargets: input.aggregate.conflicts.map(conflict => ({
+        targetKind: conflict.targetKind,
+        targetId: conflict.targetId,
+      })),
+      resolution,
+      summary: resolution === 'rerun_verification'
+        ? `Coordinator requested verification rerun for ${conflictFindingRefs.length} conflicting review finding${conflictFindingRefs.length === 1 ? '' : 's'}.`
+        : `Coordinator requested canonical task inspection for ${conflictFindingRefs.length} conflicting review finding${conflictFindingRefs.length === 1 ? '' : 's'}.`,
       rationale,
       scopeInstructions,
       decidedBy: 'coordinator',
@@ -9383,11 +9377,13 @@ export class Orchestrator {
       `**Coordinator:** ${coordinatorId}`,
       `**Trigger:** ${adjudication.trigger} (round ${adjudication.round})`,
       `**Dissenters:** ${dissenterSlugs.join(', ') || 'none'}`,
+      `**Finding references:** ${conflictFindingRefs.join(', ') || 'none'}`,
+      `**Recovery action:** ${resolution}`,
       '',
       '**Rationale:**',
       rationale,
       '',
-      '**Scoped instructions to worker:**',
+      '**Target-anchored instructions:**',
       ...scopeInstructions.map(i => `- ${i}`),
       '',
       '---',
@@ -9400,13 +9396,50 @@ export class Orchestrator {
       // the load-bearing trail.
     }
 
-    // Build the worker's next prompt from scope instructions only.
+    if (resolution === 'rerun_verification') {
+      input.task.notes.push({
+        agentId: coordinatorId,
+        role: 'coordinator',
+        content: `${adjudication.summary}\n\n${rationale}`,
+        timestamp: input.now,
+      })
+      transitionTaskStatus({
+        task: input.task,
+        event: 'start_gate_check',
+        actor: coordinatorId,
+        evidenceRefs: conflictFindingRefs,
+        now: input.now,
+      })
+      input.task.updatedAt = input.now
+      input.queue.lastUpdated = input.now
+      await this.writeQueue(input.queue)
+      await this.logTickProgress({
+        task: input.task,
+        agent: coordinatorId,
+        beforeStatus: input.beforeStatus,
+        afterStatus: 'gate_check',
+        transitioned: true,
+        note: 'coordinator requested verification rerun for typed reviewer conflict',
+      })
+      return {
+        kind: 'processed',
+        taskId: input.task.id,
+        agent: coordinatorId,
+        beforeStatus: input.beforeStatus,
+        afterStatus: 'gate_check',
+        transitioned: true,
+        note: 'coordinator requested verification rerun for typed reviewer conflict',
+        revisionCount: input.task.revisionCount,
+      } as TickOutcome
+    }
+
+    // Build the worker's next prompt from target-anchored instructions only.
     const scopedFeedback = [
       `**Coordinator adjudication (round ${adjudication.round}):**`,
       '',
       adjudication.summary,
       '',
-      '**Scoped instructions (address exactly these items):**',
+      '**Target-anchored instructions (inspect exactly these items):**',
       ...scopeInstructions.map(i => `- ${i}`),
     ].join('\n')
 
@@ -9420,7 +9453,7 @@ export class Orchestrator {
       task: input.task,
       event: 'revise',
       actor: coordinatorId,
-      evidenceRefs: dissenterSlugs.map((slug) => `reviewer-fanout:${slug}`),
+      evidenceRefs: conflictFindingRefs,
       now: input.now,
     })
     ensureWorkerOwnership(input.task)
@@ -9458,7 +9491,7 @@ export class Orchestrator {
       beforeStatus: input.beforeStatus,
       afterStatus: 'in_progress',
       transitioned: true,
-      note: `coordinator adjudicated (dissenters: ${dissenterSlugs.join(', ')}) → scoped rework`,
+      note: 'coordinator requested canonical task inspection for typed reviewer conflict',
     })
     return {
       kind: 'processed',
@@ -9467,7 +9500,7 @@ export class Orchestrator {
       beforeStatus: input.beforeStatus,
       afterStatus: 'in_progress',
       transitioned: true,
-      note: `coordinator adjudicated (dissenters: ${dissenterSlugs.join(', ')}) → scoped rework`,
+      note: 'coordinator requested canonical task inspection for typed reviewer conflict',
       revisionCount: input.task.revisionCount,
     } as TickOutcome
   }
@@ -13610,8 +13643,8 @@ function extractStructuredHandoff(task: Task): NonNullable<StructuredSelfCritiqu
  * Rebuild prior fan-out rounds from the flat `task.reviewVerdicts` trail.
  * Verdicts recorded within the same ISO second are treated as one round
  * (the fan-out persists every persona's verdict with the same `recordedAt`).
- * The most-recent round is placed last in the returned list so
- * `findRecurrentDissent` can compare against `priorRounds.at(-1)`.
+ * The most-recent round is placed last for audit and bounded retry accounting;
+ * prior persona identity is never used to infer a substantive conflict.
  *
  * Each element is a PersonaVerdict-shaped slice derived from the stored
  * ReviewVerdict — `guildSlug` comes from `failingSignals[0]` (fan-out
@@ -14027,42 +14060,16 @@ function latestApprovingReviewEvidenceRefs(task: Task): string[] {
   return verdict ? [`review:${verdict.recordedAt}`] : ['review:approved']
 }
 
-function sortedDissenterSlugs(dissenting: readonly PersonaVerdict[]): string[] {
-  return [...new Set(dissenting.map((verdict) => verdict.guildSlug).filter(Boolean))].sort()
-}
-
-function sameDissenterSet(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false
-  return left.every((slug, index) => slug === right[index])
-}
-
-function hasOverlappingPriorDissent(
-  dissenting: readonly PersonaVerdict[],
-  priorRounds: readonly (readonly PersonaVerdict[])[],
-): boolean {
-  const current = new Set(sortedDissenterSlugs(dissenting))
-  if (current.size === 0) return false
-  return priorRounds.some((round) =>
-    round.some((verdict) =>
-      verdict.verdict === 'revise' && current.has(verdict.guildSlug),
-    ),
-  )
-}
-
-function hasPriorAdjudicationForDissent(
+function hasPriorAdjudicationForConflict(
   task: Task,
-  dissenting: readonly PersonaVerdict[],
+  conflicts: ReadonlyArray<{ targetKind: string; targetId: string }>,
 ): boolean {
-  const current = sortedDissenterSlugs(dissenting)
-  if (current.length === 0) return false
+  if (conflicts.length === 0) return false
+  const current = new Set(conflicts.map(conflict => `${conflict.targetKind}:${conflict.targetId}`))
   return (task.adjudications ?? []).some((record) =>
     record.decidedBy === 'coordinator' &&
-    sameDissenterSet(sortedDissenterSlugsFromRecord(record.dissenters), current),
+    (record.contestedTargets ?? []).some(target => current.has(`${target.targetKind}:${target.targetId}`)),
   )
-}
-
-function sortedDissenterSlugsFromRecord(dissenters: readonly string[]): string[] {
-  return [...new Set(dissenters.filter(Boolean))].sort()
 }
 
 function resolvedScopeDecisionTexts(task: Task): string[] {

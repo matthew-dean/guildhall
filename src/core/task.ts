@@ -181,11 +181,27 @@ export const AgentNote = z.object({
 })
 export type AgentNote = z.infer<typeof AgentNote>
 
+/**
+ * A reviewer finding is a claim about one existing, machine-addressable part
+ * of task completion. The explanation may help a worker, but its wording can
+ * never become the identity or disposition of the finding.
+ */
+export const ReviewFinding = z.object({
+  targetKind: z.enum(['acceptance_criterion', 'proof_evidence']),
+  targetId: z.string().min(1),
+  disposition: z.enum(['satisfied', 'unsatisfied', 'advisory']),
+  evidenceRefs: z.array(z.string()).default([]),
+  workerInstruction: z.string().optional(),
+})
+export type ReviewFinding = z.infer<typeof ReviewFinding>
+
 // FR-26 / FR-27 / AC-18: every reviewer verdict is persisted on the task so
 // the audit trail shows what was decided, by which path, when, and against
 // which policy version. `reviewerPath` distinguishes LLM-run reviews from
 // deterministic fallbacks — the machine-readable field for AC-18.
 export const ReviewVerdict = z.object({
+  /** Stable review-run identity for finding and adjudication references. */
+  id: z.string().optional(),
   verdict: z.enum(['approve', 'revise']),
   reviewerPath: z.enum(['llm', 'deterministic']),
   /** Stable reviewer/persona identity for cross-round attribution. */
@@ -218,6 +234,11 @@ export const ReviewVerdict = z.object({
   acceptedCriteriaIds: z.array(z.string()).optional(),
   /** Stable proof evidence IDs the reviewer explicitly verified. */
   proofEvidenceIds: z.array(z.string()).optional(),
+  /**
+   * Typed review conclusions. New writes populate this array; the older ID
+   * lists remain readable during migration but cannot drive adjudication.
+   */
+  findings: z.array(ReviewFinding).optional(),
   /** Optional structured advisory dimensions shown in the review UI. */
   advisoryScores: z.object({
     recommendationPriority: z.enum(['low', 'medium', 'high']).optional(),
@@ -247,10 +268,22 @@ export const AdjudicationRecord = z.object({
   trigger: z.enum(['same_persona_repeat_dissent', 'explicit_request', 'policy_conflict']),
   /** Guild slugs whose revise verdicts this record resolves. */
   dissenters: z.array(z.string()).default([]),
-  /** Guild slugs whose concerns won. */
+  /**
+   * Legacy display field. New resolution records reference finding IDs, never
+   * reviewer/persona names; old data remains readable while it ages out.
+   */
   winningConcerns: z.array(z.string()).default([]),
-  /** Guild slugs whose concerns were superseded. */
+  /** Legacy display field; see resolved/superseded finding references below. */
   supersededConcerns: z.array(z.string()).default([]),
+  /** Stable review-finding references that caused this recovery action. */
+  findingRefs: z.array(z.string()).optional(),
+  /** The exact targets that were contested when this recovery was scheduled. */
+  contestedTargets: z.array(z.object({
+    targetKind: z.enum(['acceptance_criterion', 'proof_evidence']),
+    targetId: z.string().min(1),
+  })).optional(),
+  /** The only operational consequence a coordinator may select. */
+  resolution: z.enum(['replan_task', 'rerun_verification', 'inspect_canonical_task']).optional(),
   /** One-line headline for CLI / PROGRESS.md. */
   summary: z.string(),
   /** Full rationale — references spec, goal guardrails, and the dissent. */

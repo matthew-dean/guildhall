@@ -64,10 +64,10 @@ export function personaReviewerSystemPrompt(guild: GuildDefinition): string {
     '',
     '```',
     '```json',
-    '{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[],"revisionItems":[],"riskItems":[],"followUpItems":[],"advisoryScores":{}}',
+    '{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[],"findings":[{"targetKind":"acceptance_criterion","targetId":"<exact-id>","disposition":"satisfied","evidenceRefs":[]}],"revisionItems":[],"riskItems":[],"followUpItems":[],"advisoryScores":{}}',
     '```',
     '',
-    'Set verdict to the exact string `approve` or `revise`. Copy stable criterion and evidence IDs exactly from the review packet. Put blocking revisions, risks, non-blocking follow-ups, and advisory levels in the corresponding JSON fields; use empty arrays or an empty object when none apply. Never encode a decision or actionable reviewer feedback only in prose.',
+    'Set verdict to the exact string `approve` or `revise`. Copy stable criterion and evidence IDs exactly from the review packet. Every substantive approval or revision needs a finding anchored to one of those IDs; use `satisfied`, `unsatisfied`, or `advisory` and include the exact evidence IDs you relied on when available. Put a concise task-local instruction beside an unsatisfied finding when a worker action is needed. Put blocking revisions, risks, non-blocking follow-ups, and advisory levels in the corresponding JSON fields; use empty arrays or an empty object when none apply. Never encode a decision or actionable reviewer feedback only in prose.',
     '',
     'Do not mutate the task queue. Do not call update-task, log-decision, or raise-escalation. Your output is the verdict; the orchestrator aggregates across all personas and decides the task\'s next status.',
   ].join('\n')

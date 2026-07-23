@@ -7879,6 +7879,42 @@ non-JavaScript proof language where possible.
   reviewer-concern migration and cross-surface consumer coverage remain open
   release work; no reviewer prose may become a temporary resolution fallback.
 
+### 2026-07-23 Typed Reviewer Findings Migration
+
+- Work id: `codex:typed-review-findings-2026-07-23`.
+- User job: two reviewers who reach opposite conclusions about the same
+  criterion or proof item must produce a target-level conflict and a
+  deterministic agent recovery action. Project surfaces must later present
+  that shared conflict projection; a reviewer name or revision sentence must
+  never masquerade as the thing being decided.
+- Implemented:
+  - new reviewer outputs name existing acceptance-criterion or proof-evidence
+    targets and record `satisfied`, `unsatisfied`, or `advisory` dispositions;
+  - substantive revisions without an unsatisfied typed target fail the review
+    contract instead of supplying freeform worker instructions;
+  - coordinator fan-out detects only opposite dispositions on one target;
+    proof conflicts re-run verification and other conflicts become a canonical
+    task-inspection step; no persona is recorded as a winner;
+  - subsequent loop detection compares persisted contested targets, never
+    dissenting persona sets.
+  - Open follow-up: add the typed recovery projection to the shared project
+    summary/action model, then prove the same target and recovery action on
+    Work, Thread, Timeline, and the project map without per-view re-ranking.
+- Schema Migration Decision:
+  - Persisted schema touched: `ReviewVerdict` and `AdjudicationRecord` in the
+    canonical task record.
+  - Migration id: `0.13.63/typed-review-findings`.
+  - Change class: additive parser/writer change. New writes carry typed fields;
+    old records remain readable as audit-only entries.
+  - Safety: missing typed fields never get inferred from reasoning, reviewer
+    names, or revision strings. They cannot trigger automatic adjudication.
+  - Fixtures/tests: typed opposite-disposition conflict, advisory non-conflict,
+    unregistered target rejection, prose-only contract failure, and target
+    replay after a recovery record.
+  - Apply/revert: no destructive rewrite. A later compaction may remove
+    obsolete audit-only shapes only after a separate migration validates that
+    every retained operational conclusion has typed state.
+
 ## 2026-07-23 Source capability coverage is a typed planning contract
 
 - Work id: `codex:source-capability-coverage-contract-2026-07-23`.

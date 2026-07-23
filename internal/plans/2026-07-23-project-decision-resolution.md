@@ -220,6 +220,23 @@ persisted `nextAction` and `actionModel` as independent decision sources.
    and never becomes a second state store. Once lifecycle freshness is
    available, reject completion/proof claims that predate a task reopen.
 
+### Typed Reviewer Record Migration
+
+- Migration id: `0.13.63/typed-review-findings`.
+- Persisted shape: `ReviewVerdict` gains a stable review-run ID and typed
+  findings; `AdjudicationRecord` gains contested target and finding-reference
+  fields plus a typed recovery action.
+- Existing data: historical verdicts remain readable as audit evidence. They
+  are deliberately ineligible to trigger automatic adjudication because they
+  lack target-level dispositions.
+- New write rule: a substantive revision must name at least one known task
+  acceptance-criterion or proof-evidence ID as `unsatisfied`; an approval may
+  not carry an unsatisfied finding. Unknown or contradictory IDs fail closed.
+- Apply/revert: parse compatibility is additive during the release. A repair
+  job may later compact historical records, but it must never invent findings
+  from prose. Reverting the writer leaves old entries readable and prevents
+  automatic conflict resolution rather than guessing.
+
 ## Verification
 
 - A response matrix asserts identical decision version, execution state,

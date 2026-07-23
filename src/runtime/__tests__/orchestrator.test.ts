@@ -12250,6 +12250,39 @@ describe('Orchestrator.run — full loops', () => {
       assignedTo: 'reviewer-agent',
       domain: 'coherence-lenses',
       spec: VALID_SPEC,
+      reviewVerdicts: [
+        {
+          id: 'review:scene-lane:copywriter:2026-07-06T00:00:00.000Z',
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reviewerId: 'copywriter',
+          reason: 'The Copywriter approved.',
+          failingSignals: [],
+          findings: [{
+            targetKind: 'acceptance_criterion',
+            targetId: 'ac-1',
+            disposition: 'satisfied',
+            evidenceRefs: ['review:copywriter'],
+          }],
+          recordedAt: '2026-07-06T00:00:00.000Z',
+        },
+        {
+          id: 'review:scene-lane:reviewer:2026-07-06T00:00:00.000Z',
+          verdict: 'revise',
+          reviewerPath: 'llm',
+          reviewerId: 'reviewer',
+          reason: 'The reviewer found a typed conflict.',
+          failingSignals: ['reviewer'],
+          findings: [{
+            targetKind: 'acceptance_criterion',
+            targetId: 'ac-1',
+            disposition: 'unsatisfied',
+            evidenceRefs: ['review:reviewer'],
+            workerInstruction: 'Inspect acceptance criterion ac-1.',
+          }],
+          recordedAt: '2026-07-06T00:00:00.000Z',
+        },
+      ],
     })
     const queue: TaskQueue = {
       version: 1,
@@ -12268,12 +12301,25 @@ describe('Orchestrator.run — full loops', () => {
       aggregate: {
         verdict: 'revise',
         combinedFeedback: 'Add a working reviewer function.',
+        conflicts: [{
+          targetKind: 'acceptance_criterion',
+          targetId: 'ac-1',
+          satisfiedBy: ['copywriter'],
+          unsatisfiedBy: ['reviewer'],
+        }],
         dissenting: [{
           guildSlug: 'copywriter',
           guildName: 'The Copywriter',
           verdict: 'revise',
           reasoning: 'The lane only defines types.',
           revisionItems: ['Add a working reviewer function.'],
+          findings: [{
+            targetKind: 'acceptance_criterion',
+            targetId: 'ac-1',
+            disposition: 'unsatisfied',
+            evidenceRefs: [],
+            workerInstruction: 'Inspect acceptance criterion ac-1.',
+          }],
           rawOutput: '**Verdict:** revise',
         }],
         approving: [],
@@ -12293,8 +12339,18 @@ describe('Orchestrator.run — full loops', () => {
       expect(out.afterStatus).toBe('in_progress')
       expect(out.transitioned).toBe(true)
       expect(out.revisionCount).toBe(1)
-      expect(out.note).toContain('coordinator adjudicated')
+      expect(out.note).toContain('canonical task inspection')
     }
+    expect(task.adjudications).toEqual([expect.objectContaining({
+      resolution: 'inspect_canonical_task',
+      contestedTargets: [{ targetKind: 'acceptance_criterion', targetId: 'ac-1' }],
+      findingRefs: [
+        'review:scene-lane:copywriter:2026-07-06T00:00:00.000Z:acceptance_criterion:ac-1',
+        'review:scene-lane:reviewer:2026-07-06T00:00:00.000Z:acceptance_criterion:ac-1',
+      ],
+      winningConcerns: [],
+      supersededConcerns: [],
+    })])
   })
 
   it('uses handoff-specific immediate resume instructions instead of file-open instructions when a review handoff checkpoint exists', async () => {

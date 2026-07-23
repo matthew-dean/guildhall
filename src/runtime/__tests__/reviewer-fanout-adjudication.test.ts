@@ -210,6 +210,19 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
                   'Add a checkpoint marker to the README documenting the verification command.',
                   'Insert an audit entry in a product file documenting the verification command.',
                 ],
+                findings: [{
+                  targetKind: 'acceptance_criterion',
+                  targetId: 'ac-checkpoint',
+                  disposition: 'unsatisfied',
+                  evidenceRefs: [],
+                  workerInstruction: 'Add a checkpoint marker to the README documenting the verification command.',
+                }, {
+                  targetKind: 'acceptance_criterion',
+                  targetId: 'ac-audit-entry',
+                  disposition: 'unsatisfied',
+                  evidenceRefs: [],
+                  workerInstruction: 'Insert an audit entry in a product file documenting the verification command.',
+                }],
                 rawOutput: '**Verdict:** revise',
               }
             : {
@@ -279,7 +292,7 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     expect(after.notes.some((n) => n.role === 'coordinator')).toBe(false)
   })
 
-  it('adjudicates on the second round when the same persona dissents with overlapping items', async () => {
+  it('does not treat recurring persona revision text as a substantive conflict', async () => {
     await setFanoutPolicy('coordinator_adjudicates_on_conflict')
 
     // Seed the task with an already-recorded first round of dissent so the
@@ -344,30 +357,11 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     await orch.tick()
 
     const after = (await readQueue()).tasks[0]!
-    // Coordinator adjudication fires.
-    expect(after.adjudications).toHaveLength(1)
-    const adj = after.adjudications[0]!
-    expect(adj.trigger).toBe('policy_conflict')
-    expect(adj.dissenters).toContain('security-engineer')
-    expect(adj.scopeInstructions.length).toBeGreaterThan(0)
-    // Task bounced to in_progress for the worker to act on the scoped list.
-    expect(after.status).toBe('in_progress')
-    // The worker-facing note is the coordinator's scoped instructions, not
-    // the raw dissent transcript.
-    const coordNote = after.notes.find((n) => n.role === 'coordinator')
-    expect(coordNote).toBeDefined()
-    expect(coordNote!.content).toContain('Scoped instructions')
-    expect(coordNote!.content).toContain('Verify email')
-    // DECISIONS.md captures the adjudication.
-    const decisions = await fs.readFile(
-      projectStatePathFromMemoryDir(memoryDir, 'DECISIONS.md'),
-      'utf8',
-    )
-    expect(decisions).toContain('Reviewer fan-out adjudication')
-    expect(decisions).toContain('security-engineer')
+    expect(after.adjudications).toHaveLength(0)
+    expect(after.status).not.toBe('blocked')
   })
 
-  it('does not auto-approve from prose that claims an adjudicated artifact is complete', async () => {
+  it('does not create an adjudication from prose alone', async () => {
     await setFanoutPolicy('coordinator_adjudicates_on_conflict')
     const priorTs = '2026-04-23T10:00:00.000Z'
     await writeTask(
@@ -447,13 +441,10 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     await orch.tick()
 
     const after = (await readQueue()).tasks[0]!
-    expect(after.status).toBe('in_progress')
-    expect(after.reviewVerdicts.at(-1)?.verdict).toBe('revise')
-    expect(after.reviewVerdicts.at(-1)?.reviewerPath).toBe('llm')
-    expect(after.reviewVerdicts.at(-1)?.reasoning).not.toContain('latest worker proof satisfies')
+    expect(after.adjudications).toHaveLength(0)
   })
 
-  it('routes repeated same-persona dissent through coordinator inspection under strict policy', async () => {
+  it('does not route repeated same-persona dissent through coordinator inspection under strict policy', async () => {
     await setFanoutPolicy('strict')
     const priorTs = '2026-04-23T10:00:00.000Z'
     await writeTask(
@@ -497,16 +488,11 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     await orch.tick()
 
     const after = (await readQueue()).tasks[0]!
-    expect(after.adjudications).toHaveLength(1)
-    expect(after.adjudications[0]).toMatchObject({
-      trigger: 'policy_conflict',
-      dissenters: ['security-engineer'],
-      decidedBy: 'coordinator',
-    })
-    expect(after.status).toBe('in_progress')
+    expect(after.adjudications).toHaveLength(0)
+    expect(after.status).not.toBe('blocked')
   })
 
-  it('escalates instead of looping when the same dissent returns after coordinator adjudication', async () => {
+  it('does not escalate from a historical persona-only adjudication record', async () => {
     await setFanoutPolicy('strict')
     const priorTs = '2026-04-23T10:00:00.000Z'
     await writeTask(
@@ -563,15 +549,9 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     })
     const outcome = await orch.tick()
 
-    expect(outcome?.kind).toBe('escalated')
+    expect(outcome?.kind).toBe('processed')
     const after = (await readQueue()).tasks[0]!
-    expect(after.status).toBe('blocked')
-    expect(after.blockReason).toContain('Reviewer/worker handoff loop detected')
-    expect(after.escalations.at(-1)).toMatchObject({
-      agentId: 'coordinator-foreman',
-      reason: 'human_judgment_required',
-      summary: 'Reviewer/worker handoff loop detected after coordinator adjudication.',
-    })
-    expect(after.notes.some((note) => note.agentId === 'reviewer-fanout')).toBe(false)
+    expect(after.status).not.toBe('blocked')
+    expect(after.escalations).toHaveLength(0)
   })
 })

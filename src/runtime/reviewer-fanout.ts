@@ -1,7 +1,7 @@
 import type { GuildDefinition } from '@guildhall/guilds'
 import type { ReviewVerdict, AdjudicationRecord, Task } from '@guildhall/core'
 import type { ReviewPlanRecord, ReviewRiskLane } from './review-audit-store.js'
-import { readStructuredReviewResult, reviewVerdictIsNonSubstantiveFailure } from './review-contract.js'
+import { readStructuredReviewResult, reviewVerdictIsNonSubstantiveFailure, validateStructuredReviewResultTargets, type StructuredReviewTargets } from './review-contract.js'
 
 /**
  * Reviewer fan-out: at `review`, each applicable persona produces an
@@ -22,7 +22,7 @@ export interface PersonaVerdict {
   guildName: string
   verdict: 'approve' | 'revise'
   reasoning: string
-  /** Bullet points of recommended task-local changes, only populated when `verdict === 'revise'`. */
+  /** Audit-only narrative; it cannot decide routing or worker instructions. */
   revisionItems: string[]
   /** Concrete risks or trade-offs if the recommendation is not taken now. */
   riskItems?: string[]
@@ -35,6 +35,14 @@ export interface PersonaVerdict {
   acceptedCriteriaIds?: string[]
   /** Stable proof evidence IDs from the machine result. */
   proofEvidenceIds?: string[]
+  /** Typed findings over the task's review-packet targets. */
+  findings?: Array<{
+    targetKind: 'acceptance_criterion' | 'proof_evidence'
+    targetId: string
+    disposition: 'satisfied' | 'unsatisfied' | 'advisory'
+    evidenceRefs: string[]
+    workerInstruction?: string
+  }>
   /** Machine-classified failure; never inferred from reviewer prose. */
   failureCode?: ReviewVerdict['failureCode']
   /** Raw model output, preserved for audit. */
@@ -54,10 +62,17 @@ export interface FanoutAggregate {
    * into the next mutation prompt.
    */
   combinedFeedback: string
+  /** Same target, incompatible typed reviewer dispositions. */
+  conflicts: Array<{
+    targetKind: 'acceptance_criterion' | 'proof_evidence'
+    targetId: string
+    satisfiedBy: string[]
+    unsatisfiedBy: string[]
+  }>
   /**
    * When true, the caller should route to the coordinator for
    * adjudication rather than bouncing to the worker. Only set under
-   * `coordinator_adjudicates_on_conflict` when dissent is recurrent.
+   * `coordinator_adjudicates_on_conflict` for an incompatible typed finding.
    */
   needsAdjudication?: boolean
   /** Human-facing explanation when `needsAdjudication` is set. */
@@ -66,6 +81,7 @@ export interface FanoutAggregate {
 
 interface PersonaOutputHints {
   taskText?: string
+  reviewTargets?: StructuredReviewTargets
 }
 
 type PersonaParseOptions = {
@@ -155,7 +171,10 @@ export function parsePersonaOutput(
   _hints: PersonaOutputHints = {},
   options: PersonaParseOptions = {},
 ): PersonaVerdict {
-  const structuredResult = readStructuredReviewResult(rawOutput)
+  const parsedResult = readStructuredReviewResult(rawOutput)
+  const structuredResult = parsedResult && _hints.reviewTargets
+    ? validateStructuredReviewResultTargets(parsedResult, _hints.reviewTargets)
+    : parsedResult
   const verdict: PersonaVerdict['verdict'] = structuredResult?.verdict ?? 'revise'
 
   // Keep the complete audit trace. No heading or prose convention is needed
@@ -180,6 +199,7 @@ export function parsePersonaOutput(
     followUpItems,
     ...(structuredResult ? { acceptedCriteriaIds: structuredResult.acceptedCriteriaIds } : {}),
     ...(structuredResult ? { proofEvidenceIds: structuredResult.proofEvidenceIds } : {}),
+    ...(structuredResult ? { findings: structuredResult.findings } : {}),
     ...((options.failureCode ?? (structuredResult ? undefined : 'invalid_review_contract'))
       ? { failureCode: options.failureCode ?? 'invalid_review_contract' as const }
       : {}),
@@ -187,7 +207,7 @@ export function parsePersonaOutput(
   }
 }
 
-export function buildPersonaOutputHints(task: Pick<Task, 'title' | 'description' | 'spec' | 'acceptanceCriteria' | 'outOfScope'>): PersonaOutputHints {
+export function buildPersonaOutputHints(task: Pick<Task, 'title' | 'description' | 'spec' | 'acceptanceCriteria' | 'outOfScope' | 'proofPaths'>): PersonaOutputHints {
   const taskText = [
     task.title,
     task.description,
@@ -200,6 +220,21 @@ export function buildPersonaOutputHints(task: Pick<Task, 'title' | 'description'
 
   return {
     taskText,
+    reviewTargets: {
+      acceptanceCriterionIds: (task.acceptanceCriteria ?? [])
+        .map((criterion) => criterion.id)
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+      proofEvidenceIds: (task.proofPaths ?? []).flatMap((path) =>
+        (Array.isArray(path.expectedEvidence) ? path.expectedEvidence : [])
+          .flatMap((evidence) => {
+            if (typeof evidence === 'string' && evidence.trim()) return [evidence.trim()]
+            if (evidence && typeof evidence === 'object' && typeof evidence.id === 'string' && evidence.id.trim()) {
+              return [evidence.id.trim()]
+            }
+            return []
+          }),
+      ),
+    },
   }
 }
 
@@ -241,6 +276,7 @@ export function aggregateFanout(
       dissenting: [],
       approving,
       combinedFeedback: availabilityOnly.length > 0 ? renderCombinedFeedback(availabilityOnly) : '',
+      conflicts: [],
     }
   }
 
@@ -272,20 +308,62 @@ export function aggregateFanout(
     dissenting,
     approving,
     combinedFeedback,
+    conflicts: findTypedFindingConflicts(verdicts),
   }
 
   if (
     policy === 'coordinator_adjudicates_on_conflict' &&
     taskVerdict === 'revise'
   ) {
-    const recurrent = findRecurrentDissent(dissenting, opts.priorRounds ?? [])
-    if (recurrent.length > 0) {
+    if (result.conflicts.length > 0) {
       result.needsAdjudication = true
-      result.adjudicationTrigger = 'same_persona_repeat_dissent'
+      result.adjudicationTrigger = 'policy_conflict'
     }
   }
 
   return result
+}
+
+/**
+ * A substantive reviewer conflict means two reviewers reached opposite typed
+ * conclusions about the same review-packet target. Persona identity and prose
+ * are deliberately absent from the decision rule.
+ */
+export function findTypedFindingConflicts(
+  verdicts: readonly PersonaVerdict[],
+): FanoutAggregate['conflicts'] {
+  const byTarget = new Map<string, {
+    targetKind: 'acceptance_criterion' | 'proof_evidence'
+    targetId: string
+    satisfiedBy: Set<string>
+    unsatisfiedBy: Set<string>
+  }>()
+  for (const verdict of verdicts) {
+    for (const finding of verdict.findings ?? []) {
+      if (finding.disposition === 'advisory') continue
+      const key = `${finding.targetKind}:${finding.targetId}`
+      const entry = byTarget.get(key) ?? {
+        targetKind: finding.targetKind,
+        targetId: finding.targetId,
+        satisfiedBy: new Set<string>(),
+        unsatisfiedBy: new Set<string>(),
+      }
+      if (finding.disposition === 'satisfied') entry.satisfiedBy.add(verdict.guildSlug)
+      else entry.unsatisfiedBy.add(verdict.guildSlug)
+      byTarget.set(key, entry)
+    }
+  }
+  return [...byTarget.values()]
+    .filter(entry => entry.satisfiedBy.size > 0 && entry.unsatisfiedBy.size > 0)
+    .map(entry => ({
+      targetKind: entry.targetKind,
+      targetId: entry.targetId,
+      satisfiedBy: [...entry.satisfiedBy].sort(),
+      unsatisfiedBy: [...entry.unsatisfiedBy].sort(),
+    }))
+    .sort((left, right) =>
+      `${left.targetKind}:${left.targetId}`.localeCompare(`${right.targetKind}:${right.targetId}`),
+    )
 }
 
 function renderCombinedFeedback(
@@ -306,10 +384,14 @@ function renderCombinedFeedback(
   for (const d of actionable) {
     sections.push(`### From ${d.guildName}`)
     sections.push('')
-    if ((d.revisionItems ?? []).length > 0) {
+    const unsatisfiedFindings = (d.findings ?? [])
+      .filter(finding => finding.disposition === 'unsatisfied')
+    if (unsatisfiedFindings.length > 0) {
       sections.push('')
-      sections.push('Recommended task-local revisions:')
-      for (const item of d.revisionItems ?? []) sections.push(`- ${item}`)
+      sections.push('Required target inspections:')
+      for (const finding of unsatisfiedFindings) {
+        sections.push(`- ${finding.workerInstruction?.trim() || `Inspect ${finding.targetKind.replace(/_/g, ' ')} ${finding.targetId}.`}`)
+      }
     }
     if ((d.acceptedCriteriaIds ?? []).length > 0) {
       sections.push('')
@@ -368,39 +450,6 @@ function isNonSubstantiveFanoutFailure(verdict: PersonaVerdict): boolean {
 }
 
 /**
- * Detect personas whose `revise` in the current round repeats in the
- * most-recent prior round. Attribution is identity-based; reviewer prose is
- * deliberately not compared because a different wording must not change
- * orchestration state.
- *
- * Pure and deterministic. Returns the guild slugs whose dissent is recurrent
- * — these are the ones the coordinator will adjudicate.
- *
- * Exported so tests can exercise the heuristic without going through the
- * full aggregation path.
- */
-export function findRecurrentDissent(
-  currentDissenting: readonly PersonaVerdict[],
-  priorRounds: ReadonlyArray<ReadonlyArray<PersonaVerdict>>,
-): string[] {
-  if (priorRounds.length === 0) return []
-  // Compare only against the *most recent* prior round — a one-round break
-  // in dissent breaks the chain.
-  const prior = priorRounds[priorRounds.length - 1]!
-  const priorBySlug = new Map<string, PersonaVerdict>()
-  for (const p of prior) {
-    if (p.verdict === 'revise') priorBySlug.set(p.guildSlug, p)
-  }
-  const recurrent: string[] = []
-  for (const cur of currentDissenting) {
-    const pv = priorBySlug.get(cur.guildSlug)
-    if (!pv) continue
-    recurrent.push(cur.guildSlug)
-  }
-  return recurrent
-}
-
-/**
  * Convert a PersonaVerdict into the canonical ReviewVerdict shape persisted
  * on `task.reviewVerdicts`. Each fan-out pass produces one record per
  * persona — the full audit trail shows which expert agreed and which
@@ -413,9 +462,11 @@ export function personaVerdictToReviewRecord(
     reviewerPath?: ReviewVerdict['reviewerPath']
     policyVersion?: string
     llmError?: string
+    taskId?: string
   },
 ): ReviewVerdict {
   return {
+    ...(opts.taskId ? { id: `review:${opts.taskId}:${v.guildSlug}:${opts.now}` } : {}),
     verdict: v.verdict,
     reviewerPath: opts.reviewerPath ?? 'llm',
     reviewerId: v.guildSlug,
@@ -438,6 +489,7 @@ export function personaVerdictToReviewRecord(
     failingSignals: v.verdict === 'revise' && !v.failureCode ? [v.guildSlug] : [],
     ...(v.acceptedCriteriaIds ? { acceptedCriteriaIds: v.acceptedCriteriaIds } : {}),
     ...(v.proofEvidenceIds ? { proofEvidenceIds: v.proofEvidenceIds } : {}),
+    ...(v.findings ? { findings: v.findings } : {}),
     ...((v.recommendationPriority || v.expectedValue || v.deferredRisk) ? {
       advisoryScores: {
         ...(v.recommendationPriority ? { recommendationPriority: v.recommendationPriority } : {}),
