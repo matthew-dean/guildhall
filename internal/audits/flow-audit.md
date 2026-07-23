@@ -51922,3 +51922,23 @@ Repair:
 - Proof provided: local suites; installed replay pending.
 - Apply/revert: revert only with a replacement inheritance path; source-plan
       omission must never silently weaken an active release contract.
+
+## 2026-07-23 Re-intake reads effective task proof state
+
+- [x] The re-intake endpoint planned from compact queue definitions, which
+      omit normalized proof paths and runtime/evidence overlays. Map and
+      Release therefore saw stale proof while re-intake saw only done rows.
+- [x] Re-intake now plans from the same current effective-task projection as
+      the shared scope surfaces. The raw queue remains only the immutable
+      fingerprint used to reject an apply after concurrent mutation.
+
+### Contract Touch Decision
+
+- Work id: `0.13.66/reintake-effective-task-read`.
+- Touched contracts: re-intake API read model and draft apply fingerprint.
+- Proof required: typecheck and re-intake suite pass; installed replay shows
+      current proof repairs without duplicate creates; unchanged queue can
+      still apply its draft safely.
+- Proof provided: typecheck and focused suite; installed replay pending.
+- Apply/revert: revert the effective read and fingerprint override together.
+      Do not reintroduce compact task reads for proof/release decisions.

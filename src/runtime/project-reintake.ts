@@ -32,6 +32,8 @@ export interface ProjectReintakeInput {
   projectPath?: string
   sources: ProjectReintakeSource[]
   tasks: Array<Record<string, unknown>>
+  /** Raw authoritative task definitions used only to guard draft application. */
+  taskQueueFingerprintTasks?: Array<Record<string, unknown>>
   releases?: Array<Pick<ProjectRelease, 'id' | 'label' | 'state' | 'nodeIds' | 'deferredNodeIds' | 'supersedesReleaseId'> & Pick<Partial<ProjectRelease>, 'proofStyle'>>
 }
 
@@ -366,7 +368,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     createdAt: now,
     createdBy: 'project-reintake',
     status: 'draft',
-    taskQueueFingerprint: fingerprint(input.tasks),
+    taskQueueFingerprint: fingerprint(input.taskQueueFingerprintTasks ?? input.tasks),
     ...(selectedRelease && releases.length > 0 ? { selectedReleaseId: selectedRelease.id, releases } : {}),
     sources: input.sources.map(source => ({ path: source.path, kind: 'source' })),
     summary: summarize(groups),
