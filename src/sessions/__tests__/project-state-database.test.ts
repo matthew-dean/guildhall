@@ -1290,6 +1290,42 @@ describe('project-state database', () => {
     })
   })
 
+  it('preserves an immutable shipped snapshot when normalizing internal proof scope', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        releases: [{
+          id: 'release-shipped',
+          label: 'Shipped release',
+          kind: 'release',
+          state: 'shipped',
+          nodeIds: ['work:task-parent', 'work:task-parent-proof'],
+          deferredNodeIds: [],
+        }],
+        tasks: [
+          { id: 'task-parent', title: 'Feature proof', status: 'done', releaseIds: ['release-shipped'] },
+          {
+            id: 'task-parent-proof',
+            title: 'Historical proof',
+            status: 'done',
+            semanticKind: 'proof_setup',
+            proofForReleaseId: 'release-shipped',
+            workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+            hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' },
+            releaseIds: [],
+          },
+        ],
+      },
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(database.prepare('SELECT release_id, task_id, disposition FROM release_membership ORDER BY task_id').all()).toEqual([
+      { release_id: 'release-shipped', task_id: 'task-parent', disposition: 'included' },
+      { release_id: 'release-shipped', task_id: 'task-parent-proof', disposition: 'included' },
+    ])
+    database.close()
+  })
+
   it('does not resurrect a dependency from the JSON mirror after normalized edges change', () => {
     writeProjectStateDatabaseSnapshot(tasksPath, {
       queue: {

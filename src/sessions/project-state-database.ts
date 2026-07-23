@@ -1174,11 +1174,12 @@ function releaseDefinitionsWithTaskMembership(
     if (!taskId) continue
     const nodeId = `work:${taskId}`
     // Internal steps can retain a release ID as execution context, but they
-    // are not members of the release's visible/project-total scope. Keeping
-    // those two relationships separate prevents a proof child from replacing
-    // the feature it verifies in Map or release progress.
+    // are not members of an active release's visible/project-total scope.
+    // A shipped release is an immutable historical snapshot, so its existing
+    // membership is preserved rather than rewritten during normalization.
     if (taskHasInternalReleaseContext(task)) {
       for (const release of byId.values()) {
+        if (stringValue(release.state) === 'shipped') continue
         release.nodeIds = stringArray(release.nodeIds).filter(value => value !== nodeId)
         release.deferredNodeIds = stringArray(release.deferredNodeIds).filter(value => value !== nodeId)
       }

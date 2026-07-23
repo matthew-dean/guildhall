@@ -101,6 +101,10 @@ help_summary: |
   with one release association gains that typed scope. A legacy child claiming
   multiple releases remains historical, and each active release receives a
   fresh explicitly scoped proof child rather than an arbitrary chosen owner.
+- Shipped-release handling: shipped scope is an immutable historical snapshot.
+  The migration preserves its existing membership exactly, removes the child
+  from active release membership only, and creates new active-release proof
+  work where proof must continue.
 - Compatibility reader: none. Rich task detail reads the typed scope; compact
   release projections read normalized visible membership. No surface is
   permitted to reconstruct one from the other.
