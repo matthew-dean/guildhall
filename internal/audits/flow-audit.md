@@ -54077,6 +54077,26 @@ Repair:
       producers to the broker; normalize `runtime.activeTaskId` before routing
       live execution observations. Do not expose raw claim payloads in fleet
       reads; use a paged audit/detail response for noncanonical dissent.
+- [x] Cross-surface replay repair: Narrative Harness Overview, Work, Map, and
+      Thread return one decision packet at project revision `376289`; task
+      detail now reads the same dedicated packet from its SQLite snapshot and
+      returns its project/queue tokens. If that packet is absent or belongs to
+      a different revision, task detail remains inspectable but exposes no
+      decision/action and declares `decisionFreshness: stale`. The user job is
+      to open the task named by the primary action and still see which
+      decision/revision led there, without a second route-local interpretation.
+- [x] Revision integrity repair: a summary projection that changes indexed
+      status or scope facts now advances `projectRevision` and rebinds the
+      canonical decision packet in the same SQLite transaction. A same-
+      revision claim replay may be idempotent only when its typed canonical
+      content is identical; a changed decision must have a newer revision.
+- [x] Writer-class repair: targeted task mutations and shared execution/runtime
+      summary updates receive a revision factory and store the packet in their
+      SQLite transaction. Journal notes remain durable history without
+      allocating an operational revision. `0.13.71` now detects a missing
+      decision-store capability, not a merely stale normal projection. The
+      regression covers hold/resume and spec-timeout recovery through Start:
+      task detail must remain current after each flow completes.
 - Proof required: a canonical snapshot produces an exact matching decision;
       stale/absent packets make the projection stale; lower-authority dissent
       is visible; equal authority contradiction produces one conflict and

@@ -1418,6 +1418,7 @@ describe('project-summary-projection', () => {
     })
 
     const revision = readProjectStateDatabaseQueueRevision(tasksPath)
+    const before = readProjectStateDatabaseReadBundle(tasksPath)
     expect(revision).not.toBeNull()
     const projected = writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
       projectId: 'evidence-status-project',
@@ -1431,6 +1432,12 @@ describe('project-summary-projection', () => {
     expect(readProjectStateDatabaseQueue(tasksPath)?.tasks).toEqual([
       expect.objectContaining({ id: 'evidence-done', status: 'done', completedAt: now }),
     ])
+    const after = readProjectStateDatabaseReadBundle(tasksPath)
+    expect(after?.projectRevision).toBe((before?.projectRevision ?? 0) + 1)
+    expect(after?.stateResolution?.decision).toMatchObject({
+      projectRevision: after?.projectRevision,
+      queueRevision: after?.queueRevision,
+    })
     const database = new DatabaseSync(projectStateDatabasePath(temp), { readOnly: true })
     const detail = database.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('evidence-done') as { payload_gzip: Buffer }
     expect(detail.payload_gzip.byteLength).toBeGreaterThan(0)

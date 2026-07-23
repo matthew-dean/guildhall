@@ -11240,8 +11240,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       if (body.taskId) {
-        await repairSpecTimeoutBlockedTask(project.path, body.taskId)
-        await repairWeakRecoverySpecReviewTask(project.path, body.taskId)
+        const repairedSpecTimeout = await repairSpecTimeoutBlockedTask(project.path, body.taskId)
+        const repairedWeakRecovery = await repairWeakRecoverySpecReviewTask(project.path, body.taskId)
+        if (repairedSpecTimeout || repairedWeakRecovery) {
+          // Recovery can touch task, runtime, and historical evidence in
+          // sequence. Publish one current decision packet before this Start
+          // route reads readiness so it cannot start work from a private,
+          // route-local interpretation of the repair.
+          writeProjectSummaryProjectionFromIndexedState(projectTasksPath(project.path), {
+            projectId: project.id,
+          })
+        }
         const queueTasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
         const scopedTask = queueTasks.find(task => task.id === body.taskId)
         if (scopedTask?.status === 'spec_review' && typeof scopedTask.spec === 'string' && scopedTask.spec.trim().length > 0) {
@@ -13703,6 +13712,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const selectedTask = proofMissingForSelectedScope
         ? { ...enrichedTask, completionProof: releaseProofMissingCompletionProof(enrichedTask) }
         : enrichedTask
+      const sharedDecision = databaseAuthority
+        ? taskDetailState?.stateResolution?.decision ?? null
+        : projection.decision
+      const decisionIsCurrent = !databaseAuthority || (
+        isRecord(sharedDecision) &&
+        sharedDecision.projectRevision === taskDetailState?.projectRevision &&
+        sharedDecision.queueRevision === taskDetailState?.queueRevision
+      )
       // Selected-scope counts belong to the durable project summary. Reusing
       // the queue here made task detail recompute scope membership and disagree
       // with Overview/Map/Work/Release for the same project revision.
@@ -13714,6 +13731,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const relatedTasks = relatedTaskRecords.map(compactTaskForTaskDetailRelated)
       return c.json({
+        // The drawer is a zoomed-in view of the same project decision, not a
+        // new current-state authority. Keep its revision token and action
+        // visible so opening the primary-action task cannot hide a conflict or
+        // make the focus look disconnected from Overview/Work/Map/Thread.
+        projectRevision: taskDetailState?.projectRevision ?? null,
+        queueRevision: taskDetailState?.queueRevision ?? null,
+        // Detail stays inspectable while a project refresh catches up, but it
+        // never exposes an action from an unbound decision packet.
+        decision: decisionIsCurrent ? sharedDecision : null,
+        decisionFreshness: decisionIsCurrent ? 'current' : 'stale',
+        ...(decisionIsCurrent ? {} : { requiresRefresh: true }),
         task: compactTaskForInitialDrawer(selectedTask),
         relatedTasks,
         workProgress,

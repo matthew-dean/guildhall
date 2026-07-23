@@ -409,6 +409,28 @@ export async function appendTaskEvidence(
     const evidenceBoundary = readProjectStateDatabaseTaskEvidenceBoundary(projectRoot)
     const projectAuthority = evidenceBoundary?.projectAuthority ?? 'legacy'
     const evidenceAuthority = evidenceBoundary?.evidenceAuthority ?? null
+    // Notes are durable audit history, never current operational evidence.
+    // Keep them out of proof/current-evidence projection paths so a human or
+    // agent note cannot mint a project revision or make a live action packet
+    // stale. The database history table is safe even while bulk evidence is
+    // still using its compressed compatibility bridge.
+    if (durable.kind === 'note') {
+      if (projectAuthority === 'database') {
+        if (evidenceAuthority === 'compressed') {
+          await appendCompressedTaskEvidence(projectRoot, durable)
+          // Compact current-note display is still useful for task detail
+          // (review summaries, checkpoints, etc.). The database writer keeps
+          // that bounded projection in sync without advancing project state;
+          // compressed history remains the compatibility read owner here.
+          appendProjectStateDatabaseTaskEvidence(projectRoot, durable, TASK_EVIDENCE_RETENTION.note)
+          return parsed
+        }
+        appendProjectStateDatabaseTaskEvidence(projectRoot, durable, TASK_EVIDENCE_RETENTION.note)
+        return parsed
+      }
+      await appendBoundedEvidenceLine(taskEvidencePath(projectRoot, taskId, parsed.kind), parsed.kind, JSON.stringify(durable))
+      return parsed
+    }
     if (projectAuthority === 'database' &&
         (evidenceAuthority === 'database' || evidenceAuthority === 'legacy')) {
       appendProjectStateDatabaseTaskEvidence(projectRoot, durable, TASK_EVIDENCE_RETENTION[durable.kind])

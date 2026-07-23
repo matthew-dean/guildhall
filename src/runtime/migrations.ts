@@ -22,6 +22,7 @@ import {
   readProjectStateDatabaseMetadata,
   readProjectStateDatabaseAuthority,
   readProjectStateDatabaseReadBundle,
+  hasProjectStateDatabaseDecisionSnapshot,
   readProjectStateDatabaseQueueDefinitionForMigration,
   readProjectStateDatabaseQueueWithRevision,
   readProjectStateDatabaseInventory,
@@ -2080,10 +2081,13 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
     async apply(projectRoot) {
       const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+      // This is the pre-SQLite backfill. Its explicit job is to materialize a
+      // compact summary from the historical task queue before database
+      // authority exists; the indexed writer is only valid after that cutover.
+      const projection = backfillProjectSummaryProjection(tasksPath, {
         projectId: path.basename(projectRoot),
+        projectRoot,
       })
-      if (!projection) throw new Error('The compact project summary could not be rebuilt after review-authority backfill.')
       return {
         summary: projection.freshness === 'error'
           ? 'Created an explicit error summary because the existing task queue could not be parsed; task history was not rewritten.'
@@ -5113,9 +5117,11 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Records the typed canonical claims and one revision-bound decision packet that Overview, Work, Map, Thread, Release, Activity, and Start share.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
-      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-      const bundle = readProjectStateDatabaseReadBundle(tasksPath)
-      const needed = Boolean(bundle?.summary && bundle.stateResolution === null)
+      // This migration creates the durable decision capability. A later
+      // runtime/evidence revision can naturally make its packet stale while a
+      // projection job catches up; that is not a schema migration and must not
+      // turn every ordinary action into "migrate again".
+      const needed = !hasProjectStateDatabaseDecisionSnapshot(projectRoot)
       return {
         needed,
         affectedPaths: needed

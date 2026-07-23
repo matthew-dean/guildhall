@@ -436,15 +436,41 @@ describe('GET /api/project/task/:id', () => {
     await seedTask('task-1')
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
-    expect(res.status).toBe(200)
+    expect(res.status, await res.clone().text()).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.id).toBe('task-1')
     expect(body.task?.status).toBe('in_progress')
+    expect(body.projectRevision).toBeTypeOf('number')
+    expect(body.queueRevision).toBeTypeOf('number')
+    expect(body.decision).toMatchObject({
+      projectRevision: body.projectRevision,
+      queueRevision: body.queueRevision,
+    })
     expect(body.recentEvents).toBeUndefined()
     expect(body.contextDebug).toBeUndefined()
     expect(body.exploringTranscript).toBeUndefined()
     expect(body.threadTurns).toBeUndefined()
     expect(body.detailPayload?.extrasHref).toBe('/api/project/task/task-1/extras')
+  })
+
+  it('keeps task detail inspectable but exposes no action when the shared decision is stale', async () => {
+    await seedTask('task-1')
+    const database = new DatabaseSync(projectStateDatabasePath(tmpDir))
+    try {
+      database.exec('DELETE FROM project_state_decisions')
+    } finally {
+      database.close()
+    }
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      task: { id: 'task-1' },
+      decision: null,
+      decisionFreshness: 'stale',
+      requiresRefresh: true,
+    })
   })
 
   it('keeps durable history out of the initial drawer payload', async () => {
@@ -2069,6 +2095,9 @@ describe('POST /api/project/task/:id/git-story/:closureAction', () => {
       branchName: 'guildhall/task-task-1',
       baseBranch: 'main',
     })
+    // The workspace overlay advances project state after the initial seed.
+    // Apply the required current-state migration before exercising a write.
+    await applyCanonicalMigrations()
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const events: Array<{ projectRoot: string; domains: string[] }> = []
@@ -2083,7 +2112,7 @@ describe('POST /api/project/task/:id/git-story/:closureAction', () => {
     }))
     unsubscribe()
 
-    expect(res.status).toBe(200)
+    expect(res.status, await res.clone().text()).toBe(200)
     expect(execFileSync('git', ['status', '--short'], { cwd: taskRepo, encoding: 'utf8' })).toBe('')
     await expect(fs.access(path.join(tmpDir, 'src', 'proof.txt'))).rejects.toThrow()
     expect(events).toContainEqual({
@@ -2278,10 +2307,14 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
     })
     expect(q.tasks[0].notes?.at(-1)?.agentId).toBe('system:human')
 
+    const detailAfterHold = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    const detailAfterHoldBody = await detailAfterHold.json() as Record<string, any>
+    expect(detailAfterHoldBody.decisionFreshness, JSON.stringify(detailAfterHoldBody)).toBe('current')
+
     const resumeRes = await app.fetch(
       new Request(projectUrl('/api/project/task/task-1/resume-hold'), { method: 'POST' }),
     )
-    expect(resumeRes.status).toBe(200)
+    expect(resumeRes.status, await resumeRes.clone().text()).toBe(200)
     const resumeBody = (await resumeRes.json()) as Record<string, any>
     expect(resumeBody.status).toBe('review')
 
@@ -2801,6 +2834,9 @@ describe('POST /api/project/task/:id/start', () => {
           stopAfterOneTask: true,
         })
       })
+      const detailAfterRecovery = await app.fetch(new Request(projectUrl('/api/project/task/task-model-proof')))
+      const detailAfterRecoveryBody = await detailAfterRecovery.json() as Record<string, any>
+      expect(detailAfterRecoveryBody.decisionFreshness, JSON.stringify(detailAfterRecoveryBody)).toBe('current')
       const queue = await readTaskQueue()
       const task = queue.tasks.find((candidate: Record<string, any>) => candidate.id === 'task-model-proof')
       expect(task).toMatchObject({

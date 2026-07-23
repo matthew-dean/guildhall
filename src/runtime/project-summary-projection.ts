@@ -20,6 +20,7 @@ import {
   type ProjectStateDatabaseSourceCapability,
   type ProjectStateDatabaseTask,
   type ProjectStateDatabaseTaskEvidenceRetentionInput,
+  type ProjectStateDatabaseAvailability,
   type ProjectStateDatabaseTaskRuntime,
   type ProjectStateDatabaseTaskStatusRow,
   type ProjectStateDatabaseStateResolutionSnapshot,
@@ -1686,7 +1687,7 @@ function canonicalDecisionClaimId(
  * Task/release/runtime rows remain canonical; this ledger makes it explicit
  * which revision and registered facts produced a cross-surface action.
  */
-function canonicalDecisionStateResolution(input: {
+export function canonicalDecisionStateResolution(input: {
   projectId: string | null
   projectRevision: number
   queueRevision: number | null
@@ -1694,6 +1695,16 @@ function canonicalDecisionStateResolution(input: {
   decision: ProjectDecisionProjection
   generatedAt: string
 }): ProjectStateDatabaseStateResolutionSnapshot {
+  // The decision is authoritative only for the revision that produced its
+  // registered claims. Projection builders may start from an older compact
+  // summary, so bind the payload itself here instead of trusting a copied
+  // revision token from that input.
+  const decision: ProjectDecisionProjection = {
+    ...input.decision,
+    projectRevision: input.projectRevision,
+    queueRevision: input.queueRevision,
+    generatedAt: input.generatedAt,
+  }
   const project = { kind: 'project', id: input.projectId ?? 'unknown-project' }
   const claim = <T>(field: ProjectStateClaim['field'], value: T): ProjectStateClaim<T> => ({
     id: canonicalDecisionClaimId(input.projectRevision, project, field),
@@ -1706,7 +1717,7 @@ function canonicalDecisionStateResolution(input: {
     observedAt: input.generatedAt,
     evidenceRefs: [],
   })
-  const focus = input.decision.planExecution?.focus ?? input.decision.execution.focus
+  const focus = decision.planExecution?.focus ?? decision.execution.focus
   const claims: ProjectStateClaim[] = [
     claim('project.selectedReleaseId', input.selectedReleaseId),
     claim('project.executionFocus', focus
@@ -1715,7 +1726,7 @@ function canonicalDecisionStateResolution(input: {
     claim('project.executionEligibility', {
       state: input.decision.planExecution?.state ?? input.decision.execution.state,
       code: input.decision.planExecution?.code ?? input.decision.execution.code,
-      primaryAction: input.decision.primaryAction,
+      primaryAction: decision.primaryAction,
     }),
   ]
   const resolution = resolveRegisteredProjectStateClaimSet({
@@ -1736,7 +1747,7 @@ function canonicalDecisionStateResolution(input: {
     resolved: resolution.resolved,
     rejected: resolution.rejected,
     disagreements,
-    decision: input.decision,
+    decision,
   })
   return {
     projectRevision: input.projectRevision,
@@ -1744,7 +1755,7 @@ function canonicalDecisionStateResolution(input: {
     generatedAt: input.generatedAt,
     claims,
     disagreements,
-    decision: input.decision,
+    decision,
     fingerprint,
   }
 }
@@ -2224,6 +2235,16 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
   const { projection, detailQueue, scopeRows } = prepared
   if (databaseAuthority && input.queueCommit !== true) {
     const expectedProjectRevision = capturedProjectRevision
+    const stateResolution = expectedProjectRevision === null
+      ? undefined
+      : canonicalDecisionStateResolution({
+          projectId: projection.projectId,
+          projectRevision: expectedProjectRevision,
+          queueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
+          selectedReleaseId: (canonicalQueue as { selectedReleaseId?: string } | null)?.selectedReleaseId ?? null,
+          decision: projection.decision,
+          generatedAt: projection.generatedAt,
+        })
     const taskStatusRows = input.projectionTasks
       ? input.projectionTasks.map(task => ({
           taskId: task.id,
@@ -2239,6 +2260,7 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
             ...(scopeRows ? { scopeRows } : {}),
             ...(taskStatusRows ? { taskStatusRows } : {}),
           }),
+      ...(stateResolution ? { stateResolution } : {}),
       ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
         ? { expectedQueueRevision: input.expectedQueueRevision }
         : {}),
@@ -2278,6 +2300,7 @@ export function updateProjectSummaryProjection(
     runtime?: Partial<NonNullable<ProjectSummaryProjection['runtime']>>
     ownerInput?: Partial<NonNullable<ProjectSummaryProjection['ownerInput']>>
     orientation?: ProjectOrientationSnapshot | null
+    availability?: ProjectStateDatabaseAvailability
   },
 ): ProjectSummaryProjection | null {
   const now = new Date().toISOString()
@@ -2320,8 +2343,10 @@ export function updateProjectSummaryProjection(
     if (patch.execution && next.decision && next.execution) {
       next.decision = applyRuntimeExecutionToProjectDecision(next.decision, next.execution)
     }
+    const resolvedNext = next
+    if (!resolvedNext) throw new Error('Project summary update did not produce a projection.')
     return {
-      summary: next as unknown as Record<string, unknown>,
+      summary: resolvedNext as unknown as Record<string, unknown>,
       currentState: {
         ...(patch.execution && next.execution
           ? { execution: next.execution }
@@ -2329,6 +2354,16 @@ export function updateProjectSummaryProjection(
         ...(patch.runtime && next.runtime
           ? { runtime: next.runtime }
           : {}),
+        ...(patch.availability ? { availability: patch.availability } : {}),
+        stateResolution: ({ projectRevision, queueRevision, generatedAt }) =>
+          canonicalDecisionStateResolution({
+            projectId: resolvedNext.projectId,
+            projectRevision,
+            queueRevision,
+            selectedReleaseId: resolvedNext.releaseSummary.release?.id ?? null,
+            decision: resolvedNext.decision,
+            generatedAt,
+          }),
       },
     }
   })

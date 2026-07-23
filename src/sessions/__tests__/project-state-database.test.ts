@@ -2442,7 +2442,8 @@ describe('project-state database', () => {
       { id: 'note-2', payload: { content: 'Essential note 2' } },
       { id: 'note-3', payload: { content: 'Essential note 3 updated' } },
     ])
-    expect(readProjectStateDatabaseSummary(tasksPath)?.freshness).toBe('stale')
+    // A note is durable audit history, not a readiness/proof/routing input.
+    expect(readProjectStateDatabaseSummary(tasksPath)?.freshness).toBe('current')
   })
 
   it('caps oversized retention requests and ordinary history reads', () => {

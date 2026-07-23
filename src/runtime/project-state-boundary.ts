@@ -49,6 +49,7 @@ import {
   type ProjectStateDatabaseSurfaceState,
   type ProjectStateDatabaseTaskEvidenceCurrentManyRead,
   type ProjectStateDatabaseStateClaim,
+  type ProjectStateDatabaseStateResolutionRead,
   type ProjectStateDatabaseStateResolutionSnapshot,
 } from '@guildhall/sessions'
 import type {
@@ -61,6 +62,7 @@ import type {
 import {
   PROJECT_SUMMARY_PROJECTION_VERSION,
   buildProjectSummaryProjectionFromIndexedState,
+  canonicalDecisionStateResolution,
   projectSummaryProjectionIsCurrent,
   projectSummaryScopeRowsFromIndexedState,
   prepareProjectSummaryProjectionFromUnknownQueue,
@@ -973,6 +975,8 @@ export interface ProjectTaskDetailReadModel {
   /** Selected execution scope from this same task-detail snapshot. */
   scope: ProjectScope | null
   summary: ProjectSummaryProjection | null
+  /** Shared decision packet from the same SQLite snapshot as this task. */
+  stateResolution: ProjectStateDatabaseStateResolutionRead | null
   authority: 'database'
   queueRevision: number
   projectRevision: number
@@ -1040,6 +1044,7 @@ export function readProjectTaskDetailStateAtBoundary(
         scopeRows: state.scopeRows,
       }),
       summary,
+      stateResolution: state.stateResolution,
       authority: 'database',
       queueRevision: state.queueRevision,
       projectRevision: state.projectRevision,
@@ -1787,6 +1792,18 @@ function writePromotedTaskDetailMutationOnce(
     lastUpdated: generatedAt,
     scopeRows: changedScopeRows,
     removeScopeRowTaskIds,
+    // A task edit is a new project state, not an invitation for a later read
+    // to reinterpret it. The database gives us the new revision and commits
+    // this packet with the task and compact summary in the same transaction.
+    stateResolution: ({ projectRevision, queueRevision, generatedAt: resolvedAt }) =>
+      canonicalDecisionStateResolution({
+        projectId: summary.projectId,
+        projectRevision,
+        queueRevision,
+        selectedReleaseId: summary.releaseSummary.release?.id ?? null,
+        decision: summary.decision,
+        generatedAt: resolvedAt,
+      }),
   })
   return { committedRevision, task: nextTask }
 }

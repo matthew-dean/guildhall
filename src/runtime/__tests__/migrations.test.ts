@@ -18,6 +18,7 @@ import { PROJECT_SUMMARY_PROJECTION_VERSION, readProjectSummaryProjection, write
 import { projectTaskStateExistsSync, readProjectTaskQueueSync, writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
 import { appendTaskEvidence, compressedTaskEvidencePath, readTaskEvidence, readTaskRuntimeStore, runtimeStatePath, taskEvidencePath, upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
 import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from '../delivery-read-projection.js'
+import { buildEffectiveTasks } from '../effective-task.js'
 
 let tmp: string
 let projectRoot: string
@@ -2035,7 +2036,6 @@ describe('applyProjectMigrations', () => {
     expect(readProjectStateDatabaseTaskOverlay(projectRoot, 'task-overlay')).toMatchObject({
       runtime: { payload: { assignedTo: 'worker-agent', revisionCount: 3 } },
       workspace: { payload: { branchName: 'guildhall/task-task-overlay' } },
-      latestProof: { kind: 'note', payload: { content: 'Keep this history.' } },
     })
     expect(await fs.readFile(evidencePath, 'utf8')).toBe(beforeEvidence)
     expect((await applyProjectMigrations({ projectRoot, only: ['0.12.14/task-current-overlay'] })).applied).toEqual([])
@@ -2553,6 +2553,14 @@ describe('applyProjectMigrations', () => {
           learningCandidates: [],
           openResidue: 'No open residue recorded.',
         },
+        retention: {
+          transcriptPrimaryArtifact: false,
+          compactedFullTranscript: true,
+          fullEvidenceAvailable: true,
+        },
+        evidenceRefs: [],
+        createdAt: completedAt,
+        createdBy: 'migration-test',
       },
     }
     writeProjectStateDatabaseSnapshot(tasksPath, {
@@ -2571,6 +2579,16 @@ describe('applyProjectMigrations', () => {
         }],
         tasks: [task],
       },
+      evidence: [{
+        event: {
+          id: 'completion-task-effective-done',
+          taskId: task.id,
+          kind: 'completion_summary',
+          recordedAt: completedAt,
+          payload: task.doneSummaryBundle,
+        },
+        retention: { maxRecords: 8, maxBytes: 64 * 1024 },
+      }],
       summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current', version: 12 },
       scopeRows: [{
         taskId: task.id,
@@ -2587,11 +2605,28 @@ describe('applyProjectMigrations', () => {
       projectRoot,
     })
     promoteProjectStateDatabaseAuthority(projectRoot)
+    expect(readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, task.id)).toMatchObject({
+      byKind: {
+        completion_summary: [
+          expect.objectContaining({
+            payload: expect.objectContaining({ status: 'done', completedAt }),
+          }),
+        ],
+      },
+    })
 
     const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
     database.prepare('UPDATE work_items SET status = ?, completed_at = NULL WHERE id = ?').run('blocked', task.id)
     database.prepare('UPDATE work_scope SET handoff_state = ?, blocks_release = 1, human_blocking = 1 WHERE task_id = ?').run('blocked', task.id)
     database.close()
+    const effective = (await buildEffectiveTasks(projectRoot, readProjectStateDatabaseQueueDefinition(tasksPath)!.tasks as any, {
+      evidence: 'current',
+    }))[0]!
+    expect(effective).toMatchObject({
+      id: task.id,
+      status: 'done',
+      completedAt,
+    })
     writeProjectSummaryProjectionFromIndexedState(tasksPath, {
       projectId: 'migration-test',
       generatedAt: now,

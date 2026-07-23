@@ -160,6 +160,58 @@ For any two claims with the same revision, subject, field, and basis:
   execution focus, review state, proof, runtime, and repository facts resolve
   through their owning machine-readable source.
 
+### Deterministic Resolution Protocol
+
+This is the general answer to two agents disagreeing, rather than a repair for
+one UI surface:
+
+1. Each producer reads the shared snapshot and submits a typed observation
+   against that exact project revision. It cannot supply an authority rank or
+   declare itself canonical.
+2. The broker validates the registered field, producer, evidence references,
+   basis, and revision; it assigns authority from the producer registry and
+   resolves the entire claim set in one compare-and-swap transaction.
+3. Different registered authority ranks yield one canonical value plus a
+   retained dissent record. Equal ranks with different typed values yield a
+   typed unresolved conflict and stop execution. Neither result depends on
+   model prose or on which agent happened to write last.
+4. Any status or selected-scope change that can alter the decision advances
+   `projectRevision` before the decision packet is committed. There is no
+   valid “same revision, new answer” state.
+5. Every regular project surface consumes the packet from the same snapshot.
+   A task detail can remain inspectable when the packet is absent or stale,
+   but returns `decision: null`, `decisionFreshness: 'stale'`, and no action;
+   it cannot quietly reuse a copied summary decision.
+
+### Writer Classes And Freshness
+
+The broker protocol also needs a strict rule for writes, otherwise two agents
+can be correct about different revisions without ever having submitted
+contradictory claims:
+
+- **Decision-bearing writes** (task/scope, execution, runtime, owner input,
+  availability, proof, review, or selected-release changes) allocate a new
+  project revision and commit a packet factory in that same SQLite
+  transaction. The factory receives the revision SQLite actually allocated;
+  no caller predicts a revision or copies a packet from an earlier summary.
+- **Journal-only writes** (notes and other prose retained solely for history)
+  are durable, bounded audit records but do not allocate a project revision or
+  enter the operational current-evidence path. A sentence cannot accidentally
+  become a new action state.
+- **Schema migration is not freshness repair.** `0.13.71` establishes the
+  decision-store capability once. A later current packet can be stale while a
+  normal projection refresh catches up; that state fails closed for actions,
+  but it must never tell the user to re-run a completed schema migration.
+
+This gives every agent the same deterministic fork: submit a claim against the
+current revision, make a registered state write that produces the next packet,
+or write non-operational history. There is no fourth path where a route keeps a
+private answer.
+
+The only human/delegated-owner path in this protocol is a registered scope
+choice. It is never a tiebreaker for runtime, proof, review, hierarchy, or
+execution facts.
+
 ### Schema Migration Decision
 
 - Persisted schema: additive v36 tables `project_state_claims`,
