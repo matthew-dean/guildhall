@@ -3991,6 +3991,56 @@ describe('applyProjectMigrations', () => {
     ])
     after.close()
   })
+
+  it('keeps historical internal proof members in a shipped release snapshot', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        releases: [{
+          id: 'release-shipped',
+          label: 'Shipped release',
+          kind: 'release',
+          state: 'shipped',
+          source: 'user',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-parent', 'work:task-parent-proof'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'task-parent',
+          title: 'Visible feature',
+          status: 'done',
+          releaseIds: ['release-shipped'],
+        }, {
+          id: 'task-parent-proof',
+          title: 'Historical internal proof',
+          status: 'done',
+          semanticKind: 'proof_setup',
+          workKind: 'verification',
+          taskKind: 'verification',
+          workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+          hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' },
+          releaseIds: ['release-shipped'],
+        }],
+      },
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.65/internal-proof-release-context'],
+    })
+
+    expect(result.failed).toEqual([])
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      releases: [{ id: 'release-shipped', nodeIds: ['work:task-parent', 'work:task-parent-proof'] }],
+      tasks: expect.arrayContaining([
+        expect.objectContaining({ id: 'task-parent-proof', proofForReleaseId: 'release-shipped', releaseIds: [] }),
+      ]),
+    })
+  })
 })
 
 async function rewriteOwnerInputPrompt(

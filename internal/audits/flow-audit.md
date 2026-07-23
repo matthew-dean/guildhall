@@ -105,7 +105,9 @@ help_summary: |
 - Shipped-release handling: shipped scope is an immutable historical snapshot.
   The migration preserves its existing membership exactly, removes the child
   from active release membership only, and creates new active-release proof
-  work where proof must continue.
+  work where proof must continue. Historical proof nodes must not be treated
+  as stale active-scope entries merely because the task now has typed proof
+  context.
 - Read-authority follow-up: promoted SQLite migrations previously preferred an
   aggregate compatibility queue when one happened to exist. That stale blob
   could prepare a release rewrite that the canonical shipped-snapshot guard

@@ -434,14 +434,20 @@ function isInternalProofSetupTask(task: Task): boolean {
 }
 
 function internalProofReleaseContextNeedsMigration(queue: { tasks: Task[]; releases?: ProjectRelease[] }): boolean {
-  return queue.tasks.some(task =>
-    isInternalProofSetupTask(task) && (
-      task.releaseIds?.length ||
-      (queue.releases ?? []).some(release =>
-        release.nodeIds?.includes(`work:${task.id}`) || release.deferredNodeIds?.includes(`work:${task.id}`),
-      )
-    ),
-  )
+  return queue.tasks.some(task => {
+    if (!isInternalProofSetupTask(task)) return false
+    if (task.releaseIds?.length) return true
+    const contextIds = proofSetupReleaseContextIds(queue, task)
+    const hasActiveMembership = (queue.releases ?? []).some(release =>
+      release.state !== 'shipped' &&
+      (release.nodeIds?.includes(`work:${task.id}`) || release.deferredNodeIds?.includes(`work:${task.id}`)),
+    )
+    // A single shipped-snapshot relation can be elevated into typed proof
+    // context without modifying that snapshot. Multiple snapshot relations are
+    // intentionally retained as unassigned historical evidence: choosing one
+    // would invent an ownership fact the old data does not contain.
+    return hasActiveMembership || (!task.proofForReleaseId && contextIds.length === 1)
+  })
 }
 
 function migrateInternalProofReleaseContexts(
@@ -460,11 +466,13 @@ function migrateInternalProofReleaseContexts(
       )
     if (!hadVisibleMembership) continue
 
-    // A persisted typed proof scope wins over an obsolete membership row.
-    // Membership is always cleared because this work is intentionally hidden
-    // from the product/release skeleton.
+    // A persisted typed proof scope wins over an obsolete active-membership
+    // row. Internal work is hidden from active product/release scope, but a
+    // shipped release is an immutable historical snapshot: its existing
+    // member rows are evidence, not an obsolete projection to delete.
     task.releaseIds = []
     for (const release of queue.releases ?? []) {
+      if (release.state === 'shipped') continue
       release.nodeIds = (release.nodeIds ?? []).filter(nodeId => nodeId !== `work:${task.id}`)
       release.deferredNodeIds = (release.deferredNodeIds ?? []).filter(nodeId => nodeId !== `work:${task.id}`)
     }
