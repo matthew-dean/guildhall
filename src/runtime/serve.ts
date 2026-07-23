@@ -45,7 +45,7 @@ import { normalizeReviewPlanForTask } from './review-planner.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { readPersistedStructuredSelfCritique, reviewVerdictHasStructuredApproval } from './review-contract.js'
 import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
-import { projectDecisionStartReadiness, reconcileProjectStateObservation, type ProjectDecisionProjection } from './project-decision-projection.js'
+import { projectDecisionStartReadiness, reconcileProjectStateObservation, requireProjectStateClaimPolicy, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
 import { readCurrentThreadTaskIdsAtBoundary, readThreadHistoryReadProjection, readThreadReadProjection, threadReadProjectionFromBoundary } from './thread-read-projection.js'
@@ -17087,12 +17087,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               observedAt: diagnostic.generatedAt,
               evidenceRefs: diagnosticTaskBlockerIds.map(taskId => `task:${taskId}`),
             },
-            policy: {
-              field: 'release.blockerTaskIds',
-              authorities: ['canonical_mutation', 'agent_derivation'],
-              reconciliation: 'inspect_canonical_state',
-              valueSemantics: 'unordered_string_set',
-            },
+            policy: requireProjectStateClaimPolicy('release.blockerTaskIds'),
           })
         : null
       const stateConsistency = decisionAgreement?.state ?? (diagnostic && diagnostic.sourceRevision === state.projectRevision ? 'unavailable' : 'stale')
@@ -17277,12 +17272,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             observedAt: new Date().toISOString(),
             evidenceRefs: diagnosticTaskBlockerIds.map(taskId => `task:${taskId}`),
           },
-          policy: {
-            field: 'release.blockerTaskIds',
-            authorities: ['canonical_mutation', 'agent_derivation'],
-            reconciliation: 'inspect_canonical_state',
-            valueSemantics: 'unordered_string_set',
-          },
+          policy: requireProjectStateClaimPolicy('release.blockerTaskIds'),
         })
       : null
     const stateConsistency = decisionAgreement?.state ?? savedCoreStateConsistency

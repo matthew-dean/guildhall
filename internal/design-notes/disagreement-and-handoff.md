@@ -9,12 +9,13 @@ help_summary: |
 
 # Disagreement & handoff — design notes
 
-**Status:** draft · pre-SPEC · 2026-04-23
+**Status:** partially superseded · deterministic state resolution introduced 2026-07-23
 
-This document captures two open design questions that surfaced after the
-Guilds subsystem landed. Both will fold into SPEC.md once the shapes are
-validated through real task runs; keeping them here first so the spec stays
-authoritative while the design settles.
+This document captures two design questions that surfaced after the Guilds
+subsystem landed. The original reviewer-conflict proposal below is retained
+only as historical context. Its prose/keyword-based detection is not an
+implementation path: model language is evidence, never an authority signal.
+The binding direction is the typed, deterministic protocol below.
 
 The questions:
 
@@ -31,6 +32,63 @@ The questions:
 ---
 
 ## 1. Disagreement adjudication
+
+### Current binding direction
+
+Every conclusion that can affect plan, scope, readiness, proof, execution,
+or release state is a typed claim over one stable subject and field. An agent
+may submit a claim and evidence references, but it cannot write the resolved
+fact itself.
+
+```ts
+type Claim = {
+  id: string                 // idempotency identity, never reused with new data
+  projectRevision: number    // claims never cross revisions
+  subject: { kind: string; id: string }
+  field: string              // registered field only
+  value: unknown             // typed/schema-validated value for the field
+  authority: Authority       // declared precedence class, not agent prestige
+  actor: string
+  observedAt: string
+  evidenceRefs: string[]
+  supersedes?: string        // explicit, same-subject/field, policy-authorized
+}
+```
+
+The field registry provides a declared authority order, value semantics, and
+one prescribed reconciliation action. It is a closed registry: an
+unregistered field, ambiguous policy, divergent reuse of a claim ID, or
+invalid supersession is rejected. Arrival order, reviewer wording, timestamps,
+and model identity do not pick a winner.
+
+For each `(subject, field)` group the resolver publishes exactly one of:
+
+1. A canonical typed value, with every agreeing claim ID.
+2. A canonical typed value **and** a `resolved_by_authority` disagreement:
+   a stronger source has a declared precedence, but the contrary evidence is
+   still visible and has a deterministic refresh/verification action.
+3. An `unresolved` disagreement: equally authoritative incompatible claims.
+   Work whose transition depends on the field cannot proceed until the policy
+   action creates a new valid claim or an owner-scope decision is explicitly
+   required by that field's policy.
+
+The current shared resolver lives in
+`src/runtime/project-decision-projection.ts`; all current-state presentations
+must consume its projection rather than reinterpreting agent output locally.
+The status, task, release, map, and diagnostics surfaces may present the
+result differently, but may not independently resolve it.
+
+Reviewer work follows the same rule. Review prose remains an audit trace.
+Operational reviewer concerns must be IDs selected from the task/review-plan
+contract (for example acceptance-criterion, proof-evidence, or review-lane
+IDs). A reviewer can mark those IDs satisfied, unsatisfied, or advisory; it
+cannot create a routing rule by describing a concern in different words. A
+future reviewer-record migration will make those concern dispositions first
+class claims before reviewer fan-out is allowed to adjudicate substantive
+conflicts automatically.
+
+This replaces the historical proposal beneath this section wherever they
+conflict.
 
 ### Current behavior (as of the Guilds landing)
 
@@ -130,27 +188,14 @@ If the Coordinator's remediation choices are exhausted (FR-32
 dissent + adjudication history attached. The human issues a binding
 decision recorded the same way the Coordinator's would be.
 
-### 1.1 Detection heuristic: when to trigger Layer 2
+### 1.1 Detection: when to trigger Layer 2
 
-The cheap heuristic to avoid false positives:
-
-1. **Same-persona-repeat-dissent**: the same persona emits `revise`
-   across two consecutive rounds. Attribution is by the persisted reviewer
-   identity; reviewer prose is never compared because wording changes must not
-   alter orchestration state.
-2. **Mutual-exclusion keywords**: any revision item contains a
-   negation-of-another-item pattern (`"do NOT do X"` where another
-   persona asked for X). Detected via a simple regex scan; false
-   positives are fine because the coordinator can always return "no
-   conflict, retry with worker."
-3. **Explicit escalation by a persona**: any persona's revision item
-   that names another persona's concern as "blocking my review" (e.g.
-   Security Engineer: "Cannot approve while the UX flow bypasses auth
-   as suggested by the UX Engineer"). Detected via a structured hint
-   the persona prompt can emit: `**Conflict:** <other-slug>` line.
-
-Tuning: start with just (1). Add (2) and (3) only if round-1 worker
-synthesis proves unreliable in practice.
+There is no prose heuristic. The coordinator considers adjudication only when
+typed reviewer concern dispositions conflict on the same concern ID, or when a
+typed repeated-dissent counter reaches the policy threshold. The input is the
+same regardless of model wording, formatting, or verbosity. Until the typed
+concern migration is complete, existing fan-out may identify repeated reviewer
+identity, but it must not infer substantive conflict from revision text.
 
 ### 1.2 The lever
 

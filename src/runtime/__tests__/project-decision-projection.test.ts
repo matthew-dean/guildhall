@@ -181,6 +181,7 @@ describe('project decision projection', () => {
     expect(resolution).toEqual({
       resolved: [expect.objectContaining({ value: { status: 'running' }, claimIds: ['new-runtime'] })],
       rejected: [],
+      disagreements: [],
     })
   })
 
@@ -217,6 +218,7 @@ describe('project decision projection', () => {
     expect(resolution).toEqual({
       resolved: [],
       rejected: [{ claimId: 'same-claim', code: 'duplicate_claim_id' }],
+      disagreements: [],
     })
   })
 
@@ -244,6 +246,7 @@ describe('project decision projection', () => {
     })).toEqual({
       resolved: [expect.objectContaining({ claimIds: ['runtime-current'], value: { status: 'running' } })],
       rejected: [],
+      disagreements: [],
     })
     expect(resolveProjectStateClaimSet({
       projectRevision: 42,
@@ -252,6 +255,7 @@ describe('project decision projection', () => {
     })).toEqual({
       resolved: [],
       rejected: [{ claimId: 'runtime-current', code: 'invalid_supersession' }],
+      disagreements: [],
     })
   })
 
@@ -292,7 +296,95 @@ describe('project decision projection', () => {
       reconciliation: 'inspect_canonical_state',
       canonicalClaimIds: ['summary-release-blockers'],
       observationClaimId: 'diagnostic-release-blockers',
+      disagreement: expect.objectContaining({
+        canonicalClaimIds: ['summary-release-blockers'],
+        contradictoryClaimIds: ['diagnostic-release-blockers'],
+        state: 'resolved_by_authority',
+      }),
     })
+  })
+
+  it('keeps a lower-authority contradiction in the shared resolution instead of hiding it behind the winner', () => {
+    const resolution = resolveProjectStateClaimSet({ projectRevision: 42, claims: [
+      {
+        id: 'canonical-running',
+        projectRevision: 42,
+        subject: { kind: 'task', id: 'task-1' },
+        field: 'task.execution',
+        value: { state: 'running' },
+        authority: 'canonical_mutation',
+        actor: 'coordinator',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['task:task-1'],
+      },
+      {
+        id: 'agent-stopped',
+        projectRevision: 42,
+        subject: { kind: 'task', id: 'task-1' },
+        field: 'task.execution',
+        value: { state: 'stopped' },
+        authority: 'agent_derivation',
+        actor: 'reviewer',
+        observedAt: '2026-07-23T12:01:00.000Z',
+        evidenceRefs: ['agent-run:reviewer'],
+      },
+    ], policies: [{
+      field: 'task.execution',
+      authorities: ['canonical_mutation', 'agent_derivation'],
+      reconciliation: 'refresh_runtime',
+    }] })
+
+    expect(resolution).toMatchObject({
+      resolved: [expect.objectContaining({ value: { state: 'running' }, claimIds: ['canonical-running'] })],
+      rejected: [],
+      disagreements: [expect.objectContaining({
+        canonicalClaimIds: ['canonical-running'],
+        contradictoryClaimIds: ['agent-stopped'],
+        state: 'resolved_by_authority',
+        reconciliation: 'refresh_runtime',
+      })],
+    })
+  })
+
+  it('fails closed when agents make a claim for a field with no declared authority policy', () => {
+    const resolution = resolveProjectStateClaimSet({ projectRevision: 42, claims: [{
+      id: 'unregistered-agent-claim',
+      projectRevision: 42,
+      subject: { kind: 'task', id: 'task-1' },
+      field: 'task.unspecifiedAgentConclusion',
+      value: { state: 'ready' },
+      authority: 'agent_derivation',
+      actor: 'reviewer',
+      observedAt: '2026-07-23T12:00:00.000Z',
+      evidenceRefs: ['agent-run:reviewer'],
+    }], policies: [] })
+
+    expect(resolution).toEqual({
+      resolved: [],
+      rejected: [{ claimId: 'unregistered-agent-claim', code: 'unregistered_field' }],
+      disagreements: [],
+    })
+  })
+
+  it('fails closed rather than choosing an arrival-ordered policy when callers register conflicting policies', () => {
+    const claim = {
+      id: 'review-claim',
+      projectRevision: 42,
+      subject: { kind: 'task', id: 'task-1' },
+      field: 'task.reviewDisposition',
+      value: { state: 'revise' },
+      authority: 'agent_derivation' as const,
+      actor: 'reviewer',
+      observedAt: '2026-07-23T12:00:00.000Z',
+      evidenceRefs: ['agent-run:reviewer'],
+    }
+    const first = { field: 'task.reviewDisposition', authorities: ['agent_derivation'] as const, reconciliation: 'rerun_verification' as const }
+    const second = { field: 'task.reviewDisposition', authorities: ['canonical_mutation'] as const, reconciliation: 'inspect_canonical_state' as const }
+
+    expect(resolveProjectStateClaimSet({ projectRevision: 42, claims: [claim], policies: [first, second] }))
+      .toEqual(resolveProjectStateClaimSet({ projectRevision: 42, claims: [claim], policies: [second, first] }))
+    expect(resolveProjectStateClaimSet({ projectRevision: 42, claims: [claim], policies: [first, second] }))
+      .toMatchObject({ rejected: [{ claimId: 'review-claim', code: 'ambiguous_policy' }] })
   })
 
   it('compares declared blocker sets independently of producer ordering', () => {

@@ -7805,6 +7805,64 @@ non-JavaScript proof language where possible.
 | Setup-pending empty project | `scratch-setup-pending` | Proves zero-task projects route to setup/intake instead of looking startable by accident. | Rendered uninitialized project-shell fixture added. |
 | Capability boundary request | `capability-boundary` | Proves Thread keeps owner approval decisions visible alongside active project/thread state. | Rendered Thread fixture and focused component regression added. |
 
+## 2026-07-23 Deterministic multi-agent disagreement protocol
+
+- Work id: `codex:deterministic-multi-agent-disagreement-protocol-2026-07-23`.
+- User job: when two agents disagree about the same project fact, review
+  concern, scope relation, or execution result, a user should see one
+  canonical answer or one explicit unresolved disagreement with a prescribed
+  next action. No surface may silently select an agent's prose or arrival
+  order as truth.
+- Finding: the existing project-state claim resolver correctly makes selected
+  decision diagnostics deterministic, but it is too narrow to be the general
+  boundary for agent-produced conclusions. The older reviewer-disagreement
+  note also contains prose/keyword detection ideas, which violate the
+  model-independence boundary and cannot form a reliable authority contract.
+- Implemented core:
+  - define a single typed disagreement record over stable subject, field,
+    concern, and evidence identities;
+  - let agents submit claims and structured concerns only, never a direct
+    “winning” conclusion;
+  - resolve every same-subject/field set through declared authority and
+    value-semantics policy, independent of submission order and prose;
+  - preserve exact duplicate replay as idempotent; reject divergent reuse of
+    IDs and invalid supersession;
+  - make ties an explicit unresolved conflict with a deterministic
+    reconciliation action, not a UI-specific fallback;
+  - require task/release/thread/diagnostic projections to consume this shared
+    result when they display the same fact; the release diagnostic now reads
+    the registered shared policy and exposes the typed disagreement record.
+- Contract Touch Decision:
+  - Touched contracts: project-state claim resolution, structured reviewer
+    concerns/adjudication, shared decision projection, diagnostic agreement.
+  - Considered but not touched: model prose, reviewer free-text feedback,
+    route-local inbox ranking, raw conversation transcripts. These remain
+    display/evidence only and cannot resolve state.
+  - Required follow-up: replace the obsolete prose-heuristic guidance in the
+    disagreement design note; migrate reviewer conflict detection to typed
+    concern IDs where it influences routing.
+  - Proof required: permutation/replay tests, equal-authority conflict tests,
+    invalid supersession tests, prose-variation tests, and a cross-surface
+    projection assertion proving the same conflict/result appears everywhere.
+  - Apply/revert behavior: resolver is pure and fail-closed. Reverting the
+    new consumers leaves no silent winner because unresolved records remain
+    visible rather than being coerced into execution state.
+- Schema Migration Decision:
+  - Persisted schema touched: durable agent/reviewer conclusion records only
+    if existing reviewer result storage cannot carry typed subject/field and
+    concern IDs.
+  - Change class: additive, with an explicit migration only after the
+    existing record shape is audited.
+  - Existing data impact: historical prose-only outcomes are retained as
+    evidence but marked non-authoritative; they cannot create a resolved
+    conflict decision.
+  - Safety: no compatibility reader may infer typed agreement from prose.
+    Missing typed fields produce `unavailable`/unresolved state and a
+    prescribed re-run or verification action.
+- Status: core resolver and release-diagnostic consumer complete. Typed
+  reviewer-concern migration and cross-surface consumer coverage remain open
+  release work; no reviewer prose may become a temporary resolution fallback.
+
 ## Surface Matrix
 
 Use this as the canonical user-test matrix. Each row needs either current live

@@ -34,6 +34,29 @@ export interface ProjectStateClaimPolicy {
   valueSemantics?: 'exact' | 'unordered_string_set'
 }
 
+/**
+ * The shared registry for facts that cross product surfaces. Adding a field
+ * here is an authority decision, not a route-local implementation detail.
+ */
+export const PROJECT_STATE_CLAIM_POLICIES: Readonly<Record<string, ProjectStateClaimPolicy>> = {
+  'release.blockerTaskIds': {
+    field: 'release.blockerTaskIds',
+    authorities: ['canonical_mutation', 'agent_derivation'],
+    reconciliation: 'inspect_canonical_state',
+    valueSemantics: 'unordered_string_set',
+  },
+}
+
+export function projectStateClaimPolicy(field: string): ProjectStateClaimPolicy | null {
+  return PROJECT_STATE_CLAIM_POLICIES[field] ?? null
+}
+
+export function requireProjectStateClaimPolicy(field: string): ProjectStateClaimPolicy {
+  const policy = projectStateClaimPolicy(field)
+  if (!policy) throw new Error(`No registered project-state claim policy for ${field}.`)
+  return policy
+}
+
 export interface ProjectStateConflict {
   id: string
   subject: { kind: string; id: string }
@@ -46,6 +69,8 @@ export type ProjectStateClaimRejectionCode =
   | 'invalid_claim'
   | 'duplicate_claim_id'
   | 'invalid_supersession'
+  | 'unregistered_field'
+  | 'ambiguous_policy'
 
 export interface RejectedProjectStateClaim {
   claimId: string
@@ -55,6 +80,24 @@ export interface RejectedProjectStateClaim {
 export interface ProjectStateClaimResolution {
   resolved: ResolvedProjectStateClaim[]
   rejected: RejectedProjectStateClaim[]
+  /**
+   * Every durable disagreement, including one where a stronger source wins.
+   * A caller may use the canonical value, but cannot pretend that every agent
+   * observed the same thing.
+   */
+  disagreements: ProjectStateDisagreement[]
+}
+
+export interface ProjectStateDisagreement {
+  id: string
+  subject: { kind: string; id: string }
+  field: string
+  /** The claims which supplied canonical state, empty for an unresolved tie. */
+  canonicalClaimIds: string[]
+  /** Active claims whose typed value differs from canonical state. */
+  contradictoryClaimIds: string[]
+  state: 'resolved_by_authority' | 'unresolved'
+  reconciliation: ProjectStateClaimPolicy['reconciliation']
 }
 
 export interface ResolvedProjectStateClaim<T = unknown> {
@@ -71,6 +114,8 @@ export interface ProjectStateObservationAgreement {
   canonicalClaimIds: string[]
   observationClaimId: string
   reason?: 'incomparable_subject_or_field' | 'invalid_canonical_claim' | 'invalid_observation_claim'
+  /** Present whenever the shared resolver recorded a typed disagreement. */
+  disagreement?: ProjectStateDisagreement
 }
 
 const DEFAULT_CLAIM_AUTHORITIES: readonly ProjectStateClaimAuthority[] = [
@@ -100,6 +145,11 @@ function claimKey(claim: Pick<ProjectStateClaim, 'subject' | 'field'>): string {
 function claimConflictId(claims: readonly ProjectStateClaim[]): string {
   const first = claims[0]!
   return `conflict:${first.subject.kind}:${first.subject.id}:${first.field}:${[...claims].map(claim => claim.id).sort().join(',')}`
+}
+
+function disagreementId(claims: readonly ProjectStateClaim[]): string {
+  const first = claims[0]!
+  return `disagreement:${first.subject.kind}:${first.subject.id}:${first.field}:${[...claims].map(claim => claim.id).sort().join(',')}`
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -148,6 +198,15 @@ function policyAuthorities(policy: ProjectStateClaimPolicy | undefined): readonl
   return policy?.authorities ?? DEFAULT_CLAIM_AUTHORITIES
 }
 
+function isStructurallyValidPolicy(policy: ProjectStateClaimPolicy): boolean {
+  return isNonEmptyString(policy.field) &&
+    policy.authorities.length > 0 &&
+    new Set(policy.authorities).size === policy.authorities.length &&
+    policy.authorities.every(authority => DEFAULT_CLAIM_AUTHORITIES.includes(authority)) &&
+    ['rerun_verification', 'refresh_runtime', 'inspect_canonical_state', 'owner_scope_decision'].includes(policy.reconciliation) &&
+    (policy.valueSemantics === undefined || policy.valueSemantics === 'exact' || policy.valueSemantics === 'unordered_string_set')
+}
+
 function canSupersedeClaim(input: {
   successor: ProjectStateClaim
   predecessor: ProjectStateClaim
@@ -175,15 +234,41 @@ export function resolveProjectStateClaimSet(
     policies: readonly ProjectStateClaimPolicy[]
   },
 ): ProjectStateClaimResolution {
-  const policiesByField = new Map(input.policies.map(policy => [policy.field, policy]))
+  const policyRecordsByField = new Map<string, ProjectStateClaimPolicy[]>()
+  for (const policy of input.policies) {
+    const existing = policyRecordsByField.get(policy.field) ?? []
+    existing.push(policy)
+    policyRecordsByField.set(policy.field, existing)
+  }
+  const ambiguousPolicyFields = new Set<string>()
+  const policiesByField = new Map<string, ProjectStateClaimPolicy>()
+  for (const [field, policies] of policyRecordsByField) {
+    const policyShapes = new Set(policies.map(policy => stableJson(policy)))
+    const policy = policies[0]!
+    if (!isStructurallyValidPolicy(policy) || policyShapes.size !== 1) {
+      ambiguousPolicyFields.add(field)
+      continue
+    }
+    policiesByField.set(field, policy)
+  }
   const rejected = new Map<string, ProjectStateClaimRejectionCode>()
   const reject = (claim: ProjectStateClaim, code: ProjectStateClaimRejectionCode) => {
     rejected.set(claim.id || '<missing-claim-id>', code)
   }
   const structurallyValid = input.claims.filter(claim => {
-    if (isStructurallyValidClaim(claim, input.projectRevision)) return true
-    reject(claim, 'invalid_claim')
-    return false
+    if (!isStructurallyValidClaim(claim, input.projectRevision)) {
+      reject(claim, 'invalid_claim')
+      return false
+    }
+    if (ambiguousPolicyFields.has(claim.field)) {
+      reject(claim, 'ambiguous_policy')
+      return false
+    }
+    if (!policiesByField.has(claim.field)) {
+      reject(claim, 'unregistered_field')
+      return false
+    }
+    return true
   })
   const claimsById = new Map<string, ProjectStateClaim[]>()
   for (const claim of structurallyValid) {
@@ -227,6 +312,7 @@ export function resolveProjectStateClaimSet(
     groups.set(key, existing)
   }
   const resolved: ResolvedProjectStateClaim[] = []
+  const disagreements: ProjectStateDisagreement[] = []
   for (const group of groups.values()) {
     const first = group[0]!
     const policy = policiesByField.get(first.field)
@@ -239,12 +325,28 @@ export function resolveProjectStateClaimSet(
     const values = new Set(strongest.map(claim => stableClaimValue(claim.value, policy)))
     if (values.size === 1) {
       const winner = [...strongest].sort((left, right) => left.id.localeCompare(right.id))[0]!
+      const winnerValue = stableClaimValue(winner.value, policy)
+      const contradictoryClaimIds = eligible
+        .filter(claim => stableClaimValue(claim.value, policy) !== winnerValue)
+        .map(claim => claim.id)
+        .sort()
       resolved.push({
         subject: winner.subject,
         field: winner.field,
         value: canonicalClaimValue(winner.value, policy),
         claimIds: strongest.map(claim => claim.id).sort(),
       })
+      if (contradictoryClaimIds.length > 0) {
+        disagreements.push({
+          id: disagreementId(group),
+          subject: winner.subject,
+          field: winner.field,
+          canonicalClaimIds: strongest.map(claim => claim.id).sort(),
+          contradictoryClaimIds,
+          state: 'resolved_by_authority',
+          reconciliation: policy?.reconciliation ?? 'inspect_canonical_state',
+        })
+      }
       continue
     }
     const conflict: ProjectStateConflict = {
@@ -260,12 +362,22 @@ export function resolveProjectStateClaimSet(
       claimIds: conflict.claimIds,
       conflict,
     })
+    disagreements.push({
+      id: disagreementId(group),
+      subject: first.subject,
+      field: first.field,
+      canonicalClaimIds: [],
+      contradictoryClaimIds: conflict.claimIds,
+      state: 'unresolved',
+      reconciliation: conflict.reconciliation,
+    })
   }
   return {
     resolved: resolved.sort((left, right) => claimKey(left).localeCompare(claimKey(right))),
     rejected: [...rejected.entries()]
       .map(([claimId, code]) => ({ claimId, code }))
       .sort((left, right) => left.claimId.localeCompare(right.claimId) || left.code.localeCompare(right.code)),
+    disagreements: disagreements.sort((left, right) => left.id.localeCompare(right.id)),
   }
 }
 
@@ -325,12 +437,18 @@ export function reconcileProjectStateObservation(input: {
   if (!resolved || resolved.value === undefined) {
     return { state: 'unavailable', reconciliation: input.policy.reconciliation, ...fallback }
   }
+  const disagreement = resolution.disagreements.find(candidate =>
+    candidate.subject.kind === input.canonicalClaim.subject.kind &&
+    candidate.subject.id === input.canonicalClaim.subject.id &&
+    candidate.field === input.canonicalClaim.field,
+  )
   if (resolved.conflict) {
     return {
       state: 'contradictory',
       reconciliation: resolved.conflict.reconciliation,
       canonicalClaimIds: resolved.claimIds,
       observationClaimId: input.observationClaim.id,
+      ...(disagreement ? { disagreement } : {}),
     }
   }
   return stableClaimValue(resolved.value, input.policy) === stableClaimValue(input.observationClaim.value, input.policy)
@@ -339,7 +457,12 @@ export function reconcileProjectStateObservation(input: {
         canonicalClaimIds: resolved.claimIds,
         observationClaimId: input.observationClaim.id,
       }
-    : { state: 'contradictory', reconciliation: input.policy.reconciliation, ...fallback }
+    : {
+        state: 'contradictory',
+        reconciliation: input.policy.reconciliation,
+        ...fallback,
+        ...(disagreement ? { disagreement } : {}),
+      }
 }
 
 export interface ProjectDecisionProjection {
