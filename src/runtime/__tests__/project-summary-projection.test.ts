@@ -93,6 +93,8 @@ describe('project-summary-projection', () => {
 
     expect(projectSummaryProjectionIsCurrent(projection)).toBe(true)
     expect(projectSummaryProjectionIsCurrent(legacy)).toBe(false)
+    expect(projectSummaryProjectionIsCurrent({ ...projection, version: 26 })).toBe(false)
+    expect(projectSummaryProjectionIsCurrent({ ...projection, version: 27 })).toBe(false)
   })
 
   it('projects an owner spec review separately from owner input', () => {
@@ -124,6 +126,7 @@ describe('project-summary-projection', () => {
     expect(projection.ownerInput).toBeUndefined()
     expect(projection.ownerReview).toMatchObject({
       openCount: 1,
+      taskIds: ['review-me'],
       next: { taskId: 'review-me', href: '/work?task=review-me' },
     })
     expect(projection.decision).toMatchObject({
@@ -135,6 +138,59 @@ describe('project-summary-projection', () => {
       focusTaskId: 'review-me',
       focusTaskTitle: 'review-me',
       focusKind: 'owner_review',
+    })
+    expect(projection.decision.execution).toMatchObject({ reviewTaskIds: ['review-me'] })
+  })
+
+  it('does not let a later release review inflate the selected release action', () => {
+    const reviewGate = {
+      authority: 'owner',
+      requestedAt: now,
+      requestedBy: 'spec-agent',
+      reason: 'spec_handoff',
+    }
+    const projection = buildProjectSummaryProjection({
+      projectId: 'release-bounded-review',
+      queue: queue([
+        task('current-review', 'spec_review', { specReviewGate: reviewGate }),
+        task('later-review', 'spec_review', { specReviewGate: reviewGate }),
+      ], {
+        selectedReleaseId: 'release-current',
+        releases: [
+          {
+            id: 'release-current',
+            label: 'Current release',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            proofStyle: 'unspecified',
+            nodeIds: ['work:current-review'],
+            deferredNodeIds: [],
+          },
+          {
+            id: 'release-later',
+            label: 'Later release',
+            kind: 'release',
+            state: 'planned',
+            source: 'release_plan',
+            proofStyle: 'unspecified',
+            nodeIds: ['work:later-review'],
+            deferredNodeIds: [],
+          },
+        ],
+      }),
+      generatedAt: now,
+    })
+
+    expect(projection.ownerReview).toMatchObject({
+      openCount: 1,
+      taskIds: ['current-review'],
+      next: { taskId: 'current-review' },
+    })
+    expect(projection.nextAction).toMatchObject({
+      code: 'owner_review_required',
+      count: 1,
+      focusTaskId: 'current-review',
     })
   })
 

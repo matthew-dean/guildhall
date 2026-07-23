@@ -1440,6 +1440,7 @@ export interface StartReadiness {
   focusTaskTitle?: string
   focusKind?: string
   proofTaskIds?: string[]
+  reviewTaskIds?: string[]
   count?: number
   executionScope?: {
     id: string

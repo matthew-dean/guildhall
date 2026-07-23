@@ -685,6 +685,8 @@ export interface ProjectDecisionExecution {
   focusTaskId?: string
   focusTaskTitle?: string
   focusKind?: string
+  /** Exact selected-scope records behind an owner-review decision. */
+  reviewTaskIds?: string[]
   count?: number
   message?: string
 }
@@ -711,7 +713,7 @@ export interface ProjectDecisionProjection {
     proofBlockerTaskIds: string[]
   }
   ownerInput: { state: 'none' | 'required'; requestId?: string }
-  ownerReview: { state: 'none' | 'required'; taskId?: string }
+  ownerReview: { state: 'none' | 'required'; taskId?: string; taskIds?: string[] }
   primaryAction: {
     kind: 'open_work' | 'resume' | 'review_proof' | 'answer_owner_input' | 'review_spec' | 'review_release' | 'resolve_conflict' | 'none'
     targetId?: string
@@ -724,7 +726,7 @@ export interface ProjectDecisionProjectionInput {
   projectRevision?: number | null
   queueRevision?: number | null
   generatedAt: string
-  start: Pick<ProjectScopeProjection['start'], 'canStart' | 'code' | 'focusTaskId' | 'focusTaskTitle' | 'focusKind' | 'count' | 'message'>
+  start: Pick<ProjectScopeProjection['start'], 'canStart' | 'code' | 'focusTaskId' | 'focusTaskTitle' | 'focusKind' | 'reviewTaskIds' | 'count' | 'message'>
   release: {
     scopeMode: 'named_release' | 'unreleased' | 'unavailable'
     state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
@@ -732,7 +734,7 @@ export interface ProjectDecisionProjectionInput {
     blockers: Array<{ owningTaskId?: string; code?: string }>
   }
   ownerInput?: { openCount: number; next?: { id: string; taskId?: string } | null } | null
-  ownerReview?: { openCount: number; next?: { taskId: string } | null } | null
+  ownerReview?: { openCount: number; taskIds?: string[]; next?: { taskId: string } | null } | null
   runStatus?: string | null
   /**
    * The supervisor owns this observation. A plan's saved next task is not a
@@ -788,6 +790,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionE
       ...(activeTaskId ? { focusTaskId: activeTaskId } : {}),
       ...(activeTaskTitle ? { focusTaskTitle: activeTaskTitle } : {}),
       ...(activeTaskId ? { focusKind: 'active_work' } : {}),
+      ...(start.reviewTaskIds?.length ? { reviewTaskIds: [...start.reviewTaskIds] } : {}),
       ...(typeof start.count === 'number' ? { count: start.count } : {}),
       message: input.runStatus === 'stopping'
         ? 'Guildhall is stopping the selected work.'
@@ -805,6 +808,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionE
       ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
       ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
       ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+      ...(start.reviewTaskIds?.length ? { reviewTaskIds: [...start.reviewTaskIds] } : {}),
       ...(typeof start.count === 'number' ? { count: start.count } : {}),
       ...(start.message ? { message: start.message } : {}),
     }
@@ -816,6 +820,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionE
       ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
       ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
       ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+      ...(start.reviewTaskIds?.length ? { reviewTaskIds: [...start.reviewTaskIds] } : {}),
       ...(typeof start.count === 'number' ? { count: start.count } : {}),
       ...(start.message ? { message: start.message } : {}),
     }
@@ -827,6 +832,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionE
     ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
     ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
     ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+    ...(start.reviewTaskIds?.length ? { reviewTaskIds: [...start.reviewTaskIds] } : {}),
     ...(typeof start.count === 'number' ? { count: start.count } : {}),
     ...(start.message ? { message: start.message } : {}),
   }
@@ -843,6 +849,7 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
   focusTaskId?: string
   focusTaskTitle?: string
   focusKind?: string
+  reviewTaskIds?: string[]
   count?: number
 } {
   const focus = decision.execution.focus
@@ -855,6 +862,7 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
     ...(focus?.taskId ?? decision.execution.focusTaskId ? { focusTaskId: focus?.taskId ?? decision.execution.focusTaskId } : {}),
     ...(focus?.displayTitle ?? decision.execution.focusTaskTitle ? { focusTaskTitle: focus?.displayTitle ?? decision.execution.focusTaskTitle } : {}),
     ...(decision.execution.focusKind ? { focusKind: decision.execution.focusKind } : {}),
+    ...(decision.execution.reviewTaskIds?.length ? { reviewTaskIds: [...decision.execution.reviewTaskIds] } : {}),
     ...(typeof decision.execution.count === 'number' ? { count: decision.execution.count } : {}),
   }
 }
@@ -997,6 +1005,7 @@ export function applyRuntimeExecutionToProjectDecision(
     ...(activeTaskId ? { focusTaskId: activeTaskId } : {}),
     ...(activeTaskTitle ? { focusTaskTitle: activeTaskTitle } : {}),
     ...(activeTaskId ? { focusKind: 'active_work' } : {}),
+    ...(decision.execution.reviewTaskIds?.length ? { reviewTaskIds: [...decision.execution.reviewTaskIds] } : {}),
     ...(typeof decision.execution.count === 'number' ? { count: decision.execution.count } : {}),
     message: status === 'stopping'
       ? 'Guildhall is stopping the selected work.'
@@ -1050,7 +1059,11 @@ export function buildProjectDecisionProjection(input: ProjectDecisionProjectionI
     ? { state: 'required' as const, ...(input.ownerInput.next?.id ? { requestId: input.ownerInput.next.id } : {}) }
     : { state: 'none' as const }
   const ownerReview = input.ownerReview && input.ownerReview.openCount > 0
-    ? { state: 'required' as const, ...(input.ownerReview.next?.taskId ? { taskId: input.ownerReview.next.taskId } : {}) }
+    ? {
+        state: 'required' as const,
+        ...(input.ownerReview.next?.taskId ? { taskId: input.ownerReview.next.taskId } : {}),
+        ...(input.ownerReview.taskIds?.length ? { taskIds: [...input.ownerReview.taskIds] } : {}),
+      }
     : { state: 'none' as const }
   const primaryAction = primaryActionForDecision({ conflicts, ownerInput, ownerReview, execution, release })
   return {

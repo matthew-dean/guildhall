@@ -66,9 +66,9 @@ import { stripLegacyRuntimeFields } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 26 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 28 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -184,6 +184,8 @@ export interface ProjectSummaryProjection {
   }
   ownerReview?: {
     openCount: number
+    /** Ordered, selected-scope membership behind the owner-review count. */
+    taskIds: string[]
     next?: {
       taskId: string
       label?: string
@@ -447,6 +449,7 @@ function ownerReviewForScope(
   const next = pending[0]
   return {
     openCount: pending.length,
+    taskIds: pending.map(task => task.id),
     ...(next ? {
       next: {
         taskId: next.id,
@@ -490,6 +493,7 @@ function applyOwnerReviewToStartReadiness(
     ...(ownerReview.next?.taskId ? { focusTaskId: ownerReview.next.taskId } : {}),
     ...(ownerReview.next?.label?.trim() ? { focusTaskTitle: ownerReview.next.label.trim() } : {}),
     focusKind: 'owner_review',
+    ...(ownerReview.taskIds.length > 0 ? { reviewTaskIds: [...ownerReview.taskIds] } : {}),
     count,
   } as ReturnType<typeof summarizeProjectScopeStart>
 }
@@ -863,6 +867,7 @@ export function buildProjectSummaryProjection(
     ...(nextAction.code ? { code: nextAction.code } : {}),
     message: nextAction.message,
     ...(typeof decisionStart.count === 'number' ? { count: decisionStart.count } : {}),
+    ...(ownerReview?.taskIds.length ? { reviewTaskIds: [...ownerReview.taskIds] } : {}),
     executionScope: selectedScope
       ? {
           id: selectedScope.id,
@@ -1391,6 +1396,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     ...(decisionStart.focusTaskTitle ? { focusTaskTitle: decisionStart.focusTaskTitle } : {}),
     ...(decisionStart.focusKind ? { focusKind: decisionStart.focusKind } : {}),
     ...(typeof decisionStart.count === 'number' ? { count: decisionStart.count } : {}),
+    ...(ownerReview?.taskIds.length ? { reviewTaskIds: [...ownerReview.taskIds] } : {}),
   }
   if (releaseSummary.state === 'ready' && start.code === 'all_terminal') {
     nextAction = {

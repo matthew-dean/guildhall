@@ -141,8 +141,10 @@ export interface ProjectScopeProjection {
     code?: string
     label: 'Start' | 'Resume' | 'Review' | 'Configure' | 'Answer in Thread'
     focusTaskId?: string
-      focusTaskTitle?: string
-      focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
+    focusTaskTitle?: string
+    focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
+    /** Exact selected-scope records behind an owner-review action. */
+    reviewTaskIds?: string[]
     count?: number
     message: string
     actionHref: string

@@ -54,6 +54,44 @@ help_summary: |
   duplicate claim id with changed content. The latter two return explicit
   rejection receipts; valid rejected observations retain their audit code.
 
+### Release-Bounded Review Finding
+
+- User job: when a selected release is paused for owner review, Start, the
+  top action, Work, and task detail must name and count only review work inside
+  that release. Later or unselected project tasks may remain visible as later
+  work, but cannot stop this release or inflate its call to action.
+- Live finding: Narrative Harness has ten `spec_review` proof children whose
+  parents are all members of the selected release's fifteen product
+  boundaries. The count is release-bounded, but the compact Map/Overview
+  orientation emits only a small subset of those rows. A person sees “10
+  specs” without being able to inspect the ten scoped records or their parent
+  membership, which makes a truthful count look fabricated.
+- Required correction: derive owner-review count, focus, and an inspectable
+  scoped review index from the same selected-scope membership snapshot as
+  execution eligibility. The compact view may summarize that index, but it
+  must link to a paged Work view that returns exactly the same ids and each
+  record's selected-release parent. A decision that cannot bind every review
+  task to that snapshot must fail closed to a scope-state repair, never ask the
+  owner to approve anonymous work.
+- Contract Touch Decision: the compact summary version advances because saved
+  v27 decisions retain a review count without the exact selected-scope review
+  membership behind it. This is a derived projection change, not a task or
+  release rewrite. Existing v26 and v27 summaries become stale and the normal
+  indexed refresh rebuilds them from the canonical membership rows. The shared
+  decision packet and `startReadiness` now carry the exact `reviewTaskIds`; no
+  view may reconstruct that set from task prose, status, or a local scope scan.
+- Proof required: a selected release with one review and later work with more
+  reviews yields one action/count everywhere; selecting a different release
+  changes the bounded review count; a compact review summary links to the same
+  paged scoped ids; and an absent/mismatched membership snapshot suppresses
+  Start rather than scanning all project tasks.
+- Proof provided: the installed Narrative Harness service reports
+  `stale:false`; its bounded Work response names ten review ids and returns all
+  ten in the first forty-item inventory page. Opening the routed review task
+  selects `Review required` and renders those same ten rows at 1280 px, 800 px,
+  and 390 px with no document horizontal overflow. The former generic
+  `internal_step` visibility rule cannot hide a decision-backed review id.
+
 - Work id: `0.13.65/explicit-review-gates-and-state-claim-resolution`.
 - User job: when any two Guildhall agents or projections report incompatible
   project facts, the product must resolve the disagreement through a declared,

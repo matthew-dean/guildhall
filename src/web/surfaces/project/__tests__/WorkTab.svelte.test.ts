@@ -170,6 +170,43 @@ describe('WorkTab', () => {
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' }))
   })
 
+  it('opens an owner-review focus into the exact selected-release review set', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=review-one')
+    path.value = '/projects/narrative-harness/work?task=review-one'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'review-one', title: 'Review the context packet proof', status: 'spec_review' }),
+          task({ id: 'review-two', title: 'Review the world-state proof', status: 'spec_review' }),
+          task({
+            id: 'unrelated-question',
+            title: 'Answer an unrelated project question',
+            status: 'exploring',
+            openQuestions: [{ id: 'question-1', prompt: 'Which branch should this use?' }],
+          }),
+        ], {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          startReadiness: {
+            canStart: false,
+            code: 'owner_review_required',
+            focusTaskId: 'review-one',
+            count: 2,
+            reviewTaskIds: ['review-one', 'review-two'],
+            message: '2 specs are ready for your review before work can continue.',
+          },
+        }),
+      },
+    })
+
+    await screen.findByText('2 shown · 3 total')
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('review')
+    expect(screen.getByRole('button', { name: /inspect work review the context packet proof/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /inspect work review the world-state proof/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /inspect work answer an unrelated project question/i })).not.toBeInTheDocument()
+  })
+
   it('shows question-shaped runnable work with an action-shaped label and keeps the source question visible', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-smoke-test')
     path.value = '/projects/looma-knit/work?task=task-smoke-test'

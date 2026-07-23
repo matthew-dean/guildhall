@@ -670,6 +670,7 @@ interface ServiceProjectSummary {
     focusTaskTitle?: string
     focusKind?: string
     proofTaskIds?: string[]
+    reviewTaskIds?: string[]
     count?: number
     executionScope?: StartExecutionScopeSummary
   } | null
