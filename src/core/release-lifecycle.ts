@@ -37,6 +37,8 @@ export function assertShippedReleaseMutation(input: {
   nextTasks: readonly ReleaseTaskStatusSnapshot[]
   nextReleasesComplete?: boolean
   nextTasksComplete?: boolean
+  /** Immutable shipped-delivery status keyed by release and task. */
+  shippedDeliveryStatus?: (releaseId: string, taskId: string) => string | undefined
 }): void {
   const nextReleasesById = input.nextReleasesComplete === false
     ? new Map(input.currentReleases.map(release => [release.id, release]))
@@ -69,7 +71,11 @@ export function assertShippedReleaseMutation(input: {
       if (!nextTask && input.nextTasksComplete !== false) {
         throw new Error(`Cannot remove work ${taskId} from shipped release ${currentRelease.id}; shipped release records are immutable.`)
       }
-      if (currentTask?.status === 'done' && nextTask && nextTask.status !== 'done') {
+      const shippedStatus = input.shippedDeliveryStatus?.(currentRelease.id, taskId)
+      // Once captured, a delivery snapshot is the shipped release's immutable
+      // completion record. The global task may legitimately be scheduled by a
+      // later active release.
+      if (shippedStatus === undefined && currentTask?.status === 'done' && nextTask && nextTask.status !== 'done') {
         throw new Error(`Cannot reopen completed work ${taskId} in shipped release ${currentRelease.id}; create a new release for new work.`)
       }
     }

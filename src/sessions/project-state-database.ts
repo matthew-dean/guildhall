@@ -1335,12 +1335,42 @@ function taskStatusesFromDatabase(database: DatabaseSync): JsonRecord[] {
   }))
 }
 
+function shippedDeliveryStatusesFromDatabase(database: DatabaseSync): Map<string, string> {
+  const statuses = new Map<string, string>()
+  if (!tableExists(database, 'release_delivery_snapshot')) return statuses
+  const rows = database.prepare('SELECT release_id, task_id, status FROM release_delivery_snapshot').all() as JsonRecord[]
+  for (const row of rows) {
+    const releaseId = stringValue(row.release_id)
+    const taskId = stringValue(row.task_id)
+    const status = stringValue(row.status)
+    if (releaseId && taskId && status) statuses.set(`${releaseId}\0${taskId}`, status)
+  }
+  return statuses
+}
+
+function backfillShippedDeliverySnapshots(database: DatabaseSync): void {
+  if (!tableExists(database, 'release_delivery_snapshot')) return
+  const releases = releaseDefinitionsFromDatabase(database).filter(release => release.state === 'shipped')
+  const statuses = new Map(taskStatusesFromDatabase(database).map(task => [String(task.id), stringValue(task.status)]))
+  const completed = new Map((database.prepare('SELECT id, completed_at FROM work_items').all() as JsonRecord[]).map(row => [String(row.id), stringValue(row.completed_at)]))
+  const insert = database.prepare(`INSERT OR IGNORE INTO release_delivery_snapshot (release_id, task_id, status, completed_at) VALUES (?, ?, ?, ?)`)
+  for (const release of releases) {
+    for (const nodeId of [...stringArray(release.nodeIds), ...stringArray(release.deferredNodeIds)]) {
+      const taskId = taskIdFromReleaseNodeId(nodeId)
+      if (!taskId) continue
+      insert.run(String(release.id), taskId, statuses.get(taskId) ?? 'unknown', completed.get(taskId) ?? null)
+    }
+  }
+}
+
 function assertShippedReleaseWriteAllowed(
   database: DatabaseSync,
   nextReleases: readonly JsonRecord[],
   nextTasks: readonly JsonRecord[],
   options: { nextReleasesComplete?: boolean; nextTasksComplete?: boolean } = {},
 ): void {
+  backfillShippedDeliverySnapshots(database)
+  const shippedDeliveryStatuses = shippedDeliveryStatusesFromDatabase(database)
   assertShippedReleaseMutation({
     currentReleases: releaseDefinitionsFromDatabase(database).map(release => ({
       id: String(release.id),
@@ -1364,6 +1394,7 @@ function assertShippedReleaseWriteAllowed(
     }),
     nextReleasesComplete: options.nextReleasesComplete,
     nextTasksComplete: options.nextTasksComplete,
+    shippedDeliveryStatus: (releaseId, taskId) => shippedDeliveryStatuses.get(`${releaseId}\0${taskId}`),
   })
 }
 
@@ -1689,6 +1720,16 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
       PRIMARY KEY (release_id, task_id)
     );
     CREATE INDEX IF NOT EXISTS release_membership_task_idx ON release_membership(task_id);
+    -- A shipped release owns an immutable delivery snapshot. Work definitions
+    -- may later be scheduled again without rewriting historical delivery.
+    CREATE TABLE IF NOT EXISTS release_delivery_snapshot (
+      release_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      completed_at TEXT,
+      PRIMARY KEY (release_id, task_id)
+    );
+    CREATE INDEX IF NOT EXISTS release_delivery_snapshot_task_idx ON release_delivery_snapshot(task_id);
     CREATE TABLE IF NOT EXISTS project_summary (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       payload_json TEXT NOT NULL,
