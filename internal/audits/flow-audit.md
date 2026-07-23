@@ -53906,6 +53906,24 @@ Repair:
       typed state, not a model-generated phrase or one arbitrary task-ranking
       outcome.
 
+### Compact Review Authority Finding
+
+- [x] Narrative Harness proved a compact/detail disagreement: task detail
+      reported an owner-gated `spec_review`, while the indexed Overview
+      decision reported no owner review and offered unrelated ready work.
+      The task point had preserved the review status but discarded its typed
+      review authority.
+- [x] The compact current-state summary now retains only
+      `specReviewAuthority` (`owner` or `coordinator`) for a task in
+      `spec_review`; it does not copy review prose or task detail. Indexed
+      start readiness, owner-review count, and the decision primary action
+      derive from that one fact. An explicit owner question still takes
+      precedence consistently in both the start and decision projections.
+- [x] Regression: an indexed promoted project containing both an owner review
+      and coordinator review exposes exactly one owner review and a
+      `review_spec` action. Focused summary tests, typecheck, and contract
+      detector pass; installed-app replay remains required.
+
 ### Release Membership Revision Decision
 
 - Work id: `0.13.69/release-membership-revision`.

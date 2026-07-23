@@ -121,6 +121,64 @@ describe('getProjectMigrationStatus', () => {
     })).applied).toEqual([])
   })
 
+  it('backfills compact review authority and rebuilds the shared decision', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      tasks: [{
+        id: 'task-owner-review',
+        title: 'Owner review',
+        status: 'spec_review',
+        releaseIds: ['release-1'],
+        specReviewGate: {
+          authority: 'owner',
+          requestedAt: '2026-07-23T00:00:00.000Z',
+          requestedBy: 'spec-agent',
+          reason: 'spec_handoff',
+        },
+      }],
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-owner-review'],
+        deferredNodeIds: [],
+      }],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const taskRow = database.prepare('SELECT summary_json FROM work_items WHERE id = ?').get('task-owner-review') as { summary_json: string }
+    const staleTaskSummary = JSON.parse(taskRow.summary_json) as Record<string, unknown>
+    delete (staleTaskSummary.currentSummary as Record<string, unknown>).specReviewAuthority
+    database.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?').run(JSON.stringify(staleTaskSummary), 'task-owner-review')
+    const summaryRow = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const staleProjection = JSON.parse(summaryRow.payload_json) as Record<string, unknown>
+    delete staleProjection.ownerReview
+    ;(staleProjection.decision as Record<string, unknown>).ownerReview = { state: 'none' }
+    ;(staleProjection.decision as Record<string, unknown>).primaryAction = { kind: 'none', reasonCode: 'summary_unavailable' }
+    database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(staleProjection))
+    database.close()
+
+    const first = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.69/compact-spec-review-authority'],
+    })
+    expect(first.failed).toEqual([])
+    expect(first.applied.map(item => item.id)).toEqual(['0.13.69/compact-spec-review-authority'])
+    expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks[0]?.currentSummary).toMatchObject({
+      specReviewAuthority: 'owner',
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.69/compact-spec-review-authority'],
+    })).applied).toEqual([])
+  })
+
   it('settles an approved durable spec handoff without approving the spec', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     const structuredSpec = {

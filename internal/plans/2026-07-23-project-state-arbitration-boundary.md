@@ -105,6 +105,25 @@ reference; prose may explain a claim but never determines it.
   stale. Revert leaves the durable records auditable but does not revive a
   second runtime authority.
 
+### Compact Review Authority Decision
+
+- Work id: `0.13.69/project-state-arbitration`.
+- Touched contracts: indexed task `currentSummary`, compact task-to-summary
+  reconstruction, owner-review count, start readiness, and decision primary
+  action.
+- Change: persist only `specReviewAuthority: owner | coordinator` for a task
+  currently in `spec_review`. Full gate rationale remains detail-only.
+- Why: a compact projection otherwise knows a task is under review but cannot
+  determine who owns that review. Detail and summary can then issue opposite
+  instructions from the same project revision.
+- Safety: absent authority on a legacy review retains the existing owner
+  default. A coordinator value must be explicitly indexed. Owner questions
+  take precedence over review requests in both start readiness and the
+  decision packet.
+- Proof: a promoted, indexed-only summary of an owner-gated review produces
+  `ownerReview`, `owner_review_required`, and `review_spec`; a coordinator
+  review does not. No detail payload or model prose is read.
+
 ## Schema Migration Decision
 
 - Persisted schema: per-task definition/current ownership, claim ledger,

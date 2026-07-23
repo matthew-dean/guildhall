@@ -3329,6 +3329,14 @@ function workItemSummary(task: JsonRecord): JsonRecord {
   const sizePlanAction = isRecord(task.sizePlan) && typeof task.sizePlan.action === 'string'
     ? task.sizePlan.action
     : null
+  // Compact readers need to distinguish an owner review from a coordinator
+  // review without reopening the task definition. The field is typed state,
+  // not the review rationale or any model-authored prose.
+  const specReviewAuthority = task.status === 'spec_review'
+    ? (isRecord(task.specReviewGate) && task.specReviewGate.authority === 'coordinator'
+        ? 'coordinator'
+        : 'owner')
+    : null
   const currentProof = currentProofSummary(task)
   const executionBlocker = taskExecutionBlocker(task)
   summary.currentSummary = {
@@ -3345,6 +3353,7 @@ function workItemSummary(task: JsonRecord): JsonRecord {
     ...(executionBlocker ? { executionBlocker } : {}),
     ...(taskReadiness ? { taskReadiness } : {}),
     ...(sizePlanAction ? { sizePlanAction } : {}),
+    ...(specReviewAuthority ? { specReviewAuthority } : {}),
   }
   return summary
 }

@@ -237,6 +237,7 @@ const INTERNAL_PROOF_RELEASE_CONTEXT_MIGRATION_ID = '0.13.65/internal-proof-rele
 const RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID = '0.13.66/release-membership-snapshot'
 const SPEC_REVIEW_GATE_MIGRATION_ID = '0.13.67/explicit-spec-review-gates'
 const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
+const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-authority'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -319,6 +320,37 @@ function settleDurableSpecHandoff(task: Task, now: string): boolean {
   }
   task.updatedAt = now
   return true
+}
+
+function compactSpecReviewAuthorityNeedsMigration(projectRoot: string): boolean {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return false
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const inventory = readProjectStateDatabaseInventory(tasksPath, {
+    includeDefinitions: false,
+  })
+  if (!inventory) return false
+  const ownerReviewTasks = inventory.tasks.filter(task => {
+    if (task.status !== 'spec_review') return false
+    const currentSummary = isRecord(task.currentSummary) ? task.currentSummary : null
+    return currentSummary?.specReviewAuthority === 'owner' && task.scopeRow?.scope === 'included'
+  })
+  const missingAuthority = inventory.tasks.some(task => {
+    if (task.status !== 'spec_review') return false
+    const currentSummary = isRecord(task.currentSummary) ? task.currentSummary : null
+    return currentSummary?.specReviewAuthority !== 'owner' && currentSummary?.specReviewAuthority !== 'coordinator'
+  })
+  const saved = readProjectStateDatabaseSummary<Record<string, unknown>>(tasksPath)?.payload
+  const savedReview = isRecord(saved?.ownerReview) ? saved.ownerReview : null
+  const savedDecision = isRecord(saved?.decision) ? saved.decision : null
+  const savedCount = typeof savedReview?.openCount === 'number' ? savedReview.openCount : 0
+  const savedTaskId = isRecord(savedReview?.next) && typeof savedReview.next.taskId === 'string'
+    ? savedReview.next.taskId
+    : null
+  const decisionReview = isRecord(savedDecision?.ownerReview) ? savedDecision.ownerReview : null
+  return missingAuthority ||
+    savedCount !== ownerReviewTasks.length ||
+    savedTaskId !== (ownerReviewTasks[0]?.id ?? null) ||
+    (ownerReviewTasks.length > 0 && decisionReview?.state !== 'required')
 }
 
 function migrateProofSetupTaskKind(task: Task): boolean {
@@ -2045,10 +2077,10 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
     async apply(projectRoot) {
       const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-      const projection = backfillProjectSummaryProjection(tasksPath, {
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
         projectId: path.basename(projectRoot),
-        projectRoot,
       })
+      if (!projection) throw new Error('The compact project summary could not be rebuilt after review-authority backfill.')
       return {
         summary: projection.freshness === 'error'
           ? 'Created an explicit error summary because the existing task queue could not be parsed; task history was not rewritten.'
@@ -4991,6 +5023,47 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
           ? `Moved ${settled.length} durable spec handoff${settled.length === 1 ? '' : 's'} into explicit owner review; no task was approved or made runnable by this repair.`
           : 'No durable specs were left in stale shaping state.',
         affectedPaths: settled.length > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID,
+    title: 'Materialize compact spec review authority',
+    introducedIn: '0.13.69',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Backfills the bounded owner-or-coordinator review authority for existing spec-review task points, so the fast project projection cannot disagree with task detail about whether work needs owner review.',
+    async detect(projectRoot) {
+      const needed = compactSpecReviewAuthorityNeedsMigration(projectRoot)
+      return {
+        needed,
+        affectedPaths: needed
+          ? [projectStateDatabasePath(projectRoot), 'compact spec-review authority points and shared summary']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped compact spec-review authority backfill because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const summaries = queue.tasks.map(task => ({
+        taskId: String(task.id),
+        summary: projectStateDatabaseTaskSummary(task),
+      }))
+      const rewritten = rewriteProjectStateDatabaseTaskSummaries(projectRoot, summaries)
+      const projection = backfillProjectSummaryProjection(tasksPath, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+      })
+      return {
+        summary: `Materialized compact review authority for ${rewritten.updatedCount} task point${rewritten.updatedCount === 1 ? '' : 's'} and refreshed the shared project decision (${projection.decision.primaryAction.kind}).`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },
   },

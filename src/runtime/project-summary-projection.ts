@@ -764,9 +764,9 @@ export function buildProjectSummaryProjection(
     generatedAt,
   })
   const ownerReview = input.ownerReview ?? ownerReviewForScope(scopeProjection.rows, tasks, generatedAt)
-  const start = applyOwnerReviewToStartReadiness(
-    applyOwnerInputToStartReadiness(scopeProjection.start, input.ownerInput),
-    ownerReview,
+  const start = applyOwnerInputToStartReadiness(
+    applyOwnerReviewToStartReadiness(scopeProjection.start, ownerReview),
+    input.ownerInput,
   )
   const orientationSpine = compactProjectOrientationSpineForMap(buildProjectOrientationSpine({
     projectId: input.projectId ?? '',
@@ -976,6 +976,9 @@ function indexedTaskForScopeProjection(task: ProjectStateDatabaseTask): Task {
     currentSummary.executionBlocker.reason.trim()
     ? currentSummary.executionBlocker.reason.trim()
     : undefined
+  const specReviewAuthority = currentSummary.specReviewAuthority === 'owner' || currentSummary.specReviewAuthority === 'coordinator'
+    ? currentSummary.specReviewAuthority
+    : undefined
   const acceptanceCriteriaCount = Number(currentSummary.acceptanceCriteriaCount ?? record.acceptanceCriteriaCount ?? 0)
   const hasBrief = brief.present === true
   const hasShapedBrief = brief.shaped === true
@@ -996,6 +999,9 @@ function indexedTaskForScopeProjection(task: ProjectStateDatabaseTask): Task {
     ...(task.releaseIds.length > 0 ? { releaseIds: task.releaseIds } : {}),
     ...(task.sourceRefs.length > 0 ? { references: task.sourceRefs } : {}),
     ...(executionBlocker ? { blockReason: executionBlocker } : {}),
+    ...(task.status === 'spec_review' && specReviewAuthority
+      ? { specReviewGate: { authority: specReviewAuthority } }
+      : {}),
     ...(record.spec === 'present' ? { spec: 'indexed-present' } : {}),
     ...(acceptanceCriteriaCount > 0
       ? { acceptanceCriteria: Array.from({ length: acceptanceCriteriaCount }, (_, index) => ({
@@ -1268,8 +1274,18 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const executionRows = indexedExecutionRows(rows)
   const includedRows = executionRows.filter(row => row.scope === 'included')
   const deferredRows = executionRows.filter(row => row.scope === 'deferred')
+  const ownerReview = ownerReviewForScope(
+    indexedScopeRowsAsProjectScopeRows(rows),
+    tasks.map(indexedTaskForScopeProjection),
+    generatedAt,
+  )
+  // A question is a direct decision request. Keep its precedence over an
+  // available review identical to the shared decision packet.
   const start = applyOwnerInputToStartReadiness(
-    indexedStartReadiness(rows, releases, selectedReleaseId, tasks),
+    applyOwnerReviewToStartReadiness(
+      indexedStartReadiness(rows, releases, selectedReleaseId, tasks),
+      ownerReview,
+    ),
     base.ownerInput,
   )
   let nextAction: ProjectSummaryProjection['nextAction'] = {
@@ -1336,6 +1352,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     start,
     release: releaseSummary,
     ownerInput: base.ownerInput,
+    ownerReview,
     runStatus: base.execution?.status ?? 'stopped',
     runtimeExecution: base.execution,
   })
@@ -1444,6 +1461,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
       ...(task.updatedAt ? { updatedAt: task.updatedAt } : {}),
     }))),
     actionModel,
+    ownerReview,
   }
 }
 

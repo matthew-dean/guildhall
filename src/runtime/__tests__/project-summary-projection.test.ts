@@ -137,6 +137,60 @@ describe('project-summary-projection', () => {
     })
   })
 
+  it('retains review authority in the compact indexed summary path', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-review-authority-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('owner-review', 'spec_review', {
+        specReviewGate: {
+          authority: 'owner',
+          requestedAt: now,
+          requestedBy: 'spec-agent',
+          reason: 'spec_handoff',
+        },
+      }),
+      task('coordinator-review', 'spec_review', {
+        specReviewGate: {
+          authority: 'coordinator',
+          requestedAt: now,
+          requestedBy: 'coordinator',
+          reason: 'spec_handoff',
+        },
+      }),
+    ], {
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:owner-review', 'work:coordinator-review'],
+        deferredNodeIds: [],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'indexed-review', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    const projection = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'indexed-review',
+      generatedAt: now,
+    })
+
+    expect(projection?.ownerReview).toMatchObject({
+      openCount: 1,
+      next: { taskId: 'owner-review' },
+    })
+    expect(projection?.nextAction).toMatchObject({
+      code: 'owner_review_required',
+      focusTaskId: 'owner-review',
+    })
+    expect(projection?.decision).toMatchObject({
+      ownerReview: { state: 'required', taskId: 'owner-review' },
+      primaryAction: { kind: 'review_spec', targetId: 'owner-review' },
+    })
+  })
+
   it('materializes accepted plan membership without inventing missing work', () => {
     const result = materializeApprovedPlanReleaseMembership(queue([
       task('current', 'ready'),
