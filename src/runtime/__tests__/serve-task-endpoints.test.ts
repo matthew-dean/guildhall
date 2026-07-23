@@ -5825,6 +5825,38 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
     expect(task.blockReason).toBeUndefined()
   })
 
+  it('preserves an explicit Codex owner delegation instead of calling it a human click', async () => {
+    await seedTask('task-1', {
+      status: 'blocked',
+      blockReason: 'Escalation raised',
+      escalations: [{
+        id: 'esc-1',
+        taskId: 'task-1',
+        reason: 'spec_ambiguous',
+        summary: 'The proof contract needs a fresh spec pass.',
+        agentId: 'agent:worker-1',
+        raisedAt: new Date().toISOString(),
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resolve-escalation'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          escalationId: 'esc-1',
+          resolution: 'Re-open proof/spec shaping under the delegated owner mandate.',
+          nextStatus: 'exploring',
+          actor: 'codex_delegated_owner',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const task = await readEffectiveTask('task-1')
+    expect(task.status).toBe('exploring')
+    expect(task.escalations[0].resolvedBy).toBe('codex_delegated_owner')
+  })
+
   it('requires both escalationId and resolution', async () => {
     await seedTask('task-1', { status: 'blocked' })
     const { app } = buildServeApp({ projectPath: tmpDir })

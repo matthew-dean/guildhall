@@ -16161,6 +16161,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           escalationId?: string
           resolution?: string
           nextStatus?: 'exploring' | 'spec_review' | 'ready' | 'in_progress' | 'review' | 'gate_check'
+          actor?: unknown
         }
         if (!body.escalationId) return c.json({ error: 'Missing escalationId' }, 400)
         if (!body.resolution || !body.resolution.trim()) {
@@ -16172,7 +16173,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
           taskId: id,
           escalationId: body.escalationId,
           resolution: body.resolution.trim(),
-          resolvedBy: 'human',
+          // Codex may carry an explicit owner delegation, but Guildhall must
+          // retain that provenance instead of silently recording it as the
+          // owner personally clicking a generic human control.
+          resolvedBy: body.actor === 'codex_delegated_owner'
+            ? 'codex_delegated_owner'
+            : 'human',
           nextStatus: body.nextStatus ?? 'ready',
         })
         if (!result.success) return c.json({ error: result.error ?? 'resolve failed' }, 400)

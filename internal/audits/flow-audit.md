@@ -52897,3 +52897,32 @@ Repair:
       is rewritten. A claim can retire another only through its explicit
       `supersedes` identity within the same subject/field/revision.
 - Apply/revert: project summaries rebuild from their existing canonical facts.
+
+## 2026-07-23 Delegated owner recovery must retain its actual actor
+
+- [x] User job: when Codex is explicitly delegated to act as the owner, a
+      recovery action should record `codex_delegated_owner`. Guildhall must not
+      misrepresent it as the owner personally clicked through, and a normal
+      Guildhall agent still cannot claim an owner-only decision.
+
+### Contract Touch Decision
+
+- Work id: `0.13.91/delegated-escalation-provenance`.
+- Touched contracts: task escalation-resolution API and escalation evidence
+      provenance.
+- Considered but not touched: gate scope exceptions remain actual owner-only
+      decisions and continue to require `human`; this endpoint change does not
+      grant that authority to Guildhall agents.
+- Proof required: an explicit Codex delegation survives the API action into
+      the durable escalation record; ordinary requests remain `human`.
+- Apply/revert: no policy change to agent authority, only accurate actor
+      propagation at the existing escalation boundary.
+
+### Schema Migration Decision
+
+- Work id: `0.13.91/delegated-escalation-provenance`.
+- Persisted schema touched: existing `resolvedBy` value only; no schema or
+      historical-data migration.
+- Change class: provenance correctness.
+- Safety: the route accepts one allowlisted delegated actor value. All other
+      values remain `human`; no arbitrary caller-selected authority is stored.
