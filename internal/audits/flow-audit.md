@@ -51959,3 +51959,22 @@ Repair:
 - Proof provided: local checks; installed replay pending.
 - Apply/revert: retain the raw fingerprint guard; do not fall back to compact
       queue definitions for re-intake planning.
+
+## 2026-07-23 Proof-missing completion cannot bypass re-intake
+
+- [x] Re-intake's first progress-protection pass marked every done task as
+      immutable before proof-aware reconciliation ran. This hid selected
+      script-only work whose command proof remained unverified.
+- [x] A done task with missing current selected-release proof is now excluded
+      from protected progress and reaches the same reconciliation path as Map
+      and Release.
+
+### Contract Touch Decision
+
+- Work id: `0.13.68/reintake-proof-missing-progress-guard`.
+- Touched contracts: re-intake progress preservation and shared proof scope.
+- Proof required: typecheck and re-intake suite pass; installed Narrative
+      Harness replay proposes existing proof-missing tasks with zero creates.
+- Proof provided: local checks; installed replay pending.
+- Apply/revert: do not restore unconditional done-task protection; only
+      current proof can protect a completed selected-release task.

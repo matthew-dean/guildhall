@@ -146,6 +146,9 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   const selectedRelease = selectReintakeRelease(detectSelectedRelease(input.sources), input)
   const protectedProgressTaskIds = new Set(input.tasks
     .filter(task => isStartedOrCompletedTask(task) && !importedContractWorkIsStructurallyIncomplete(task))
+    // A completion claim without the selected release's current proof is a
+    // repair candidate, not immutable historical progress.
+    .filter(task => stringField(task, 'status') !== 'done' || !taskNeedsCurrentScopeProof(task, selectedRelease))
     .map(task => stringField(task, 'id'))
     .filter((id): id is string => Boolean(id)))
 
