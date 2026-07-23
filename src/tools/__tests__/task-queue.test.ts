@@ -12,6 +12,7 @@ import {
   isProofSetupTask,
   materializeSplitChildren,
   materializeProofSetupTask,
+  prepareReleaseProofRecovery,
   settleMaterializedSplitReadiness,
 } from '../task-queue.js'
 import {
@@ -2635,6 +2636,101 @@ describe('materializeProofSetupTask', () => {
       childTaskId: proofTask.id,
     })
     expect(queue.tasks).toHaveLength(beforeCount)
+  })
+})
+
+describe('prepareReleaseProofRecovery', () => {
+  it('materializes every selected proof blocker and reopens only its existing internal proof step', () => {
+    const timestamp = '2026-07-23T09:00:00.000Z'
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-001', 'work:task-002'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        id: 'task-001',
+        status: 'done',
+        releaseIds: ['release-1'],
+      }, {
+        ...seedQueue.tasks[0],
+        id: 'task-002',
+        status: 'done',
+        releaseIds: ['release-1'],
+      }],
+    })
+    const historical = materializeProofSetupTask(queue, queue.tasks[0]!, timestamp, {
+      releaseIds: ['release-1'],
+    })
+    const historicalTask = queue.tasks.find(task => task.id === historical.childTaskId)!
+    historicalTask.status = 'done'
+    historicalTask.completedAt = timestamp
+
+    const result = prepareReleaseProofRecovery(queue, {
+      parentTaskIds: ['task-002', 'task-001', 'task-001'],
+      releaseId: 'release-1',
+      timestamp,
+    })
+
+    expect(result).toEqual({
+      materializedTaskIds: ['task-002-proof-setup'],
+      reopenedTaskIds: ['task-001-proof-setup'],
+      representedTaskIds: ['task-001-proof-setup'],
+      rejectedParentTaskIds: [],
+    })
+    expect(queue.tasks.find(task => task.id === 'task-001-proof-setup')).toMatchObject({
+      status: 'ready',
+      releaseIds: ['release-1'],
+      hierarchy: { parentId: 'task-001', relation: 'decomposes' },
+    })
+    expect(queue.tasks.find(task => task.id === 'task-002-proof-setup')).toMatchObject({
+      status: 'ready',
+      releaseIds: ['release-1'],
+      hierarchy: { parentId: 'task-002', relation: 'decomposes' },
+    })
+  })
+
+  it('rejects a blocker that is not a member of the selected release', () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        id: 'later-task',
+        status: 'done',
+        releaseIds: ['release-later'],
+      }],
+    })
+
+    expect(prepareReleaseProofRecovery(queue, {
+      parentTaskIds: ['later-task'],
+      releaseId: 'release-1',
+      timestamp: '2026-07-23T09:00:00.000Z',
+    })).toEqual({
+      materializedTaskIds: [],
+      reopenedTaskIds: [],
+      representedTaskIds: [],
+      rejectedParentTaskIds: ['later-task'],
+    })
+    expect(queue.tasks).toHaveLength(1)
   })
 })
 

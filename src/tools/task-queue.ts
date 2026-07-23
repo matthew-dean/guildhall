@@ -1250,6 +1250,70 @@ export function materializeProofSetupTask(
 }
 
 /**
+ * Turn a selected release's known proof blockers into its existing internal
+ * verification work in one deterministic mutation. The caller supplies the
+ * blocker identities from the shared scope projection; this helper only
+ * maintains the task graph and never re-derives readiness from prose.
+ */
+export function prepareReleaseProofRecovery(
+  queue: TaskQueueRecord,
+  input: {
+    parentTaskIds: readonly string[]
+    releaseId: string
+    timestamp: string
+  },
+): {
+  materializedTaskIds: string[]
+  reopenedTaskIds: string[]
+  representedTaskIds: string[]
+  rejectedParentTaskIds: string[]
+} {
+  const materializedTaskIds: string[] = []
+  const reopenedTaskIds: string[] = []
+  const representedTaskIds: string[] = []
+  const rejectedParentTaskIds: string[] = []
+  const release = queue.releases?.find(candidate => candidate.id === input.releaseId)
+  for (const parentTaskId of [...new Set(input.parentTaskIds)].sort()) {
+    const parent = queue.tasks.find(task => task.id === parentTaskId)
+    const isReleaseMember = Boolean(
+      release && (
+        (parent?.releaseIds ?? []).includes(input.releaseId) ||
+        (release.nodeIds ?? []).includes(`work:${parentTaskId}`)
+      ),
+    )
+    if (!parent || !isReleaseMember || ['archived', 'cancelled', 'shelved'].includes(parent.status)) {
+      rejectedParentTaskIds.push(parentTaskId)
+      continue
+    }
+    const result = materializeProofSetupTask(queue, parent, input.timestamp, {
+      releaseIds: [input.releaseId],
+    })
+    const proofTask = queue.tasks.find(task => task.id === result.childTaskId)
+    if (!proofTask) continue
+    if (result.status === 'materialized') materializedTaskIds.push(proofTask.id)
+    else representedTaskIds.push(proofTask.id)
+
+    // A settled historical proof child is not reusable when the shared scope
+    // projection says its parent lacks current proof. Reopen the same bounded
+    // child; do not create a proof-setup chain or mutate the parent boundary.
+    if (['done', 'pending_pr'].includes(proofTask.status)) {
+      proofTask.status = 'ready'
+      proofTask.assignedTo = null
+      delete proofTask.completedAt
+      proofTask.updatedAt = input.timestamp
+      proofTask.notes.push({
+        agentId: 'proof-recovery',
+        role: 'coordinator',
+        content: `Reopened ${proofTask.id} because the selected release still lacks current proof for ${parent.id}.`,
+        timestamp: input.timestamp,
+      })
+      reopenedTaskIds.push(proofTask.id)
+    }
+  }
+  return { materializedTaskIds, reopenedTaskIds, representedTaskIds, rejectedParentTaskIds }
+}
+
+/**
  * Build the one canonical proof-setup task contract. Existing generated proof
  * children use this same builder during migration so creation and repair
  * cannot drift into two subtly different task shapes.

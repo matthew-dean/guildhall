@@ -1697,17 +1697,19 @@ function writeTargetedTaskBatchMutationIfSafe(
     projectId?: string | null
     projectRoot?: string
     expectedQueueRevision?: number | null
+    expectedProjectRevision?: number | null
     taskEvidence?: readonly {
       event: TaskEvidenceEventRecord
       retention: ProjectStateDatabaseTaskEvidenceRetentionInput
     }[]
+    taskRuntimes?: readonly { taskId: string; updatedAt?: string; payload: unknown }[]
   },
 ): boolean {
   if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return false
   const current = readProjectTaskQueueSyncWithRevision(tasksPath)
   const expectedQueueRevision = options.expectedQueueRevision ?? current.revision
   if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return false
-  const expectedProjectRevision = current.projectRevision
+  const expectedProjectRevision = options.expectedProjectRevision ?? current.projectRevision
   if (typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) return false
   const currentQueue = readProjectStateDatabaseQueueDefinition(tasksPath) ?? current.queue
   const currentTasks = taskRecordById(currentQueue)
@@ -1767,6 +1769,7 @@ function writeTargetedTaskBatchMutationIfSafe(
       ? { scopeAuthorityRequests: queue.scopeAuthorityRequests.filter(isRecord) }
       : {}),
     ...(options.taskEvidence ? { evidence: options.taskEvidence } : {}),
+    ...(options.taskRuntimes ? { taskRuntimes: options.taskRuntimes } : {}),
     summary: prepared.projection as unknown as Record<string, unknown>,
     expectedQueueRevision,
     expectedProjectRevision,
@@ -2006,6 +2009,7 @@ export async function writeProjectTaskQueueAtCurrentStateBoundary(
     projectId?: string | null
     projectRoot?: string
     expectedQueueRevision?: number | null
+    expectedProjectRevision?: number | null
   } = {},
 ): Promise<void> {
   const wasDatabaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
@@ -2146,6 +2150,7 @@ export function writeProjectTaskQueueWithSummary(
     /** Internal marker for the sanitizer-owned normal writer. */
     taskDefinitionsAlreadySanitized?: boolean
     expectedQueueRevision?: number | null
+    expectedProjectRevision?: number | null
     taskEvidence?: readonly {
       event: TaskEvidenceEventRecord
       retention: ProjectStateDatabaseTaskEvidenceRetentionInput
@@ -2179,7 +2184,7 @@ export function writeProjectTaskQueueWithSummary(
   // a promoted project's current task definitions.
   const persistedQueue = preserveProjectQueueEnvelope(tasksPath, currentQueue, compatibilityExport !== undefined)
   if (databaseAuthority && !hasAtomicExtras && writeTargetedReleaseSelectionIfSafe(tasksPath, persistedQueue, options)) return
-  if (databaseAuthority && !hasAtomicExtras && writeTargetedTaskBatchMutationIfSafe(tasksPath, persistedQueue, options)) return
+  if (databaseAuthority && options.taskWorkspaces === undefined && writeTargetedTaskBatchMutationIfSafe(tasksPath, persistedQueue, options)) return
   if (databaseAuthority && !hasAtomicExtras && writeTargetedTaskMutationIfSafe(tasksPath, persistedQueue, options)) return
   if (databaseAuthority && compatibilityExport === undefined && !hasAtomicExtras) {
     const currentQueue = readProjectStateDatabaseQueueDefinition(tasksPath)

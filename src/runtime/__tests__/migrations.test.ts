@@ -1110,6 +1110,13 @@ describe('applyProjectMigrations', () => {
     expect((task?.notes as Array<Record<string, unknown>> | undefined)?.at(-1)?.structured).toMatchObject({
       event: 'proof_setup_reopened_before_proof',
     })
+    // A ready proof step without a recovery marker is ordinary runnable work,
+    // not a historical terminal state that should block Start on migration.
+    replaceProjectStateDatabaseTaskRuntimes(projectRoot, [])
+    expect((await getProjectMigrationStatus({
+      projectRoot,
+      only: ['0.13.32/proof-setup-runtime-recovery-marker'],
+    })).blocked).toEqual([])
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.13.30/proof-setup-completion-authority'],

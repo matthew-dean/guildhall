@@ -2619,6 +2619,110 @@ describe('POST /api/project/task/:id/start', () => {
     }
   })
 
+  it('prepares every selected proof blocker and keeps global Resume scoped to the release', async () => {
+    const now = '2026-07-23T09:00:00.000Z'
+    await seedCanonicalQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        proofStyle: 'script_only',
+        nodeIds: ['work:task-1', 'work:task-2'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        id: 'task-1',
+        title: 'Prove author input',
+        description: 'A completed selected-scope task needs current script proof.',
+        domain: 'harness',
+        projectPath: tmpDir,
+        status: 'done',
+        priority: 'normal',
+        releaseIds: ['release-1'],
+        hierarchy: { childIds: ['task-1-proof-setup'], order: 0, relation: 'contains' },
+        acceptanceCriteria: [{ id: 'ac-1', description: 'A project proof passes.', verifiedBy: 'review', met: true }],
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      }, {
+        id: 'task-1-proof-setup',
+        title: 'Establish concrete proof for Prove author input',
+        description: 'Historical proof setup needs current proof.',
+        domain: 'harness',
+        projectPath: tmpDir,
+        status: 'done',
+        priority: 'normal',
+        semanticKind: 'proof_setup',
+        taskKind: 'verification',
+        workKind: 'verification',
+        workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+        releaseIds: ['release-1'],
+        runtime: {
+          proofRecovery: {
+            reopenedAt: now,
+            kind: 'proof',
+            reason: 'A previous recovery marker must survive this stale terminal projection.',
+          },
+        },
+        hierarchy: { parentId: 'task-1', childIds: [], order: 0, relation: 'decomposes' },
+        acceptanceCriteria: [{ id: 'ac-1', description: 'A task-specific proof command is recorded and passes.', verifiedBy: 'review', met: true }],
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      }, {
+        id: 'task-2',
+        title: 'Prove chapter review',
+        description: 'A second completed selected-scope task needs current script proof.',
+        domain: 'harness',
+        projectPath: tmpDir,
+        status: 'done',
+        priority: 'normal',
+        releaseIds: ['release-1'],
+        acceptanceCriteria: [{ id: 'ac-1', description: 'A project proof passes.', verifiedBy: 'review', met: true }],
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      }],
+    })
+    await applyProjectMigrations({
+      projectRoot: tmpDir,
+      only: ['0.13.30/proof-setup-completion-authority'],
+      appVersion: 'serve-task-endpoints-test',
+    })
+    await applyCanonicalMigrations()
+    await refreshCanonicalSummary()
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const response = await app.fetch(new Request(projectUrl('/api/project/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'continuous' }),
+      }))
+      expect(response.status, await response.text()).toBe(200)
+      await vi.waitFor(() => expect(starts.at(-1)).toEqual({}))
+
+      const queue = await readTaskQueue()
+      expect(queue.tasks.filter((task: Record<string, any>) => task.semanticKind === 'proof_setup')).toEqual([
+        expect.objectContaining({ id: 'task-1-proof-setup', status: 'ready', releaseIds: ['release-1'] }),
+        expect.objectContaining({ id: 'task-2-proof-setup', status: 'ready', releaseIds: ['release-1'] }),
+      ])
+      const runtime = await readTaskRuntimeStore(tmpDir)
+      expect(runtime.tasks['task-1-proof-setup']?.proofRecovery).toMatchObject({ kind: 'proof' })
+      expect(runtime.tasks['task-2-proof-setup']?.proofRecovery).toBeUndefined()
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
   it('lets a specifically requested shaping task start inside the selected scope', async () => {
     const now = new Date().toISOString()
     await seedTasks([

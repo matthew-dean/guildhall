@@ -62,7 +62,7 @@ import {
   pruneFleetSummaryProjectionAtBoundary,
   readFleetSummaryProjectionPageAtBoundary,
 } from './fleet-summary-projection.js'
-import { ProjectStateRevisionMismatchError, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectOverviewStateAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, upsertProjectSourceCapabilitiesAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
+import { ProjectStateRevisionMismatchError, preserveRuntimeOverlayOnTaskQueueParse, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectOverviewStateAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, upsertProjectSourceCapabilitiesAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -131,6 +131,7 @@ import {
   settleMaterializedSplitReadiness,
   isProofSetupTask,
   materializeProofSetupTask,
+  prepareReleaseProofRecovery,
   updateDesignSystem,
 } from '@guildhall/tools'
 import { DesignSystem, explicitTaskStructuralIdentity, summarizeDesignSystem, Task as TaskSchema, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
@@ -1127,6 +1128,27 @@ type StartStateSnapshot = {
   ownerInput?: ProjectSummaryProjection['ownerInput'] | null
   /** The same bounded summary shown by Overview and Release. */
   summary?: ProjectSummaryProjection | null
+}
+
+type ReleaseProofRecoveryDecision = {
+  releaseId: string
+  parentTaskIds: string[]
+}
+
+function savedReleaseProofRecoveryDecision(
+  summary: ProjectSummaryProjection | null | undefined,
+  scope: ProjectScope | null | undefined,
+  requestedTaskId?: string,
+): ReleaseProofRecoveryDecision | null {
+  if (requestedTaskId || scope?.kind !== 'release' || !summary) return null
+  const parentTaskIds = [...new Set(summary.releaseSummary.blockers
+    .filter(blocker => blocker.code === 'proof_evidence_missing')
+    .map(blocker => blocker.owningTaskId ?? blocker.id)
+    .filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
+    .sort()
+  return parentTaskIds.length > 0
+    ? { releaseId: scope.id, parentTaskIds }
+    : null
 }
 
 function savedProofEvidenceStartBlocker(
@@ -9168,6 +9190,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: string
+    proofTaskIds?: string[]
+    releaseProofRecovery?: ReleaseProofRecoveryDecision
     count?: number
     loadedModels?: string[]
     missingModels?: string[]
@@ -9186,8 +9210,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
       effectiveTasks: input.effectiveTasks,
       scope: input.scope,
     }))
-    const attachExecutionScope = <T extends { canStart: boolean }>(status: T): T & { executionScope?: StartExecutionScopeSummary } =>
-      executionScope ? { ...status, executionScope } : status
+    const releaseProofRecovery = savedReleaseProofRecoveryDecision(
+      input.summary,
+      input.scope,
+      input.requestedTaskId,
+    )
+    const attachExecutionScope = <T extends { canStart: boolean }>(status: T): T & {
+      executionScope?: StartExecutionScopeSummary
+      releaseProofRecovery?: ReleaseProofRecoveryDecision
+    } => ({
+      ...status,
+      ...(executionScope ? { executionScope } : {}),
+      ...(releaseProofRecovery ? { releaseProofRecovery } : {}),
+    })
     const startStateOptions = {
       queue: input.queue,
       effectiveTasks: input.effectiveTasks,
@@ -11267,41 +11302,64 @@ export function buildServeApp(opts: ServeOptions = {}): {
             }
           : {}),
       })
-      if (!startReadiness.canStart) {
-        if (
-          startReadiness.code === 'proof_evidence_missing' &&
-          startReadiness.focusTaskId &&
-          !body.taskId
-        ) {
-          const retryUrl = new URL(c.req.url)
-          retryUrl.pathname = `/api/project/task/${encodeURIComponent(startReadiness.focusTaskId)}/retry-work`
-          const retryRes = await app.fetch(
-            new Request(retryUrl, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({
-                instruction:
-                  'Recover the missing release proof for this completed work item. Do not treat the task as complete again until the expected proof evidence is recorded.',
-              }),
-            }),
-            c.env,
-          )
-          if (!retryRes.ok) return retryRes
+      if (
+        !body.taskId &&
+        canonicalState &&
+        startReadiness.releaseProofRecovery &&
+        (startReadiness.canStart || startReadiness.code === 'proof_evidence_missing')
+      ) {
+        const releaseProofRecovery = startReadiness.releaseProofRecovery
+        const richQueue = {
+          ...canonicalState.rawQueue,
+          tasks: canonicalState.tasks as unknown as Array<Record<string, unknown>>,
+        }
+        const proofQueue = preserveRuntimeOverlayOnTaskQueueParse(richQueue, TaskQueue.parse(richQueue))
+        const timestamp = new Date().toISOString()
+        const prepared = prepareReleaseProofRecovery(proofQueue, {
+          parentTaskIds: releaseProofRecovery.parentTaskIds,
+          releaseId: releaseProofRecovery.releaseId,
+          timestamp,
+        })
+        if (prepared.rejectedParentTaskIds.length > 0) {
+          return c.json({
+            error: 'Guildhall found a release-proof blocker that is not a member of the selected release. Refresh the release plan before resuming.',
+            code: 'proof_recovery_scope_conflict',
+            taskIds: prepared.rejectedParentTaskIds,
+            actionHref: '/release',
+          }, 409)
+        }
+        for (const taskId of prepared.reopenedTaskIds) {
+          const task = proofQueue.tasks.find(candidate => candidate.id === taskId)
+          if (!task) continue
+          ;(task as Task & { proofRecovery?: Record<string, unknown> }).proofRecovery = {
+            reopenedAt: timestamp,
+            kind: 'proof',
+            reason: 'The selected release is missing current typed proof evidence.',
+          }
+        }
+        if (prepared.materializedTaskIds.length > 0 || prepared.reopenedTaskIds.length > 0) {
+          await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, {
+            ...proofQueue,
+            tasks: proofQueue.tasks as unknown as Array<Record<string, unknown>>,
+          }, {
+            projectId: project.id,
+            projectRoot: project.path,
+            expectedQueueRevision: canonicalState.queueRevision,
+            expectedProjectRevision: canonicalState.projectRevision,
+          })
           const restartUrl = new URL(c.req.url)
           restartUrl.pathname = '/api/project/start'
           return app.fetch(
             new Request(restartUrl, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({
-                ...body,
-                taskId: startReadiness.focusTaskId,
-                mode: body.mode ?? 'continuous',
-              }),
+              body: JSON.stringify({ ...body, mode: body.mode ?? 'continuous' }),
             }),
             c.env,
           )
         }
+      }
+      if (!startReadiness.canStart) {
         if (startReadiness.code === 'all_terminal') {
           const terminal = await terminalStartState(project.path, body.taskId, canonicalState
             ? {

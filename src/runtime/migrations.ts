@@ -475,7 +475,11 @@ function taskNeedsProofSetupRuntimeRecovery(
   task: Task,
   runtime: Awaited<ReturnType<typeof readTaskRuntimeStore>>,
 ): boolean {
-  if (!isProofSetupTask(task) || (task.status !== 'done' && task.status !== 'ready')) return false
+  // This migration repairs historical terminal state. A ready proof step may
+  // be newly materialized normal work, and does not need a recovery marker to
+  // be runnable. Treating every unfinished ready step as a migration defect
+  // turns ordinary release progress into a false required-migration blocker.
+  if (!isProofSetupTask(task) || task.status !== 'done') return false
   const recovery = runtime.tasks[task.id]?.proofRecovery
   if (recovery?.kind === 'proof' && typeof recovery.reopenedAt === 'string') return false
   return taskDoneButProofMissing(task)

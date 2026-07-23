@@ -674,7 +674,10 @@ export function resolveProjectActionModel(input: {
     primaryAction: resolved.primaryAction,
     runControl: resolved.runControl,
     ownerInput: resolved.ownerInput,
-    setup: resolved.setup,
+    // Setup state depends on the task inventory, which a compact current-state
+    // refresh deliberately does not reload. Keep its saved projection instead
+    // of deriving a false "fresh intake" state from an empty placeholder list.
+    setup: input.stored?.setup ?? resolved.setup,
     secondaryActions: resolved.secondaryActions.length > 0
       ? resolved.secondaryActions
       : input.stored?.secondaryActions ?? [],

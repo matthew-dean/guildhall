@@ -42,6 +42,7 @@ describe('buildProjectActionModel', () => {
       tone: 'accent',
     })
     expect(model.primaryAction?.detail).toBeUndefined()
+    expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
   it('resolves a stale persisted task action from shared ready-work state', () => {
@@ -80,6 +81,7 @@ describe('buildProjectActionModel', () => {
       taskId: 'task-synopsis',
     })
     expect(model.primaryAction?.detail).toBeUndefined()
+    expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
   it('does not let a contradictory ready-work hint override the shared readiness authority', () => {

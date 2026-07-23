@@ -209,6 +209,8 @@ export interface ProjectStateDatabaseTaskBatchMutation {
     event: TaskEvidenceEventRecord
     retention: ProjectStateDatabaseTaskEvidenceRetentionInput
   }[]
+  /** Replace runtime overlays in the same revision-guarded structural write. */
+  taskRuntimes?: readonly ProjectStateDatabaseTaskRuntime[]
   summary: JsonRecord
   expectedQueueRevision: number
   expectedProjectRevision: number
@@ -4539,8 +4541,8 @@ export function writeProjectStateDatabaseTaskBatchMutation(
     mutation.executionPlanActions !== undefined ||
     mutation.scopeAuthorityRequests !== undefined
   const hasCapabilityMutation = mutation.sourceCapabilities !== undefined
-  if (changedTaskIds.size === 0 && removedTaskIds.length === 0 && !hasEnvelopeMutation && !hasCapabilityMutation) {
-    throw new Error('Targeted task batch mutations require a task, capability catalog, or queue-envelope change')
+  if (changedTaskIds.size === 0 && removedTaskIds.length === 0 && !hasEnvelopeMutation && !hasCapabilityMutation && mutation.taskRuntimes === undefined) {
+    throw new Error('Targeted task batch mutations require a task, runtime overlay, capability catalog, or queue-envelope change')
   }
 
   const database = openDatabase(projectStateDatabasePathFromTasksPath(tasksPath))
@@ -4692,6 +4694,9 @@ export function writeProjectStateDatabaseTaskBatchMutation(
         database.prepare('DELETE FROM work_items WHERE id = ?').run(taskId)
       }
       syncTaskCapabilityBindings(database, changedTasks)
+      if (mutation.taskRuntimes !== undefined) {
+        replaceTaskOverlayRowsInDatabase(database, 'task_execution', mutation.taskRuntimes)
+      }
 
       const scopeRows = mutation.scopeRows ?? []
       const scopeRowsByTaskId = new Map<string, ProjectStateDatabaseScopeRow>()

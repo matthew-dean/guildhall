@@ -5,6 +5,62 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+## 2026-07-23 Release Resume Preserves Release Scope During Proof Recovery
+
+- Work id: `0.13.64/release-proof-recovery-batch`.
+- User job: pressing Resume for a selected script-only release with missing
+  completion proof must continue that release. It must not quietly narrow the
+  run to one parent task or leave a populated project claiming that fresh
+  intake is needed.
+- Finding: Narrative Harness has 14 completed selected-scope tasks missing
+  current proof and one task in spec review. The shared action projection said
+  `Resume`, but global Start recovered only the first proof parent and then
+  restarted as `one_task`. Separately, action-model reconciliation passed an
+  empty task list into setup derivation, replacing the stored populated-project
+  setup state with `fresh_intake_needed`.
+- Plan: materialize or reopen release-local internal proof-setup work for the
+  complete blocker set, restart the original selected-release run without a
+  task ID, and preserve the stored setup state while refreshing shared action
+  controls. Internal verification children remain execution-visible but do not
+  inflate feature/release totals.
+- Proof required: task-queue recovery unit coverage, start-endpoint replay
+  proving no `taskId` narrowing, action-model regression for a populated
+  stored setup, installed Narrative Harness Resume replay, and cross-surface
+  release agreement after restart.
+
+### Contract Touch Decision
+
+- Touched contracts: selected-release proof recovery, the task runtime
+  recovery marker, required-migration start readiness, and the shared
+  action-model setup field.
+- Contracts considered but not touched: release membership, task hierarchy,
+  proof evidence schema, owner approval, and provider routing.
+- Change: the shared start decision prepares the complete saved release blocker
+  set as internal proof work and retains global selected-release scope. The
+  task graph and runtime marker commit in one revision-guarded SQLite mutation.
+  Runtime proof recovery is persisted only when historical proof work is
+  reopened; newly materialized proof work is normal ready work. Migration
+  `0.13.32` now owns only stale terminal proof steps; a normal ready proof step
+  is runnable work, not a migration fault.
+- Proof: focused task-queue, action-model, migration, and start-endpoint
+  regressions; then installed Narrative Harness replay.
+- Apply/revert: code-only. Revert the queue/runtime transition and migration
+  predicate together; no historical task or release data is rewritten.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. Existing `TaskRuntimeState.proofRecovery`
+  records are reused without a shape change.
+- Change class: migration-detection correction. It stops classifying a normal
+  ready proof task as historical recovery while retaining the marker for a
+  terminal task that is actually reopened.
+- Existing data impact: ready proof tasks can run without a false migration
+  gate. Existing recovery markers remain valid and continue to protect their
+  reopened tasks.
+- Migration id: `0.13.32/proof-setup-runtime-recovery-marker`; no new
+  migration or compatibility reader is required.
+
+
 ## 2026-07-22 Proof recovery reads landed project state
 
 ### Contract Touch Decision
