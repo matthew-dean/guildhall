@@ -2055,6 +2055,11 @@ export function projectSummaryProjectionIsCurrent(value: Pick<ProjectSummaryProj
     typeof decision === 'object' &&
     !Array.isArray(decision) &&
     (decision as { version?: unknown }).version === 1 &&
+    (decision as { planExecution?: unknown }).planExecution &&
+    typeof (decision as { planExecution?: unknown }).planExecution === 'object' &&
+    !Array.isArray((decision as { planExecution?: unknown }).planExecution) &&
+    typeof ((decision as { planExecution?: { state?: unknown } }).planExecution?.state) === 'string' &&
+    typeof ((decision as { planExecution?: { code?: unknown } }).planExecution?.code) === 'string' &&
     sourceCapabilityCatalog &&
     typeof sourceCapabilityCatalog === 'object' &&
     !Array.isArray(sourceCapabilityCatalog) &&

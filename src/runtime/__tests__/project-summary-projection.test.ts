@@ -11,6 +11,7 @@ import {
   buildProjectSummaryProjectionFromIndexedState,
   backfillProjectSummaryProjection,
   PROJECT_SUMMARY_PROJECTION_VERSION,
+  projectSummaryProjectionIsCurrent,
   projectSummaryProjectionPath,
   queueForProjectSummaryScope,
   readProjectSummaryProjection,
@@ -75,6 +76,22 @@ describe('project-summary-projection', () => {
     await writeFile(projectStateDatabasePath(temp), 'not a sqlite database')
 
     expect(readProjectSummaryShellProjection(getProjectSystemStatePath(temp, 'TASKS.json'))).toBeNull()
+  })
+
+  it('marks an old decision without retained plan execution stale', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([task('ready-task', 'ready', { spec: 'A real spec.' })]),
+      generatedAt: now,
+    })
+    const legacy: Record<string, unknown> = {
+      ...projection,
+      decision: { ...projection.decision },
+    }
+    delete (legacy.decision as Record<string, unknown>).planExecution
+
+    expect(projectSummaryProjectionIsCurrent(projection)).toBe(true)
+    expect(projectSummaryProjectionIsCurrent(legacy)).toBe(false)
   })
 
   it('projects scope, counts, and next action without effective-task expansion', () => {
