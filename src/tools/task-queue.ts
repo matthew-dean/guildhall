@@ -35,6 +35,7 @@ import {
   atomicWriteText,
   inferProjectRootFromMemoryDir,
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+  readProjectStateDatabaseTaskEvidenceCurrent,
   upsertTaskRuntimeState,
   withProjectStateWriteLock,
 } from '@guildhall/sessions'
@@ -221,6 +222,59 @@ function acceptanceContractIsActive(task: TaskRecord): boolean {
   return ['ready', 'in_progress', 'review', 'gate_check', 'pending_pr', 'done'].includes(task.status)
 }
 
+function knownCommandProofs(
+  task: TaskRecord,
+  currentEvidence?: { byKind?: Record<string, Array<{ payload?: unknown }>> } | null,
+): string[] {
+  const evidenceGates = (currentEvidence?.byKind?.['gate_result'] ?? [])
+    .map((event) => GateResult.safeParse(event.payload))
+    .filter((result): result is { success: true; data: z.infer<typeof GateResult> } => result.success)
+    .map((result) => result.data)
+  const commands = [
+    ...task.acceptanceCriteria.map((criterion) => criterion.command),
+    ...(task.proofPaths ?? []).map((path) => path?.kind === 'command' ? path.command : undefined),
+    ...task.gateResults
+      .filter((gate) => gate.type === 'hard' && gate.passed)
+      .map((gate) => gate.command),
+    ...evidenceGates
+      .filter((gate) => gate.type === 'hard' && gate.passed)
+      .map((gate) => gate.command),
+  ]
+    .filter((command): command is string => typeof command === 'string' && command.trim().length > 0)
+    .map((command) => command.trim())
+  return [...new Set(commands)]
+}
+
+function validateStructuredProofContract(
+  task: TaskRecord,
+  spec: z.infer<typeof StructuredSpec>,
+  currentEvidence?: { byKind?: Record<string, Array<{ payload?: unknown }>> } | null,
+): string | null {
+  const existingCommands = knownCommandProofs(task, currentEvidence)
+  if (existingCommands.length === 0) return null
+
+  const disposition = spec.proofContract?.existingCommandDisposition
+  if (!disposition) {
+    return 'This task has recorded command-backed proof. structuredSpec.proofContract must explicitly preserve, replace, or retire that proof instead of silently omitting it.'
+  }
+
+  const nextCommands = new Set(
+    spec.acceptanceCriteria
+      .map((criterion) => criterion.command?.trim())
+      .filter((command): command is string => Boolean(command)),
+  )
+  if (disposition === 'preserve') {
+    const missing = existingCommands.filter((command) => !nextCommands.has(command))
+    if (missing.length > 0) {
+      return `structuredSpec.proofContract preserves recorded command proof, but these commands are missing from its acceptance criteria: ${missing.join(', ')}.`
+    }
+  }
+  if (disposition === 'replace' && nextCommands.size === 0) {
+    return 'structuredSpec.proofContract replaces recorded command proof, so it must provide at least one replacement command in acceptance criteria.'
+  }
+  return null
+}
+
 function inferMetadataTaskId(metadata: Record<string, unknown> = {}): string | null {
   const taskId = metadata['current_task_id']
   return typeof taskId === 'string' && taskId.trim().length > 0 ? taskId.trim() : null
@@ -340,6 +394,14 @@ async function updateTaskUnlocked(
     const renderedStructuredSpec = normalizedStructuredSpec
       ? normalizeSpecForTaskProjectPath(renderStructuredSpecMarkdown(normalizedStructuredSpec), task.projectPath)
       : undefined
+    if (normalizedStructuredSpec) {
+      const currentEvidence = readProjectStateDatabaseTaskEvidenceCurrent(
+        projectRootForTaskState(input.tasksPath, task),
+        task.id,
+      )
+      const proofContractError = validateStructuredProofContract(task, normalizedStructuredSpec, currentEvidence)
+      if (proofContractError) return { success: false, taskId, error: proofContractError }
+    }
     const nextSpec = renderedStructuredSpec ?? normalizedSpec
     if (nextSpec) {
       const grounding = validateSpecGrounding({ ...task, spec: nextSpec })

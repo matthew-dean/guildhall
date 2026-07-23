@@ -182,7 +182,6 @@ describe('updateTask', () => {
       }],
     })
     writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
-
     const result = await updateTask({
       tasksPath,
       taskId: 'task-001',
@@ -1844,7 +1843,6 @@ describe('updateTask', () => {
       }],
     })
     writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
-
     const result = await updateTask({
       tasksPath,
       taskId: 'task-001',
@@ -1864,6 +1862,132 @@ describe('updateTask', () => {
       command: 'pnpm proof:current',
       verifiedBy: 'automated',
     })
+  })
+
+  it('does not let a fresh structured spec erase recorded command proof into review-only criteria', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        gateResults: [{
+          gateId: 'focused-proof',
+          command: 'pnpm test -- focused-proof',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-07-22T00:00:00.000Z',
+        }],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: 'gate-proof-focused',
+      kind: 'gate_result',
+      recordedAt: '2026-07-22T00:00:00.000Z',
+      payload: {
+        gateId: 'focused-proof',
+        command: 'pnpm test -- focused-proof',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-07-22T00:00:00.000Z',
+      },
+    })
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A focused proof-preservation fixture.',
+        problemContext: 'The task has previously recorded a concrete proof command.',
+        goals: ['Keep the focused behavior verifiable.'],
+        nonGoals: ['Do not replace the proof plan without declaring it.'],
+        proposedDesign: 'Preserve the bounded task behavior.',
+        keyDecisions: ['Use the current task record.'],
+        acceptanceCriteria: [{
+          scenario: 'Given the focused fixture',
+          expectation: 'Then the behavior can be reviewed.',
+          verificationMode: 'review',
+        }],
+        verification: ['Review the focused behavior.'],
+        completionBoundary: {
+          productOutcome: 'The focused behavior remains verifiable.',
+          whatGuildhallCanCompleteInCode: 'The focused implementation and proof contract.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'The local test environment.',
+          whatCountsAsDone: 'The focused behavior is proven.',
+          whatMustBeSplitOrBlocked: 'None.',
+        },
+      },
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('proofContract must explicitly preserve, replace, or retire'),
+    })
+  })
+
+  it('requires a preserved command to remain in the structured acceptance contract', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        gateResults: [{
+          gateId: 'focused-proof',
+          command: 'pnpm test -- focused-proof',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-07-22T00:00:00.000Z',
+        }],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: 'gate-proof-focused',
+      kind: 'gate_result',
+      recordedAt: '2026-07-22T00:00:00.000Z',
+      payload: {
+        gateId: 'focused-proof',
+        command: 'pnpm test -- focused-proof',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-07-22T00:00:00.000Z',
+      },
+    })
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A focused proof-preservation fixture.',
+        problemContext: 'The task has previously recorded a concrete proof command.',
+        goals: ['Keep the focused behavior verifiable.'],
+        nonGoals: ['Do not replace the proof plan without declaring it.'],
+        proposedDesign: 'Preserve the bounded task behavior.',
+        keyDecisions: ['Keep the recorded proof command.'],
+        proofContract: { existingCommandDisposition: 'preserve' },
+        acceptanceCriteria: [{
+          scenario: 'Given the focused fixture',
+          expectation: 'Then the focused command passes.',
+          verificationMode: 'automated',
+          command: 'pnpm test -- focused-proof',
+        }],
+        verification: ['Run pnpm test -- focused-proof.'],
+        completionBoundary: {
+          productOutcome: 'The focused behavior remains verifiable.',
+          whatGuildhallCanCompleteInCode: 'The focused implementation and proof contract.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'The local test environment.',
+          whatCountsAsDone: 'The focused behavior is proven.',
+          whatMustBeSplitOrBlocked: 'None.',
+        },
+      },
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result).toMatchObject({ success: true })
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.acceptanceCriteria).toEqual([
+      expect.objectContaining({ command: 'pnpm test -- focused-proof', verifiedBy: 'automated' }),
+    ])
   })
 
   it('does not let Markdown headings or question-shaped prose change spec_review promotion', async () => {

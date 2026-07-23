@@ -111,6 +111,13 @@ reviewable.
      "Given X, when Y, then Z" or similar.
    - "Verification" must name the commands, review proof, browser proof,
      provider proof, or safe launch proof needed before work starts.
+   - When read-tasks shows an existing command-backed acceptance criterion,
+     proof path, or hard gate, the structuredSpec must include proofContract.
+     Set existingCommandDisposition to preserve, replace, or retire. Preserve
+     means copying every known command into structured acceptance criteria;
+     replace means providing a concrete replacement command; retire is only
+     appropriate when the documented task outcome no longer needs executable
+     proof. Never silently turn known command proof into review-only criteria.
    - "Risks / Open Questions" belongs only when there is real uncertainty worth
      carrying forward after intake.
    - A "Completion Boundary" section with these exact fields:

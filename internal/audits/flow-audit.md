@@ -52290,3 +52290,62 @@ Repair:
 - Apply/revert: remove only with an equivalent structured planning action;
       do not restore broad prose-driven owner escalation for internal design
       work.
+
+## 2026-07-23 Proof contracts survive fresh spec shaping
+
+- [x] A fresh structured spec could replace current task acceptance criteria
+      with review-only rows even when the shared current-evidence store held
+      a successful typed hard-gate command. The task writer consulted only the
+      definition row, so proof state could silently disappear during shaping.
+- [x] The structured spec now records a typed disposition for known command
+      proof: preserve, replace, or retire. Preserve requires every known
+      command to remain in structured acceptance criteria; replace requires a
+      new command. The writer reads command identity from the same current
+      evidence boundary as runtime projections.
+- [x] New gate-runner results always persist the originating hard-gate
+      command. Output text is audit-only and is never parsed or promoted into
+      executable proof state.
+
+### Contract Touch Decision
+
+- Work id: `0.13.79/proof-contract-spec-boundary`.
+- Touched contracts: `StructuredSpec.proofContract`, structured spec-to-task
+      acceptance derivation, typed current `gate_result` evidence, and the
+      gate-runner result writer.
+- Considered but not touched: task/release scope, proof output text, legacy
+      output-only gate history, owner approval, and provider prose.
+- Existing data impact: no compatibility reader or output parser is added.
+      Old records without `GateResult.command` remain honestly untyped audit
+      evidence and need an explicit owner/delegate repair if they are to become
+      an active proof contract.
+- Required follow-up: expose a deliberate owner/delegate action for adopting
+      a visible historical command when current evidence lacks typed command
+      identity; do not infer it automatically.
+- Proof required: task-writer regression for review-only downgrade and
+      preserved command, gate-runner and run-gates persistence regressions,
+      typecheck, model-independence, contract lint, and installed Narrative
+      Harness replay using only typed current evidence.
+- Apply/revert: replace this only with another typed proof-plan contract. Do
+      not restore command discovery from raw output, Markdown, or model prose.
+
+### Schema Migration Decision
+
+- Work id: `0.13.79/proof-contract-spec-boundary`.
+- Persisted schema touched: optional `StructuredSpec.proofContract` in task
+      detail plus `GateResult.command`, an existing optional evidence field now
+      populated by the live writer.
+- Change class: additive structured planning field and live write correction.
+- Existing data impact: legacy specs remain valid when no typed command proof
+      exists; no existing output-only records are rewritten.
+- Migration id: none. A migration would require promoting raw output into
+      authority, which this change explicitly rejects.
+- Safety: the rule preserves plan flexibility while making proof retirement or
+      replacement visible and machine-checkable.
+- Compatibility reader: absent `proofContract` remains accepted only when the
+      task has no typed known command proof.
+- Fixtures and tests: task-writer downgrade/preservation tests plus gate-runner
+      persistence tests.
+- Owner-facing plan text: Guildhall keeps the known test command when it is
+      still the right proof, or explicitly records that the proof changed.
+- Apply/revert: removing the optional field does not alter historical evidence;
+      it would merely remove the admission check for future spec changes.
