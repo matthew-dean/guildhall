@@ -91,6 +91,7 @@ import {
   projectSummaryProjectionIsCurrent,
   projectSummaryProjectionNeedsBackfill,
   projectSummaryProjectionPath,
+  readProjectSummaryProjection,
   readProjectSummaryProjectionForMigration,
   writeProjectSummaryProjection,
   writeProjectSummaryProjectionFromIndexedState,
@@ -2910,9 +2911,8 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
     async apply(projectRoot) {
       const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
-        projectId: path.basename(projectRoot),
-      })
+      await realignPromotedSummaryWithEffectiveState(projectRoot)
+      const projection = readProjectSummaryProjection(tasksPath)
       if (!projection || !projectSummaryProjectionIsCurrent(projection)) {
         throw new Error('The shared project decision could not be persisted.')
       }

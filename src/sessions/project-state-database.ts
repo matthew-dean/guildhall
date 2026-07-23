@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 
 import { assertShippedReleaseMutation, compactTaskEvidenceEvent, compactTaskEvidencePayload, TaskEvidenceEvent } from '@guildhall/core'
 import type { TaskEvidenceEvent as TaskEvidenceEventRecord } from '@guildhall/core'
-import { ownerInputObjectiveLabel, summarizeCurrentProof } from '@guildhall/shared'
+import { ownerInputObjectiveLabel, summarizeCurrentProof, taskExecutionBlocker } from '@guildhall/shared'
 import { ensureProjectLocalHistoryDir, getProjectLocalHistoryDir, getProjectSystemStatePath } from './local-history.js'
 import { atomicWriteBytes, atomicWriteText } from './atomic.js'
 import { emitProjectSummaryInvalidation, type ProjectStateDomain } from './project-summary-invalidation.js'
@@ -2844,6 +2844,7 @@ function workItemSummary(task: JsonRecord): JsonRecord {
     ? task.sizePlan.action
     : null
   const currentProof = currentProofSummary(task)
+  const executionBlocker = taskExecutionBlocker(task)
   summary.currentSummary = {
     imported,
     brief: {
@@ -2855,6 +2856,7 @@ function workItemSummary(task: JsonRecord): JsonRecord {
     },
     acceptanceCriteriaCount,
     proof: currentProof,
+    ...(executionBlocker ? { executionBlocker } : {}),
     ...(taskReadiness ? { taskReadiness } : {}),
     ...(sizePlanAction ? { sizePlanAction } : {}),
   }

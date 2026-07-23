@@ -1,4 +1,5 @@
 import type { Task } from '@guildhall/core'
+import { taskExecutionBlocker } from '@guildhall/shared'
 
 type TaskLike = Pick<Task, 'blockReason'> & {
   proofRecovery?: { kind?: unknown; reason?: unknown }
@@ -6,13 +7,5 @@ type TaskLike = Pick<Task, 'blockReason'> & {
 }
 
 export function taskBlockerSummary(task: TaskLike): string {
-  const proofRecovery = task.proofRecovery ?? task.runtime?.proofRecovery
-  if (
-    proofRecovery?.kind === 'proof' &&
-    typeof proofRecovery.reason === 'string' &&
-    proofRecovery.reason.trim().length > 0
-  ) {
-    return proofRecovery.reason.trim()
-  }
-  return task.blockReason?.trim() ?? ''
+  return taskExecutionBlocker(task)?.reason ?? ''
 }

@@ -740,6 +740,11 @@ function indexedTaskForScopeProjection(task: ProjectStateDatabaseTask): Task {
   const record = task as unknown as Record<string, unknown>
   const currentSummary = isRecord(record.currentSummary) ? record.currentSummary : {}
   const brief = isRecord(currentSummary.brief) ? currentSummary.brief : {}
+  const executionBlocker = isRecord(currentSummary.executionBlocker) &&
+    typeof currentSummary.executionBlocker.reason === 'string' &&
+    currentSummary.executionBlocker.reason.trim()
+    ? currentSummary.executionBlocker.reason.trim()
+    : undefined
   const acceptanceCriteriaCount = Number(currentSummary.acceptanceCriteriaCount ?? record.acceptanceCriteriaCount ?? 0)
   const hasBrief = brief.present === true
   const hasShapedBrief = brief.shaped === true
@@ -759,6 +764,7 @@ function indexedTaskForScopeProjection(task: ProjectStateDatabaseTask): Task {
     ...(task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {}),
     ...(task.releaseIds.length > 0 ? { releaseIds: task.releaseIds } : {}),
     ...(task.sourceRefs.length > 0 ? { references: task.sourceRefs } : {}),
+    ...(executionBlocker ? { blockReason: executionBlocker } : {}),
     ...(record.spec === 'present' ? { spec: 'indexed-present' } : {}),
     ...(acceptanceCriteriaCount > 0
       ? { acceptanceCriteria: Array.from({ length: acceptanceCriteriaCount }, (_, index) => ({

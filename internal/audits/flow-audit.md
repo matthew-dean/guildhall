@@ -52668,7 +52668,7 @@ Repair:
 - Touched contracts: project summary projection, shared runtime summary
       boundary, compact project responses, diagnostic readiness, release
       readiness, primary action, runtime and owner-input envelopes, and future
-      multi-agent state assertions.
+      multi-agent state assertions, plus the compact task current-blocker fact.
 - Considered but not touched: task-definition, evidence, release-membership,
       and approval writers remain canonical sources; this change consumes their
       typed facts rather than duplicating them.
@@ -52691,13 +52691,15 @@ Repair:
 
 ### Schema Migration Decision
 
-- Persisted schema touched: project-summary derived projection only.
+- Persisted schema touched: project-summary derived projection and bounded
+      `work_items.currentSummary.executionBlocker` facts.
 - Scope: decision derivation and provenance at existing canonical boundaries,
       not raw agent transcript storage or a second claim database.
 - Change class: summary schema replacement.
 - Existing data impact: old action and next-action caches become stale on the
-      projection-version bump and are rebuilt from current typed state. Existing
-      task, proof, and release records are not rewritten.
+      projection-version bump and are rebuilt from current typed state. The
+      blocker fact is refreshed from existing task/runtime state; task, proof,
+      and release records are not rewritten.
 - Migration id: `0.13.0/project-decision-projection`.
 - Safety: execution and release are separate fields; equal-authority conflict
       returns explicit uncertainty rather than selecting arbitrary state.
@@ -52705,7 +52707,8 @@ Repair:
       only when the new projection is unavailable; they cannot recompute or
       override a current decision projection. Remove them after migration.
 - Fixtures/tests: version-current-but-decision-missing migration regression,
-      plus the response matrix and conflict-resolution fixtures listed above.
+      compact-versus-effective proof-recovery blocker regression, plus the
+      response matrix and conflict-resolution fixtures listed above.
 - Owner-facing plan text: a project may continue runnable work while its
       release remains unshippable, and the UI will say both plainly.
 - Rollback/revert: rebuild the previous derived projection from canonical
