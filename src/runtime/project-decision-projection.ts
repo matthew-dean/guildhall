@@ -608,20 +608,24 @@ export function reconcileRegisteredProjectStateObservation(input: {
   })
 }
 
+export interface ProjectDecisionExecution {
+  state: 'runnable' | 'running' | 'paused' | 'blocked' | 'complete' | 'conflicted'
+  code: string
+  focusTaskId?: string
+  focusTaskTitle?: string
+  focusKind?: string
+  count?: number
+  message?: string
+}
+
 export interface ProjectDecisionProjection {
   version: 1
   projectRevision: number | null
   queueRevision: number | null
   generatedAt: string
-  execution: {
-    state: 'runnable' | 'running' | 'paused' | 'blocked' | 'complete' | 'conflicted'
-    code: string
-    focusTaskId?: string
-    focusTaskTitle?: string
-    focusKind?: string
-    count?: number
-    message?: string
-  }
+  /** Canonical selected-scope execution state before a live supervisor overlays it. */
+  planExecution?: ProjectDecisionExecution
+  execution: ProjectDecisionExecution
   release: {
     state: 'ready' | 'not_ready' | 'unavailable' | 'conflicted'
     releaseId?: string
@@ -661,7 +665,7 @@ export interface ProjectDecisionProjectionInput {
   conflicts?: ProjectStateConflict[]
 }
 
-function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionProjection['execution'] {
+function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionExecution {
   const { start } = input
   if (input.conflicts?.some(conflict => conflict.field === 'execution')) {
     return { state: 'conflicted', code: 'state_conflict', message: 'Execution facts disagree.' }
@@ -818,11 +822,28 @@ export function applyRuntimeExecutionToProjectDecision(
   } | null | undefined,
 ): ProjectDecisionProjection {
   const status = runtimeExecution?.status
-  if (status !== 'running' && status !== 'stopping') return decision
+  if (status !== 'running' && status !== 'stopping') {
+    if (decision.execution.state !== 'running') return decision
+    const execution = decision.planExecution ?? {
+      state: 'blocked' as const,
+      code: 'plan_execution_missing',
+      message: 'Guildhall stopped. Refresh the saved project plan before starting more work.',
+    }
+    return {
+      ...decision,
+      execution,
+      primaryAction: primaryActionForDecision({
+        conflicts: decision.conflicts,
+        ownerInput: decision.ownerInput,
+        execution,
+        release: decision.release,
+      }),
+    }
+  }
   if (decision.conflicts.some(conflict => conflict.field === 'execution')) return decision
   const activeTaskId = runtimeExecution?.activeTaskId?.trim()
   const activeTaskTitle = runtimeExecution?.activeTaskTitle?.trim()
-  const execution: ProjectDecisionProjection['execution'] = {
+  const execution: ProjectDecisionExecution = {
     state: 'running',
     code: status,
     ...(activeTaskId ? { focusTaskId: activeTaskId } : {}),
@@ -851,6 +872,11 @@ export function applyRuntimeExecutionToProjectDecision(
 
 export function buildProjectDecisionProjection(input: ProjectDecisionProjectionInput): ProjectDecisionProjection {
   const conflicts = input.conflicts ?? []
+  const planExecution = executionState({
+    ...input,
+    runStatus: 'stopped',
+    runtimeExecution: null,
+  })
   const execution = executionState(input)
   const blockerTaskIds = input.release.blockers
     .flatMap(blocker => blocker.owningTaskId ? [blocker.owningTaskId] : [])
@@ -880,6 +906,7 @@ export function buildProjectDecisionProjection(input: ProjectDecisionProjectionI
     projectRevision: input.projectRevision ?? null,
     queueRevision: input.queueRevision ?? null,
     generatedAt: input.generatedAt,
+    planExecution,
     execution,
     release,
     ownerInput,

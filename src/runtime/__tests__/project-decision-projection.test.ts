@@ -67,6 +67,41 @@ describe('project decision projection', () => {
     })
   })
 
+  it('restores the retained plan execution after a supervisor stops', () => {
+    const planned = buildProjectDecisionProjection({
+      projectRevision: 42,
+      generatedAt: '2026-07-23T12:00:00.000Z',
+      start: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-next',
+        focusTaskTitle: 'Planned next task',
+        focusKind: 'ready_work',
+        message: 'Planned next task is ready.',
+      },
+      release: { scopeMode: 'named_release', release: { id: 'release-1' }, state: 'blocked', blockers: [] },
+    })
+    const running = applyRuntimeExecutionToProjectDecision(planned, {
+      status: 'running',
+      activeTaskId: 'task-live',
+      activeTaskTitle: 'Live proof worker',
+    })
+
+    expect(applyRuntimeExecutionToProjectDecision(running, { status: 'stopped' })).toMatchObject({
+      planExecution: {
+        state: 'runnable',
+        code: 'ready_work',
+        focusTaskId: 'task-next',
+      },
+      execution: {
+        state: 'runnable',
+        code: 'ready_work',
+        focusTaskId: 'task-next',
+      },
+      primaryAction: { kind: 'open_work', targetId: 'task-next', reasonCode: 'ready_work' },
+    })
+  })
+
   it('resolves any registered agent fact through one closed field policy', () => {
     const claims = [
       {

@@ -53610,3 +53610,47 @@ Repair:
       scope counts across Overview, Activity, Start, and Release.
 - Apply/revert: no persisted schema change. Revert restores only an invalid
       reader choice; queue membership remains the canonical release model.
+
+## 2026-07-23 Runtime is an overlay, not the saved plan decision
+
+- [ ] User job: when a run stops, every surface immediately stops claiming
+      that Guildhall is running or stopping. It returns to the selected
+      release's actual next state without a view guessing from old runtime
+      copy.
+- Finding: the shared decision packet replaced plan execution with its runtime
+      overlay while a supervisor ran, but did not retain the pre-run plan
+      execution. A terminal runtime update could therefore leave Activity
+      saying `stopping` while its own run flag was false.
+
+### Contract Touch Decision
+
+- Work id: `0.13.98/runtime-plan-overlay`.
+- Touched contracts: shared project decision projection, runtime execution
+      overlay, Activity primary action, and summary update boundary.
+- Considered but not touched: task lifecycle, release membership, supervisor
+      stop mechanics, model output, and owner input.
+- Required behavior: plan execution is computed from canonical selected-scope
+      state and retained separately. Runtime may temporarily overlay it only
+      while the supervisor is running or stopping. A terminal runtime update
+      restores the retained plan execution; it cannot leave a running label or
+      primary action behind.
+- Proof required: decision regression for running -> stopped restoration and
+      installed NH replay showing `running:false` agrees with Activity,
+      Overview, Work, Thread, Release, and Start.
+- Apply/revert: consumers read one additive decision field. Existing summaries
+      without it fail closed to a non-running state until their normal summary
+      refresh restores the canonical plan execution.
+
+### Schema Migration Decision
+
+- Persisted schema touched: additive `planExecution` field inside the derived
+      project-summary decision projection.
+- Change class: additive projection field; no task, release, or evidence data
+      changes.
+- Existing data impact: an old summary has no retained plan execution. Its
+      terminal runtime state must not claim live work and is replaced on the
+      next normal summary projection refresh.
+- Compatibility reader: accepts absence and fails closed to non-running;
+      it never reuses a stale `running`/`stopping` execution branch.
+- Rollback/revert: remove the derived field after rebuilding summaries; the
+      canonical queue/scope/runtime rows remain intact.

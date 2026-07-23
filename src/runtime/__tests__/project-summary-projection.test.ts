@@ -1311,6 +1311,13 @@ describe('project-summary-projection', () => {
       execution: { status: 'running', mode: 'continuous', activeTaskId: 'one' },
       runtime: { status: 'running', health: 'healthy' },
     })
+    expect(updated?.decision?.execution).toMatchObject({ state: 'running', focusTaskId: 'one' })
+
+    const stopped = updateProjectSummaryProjection(tasksPath, {
+      execution: { status: 'stopped', stoppedAt: now, updatedAt: now },
+    })
+    expect(stopped?.decision?.execution).toEqual(updated?.decision?.planExecution)
+    expect(stopped?.decision?.execution.state).not.toBe('running')
   })
 
   it('preserves compact execution and runtime state when the task queue is rebuilt', async () => {
