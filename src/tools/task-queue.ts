@@ -168,6 +168,32 @@ function normalizeUpdateTaskNote(
   return { agentId, role, content }
 }
 
+function normalizeStructuredSpecDisplayField(value: unknown): unknown {
+  if (typeof value === 'string' || value === undefined) return value
+  // These fields are rendered explanatory material. Preserve a malformed
+  // model shape deterministically for review instead of throwing away an
+  // otherwise valid typed planning contract. Operational fields such as
+  // acceptance criteria and proof contracts remain schema-strict.
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function normalizeStructuredSpecInput(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const record = value as Record<string, unknown>
+  return {
+    ...record,
+    verification: Array.isArray(record.verification)
+      ? record.verification.map(normalizeStructuredSpecDisplayField)
+      : record.verification,
+    componentApiShape: normalizeStructuredSpecDisplayField(record.componentApiShape),
+    performanceReliabilitySecurity: normalizeStructuredSpecDisplayField(record.performanceReliabilitySecurity),
+  }
+}
+
 const updateTaskInputSchema = z.object({
   tasksPath: TASKS_PATH_SCHEMA,
   taskId: z.string().optional(),
@@ -181,7 +207,7 @@ const updateTaskInputSchema = z.object({
   blockReason: z.string().optional(),
   humanJudgment: z.string().optional(),
   spec: z.string().optional(),
-  structuredSpec: StructuredSpec.optional(),
+  structuredSpec: z.preprocess(normalizeStructuredSpecInput, StructuredSpec).optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
   parentAcceptanceCriterionIds: z.array(z.string().min(1)).optional(),
   workUnitAnalysis: WorkUnitAnalysis.optional(),

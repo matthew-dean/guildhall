@@ -1779,6 +1779,45 @@ describe('updateTask', () => {
     expect(saved.structuredSpec?.proposedDesign).toContain('src/pipeline/synopsis.ts')
   })
 
+  it('normalizes malformed display-only structured spec fields without relaxing typed proof fields', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A bounded contract.',
+        problemContext: 'The task has a defined source boundary.',
+        goals: ['Save a reviewable spec.'],
+        nonGoals: ['Do not infer proof from prose.'],
+        proposedDesign: 'Persist the typed planning contract.',
+        keyDecisions: ['Keep proof fields structured.'],
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          scenario: 'Given the saved contract',
+          expectation: 'A reviewer can inspect it.',
+          verificationMode: 'review',
+        }],
+        verification: [{ kind: 'review', target: 'task contract' }],
+        completionBoundary: {
+          productOutcome: 'A valid spec exists.',
+          whatGuildhallCanCompleteInCode: 'Save the planning contract.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'The registered project.',
+          whatCountsAsDone: 'The contract is ready for review.',
+          whatMustBeSplitOrBlocked: 'Split only independent outcomes.',
+        },
+        componentApiShape: { function: 'saveContract' },
+        performanceReliabilitySecurity: ['No untyped proof is accepted.'],
+      },
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result.success, result.error).toBe(true)
+    const saved = readProjectTaskQueueSync(tasksPath).tasks[0]!
+    expect(saved.structuredSpec?.verification).toEqual(['{"kind":"review","target":"task contract"}'])
+    expect(saved.structuredSpec?.componentApiShape).toBe('{"function":"saveContract"}')
+    expect(saved.structuredSpec?.performanceReliabilitySecurity).toBe('["No untyped proof is accepted."]')
+  })
+
   it('does not invent split pressure or child tasks for one bounded artifact patch spec', async () => {
     await updateTask({
       tasksPath,

@@ -52463,3 +52463,39 @@ Repair:
       visible as its source trail after it writes the spec.
 - Apply/revert: removing the writer leaves existing compact claims harmless;
       it must not be replaced by re-reading raw transcripts on each request.
+
+### Contract Touch Decision
+
+- Work id: `0.13.83/structured-spec-display-normalization`.
+- Touched contracts: spec-agent `update-task` input adapter and persisted
+      display-only `StructuredSpec` fields (`verification`,
+      `componentApiShape`, and `performanceReliabilitySecurity`).
+- Considered but not touched: typed acceptance criteria, command proof,
+      proof-contract disposition, lifecycle state, release scope, and owner
+      approval.
+- Existing data impact: malformed new display fields are normalized to stable
+      JSON strings before the existing strict structured-spec schema persists
+      them. Existing valid strings are unchanged.
+- Proof required: malformed display-shape regression, typecheck,
+      model-independence, contract lint, and an installed spec-agent replay.
+- Apply/revert: remove only after providers reliably emit the declared input
+      shape; do not turn display normalization into a generic permissive
+      adapter for operational task fields.
+
+### Schema Migration Decision
+
+- Work id: `0.13.83/structured-spec-display-normalization`.
+- Persisted schema touched: existing string display fields in
+      `StructuredSpec`.
+- Change class: write-time input normalization with no schema expansion.
+- Existing data impact: no migration or compatibility reader is needed;
+      previously stored valid strings retain their exact values.
+- Migration id: none.
+- Safety: normalization is deterministic serialization for display-only
+      values. It does not extract commands, choose status, mark proof met, or
+      derive any operational fact from model prose.
+- Fixtures and tests: `update-task` malformed-display-field regression.
+- Owner-facing plan text: malformed explanatory detail remains reviewable
+      rather than preventing an otherwise valid spec from being saved.
+- Apply/revert: reverting stops future tolerant writes but leaves saved values
+      valid under the existing reader.
