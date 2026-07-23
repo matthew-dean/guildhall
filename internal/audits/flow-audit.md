@@ -141,6 +141,11 @@ help_summary: |
   created. Internal proof eligibility now reads only `proofForReleaseId` at
   the scope boundary, keeping release recovery, Work, and Start on the same
   typed relation.
+- Release-total follow-up: scheduler eligibility and release-total visibility
+  are separate fields. Internal proof steps may be ready or running so Start
+  can dispatch them, but release summaries and readiness now exclude rows with
+  `countInProjectTotals: false`; the parent product task remains the single
+  visible completion boundary.
 - Compatibility reader: none. Rich task detail reads the typed scope; compact
   release projections read normalized visible membership. No surface is
   permitted to reconstruct one from the other.

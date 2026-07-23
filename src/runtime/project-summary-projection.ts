@@ -1096,7 +1096,11 @@ export function buildProjectSummaryProjectionFromIndexedState(
     : selectedReleaseRow
   const indexedRelease = summarizeProjectScopeRelease(indexedScopeRowsAsProjectScopeRows(rows))
   const taskReleaseBlockers = indexedRelease.blockers
-  const releaseExecutionRows = includedRows.filter(row => row.hierarchyRole !== 'parent' || !includedRows.some(child => child.parentTaskId === row.taskId))
+  const releaseExecutionRows = includedRows
+    .filter(row => row.countInProjectTotals !== false)
+    .filter(row => row.hierarchyRole !== 'parent' || !includedRows.some(child =>
+      child.parentTaskId === row.taskId && child.countInProjectTotals !== false,
+    ))
   const releaseSummary: ProjectSummaryReleaseSummary = {
     scopeMode: selectedRelease ? 'named_release' : 'unreleased',
     release: selectedRelease

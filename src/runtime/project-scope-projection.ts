@@ -1087,9 +1087,14 @@ export function summarizeProjectScopeStart(
 }
 
 export function summarizeProjectScopeRelease(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['release'] {
-  const included = executionRows(rows).filter(row => row.scope === 'included')
-  const blockers = executionRows(rows)
-    .filter(row => row.scope === 'included' && row.blocksRelease)
+  // Internal steps can be executable without becoming visible release work.
+  // The parent product task remains the release boundary and carries any
+  // proof debt; otherwise a recovery child would inflate totals or make a
+  // release appear to regress from completed to unfinished.
+  const included = executionRows(rows)
+    .filter(row => row.scope === 'included' && row.countInProjectTotals !== false)
+  const blockers = included
+    .filter(row => row.blocksRelease)
     .map(row => ({
       id: row.taskId,
       owningTaskId: row.taskId,
