@@ -316,6 +316,13 @@ export interface ProjectStateDatabaseReleaseMembership {
   disposition: ProjectStateDatabaseReleaseDisposition
 }
 
+/** One watermark for the normalized release-membership relation. */
+export interface ProjectStateDatabaseReleaseMembershipState {
+  membershipRevision: number
+  projectRevision: number | null
+  updatedAt: string | null
+}
+
 export interface ProjectStateDatabaseTaskRuntime {
   taskId: string
   updatedAt?: string
@@ -1243,16 +1250,55 @@ function releaseDefinitionsWithTaskMembership(
 function syncReleaseMembershipFromDefinitions(
   database: DatabaseSync,
   releases: readonly JsonRecord[],
-): void {
-  if (!tableExists(database, 'release_membership')) return
+): boolean {
+  if (!tableExists(database, 'release_membership')) return false
+  const desired = releaseMembershipFromDefinitions(releases)
+  const current = database.prepare(`
+    SELECT release_id, task_id, disposition
+    FROM release_membership
+    ORDER BY release_id, task_id
+  `).all() as JsonRecord[]
+  const currentKeys = current.map(row => `${row.release_id}\0${row.task_id}\0${row.disposition}`)
+  const desiredKeys = desired
+    .map(row => `${row.releaseId}\0${row.taskId}\0${row.disposition}`)
+    .sort()
+  const changed = currentKeys.length !== desiredKeys.length || currentKeys.some((key, index) => key !== desiredKeys[index])
+  if (!changed) return false
   database.prepare('DELETE FROM release_membership').run()
   const insert = database.prepare(`
     INSERT INTO release_membership (release_id, task_id, disposition)
     VALUES (?, ?, ?)
   `)
-  for (const row of releaseMembershipFromDefinitions(releases)) {
+  for (const row of desired) {
     insert.run(row.releaseId, row.taskId, row.disposition)
   }
+  markReleaseMembershipStatePending(database)
+  return true
+}
+
+function markReleaseMembershipStatePending(database: DatabaseSync): void {
+  if (!tableExists(database, 'release_membership_state')) return
+  database.prepare(`
+    INSERT INTO release_membership_state (id, membership_revision, project_revision, updated_at)
+    VALUES (1, 1, NULL, NULL)
+    ON CONFLICT(id) DO UPDATE SET
+      membership_revision = release_membership_state.membership_revision + 1,
+      project_revision = NULL,
+      updated_at = NULL
+  `).run()
+}
+
+function finalizeReleaseMembershipState(
+  database: DatabaseSync,
+  projectRevision: number,
+  updatedAt: string,
+): void {
+  if (!tableExists(database, 'release_membership_state')) return
+  database.prepare(`
+    UPDATE release_membership_state
+    SET project_revision = ?, updated_at = ?
+    WHERE id = 1 AND project_revision IS NULL
+  `).run(projectRevision, updatedAt)
 }
 
 function upsertReleaseDefinitions(database: DatabaseSync, releases: readonly JsonRecord[]): void {
@@ -1794,6 +1840,14 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
       PRIMARY KEY (release_id, task_id)
     );
     CREATE INDEX IF NOT EXISTS release_membership_task_idx ON release_membership(task_id);
+    -- Membership changes independently from evidence/runtime changes. This
+    -- singleton lets a derived scope prove exactly which relation it used.
+    CREATE TABLE IF NOT EXISTS release_membership_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      membership_revision INTEGER NOT NULL,
+      project_revision INTEGER,
+      updated_at TEXT
+    );
     -- Structured adapters own capability identity. This table holds the
     -- source-derived scope fact; no Markdown or task prose can create a row.
     CREATE TABLE IF NOT EXISTS source_capabilities (
@@ -3415,6 +3469,7 @@ function writeSnapshotToDatabase(
       projectionDomains: snapshot.projectionDomains,
       summaryFreshness: 'preserve',
     })
+    finalizeReleaseMembershipState(database, revision, generatedAt)
     database.prepare('UPDATE queue_state SET revision = ? WHERE id = 1').run(revision)
     replaceWorkItemDetails(database, tasks, revision)
     database.prepare('UPDATE project_meta SET project_id = ? WHERE id = 1').run(projectId)
@@ -4200,6 +4255,7 @@ export function writeProjectStateDatabaseTaskMutation(
       // persisted authority used by later reads.
       upsertReleaseDefinitions(database, normalizedReleases)
       syncReleaseMembershipFromDefinitions(database, normalizedReleases)
+      finalizeReleaseMembershipState(database, revision, generatedAt)
 
       /*
        * Keep the existing snapshot-revision invariant for rich queue reads.
@@ -4512,6 +4568,7 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
         projectionDomains: mutation.projectionDomains,
         summaryFreshness: 'preserve',
       })
+      finalizeReleaseMembershipState(database, revision, generatedAt)
       database.prepare(`
         UPDATE queue_state
         SET selected_release_id = ?, last_updated = ?, revision = ?
@@ -4726,7 +4783,8 @@ export function writeProjectStateDatabaseTaskBatchMutation(
 
       for (const taskId of removedTaskIds) {
         deleteTaskDependencies(database, [taskId])
-        database.prepare('DELETE FROM release_membership WHERE task_id = ?').run(taskId)
+        const deletedMembership = database.prepare('DELETE FROM release_membership WHERE task_id = ?').run(taskId)
+        if (Number(deletedMembership.changes ?? 0) > 0) markReleaseMembershipStatePending(database)
         database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(taskId)
         database.prepare('DELETE FROM work_item_detail WHERE task_id = ?').run(taskId)
         for (const table of ['task_execution', 'task_workspace', 'task_proof', 'task_evidence_current']) {
@@ -4799,6 +4857,7 @@ export function writeProjectStateDatabaseTaskBatchMutation(
         projectionDomains: mutation.projectionDomains,
         summaryFreshness: 'preserve',
       })
+      finalizeReleaseMembershipState(database, revision, generatedAt)
       const upsertDetail = database.prepare(`
         INSERT INTO work_item_detail (task_id, revision, payload_gzip)
         VALUES (?, ?, ?)

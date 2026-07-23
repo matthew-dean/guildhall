@@ -1183,6 +1183,12 @@ describe('project-state database', () => {
     promoteProjectStateDatabaseAuthority(projectRoot)
     const queueRevision = readProjectStateDatabaseQueueRevision(tasksPath)!
     const projectRevision = readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!
+    const initialState = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(initialState.prepare('SELECT membership_revision, project_revision FROM release_membership_state WHERE id = 1').get()).toMatchObject({
+      membership_revision: 1,
+      project_revision: expect.any(Number),
+    })
+    initialState.close()
 
     writeProjectStateDatabaseTaskMutation(tasksPath, {
       expectedQueueRevision: queueRevision,
@@ -1192,6 +1198,7 @@ describe('project-state database', () => {
     })
 
     const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(database.prepare('SELECT membership_revision FROM release_membership_state WHERE id = 1').get()).toEqual({ membership_revision: 1 })
     expect(database.prepare('SELECT release_id, task_id, disposition FROM release_membership ORDER BY task_id').all()).toEqual([
       { release_id: 'release-current', task_id: 'task-current', disposition: 'included' },
       { release_id: 'release-current', task_id: 'task-later', disposition: 'deferred' },
@@ -1225,6 +1232,10 @@ describe('project-state database', () => {
       summary: { generatedAt: '2026-07-15T00:01:00.000Z', freshness: 'current' },
     })
     const afterEdit = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(afterEdit.prepare('SELECT membership_revision, project_revision FROM release_membership_state WHERE id = 1').get()).toMatchObject({
+      membership_revision: 2,
+      project_revision: expect.any(Number),
+    })
     expect(afterEdit.prepare('SELECT release_id, task_id, disposition FROM release_membership ORDER BY task_id').all()).toEqual([
       { release_id: 'release-current', task_id: 'task-later', disposition: 'deferred' },
     ])
