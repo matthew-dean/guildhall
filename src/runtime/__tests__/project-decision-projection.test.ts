@@ -608,4 +608,46 @@ describe('project decision projection', () => {
       observationClaimId: 'wrong-task-observation',
     })
   })
+
+  it('treats a different worktree attempt as stale evidence rather than a competing agent opinion', () => {
+    const agreement = reconcileProjectStateObservation({
+      projectRevision: 42,
+      canonicalClaim: {
+        id: 'workspace-attempt-two',
+        projectRevision: 42,
+        subject: { kind: 'task', id: 'task-proof' },
+        field: 'workspace.syncState',
+        value: { state: 'current', baseSha: 'base-b', headSha: 'head-b' },
+        authority: 'verified_observation',
+        actor: 'git-driver',
+        observedAt: '2026-07-23T12:01:00.000Z',
+        evidenceRefs: ['git:head-b'],
+        basis: { kind: 'workspace_attempt', id: 'task-proof:attempt-2' },
+      },
+      observationClaim: {
+        id: 'workspace-attempt-one-conflict',
+        projectRevision: 42,
+        subject: { kind: 'task', id: 'task-proof' },
+        field: 'workspace.syncState',
+        value: { state: 'conflicted', baseSha: 'base-a', headSha: 'head-a' },
+        authority: 'verified_observation',
+        actor: 'git-driver',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['git:head-a'],
+        basis: { kind: 'workspace_attempt', id: 'task-proof:attempt-1' },
+      },
+      policy: {
+        field: 'workspace.syncState',
+        authorities: ['verified_observation'],
+        reconciliation: 'refresh_runtime',
+      },
+    })
+
+    expect(agreement).toEqual({
+      state: 'stale',
+      reconciliation: 'refresh_runtime',
+      canonicalClaimIds: ['workspace-attempt-two'],
+      observationClaimId: 'workspace-attempt-one-conflict',
+    })
+  })
 })

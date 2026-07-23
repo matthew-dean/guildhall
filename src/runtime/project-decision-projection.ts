@@ -20,6 +20,14 @@ export interface ProjectStateClaim<T = unknown> {
   actor: string
   observedAt: string
   evidenceRefs: string[]
+  /**
+   * The physical or logical instance a fact describes. Claims from different
+   * attempts are historical observations, not competing views of one fact.
+   */
+  basis?: {
+    kind: string
+    id: string
+  }
   supersedes?: string
 }
 
@@ -53,6 +61,7 @@ export type ProjectStateClaimField =
   | 'task.reviewEvidenceDisposition'
   | 'proof.status'
   | 'runtime.status'
+  | 'workspace.syncState'
   | 'repository.landingStatus'
 
 /**
@@ -120,6 +129,11 @@ export const PROJECT_STATE_CLAIM_POLICIES: Readonly<Record<ProjectStateClaimFiel
   'runtime.status': {
     field: 'runtime.status',
     authorities: ['runtime_observation'],
+    reconciliation: 'refresh_runtime',
+  },
+  'workspace.syncState': {
+    field: 'workspace.syncState',
+    authorities: ['verified_observation', 'runtime_observation'],
     reconciliation: 'refresh_runtime',
   },
   'repository.landingStatus': {
@@ -234,8 +248,12 @@ function stableClaimValue(value: unknown, policy: ProjectStateClaimPolicy | unde
   return stableJson(value)
 }
 
-function claimKey(claim: Pick<ProjectStateClaim, 'subject' | 'field'>): string {
-  return `${claim.subject.kind}:${claim.subject.id}:${claim.field}`
+function claimBasisKey(claim: Pick<ProjectStateClaim, 'basis'>): string {
+  return claim.basis ? `${claim.basis.kind}:${claim.basis.id}` : 'current'
+}
+
+function claimKey(claim: Pick<ProjectStateClaim, 'subject' | 'field' | 'basis'>): string {
+  return `${claim.subject.kind}:${claim.subject.id}:${claim.field}:${claimBasisKey(claim)}`
 }
 
 function claimConflictId(claims: readonly ProjectStateClaim[]): string {
@@ -266,6 +284,7 @@ function claimFingerprint(claim: ProjectStateClaim): string | null {
       actor: claim.actor,
       observedAt: claim.observedAt,
       evidenceRefs: claim.evidenceRefs,
+      basis: claim.basis,
       supersedes: claim.supersedes,
     })
   } catch {
@@ -283,6 +302,7 @@ function isStructurallyValidClaim(claim: ProjectStateClaim, projectRevision: num
     Number.isFinite(Date.parse(claim.observedAt)) &&
     Array.isArray(claim.evidenceRefs) &&
     claim.evidenceRefs.every(isNonEmptyString) &&
+    (claim.basis === undefined || (isNonEmptyString(claim.basis.kind) && isNonEmptyString(claim.basis.id))) &&
     claimFingerprint(claim) !== null
 }
 
@@ -507,10 +527,14 @@ export function reconcileProjectStateObservation(input: {
     return { state: 'stale', reconciliation: input.policy.reconciliation, ...fallback }
   }
   if (claimKey(input.canonicalClaim) !== claimKey(input.observationClaim)) {
+    const sameSubjectAndField =
+      input.canonicalClaim.subject.kind === input.observationClaim.subject.kind &&
+      input.canonicalClaim.subject.id === input.observationClaim.subject.id &&
+      input.canonicalClaim.field === input.observationClaim.field
     return {
-      state: 'unavailable',
+      state: sameSubjectAndField ? 'stale' : 'unavailable',
       reconciliation: input.policy.reconciliation,
-      reason: 'incomparable_subject_or_field',
+      ...(sameSubjectAndField ? {} : { reason: 'incomparable_subject_or_field' as const }),
       ...fallback,
     }
   }

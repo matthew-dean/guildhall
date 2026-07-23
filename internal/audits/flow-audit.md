@@ -53536,6 +53536,9 @@ Repair:
       lifecycle recovery consume that fact and re-read Git before clearing it.
 - [x] Focused real-Git, manager, and orchestrator regressions prove path/ref
       capture, no human blocker, review bounce, and verified recovery clear.
+- [x] The shared claim resolver now carries a typed basis identity. A claim
+      from a different task-worktree attempt is stale evidence, not a
+      same-revision tie that another agent can win by wording or timing.
 - [ ] Extend the compact shared project decision/action projection and its
       Overview, Work, Thread, Activity, and release consumers so a live
       workspace reconciliation is visible identically everywhere. Do this as
