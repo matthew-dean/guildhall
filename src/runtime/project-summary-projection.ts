@@ -45,6 +45,8 @@ import {
   buildProjectOrientationSpine,
   compactProjectOrientationSpineForMap,
   reconcileOrientationSpineWithReleaseTruth,
+  type OrientationReleaseState,
+  type OrientationReleaseTruth,
   type OrientationWorkspaceImportDraftContext,
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
@@ -1537,7 +1539,10 @@ function synchronizeIndexedOrientationSpine(
               source: releasePatch.source as typeof release.source,
             }
           : {}),
-        state: input.releaseSummary.state,
+        // A release record's lifecycle is durable. `releaseSummary.state` is
+        // current readiness and belongs on the release summary, not in the
+        // historical release record rendered by Map or Release.
+        state: releasePatch?.state as OrientationReleaseState ?? release.state,
       } as (typeof spine.releases)[number]
     : release
   const selectedRelease = (spine.selectedRelease && spine.selectedRelease.id === releaseId
@@ -1550,7 +1555,7 @@ function synchronizeIndexedOrientationSpine(
               source: releasePatch.source as typeof spine.selectedRelease.source,
             }
           : {}),
-        state: input.releaseSummary.state,
+        state: releasePatch?.state as OrientationReleaseState ?? spine.selectedRelease.state,
       }
     : spine.selectedRelease) as typeof spine.selectedRelease
   const rowById = new Map(input.rows.map(row => [row.taskId, row]))
@@ -1661,7 +1666,8 @@ function synchronizeIndexedOrientationSpine(
     roots: spine.roots.map(patchNode),
     },
     {
-      state: input.releaseSummary.state,
+    state: input.releaseSummary.state,
+      ...(releasePatch?.state ? { lifecycleState: releasePatch.state as OrientationReleaseTruth['lifecycleState'] } : {}),
       counts: {
         total: counts.total,
         done: counts.done,
@@ -1694,6 +1700,8 @@ export function canonicalDecisionStateResolution(input: {
   selectedReleaseId: string | null
   decision: ProjectDecisionProjection
   generatedAt: string
+  releaseSummary?: ProjectSummaryReleaseSummary | null
+  releaseMembershipTaskIds?: readonly string[]
 }): ProjectStateDatabaseStateResolutionSnapshot {
   // The decision is authoritative only for the revision that produced its
   // registered claims. Projection builders may start from an older compact
@@ -1706,10 +1714,10 @@ export function canonicalDecisionStateResolution(input: {
     generatedAt: input.generatedAt,
   }
   const project = { kind: 'project', id: input.projectId ?? 'unknown-project' }
-  const claim = <T>(field: ProjectStateClaim['field'], value: T): ProjectStateClaim<T> => ({
-    id: canonicalDecisionClaimId(input.projectRevision, project, field),
+  const claim = <T>(subject: ProjectStateClaim['subject'], field: ProjectStateClaim['field'], value: T): ProjectStateClaim<T> => ({
+    id: canonicalDecisionClaimId(input.projectRevision, subject, field),
     projectRevision: input.projectRevision,
-    subject: project,
+    subject,
     field,
     value,
     authority: 'canonical_mutation',
@@ -1719,16 +1727,32 @@ export function canonicalDecisionStateResolution(input: {
   })
   const focus = decision.planExecution?.focus ?? decision.execution.focus
   const claims: ProjectStateClaim[] = [
-    claim('project.selectedReleaseId', input.selectedReleaseId),
-    claim('project.executionFocus', focus
+    claim(project, 'project.selectedReleaseId', input.selectedReleaseId),
+    claim(project, 'project.executionFocus', focus
       ? { taskId: focus.taskId, taskRevision: focus.taskRevision ?? input.projectRevision }
       : null),
-    claim('project.executionEligibility', {
+    claim(project, 'project.executionEligibility', {
       state: input.decision.planExecution?.state ?? input.decision.execution.state,
       code: input.decision.planExecution?.code ?? input.decision.execution.code,
       primaryAction: decision.primaryAction,
     }),
   ]
+  if (input.selectedReleaseId && input.releaseSummary?.release?.id === input.selectedReleaseId) {
+    const release = { kind: 'release', id: input.selectedReleaseId }
+    const summary = input.releaseSummary
+    claims.push(
+      claim(release, 'release.lifecycleState', summary.release!.state),
+      claim(release, 'release.membershipTaskIds', [...new Set(input.releaseMembershipTaskIds ?? [])].sort()),
+      claim(release, 'release.readiness', {
+        state: summary.state,
+        counts: summary.counts,
+        blockerTaskIds: summary.blockers
+          .map(blocker => blocker.owningTaskId ?? blocker.id)
+          .filter((taskId): taskId is string => Boolean(taskId))
+          .sort(),
+      }),
+    )
+  }
   const resolution = resolveRegisteredProjectStateClaimSet({
     projectRevision: input.projectRevision,
     claims,
@@ -1758,6 +1782,13 @@ export function canonicalDecisionStateResolution(input: {
     decision,
     fingerprint,
   }
+}
+
+function canonicalReleaseMembershipTaskIds(projection: Pick<ProjectSummaryProjection, 'orientationSpine'>): string[] {
+  return [...new Set((projection.orientationSpine?.selectedRelease?.nodeIds ?? [])
+    .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice('work:'.length) : nodeId)
+    .filter(Boolean))]
+    .sort()
 }
 
 /**
@@ -1871,6 +1902,8 @@ export function writeProjectSummaryProjectionFromIndexedState(
         selectedReleaseId: indexedState?.queue.selectedReleaseId ?? null,
         decision: projection.decision,
         generatedAt: projection.generatedAt,
+        releaseSummary: projection.releaseSummary,
+        releaseMembershipTaskIds: canonicalReleaseMembershipTaskIds(projection),
       })
   /*
    * Indexed proof refreshes must publish the corrected scope rows as well as
@@ -2033,6 +2066,8 @@ export function writeProjectSummaryProjection(
         selectedReleaseId: (canonicalQueue as { selectedReleaseId?: string } | null)?.selectedReleaseId ?? null,
         decision: projection.decision,
         generatedAt: projection.generatedAt,
+        releaseSummary: projection.releaseSummary,
+        releaseMembershipTaskIds: canonicalReleaseMembershipTaskIds(projection),
       })
   if (currentStateAuthority === 'database') {
     writeProjectStateDatabaseSummarySnapshot(tasksPath, {
@@ -2244,6 +2279,8 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
           selectedReleaseId: (canonicalQueue as { selectedReleaseId?: string } | null)?.selectedReleaseId ?? null,
           decision: projection.decision,
           generatedAt: projection.generatedAt,
+          releaseSummary: projection.releaseSummary,
+          releaseMembershipTaskIds: canonicalReleaseMembershipTaskIds(projection),
         })
     const taskStatusRows = input.projectionTasks
       ? input.projectionTasks.map(task => ({
@@ -2363,6 +2400,8 @@ export function updateProjectSummaryProjection(
             selectedReleaseId: resolvedNext.releaseSummary.release?.id ?? null,
             decision: resolvedNext.decision,
             generatedAt,
+            releaseSummary: resolvedNext.releaseSummary,
+            releaseMembershipTaskIds: canonicalReleaseMembershipTaskIds(resolvedNext),
           }),
       },
     }

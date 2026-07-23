@@ -34,6 +34,12 @@ export interface ProjectStateClaim<T = unknown> {
 export interface ProjectStateClaimPolicy {
   field: string
   authorities: readonly ProjectStateClaimAuthority[]
+  /**
+   * Producers allowed to report a typed observation. When omitted, only an
+   * authority that can decide the field may report it. This separates a
+   * useful dissent from permission to change the fact.
+   */
+  observationAuthorities?: readonly ProjectStateClaimAuthority[]
   reconciliation: 'rerun_verification' | 'refresh_runtime' | 'inspect_canonical_state' | 'owner_scope_decision'
   /**
    * Claim values are normally exact structured values. A declared set field
@@ -52,7 +58,9 @@ export type ProjectStateClaimField =
   | 'project.selectedReleaseId'
   | 'project.scopeSelection'
   | 'project.charterConfirmation'
+  | 'release.lifecycleState'
   | 'release.membershipTaskIds'
+  | 'release.readiness'
   | 'release.blockerTaskIds'
   | 'task.lifecycleStatus'
   | 'task.specReviewAuthority'
@@ -89,11 +97,23 @@ export const PROJECT_STATE_CLAIM_POLICIES: Readonly<Record<ProjectStateClaimFiel
     authorities: ['owner_selection', 'canonical_mutation', 'imported_record', 'agent_derivation'],
     reconciliation: 'owner_scope_decision',
   },
+  'release.lifecycleState': {
+    field: 'release.lifecycleState',
+    authorities: ['canonical_mutation'],
+    observationAuthorities: ['canonical_mutation', 'agent_derivation'],
+    reconciliation: 'inspect_canonical_state',
+  },
   'release.membershipTaskIds': {
     field: 'release.membershipTaskIds',
     authorities: ['canonical_mutation'],
+    observationAuthorities: ['canonical_mutation', 'agent_derivation'],
     reconciliation: 'inspect_canonical_state',
     valueSemantics: 'unordered_string_set',
+  },
+  'release.readiness': {
+    field: 'release.readiness',
+    authorities: ['canonical_mutation', 'agent_derivation'],
+    reconciliation: 'inspect_canonical_state',
   },
   'release.blockerTaskIds': {
     field: 'release.blockerTaskIds',
@@ -212,6 +232,7 @@ export type ProjectStateClaimRejectionCode =
   | 'duplicate_claim_id'
   | 'invalid_supersession'
   | 'unregistered_field'
+  | 'unauthorized_authority'
   | 'ambiguous_policy'
 
 export interface RejectedProjectStateClaim {
@@ -351,6 +372,10 @@ function isStructurallyValidPolicy(policy: ProjectStateClaimPolicy): boolean {
     policy.authorities.length > 0 &&
     new Set(policy.authorities).size === policy.authorities.length &&
     policy.authorities.every(authority => DEFAULT_CLAIM_AUTHORITIES.includes(authority)) &&
+    (policy.observationAuthorities === undefined ||
+      (policy.observationAuthorities.length > 0 &&
+        new Set(policy.observationAuthorities).size === policy.observationAuthorities.length &&
+        policy.observationAuthorities.every(authority => DEFAULT_CLAIM_AUTHORITIES.includes(authority)))) &&
     ['rerun_verification', 'refresh_runtime', 'inspect_canonical_state', 'owner_scope_decision'].includes(policy.reconciliation) &&
     (policy.valueSemantics === undefined || policy.valueSemantics === 'exact' || policy.valueSemantics === 'unordered_string_set')
 }
@@ -414,6 +439,12 @@ export function resolveProjectStateClaimSet(
     }
     if (!policiesByField.has(claim.field)) {
       reject(claim, 'unregistered_field')
+      return false
+    }
+    const policy = policiesByField.get(claim.field)!
+    const observationAuthorities = policy.observationAuthorities ?? policy.authorities
+    if (!observationAuthorities.includes(claim.authority)) {
+      reject(claim, 'unauthorized_authority')
       return false
     }
     return true

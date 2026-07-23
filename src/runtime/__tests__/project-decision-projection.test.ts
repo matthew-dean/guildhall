@@ -227,6 +227,64 @@ describe('project decision projection', () => {
     })
   })
 
+  it('keeps a release lifecycle and readiness disagreement inspectable without letting an agent relabel the release', () => {
+    const resolution = resolveRegisteredProjectStateClaimSet({ projectRevision: 42, claims: [
+      {
+        id: 'canonical-release-lifecycle',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.lifecycleState',
+        value: 'active',
+        authority: 'canonical_mutation',
+        actor: 'release-store',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['release:release-1'],
+      },
+      {
+        id: 'agent-release-lifecycle',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.lifecycleState',
+        value: 'shipped',
+        authority: 'agent_derivation',
+        actor: 'roadmap-agent',
+        observedAt: '2026-07-23T12:01:00.000Z',
+        evidenceRefs: ['agent-run:roadmap-agent'],
+      },
+      {
+        id: 'canonical-release-readiness',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.readiness',
+        value: { state: 'blocked', blockerTaskIds: ['task-proof'] },
+        authority: 'canonical_mutation',
+        actor: 'release-summary',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['task:task-proof'],
+      },
+      {
+        id: 'agent-release-readiness',
+        projectRevision: 42,
+        subject: { kind: 'release', id: 'release-1' },
+        field: 'release.readiness',
+        value: { state: 'ready', blockerTaskIds: [] },
+        authority: 'agent_derivation',
+        actor: 'roadmap-agent',
+        observedAt: '2026-07-23T12:01:00.000Z',
+        evidenceRefs: ['agent-run:roadmap-agent'],
+      },
+    ] })
+
+    expect(resolution.resolved).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'release.lifecycleState', value: 'active' }),
+      expect.objectContaining({ field: 'release.readiness', value: { state: 'blocked', blockerTaskIds: ['task-proof'] } }),
+    ]))
+    expect(resolution.disagreements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'release.lifecycleState', state: 'resolved_by_authority', contradictoryClaimIds: ['agent-release-lifecycle'] }),
+      expect.objectContaining({ field: 'release.readiness', state: 'resolved_by_authority', contradictoryClaimIds: ['agent-release-readiness'] }),
+    ]))
+  })
+
   it('keeps a coordinator execution report visible when canonical eligibility disagrees', () => {
     const resolution = resolveRegisteredProjectStateClaimSet({ projectRevision: 42, claims: [
       {

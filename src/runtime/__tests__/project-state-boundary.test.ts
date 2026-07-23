@@ -82,6 +82,31 @@ describe('project-state-boundary', () => {
         producer: 'verifier',
       })
       expect(first.disagreements).toEqual([])
+      expect(first.receipt).toMatchObject({
+        observationClaimId: 'verifier:proof:passed',
+        state: 'confirmed',
+        canonicalClaimIds: ['verifier:proof:passed'],
+        canonicalValue: { state: 'passed' },
+      })
+
+      const dissent = resolveProjectStateObservationAtBoundary(tasksPath, {
+        id: 'agent:proof:failed',
+        projectRevision: revision!,
+        subject: { kind: 'task', id: 'task-proof' },
+        field: 'proof.status',
+        value: { state: 'failed' },
+        observedAt: '2026-07-23T00:01:30.000Z',
+        evidenceRefs: ['agent:proof:failed'],
+        producer: 'agent',
+      })
+      expect(dissent.receipt).toMatchObject({
+        observationClaimId: 'agent:proof:failed',
+        state: 'resolved_by_authority',
+        canonicalClaimIds: ['verifier:proof:passed'],
+        canonicalValue: { state: 'passed' },
+        reconciliation: 'rerun_verification',
+        disagreement: expect.objectContaining({ state: 'resolved_by_authority' }),
+      })
 
       const second = resolveProjectStateObservationAtBoundary(tasksPath, {
         id: 'verifier:proof:failed',
@@ -106,9 +131,54 @@ describe('project-state-boundary', () => {
           contradictoryClaimIds: ['verifier:proof:failed', 'verifier:proof:passed'],
         }),
       ])
+      expect(second.receipt).toMatchObject({
+        observationClaimId: 'verifier:proof:failed',
+        state: 'unresolved',
+        canonicalClaimIds: [],
+        reconciliation: 'rerun_verification',
+      })
       expect(readProjectSummaryProjection(tasksPath)?.decision).toMatchObject({
         execution: { state: 'conflicted' },
         primaryAction: { kind: 'resolve_conflict' },
+      })
+
+      const unauthorized = resolveProjectStateObservationAtBoundary(tasksPath, {
+        id: 'agent:project:selected-release',
+        projectRevision: revision!,
+        subject: { kind: 'project', id: 'state-arbitration' },
+        field: 'project.selectedReleaseId',
+        value: 'release-1',
+        observedAt: '2026-07-23T00:03:00.000Z',
+        evidenceRefs: ['agent:project:selected-release'],
+        producer: 'agent',
+      })
+      expect(unauthorized.receipt).toEqual({
+        observationClaimId: 'agent:project:selected-release',
+        state: 'rejected',
+        canonicalClaimIds: [],
+        rejectionCode: 'unauthorized_authority',
+      })
+      expect(readProjectStateDatabaseReadBundle(tasksPath, { includeStateClaims: true })?.stateResolution?.claims)
+        .toContainEqual(expect.objectContaining({
+          id: 'agent:project:selected-release',
+          rejectionCode: 'unauthorized_authority',
+        }))
+
+      const duplicate = resolveProjectStateObservationAtBoundary(tasksPath, {
+        id: 'verifier:proof:passed',
+        projectRevision: revision!,
+        subject: { kind: 'task', id: 'task-proof' },
+        field: 'proof.status',
+        value: { state: 'failed' },
+        observedAt: '2026-07-23T00:04:00.000Z',
+        evidenceRefs: ['proof:task-proof:replayed-with-different-content'],
+        producer: 'verifier',
+      })
+      expect(duplicate.receipt).toEqual({
+        observationClaimId: 'verifier:proof:passed',
+        state: 'rejected',
+        canonicalClaimIds: [],
+        rejectionCode: 'duplicate_claim_id',
       })
     } finally {
       await fs.rm(root, { recursive: true, force: true })

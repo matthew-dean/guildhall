@@ -157,12 +157,20 @@
       tone: sourceCapabilityCatalog.availability === 'ready' ? 'ok' as Tone : 'warn' as Tone,
     }
     if ((spine.sourceTrail?.length ?? 0) > 0) {
-      return [catalogRow, ...spine.sourceTrail!.map(row => ({
-        label: row.label ?? 'Source',
-        value: row.value ?? 'Missing',
-        detail: row.detail ?? 'No source detail is available yet.',
-        tone: normalizeSourceTrailTone(row.tone),
-      }))]
+      return [catalogRow, ...spine.sourceTrail!.map(row => {
+        const isScopeRow = row.label === 'Scope'
+        const executableTotal = progress?.total ?? 0
+        const executableDone = progress?.done ?? 0
+        const boundaryCount = selectedRelease?.nodeIds?.length ?? 0
+        return {
+          label: row.label ?? 'Source',
+          value: row.value ?? 'Missing',
+          detail: isScopeRow && selectedRelease
+            ? `${taskScopeLabel} has ${executableDone}/${executableTotal} executable ${executableTotal === 1 ? 'work item' : 'work items'} complete across ${countLabel(boundaryCount, 'product boundary', 'product boundaries')}, with ${countLabel(deferredWorkCount, 'later work item')}.`
+            : row.detail ?? 'No source detail is available yet.',
+          tone: normalizeSourceTrailTone(row.tone),
+        }
+      })]
     }
     const taskRefs = new Set<string>()
     const artifactRefs = new Set<string>()
@@ -190,7 +198,7 @@
       {
         label: 'Scope',
         value: sourceLabelFor(selectedScopeSource),
-        detail: `${taskScopeLabel} contains ${spine.summary?.includedWorkCount ?? spine.summary?.includedCount ?? 0} assigned work items and ${spine.summary?.deferredWorkCount ?? spine.summary?.deferredCount ?? 0} later.`,
+        detail: `${taskScopeLabel} contains ${spine.summary?.includedWorkCount ?? spine.summary?.includedCount ?? 0} executable work items and ${spine.summary?.deferredWorkCount ?? spine.summary?.deferredCount ?? 0} later.`,
         tone: sourceIsInferred(selectedScopeSource) ? 'warn' as Tone : 'ok' as Tone,
       },
       {
@@ -343,11 +351,24 @@
     return 'neutral'
   }
 
-  function releaseSummary(release: { nodeIds?: string[]; deferredNodeIds?: string[] }): string {
-    const active = release.nodeIds?.length ?? 0
+  function releaseSummary(release: { id?: string; state?: string; nodeIds?: string[]; deferredNodeIds?: string[] }): string {
+    const boundaries = release.nodeIds?.length ?? 0
     const later = release.deferredNodeIds?.length ?? 0
+    if (release.id && release.id === selectedReleaseId) {
+      const executableTotal = progress?.total ?? 0
+      const executableDone = progress?.done ?? 0
+      const execution = executableTotal > 0
+        ? `${executableDone}/${executableTotal} executable ${executableTotal === 1 ? 'work item' : 'work items'} complete`
+        : 'Execution is not shaped yet'
+      const scope = countLabel(boundaries, 'product boundary', 'product boundaries')
+      const deferred = deferredWorkCount > 0 ? countLabel(deferredWorkCount, 'later work item') : null
+      return [execution, scope, deferred].filter(Boolean).join(' · ')
+    }
+    if (release.state === 'shipped') {
+      return `${countLabel(boundaries, 'delivered product boundary', 'delivered product boundaries')} · historical release`
+    }
     const pieces = [
-      active > 0 ? countLabel(active, 'current work item') : null,
+      boundaries > 0 ? countLabel(boundaries, 'product boundary', 'product boundaries') : null,
       later > 0 ? countLabel(later, 'later work item') : null,
     ].filter(Boolean)
     return pieces.join(' · ') || 'No work assigned yet'
@@ -525,8 +546,8 @@
     <Card title={workContainerTitle} titleTag="h2" padding="compact" density="dense" className="map-scope-card">
       <div class="scope-stack">
         <Chip label={taskScopeLabel} tone={sourceIsInferred(selectedScopeSource) ? 'warn' : 'accent'} />
-        <strong>{countLabel(spine?.summary?.includedWorkCount ?? spine?.summary?.includedCount, 'assigned work item')}</strong>
-        <span>{countLabel(deferredWorkCount, 'later work item')} · {countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')} · {countLabel(sourceGapCount, 'gap')}</span>
+        <strong>{progress && progress.total > 0 ? `${progress.done ?? 0}/${progress.total} executable ${progress.total === 1 ? 'work item' : 'work items'} complete` : countLabel(spine?.summary?.includedWorkCount ?? spine?.summary?.includedCount, 'executable work item')}</strong>
+        <span>{selectedRelease ? `${countLabel(selectedRelease.nodeIds?.length ?? 0, 'product boundary', 'product boundaries')} · ` : ''}{countLabel(deferredWorkCount, 'later work item')} · {countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')} · {countLabel(sourceGapCount, 'gap')}</span>
       </div>
     </Card>
     <Card title="Proof mode" titleTag="h2" padding="compact" density="dense" className="map-boundary-card">
@@ -546,7 +567,7 @@
     <section class="map-stats" aria-label="Project map progress">
       <UtilityPanel className="stat" tone="neutral">
         <strong>{countLabel(progress?.total, 'work item')}</strong>
-        <span>Mapped work</span>
+        <span>Executable work</span>
       </UtilityPanel>
       <UtilityPanel className="stat" tone="neutral">
         <strong>{countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')}</strong>
@@ -583,10 +604,10 @@
           {#each releaseRoadmap as release (release.id ?? release.label)}
             <CardListItem className="release-roadmap-row" tone={releaseTone(release)} railStrength={release.id === selectedReleaseId ? 'strong' : 'subtle'} dense>
               <div>
-                <Chip label={release.id === selectedReleaseId ? 'Selected' : friendlyStatus(release.state ?? 'planned')} tone={releaseTone(release)} />
+                <Chip label={release.id === selectedReleaseId ? 'Current release' : friendlyStatus(release.state ?? 'planned')} tone={releaseTone(release)} />
                 <strong>{release.label ?? 'Untitled release'}</strong>
                 <p>{releaseSummary(release)}</p>
-                {#if release.id && release.id !== selectedReleaseId}
+                {#if release.id && release.id !== selectedReleaseId && release.state !== 'shipped'}
                   <Button variant="secondary" size="sm" disabled={Boolean(selectingReleaseId)} onclick={() => void selectRelease(release)}>
                     {selectingReleaseId === release.id ? 'Selecting' : 'Select'}
                   </Button>
@@ -601,7 +622,7 @@
     {#if scopeRows.length > 0}
       <Card title="Scope ledger" titleTag="h2" padding="compact" density="dense" className="scope-ledger-card">
         <div class="lane-meta">
-          <span>{countLabel(totalCurrentScopeRows, 'current work item')} · {countLabel(totalLaterScopeRows, 'later work item')}</span>
+          <span>{countLabel(totalCurrentScopeRows, 'visible scope row')} · {countLabel(totalLaterScopeRows, 'later scope row')}</span>
         </div>
         <CardList className="scope-ledger-list">
           {#each visibleScopeRows as row (`${row.scope}:${row.taskId}`)}
@@ -644,7 +665,7 @@
           </Button>
         </div>
         {#if workRoots.length === 0}
-          <p class="muted">No scoped work is mapped yet.</p>
+          <p class="muted">The selected scope has work in the ledger above, but Guildhall has not mapped it into a durable task tree yet.</p>
         {:else}
         <CardList className="lane-list">
           {#each workRoots as lane (lane.id ?? lane.title)}

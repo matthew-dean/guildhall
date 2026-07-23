@@ -79,6 +79,7 @@ import {
   resolveRegisteredProjectStateClaimSet,
   type ProjectDecisionProjection,
   type ProjectStateClaim,
+  type ProjectStateClaimRejectionCode,
   type ProjectStateDisagreement,
 } from './project-decision-projection.js'
 
@@ -152,10 +153,83 @@ export interface ProjectStateObservationInput {
   producer: 'agent' | 'runtime' | 'verifier' | 'import'
 }
 
+/**
+ * The broker's machine-readable answer to one producer. This is deliberately
+ * narrower than the full claim ledger: a producer learns whether its exact
+ * observation became canonical, dissented from canonical state, created a
+ * fail-closed conflict, or was rejected before it could participate.
+ */
+export interface ProjectStateObservationReceipt {
+  observationClaimId: string
+  state: 'confirmed' | 'resolved_by_authority' | 'unresolved' | 'rejected'
+  canonicalClaimIds: string[]
+  canonicalValue?: unknown
+  reconciliation?: ProjectStateDisagreement['reconciliation']
+  disagreement?: ProjectStateDisagreement
+  rejectionCode?: ProjectStateClaimRejectionCode
+}
+
+export interface ProjectStateObservationResolution {
+  decision: ProjectDecisionProjection
+  disagreements: ProjectStateDisagreement[]
+  receipt: ProjectStateObservationReceipt
+}
+
+function observationReceipt(
+  observation: ProjectStateClaim,
+  resolution: ReturnType<typeof resolveRegisteredProjectStateClaimSet>,
+): ProjectStateObservationReceipt {
+  const rejected = resolution.rejected.find(candidate => candidate.claimId === observation.id)
+  if (rejected) {
+    return {
+      observationClaimId: observation.id,
+      state: 'rejected',
+      canonicalClaimIds: [],
+      rejectionCode: rejected.code,
+    }
+  }
+  const resolved = resolution.resolved.find(candidate =>
+    candidate.subject.kind === observation.subject.kind &&
+    candidate.subject.id === observation.subject.id &&
+    candidate.field === observation.field,
+  )
+  const disagreement = resolution.disagreements.find(candidate =>
+    candidate.subject.kind === observation.subject.kind &&
+    candidate.subject.id === observation.subject.id &&
+    candidate.field === observation.field,
+  )
+  if (resolved?.conflict) {
+    return {
+      observationClaimId: observation.id,
+      state: 'unresolved',
+      canonicalClaimIds: [],
+      reconciliation: resolved.conflict.reconciliation,
+      ...(disagreement ? { disagreement } : {}),
+    }
+  }
+  const canonicalClaimIds = resolved?.claimIds ?? []
+  if (disagreement?.contradictoryClaimIds.includes(observation.id)) {
+    return {
+      observationClaimId: observation.id,
+      state: 'resolved_by_authority',
+      canonicalClaimIds,
+      ...(resolved?.value !== undefined ? { canonicalValue: resolved.value } : {}),
+      reconciliation: disagreement.reconciliation,
+      disagreement,
+    }
+  }
+  return {
+    observationClaimId: observation.id,
+    state: 'confirmed',
+    canonicalClaimIds,
+    ...(resolved?.value !== undefined ? { canonicalValue: resolved.value } : {}),
+  }
+}
+
 export function resolveProjectStateObservationAtBoundary(
   tasksPath: string,
   input: ProjectStateObservationInput,
-): { decision: ProjectDecisionProjection; disagreements: ProjectStateDisagreement[] } {
+): ProjectStateObservationResolution {
   const bundle = readProjectStateDatabaseReadBundle<ProjectSummaryProjection>(tasksPath, {
     includeStateClaims: true,
   })
@@ -185,26 +259,53 @@ export function resolveProjectStateObservationAtBoundary(
     ...(input.basis ? { basis: input.basis } : {}),
     ...(input.supersedes ? { supersedes: input.supersedes } : {}),
   }
-  const claims: ProjectStateClaim[] = [
-    ...current.claims.map(claim => ({
-      id: claim.id,
-      projectRevision: claim.projectRevision,
-      subject: claim.subject,
-      field: claim.field,
-      value: claim.value,
-      authority: claim.authority,
-      actor: claim.actor,
-      observedAt: claim.observedAt,
-      evidenceRefs: [...claim.evidenceRefs],
-      ...(claim.basis ? { basis: claim.basis } : {}),
-      ...(claim.supersedes ? { supersedes: claim.supersedes } : {}),
-    })),
-    observation,
-  ]
+  const currentClaims: ProjectStateClaim[] = current.claims.map(claim => ({
+    id: claim.id,
+    projectRevision: claim.projectRevision,
+    subject: claim.subject,
+    field: claim.field,
+    value: claim.value,
+    authority: claim.authority,
+    actor: claim.actor,
+    observedAt: claim.observedAt,
+    evidenceRefs: [...claim.evidenceRefs],
+    ...(claim.basis ? { basis: claim.basis } : {}),
+    ...(claim.supersedes ? { supersedes: claim.supersedes } : {}),
+  }))
+  const priorClaim = currentClaims.find(claim => claim.id === observation.id)
+  if (priorClaim) {
+    const currentResolution = resolveRegisteredProjectStateClaimSet({
+      projectRevision: bundle.projectRevision,
+      claims: currentClaims,
+    })
+    if (stableJson(priorClaim) !== stableJson(observation)) {
+      return {
+        decision: current.decision as ProjectDecisionProjection,
+        disagreements: currentResolution.disagreements,
+        receipt: {
+          observationClaimId: observation.id,
+          state: 'rejected',
+          canonicalClaimIds: [],
+          rejectionCode: 'duplicate_claim_id',
+        },
+      }
+    }
+    return {
+      decision: current.decision as ProjectDecisionProjection,
+      disagreements: currentResolution.disagreements,
+      receipt: observationReceipt(observation, currentResolution),
+    }
+  }
+  const claims: ProjectStateClaim[] = [...currentClaims, observation]
   const resolution = resolveRegisteredProjectStateClaimSet({
     projectRevision: bundle.projectRevision,
     claims,
   })
+  const rejectedByClaimId = new Map(resolution.rejected.map(rejection => [rejection.claimId, rejection.code]))
+  const persistedClaims: ProjectStateDatabaseStateClaim[] = claims.map(claim => ({
+    ...claim,
+    ...(rejectedByClaimId.has(claim.id) ? { rejectionCode: rejectedByClaimId.get(claim.id)! } : {}),
+  }))
   const decision = decisionAfterStateResolution(
     current.decision as ProjectDecisionProjection,
     resolution.disagreements,
@@ -213,7 +314,7 @@ export function resolveProjectStateObservationAtBoundary(
     projectRevision: bundle.projectRevision,
     queueRevision: bundle.queueRevision,
     generatedAt: new Date().toISOString(),
-    claims: claims as ProjectStateDatabaseStateClaim[],
+    claims: persistedClaims,
     disagreements: resolution.disagreements,
     decision,
     fingerprint: stableJson({
@@ -225,7 +326,11 @@ export function resolveProjectStateObservationAtBoundary(
     }),
   }
   writeProjectStateDatabaseStateResolutionSnapshot(tasksPath, snapshot)
-  return { decision, disagreements: resolution.disagreements }
+  return {
+    decision,
+    disagreements: resolution.disagreements,
+    receipt: observationReceipt(observation, resolution),
+  }
 }
 
 export const FORBIDDEN_PROJECT_TASK_FIELDS = [
@@ -1803,6 +1908,9 @@ function writePromotedTaskDetailMutationOnce(
         selectedReleaseId: summary.releaseSummary.release?.id ?? null,
         decision: summary.decision,
         generatedAt: resolvedAt,
+        releaseSummary: summary.releaseSummary,
+        releaseMembershipTaskIds: (summary.orientationSpine?.selectedRelease?.nodeIds ?? [])
+          .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice('work:'.length) : nodeId),
       }),
   })
   return { committedRevision, task: nextTask }

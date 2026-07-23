@@ -212,6 +212,56 @@ The only human/delegated-owner path in this protocol is a registered scope
 choice. It is never a tiebreaker for runtime, proof, review, hierarchy, or
 execution facts.
 
+### Release Snapshot Extension
+
+`0.13.72/release-snapshot-arbitration` extends the same protocol to the facts
+that describe a bounded release. It is not a Map-specific adapter.
+
+- The authoritative release snapshot is one structured record for one selected
+  release and one project revision: release id, lifecycle, successor relation,
+  visible product-boundary ids, deferred boundary ids, executable-unit counts,
+  blocker ids, and readiness state.
+- `release.lifecycleState`, `release.membershipTaskIds`, and
+  `release.readiness` are registered canonical facts. A diagnostic or agent may
+  submit a typed observation against them, but cannot turn a release shipped,
+  complete, or blocked with prose or a route-local calculation.
+- Lifecycle and readiness are deliberately separate. `shipped` is an immutable
+  historical delivery fact; `ready`, `active`, `blocked`, and `shaping`
+  describe the selected snapshot's current execution state. A selected release
+  is never rendered as a shipped predecessor merely because it supersedes one.
+- A product boundary is not an executable unit. Parent features remain the
+  visible membership of a release; a parent with child work has one product
+  boundary but its children may be the executable units. Every surface names
+  those dimensions instead of showing incompatible anonymous “work item”
+  counts.
+- A Map or Release route must consume the snapshot. It may compact lists for
+  display, but it cannot recompute lifecycle, readiness, or scope counts from
+  its own orientation tree. If the snapshot is absent or stale, the route says
+  so and offers no execution claim.
+
+### Observation Receipt Extension
+
+`0.13.73/observation-receipts` makes the broker's answer a first-class result,
+not an implicit side effect of changing the decision packet. Every submitted
+typed observation receives one durable receipt with exactly one outcome:
+`confirmed`, `resolved_by_authority`, `unresolved`, or `rejected`.
+
+- A receipt includes the observation id, canonical claim ids and typed value
+  when one exists, any disagreement id, the registered reconciliation action,
+  and a machine-readable rejection code when the claim is invalid or not
+  authorized for that field.
+- Rejected claims remain bounded audit records with their rejection code, but
+  they never participate in the resolver. An unsupported agent claim can no
+  longer disappear silently or look like a viable alternate truth later.
+- The broker validates authority before grouping values. A producer that is
+  not registered for a field is rejected instead of being retained as an
+  inert, ambiguous claim.
+- This receipt is the only inter-agent handshake: a later producer reads the
+  current revision and receipt, then either supplies new evidence through the
+  registry's reconciliation action or records non-operational history. It
+  cannot try to settle the dispute with prose, prompt wording, or a second
+  view-local calculation.
+
 ### Schema Migration Decision
 
 - Persisted schema: additive v36 tables `project_state_claims`,

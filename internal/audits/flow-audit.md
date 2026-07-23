@@ -7,6 +7,53 @@ help_summary: |
 
 ## 2026-07-23 Explicit Review-Gate and Agent-Disagreement Boundary
 
+### Release Snapshot Finding
+
+- Work id: `0.13.72/release-snapshot-arbitration`.
+- User job: on Map and Release, a person can immediately tell which bounded
+  release is selected, what can run or is blocked now, how much selected
+  product scope it contains, and whether a similarly named release is a
+  historical shipped predecessor. The same fact must have the same answer on
+  every route.
+- Live finding: Narrative Harness Map listed a shipped `Stage 1` release and
+  a selected reconciled `Stage 1` release with nearly identical labels. It
+  also called 15 product boundaries and the Release view's 3/4 execution
+  progress both “current work,” while the compact Map scope ledger held a
+  third, truncated row count. These are different facts rendered as though
+  they were competing answers.
+- Required correction: the shared release snapshot owns selected identity,
+  lifecycle, visible membership, deferred membership, execution counts, and
+  blockers. Map consumes that snapshot for its selected-release row; it labels
+  product boundaries and executable work distinctly. Historical shipped
+  releases remain immutable history and visibly identify their successor.
+- Proof required: shared-projection regressions for a shipped predecessor plus
+  active successor, a Map rendering regression for distinct count labels, and
+  installed Narrative Harness checks across Map, Release, Work, and Overview.
+- Installed Map proof: Narrative Harness now shows the selected reconciled
+  release as `3/4 executable work items complete` across `15 product
+  boundaries`, with `32 later work items`. The earlier Stage 1 is explicitly
+  `Shipped` historical release. The scope source repeats those same named
+  dimensions, and the ledger identifies its seven entries as visible scope
+  rows rather than a competing completion total.
+
+### Observation Receipt Finding
+
+- Work id: `0.13.73/observation-receipts`.
+- User job: when two agents disagree, each gets a deterministic typed answer
+  rather than a prose dispute: confirmed, superseded by a stronger source,
+  unresolved and blocking, or rejected because that producer cannot report
+  that fact.
+- Correction: the project-state broker now returns an observation receipt with
+  canonical value/claim ids, disagreement and repair action, or a rejection
+  code. The registry separately declares who may report a fact and who may
+  make it canonical. Divergent reuse of an immutable claim id is rejected
+  before it can corrupt the ledger.
+- Proof: the boundary regression covers a verifier confirmation, an agent
+  dissent resolved to verifier evidence, two contradictory verifier reports
+  that block execution, an agent attempting an owner-only scope choice, and a
+  duplicate claim id with changed content. The latter two return explicit
+  rejection receipts; valid rejected observations retain their audit code.
+
 - Work id: `0.13.65/explicit-review-gates-and-state-claim-resolution`.
 - User job: when any two Guildhall agents or projections report incompatible
   project facts, the product must resolve the disagreement through a declared,
