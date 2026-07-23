@@ -48,10 +48,9 @@ help_summary: |
   visible spec-review gate but did not prepare proof work, because the recovery
   decision used an internal scope variant while Start exposed the selected
   release through `executionScope`. Recovery now uses that shared execution
-  scope contract, so the same release identity governs visible state and the
-  mutation decision. Start also reuses the same helper against its canonical
-  snapshot if an early readiness return omitted the attached decision; it does
-  not re-rank or reinterpret blockers locally.
+  scope contract, and the canonical terminal proof result overrides compact
+  summary fallback before release review gates return. The same selected-release
+  identity therefore governs visible state and the mutation decision.
 - Apply/revert: code-only. Revert the queue/runtime transition and migration
   predicate together; no historical task or release data is rewritten.
 

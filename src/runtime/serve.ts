@@ -9210,7 +9210,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       effectiveTasks: input.effectiveTasks,
       scope: input.scope,
     }))
-    const releaseProofRecovery = savedReleaseProofRecoveryDecision(
+    let releaseProofRecovery = savedReleaseProofRecoveryDecision(
       input.summary,
       executionScope,
       input.requestedTaskId,
@@ -9243,6 +9243,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       effectiveTasks: input.effectiveTasks,
       scope: input.scope,
     }))
+    if (
+      terminal?.code === 'proof_evidence_missing' &&
+      executionScope?.kind === 'release' &&
+      !input.requestedTaskId &&
+      terminal.proofTaskIds?.length
+    ) {
+      releaseProofRecovery = {
+        releaseId: executionScope.id,
+        parentTaskIds: [...new Set(terminal.proofTaskIds)].sort(),
+      }
+    }
     const hasMaterializedStartWork = await time('materialized', () => hasMaterializedScopedStartWork(
       input.projectPath,
       input.requestedTaskId,
