@@ -2206,7 +2206,9 @@ function startReadinessWithFocus(
   const focusTaskId = startReadiness.focusTaskId ?? (hrefTaskId ? decodeURIComponent(hrefTaskId) : undefined) ?? scopeProjection?.start.focusTaskId
   if (!focusTaskId) return startReadiness
   const taskTitle = tasks.find(task => task.id === focusTaskId)?.title
-  const focusTaskTitle = startReadiness.focusTaskTitle ?? taskTitle ?? (
+  // The task point is canonical display identity for a focus ID. A saved
+  // readiness title can explain the action, but it cannot rename that task.
+  const focusTaskTitle = taskTitle ?? startReadiness.focusTaskTitle ?? (
     scopeProjection?.start.focusTaskId === focusTaskId ? scopeProjection.start.focusTaskTitle : undefined
   )
   return {

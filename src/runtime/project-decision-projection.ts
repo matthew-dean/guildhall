@@ -63,6 +63,7 @@ export type ProjectStateClaimField =
   | 'task.reviewEvidenceDisposition'
   | 'proof.status'
   | 'runtime.status'
+  | 'project.executionFocus'
   | 'project.executionEligibility'
   | 'workspace.syncState'
   | 'repository.landingStatus'
@@ -144,6 +145,11 @@ export const PROJECT_STATE_CLAIM_POLICIES: Readonly<Record<ProjectStateClaimFiel
     field: 'runtime.status',
     authorities: ['runtime_observation'],
     reconciliation: 'refresh_runtime',
+  },
+  'project.executionFocus': {
+    field: 'project.executionFocus',
+    authorities: ['canonical_mutation', 'runtime_observation'],
+    reconciliation: 'inspect_canonical_state',
   },
   'project.executionEligibility': {
     field: 'project.executionEligibility',
@@ -632,11 +638,24 @@ export function reconcileRegisteredProjectStateObservation(input: {
 export interface ProjectDecisionExecution {
   state: 'runnable' | 'running' | 'paused' | 'blocked' | 'complete' | 'conflicted'
   code: string
+  /**
+   * The single decision focus identity. `focusTaskTitle` remains a temporary
+   * wire-compatibility field, but it is derived from this reference whenever
+   * a canonical task snapshot is available.
+   */
+  focus?: ProjectDecisionTaskRef
   focusTaskId?: string
   focusTaskTitle?: string
   focusKind?: string
   count?: number
   message?: string
+}
+
+export interface ProjectDecisionTaskRef {
+  taskId: string
+  displayTitle: string
+  /** The task point's owning project revision when the caller has one. */
+  taskRevision?: number
 }
 
 export interface ProjectDecisionProjection {
@@ -685,7 +704,36 @@ export interface ProjectDecisionProjectionInput {
     activeTaskId?: string | null
     activeTaskTitle?: string | null
   } | null
+  /**
+   * Canonical task identities captured in the same project-state snapshot as
+   * the decision. A route never supplies an independently cached title here.
+   */
+  canonicalTaskRefs?: readonly ProjectDecisionTaskRef[]
   conflicts?: ProjectStateConflict[]
+}
+
+function attachCanonicalFocus(
+  execution: ProjectDecisionExecution,
+  canonicalTaskRefs: readonly ProjectDecisionTaskRef[] | undefined,
+): ProjectDecisionExecution {
+  const taskId = execution.focusTaskId?.trim()
+  if (!taskId) return execution
+  const canonical = canonicalTaskRefs?.find(task => task.taskId === taskId)
+  // A canonical snapshot is deliberately stronger than a saved decision
+  // string. This prevents an advanced ID from retaining a previous task's
+  // title after an approval or runtime transition.
+  const displayTitle = canonical?.displayTitle.trim() || execution.focusTaskTitle?.trim()
+  if (!displayTitle) return execution
+  return {
+    ...execution,
+    focus: {
+      taskId,
+      displayTitle,
+      ...(canonical?.taskRevision !== undefined ? { taskRevision: canonical.taskRevision } : {}),
+    },
+    focusTaskId: taskId,
+    focusTaskTitle: displayTitle,
+  }
 }
 
 function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionExecution {
@@ -759,14 +807,15 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
   focusKind?: string
   count?: number
 } {
+  const focus = decision.execution.focus
   return {
     canStart: decision.execution.state === 'runnable' ||
       decision.execution.state === 'running' ||
       decision.execution.state === 'paused',
     code: decision.execution.code,
     ...(decision.execution.message ? { message: decision.execution.message } : {}),
-    ...(decision.execution.focusTaskId ? { focusTaskId: decision.execution.focusTaskId } : {}),
-    ...(decision.execution.focusTaskTitle ? { focusTaskTitle: decision.execution.focusTaskTitle } : {}),
+    ...(focus?.taskId ?? decision.execution.focusTaskId ? { focusTaskId: focus?.taskId ?? decision.execution.focusTaskId } : {}),
+    ...(focus?.displayTitle ?? decision.execution.focusTaskTitle ? { focusTaskTitle: focus?.displayTitle ?? decision.execution.focusTaskTitle } : {}),
     ...(decision.execution.focusKind ? { focusKind: decision.execution.focusKind } : {}),
     ...(typeof decision.execution.count === 'number' ? { count: decision.execution.count } : {}),
   }
@@ -934,12 +983,12 @@ export function applyRuntimeExecutionToProjectDecision(
 
 export function buildProjectDecisionProjection(input: ProjectDecisionProjectionInput): ProjectDecisionProjection {
   const conflicts = input.conflicts ?? []
-  const planExecution = executionState({
+  const planExecution = attachCanonicalFocus(executionState({
     ...input,
     runStatus: 'stopped',
     runtimeExecution: null,
-  })
-  const execution = executionState(input)
+  }), input.canonicalTaskRefs)
+  const execution = attachCanonicalFocus(executionState(input), input.canonicalTaskRefs)
   const blockerTaskIds = input.release.blockers
     .flatMap(blocker => blocker.owningTaskId ? [blocker.owningTaskId] : [])
     .filter((taskId, index, all) => all.indexOf(taskId) === index)

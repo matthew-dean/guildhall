@@ -46,15 +46,15 @@ import {
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
 import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
-import { applyProjectActionModelPrimaryAction, applyRuntimeExecutionToProjectDecision, buildProjectDecisionProjection, projectDecisionStartReadiness, type ProjectDecisionProjection } from './project-decision-projection.js'
+import { applyProjectActionModelPrimaryAction, applyRuntimeExecutionToProjectDecision, buildProjectDecisionProjection, projectDecisionStartReadiness, type ProjectDecisionProjection, type ProjectDecisionTaskRef } from './project-decision-projection.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 24 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 26 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -444,6 +444,19 @@ function ownerReviewForScope(
   }
 }
 
+function canonicalDecisionTaskRefs(
+  tasks: readonly { id: string; title: string; updatedAt?: string | null }[],
+  projectRevision?: number | null,
+): ProjectDecisionTaskRef[] {
+  return tasks
+    .filter(task => task.id.trim().length > 0 && task.title.trim().length > 0)
+    .map(task => ({
+      taskId: task.id,
+      displayTitle: task.title,
+      ...(projectRevision !== undefined && projectRevision !== null ? { taskRevision: projectRevision } : {}),
+    }))
+}
+
 function applyOwnerReviewToStartReadiness(
   start: ReturnType<typeof summarizeProjectScopeStart>,
   ownerReview: ProjectSummaryProjection['ownerReview'] | null | undefined,
@@ -809,11 +822,13 @@ export function buildProjectSummaryProjection(
     ownerReview,
     runStatus: input.execution?.status ?? 'stopped',
     runtimeExecution: input.execution,
+    canonicalTaskRefs: canonicalDecisionTaskRefs(tasks),
   })
   // Start readiness remains an execution fact. The summary action is what a
   // person should do next, so a finished release must not surface the stale
   // "no runnable work" transport message as though more work were expected.
   const releaseReadyForReview = releaseSummary.state === 'ready' && start.code === 'all_terminal'
+  const decisionStart = projectDecisionStartReadiness(initialDecision)
   const nextAction: ProjectSummaryProjection['nextAction'] = releaseReadyForReview
     ? {
         code: 'release_ready',
@@ -825,18 +840,15 @@ export function buildProjectSummaryProjection(
         label: start.label,
         message: start.message,
         ...(typeof start.count === 'number' ? { count: start.count } : {}),
-        ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
-        ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
-        ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+        ...(decisionStart.focusTaskId ? { focusTaskId: decisionStart.focusTaskId } : {}),
+        ...(decisionStart.focusTaskTitle ? { focusTaskTitle: decisionStart.focusTaskTitle } : {}),
+        ...(decisionStart.focusKind ? { focusKind: decisionStart.focusKind } : {}),
       }
   const startReadiness = {
-    ...projectDecisionStartReadiness(initialDecision),
+    ...decisionStart,
     ...(nextAction.code ? { code: nextAction.code } : {}),
     message: nextAction.message,
-    ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
-    ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
-    ...(start.focusKind ? { focusKind: start.focusKind } : {}),
-    ...(typeof start.count === 'number' ? { count: start.count } : {}),
+    ...(typeof decisionStart.count === 'number' ? { count: decisionStart.count } : {}),
     executionScope: selectedScope
       ? {
           id: selectedScope.id,
@@ -1356,7 +1368,16 @@ export function buildProjectSummaryProjectionFromIndexedState(
     ownerReview,
     runStatus: base.execution?.status ?? 'stopped',
     runtimeExecution: base.execution,
+    canonicalTaskRefs: canonicalDecisionTaskRefs(tasks, current.projectRevision),
   })
+  const decisionStart = projectDecisionStartReadiness(initialDecision)
+  nextAction = {
+    ...nextAction,
+    ...(decisionStart.focusTaskId ? { focusTaskId: decisionStart.focusTaskId } : {}),
+    ...(decisionStart.focusTaskTitle ? { focusTaskTitle: decisionStart.focusTaskTitle } : {}),
+    ...(decisionStart.focusKind ? { focusKind: decisionStart.focusKind } : {}),
+    ...(typeof decisionStart.count === 'number' ? { count: decisionStart.count } : {}),
+  }
   if (releaseSummary.state === 'ready' && start.code === 'all_terminal') {
     nextAction = {
       code: 'release_ready',
@@ -1367,7 +1388,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const rawCounts = summarizeRawTaskCounts(tasks)
   const actionModel = buildProjectActionModel({
     startReadiness: {
-      ...projectDecisionStartReadiness(initialDecision),
+      ...decisionStart,
       ...(nextAction.code ? { code: nextAction.code } : {}),
       message: nextAction.message,
       ...(nextAction.focusTaskId ? { focusTaskId: nextAction.focusTaskId } : {}),
@@ -1415,6 +1436,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     releaseSummary,
     rows,
     nextAction,
+    focus: initialDecision.execution.focus,
     currentProofByTaskId,
   })
   return {
@@ -1480,6 +1502,7 @@ function synchronizeIndexedOrientationSpine(
     releaseSummary: ProjectSummaryReleaseSummary
     rows: readonly IndexedSummaryScopeRow[]
     nextAction: ProjectSummaryProjection['nextAction']
+    focus?: ProjectDecisionTaskRef
     currentProofByTaskId: ReadonlyMap<string, IndexedCurrentProof>
   },
 ): ProjectSummaryProjection['orientationSpine'] {
@@ -1554,6 +1577,11 @@ function synchronizeIndexedOrientationSpine(
     : input.releaseSummary.state === 'blocked'
       ? `${label} needs attention.`
       : `${label} is in progress.`
+  const activePins = input.focus
+    ? spine.activePins.map(pin => pin.id === `start-focus:${input.focus!.taskId}`
+      ? { ...pin, nodeId: `work:${input.focus!.taskId}`, label: input.focus!.displayTitle }
+      : pin)
+    : spine.activePins
   const patchNode = (node: ProjectOrientationSpine['roots'][number]): ProjectOrientationSpine['roots'][number] => {
     const taskId = node.id.startsWith('work:') ? node.id.slice('work:'.length) : null
     const currentProof = taskId ? input.currentProofByTaskId.get(taskId) : undefined
@@ -1604,6 +1632,7 @@ function synchronizeIndexedOrientationSpine(
         ? input.nextAction.message
         : blockers[0]?.label ?? null,
       nextAction: input.nextAction.message,
+      pinnedNow: input.focus ? [input.focus.displayTitle] : spine.summary.pinnedNow,
       progress,
     },
     scopeRows,
@@ -1616,6 +1645,7 @@ function synchronizeIndexedOrientationSpine(
       blockers,
     },
     proofContracts,
+    activePins,
     roots: spine.roots.map(patchNode),
     },
     {
@@ -2311,6 +2341,20 @@ export function projectSummaryProjectionIsCurrent(value: Pick<ProjectSummaryProj
   if (value.version !== PROJECT_SUMMARY_PROJECTION_VERSION) return false
   const decision = value.decision
   const sourceCapabilityCatalog = value.sourceCapabilityCatalog
+  const decisionExecution = decision && typeof decision === 'object' && !Array.isArray(decision)
+    ? (decision as { execution?: unknown }).execution
+    : null
+  const focusIsAtomic = !decisionExecution || typeof decisionExecution !== 'object' || Array.isArray(decisionExecution)
+    ? false
+    : (() => {
+        const execution = decisionExecution as { focusTaskId?: unknown; focusTaskTitle?: unknown; focus?: unknown }
+        if (typeof execution.focusTaskId !== 'string' || !execution.focusTaskId.trim()) return true
+        if (!execution.focus || typeof execution.focus !== 'object' || Array.isArray(execution.focus)) return false
+        const focus = execution.focus as { taskId?: unknown; displayTitle?: unknown }
+        return focus.taskId === execution.focusTaskId &&
+          typeof focus.displayTitle === 'string' && focus.displayTitle.trim().length > 0 &&
+          (typeof execution.focusTaskTitle !== 'string' || focus.displayTitle === execution.focusTaskTitle)
+      })()
   return Boolean(
     decision &&
     typeof decision === 'object' &&
@@ -2321,6 +2365,7 @@ export function projectSummaryProjectionIsCurrent(value: Pick<ProjectSummaryProj
     !Array.isArray((decision as { planExecution?: unknown }).planExecution) &&
     typeof ((decision as { planExecution?: { state?: unknown } }).planExecution?.state) === 'string' &&
     typeof ((decision as { planExecution?: { code?: unknown } }).planExecution?.code) === 'string' &&
+    focusIsAtomic &&
     sourceCapabilityCatalog &&
     typeof sourceCapabilityCatalog === 'object' &&
     !Array.isArray(sourceCapabilityCatalog) &&

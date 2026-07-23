@@ -31,6 +31,55 @@ help_summary: |
   an unattended run does not impersonate the owner; and a Narrative Harness
   replay where delegated Codex approval is explicit and visible.
 
+### Atomic Focus Finding
+
+- Live finding: after one delegated Narrative Harness spec approval, the
+  shared decision identified `task-context-plan-and-bounded-packet-builder-proof-setup`
+  as the next owner review while displaying the prior synopsis task's title.
+  The task detail point correctly named the context-plan proof work.
+- Root cause: focus id and title were independently cached and later merged by
+  summary/orientation adapters. That made a partial state mismatch look like
+  two agents disagreeing.
+- Correction: `0.13.70/atomic-decision-focus` stores a decision focus as one
+  canonical task reference derived from the snapshot task point. Old summary
+  versions are stale; rebuilding from indexed state is required before Start.
+- Proof required: a revision rollover from review task A to B, with stale A
+  presentation data deliberately retained, must return B's id and canonical
+  title through the shared decision and every focus-bearing surface. A
+  lower-authority observation remains visible as dissent; an equal-authority
+  conflict blocks execution with one conflict id.
+- Installed proof: after rebuilding Narrative Harness at project revision
+  `376289`, Overview, Work, and Map all returned
+  `task-context-plan-and-bounded-packet-builder-proof-setup` with the same
+  canonical title, `Establish concrete proof for Build Context plan and
+  bounded packet builder`. The Overview and Map focus pins now match the
+  shared decision; the earlier synopsis title no longer appears as a focus.
+
+### Contract Touch Decision
+
+- Work id: `0.13.70/atomic-decision-focus`.
+- Touched contracts: shared decision execution focus, summary next action and
+  start readiness, orientation pin display identity, required-summary
+  freshness, and project migration status.
+- Considered but not touched: task title persistence, release membership,
+  task hierarchy, runtime agent protocol, and raw transcript retention.
+- Apply/revert: the migration only rebuilds a derived decision from normalized
+  task points. Reverting leaves the higher-version summary stale instead of
+  reintroducing an independent title authority.
+
+### Schema Migration Decision
+
+- Persisted schema: project-summary decision payload.
+- Change class: additive decision field plus required projection rebuild.
+- Existing data impact: version 24 summaries with a focus are deliberately
+  stale because they cannot prove the id/title pair came from one snapshot.
+- Migration id: `0.13.70/atomic-decision-focus`.
+- Safety: no task, release, proof, or owner approval data is rewritten. The
+  summary is rebuilt from the normalized SQLite task points under the current
+  project revision.
+- Rollback: retain the durable rebuilt summary for audit; older code must not
+  mark it current or reconstruct an independent focus title.
+
 ### Contract Touch Decision
 
 - Touched contracts: task lifecycle review handoff, owner-input projection,

@@ -5599,7 +5599,12 @@ function buildOverviewOrientationPreviewSpine(input: {
   const startFocusTask = startFocusTaskId
     ? input.rawQueue.tasks.find(task => task.id === startFocusTaskId)
     : undefined
-  const startFocusTaskTitle = start?.focusTaskTitle ?? (typeof startFocusTask?.title === 'string' ? startFocusTask.title : undefined)
+  // A focus ID names one task. Prefer its current normalized title over a
+  // previously saved action label so compact orientation cannot pair task B
+  // with task A's display text after a decision transition.
+  const startFocusTaskTitle = typeof startFocusTask?.title === 'string'
+    ? startFocusTask.title
+    : start?.focusTaskTitle
   const focusTaskId = start?.canStart === false && startFocusTaskId
     ? startFocusTaskId
     : projection.start.focusTaskId

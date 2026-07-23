@@ -238,6 +238,7 @@ const RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID = '0.13.66/release-membership-sna
 const SPEC_REVIEW_GATE_MIGRATION_ID = '0.13.67/explicit-spec-review-gates'
 const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
 const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-authority'
+const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -5063,6 +5064,39 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       })
       return {
         summary: `Materialized compact review authority for ${rewritten.updatedCount} task point${rewritten.updatedCount === 1 ? '' : 's'} and refreshed the shared project decision (${projection.decision.primaryAction.kind}).`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: ATOMIC_DECISION_FOCUS_MIGRATION_ID,
+    title: 'Rebuild project decisions with atomic focus references',
+    introducedIn: '0.13.70',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the shared project decision from normalized task points so an advanced focus task cannot retain an earlier task title in Overview, Work, Map, or Start.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = readProjectSummaryProjectionForMigration(tasksPath)
+      return {
+        needed: !projection || !projectSummaryProjectionIsCurrent(projection),
+        affectedPaths: !projection || !projectSummaryProjectionIsCurrent(projection)
+          ? [projectStateDatabasePath(projectRoot), 'shared decision focus reference']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection || !projectSummaryProjectionIsCurrent(projection)) {
+        throw new Error('The shared project decision could not be rebuilt with an atomic focus reference.')
+      }
+      return {
+        summary: 'Rebuilt the shared decision from one normalized task snapshot; focused work now carries its own canonical display identity.',
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },

@@ -40,6 +40,10 @@ not recognize the same durable handoff. Both paths claimed SQLite authority.
 7. Owner questions and owner review are separate registered facts. Delegated
    Codex approval is an explicit owner action; Guildhall automation never
    manufactures either one.
+8. A decision focus is an atomic reference to a canonical task point. It has
+   one task id, that point's display title, and its snapshot revision. A saved
+   action may not carry an independently preserved title, recover identity
+   from an href, or mix fields from a different snapshot.
 
 ## Model
 
@@ -75,6 +79,22 @@ reference; prose may explain a claim but never determines it.
    remains available only through owner or delegated-owner mutations.
 6. Migrate saved projects, invalidate stale summaries, then replay Narrative
    Harness through Overview, Map, Work, Thread, Release, task detail, and Run.
+
+### Decision-Focus Repair
+
+The first production use of this boundary repairs an actual disagreement:
+Narrative Harness advanced its owner-review task id after approval, while a
+saved decision retained the prior task's title. This was not a model judgment
+dispute. It was a partial merge that represented one focus as independent
+`focusTaskId` and `focusTaskTitle` fields.
+
+`0.13.70/atomic-decision-focus` makes the decision own one `focus` reference.
+The title is copied only from the normalized task point captured in the same
+SQLite snapshot. Legacy scalar fields remain temporarily for wire
+compatibility, but are derived from the atomic reference. If a canonical task
+cannot be found, the decision must refresh or conflict rather than inventing a
+label. The migration invalidates old summaries and rebuilds their shared
+decision from indexed task points.
 
 ## Proof
 

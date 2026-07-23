@@ -11,6 +11,37 @@ import {
 } from '../project-decision-projection.js'
 
 describe('project decision projection', () => {
+  it('attaches a focus title only from the canonical task in the captured snapshot', () => {
+    const decision = buildProjectDecisionProjection({
+      projectRevision: 43,
+      generatedAt: '2026-07-23T12:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'owner_review_required',
+        focusTaskId: 'review-b',
+        focusTaskTitle: 'Old review A',
+        focusKind: 'owner_review',
+        message: 'One spec needs review.',
+      },
+      release: { scopeMode: 'named_release', release: { id: 'release-1' }, state: 'blocked', blockers: [] },
+      canonicalTaskRefs: [{
+        taskId: 'review-b',
+        displayTitle: 'Current review B',
+        taskRevision: 43,
+      }],
+    })
+
+    expect(decision.execution).toMatchObject({
+      focus: {
+        taskId: 'review-b',
+        displayTitle: 'Current review B',
+        taskRevision: 43,
+      },
+      focusTaskId: 'review-b',
+      focusTaskTitle: 'Current review B',
+    })
+  })
+
   it('does not present a stale blocked plan focus as live work between workers', () => {
     const decision = buildProjectDecisionProjection({
       projectRevision: 42,
