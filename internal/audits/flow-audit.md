@@ -52978,6 +52978,47 @@ Repair:
       diagnostic API, release readiness, Start, restart, and the installed
       Narrative Harness UI.
 
+### Live Runtime Focus Follow-up
+
+- [ ] User job: while Guildhall is advancing a selected release, every surface
+      must agree about whether a worker is actively on a task, what that task
+      is, and what remains merely planned or blocked. A prior blocked plan row
+      must not be presented as the live worker simply because the run is still
+      alive.
+- [x] Make the supervisor's typed runtime observation the sole source for live
+      task focus. When no worker is active between ticks, the decision must say
+      that the release is advancing without manufacturing a task focus. Route
+      activity, release readiness, and project cards must format that same
+      decision packet rather than build competing actions. Activity now exposes
+      and formats the decision packet directly; cached action presentation is
+      retained only for its own compatibility payload, not as Activity's truth.
+- [x] Prove the running-with-no-active-worker and running-with-active-worker
+      cases through deterministic decision, summary, supervisor lifecycle, and
+      Activity/fleet packet tests. Installed Narrative Harness replay remains
+      pending the active run reaching a safe restart point.
+
+#### Schema Migration Decision
+
+- Persisted schema touched: the compact `current_execution.payload_json` and
+      project-summary execution envelope gain optional `activeTaskId`.
+- Change class: additive current-state observation. It is owned exclusively by
+      the in-memory supervisor's typed `agent_started`/terminal lifecycle
+      events; plan/task rows, release membership, and durable agent transcript
+      history are not changed.
+- Existing data impact: missing `activeTaskId` means no worker is currently
+      asserted. Readers deliberately render “advancing selected work” rather
+      than infer a task from stale plan state. No compatibility branch is
+      needed because the field is optional and bounded.
+- Migration id: none. The auxiliary JSON payload remains schema-compatible and
+      is overwritten at the next supervisor lifecycle update.
+- Safety and rollback: terminal lifecycle events clear the field; a service
+      restart clears in-memory ownership and orphan recovery marks execution
+      non-live. Reverting removes the field from the compact writer/reader as
+      one change and never promotes it into task or transcript state.
+- Proof: decision, summary, supervisor, Activity/fleet packet, typecheck,
+      contract, and model-independence regressions. Installed Narrative
+      Harness replay remains pending a safe run boundary.
+
 ### Contract Touch Decision
 
 - Work id: `0.13.87/project-decision-resolution`.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyRuntimeExecutionToProjectDecision,
   buildProjectDecisionProjection,
   reconcileRegisteredProjectStateObservation,
   resolveRegisteredProjectStateClaimSet,
@@ -9,6 +10,62 @@ import {
 } from '../project-decision-projection.js'
 
 describe('project decision projection', () => {
+  it('does not present a stale blocked plan focus as live work between workers', () => {
+    const decision = buildProjectDecisionProjection({
+      projectRevision: 42,
+      generatedAt: '2026-07-23T12:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        focusTaskId: 'task-blocked',
+        focusTaskTitle: 'Blocked plan task',
+        focusKind: 'blocked_work',
+        message: 'Blocked plan task needs recovery.',
+      },
+      release: { scopeMode: 'named_release', release: { id: 'release-1' }, state: 'blocked', blockers: [] },
+      runStatus: 'running',
+    })
+
+    expect(decision).toMatchObject({
+      execution: {
+        state: 'running',
+        message: 'Guildhall is advancing the selected work.',
+      },
+      primaryAction: { kind: 'open_work', reasonCode: 'running' },
+    })
+    expect(decision.execution).not.toHaveProperty('focusTaskId')
+  })
+
+  it('uses the supervisor runtime task as the sole live execution focus', () => {
+    const saved = buildProjectDecisionProjection({
+      projectRevision: 42,
+      generatedAt: '2026-07-23T12:00:00.000Z',
+      start: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-next',
+        focusTaskTitle: 'Planned next task',
+        focusKind: 'ready_work',
+        message: 'Planned next task is ready.',
+      },
+      release: { scopeMode: 'named_release', release: { id: 'release-1' }, state: 'blocked', blockers: [] },
+    })
+
+    expect(applyRuntimeExecutionToProjectDecision(saved, {
+      status: 'running',
+      activeTaskId: 'task-live',
+      activeTaskTitle: 'Live proof worker',
+    })).toMatchObject({
+      execution: {
+        state: 'running',
+        focusTaskId: 'task-live',
+        focusTaskTitle: 'Live proof worker',
+        focusKind: 'active_work',
+      },
+      primaryAction: { kind: 'open_work', targetId: 'task-live', reasonCode: 'running' },
+    })
+  })
+
   it('resolves any registered agent fact through one closed field policy', () => {
     const claims = [
       {

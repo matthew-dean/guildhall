@@ -69,6 +69,8 @@ export interface WorkspaceRun {
   /** Provider selected by start preflight for this run. */
   providerStatus?: ProviderRunStatus
   providerHealthKey?: string
+  /** Current worker ownership, derived only from typed agent lifecycle events. */
+  activeTaskId?: string
 }
 
 export interface ProviderRunStatus {
@@ -560,7 +562,7 @@ function writePersistedEvent(workspacePath: string, event: SupervisorEvent): voi
   }
 }
 
-function updateExecutionProjection(run: Pick<WorkspaceRun, 'workspacePath' | 'status' | 'mode' | 'startedAt' | 'stoppedAt' | 'stopRequestedAt' | 'error'>, updatedAt: string): void {
+function updateExecutionProjection(run: Pick<WorkspaceRun, 'workspacePath' | 'status' | 'mode' | 'startedAt' | 'stoppedAt' | 'stopRequestedAt' | 'error' | 'activeTaskId'>, updatedAt: string): void {
   updateProjectSummaryProjection(getProjectSystemStatePath(run.workspacePath, 'TASKS.json'), {
     execution: {
       status: run.status,
@@ -569,6 +571,7 @@ function updateExecutionProjection(run: Pick<WorkspaceRun, 'workspacePath' | 'st
       stoppedAt: run.stoppedAt ?? null,
       stopRequestedAt: run.stopRequestedAt ?? null,
       error: run.error ?? null,
+      activeTaskId: run.activeTaskId ?? null,
       updatedAt,
     },
   })
@@ -749,6 +752,24 @@ export class OrchestratorSupervisor {
       }
       writePersistedEvent(opts.workspacePath, supervisorEv)
       emitProjectSummaryInvalidation(opts.workspacePath, 'supervisor-event', { domains: ['thread'] })
+      const eventTaskIdValue = (event as { task_id?: unknown }).task_id
+      const eventTaskId = typeof eventTaskIdValue === 'string' && eventTaskIdValue.trim()
+        ? eventTaskIdValue.trim()
+        : null
+      if (event.type === 'agent_started' && eventTaskId) {
+        run.activeTaskId = eventTaskId
+        updateExecutionProjection(run, supervisorEv.at)
+      } else if (
+        eventTaskId === run.activeTaskId &&
+        (
+          event.type === 'agent_finished' ||
+          (event.type === 'task_transition' &&
+            !['exploring', 'in_progress'].includes(String((event as { to_status?: unknown }).to_status ?? '')))
+        )
+      ) {
+        delete run.activeTaskId
+        updateExecutionProjection(run, supervisorEv.at)
+      }
       if (event.type === 'supervisor_started' || event.type === 'supervisor_stopped' || event.type === 'supervisor_error') {
         updateExecutionProjection(run, supervisorEv.at)
       }

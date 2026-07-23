@@ -6074,7 +6074,7 @@ describe('GET /api/project/activity', () => {
     })
   })
 
-  it('keeps the live activity action identical to the fleet project summary', async () => {
+  it('keeps live Activity and fleet on the same project decision packet', async () => {
     const now = new Date().toISOString()
     await seedCanonicalQueue({
       version: 1,
@@ -6116,7 +6116,8 @@ describe('GET /api/project/activity', () => {
     expect(activity.releaseSummary).toEqual(projectSummary?.releaseSummary)
     expect(projectSummary?.workProgress?.counts.visibleTotal).toBe(1)
     expect(activity.actionModel).toEqual(projectSummary?.actionModel)
-    expect(activity.topAction).toEqual(projectSummary?.actionModel?.primaryAction)
+    expect(activity.decision).toEqual(projectSummary?.decision)
+    expect(activity.topAction?.taskId).toBe(activity.decision?.primaryAction?.targetId)
   })
 
   it('keeps live event metadata out of ordinary activity polling', async () => {

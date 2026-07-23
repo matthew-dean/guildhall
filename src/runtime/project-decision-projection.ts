@@ -626,6 +626,14 @@ export interface ProjectDecisionProjectionInput {
   }
   ownerInput?: { openCount: number; next?: { id: string; taskId?: string } | null } | null
   runStatus?: string | null
+  /**
+   * The supervisor owns this observation. A plan's saved next task is not a
+   * substitute for a worker that is actually running right now.
+   */
+  runtimeExecution?: {
+    activeTaskId?: string | null
+    activeTaskTitle?: string | null
+  } | null
   conflicts?: ProjectStateConflict[]
 }
 
@@ -635,14 +643,22 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionP
     return { state: 'conflicted', code: 'state_conflict', message: 'Execution facts disagree.' }
   }
   if (input.runStatus === 'running' || input.runStatus === 'stopping') {
+    const activeTaskId = input.runtimeExecution?.activeTaskId?.trim()
+    const activeTaskTitle = input.runtimeExecution?.activeTaskTitle?.trim()
     return {
       state: 'running',
       code: input.runStatus,
-      ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
-      ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
-      ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+      ...(activeTaskId ? { focusTaskId: activeTaskId } : {}),
+      ...(activeTaskTitle ? { focusTaskTitle: activeTaskTitle } : {}),
+      ...(activeTaskId ? { focusKind: 'active_work' } : {}),
       ...(typeof start.count === 'number' ? { count: start.count } : {}),
-      ...(start.message ? { message: start.message } : {}),
+      message: input.runStatus === 'stopping'
+        ? 'Guildhall is stopping the selected work.'
+        : activeTaskTitle
+          ? `Guildhall is working on "${activeTaskTitle}".`
+          : activeTaskId
+            ? 'Guildhall is working on the selected task.'
+            : 'Guildhall is advancing the selected work.',
     }
   }
   if (start.code === 'ready_work') {
@@ -705,6 +721,75 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
   }
 }
 
+function primaryActionForDecision(input: {
+  conflicts: ProjectStateConflict[]
+  ownerInput: ProjectDecisionProjection['ownerInput']
+  execution: ProjectDecisionProjection['execution']
+  release: ProjectDecisionProjection['release']
+}): ProjectDecisionProjection['primaryAction'] {
+  const { conflicts, ownerInput, execution, release } = input
+  return conflicts.length > 0
+    ? { kind: 'resolve_conflict' as const, targetId: conflicts[0]!.id, reasonCode: 'state_conflict' }
+    : ownerInput.state === 'required'
+      ? { kind: 'answer_owner_input' as const, targetId: ownerInput.requestId, reasonCode: 'owner_input_required' }
+      : execution.state === 'runnable'
+        ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
+        : execution.state === 'paused'
+          ? { kind: 'resume' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
+          : execution.state === 'running'
+            ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
+            : execution.state === 'complete' && release.state === 'ready'
+              ? { kind: 'review_release' as const, targetId: release.releaseId, reasonCode: 'release_ready' }
+              : release.proofBlockerTaskIds.length > 0
+                ? { kind: 'review_proof' as const, targetId: release.proofBlockerTaskIds[0], reasonCode: 'proof_evidence_missing' }
+                : { kind: 'none' as const, reasonCode: execution.code }
+}
+
+/**
+ * Runtime liveness is a separately-owned fact. Refresh only the execution
+ * branch of an existing decision so a live worker can never inherit a stale
+ * plan focus or cause a route-local re-ranking of project work.
+ */
+export function applyRuntimeExecutionToProjectDecision(
+  decision: ProjectDecisionProjection,
+  runtimeExecution: {
+    status?: string | null
+    activeTaskId?: string | null
+    activeTaskTitle?: string | null
+  } | null | undefined,
+): ProjectDecisionProjection {
+  const status = runtimeExecution?.status
+  if (status !== 'running' && status !== 'stopping') return decision
+  if (decision.conflicts.some(conflict => conflict.field === 'execution')) return decision
+  const activeTaskId = runtimeExecution?.activeTaskId?.trim()
+  const activeTaskTitle = runtimeExecution?.activeTaskTitle?.trim()
+  const execution: ProjectDecisionProjection['execution'] = {
+    state: 'running',
+    code: status,
+    ...(activeTaskId ? { focusTaskId: activeTaskId } : {}),
+    ...(activeTaskTitle ? { focusTaskTitle: activeTaskTitle } : {}),
+    ...(activeTaskId ? { focusKind: 'active_work' } : {}),
+    ...(typeof decision.execution.count === 'number' ? { count: decision.execution.count } : {}),
+    message: status === 'stopping'
+      ? 'Guildhall is stopping the selected work.'
+      : activeTaskTitle
+        ? `Guildhall is working on "${activeTaskTitle}".`
+        : activeTaskId
+          ? 'Guildhall is working on the selected task.'
+          : 'Guildhall is advancing the selected work.',
+  }
+  return {
+    ...decision,
+    execution,
+    primaryAction: primaryActionForDecision({
+      conflicts: decision.conflicts,
+      ownerInput: decision.ownerInput,
+      execution,
+      release: decision.release,
+    }),
+  }
+}
+
 export function buildProjectDecisionProjection(input: ProjectDecisionProjectionInput): ProjectDecisionProjection {
   const conflicts = input.conflicts ?? []
   const execution = executionState(input)
@@ -730,21 +815,7 @@ export function buildProjectDecisionProjection(input: ProjectDecisionProjectionI
   const ownerInput = input.ownerInput && input.ownerInput.openCount > 0
     ? { state: 'required' as const, ...(input.ownerInput.next?.id ? { requestId: input.ownerInput.next.id } : {}) }
     : { state: 'none' as const }
-  const primaryAction = conflicts.length > 0
-    ? { kind: 'resolve_conflict' as const, targetId: conflicts[0]!.id, reasonCode: 'state_conflict' }
-    : ownerInput.state === 'required'
-      ? { kind: 'answer_owner_input' as const, targetId: ownerInput.requestId, reasonCode: 'owner_input_required' }
-      : execution.state === 'runnable'
-        ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
-        : execution.state === 'paused'
-          ? { kind: 'resume' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
-          : execution.state === 'running'
-            ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
-            : execution.state === 'complete' && release.state === 'ready'
-              ? { kind: 'review_release' as const, targetId: release.releaseId, reasonCode: 'release_ready' }
-              : proofBlockerTaskIds.length > 0
-                ? { kind: 'review_proof' as const, targetId: proofBlockerTaskIds[0], reasonCode: 'proof_evidence_missing' }
-                : { kind: 'none' as const, reasonCode: execution.code }
+  const primaryAction = primaryActionForDecision({ conflicts, ownerInput, execution, release })
   return {
     version: 1,
     projectRevision: input.projectRevision ?? null,

@@ -800,6 +800,10 @@ function compactFleetSummaryPayload(summary: ServiceProjectSummary): ServiceProj
     ...(summary.taskCounts ? { taskCounts: summary.taskCounts } : {}),
     ...(summary.workProgress ? { workProgress: summary.workProgress } : {}),
     ...(releaseSummary ? { releaseSummary } : {}),
+    // Decision is already a bounded, revisioned projection. Dropping it here
+    // would force fleet cards to infer a competing answer from presentation
+    // caches and leave live Activity with the only authoritative packet.
+    ...(summary.decision ? { decision: summary.decision } : {}),
     ...(summary.highlights
       ? {
           highlights: {
@@ -2708,6 +2712,60 @@ function summarizeProjectFromProjection(
     },
     startReadiness,
     actionModel,
+  }
+}
+
+/**
+ * Activity is a compact presentation of the shared decision packet. It must
+ * not revive the separately cached action model and re-rank work on a polling
+ * route, especially while a coordinator is between worker turns.
+ */
+function activityActionFromDecision(
+  projectId: string,
+  decision: ProjectDecisionProjection | null | undefined,
+): ProjectActionModel['primaryAction'] {
+  if (!decision || decision.primaryAction.kind === 'none') return null
+  const taskId = decision.primaryAction.targetId
+  const execution = decision.execution
+  const href = taskId
+    ? `/projects/${encodeURIComponent(projectId)}/work?task=${encodeURIComponent(taskId)}`
+    : `/projects/${encodeURIComponent(projectId)}/work`
+  if (decision.primaryAction.kind === 'answer_owner_input') {
+    return {
+      source: 'owner_input',
+      label: 'Answer in Thread',
+      buttonLabel: 'Open Thread',
+      href: `/projects/${encodeURIComponent(projectId)}/thread`,
+      tone: 'warn',
+    }
+  }
+  if (decision.primaryAction.kind === 'review_release') {
+    return {
+      source: 'start_readiness',
+      label: 'Release ready for review',
+      buttonLabel: 'Open release',
+      href: `/projects/${encodeURIComponent(projectId)}/map`,
+      tone: 'accent',
+    }
+  }
+  if (decision.primaryAction.kind === 'resolve_conflict') {
+    return {
+      source: 'start_readiness',
+      label: 'Project state needs reconciliation',
+      buttonLabel: 'Open project',
+      href: `/projects/${encodeURIComponent(projectId)}/overview`,
+      tone: 'warn',
+    }
+  }
+  const running = execution.state === 'running'
+  return {
+    source: 'start_readiness',
+    label: execution.focusTaskTitle ?? (running ? 'Guildhall is advancing the selected work' : 'Open selected work'),
+    ...(execution.message ? { detail: execution.message } : {}),
+    buttonLabel: decision.primaryAction.kind === 'review_proof' ? 'Review proof' : 'Open Work',
+    href,
+    tone: running ? 'running' : decision.primaryAction.kind === 'review_proof' ? 'warn' : 'accent',
+    ...(taskId ? { taskId } : {}),
   }
 }
 
@@ -16478,7 +16536,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : null
       const projectedInFlight = inFlight
       const actionModel = compactSummary?.actionModel ?? null
-      const topAction = actionModel?.primaryAction ?? null
+      const decision = compactSummary?.decision ?? projection?.decision ?? null
+      const topAction = activityActionFromDecision(project.id, decision)
       return c.json({
         running: run?.status === 'running',
         runStatus: run?.status ?? 'stopped',
@@ -16486,6 +16545,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         releaseSummary: projection?.releaseSummary ?? null,
         counts,
         inFlight: projectedInFlight.slice(0, 5),
+        decision,
         actionModel,
         topAction,
         current: topAction,

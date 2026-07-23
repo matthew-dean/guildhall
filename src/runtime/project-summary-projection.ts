@@ -45,7 +45,7 @@ import {
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
 import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
-import { buildProjectDecisionProjection, projectDecisionStartReadiness, type ProjectDecisionProjection } from './project-decision-projection.js'
+import { applyRuntimeExecutionToProjectDecision, buildProjectDecisionProjection, projectDecisionStartReadiness, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
@@ -137,6 +137,8 @@ export interface ProjectSummaryProjection {
     stoppedAt?: string | null
     stopRequestedAt?: string | null
     error?: string | null
+    /** The task currently held by a live supervisor worker, if any. */
+    activeTaskId?: string | null
     updatedAt: string
   }
   runtime?: {
@@ -621,6 +623,7 @@ export function buildProjectSummaryProjection(
     release: releaseSummary,
     ownerInput: input.ownerInput,
     runStatus: input.execution?.status ?? 'stopped',
+    runtimeExecution: input.execution,
   })
   // Start readiness remains an execution fact. The summary action is what a
   // person should do next, so a finished release must not surface the stale
@@ -1141,6 +1144,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     release: releaseSummary,
     ownerInput: base.ownerInput,
     runStatus: base.execution?.status ?? 'stopped',
+    runtimeExecution: base.execution,
   })
   if (releaseSummary.state === 'ready' && start.code === 'all_terminal') {
     nextAction = {
@@ -1914,6 +1918,9 @@ export function updateProjectSummaryProjection(
           }
         : {}),
       ...(patch.orientation !== undefined ? { orientation: patch.orientation } : {}),
+    }
+    if (patch.execution && next.decision && next.execution) {
+      next.decision = applyRuntimeExecutionToProjectDecision(next.decision, next.execution)
     }
     return {
       summary: next as unknown as Record<string, unknown>,

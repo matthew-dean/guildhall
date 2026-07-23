@@ -1295,6 +1295,7 @@ describe('project-summary-projection', () => {
         status: 'running',
         mode: 'continuous',
         startedAt: now,
+        activeTaskId: 'one',
         updatedAt: now,
       },
       runtime: {
@@ -1307,7 +1308,7 @@ describe('project-summary-projection', () => {
     expect(updated).toMatchObject({
       freshness: 'current',
       counts: { total: 1, active: 1 },
-      execution: { status: 'running', mode: 'continuous' },
+      execution: { status: 'running', mode: 'continuous', activeTaskId: 'one' },
       runtime: { status: 'running', health: 'healthy' },
     })
   })

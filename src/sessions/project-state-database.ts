@@ -390,6 +390,7 @@ export interface ProjectStateDatabaseExecution {
   stoppedAt?: string | null
   stopRequestedAt?: string | null
   error?: string | null
+  activeTaskId?: string | null
   updatedAt: string
   payload?: unknown
 }
@@ -2371,10 +2372,11 @@ function hydrateSummaryFromAuxiliaryRows(database: DatabaseSync, summary: JsonRe
   if (tableExists(database, 'current_execution')) {
     const row = database.prepare(`
       SELECT status, mode, started_at, stopped_at, stop_requested_at, error,
-        updated_at
+        updated_at, payload_json
       FROM current_execution WHERE id = 1
     `).get() as JsonRecord | undefined
     if (row) {
+      const payload = parseJson<JsonRecord>(row.payload_json, {})
       next.execution = {
         status: String(row.status ?? 'stopped'),
         ...(stringValue(row.mode) ? { mode: stringValue(row.mode) } : {}),
@@ -2382,6 +2384,7 @@ function hydrateSummaryFromAuxiliaryRows(database: DatabaseSync, summary: JsonRe
         ...(stringValue(row.stopped_at) ? { stoppedAt: stringValue(row.stopped_at) } : {}),
         ...(stringValue(row.stop_requested_at) ? { stopRequestedAt: stringValue(row.stop_requested_at) } : {}),
         ...(stringValue(row.error) ? { error: stringValue(row.error) } : {}),
+        ...(stringValue(payload?.activeTaskId) ? { activeTaskId: stringValue(payload?.activeTaskId) } : {}),
         updatedAt: stringValue(row.updated_at) ?? '',
       }
     }
