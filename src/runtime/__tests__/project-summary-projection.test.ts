@@ -10,6 +10,7 @@ import {
   buildProjectSummaryProjection,
   buildProjectSummaryProjectionFromIndexedState,
   backfillProjectSummaryProjection,
+  materializeApprovedPlanReleaseMembership,
   PROJECT_SUMMARY_PROJECTION_VERSION,
   projectSummaryProjectionIsCurrent,
   projectSummaryProjectionPath,
@@ -92,6 +93,51 @@ describe('project-summary-projection', () => {
 
     expect(projectSummaryProjectionIsCurrent(projection)).toBe(true)
     expect(projectSummaryProjectionIsCurrent(legacy)).toBe(false)
+  })
+
+  it('materializes accepted plan membership without inventing missing work', () => {
+    const result = materializeApprovedPlanReleaseMembership(queue([
+      task('current', 'ready'),
+      task('later', 'shelved'),
+    ], {
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        proofStyle: 'unspecified',
+        nodeIds: ['work:current'],
+        deferredNodeIds: [],
+      }],
+      selectedReleaseId: 'release-1',
+    }), {
+      source: 'workspace_import',
+      recordedAt: now,
+      goalCount: 1,
+      taskCount: 3,
+      milestoneCount: 0,
+      currentTaskCount: 1,
+      laterTaskCount: 2,
+      currentTaskIds: ['current'],
+      laterTaskIds: ['later', 'missing'],
+      currentReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        currentTaskIds: ['current'],
+        laterTaskIds: ['later', 'missing'],
+      }],
+    })
+
+    expect(result.conflicts).toEqual([])
+    expect(result.queue.releases?.[0]).toMatchObject({
+      nodeIds: ['work:current'],
+      deferredNodeIds: ['work:later'],
+    })
   })
 
   it('projects scope, counts, and next action without effective-task expansion', () => {

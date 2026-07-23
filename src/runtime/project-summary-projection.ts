@@ -420,11 +420,100 @@ export function projectSummaryProjectionPath(tasksPath: string): string {
   return join(dirname(tasksPath), PROJECT_SUMMARY_PROJECTION_FILE)
 }
 
+export type ApprovedPlanReleaseMembershipConflict = {
+  releaseId: string
+  taskId: string
+  existing: 'included' | 'deferred'
+  proposed: 'included' | 'deferred'
+}
+
 /**
- * Give the compact read model the release envelope already described by an
- * approved plan. This is an in-memory projection only: the queue remains the
- * authoritative execution record and is never mutated here.
+ * Prepare an accepted plan for one atomic release-membership write. This does
+ * not invent tasks from plan text. Explicit opposite dispositions become
+ * typed conflicts instead of a silent overwrite.
  */
+export function materializeApprovedPlanReleaseMembership(
+  queue: TaskQueueModel,
+  approvedPlan: ProjectSummaryApprovedPlan | null | undefined,
+): { queue: TaskQueueModel; changed: boolean; conflicts: ApprovedPlanReleaseMembershipConflict[] } {
+  if (!approvedPlan || approvedPlan.releases.length === 0) return { queue, changed: false, conflicts: [] }
+  const taskIds = new Set(queue.tasks.map(task => task.id))
+  const existingById = new Map((queue.releases ?? []).map(release => [release.id, release]))
+  const conflicts: ApprovedPlanReleaseMembershipConflict[] = []
+  let changed = false
+  const planReleases: ProjectRelease[] = approvedPlan.releases.map(release => {
+    const existing = existingById.get(release.id)
+    const kind: ProjectRelease['kind'] = release.kind === 'milestone' ? 'milestone' : 'release'
+    const source: ProjectRelease['source'] = release.source === 'release_plan' || release.source === 'spec' || release.source === 'inferred'
+      ? release.source
+      : 'owner_approved'
+    const state: ProjectRelease['state'] = release.state === 'planned'
+      ? 'planned'
+      : release.state === 'completed'
+        ? 'shipped'
+        : release.state === 'archived'
+          ? 'deferred'
+          : release.state === 'ready' || release.state === 'shipped' || release.state === 'deferred'
+            ? release.state
+            : 'active'
+    const included = new Set(existing?.nodeIds ?? [])
+    const deferred = new Set(existing?.deferredNodeIds ?? [])
+    const add = (taskId: string, disposition: 'included' | 'deferred') => {
+      if (!taskIds.has(taskId)) return
+      const nodeId = `work:${taskId}`
+      const target = disposition === 'included' ? included : deferred
+      const opposite = disposition === 'included' ? deferred : included
+      if (opposite.has(nodeId)) {
+        conflicts.push({
+          releaseId: release.id,
+          taskId,
+          existing: disposition === 'included' ? 'deferred' : 'included',
+          proposed: disposition,
+        })
+      } else if (!target.has(nodeId)) {
+        target.add(nodeId)
+        changed = true
+      }
+    }
+    for (const taskId of release.currentTaskIds) add(taskId, 'included')
+    for (const taskId of release.laterTaskIds) add(taskId, 'deferred')
+    const materialized: ProjectRelease = {
+      ...(existing ?? {
+        id: release.id,
+        label: release.label,
+        kind,
+        state,
+        source,
+        proofStyle: 'unspecified',
+        nodeIds: [],
+        deferredNodeIds: [],
+      }),
+      id: release.id,
+      label: existing?.label ?? release.label,
+      kind: existing?.kind ?? kind,
+      state: existing?.state ?? state,
+      source: existing?.source ?? source,
+      nodeIds: [...included],
+      deferredNodeIds: [...deferred],
+    }
+    if (!existing || JSON.stringify(existing.nodeIds ?? []) !== JSON.stringify(materialized.nodeIds) ||
+      JSON.stringify(existing.deferredNodeIds ?? []) !== JSON.stringify(materialized.deferredNodeIds)) changed = true
+    return materialized
+  })
+  const releases = [
+    ...planReleases,
+    ...(queue.releases ?? []).filter(release => !planReleases.some(candidate => candidate.id === release.id)),
+  ]
+  const selectedReleaseId = queue.selectedReleaseId || approvedPlan.currentReleaseId || undefined
+  if (selectedReleaseId !== queue.selectedReleaseId) changed = true
+  return {
+    queue: { ...queue, releases, ...(selectedReleaseId ? { selectedReleaseId } : {}) },
+    changed,
+    conflicts,
+  }
+}
+
+/** Legacy read compatibility only; promoted readers do not use this overlay. */
 export function queueForProjectSummaryScope(
   queue: TaskQueueModel,
   approvedPlan: ProjectSummaryApprovedPlan | null | undefined,
@@ -439,9 +528,6 @@ export function queueForProjectSummaryScope(
   const knownPlanTaskIds = new Set([...planTaskIds].filter(taskId => currentTaskIds.has(taskId)))
   const knownCurrentTaskIds = new Set(approvedPlan.currentTaskIds.filter(taskId => currentTaskIds.has(taskId)))
   const knownLaterTaskIds = new Set(approvedPlan.laterTaskIds.filter(taskId => currentTaskIds.has(taskId)))
-  // An approved plan can seed a release before the queue has materialized its
-  // assignments. Once the queue has explicit membership, keep that membership
-  // authoritative; otherwise a stale plan row can silently become runnable.
   const queueOwnsReleaseMembership = (releaseId: string): boolean =>
     (queue.releases ?? []).some(release => release.id === releaseId && [
       ...(release.nodeIds ?? []),
@@ -451,10 +537,6 @@ export function queueForProjectSummaryScope(
   const currentReleaseId = approvedPlan.currentReleaseId ??
     approvedPlan.releases.find(release => release.currentTaskIds.some(taskId => knownCurrentTaskIds.has(taskId)))?.id ??
     null
-  // Workspace import plans are snapshots, not a second task identity system.
-  // If an intake refresh replaced task IDs, keep real queue work current and
-  // discard phantom plan references instead of turning the project into an
-  // apparently complete release with zero included work.
   const unassignedCurrentTaskIds = [...currentTaskIds].filter(taskId =>
     !knownPlanTaskIds.has(taskId) &&
     !knownLaterTaskIds.has(taskId) &&
