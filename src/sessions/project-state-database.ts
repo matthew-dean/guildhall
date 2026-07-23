@@ -1301,6 +1301,22 @@ function finalizeReleaseMembershipState(
   `).run(projectRevision, updatedAt)
 }
 
+function readReleaseMembershipStateFromDatabase(
+  database: DatabaseSync,
+): ProjectStateDatabaseReleaseMembershipState | null {
+  if (!tableExists(database, 'release_membership_state')) return null
+  const row = database.prepare(`
+    SELECT membership_revision, project_revision, updated_at
+    FROM release_membership_state WHERE id = 1
+  `).get() as JsonRecord | undefined
+  if (!row || !Number.isInteger(Number(row.membership_revision))) return null
+  return {
+    membershipRevision: Number(row.membership_revision),
+    projectRevision: Number.isInteger(Number(row.project_revision)) ? Number(row.project_revision) : null,
+    updatedAt: stringValue(row.updated_at),
+  }
+}
+
 function upsertReleaseDefinitions(database: DatabaseSync, releases: readonly JsonRecord[]): void {
   const upsert = database.prepare(`
     INSERT INTO scopes (
@@ -6801,6 +6817,24 @@ export function readProjectStateDatabaseRevisionFromTasksPath(tasksPath: string)
   try {
     const row = database.prepare('SELECT revision FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
     return row ? Number(row.revision ?? 0) : null
+  } finally {
+    database.close()
+  }
+}
+
+/** Read only the release-membership watermark; this never opens task detail. */
+export function readProjectStateDatabaseReleaseMembershipState(
+  tasksPath: string,
+): ProjectStateDatabaseReleaseMembershipState | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readReleaseMembershipStateFromDatabase(database)
   } finally {
     database.close()
   }

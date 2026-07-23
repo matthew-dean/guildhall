@@ -29,6 +29,7 @@ import {
   readProjectStateDatabaseReadBundle,
   readProjectStateDatabaseSurfaceState,
   readProjectStateDatabaseRevisionFromTasksPath,
+  readProjectStateDatabaseReleaseMembershipState,
   readProjectStateDatabaseQueueWithRevision,
   readProjectStateDatabaseSummary,
   readProjectStateDatabaseShellState,
@@ -1189,6 +1190,7 @@ describe('project-state database', () => {
       project_revision: expect.any(Number),
     })
     initialState.close()
+    expect(readProjectStateDatabaseReleaseMembershipState(tasksPath)).toMatchObject({ membershipRevision: 1 })
 
     writeProjectStateDatabaseTaskMutation(tasksPath, {
       expectedQueueRevision: queueRevision,
@@ -1244,6 +1246,7 @@ describe('project-state database', () => {
       { release_ids_json: '[]' },
     ])
     afterEdit.close()
+    expect(readProjectStateDatabaseReleaseMembershipState(tasksPath)).toMatchObject({ membershipRevision: 2 })
 
     expect(readProjectStateDatabaseTask(tasksPath, 'task-current')).toMatchObject({
       id: 'task-current',

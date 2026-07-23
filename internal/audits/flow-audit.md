@@ -53832,6 +53832,10 @@ Repair:
       membership identity on mismatch, but must withhold scope counts,
       readiness, and primary execution instructions until a summary from that
       same revision exists.
+- Reader boundary: `readProjectStateDatabaseReleaseMembershipState` is the
+      only lightweight storage reader for that watermark. It opens neither
+      task detail nor a derived summary, so a caller cannot silently recreate
+      release membership from a competing projection.
 - Safety: existing databases receive a watermark from their current relation
       during migration. Rows with no watermark are stale/unavailable, never
       silently treated as revision zero. Compare-and-swap writes reject an
