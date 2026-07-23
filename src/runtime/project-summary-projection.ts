@@ -39,13 +39,14 @@ import {
   buildProjectOrientationSpine,
   compactProjectOrientationSpineForMap,
   reconcileOrientationSpineWithReleaseTruth,
+  type OrientationWorkspaceImportDraftContext,
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
 import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 17 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 18 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
 const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
 
@@ -108,6 +109,12 @@ export interface ProjectSummaryProjection {
     proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
   } | null
   orientation: ProjectOrientationSnapshot | null
+  /**
+   * Small, source-backed records that describe the project independently of
+   * executable work. They are persisted with the shared summary so Map does
+   * not reopen a workspace-import scan on every request.
+   */
+  documentedStructure: OrientationWorkspaceImportDraftContext[]
   orientationSpine: ProjectOrientationSpine | null
   approvedPlan: ProjectSummaryApprovedPlan | null
   releaseSummary: ProjectSummaryReleaseSummary
@@ -353,6 +360,7 @@ export interface ProjectSummaryProjectionInput {
   workspaceGoalsMtimeMs?: number | null
   approvedPlan?: ProjectSummaryApprovedPlan | null
   orientation?: ProjectOrientationSnapshot | null
+  documentedStructure?: OrientationWorkspaceImportDraftContext[]
   execution?: ProjectSummaryProjection['execution']
   runtime?: ProjectSummaryProjection['runtime']
   ownerInput?: ProjectSummaryProjection['ownerInput']
@@ -545,17 +553,43 @@ export function buildProjectSummaryProjection(
     runStatus: input.execution?.status ?? 'stopped',
     runMode: input.execution?.mode,
     sourceRefs: input.orientation?.sourceRefs ?? [],
+    ...(input.documentedStructure?.length
+      ? {
+          workspaceImportDraft: {
+            tasks: [],
+            contexts: input.documentedStructure,
+            source: {
+              kind: 'import',
+              refs: input.documentedStructure.flatMap(context => context.refs ?? []).slice(0, 24),
+              confidence: 'medium',
+              freshness: 'fresh',
+              inferred: false,
+              refreshedAt: generatedAt,
+            },
+          },
+        }
+      : {}),
   }))
   const recentWork = recentWorkForTasks(tasks)
-  const nextAction = {
-    ...(start.code ? { code: start.code } : {}),
-    label: start.label,
-    message: start.message,
-    ...(typeof start.count === 'number' ? { count: start.count } : {}),
-    ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
-    ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
-    ...(start.focusKind ? { focusKind: start.focusKind } : {}),
-  }
+  // Start readiness remains an execution fact. The summary action is what a
+  // person should do next, so a finished release must not surface the stale
+  // "no runnable work" transport message as though more work were expected.
+  const releaseReadyForReview = releaseSummary.state === 'ready' && start.code === 'all_terminal'
+  const nextAction: ProjectSummaryProjection['nextAction'] = releaseReadyForReview
+    ? {
+        code: 'release_ready',
+        label: 'Review project state' as const,
+        message: 'Review completed scope.',
+      }
+    : {
+        ...(start.code ? { code: start.code } : {}),
+        label: start.label,
+        message: start.message,
+        ...(typeof start.count === 'number' ? { count: start.count } : {}),
+        ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
+        ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
+        ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+      }
   const startReadiness = {
     canStart: start.canStart,
     ...(nextAction.code ? { code: nextAction.code } : {}),
@@ -630,6 +664,12 @@ export function buildProjectSummaryProjection(
         }
       : null,
     orientation: input.orientation ?? null,
+    documentedStructure: (input.documentedStructure ?? []).map(context => ({
+      ...context,
+      ...(context.refs ? { refs: [...context.refs] } : {}),
+      ...(context.releaseIds ? { releaseIds: [...context.releaseIds] } : {}),
+      ...(context.linkedTaskHints ? { linkedTaskHints: [...context.linkedTaskHints] } : {}),
+    })),
     orientationSpine,
     approvedPlan,
     releaseSummary,
@@ -852,7 +892,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     indexedStartReadiness(rows, releases, selectedReleaseId, tasks),
     base.ownerInput,
   )
-  const nextAction: ProjectSummaryProjection['nextAction'] = {
+  let nextAction: ProjectSummaryProjection['nextAction'] = {
     ...(start.code ? { code: start.code } : {}),
     label: start.label,
     message: start.message,
@@ -905,16 +945,23 @@ export function buildProjectSummaryProjectionFromIndexedState(
     blockers: taskReleaseBlockers,
     updatedAt: generatedAt,
   }
+  if (releaseSummary.state === 'ready' && start.code === 'all_terminal') {
+    nextAction = {
+      code: 'release_ready',
+      label: 'Review project state',
+      message: 'Review completed scope.',
+    }
+  }
   const rawCounts = summarizeRawTaskCounts(tasks)
   const actionModel = buildProjectActionModel({
     startReadiness: {
       canStart: start.canStart,
-      ...(start.code ? { code: start.code } : {}),
-      message: start.message,
-      ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
-      ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
-      ...(start.focusKind ? { focusKind: start.focusKind } : {}),
-      ...(start.count ? { count: start.count } : {}),
+      ...(nextAction.code ? { code: nextAction.code } : {}),
+      message: nextAction.message,
+      ...(nextAction.focusTaskId ? { focusTaskId: nextAction.focusTaskId } : {}),
+      ...(nextAction.focusTaskTitle ? { focusTaskTitle: nextAction.focusTaskTitle } : {}),
+      ...(nextAction.focusKind ? { focusKind: nextAction.focusKind } : {}),
+      ...(nextAction.count ? { count: nextAction.count } : {}),
       executionScope: selectedRelease
         ? {
             id: String(selectedRelease.id),
@@ -1137,7 +1184,7 @@ function synchronizeIndexedOrientationSpine(
       includedWorkCount: counts.total,
       deferredCount: counts.deferred,
       deferredWorkCount: counts.deferred,
-      topBlocker: input.nextAction.code === 'all_terminal' && outsideWork.count > 0
+      topBlocker: input.nextAction.code === 'all_terminal'
         ? input.nextAction.message
         : blockers[0]?.label ?? null,
       nextAction: input.nextAction.message,
@@ -1290,6 +1337,7 @@ export function buildProjectSummaryProjectionError(input: {
   workspaceGoalsMtimeMs?: number | null
   approvedPlan?: ProjectSummaryApprovedPlan | null
   orientation?: ProjectOrientationSnapshot | null
+  documentedStructure?: OrientationWorkspaceImportDraftContext[]
   error: unknown
   generatedAt?: string
   execution?: ProjectSummaryProjection['execution']
@@ -1323,6 +1371,12 @@ export function buildProjectSummaryProjectionError(input: {
     },
     scope: null,
     orientation: input.orientation ?? null,
+    documentedStructure: (input.documentedStructure ?? []).map(context => ({
+      ...context,
+      ...(context.refs ? { refs: [...context.refs] } : {}),
+      ...(context.releaseIds ? { releaseIds: [...context.releaseIds] } : {}),
+      ...(context.linkedTaskHints ? { linkedTaskHints: [...context.linkedTaskHints] } : {}),
+    })),
     orientationSpine: null,
     approvedPlan: input.approvedPlan ?? null,
     releaseSummary: {
@@ -1409,6 +1463,8 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
     projectRoot?: string
     queue: unknown
     projectionTasks?: TaskQueueModel['tasks']
+    /** Compact source-backed project skeleton, never a raw intake scan. */
+    documentedStructure?: OrientationWorkspaceImportDraftContext[]
     generatedAt?: string
     /** Migration-only seed for importing the historical summary export. */
     existingSummary?: ProjectSummaryProjection | null
@@ -1457,6 +1513,7 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
         currentStateAuthority: databaseAuthority ? 'database' : 'legacy',
         projectionTasks,
         ...supplemental,
+        documentedStructure: input.documentedStructure ?? supplemental.documentedStructure,
         orientation,
       })
     : buildProjectSummaryProjectionError({
@@ -1467,6 +1524,7 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
         workspaceGoalsMtimeMs: goalsMtimeMs,
         approvedPlan,
         ...supplemental,
+        documentedStructure: input.documentedStructure ?? supplemental.documentedStructure,
         orientation,
       })
   const detailQueue = parsed.success
@@ -1508,6 +1566,8 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
     projectRoot?: string
     queue: unknown
     projectionTasks?: TaskQueueModel['tasks']
+    /** Compact source-backed project skeleton, never a raw intake scan. */
+    documentedStructure?: OrientationWorkspaceImportDraftContext[]
     generatedAt?: string
     expectedQueueRevision?: number | null
     expectedProjectRevision?: number | null
@@ -1648,13 +1708,14 @@ export function updateProjectSummaryProjection(
 function existingProjectionFields(
   tasksPath: string,
   seed?: ProjectSummaryProjection | null,
-): Pick<ProjectSummaryProjectionInput, 'execution' | 'runtime' | 'ownerInput' | 'orientation'> {
+): Pick<ProjectSummaryProjectionInput, 'execution' | 'runtime' | 'ownerInput' | 'orientation' | 'documentedStructure'> {
   const existing = seed ?? readProjectSummaryProjection(tasksPath)
   return {
     ...(existing?.execution ? { execution: existing.execution } : {}),
     ...(existing?.runtime ? { runtime: existing.runtime } : {}),
     ...(existing?.ownerInput ? { ownerInput: existing.ownerInput } : {}),
     ...(existing?.orientation ? { orientation: existing.orientation } : {}),
+    ...(existing?.documentedStructure?.length ? { documentedStructure: existing.documentedStructure } : {}),
   }
 }
 

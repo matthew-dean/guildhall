@@ -222,12 +222,12 @@ describe('project-summary-projection', () => {
     })
 
     expect(indexed?.nextAction).toMatchObject({
-      code: 'all_terminal',
-      message: 'Current release has no runnable work remaining.',
+      code: 'release_ready',
+      message: 'Review completed scope.',
     })
     expect(indexed?.orientationSpine?.summary).toMatchObject({
-      topBlocker: 'Current release has no runnable work remaining.',
-      nextAction: 'Current release has no runnable work remaining.',
+      topBlocker: null,
+      nextAction: 'Review completed scope.',
     })
   })
 
@@ -771,6 +771,37 @@ describe('project-summary-projection', () => {
     expect(projection.orientationSpine?.roots[0]?.parentId).toBeUndefined()
     expect(projection.orientationSpine?.roots[0]?.progress).toEqual({ total: 1 })
     expect(projection.orientationSpine?.roots[0]?.progress?.blocked).toBeUndefined()
+  })
+
+  it('persists explicit structural records in the shared Map projection without retaining raw intake notes', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([task('task-proof', 'ready')]),
+      documentedStructure: [
+        {
+          id: 'import-structure-story-fact',
+          title: 'Story fact',
+          description: 'A durable story-state record.',
+          refs: ['docs/harness/architecture-notes.md'],
+          role: 'capability',
+          structure: 'record',
+        },
+      ],
+    })
+
+    expect(projection.documentedStructure).toEqual([
+      expect.objectContaining({ id: 'import-structure-story-fact', title: 'Story fact' }),
+    ])
+    expect(projection.orientationSpine?.roots).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: 'Architecture Notes',
+        children: expect.arrayContaining([
+          expect.objectContaining({ title: 'Story fact', visibility: { kind: 'supporting' } }),
+        ]),
+      }),
+    ]))
+    expect(projection.orientationSpine?.sourceHealth).toMatchObject({ documented: 1, deferred: 0 })
+    expect(JSON.stringify(projection.documentedStructure)).not.toContain('raw detector note')
   })
 
   it('keeps setup pending distinct from an empty terminal work scope', () => {

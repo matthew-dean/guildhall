@@ -51641,3 +51641,80 @@ Contract Touch Decision
 - Owner-review items: none.
 - Apply/revert: revert the reconciler and nested-child regression together;
       do not hide stale proof gaps in an Overview-only formatter.
+
+## 2026-07-22 Narrative Harness Map dropped its documented skeleton
+
+User job: on the Project Map, a user can tell the difference between the
+release's executable work and the source-backed product structure that work is
+meant to deliver. A completed release must not appear as a flat list with
+`0 documented capabilities` when Guildhall has already extracted structural
+records from its visible sources.
+
+Finding:
+
+- [x] The installed Narrative Harness Map accurately showed 15 completed
+      release tasks, but reported `0 documented capabilities` and no durable
+      skeleton. Its 15 tasks have no persisted feature/domain/parent relation.
+- [x] A Guildhall-owned workspace-import refresh found 377 context fragments.
+      Most are raw planning lines and must not become permanent project state.
+      It also found source-backed structural records: Book brief, Outline,
+      Manuscript unit, Story fact, Character trace, Reader-state trace, and
+      Review finding.
+- [x] The shared project summary now retains and renders only explicit
+      structural records. It does not reopen the raw workspace scan on Map
+      reads or turn the other fragments into tasks, capabilities, or release
+      membership.
+- [ ] The projection must report missing capability-to-work links honestly;
+      it may not manufacture those links from matching prose.
+
+Contract Touch Decision
+
+- Work id: `0.13.58/documented-structural-context-map-projection`.
+- Touched contracts: Map orientation read model and typed workspace-import
+      structural-context adapter.
+- Considered but not touched: task schema, task/release membership,
+      readiness/proof calculations, raw import history, provider output, and
+      generic planning prose. Structural records remain supporting source
+      context, never executable work.
+- Required follow-up: create a typed capability-to-work relation during
+      intake/reintake; until then the Map must expose the missing relation as
+      a real modeling gap rather than infer it from titles.
+- Proof required: a source-only structural-context regression, a Map response
+      regression that excludes notes, and installed Narrative Harness Map
+      replay after a cold restart.
+- Proof provided: projection and importer regressions prove that a record
+      becomes a supporting Map node, notes do not persist, and raw context is
+      empty after approval. The installed app was rebuilt, reinstalled, and
+      cold-restarted. A real Narrative Harness import refresh then reported
+      seven documented capabilities and zero gaps; dismissing the review kept
+      those seven records and restored the shared `release_ready` action.
+      The migration detector was also corrected so shipped-only historical
+      proof tasks cannot re-block that replay.
+- Apply/revert: revert the summary field, compact importer snapshot, and
+      regressions together. Do not replace them with a request-time scan.
+
+### Schema Migration Decision
+
+- Persisted schema touched: `workspace-goals.json` structural snapshot and
+      the SQLite-backed project summary projection.
+- Scope: replace raw imported context as Map input with a bounded
+      `documentedStructure` record list in both persisted models.
+- Change class: authoritative projection ownership and payload reduction.
+- Existing data impact: projection version advances to `18`; a summary refresh
+      rewrites the durable snapshot. Existing raw workspace context is read
+      only to extract explicit record-shaped capabilities, then new writes
+      store an empty transient `context` array.
+- Migration id: `0.13.58/documented-structure-summary-v18`.
+- Safety: only `role=capability` plus `structure=record` can enter the new
+      list. The records are supporting nodes with zero release/progress effect.
+- Compatibility reader: the workspace-goals parser derives records from an
+      old snapshot once; no route reads raw context after the summary refresh.
+- Fixtures/tests: workspace importer lifecycle suite, orientation-spine suite,
+      and project-summary projection suite.
+- Owner-facing plan text: refresh project intake when the Map says the
+      documented skeleton is unavailable; dismissing that review retains the
+      compact source map and never blocks Start.
+- Rollback/revert: the previous summary version remains stale and is rebuilt;
+      no task, release, or execution record is rewritten.
+- Apply/revert: remove the adapter and its regressions together. Do not
+      replace it by promoting extracted prose into task rows.

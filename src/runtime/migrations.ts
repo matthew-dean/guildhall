@@ -473,6 +473,13 @@ function taskNeedsProofSetupRuntimeRecovery(
   return taskDoneButProofMissing(task)
 }
 
+function proofSetupRuntimeRecoveryIsActionable(task: Task, releases: readonly ProjectRelease[]): boolean {
+  const taskReleaseIds = task.releaseIds ?? []
+  return taskReleaseIds.length === 0 || taskReleaseIds.some(releaseId =>
+    releases.some(release => release.id === releaseId && release.state !== 'shipped'),
+  )
+}
+
 function releaseLocalProofSetupRepair(
   queue: { tasks: Task[]; releases?: ProjectRelease[] },
   task: Task,
@@ -4054,7 +4061,10 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       const releases = (queue?.releases ?? []) as unknown as ProjectRelease[]
       const runtime = await readTaskRuntimeStore(projectRoot)
       const taskIds = tasks
-        .filter(task => taskNeedsProofSetupRuntimeRecovery(task, runtime))
+        .filter(task =>
+          taskNeedsProofSetupRuntimeRecovery(task, runtime) &&
+          proofSetupRuntimeRecoveryIsActionable(task, releases),
+        )
         .map(task => task.id)
       return {
         needed: taskIds.length > 0,

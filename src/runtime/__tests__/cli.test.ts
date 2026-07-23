@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getProjectSystemStatePath } from '@guildhall/sessions'
+import { PROJECT_SUMMARY_PROJECTION_VERSION } from '../project-summary-projection.js'
 import {
   semanticCompletionBudget,
   semanticRepairCompletionBudget,
@@ -338,7 +339,7 @@ describe('Guildhall CLI surface', () => {
       repositories: [],
       diagnostics: null,
       summary: {
-        version: 17 as const,
+        version: PROJECT_SUMMARY_PROJECTION_VERSION,
         projectId: 'demo',
         generatedAt: '2026-07-19T00:00:00.000Z',
         freshness: 'current' as const,
@@ -346,6 +347,7 @@ describe('Guildhall CLI surface', () => {
         counts: { total: 2, active: 0, draftReview: 0, blocked: 0, done: 1, shelved: 0, included: 1, deferred: 1, ready: 0, paused: 0, ownerBlocked: 0, proofBlocked: 0, byStatus: { done: 1 } },
         scope: { id: 'release-1', label: 'Release 1', kind: 'release' as const, source: 'release_plan', included: 1, deferred: 1 },
         orientation: null,
+        documentedStructure: [],
         orientationSpine: null,
         approvedPlan: null,
         releaseSummary: {

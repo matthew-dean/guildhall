@@ -73,11 +73,11 @@
   const hiddenSkeletonRootCount = $derived.by(() =>
     Math.max(0, allSkeletonRoots.length - skeletonRoots.length),
   )
-  const documentedCapabilityCount = $derived.by(() =>
-    allSkeletonRoots.reduce((sum, root) => sum + supportingChildren(root).length, 0),
+  const documentedCapabilityCount = $derived(
+    spine?.sourceHealth?.documented ?? allSkeletonRoots.reduce((sum, root) => sum + supportingChildren(root).length, 0),
   )
-  const documentedLaterCount = $derived.by(() =>
-    allSkeletonRoots.reduce((sum, root) => sum + deferredSupportingChildren(root).length, 0),
+  const documentedLaterCount = $derived(
+    spine?.sourceHealth?.deferred ?? allSkeletonRoots.reduce((sum, root) => sum + deferredSupportingChildren(root).length, 0),
   )
   const deferredWorkCount = $derived(spine?.summary?.deferredWorkCount ?? spine?.summary?.deferredCount ?? selectedDeferredNodes.length)
   const documentedCurrentCount = $derived.by(() =>

@@ -874,7 +874,7 @@ describe('applyProjectMigrations', () => {
     expect((queue?.tasks[0]?.hierarchy as { childIds?: string[] } | undefined)?.childIds).toEqual([])
     expect(queue?.tasks[0]?.deliverySteps).toEqual([])
     expect(queue?.tasks[1]?.dependsOn).toEqual([])
-    expect(queue?.releases?.[0]?.nodeIds).toEqual(['work:parent-proof'])
+    expect(queue?.releases?.[0]?.nodeIds).toEqual(['work:parent-proof', 'work:dependent-work'])
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.13.21/remove-recursive-proof-setup-tasks'],

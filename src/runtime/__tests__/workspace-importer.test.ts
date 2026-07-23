@@ -12,6 +12,7 @@ import {
 } from '@guildhall/sessions'
 import {
   createWorkspaceImportTask,
+  dismissWorkspaceImportTask,
   workspaceNeedsImport,
   materializeWorkspaceImportDraft,
   materializeParsedWorkspaceImport,
@@ -25,6 +26,7 @@ import {
   summarizeWorkspaceImportSpec,
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
+  WORKSPACE_GOALS_STRUCTURAL_VERSION,
   readWorkspaceGoalsState,
   parseWorkspaceGoalsState,
   workspaceGoalsNeedStructuralRefresh,
@@ -135,6 +137,23 @@ const sampleInventory = (): WorkspaceInventory =>
   ])
 
 describe('createWorkspaceImportTask', () => {
+  it('closes a dismissed import at the canonical queue authority', async () => {
+    await createWorkspaceImportTask({
+      memoryDir,
+      projectPath: tmpDir,
+      inventory: { ran: [], signals: [], failed: [], bySource: {} },
+    })
+
+    const result = await dismissWorkspaceImportTask({ memoryDir, projectPath: tmpDir })
+    const queue = await readQueue()
+
+    expect(result).toEqual({ dismissed: true })
+    expect(queue.tasks.find(task => task.id === WORKSPACE_IMPORT_TASK_ID)).toMatchObject({
+      status: 'done',
+      notes: [expect.objectContaining({ content: expect.stringContaining('dismissed') })],
+    })
+  })
+
   it('seeds the reserved importer task with id + domain', async () => {
     const res = await createWorkspaceImportTask({
       memoryDir,
@@ -1178,7 +1197,7 @@ tasks:
 
   it('prefers the durable approved snapshot over a stale importer spec', () => {
     const state = parseWorkspaceGoalsState({
-      version: 3,
+      version: WORKSPACE_GOALS_STRUCTURAL_VERSION,
       recordedAt: '2026-07-13T12:00:00.000Z',
       goals: [],
       tasks: [{
@@ -2232,7 +2251,7 @@ tasks:
         laterTaskIds: string[]
       } | null
     }>(tmpDir, 'workspace-goals.json')
-    expect(goalsPersisted.version).toBe(3)
+    expect(goalsPersisted.version).toBe(WORKSPACE_GOALS_STRUCTURAL_VERSION)
     expect(goalsPersisted.goals).toHaveLength(seeded.draft.goals.length)
     expect(goalsPersisted.tasks).toHaveLength(seeded.draft.tasks.length)
     expect(goalsPersisted.milestones).toHaveLength(seeded.draft.milestones.length)
@@ -2336,7 +2355,7 @@ tasks:
 
   it('requires structural refresh when a versioned goals snapshot still lacks durable task-scope membership', () => {
     const state = parseWorkspaceGoalsState({
-      version: 3,
+      version: WORKSPACE_GOALS_STRUCTURAL_VERSION,
       recordedAt: '2026-06-18T12:00:00.000Z',
       goals: [],
       tasks: [
@@ -2376,20 +2395,23 @@ tasks:
 
   it('does not require structural refresh for fresh capability notes with explicit task-scope membership', () => {
     const state = parseWorkspaceGoalsState({
-      version: 3,
+      version: WORKSPACE_GOALS_STRUCTURAL_VERSION,
       recordedAt: '2026-06-18T12:00:00.000Z',
       goals: [],
       tasks: [],
       milestones: [],
-      context: [
+      documentedStructure: [
         {
-          label: 'Mastra workflow for the prototype iteration loop',
-          excerpt: 'Future-stage capability note.',
-          source: 'planning-docs',
+          id: 'import-structure-mastra-workflow',
+          title: 'Mastra workflow for the prototype iteration loop',
+          description: 'Future-stage capability record.',
+          refs: ['docs/architecture.md'],
           role: 'capability',
+          structure: 'record',
           scopeHint: 'later',
         },
       ],
+      context: [],
       approved: {
         goalCount: 0,
         taskCount: 2,
@@ -3725,16 +3747,8 @@ tasks:
     expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
 
     const goalsState = await readWorkspaceGoalsState(memoryDir)
-    expect(goalsState?.context).toEqual([
-      expect.objectContaining({
-        label: 'Author defines book intent, genre/form expectations, themes, and voice.',
-        role: 'brief_input',
-      }),
-      expect.objectContaining({
-        label: 'The coordinator chooses reviewers based on current phase.',
-        role: 'capability',
-      }),
-    ])
+    expect(goalsState?.context).toEqual([])
+    expect(goalsState?.documentedStructure).toEqual([])
   })
 
   it('keeps previously archived imported work archived when the docs only mention it outside the approved import set', async () => {
@@ -4946,18 +4960,10 @@ tasks:
     })
     expect(q.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toBeUndefined()
     const goalsState = await readWorkspaceGoalsState(memoryDir)
-    expect(goalsState?.context).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        label: 'Spec: Dialogue And Character Voice',
-        role: 'capability',
-        domain: 'coherence',
-        scopeHint: 'later',
-        references: expect.arrayContaining([
-          path.join(tmpDir, 'docs/specs/dialogue-and-character-voice.md'),
-          path.join(tmpDir, 'docs/harness/remaining-spec-decomposition-inventory.md'),
-        ]),
-      }),
-    ]))
+    expect(goalsState?.context).toEqual([])
+    // The detected spec mention is useful intake evidence, but it has no
+    // explicit record shape. It must not become durable project structure.
+    expect(goalsState?.documentedStructure).toEqual([])
   })
 
   it('derives reviewer-lane and workflow contracts from cited fiction specs instead of generic convention filler', async () => {

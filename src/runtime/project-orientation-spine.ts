@@ -592,6 +592,8 @@ export interface OrientationWorkspaceImportDraftContext {
   domain?: string
   refs?: string[]
   role?: 'capability' | 'reference' | 'brief_input'
+  /** A record is durable project structure; notes remain intake evidence. */
+  structure?: 'record' | 'note'
   scopeHint?: 'current' | 'later'
   releaseIds?: string[]
   linkedTaskHints?: string[]
@@ -1681,11 +1683,11 @@ function mergeWorkspaceImportContexts(input: {
           releaseCheckIds: [],
         },
         source: {
-          kind: 'inferred',
+          kind: context.structure === 'record' ? 'import' : 'inferred',
           refs: context.refs?.length ? context.refs : ['workspace-import:draft'],
           confidence: 'medium',
           freshness: 'fresh',
-          inferred: true,
+          inferred: context.structure !== 'record',
           refreshedAt: input.now,
         },
         visibility: { kind: 'supporting', countInProjectTotals: false },
@@ -1728,11 +1730,11 @@ function mergeWorkspaceImportContexts(input: {
           releaseCheckIds: [],
         },
       source: {
-        kind: 'inferred',
+        kind: contexts.every(context => context.structure === 'record') ? 'import' : 'inferred',
         refs: children.flatMap(child => child.source.refs),
         confidence: 'medium',
         freshness: 'fresh',
-        inferred: true,
+        inferred: !contexts.every(context => context.structure === 'record'),
         refreshedAt: input.now,
       },
       visibility: { kind: 'supporting', countInProjectTotals: false },
@@ -2338,7 +2340,19 @@ function sourceHealth(nodes: OrientationNode[], gaps: OrientationGap[]): Orienta
     .filter(gap => gap.kind === 'missing_source_provenance')
     .reduce((sum, gap) => sum + Math.max(1, gap.refs.length), 0)
   return {
-    inferred: allNodes.filter(node => node.source.inferred).length,
+    // Persisted map projections intentionally omit per-node source detail.
+    // Missing display provenance is not an inference and must not make a
+    // source-health refresh fail.
+    inferred: allNodes.filter(node => node.source?.inferred === true).length,
+    documented: allNodes.filter(node =>
+      node.visibility.kind === 'supporting' && node.kind === 'feature' && node.source?.inferred === false,
+    ).length,
+    deferred: allNodes.filter(node =>
+      node.visibility.kind === 'supporting' &&
+      node.kind === 'feature' &&
+      node.source?.inferred === false &&
+      node.maturity === 'deferred',
+    ).length,
     conflicts: gaps.filter(gap => gap.kind === 'source_conflict').length,
     gaps: sourceGaps,
   }

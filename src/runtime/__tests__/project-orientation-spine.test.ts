@@ -4124,4 +4124,42 @@ describe('buildProjectOrientationSpine', () => {
       'stage-4-authoring-shell',
     ])
   })
+
+  it('adds only source-declared capability records to the shared Map tree', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-22T00:00:00.000Z',
+      tasks: [{ id: 'task-chapter', title: 'Draft a chapter', status: 'done' }],
+      workspaceImportDraft: {
+        tasks: [],
+        source: {
+          kind: 'import',
+          refs: ['docs/harness/architecture-notes.md'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: false,
+          refreshedAt: '2026-07-22T00:00:00.000Z',
+        },
+        contexts: [
+          {
+            id: 'outline',
+            title: 'Outline',
+            description: 'Acts, chapters, scene goals, and thread movement.',
+            refs: ['docs/harness/architecture-notes.md'],
+            role: 'capability',
+            structure: 'record',
+          },
+        ],
+      },
+    })
+
+    const architecture = spine.roots.find(root => root.title === 'Architecture Notes')
+    expect(architecture?.children.map(child => child.title)).toEqual(['Outline'])
+    expect(spine.nodes['capability:outline']?.visibility).toMatchObject({
+      kind: 'supporting',
+      countInProjectTotals: false,
+    })
+    expect(spine.summary.progress.total).toBe(1)
+    expect(spine.sourceHealth).toMatchObject({ documented: 1, deferred: 0 })
+  })
 })

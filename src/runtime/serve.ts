@@ -304,6 +304,8 @@ import {
   approveWorkspaceImport,
   canonicalApprovedWorkspaceImport,
   createWorkspaceImportTask,
+  dismissWorkspaceImportState,
+  dismissWorkspaceImportTask,
   materializeParsedWorkspaceImport,
   materializeWorkspaceImportDraft,
   mergeWorkspaceImportDraft,
@@ -7150,7 +7152,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           sourceRefs: projection.orientation?.sourceRefs ?? [],
         }).orientationSpine
       : null)
-    if (!builtOrientationSpine) {
+    const surfaceOrientationSource = builtOrientationSpine
+    if (!surfaceOrientationSource) {
       return {
         ...summary,
         id: project.id,
@@ -7170,7 +7173,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // is already materialized with the full task set; rebuilding it from the
     // deliberately absent inventory would turn real membership into zero.
     const liveOrientationPreview = input.surface === 'overview'
-      ? { summary: builtOrientationSpine.summary }
+      ? { summary: surfaceOrientationSource.summary }
       : buildOverviewOrientationPreviewSpine({
           projectId: project.id,
           rawQueue: {
@@ -7180,11 +7183,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           },
           charter: projection.orientation?.charter ?? null,
           startReadiness: summary.startReadiness,
-          sourceSpine: builtOrientationSpine,
+          sourceSpine: surfaceOrientationSource,
         })
     const reconciledLiveSummarySpine = reconcileOrientationSpineWithReleaseTruth(
       {
-        ...builtOrientationSpine,
+        ...surfaceOrientationSource,
         summary: liveOrientationPreview.summary as ProjectOrientationSpine['summary'],
       },
       {
@@ -12777,13 +12780,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const memoryDir = getProjectStateDir(project.path)
-      const goalsPath = getProjectSystemStatePath(project.path, 'workspace-goals.json')
-      await fsp.mkdir(dirname(goalsPath), { recursive: true })
-      await writeManagedTextFile(
-        goalsPath,
-        JSON.stringify({ dismissed: true, dismissedAt: new Date().toISOString() }, null, 2),
-        'utf-8',
-      )
+      await dismissWorkspaceImportState({ memoryDir })
+      await dismissWorkspaceImportTask({ memoryDir, projectPath: project.path })
       await recordWorkspaceImportDismissal(memoryDir)
       return c.json({ ok: true })
     } catch (err) {
