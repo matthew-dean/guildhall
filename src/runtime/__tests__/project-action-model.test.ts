@@ -20,6 +20,30 @@ describe('applyRunStatusToStartReadiness', () => {
 })
 
 describe('buildProjectActionModel', () => {
+  it('uses shared ready-work state instead of inferring brief cleanup from a compact task point', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        message: '"Build synopsis expansion" is ready to run.',
+        focusTaskId: 'task-synopsis',
+        focusTaskTitle: 'Build synopsis expansion',
+        focusKind: 'ready_work',
+      },
+      // Saved summary projections intentionally omit rich brief/spec fields.
+      tasks: [{ id: 'task-synopsis', title: 'Build synopsis expansion', status: 'ready' }],
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: '"Build synopsis expansion" is ready to run.',
+      buttonLabel: 'Open Work',
+      href: '/work?task=task-synopsis',
+      tone: 'accent',
+    })
+    expect(model.primaryAction?.detail).toBeUndefined()
+  })
+
   it('labels an approved brief without a spec as source-backed shaping', () => {
     const model = buildProjectActionModel({
       startReadiness: {

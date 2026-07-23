@@ -52566,3 +52566,29 @@ Repair:
 - Apply/revert: removing this restores a false-completion path and is not an
       acceptable rollback without an equivalent atomic definition/overlay
       mutation contract.
+
+## 2026-07-23 Ready work cannot be rewritten as missing brief state
+
+- [x] Narrative Harness replay found a direct cross-surface disagreement:
+      `startReadiness` named a runnable task, while the saved overview action
+      model read an intentionally compact task point and claimed the same task
+      needed a brief. The compact projection had omitted rich brief/spec fields;
+      that omission was incorrectly treated as a negative fact.
+
+### Contract Touch Decision
+
+- Work id: `0.13.85/shared-ready-action-authority`.
+- Touched contracts: shared start-readiness to action-model mapping and
+      overview primary-action presentation.
+- Considered but not touched: task readiness calculation, task definitions,
+      owner approval, release scope, evidence storage, and UI-local ranking.
+- Existing data impact: no persisted state changes. On the next projection
+      refresh, an explicit `ready_work` focus renders from the shared
+      readiness result rather than a lossy task point.
+- Required follow-up: install the build and verify Narrative Harness overview,
+      Work, and the Start control agree on the focused task and its ready
+      status.
+- Proof required: compact-task-point regression, typecheck, contract lint,
+      and installed cross-surface replay.
+- Apply/revert: do not add brief/spec inference to compact view components.
+      Any future readiness presentation must extend the shared action contract.

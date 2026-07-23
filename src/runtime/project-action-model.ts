@@ -236,6 +236,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
   if (readiness.code === 'scope_source_conflict') return 'Open map'
   if (readiness.code === 'repository_followup_required') return 'Open release'
+  if (readiness.code === 'ready_work') return 'Open Work'
   if (readiness.code === 'paused_live_work') return 'Open Work'
   if (readiness.code === 'no_unattended_progress') {
     if (readiness.focusKind === 'blocked_work') return 'Open Work'
@@ -488,8 +489,8 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     label,
     detail,
     buttonLabel: startReadinessButtonLabel(readiness),
-    href: readiness.actionHref ?? '/overview',
-    tone: readiness.code === 'required_migration_pending' ? 'danger' : 'warn',
+    href: readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
+    tone: readiness.code === 'required_migration_pending' ? 'danger' : readiness.code === 'ready_work' ? 'accent' : 'warn',
     code: readiness.code,
   }
 }
@@ -559,6 +560,13 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
           }
         : startReadinessAction(startReadiness),
     )
+  }
+  // A compact saved summary deliberately omits full brief/spec detail. When
+  // the shared start-readiness contract says this exact item is runnable, it
+  // must remain the primary action instead of letting a compact task point
+  // manufacture a competing "Needs brief" interpretation.
+  if (startReadiness?.canStart && startReadiness.code === 'ready_work' && startReadiness.focusKind === 'ready_work') {
+    candidates.push(startReadinessAction(startReadiness))
   }
   if (setupBlocksStart && ownerInput.href) {
     candidates.push({
