@@ -53133,3 +53133,19 @@ Repair:
 - [ ] Bind the catalog to Map, Release, Overview, and Work through the shared
       summary projection, then verify their displayed scope is identical at a
       single project revision.
+
+### Contract Touch Decision: catalog-only adapter write
+
+- Work id: `0.13.94/source-capability-boundary`.
+- Touched contracts: promoted current-state CAS mutation, project summary
+      refresh, source-capability catalog, and task/release runtime boundary.
+- Considered but not touched: task materialization, release selection, scope
+      rows, and compatibility queue content. Recording source scope must not
+      manufacture runnable work or change the selected release.
+- Required behavior: a database-authoritative project accepts a structured
+      adapter catalog update at one revision; the same transaction refreshes
+      the shared summary watermark while leaving work rows unchanged.
+- Proof required: a boundary test records a capability, reads it through the
+      catalog API, and proves the current task inventory is unchanged.
+- Apply/revert: one new explicit boundary; reverting it leaves existing task
+      writes untouched and removes only catalog-only adapter intake.

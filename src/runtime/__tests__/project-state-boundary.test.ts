@@ -10,6 +10,7 @@ import {
   projectStateDatabasePath,
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseTaskOverlay,
+  readProjectStateDatabaseSourceCapabilities,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
   writeProjectStateDatabaseAvailability,
@@ -47,10 +48,45 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueueAtCurrentStateBoundary,
   writeProjectTaskQueueWithSummary,
+  upsertProjectSourceCapabilitiesAtBoundary,
 } from '../project-state-boundary.js'
 import { readProjectSummaryProjection } from '../project-summary-projection.js'
 
 describe('project-state-boundary', () => {
+  it('records a structured capability snapshot without manufacturing task work', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-capability-catalog-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, {
+        version: 1,
+        lastUpdated: '2026-07-23T00:00:00.000Z',
+        tasks: [{ id: 'task-existing', title: 'Existing work', status: 'ready' }],
+        releases: [],
+      }, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+
+      expect(upsertProjectSourceCapabilitiesAtBoundary(tasksPath, [{
+        id: 'narrative:world-state-review',
+        adapterId: 'narrative-release-plan',
+        adapterSchemaVersion: 1,
+        sourceRevision: 'v1',
+        label: 'Review world state',
+        state: 'planned',
+        releaseIds: ['headless-mvp'],
+        dependsOnCapabilityIds: [],
+        evidenceRefs: ['artifact:release-plan'],
+      }], { projectRoot: root })).toBe(true)
+      expect(readProjectStateDatabaseSourceCapabilities(tasksPath)).toEqual([
+        expect.objectContaining({ id: 'narrative:world-state-review' }),
+      ])
+      expect(readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks).toEqual([
+        expect.objectContaining({ id: 'task-existing' }),
+      ])
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('fails closed when a current-state database is present but unreadable', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-corrupt-db-'))
     const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')

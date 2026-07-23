@@ -37,6 +37,7 @@ import {
   type ProjectStateDatabaseQueue,
   type ProjectStateDatabaseRepository,
   type ProjectStateDatabaseScopeRow,
+  type ProjectStateDatabaseSourceCapability,
   type ProjectStateDatabaseTask,
   type ProjectStateDatabaseTaskDetailReadOptions,
   type ProjectStateDatabaseTaskOverlay,
@@ -1770,6 +1771,45 @@ function writeTargetedTaskBatchMutationIfSafe(
     expectedQueueRevision,
     expectedProjectRevision,
     lastUpdated: isRecord(queue) && typeof queue.lastUpdated === 'string' ? queue.lastUpdated : null,
+  })
+  return true
+}
+
+/**
+ * Persist an adapter-owned capability snapshot without manufacturing or
+ * rewriting task work. Scheduling is a later, explicit coordinator action;
+ * this boundary only records what the structured source says exists.
+ */
+export function upsertProjectSourceCapabilitiesAtBoundary(
+  tasksPath: string,
+  sourceCapabilities: readonly ProjectStateDatabaseSourceCapability[],
+  options: { projectId?: string | null; projectRoot?: string } = {},
+): boolean {
+  if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return false
+  const current = readProjectTaskQueueSyncWithRevision(tasksPath)
+  const expectedQueueRevision = current.revision
+  const expectedProjectRevision = current.projectRevision
+  if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0 ||
+      typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) {
+    return false
+  }
+  const projectionQueue = queueForProjection(current.queue)
+  const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+    projectId: options.projectId,
+    projectRoot: options.projectRoot,
+    queue: projectionQueue,
+    projectionTasks: isRecord(projectionQueue) && Array.isArray(projectionQueue.tasks)
+      ? projectionQueue.tasks as Task[]
+      : undefined,
+  })
+  if (!prepared.parsedQueue || !prepared.scopeRows) return false
+  writeProjectStateDatabaseTaskBatchMutation(tasksPath, {
+    tasks: [],
+    sourceCapabilities,
+    summary: prepared.projection as unknown as Record<string, unknown>,
+    expectedQueueRevision,
+    expectedProjectRevision,
+    lastUpdated: isRecord(current.queue) && typeof current.queue.lastUpdated === 'string' ? current.queue.lastUpdated : null,
   })
   return true
 }
