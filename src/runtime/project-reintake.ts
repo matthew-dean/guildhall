@@ -2,7 +2,7 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { AcceptanceCriteria, explicitTaskStructuralIdentity, type ProjectRelease, type Task } from '@guildhall/core'
-import { getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { clearTaskRuntimeState, clearTaskWorkspaceState, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import {
   planEvidenceWorkGraph,
   type EvidenceSource,
@@ -441,6 +441,14 @@ export async function applyProjectReintakeDraft(input: {
     projectRoot: inferProjectRootFromMemoryDir(input.memoryDir),
     expectedQueueRevision: queueRead.expectedQueueRevision,
   })
+  // A re-intake reframe changes the authoritative planning state. Runtime and
+  // worktree overlays from an old execution must not re-promote a stale done
+  // status over the newly reopened task.
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  await Promise.all([...refreshedTaskIds].flatMap(taskId => [
+    clearTaskRuntimeState(projectRoot, taskId),
+    clearTaskWorkspaceState(projectRoot, taskId),
+  ]))
   await appendReintakeProgress(input.memoryDir, draft, groups.length, now)
   await writeProjectReintakeDraft(input.memoryDir, { ...draft, status: 'applied' })
   return { success: true, appliedGroups: groups.length }
