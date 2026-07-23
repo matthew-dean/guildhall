@@ -818,6 +818,40 @@ function primaryActionForDecision(input: {
 }
 
 /**
+ * The action builder may prioritize a bounded task row more specifically than
+ * scope readiness alone can. Fold that typed result into the decision packet
+ * at summary-write time so routes never choose between two saved primaries.
+ */
+export function applyProjectActionModelPrimaryAction(
+  decision: ProjectDecisionProjection,
+  action: {
+    source?: string
+    taskId?: string
+    code?: string
+  } | null | undefined,
+): ProjectDecisionProjection {
+  if (!action || decision.conflicts.length > 0 || decision.ownerInput.state === 'required') return decision
+  if (decision.execution.state === 'complete' && decision.release.state === 'ready') return decision
+  const taskId = action.taskId?.trim()
+  if (!taskId) return decision
+  const kind = action.source === 'owner_input'
+    ? 'answer_owner_input' as const
+    : action.code === 'proof_evidence_missing'
+      ? 'review_proof' as const
+      : decision.execution.state === 'paused'
+        ? 'resume' as const
+        : 'open_work' as const
+  return {
+    ...decision,
+    primaryAction: {
+      kind,
+      targetId: taskId,
+      reasonCode: action.code ?? decision.primaryAction.reasonCode,
+    },
+  }
+}
+
+/**
  * Runtime liveness is a separately-owned fact. Refresh only the execution
  * branch of an existing decision so a live worker can never inherit a stale
  * plan focus or cause a route-local re-ranking of project work.

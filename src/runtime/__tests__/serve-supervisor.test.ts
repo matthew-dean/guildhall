@@ -47,7 +47,7 @@ describe('OrchestratorSupervisor', () => {
       resolveConfig: () => ({ workspaceId: 'active-task-project', projectPath: workspacePath } as ResolvedConfig),
       runOrchestrator: async (_config, options) => {
         await workerStart
-        await options?.onBackendEvent?.({ type: 'agent_started', task_id: 'task-live' })
+        await options?.onBackendEvent?.({ type: 'agent_started', task_id: 'task-live', task_title: 'Prove live execution identity' })
         await options?.onBackendEvent?.({ type: 'task_transition', task_id: 'task-live', to_status: 'in_progress' })
         await workerFinish
         await options?.onBackendEvent?.({ type: 'agent_finished', task_id: 'task-live' })
@@ -66,16 +66,20 @@ describe('OrchestratorSupervisor', () => {
       letWorkerStartContinue()
       await new Promise(resolve => setTimeout(resolve, 0))
       expect(supervisor.get('active-task-project')?.activeTaskId).toBe('task-live')
+      expect(supervisor.get('active-task-project')?.activeTaskTitle).toBe('Prove live execution identity')
       expect(readProjectSummaryProjection(tasksPath)?.execution).toMatchObject({
         status: 'running',
         activeTaskId: 'task-live',
+        activeTaskTitle: 'Prove live execution identity',
       })
 
       letWorkerFinish()
       await run.runPromise
       expect(supervisor.get('active-task-project')?.activeTaskId).toBeUndefined()
+      expect(supervisor.get('active-task-project')?.activeTaskTitle).toBeUndefined()
       expect(readProjectSummaryProjection(tasksPath)?.execution).toMatchObject({ status: 'stopped' })
       expect(readProjectSummaryProjection(tasksPath)?.execution).not.toHaveProperty('activeTaskId')
+      expect(readProjectSummaryProjection(tasksPath)?.execution).not.toHaveProperty('activeTaskTitle')
     } finally {
       await rm(workspacePath, { recursive: true, force: true })
     }

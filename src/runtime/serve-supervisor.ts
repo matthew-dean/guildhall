@@ -71,6 +71,8 @@ export interface WorkspaceRun {
   providerHealthKey?: string
   /** Current worker ownership, derived only from typed agent lifecycle events. */
   activeTaskId?: string
+  /** Display identity paired with `activeTaskId`; never inferred from event prose. */
+  activeTaskTitle?: string
 }
 
 export interface ProviderRunStatus {
@@ -562,7 +564,7 @@ function writePersistedEvent(workspacePath: string, event: SupervisorEvent): voi
   }
 }
 
-function updateExecutionProjection(run: Pick<WorkspaceRun, 'workspacePath' | 'status' | 'mode' | 'startedAt' | 'stoppedAt' | 'stopRequestedAt' | 'error' | 'activeTaskId'>, updatedAt: string): void {
+function updateExecutionProjection(run: Pick<WorkspaceRun, 'workspacePath' | 'status' | 'mode' | 'startedAt' | 'stoppedAt' | 'stopRequestedAt' | 'error' | 'activeTaskId' | 'activeTaskTitle'>, updatedAt: string): void {
   updateProjectSummaryProjection(getProjectSystemStatePath(run.workspacePath, 'TASKS.json'), {
     execution: {
       status: run.status,
@@ -572,6 +574,7 @@ function updateExecutionProjection(run: Pick<WorkspaceRun, 'workspacePath' | 'st
       stopRequestedAt: run.stopRequestedAt ?? null,
       error: run.error ?? null,
       activeTaskId: run.activeTaskId ?? null,
+      activeTaskTitle: run.activeTaskTitle ?? null,
       updatedAt,
     },
   })
@@ -756,8 +759,14 @@ export class OrchestratorSupervisor {
       const eventTaskId = typeof eventTaskIdValue === 'string' && eventTaskIdValue.trim()
         ? eventTaskIdValue.trim()
         : null
+      const eventTaskTitleValue = (event as { task_title?: unknown }).task_title
+      const eventTaskTitle = typeof eventTaskTitleValue === 'string' && eventTaskTitleValue.trim()
+        ? eventTaskTitleValue.trim()
+        : null
       if (event.type === 'agent_started' && eventTaskId) {
         run.activeTaskId = eventTaskId
+        if (eventTaskTitle) run.activeTaskTitle = eventTaskTitle
+        else delete run.activeTaskTitle
         updateExecutionProjection(run, supervisorEv.at)
       } else if (
         eventTaskId === run.activeTaskId &&
@@ -768,6 +777,7 @@ export class OrchestratorSupervisor {
         )
       ) {
         delete run.activeTaskId
+        delete run.activeTaskTitle
         updateExecutionProjection(run, supervisorEv.at)
       }
       if (event.type === 'supervisor_started' || event.type === 'supervisor_stopped' || event.type === 'supervisor_error') {

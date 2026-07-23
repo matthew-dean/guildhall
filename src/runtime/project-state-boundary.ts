@@ -62,6 +62,7 @@ import {
   projectSummaryScopeRowsFromIndexedState,
   prepareProjectSummaryProjectionFromUnknownQueue,
   readProjectSummaryProjection,
+  synchronizeProjectSummaryDecision,
   writeProjectSummaryProjectionFromUnknownQueue,
   type ProjectSummaryProjection,
 } from './project-summary-projection.js'
@@ -73,7 +74,7 @@ import { recoverClippedTitle } from '@guildhall/shared'
 function projectSummaryAtRuntimeVersion(
   summary: ProjectStateDatabaseSummary<ProjectSummaryProjection> | ProjectSummaryProjection,
 ): ProjectSummaryProjection {
-  const payload = 'payload' in summary ? summary.payload : summary
+  const payload = synchronizeProjectSummaryDecision('payload' in summary ? summary.payload : summary)
   return {
     ...payload,
     freshness: projectSummaryProjectionIsCurrent(payload as ProjectSummaryProjection)

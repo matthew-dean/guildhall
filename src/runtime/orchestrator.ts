@@ -4158,6 +4158,7 @@ export class Orchestrator {
     await this.emitBackendEvent({
       type: 'agent_started',
       task_id: task.id,
+      task_title: task.title,
       agent_name: agent.name,
       from_status: beforeStatus,
       message: `${agent.name} is working on ${task.title}`,

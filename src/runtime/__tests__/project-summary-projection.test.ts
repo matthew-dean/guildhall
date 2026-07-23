@@ -182,6 +182,24 @@ describe('project-summary-projection', () => {
     ])
   })
 
+  it('stores the action model primary action back into the shared decision packet', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([
+        task('ready-task', 'ready', {
+          spec: 'A real spec.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'It works.', met: false }],
+        }),
+        task('blocked-task', 'blocked', {
+          blockReason: 'human_judgment_required: Confirm which provider policy applies before continuing.',
+        }),
+      ]),
+      generatedAt: now,
+    })
+
+    expect(projection.decision.primaryAction.targetId).toBe(projection.actionModel?.primaryAction?.taskId)
+  })
+
   it('carries only compact structured source authority into the shared summary', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'narrative-harness',

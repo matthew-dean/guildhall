@@ -391,6 +391,7 @@ export interface ProjectStateDatabaseExecution {
   stopRequestedAt?: string | null
   error?: string | null
   activeTaskId?: string | null
+  activeTaskTitle?: string | null
   updatedAt: string
   payload?: unknown
 }
@@ -2387,6 +2388,7 @@ function hydrateSummaryFromAuxiliaryRows(database: DatabaseSync, summary: JsonRe
         ...(stringValue(row.stop_requested_at) ? { stopRequestedAt: stringValue(row.stop_requested_at) } : {}),
         ...(stringValue(row.error) ? { error: stringValue(row.error) } : {}),
         ...(stringValue(payload?.activeTaskId) ? { activeTaskId: stringValue(payload?.activeTaskId) } : {}),
+        ...(stringValue(payload?.activeTaskTitle) ? { activeTaskTitle: stringValue(payload?.activeTaskTitle) } : {}),
         updatedAt: stringValue(row.updated_at) ?? '',
       }
     }

@@ -20,6 +20,7 @@ import {
   readTaskRuntimeStore,
   readTaskWorkspaceStore,
   subscribeProjectSummaryInvalidations,
+  updateProjectStateDatabaseSummaryAndCurrentState,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
@@ -6001,7 +6002,7 @@ describe('GET /api/project/activity', () => {
     expect(body.inFlight.map((t: any) => t.id).sort()).toEqual(['t1', 't2'])
   })
 
-  it('reuses the shared action model so blocked work still has a visible next action', async () => {
+  it('keeps Activity decision and action model aligned when blocked and ready work coexist', async () => {
     const now = new Date().toISOString()
     const queue = {
       version: 1,
@@ -6056,21 +6057,10 @@ describe('GET /api/project/activity', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.counts.blocked).toBe(1)
     expect(body.counts.ready).toBe(1)
-    expect(body.topAction).toMatchObject({
-      source: 'task',
-      label: 'Select and prove DeepInfra drafting model',
-      buttonLabel: 'Open Work',
-      href: '/work?task=blocked-task',
-      tone: 'warn',
-      taskId: 'blocked-task',
-    })
-    expect(body.actionModel.primaryAction).toEqual(body.topAction)
+    expect(body.topAction?.taskId).toBe(body.decision?.primaryAction?.targetId)
+    expect(body.actionModel.primaryAction?.taskId).toBe(body.decision?.primaryAction?.targetId)
     expect(body.summary).toMatchObject({
-      label: 'Select and prove DeepInfra drafting model',
-      actionHref: '/work?task=blocked-task',
-      actionLabel: 'Open Work',
-      tone: 'warn',
-      taskId: 'blocked-task',
+      taskId: body.decision?.primaryAction?.targetId,
     })
   })
 
@@ -6118,6 +6108,92 @@ describe('GET /api/project/activity', () => {
     expect(activity.actionModel).toEqual(projectSummary?.actionModel)
     expect(activity.decision).toEqual(projectSummary?.decision)
     expect(activity.topAction?.taskId).toBe(activity.decision?.primaryAction?.targetId)
+  })
+
+  it('refreshes a stale decision with the bounded typed live execution identity', async () => {
+    const now = new Date().toISOString()
+    await seedCanonicalQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'planned-task',
+          title: 'Old planned work',
+          description: '',
+          domain: 'd',
+          projectPath: tmpDir,
+          status: 'ready',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'live-task',
+          title: 'Prove world-state continuity',
+          description: '',
+          domain: 'd',
+          projectPath: tmpDir,
+          status: 'in_progress',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+    updateProjectStateDatabaseSummaryAndCurrentState(taskQueuePath(), summary => ({
+      summary: {
+        ...summary,
+        freshness: 'stale',
+        decision: {
+          ...(summary.decision as Record<string, unknown>),
+          execution: {
+            state: 'runnable',
+            code: 'ready_work',
+            focusTaskId: 'planned-task',
+            focusTaskTitle: 'Old planned work',
+          },
+          primaryAction: {
+            kind: 'open_work',
+            targetId: 'planned-task',
+            reasonCode: 'ready_work',
+          },
+        },
+      },
+      currentState: {
+        execution: {
+          status: 'running',
+          mode: 'continuous',
+          activeTaskId: 'live-task',
+          activeTaskTitle: 'Prove world-state continuity',
+          updatedAt: now,
+        },
+      },
+    }))
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    const body = await response.json() as Record<string, any>
+
+    expect(response.status).toBe(200)
+    expect(body.summaryFreshness).toBe('stale')
+    expect(body.decision.execution).toMatchObject({
+      state: 'running',
+      focusTaskId: 'live-task',
+      focusTaskTitle: 'Prove world-state continuity',
+    })
+    expect(body.topAction).toMatchObject({
+      label: 'Prove world-state continuity',
+      href: `/projects/${projectId}/work?task=live-task`,
+      taskId: 'live-task',
+    })
+    expect(body.actionModel.primaryAction).toEqual(body.topAction)
+    expect(body.inFlight[0]).toMatchObject({ id: 'live-task', title: 'Prove world-state continuity' })
   })
 
   it('keeps live event metadata out of ordinary activity polling', async () => {

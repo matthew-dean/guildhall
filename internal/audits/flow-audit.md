@@ -53740,9 +53740,73 @@ Repair:
       the canonical release boundary and returning `requiresRefresh`. This
       prevents one response from blending fresh membership with an older
       completion state.
+- [x] Live execution identity is a bounded operational
+      fact. A running supervisor and a saved decision may not disagree merely
+      because the decision projection was generated before the worker started:
+      the typed lifecycle event carries the active task ID and title into the
+      compact `current_execution` projection, and polling routes refresh only
+      that execution branch through the shared decision helper. Activity's
+      returned action model is refreshed from that same decision when runtime
+      state changes, so its primary action cannot point at a different task.
 - [ ] Start, Overview, Release, Work, Thread, and Activity still need to
       consume the resulting membership revision token and fail closed when a
       conflict or stale projection remains.
+
+### Live Execution Identity Decision
+
+- Work id: `0.13.67/live-execution-identity`.
+- Touched contracts: backend lifecycle event, supervisor run state,
+      `current_execution` payload, and the shared decision packet consumed by
+      Activity.
+- Considered but not touched: task definition/detail reads, recent-event
+      history, agent prose, task ranking, and release membership.
+- Required behavior: any surface saying work is currently running gets the
+      task ID and title from one typed execution observation. A stale decision
+      may supply plan/release context, but it cannot replace a newer active
+      task. When the identity is genuinely absent, the UI may say work is
+      advancing but must not invent a title or task link.
+- Persisted impact: additive `activeTaskTitle` inside the existing bounded
+      `current_execution.payload_json`; no table migration or second task
+      projection. Existing rows without it remain valid and show the honest
+      ID-only state.
+- Proof required: a supervisor lifecycle test for ID/title persistence, an
+      Activity test where a stale decision is refreshed by a live task, and a
+      shell-only read assertion proving no task-detail or retained-history
+      load is introduced.
+- Apply/revert: lifecycle events populate the field; clearing worker ownership
+      clears both fields. Revert stops writing the additive payload field;
+      old rows remain harmless bounded operational residue.
+
+### Primary Action Authority Decision
+
+- Work id: `0.13.68/primary-action-authority`.
+- Finding: the compact decision packet selected an executable ready task, then
+      the richer action-model builder independently preferred a blocked task.
+      A route could therefore honestly read either stored object and still
+      disagree with another route. That is not a presentation choice.
+- Touched contracts: `ProjectDecisionProjection.primaryAction`, the persisted
+      project summary action model, and Activity's shared action response.
+- Required behavior: planning/readiness determines execution state; after the
+      bounded action builder applies its allowed task-aware prioritization,
+      that resulting typed action is folded back into the decision packet.
+      Both stored objects then name the same primary action. Runtime liveness
+      may subsequently refresh only the execution branch as described above.
+- Considered but not touched: task ranking rules, task definitions, release
+      membership, owner-input policy, agent prose, and route-local actions.
+- Proof required: a blocked-versus-ready summary fixture where decision,
+      action model, Activity, and fleet all select the same typed task;
+      lifecycle identity proof remains green.
+- Apply/revert: apply the action-model primary action through one shared
+      decision helper at each summary construction path. Revert restores the
+      previous summary build only; no canonical task or runtime fact changes.
+- [x] Full and indexed summary writers fold the bounded action-model primary
+      action into `ProjectDecisionProjection.primaryAction`. Promoted summary
+      readers perform the same pure normalization for historical rows before
+      any route consumes them; a summary without a decision remains stale.
+- [x] Activity tests cover blocked-plus-ready work, fleet agreement, stale
+      execution identity, and shell-only polling. They assert stable IDs and
+      typed state, not a model-generated phrase or one arbitrary task-ranking
+      outcome.
 
 ### Schema Migration Decision
 

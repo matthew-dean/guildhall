@@ -48,7 +48,7 @@ import { taskBlockerSummary } from './task-blocker-summary.js'
 import { readPersistedStructuredSelfCritique, reviewVerdictHasStructuredApproval } from './review-contract.js'
 import { validateProductBriefGrounding } from './spec-quality.js'
 import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
-import { projectDecisionInFlight, projectDecisionStartReadiness, reconcileRegisteredProjectStateObservation, type ProjectDecisionProjection } from './project-decision-projection.js'
+import { applyRuntimeExecutionToProjectDecision, projectDecisionInFlight, projectDecisionStartReadiness, reconcileRegisteredProjectStateObservation, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
 import { readCurrentThreadTaskIdsAtBoundary, readThreadHistoryReadProjection, readThreadReadProjection, threadReadProjectionFromBoundary } from './thread-read-projection.js'
@@ -16559,8 +16559,50 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const compactSummary = projectionIsCurrent
         ? summarizeProjectFromProjection({ id: project.id, path: project.path }, project, run, projection)
         : null
-      const actionModel = compactSummary?.actionModel ?? null
-      const decision = compactSummary?.decision ?? projection?.decision ?? null
+      const savedDecision = compactSummary?.decision ?? projection?.decision ?? null
+      // The shell contains a bounded execution row that is updated by typed
+      // lifecycle events. Refresh only that branch of the shared decision so
+      // polling can never let an older plan claim a different live task.
+      const runtimeExecution = run
+        ? {
+            status: run.status,
+            activeTaskId: run.activeTaskId,
+            activeTaskTitle: run.activeTaskTitle,
+          }
+        : projection?.execution
+          ? {
+              status: projection.execution.status,
+              activeTaskId: projection.execution.activeTaskId,
+              activeTaskTitle: projection.execution.activeTaskTitle,
+            }
+        : null
+      const decision = savedDecision
+        ? applyRuntimeExecutionToProjectDecision(savedDecision, runtimeExecution)
+        : null
+      const decisionActionModel = decision && decision !== savedDecision
+        ? (() => {
+            const readiness = projectDecisionStartReadiness(decision)
+            return resolveProjectActionModel({
+              stored: compactSummary?.actionModel ?? projection?.actionModel,
+              startReadiness: {
+                ...readiness,
+                actionHref: `/projects/${encodeURIComponent(project.id)}/work${readiness.focusTaskId ? `?task=${encodeURIComponent(readiness.focusTaskId)}` : ''}`,
+              },
+              ownerInput: projection?.ownerInput && projection.ownerInput.openCount > 0
+                ? {
+                    active: true,
+                    label: 'Answer in Thread',
+                    detail: projection.ownerInput.next?.prompt ?? 'Open the thread to answer the current question.',
+                    href: projection.ownerInput.next?.href ?? `/projects/${encodeURIComponent(project.id)}/thread`,
+                  }
+                : null,
+              runStatus: decision.execution.state === 'running'
+                ? decision.execution.code === 'stopping' ? 'stopping' : 'running'
+                : undefined,
+              runMode: run?.mode ?? projection?.execution?.mode,
+            })
+          })()
+        : compactSummary?.actionModel ?? projection?.actionModel ?? null
       const projectedInFlight = projectDecisionInFlight(decision, inFlight)
       const topAction = activityActionFromDecision(project.id, decision)
       return c.json({
@@ -16571,7 +16613,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         counts,
         inFlight: projectedInFlight.slice(0, 5),
         decision,
-        actionModel,
+        actionModel: decisionActionModel,
         topAction,
         current: topAction,
         summary: topAction

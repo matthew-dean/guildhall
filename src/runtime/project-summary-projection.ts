@@ -45,7 +45,7 @@ import {
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
 import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
-import { applyRuntimeExecutionToProjectDecision, buildProjectDecisionProjection, projectDecisionStartReadiness, type ProjectDecisionProjection } from './project-decision-projection.js'
+import { applyProjectActionModelPrimaryAction, applyRuntimeExecutionToProjectDecision, buildProjectDecisionProjection, projectDecisionStartReadiness, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
@@ -139,6 +139,8 @@ export interface ProjectSummaryProjection {
     error?: string | null
     /** The task currently held by a live supervisor worker, if any. */
     activeTaskId?: string | null
+    /** Typed display identity paired with `activeTaskId`; never parsed from prose. */
+    activeTaskTitle?: string | null
     updatedAt: string
   }
   runtime?: {
@@ -188,6 +190,19 @@ export interface ProjectSummaryProjection {
   }>
   actionModel?: ProjectActionModel | null
   error?: string
+}
+
+/**
+ * Older summary writers may have persisted an action model after its decision
+ * packet. Normalize that bounded pair at the shared summary boundary so every
+ * promoted reader receives one primary action without reopening task detail.
+ */
+export function synchronizeProjectSummaryDecision(
+  summary: ProjectSummaryProjection,
+): ProjectSummaryProjection {
+  if (!summary.decision || typeof summary.decision !== 'object') return summary
+  const decision = applyProjectActionModelPrimaryAction(summary.decision, summary.actionModel?.primaryAction)
+  return decision === summary.decision ? summary : { ...summary, decision }
 }
 
 export interface ProjectSummarySourceCapabilityCatalog {
@@ -699,7 +714,7 @@ export function buildProjectSummaryProjection(
   }))
   const sourceCapabilityCatalog = summarizeSourceCapabilityCatalog(input.sourceCapabilities)
   const recentWork = recentWorkForTasks(tasks)
-  const decision = buildProjectDecisionProjection({
+  const initialDecision = buildProjectDecisionProjection({
     generatedAt,
     start,
     release: releaseSummary,
@@ -727,7 +742,7 @@ export function buildProjectSummaryProjection(
         ...(start.focusKind ? { focusKind: start.focusKind } : {}),
       }
   const startReadiness = {
-    ...projectDecisionStartReadiness(decision),
+    ...projectDecisionStartReadiness(initialDecision),
     ...(nextAction.code ? { code: nextAction.code } : {}),
     message: nextAction.message,
     ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
@@ -768,6 +783,7 @@ export function buildProjectSummaryProjection(
       ...recentWork.map(task => ({ id: task.taskId, title: task.title, status: task.status })),
     ].filter((task, index, all) => all.findIndex(candidate => candidate.id === task.id) === index),
   })
+  const decision = applyProjectActionModelPrimaryAction(initialDecision, actionModel.primaryAction)
 
   return {
     version: PROJECT_SUMMARY_PROJECTION_VERSION,
@@ -1218,7 +1234,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     blockers: taskReleaseBlockers,
     updatedAt: generatedAt,
   }
-  const decision = buildProjectDecisionProjection({
+  const initialDecision = buildProjectDecisionProjection({
     projectRevision: current.projectRevision,
     queueRevision: current.queueRevision,
     generatedAt,
@@ -1238,7 +1254,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const rawCounts = summarizeRawTaskCounts(tasks)
   const actionModel = buildProjectActionModel({
     startReadiness: {
-      ...projectDecisionStartReadiness(decision),
+      ...projectDecisionStartReadiness(initialDecision),
       ...(nextAction.code ? { code: nextAction.code } : {}),
       message: nextAction.message,
       ...(nextAction.focusTaskId ? { focusTaskId: nextAction.focusTaskId } : {}),
@@ -1267,6 +1283,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     runStatus: base.execution?.status ?? 'stopped',
     tasks: indexedActionTasks(tasks, rowsByTaskId),
   })
+  const decision = applyProjectActionModelPrimaryAction(initialDecision, actionModel.primaryAction)
   const scope = selectedRelease
     ? {
         id: String(selectedRelease.id),
@@ -2036,9 +2053,10 @@ function existingProjectionFields(
 export function readProjectSummaryProjection(tasksPath: string): ProjectSummaryProjection | null {
   const databaseSummary = readProjectStateDatabaseSummary<ProjectSummaryProjection>(tasksPath)
   if (databaseSummary) {
+    const summary = synchronizeProjectSummaryDecision(databaseSummary.payload)
     return {
-      ...databaseSummary.payload,
-      freshness: projectSummaryProjectionIsCurrent(databaseSummary.payload)
+      ...summary,
+      freshness: projectSummaryProjectionIsCurrent(summary)
         ? databaseSummary.freshness
         : 'stale',
     }
@@ -2108,10 +2126,11 @@ export function readProjectSummaryShellProjection(tasksPath: string): ProjectSum
       includeApprovedPlan: false,
     })
     if (databaseSummary) {
+      const summary = synchronizeProjectSummaryDecision(databaseSummary.payload)
       return {
-        ...databaseSummary.payload,
+        ...summary,
         orientationSpine: null,
-        freshness: projectSummaryProjectionIsCurrent(databaseSummary.payload)
+        freshness: projectSummaryProjectionIsCurrent(summary)
           ? databaseSummary.freshness
           : 'stale',
       }
