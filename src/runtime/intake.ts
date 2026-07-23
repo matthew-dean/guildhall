@@ -1379,18 +1379,19 @@ export async function rerunTaskStage(
     task.completedAt = undefined
     task.status = 'exploring'
     task.assignedTo = null
-    // "Rerun spec" is a new shaping boundary, not a worker retry. Remove the
-    // old executable contract even when the caller did not provide a special
-    // recovery reason; otherwise the coordinator can keep reusing a blueprint
-    // that the user explicitly asked it to replace.
-    resetCurrentPlanForProofRecovery(task, {
-      reason:
-        input.recoveryReason?.trim() ||
-        'The current plan was cleared for a fresh spec pass from current project reality.',
-      now,
-      agentId: 'system',
-      role: input.recoveryKind === 'proof' ? 'proof-recovery' : 'spec-recovery',
-    })
+    // A proof recovery replaces a stale executable contract. A blueprint
+    // rerun, by contrast, refines the durable source-grounded brief already
+    // on the task; it must not erase that owner-authored boundary.
+    if (input.recoveryKind === 'proof') {
+      resetCurrentPlanForProofRecovery(task, {
+        reason:
+          input.recoveryReason?.trim() ||
+          'The current proof plan was cleared for a fresh source-backed spec pass.',
+        now,
+        agentId: 'system',
+        role: 'proof-recovery',
+      })
+    }
     detachStaleShelvedReverseChildren(queue, task, now)
     task.updatedAt = now
     queue.lastUpdated = now
