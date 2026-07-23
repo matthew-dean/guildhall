@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Task, TaskQueue } from '@guildhall/core'
-import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, selectedProjectScopeForQueue } from '../project-scope-projection.js'
+import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, projectScopeMembershipCounts, selectedProjectScopeForQueue } from '../project-scope-projection.js'
 
 const now = '2026-07-04T12:00:00.000Z'
 
@@ -51,6 +51,22 @@ function queue(tasks: Task[]): TaskQueue {
 }
 
 describe('buildProjectScopeProjection', () => {
+  it('keeps public release membership totals when execution scope is compacted', () => {
+    expect(projectScopeMembershipCounts({
+      id: 'stage-1',
+      kind: 'release',
+      nodeIds: ['work:parent'],
+      deferredNodeIds: ['work:execution-only-deferred'],
+    }, [{
+      id: 'stage-1',
+      label: 'Stage 1',
+      kind: 'release',
+      state: 'active',
+      nodeIds: ['work:parent', 'work:also-included'],
+      deferredNodeIds: ['work:later-a', 'work:later-b'],
+    }])).toEqual({ taskCount: 2, deferredTaskCount: 2 })
+  })
+
   it('does not manufacture a release from task membership during a current-state read', () => {
     const selected = selectedProjectScopeForQueue({
       tasks: [task({ id: 'task-unreleased', releaseIds: ['release-in-task-only'] })],

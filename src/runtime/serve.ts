@@ -238,7 +238,7 @@ import {
   type ProjectOrientationCharter,
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
-import { buildProjectScopeProjection, executionScopeRows, normalizeProjectScopeRowReadModel, projectScopeRowNeedsOwnerInput, releaseLabelFromId, selectedProjectScopeForQueue, summarizeProjectScopeOutsideWork, taskCompletionProofSatisfiedByLinkedChildren, taskScopeNodeId, type ProjectScope, type ProjectScopeProjection, type ProjectScopeRow } from './project-scope-projection.js'
+import { buildProjectScopeProjection, executionScopeRows, normalizeProjectScopeRowReadModel, projectScopeMembershipCounts, projectScopeRowNeedsOwnerInput, releaseLabelFromId, selectedProjectScopeForQueue, summarizeProjectScopeOutsideWork, taskCompletionProofSatisfiedByLinkedChildren, taskScopeNodeId, type ProjectScope, type ProjectScopeProjection, type ProjectScopeRow } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -9773,13 +9773,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (selectedScope) {
       const releaseMetadata = queue.releases.find(release => release.id === selectedScope.id) ??
         workspaceGoalsState?.releases?.find(release => release.id === selectedScope.id)
+      const membershipCounts = projectScopeMembershipCounts(selectedScope, queue.releases)
       return {
         id: selectedScope.id,
         label: releaseMetadata?.label ?? selectedScope.label,
         kind: selectedScope.kind,
         source: releaseMetadata?.source ?? selectedScope.source,
-        taskCount: selectedScope.nodeIds.length,
-        deferredTaskCount: selectedScope.deferredNodeIds.length,
+        taskCount: membershipCounts.taskCount,
+        deferredTaskCount: membershipCounts.deferredTaskCount,
       }
     }
     const currentTasks = typedTasks.filter(task => !['archived', 'cancelled', 'shelved'].includes(String(task.status ?? '')))

@@ -34,6 +34,24 @@ export interface ProjectScope {
   proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
 }
 
+/**
+ * Public scope totals describe the owner-selected boundary. Scheduler rows can
+ * collapse parent/child work into fewer runnable units, but that execution
+ * view must never redefine how much work belongs to the release.
+ */
+export function projectScopeMembershipCounts(
+  scope: Pick<ProjectScope, 'id' | 'kind' | 'nodeIds' | 'deferredNodeIds'>,
+  releases: readonly ProjectRelease[],
+): { taskCount: number; deferredTaskCount: number } {
+  const release = scope.kind === 'release'
+    ? releases.find(candidate => candidate.id === scope.id)
+    : undefined
+  return {
+    taskCount: release?.nodeIds.length ?? scope.nodeIds.length,
+    deferredTaskCount: release?.deferredNodeIds.length ?? scope.deferredNodeIds.length,
+  }
+}
+
 type ProofScope = {
   id: string
   kind: string

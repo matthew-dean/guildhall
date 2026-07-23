@@ -53613,7 +53613,7 @@ Repair:
 
 ## 2026-07-23 Runtime is an overlay, not the saved plan decision
 
-- [ ] User job: when a run stops, every surface immediately stops claiming
+- [x] User job: when a run stops, every surface immediately stops claiming
       that Guildhall is running or stopping. It returns to the selected
       release's actual next state without a view guessing from old runtime
       copy.
@@ -53640,6 +53640,50 @@ Repair:
 - Apply/revert: consumers read one additive decision field. Existing summaries
       without it fail closed to a non-running state until their normal summary
       refresh restores the canonical plan execution.
+
+### Installed Replay Evidence
+
+- [x] Built and installed the current app bundle, restarted Guildhall, and
+      confirmed `/api/stale-server` returned `stale:false` after refreshing all
+      seven projects.
+- [x] Narrative Harness then reported `running:false` and `runStatus:"stopped"`
+      while Activity, Overview, Start, and Release all resolved the same
+      canonical next task: `task-synopsis-expansion-into-story-records`.
+      No installed Overview or Thread surface rendered the stale
+      `Guildhall is stopping` claim; desktop Overview had no horizontal
+      overflow at 1280px.
+
+## 2026-07-23 Release membership and executable work are distinct facts
+
+- [ ] User job: when Start says which release it will run, its visible scoped
+      and deferred counts must match Overview and Release. Internal execution
+      compaction may choose a child or proof-recovery item, but it must never
+      silently redefine the release boundary the user selected.
+- Finding: the Start response reused the canonical state's executable scope
+      projection for `executionScope.taskCount` and `deferredTaskCount`.
+      That projection intentionally collapses hierarchy for scheduling, while
+      queue membership is the durable release boundary. On Narrative Harness,
+      Start therefore said 15 scoped / 1 deferred while Overview and Release
+      correctly said 15 scoped / 33 deferred.
+
+### Contract Touch Decision
+
+- Work id: `0.13.99/release-membership-vs-execution-view`.
+- Touched contracts: selected-release presentation summary in Start,
+      canonical release membership, and the selected executable scope read.
+- Considered but not touched: task lifecycle, release selection, hierarchy
+      scheduling, work-item visibility, model output, and persisted release
+      records.
+- Required behavior: the selected release's label and public scoped/deferred
+      counts always come from its normalized membership relation. The
+      executable scope remains a separately named scheduler input; it may
+      reduce runnable units but cannot overwrite membership counts.
+- Proof required: focused Start regression where executable compaction differs
+      from release membership, followed by installed Narrative Harness Start /
+      Overview / Release agreement.
+- Apply/revert: no persisted schema change. Revert removes the derived
+      presentation helper only; release membership and scheduler rows remain
+      intact.
 
 ### Schema Migration Decision
 
