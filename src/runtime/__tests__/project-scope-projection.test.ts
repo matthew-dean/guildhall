@@ -138,7 +138,8 @@ describe('buildProjectScopeProjection', () => {
           status: 'done',
           semanticKind: 'proof_setup',
           workVisibility: { kind: 'internal_step', countInProjectTotals: false },
-          releaseIds: ['stage-1-shipped'],
+          proofForReleaseId: 'stage-1-shipped',
+          releaseIds: [],
           hierarchy: { parentId: 'task-parent', childIds: [], order: 1, relation: 'decomposes' },
         }),
         task({
@@ -147,7 +148,8 @@ describe('buildProjectScopeProjection', () => {
           status: 'done',
           semanticKind: 'proof_setup',
           workVisibility: { kind: 'internal_step', countInProjectTotals: false },
-          releaseIds: ['stage-1-r1'],
+          proofForReleaseId: 'stage-1-r1',
+          releaseIds: [],
           hierarchy: { parentId: 'task-parent', childIds: [], order: 1, relation: 'decomposes' },
           acceptanceCriteria: [{
             id: 'ac-1',

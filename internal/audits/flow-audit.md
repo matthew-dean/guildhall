@@ -125,6 +125,22 @@ help_summary: |
 - Guard diagnosability: the shipped-release rejection now reports the typed
   included/deferred node diff. This is evidence for a deterministic repair,
   never a reason to weaken or bypass the immutable-snapshot boundary.
+- Release-work contract follow-up: approval, retry, and acceptance-command
+  mutations had each inferred selected-release membership through a different
+  combination of scope rows, execution nodes, and historical task fields.
+  They now share one boundary resolver: normalized release membership settles
+  whether selected script-only proof is required, derived scope rows are
+  exposed only as a typed projection-mismatch diagnostic, and internal proof
+  children use `proofForReleaseId` exclusively. This prevents one agent from
+  acting on a task as selected-release work while another calls the same work
+  out of scope.
+- Internal-proof execution follow-up: the shared scope projection still
+  tested internal proof eligibility against visible `releaseIds` after that
+  field was normalized away. Release readiness could therefore identify
+  missing proof while Start could not see the ready proof child it had just
+  created. Internal proof eligibility now reads only `proofForReleaseId` at
+  the scope boundary, keeping release recovery, Work, and Start on the same
+  typed relation.
 - Compatibility reader: none. Rich task detail reads the typed scope; compact
   release projections read normalized visible membership. No surface is
   permitted to reconstruct one from the other.

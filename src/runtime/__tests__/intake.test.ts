@@ -621,7 +621,8 @@ describe('approveSpec', () => {
       // that needs another exploratory/spec loop.
       status: 'ready',
       hierarchy: { parentId: task.id },
-      releaseIds: ['release-1'],
+      proofForReleaseId: 'release-1',
+      releaseIds: [],
       workVisibility: { kind: 'internal_step', countInProjectTotals: false },
     })
     expect(parent.hierarchy?.childIds).toContain(proofSetup?.id)

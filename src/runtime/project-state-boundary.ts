@@ -230,6 +230,58 @@ export interface ProjectSavedReleaseReadModel {
 
 export type ProjectReleaseReadModel = ProjectCanonicalCurrentState | ProjectSavedReleaseReadModel
 
+/**
+ * One task's selected-release contract, resolved from the same saved project
+ * revision as Release and Start. Release membership is the normalized
+ * `release_membership` relation carried by the release node list; scope rows
+ * are a derived execution projection and are exposed here only so a caller
+ * can diagnose a stale projection instead of treating it as a second source
+ * of truth.
+ */
+export interface SelectedReleaseTaskContract {
+  release: ProjectRelease | null
+  taskId: string
+  membership: 'included' | 'deferred' | 'outside'
+  executionScope: 'included' | 'deferred' | 'outside'
+  projectionMismatch: boolean
+  proofStyle: ProjectRelease['proofStyle'] | undefined
+  requiresScriptProof: boolean
+}
+
+export function resolveSelectedReleaseTaskContract(
+  state: ProjectReleaseReadModel,
+  taskId: string,
+): SelectedReleaseTaskContract {
+  const release = state.scope
+    ? state.rawQueue.releases.find(candidate => candidate.id === state.scope?.id) ?? null
+    : null
+  const nodeId = taskScopeNodeId(taskId)
+  const membership = !release
+    ? 'outside'
+    : release.nodeIds.includes(nodeId)
+      ? 'included'
+      : release.deferredNodeIds.includes(nodeId)
+        ? 'deferred'
+        : 'outside'
+  const executionRow = state.scopeRows.find(row => row.taskId === taskId)
+  const executionScope = executionRow?.scope ?? 'outside'
+  // Current summaries should agree with normalized membership for a directly
+  // selected node. A mismatch is observable diagnostic state; decisions keep
+  // using the canonical relation rather than silently trusting whichever
+  // projection happened to be read by this route.
+  const projectionMismatch = executionScope !== 'outside' && executionScope !== membership
+  const proofStyle = release?.proofStyle
+  return {
+    release,
+    taskId,
+    membership,
+    executionScope,
+    projectionMismatch,
+    proofStyle,
+    requiresScriptProof: membership === 'included' && proofStyle === 'script_only',
+  }
+}
+
 function persistableRelease(release: ProjectRelease): ProjectRelease {
   const description = (release as ProjectRelease & { description?: string | null }).description
   return {

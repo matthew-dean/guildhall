@@ -62,7 +62,7 @@ import {
   pruneFleetSummaryProjectionAtBoundary,
   readFleetSummaryProjectionPageAtBoundary,
 } from './fleet-summary-projection.js'
-import { ProjectStateRevisionMismatchError, preserveRuntimeOverlayOnTaskQueueParse, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectOverviewStateAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, upsertProjectSourceCapabilitiesAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
+import { ProjectStateRevisionMismatchError, preserveRuntimeOverlayOnTaskQueueParse, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectOverviewStateAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, resolveSelectedReleaseTaskContract, upsertProjectSourceCapabilitiesAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -1141,7 +1141,44 @@ function savedReleaseProofRecoveryDecision(
   requestedTaskId?: string,
 ): ReleaseProofRecoveryDecision | null {
   if (requestedTaskId || executionScope?.kind !== 'release' || !summary) return null
-  const parentTaskIds = [...new Set(summary.releaseSummary.blockers
+  // The saved decision projection is the shared authority used by Release,
+  // Overview, and Work. Do not re-rank a parallel legacy blocker list here:
+  // that allowed Release to show proof debt while Start skipped it and stopped
+  // at an unrelated review gate. The older row list is read only for projects
+  // whose saved decision predates this typed field.
+  const decisionProofBlockerIds = summary.decision?.release.proofBlockerTaskIds ?? []
+  const legacyProofBlockerIds = summary.releaseSummary.blockers
+    .filter(blocker => blocker.code === 'proof_evidence_missing')
+    .map(blocker => blocker.owningTaskId ?? blocker.id)
+  const parentTaskIds = [...new Set((decisionProofBlockerIds.length > 0
+    ? decisionProofBlockerIds
+    : legacyProofBlockerIds)
+    .filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
+    .sort()
+  return parentTaskIds.length > 0
+    ? { releaseId: executionScope.id, parentTaskIds }
+    : null
+}
+
+/**
+ * Start owns a current task snapshot, so it can obtain the same proof-blocker
+ * set that the saved summary would project without falling back to a route
+ * specific ranking. This is intentionally the shared scope projection, not a
+ * second Start-only proof detector.
+ */
+function currentReleaseProofRecoveryDecision(
+  state: ProjectCanonicalCurrentState,
+  executionScope: StartExecutionScopeSummary | undefined,
+  requestedTaskId?: string,
+): ReleaseProofRecoveryDecision | null {
+  if (requestedTaskId || executionScope?.kind !== 'release') return null
+  const queueInput = {
+    version: 1,
+    ...state.rawQueue,
+    tasks: state.tasks,
+  }
+  const scopeProjection = buildProjectScopeProjection(TaskQueue.parse(queueInput))
+  const parentTaskIds = [...new Set(scopeProjection.release.blockers
     .filter(blocker => blocker.code === 'proof_evidence_missing')
     .map(blocker => blocker.owningTaskId ?? blocker.id)
     .filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
@@ -11189,18 +11226,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
             }
           : {}),
       })
+      const canonicalReleaseProofRecovery = canonicalState
+        ? currentReleaseProofRecoveryDecision(canonicalState, startReadiness.executionScope, body.taskId)
+        : null
+      const releaseProofRecovery = startReadiness.releaseProofRecovery ??
+        canonicalReleaseProofRecovery ??
+        savedReleaseProofRecoveryDecision(canonicalState?.summary, startReadiness.executionScope, body.taskId)
       if (
         !body.taskId &&
         canonicalState &&
-        (startReadiness.releaseProofRecovery ?? savedReleaseProofRecoveryDecision(
-          canonicalState.summary,
-          startReadiness.executionScope,
-        ))
+        releaseProofRecovery
       ) {
-        const releaseProofRecovery = startReadiness.releaseProofRecovery ?? savedReleaseProofRecoveryDecision(
-          canonicalState.summary,
-          startReadiness.executionScope,
-        )
         if (!releaseProofRecovery) {
           return c.json({
             error: 'Guildhall could not resolve selected-release proof recovery from the canonical current state.',
@@ -14787,18 +14823,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         // closure. The mutation queue remains the write/CAS source, but it
         // must not be the place where a release proof contract is inferred.
         const releaseState = await readProjectReleaseState(project.path)
-        const selectedRelease = releaseState.scope
-          ? releaseState.rawQueue.releases.find(release => release.id === releaseState.scope?.id)
+        const selectedReleaseTask = resolveSelectedReleaseTaskContract(releaseState, id)
+        const selectedRelease = selectedReleaseTask.release
+        const selectedProofStyle = selectedReleaseTask.requiresScriptProof
+          ? selectedReleaseTask.proofStyle
           : undefined
-        const selectedScope = releaseState.scope
-        // Scope rows are the shared release-membership authority. A task can
-        // be included through an ancestor or other normalized scope rule, so
-        // checking raw release nodeIds here would disagree with Overview,
-        // Release, and Start readiness.
-        const selectedTaskIsEligible = selectedScope
-          ? releaseState.scopeRows.some(row => row.taskId === String(task?.id ?? '') && row.scope === 'included')
-          : false
-        const selectedProofStyle = selectedTaskIsEligible ? selectedRelease?.proofStyle : undefined
         const currentTaskRead = await readProjectTaskCurrentStateAtBoundary(project.path, id)
         const effectiveTask = (currentTaskRead.task ?? await buildEffectiveTask(project.path, task as Task, {
           evidence: 'current',
@@ -14820,11 +14849,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return c.json({ error: `task is ${effectiveStatus}` }, 400)
         }
         const now = new Date().toISOString()
-        const taskReleaseIds = Array.isArray(effectiveTask.releaseIds)
-          ? effectiveTask.releaseIds.filter((releaseId): releaseId is string => typeof releaseId === 'string')
-          : []
-        const hasShippedReleaseMembership = taskReleaseIds.some(releaseId =>
-          releaseState.rawQueue.releases.some(release => release.id === releaseId && release.state === 'shipped'),
+        const hasShippedReleaseMembership = releaseState.rawQueue.releases.some(release =>
+          release.state === 'shipped' && release.nodeIds.includes(taskScopeNodeId(id)),
         )
         // A proof-setup task is already the release-local proof boundary. It
         // must be reopened as work, never treated as a parent that needs a
@@ -15495,12 +15521,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!projectTaskStateExistsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
         const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
         const releaseState = await readProjectReleaseState(project.path)
-        const selectedRelease = releaseState.scope
-          ? releaseState.rawQueue.releases.find(release => release.id === releaseState.scope?.id)
-          : undefined
-        const materializesSelectedScriptProof =
-          selectedRelease?.proofStyle === 'script_only' &&
-          releaseState.scope?.nodeIds.includes(taskScopeNodeId(id)) === true
+        const selectedReleaseTask = resolveSelectedReleaseTaskContract(releaseState, id)
+        const materializesSelectedScriptProof = selectedReleaseTask.requiresScriptProof
         const now = new Date().toISOString()
         let criterionFound = false
         let changed = false

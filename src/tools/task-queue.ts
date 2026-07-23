@@ -1205,14 +1205,13 @@ export function materializeProofSetupTask(
     if (candidate.hierarchy?.parentId !== parent.id || !isProofSetupTask(candidate)) return false
     if (['archived', 'cancelled'].includes(candidate.status)) return false
     if (requestedReleaseIds.size > 0 &&
-      ![candidate.proofForReleaseId, ...(candidate.releaseIds ?? [])]
-        .some(releaseId => releaseId && requestedReleaseIds.has(releaseId))) return false
+      !(candidate.proofForReleaseId && requestedReleaseIds.has(candidate.proofForReleaseId))) return false
     // A proof child shared with a shipped release is historical evidence. A
     // later release gets a fresh child even when the old child also names the
     // later release, so the current proof contract never mutates history.
-    const hasShippedMembership = [candidate.proofForReleaseId, ...(candidate.releaseIds ?? [])].some(releaseId =>
-      queue.releases?.some(release => release.id === releaseId && release.state === 'shipped') === true,
-    )
+    const hasShippedMembership = candidate.proofForReleaseId
+      ? queue.releases?.some(release => release.id === candidate.proofForReleaseId && release.state === 'shipped') === true
+      : false
     return !hasShippedMembership
   })
   if (existing) {
@@ -1279,7 +1278,6 @@ export function prepareReleaseProofRecovery(
     const parent = queue.tasks.find(task => task.id === parentTaskId)
     const isReleaseMember = Boolean(
       release && (
-        (parent?.releaseIds ?? []).includes(input.releaseId) ||
         (release.nodeIds ?? []).includes(`work:${parentTaskId}`)
       ),
     )

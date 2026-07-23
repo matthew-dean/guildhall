@@ -31,6 +31,7 @@ import {
   findForbiddenProjectTaskFields,
   readProjectCanonicalCurrentState,
   readProjectSavedReleaseState,
+  resolveSelectedReleaseTaskContract,
   projectTaskStateExistsSync,
   readProjectCurrentStateModel,
   readProjectMapStateModel,
@@ -53,6 +54,46 @@ import {
 import { readProjectSummaryProjection } from '../project-summary-projection.js'
 
 describe('project-state-boundary', () => {
+  it('uses normalized release membership for selected-release proof obligations and reports stale scope rows', () => {
+    const state = {
+      rawQueue: {
+        releases: [{
+          id: 'release-1',
+          label: 'Release 1',
+          kind: 'release',
+          state: 'active',
+          source: 'owner_approved',
+          nodeIds: ['work:task-included'],
+          deferredNodeIds: [],
+          proofStyle: 'script_only',
+        }],
+      },
+      scope: {
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        source: 'owner_approved',
+        nodeIds: ['work:task-included'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      },
+      scopeRows: [{ taskId: 'task-included', scope: 'deferred' }],
+    } as unknown as Parameters<typeof resolveSelectedReleaseTaskContract>[0]
+
+    expect(resolveSelectedReleaseTaskContract(state, 'task-included')).toMatchObject({
+      membership: 'included',
+      executionScope: 'deferred',
+      projectionMismatch: true,
+      requiresScriptProof: true,
+    })
+    expect(resolveSelectedReleaseTaskContract(state, 'task-projection-only')).toMatchObject({
+      membership: 'outside',
+      executionScope: 'outside',
+      projectionMismatch: false,
+      requiresScriptProof: false,
+    })
+  })
+
   it('records a structured capability snapshot without manufacturing task work', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-capability-catalog-'))
     const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')

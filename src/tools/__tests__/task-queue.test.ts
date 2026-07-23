@@ -2598,7 +2598,8 @@ describe('materializeProofSetupTask', () => {
         semanticKind: 'proof_setup',
         workKind: 'verification',
         taskKind: 'verification',
-        releaseIds: ['release-shipped', 'release-next'],
+        proofForReleaseId: 'release-shipped',
+        releaseIds: [],
         hierarchy: { parentId: 'task-001', childIds: [], order: 0, relation: 'decomposes' },
       }],
     })

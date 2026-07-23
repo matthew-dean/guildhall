@@ -176,6 +176,7 @@ export interface ProjectScopeTaskInput {
   id: string
   status?: TaskStatus
   releaseIds?: readonly string[]
+  proofForReleaseId?: string
   semanticKind?: string
   hierarchy?: { parentId?: string; childIds?: string[] }
 }
@@ -426,7 +427,7 @@ export function taskScopeEligibility(
   if (
     scope.kind === 'release' &&
     task.semanticKind === 'proof_setup' &&
-    !task.releaseIds?.includes(scope.id)
+    task.proofForReleaseId !== scope.id
   ) {
     // Proof setup is release-local executable work. A historical proof child
     // remains readable, but ancestor membership must not make it an active
@@ -526,7 +527,7 @@ function proofChildBelongsToSelectedScope(
   // historical proof children must not keep the current parent blocked (or
   // satisfy it) through ancestor membership alone.
   if (!selectedScope || selectedScope.kind !== 'release' || child.semanticKind !== 'proof_setup') return true
-  return child.releaseIds?.includes(selectedScope.id) === true
+  return child.proofForReleaseId === selectedScope.id
 }
 
 function currentTaskForProjection(task: Task): Task {

@@ -2644,36 +2644,9 @@ describe('POST /api/project/task/:id/start', () => {
         status: 'done',
         priority: 'normal',
         releaseIds: ['release-1'],
-        hierarchy: { childIds: ['task-1-proof-setup'], order: 0, relation: 'contains' },
         acceptanceCriteria: [{ id: 'ac-1', description: 'A project proof passes.', verifiedBy: 'review', met: true }],
         createdAt: now,
         updatedAt: now,
-        completedAt: now,
-      }, {
-        id: 'task-1-proof-setup',
-        title: 'Establish concrete proof for Prove author input',
-        description: 'Historical proof setup needs current proof.',
-        domain: 'harness',
-        projectPath: tmpDir,
-        status: 'done',
-        priority: 'normal',
-        semanticKind: 'proof_setup',
-        taskKind: 'verification',
-        workKind: 'verification',
-        workVisibility: { kind: 'internal_step', countInProjectTotals: false },
-        releaseIds: ['release-1'],
-        runtime: {
-          proofRecovery: {
-            reopenedAt: now,
-            kind: 'proof',
-            reason: 'A previous recovery marker must survive this stale terminal projection.',
-          },
-        },
-        hierarchy: { parentId: 'task-1', childIds: [], order: 0, relation: 'decomposes' },
-        acceptanceCriteria: [{ id: 'ac-1', description: 'A task-specific proof command is recorded and passes.', verifiedBy: 'review', met: true }],
-        createdAt: now,
-        updatedAt: now,
-        completedAt: now,
       }, {
         id: 'task-2',
         title: 'Prove chapter review',
@@ -2725,11 +2698,11 @@ describe('POST /api/project/task/:id/start', () => {
 
       const queue = await readTaskQueue()
       expect(queue.tasks.filter((task: Record<string, any>) => task.semanticKind === 'proof_setup')).toEqual([
-        expect.objectContaining({ id: 'task-1-proof-setup', status: 'ready', releaseIds: ['release-1'] }),
-        expect.objectContaining({ id: 'task-2-proof-setup', status: 'ready', releaseIds: ['release-1'] }),
+        expect.objectContaining({ id: 'task-1-proof-setup', status: 'ready', proofForReleaseId: 'release-1', releaseIds: [] }),
+        expect.objectContaining({ id: 'task-2-proof-setup', status: 'ready', proofForReleaseId: 'release-1', releaseIds: [] }),
       ])
       const runtime = await readTaskRuntimeStore(tmpDir)
-      expect(runtime.tasks['task-1-proof-setup']?.proofRecovery).toMatchObject({ kind: 'proof' })
+      expect(runtime.tasks['task-1-proof-setup']?.proofRecovery).toBeUndefined()
       expect(runtime.tasks['task-2-proof-setup']?.proofRecovery).toBeUndefined()
       expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-review')).toMatchObject({
         status: 'spec_review',
@@ -2965,9 +2938,8 @@ describe('POST /api/project/task/:id/approve-spec', () => {
         id: 'task-1',
         title: 'Build the bounded runner',
         status: 'spec_review',
-        // Imported work may receive selected-release membership through the
-        // normalized scope row, without carrying a duplicated raw releaseIds
-        // field on the task definition.
+        // Visible selected-release membership is normalized on the release
+        // node; task definitions do not duplicate it in `releaseIds`.
         structuredSpec: structuredSpecForTest('Build the bounded runner'),
         createdAt: now,
         updatedAt: now,
@@ -3014,7 +2986,8 @@ describe('POST /api/project/task/:id/approve-spec', () => {
       status: 'ready',
       workKind: 'verification',
       hierarchy: { parentId: 'task-1' },
-      releaseIds: ['release-1'],
+      proofForReleaseId: 'release-1',
+      releaseIds: [],
     })
     expect(queue.tasks[0]?.notes?.at(-1)?.content).toMatch(/linked verification work/i)
   })

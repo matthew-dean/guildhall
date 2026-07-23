@@ -53,8 +53,9 @@ import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup
 import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
 import {
   sanitizeTaskQueueForProjectWrite,
+  readProjectCanonicalCurrentState,
   readProjectStateAuthorityAtBoundary,
-  readProjectReleaseState,
+  resolveSelectedReleaseTaskContract,
   preserveRuntimeOverlayOnTaskQueueParse,
   writeProjectTaskQueueAtCurrentStateBoundary,
   writePromotedTaskDetailMutation,
@@ -113,14 +114,21 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
   return queueWithRuntime
 }
 
-async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
+async function writeQueue(
+  memoryDir: string,
+  queue: TaskQueue,
+  options: { expectedQueueRevision?: number | null; expectedProjectRevision?: number | null } = {},
+): Promise<void> {
   const tasksPath = tasksPathFor(memoryDir)
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
-  const expectedQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+  const expectedQueueRevision = options.expectedQueueRevision ?? readProjectStateDatabaseQueueRevision(tasksPath)
   await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
     projectId: path.basename(projectRoot),
     projectRoot,
     ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
+    ...(options.expectedProjectRevision !== null && options.expectedProjectRevision !== undefined
+      ? { expectedProjectRevision: options.expectedProjectRevision }
+      : {}),
   })
 }
 
@@ -410,9 +418,36 @@ export interface ApproveSpecResult {
  * Mark a task's spec as approved. A one-task spec moves to `ready`; a spec
  * that names multiple child tasks creates them and keeps this task as `parent`.
  */
+function isProjectRevisionRace(error: unknown): boolean {
+  return error instanceof Error && /Stale (?:targeted )?project mutation|project state changed|expected (?:project )?revision/i.test(error.message)
+}
+
 export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecResult> {
+  // Approval changes task state and can add a release-local proof child. If a
+  // release selection changes while that decision is in flight, discard the
+  // old decision and derive both facts again from one current snapshot.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await approveSpecFromCurrentSnapshot(input)
+    } catch (error) {
+      if (attempt === 0 && isProjectRevisionRace(error)) continue
+      throw error
+    }
+  }
+  throw new Error('Spec approval could not obtain a stable project snapshot.')
+}
+
+async function approveSpecFromCurrentSnapshot(input: ApproveSpecInput): Promise<ApproveSpecResult> {
   const approvalActor = input.approvalActor ?? 'human'
-  const queue = await readQueue(input.memoryDir)
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const canonicalState = await readProjectCanonicalCurrentState(projectRoot)
+  const currentQueue = {
+    version: 1,
+    ...canonicalState.rawQueue,
+    tasks: canonicalState.tasks.map(task => ({ ...task })),
+  }
+  const parsedQueue = TaskQueue.parse(currentQueue)
+  const queue = preserveRuntimeOverlayOnTaskQueueParse(currentQueue, parsedQueue)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
   if (task.status !== 'spec_review') {
@@ -459,18 +494,11 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     }
   }
 
-  // Scope rows are the release-membership authority. An imported task can be
-  // selected through normalized scope without carrying an old raw releaseIds
-  // copy; consulting that copy here made approval disagree with readiness.
-  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
-  const releaseState = await readProjectReleaseState(projectRoot)
-  const selectedRelease = releaseState.scope
-    ? releaseState.rawQueue.releases.find(release => release.id === releaseState.scope?.id)
-    : undefined
-  const taskIsIncludedInSelectedRelease = Boolean(selectedRelease) &&
-    releaseState.scopeRows.some(row => row.taskId === task.id && row.scope === 'included')
-  const requiresScriptProof = taskIsIncludedInSelectedRelease &&
-    selectedRelease?.proofStyle === 'script_only' &&
+  // The selected-release contract comes from the shared canonical boundary.
+  // Approval must not choose a different membership interpretation than
+  // release readiness, Start, or a task command mutation.
+  const selectedReleaseTask = resolveSelectedReleaseTaskContract(canonicalState, task.id)
+  const requiresScriptProof = selectedReleaseTask.requiresScriptProof &&
     !isProofSetupTask(task)
   let proofSetupTaskId: string | null = null
   const hasConcreteScriptProof = (task.proofPaths ?? []).some(path => (
@@ -486,7 +514,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   if (requiresScriptProof && !hasConcreteScriptProof) {
     const now = new Date().toISOString()
     const proofSetup = materializeProofSetupTask(queue, task, now, {
-      releaseIds: selectedRelease?.id ? [selectedRelease.id] : [],
+      releaseIds: selectedReleaseTask.release?.id ? [selectedReleaseTask.release.id] : [],
     })
     proofSetupTaskId = proofSetup.childTaskId
     task.proofPaths = replaceGenericProjectProofPathsWithSetup(task)
@@ -512,12 +540,6 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       timestamp: now,
     })
     queue.lastUpdated = now
-    await writeQueue(input.memoryDir, queue)
-    await upsertTaskRuntimeState(projectRoot, task.id, {
-      assignedTo: null,
-      proofRecovery: undefined,
-      updatedAt: now,
-    })
   }
 
   const now = new Date().toISOString()
@@ -660,8 +682,11 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     })
   }
 
-  await writeQueue(input.memoryDir, queue)
-  await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(input.memoryDir), task.id, {
+  await writeQueue(input.memoryDir, queue, {
+    expectedQueueRevision: canonicalState.queueRevision,
+    expectedProjectRevision: canonicalState.projectRevision,
+  })
+  await upsertTaskRuntimeState(projectRoot, task.id, {
     assignedTo: null,
     proofRecovery: undefined,
     updatedAt: now,
