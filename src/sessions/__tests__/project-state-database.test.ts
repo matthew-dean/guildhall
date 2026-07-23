@@ -26,6 +26,7 @@ import {
   readProjectStateDatabaseQueue,
   readProjectStateDatabaseQueueRevision,
   readProjectStateDatabaseQueueDefinition,
+  readProjectStateDatabaseQueueDefinitionForMigration,
   readProjectStateDatabaseReadBundle,
   readProjectStateDatabaseSurfaceState,
   readProjectStateDatabaseRevisionFromTasksPath,
@@ -2787,6 +2788,34 @@ describe('project-state database', () => {
     expect(readProjectStateDatabaseTask(tasksPath, 'task-1')?.definition).toMatchObject({
       spec: 'Full detail is not part of the mutable current-state row.',
     })
+  })
+
+  it('reconstructs migration detail with the indexed current lifecycle', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        tasks: [{
+          id: 'task-1',
+          title: 'Current lifecycle wins',
+          status: 'ready',
+          structuredSpec: { whatThisIs: 'A durable task definition.' },
+        }],
+      },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+    })
+
+    // Simulate the old split representation: detail still contains `ready`,
+    // while the normalized current lifecycle has advanced to `exploring`.
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    database.prepare('UPDATE work_items SET status = ? WHERE id = ?').run('exploring', 'task-1')
+    database.close()
+
+    expect(readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)?.tasks).toEqual([
+      expect.objectContaining({
+        id: 'task-1',
+        status: 'exploring',
+        structuredSpec: { whatThisIs: 'A durable task definition.' },
+      }),
+    ])
   })
 
   it('does not allocate for live-state reads and imports legacy records only through an explicit migration', async () => {

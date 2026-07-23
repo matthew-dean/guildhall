@@ -3130,10 +3130,14 @@ function readQueueDefinitionFromWorkItemDetails(
   // Queue order is semantic: hierarchy.childIds and callers that read the
   // rich queue expect the materialized insertion order, not “most recently
   // edited first”. The compact inventory may sort by freshness separately.
-  const taskRows = database.prepare('SELECT id, updated_at, summary_json FROM work_items ORDER BY rowid').all() as JsonRecord[]
+  const taskRows = database.prepare('SELECT * FROM work_items ORDER BY rowid').all() as JsonRecord[]
   const detailRows = database.prepare('SELECT task_id, revision, payload_gzip FROM work_item_detail').all() as JsonRecord[]
   if (detailRows.length !== taskRows.length) return null
   const summaryByTaskId = new Map(taskRows.map(row => [String(row.id), parseJson<JsonRecord>(row.summary_json, {})]))
+  const indexedByTaskId = new Map(taskRows.map(row => {
+    const indexed = taskFromRow(row, false)
+    return [indexed.id, indexed] as const
+  }))
   const byId = new Map<string, JsonRecord>()
   for (const row of detailRows) {
     const taskId = stringValue(row.task_id)
@@ -3143,10 +3147,33 @@ function readQueueDefinitionFromWorkItemDetails(
     // revision without a table-wide metadata rewrite.
     const detail = taskId ? parseWorkItemDetail(row.payload_gzip) : null
     if (!taskId || !detail) return null
+    const indexed = indexedByTaskId.get(taskId)
+    if (!indexed) return null
+    // Detail owns the rich task definition. Indexed columns own current
+    // lifecycle and compact identity fields. A rich migration read must use
+    // the same two ownership layers as the task-detail boundary, otherwise a
+    // stale definition status can make migration planning disagree with the
+    // visible task state at one project revision.
+    const current: JsonRecord = {
+      ...detail,
+      id: indexed.id,
+      title: indexed.title,
+      ...(indexed.description !== null ? { description: indexed.description } : {}),
+      ...(indexed.status !== null ? { status: indexed.status } : {}),
+      ...(indexed.domain !== null ? { domain: indexed.domain } : {}),
+      ...(indexed.priority !== null ? { priority: indexed.priority } : {}),
+      ...(indexed.workKind !== null ? { workKind: indexed.workKind } : {}),
+      ...(indexed.semanticKind !== null && indexed.semanticKind !== undefined ? { semanticKind: indexed.semanticKind } : {}),
+      ...(indexed.hierarchy ? { hierarchy: indexed.hierarchy } : {}),
+      ...(indexed.dependsOn.length > 0 ? { dependsOn: [...indexed.dependsOn] } : {}),
+      ...(indexed.sourceRefs.length > 0 ? { sourceRefs: [...indexed.sourceRefs] } : {}),
+      ...(indexed.updatedAt !== null ? { updatedAt: indexed.updatedAt } : {}),
+      ...(indexed.completedAt !== null ? { completedAt: indexed.completedAt } : {}),
+    }
     const summary = summaryByTaskId.get(taskId) ?? {}
     byId.set(taskId, isRecord(summary.currentSummary)
-      ? { ...detail, currentSummary: summary.currentSummary }
-      : detail)
+      ? { ...current, currentSummary: summary.currentSummary }
+      : current)
   }
   if (byId.size !== taskRows.length || taskRows.some(row => !byId.has(String(row.id)))) return null
   const releaseIdsByTask = readReleaseMembershipByTask(database)
