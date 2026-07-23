@@ -573,6 +573,17 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   if (startReadiness?.canStart && startReadiness.code === 'ready_work') {
     candidates.push(startReadinessAction(startReadiness))
   }
+  if (running && startReadiness?.focusTaskId) {
+    candidates.push({
+      source: 'start_readiness',
+      label: startReadiness.focusTaskTitle?.trim() || 'Current work',
+      detail: startReadiness.message,
+      buttonLabel: 'Open Work',
+      href: startReadiness.actionHref ?? workHrefForTask(startReadiness.focusTaskId),
+      tone: 'running',
+      taskId: startReadiness.focusTaskId,
+    })
+  }
   if (setupBlocksStart && ownerInput.href) {
     candidates.push({
       source: 'owner_input',

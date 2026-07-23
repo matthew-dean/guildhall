@@ -1240,6 +1240,56 @@ describe('project-state database', () => {
     })
   })
 
+  it('keeps internal release-context steps out of visible release membership', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          nodeIds: ['work:task-parent', 'work:task-parent-proof'],
+          deferredNodeIds: [],
+        }],
+        tasks: [
+          { id: 'task-parent', title: 'Feature proof', status: 'done', releaseIds: ['release-current'] },
+          {
+            id: 'task-parent-proof',
+            title: 'Establish proof',
+            status: 'ready',
+            proofForReleaseId: 'release-current',
+            releaseIds: [],
+            workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+            hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' },
+          },
+        ],
+      },
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(database.prepare('SELECT release_id, task_id, disposition FROM release_membership ORDER BY task_id').all()).toEqual([
+      { release_id: 'release-current', task_id: 'task-parent', disposition: 'included' },
+    ])
+    database.close()
+
+    expect(readProjectStateDatabaseQueue(tasksPath)).toMatchObject({
+      releases: [{ id: 'release-current', nodeIds: ['work:task-parent'] }],
+      tasks: [
+        { id: 'task-parent', releaseIds: ['release-current'] },
+        { id: 'task-parent-proof' },
+      ],
+    })
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      tasks: [
+        { id: 'task-parent', releaseIds: ['release-current'] },
+        { id: 'task-parent-proof', proofForReleaseId: 'release-current', releaseIds: [] },
+      ],
+    })
+  })
+
   it('does not resurrect a dependency from the JSON mirror after normalized edges change', () => {
     writeProjectStateDatabaseSnapshot(tasksPath, {
       queue: {

@@ -228,6 +228,7 @@ const PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID = '0.13.57/proof-setup-effec
 const DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID = '0.13.58/diagnostic-readiness-task-identity'
 const SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID = '0.13.59/script-only-proof-projection'
 const SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID = '0.13.60/source-capability-summary'
+const INTERNAL_PROOF_RELEASE_CONTEXT_MIGRATION_ID = '0.13.65/internal-proof-release-context'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -327,7 +328,7 @@ function repairProofSetupExecutionBlueprint(
   const command = concreteProofCommandForTask(task)
   const canonical = buildProofSetupTaskContract(parent, now, {
     id: task.id,
-    releaseIds: task.releaseIds?.length ? task.releaseIds : parent.releaseIds,
+    ...proofSetupContractScope(task),
     ...(command ? { command } : {}),
   })
   const previousNotes = Array.isArray(task.notes) ? task.notes : []
@@ -368,7 +369,7 @@ function migrateDeterministicProofSetupContract(
   const command = concreteProofCommandForTask(task)
   const canonical = buildProofSetupTaskContract(parent, now, {
     id: task.id,
-    releaseIds: task.releaseIds?.length ? task.releaseIds : parent.releaseIds,
+    ...proofSetupContractScope(task),
     ...(command ? { command } : {}),
   })
   const previousNotes = Array.isArray(task.notes) ? task.notes : []
@@ -400,6 +401,98 @@ function migrateDeterministicProofSetupContract(
 
 function proofSetupParentId(task: Task): string | undefined {
   return task.hierarchy?.parentId ?? task.delivery?.supports?.[0]
+}
+
+function proofSetupScopedReleaseIds(task: Task): string[] {
+  return [...new Set([
+    ...(task.proofForReleaseId ? [task.proofForReleaseId] : []),
+    ...(task.releaseIds ?? []),
+  ])]
+}
+
+function proofSetupContractScope(task: Task): { proofForReleaseId?: string; releaseIds?: string[] } {
+  if (task.proofForReleaseId) return { proofForReleaseId: task.proofForReleaseId }
+  return task.releaseIds?.length ? { releaseIds: task.releaseIds } : {}
+}
+
+function proofSetupReleaseContextIds(
+  queue: { releases?: ProjectRelease[] },
+  task: Task,
+): string[] {
+  const nodeId = `work:${task.id}`
+  return [...new Set([
+    ...(task.proofForReleaseId ? [task.proofForReleaseId] : []),
+    ...(task.releaseIds ?? []),
+    ...(queue.releases ?? [])
+      .filter(release => release.nodeIds?.includes(nodeId) || release.deferredNodeIds?.includes(nodeId))
+      .map(release => release.id),
+  ])]
+}
+
+function isInternalProofSetupTask(task: Task): boolean {
+  return isProofSetupTask(task) && task.workVisibility?.countInProjectTotals === false
+}
+
+function internalProofReleaseContextNeedsMigration(queue: { tasks: Task[]; releases?: ProjectRelease[] }): boolean {
+  return queue.tasks.some(task =>
+    isInternalProofSetupTask(task) && (
+      task.releaseIds?.length ||
+      (queue.releases ?? []).some(release =>
+        release.nodeIds?.includes(`work:${task.id}`) || release.deferredNodeIds?.includes(`work:${task.id}`),
+      )
+    ),
+  )
+}
+
+function migrateInternalProofReleaseContexts(
+  queue: { tasks: Task[]; releases?: ProjectRelease[] },
+  now: string,
+): { normalized: number; materialized: number; historical: number } {
+  let normalized = 0
+  let materialized = 0
+  let historical = 0
+  for (const task of [...queue.tasks]) {
+    if (!isInternalProofSetupTask(task)) continue
+    const legacyContextIds = proofSetupReleaseContextIds(queue, task)
+    const hadVisibleMembership = (task.releaseIds?.length ?? 0) > 0 ||
+      (queue.releases ?? []).some(release =>
+        release.nodeIds?.includes(`work:${task.id}`) || release.deferredNodeIds?.includes(`work:${task.id}`),
+      )
+    if (!hadVisibleMembership) continue
+
+    // A persisted typed proof scope wins over an obsolete membership row.
+    // Membership is always cleared because this work is intentionally hidden
+    // from the product/release skeleton.
+    task.releaseIds = []
+    for (const release of queue.releases ?? []) {
+      release.nodeIds = (release.nodeIds ?? []).filter(nodeId => nodeId !== `work:${task.id}`)
+      release.deferredNodeIds = (release.deferredNodeIds ?? []).filter(nodeId => nodeId !== `work:${task.id}`)
+    }
+
+    if (!task.proofForReleaseId && legacyContextIds.length === 1) {
+      task.proofForReleaseId = legacyContextIds[0]
+    } else if (!task.proofForReleaseId && legacyContextIds.length > 1) {
+      // One old child claimed multiple release memberships. It cannot be
+      // truthfully assigned to one of them. Keep it as historical evidence
+      // and create fresh, explicitly scoped proof work for every active
+      // release instead of selecting an arbitrary winner.
+      const parentId = proofSetupParentId(task)
+      const parent = parentId ? queue.tasks.find(candidate => candidate.id === parentId) : undefined
+      for (const releaseId of legacyContextIds) {
+        const release = queue.releases?.find(candidate => candidate.id === releaseId)
+        if (!parent || !release || release.state === 'shipped') continue
+        const result = materializeProofSetupTask(queue as Parameters<typeof materializeProofSetupTask>[0], parent, now, {
+          releaseIds: [releaseId],
+          linkParent: false,
+        })
+        if (result.status === 'materialized') materialized += 1
+      }
+      historical += 1
+    }
+    task.updatedAt = now
+    normalized += 1
+  }
+  return { normalized, materialized, historical }
 }
 
 function rawProofPathRecords(task: Task): Array<Record<string, unknown>> {
@@ -446,7 +539,7 @@ function taskNeedsProofSetupCompletionRepair(
 ): boolean {
   if (!isProofSetupTask(task) || task.status !== 'done') return false
 
-  const taskReleaseIds = new Set(task.releaseIds ?? [])
+  const taskReleaseIds = new Set(proofSetupScopedReleaseIds(task))
   const shippedReleaseIds = new Set(
     [...taskReleaseIds].filter(releaseId => releases.some(release => release.id === releaseId && release.state === 'shipped')),
   )
@@ -490,7 +583,7 @@ function proofSetupRuntimeRecoveryIsActionable(
   releases: readonly ProjectRelease[],
   selectedReleaseId: string | null | undefined,
 ): boolean {
-  const taskReleaseIds = task.releaseIds ?? []
+  const taskReleaseIds = proofSetupScopedReleaseIds(task)
   // A proof repair is executable-release maintenance, never a retrospective
   // rewrite of historical release evidence. Once a project has a selected
   // release, only that release may make this migration actionable.
@@ -506,7 +599,8 @@ function releaseLocalProofSetupRepair(
   releases: readonly ProjectRelease[],
   now: string,
 ): boolean {
-  const taskReleaseIds = new Set(task.releaseIds ?? [])
+  if (task.proofForReleaseId) return false
+  const taskReleaseIds = new Set(proofSetupScopedReleaseIds(task))
   const shippedReleaseIds = [...taskReleaseIds].filter(releaseId =>
     releases.some(release => release.id === releaseId && release.state === 'shipped'),
   )
@@ -670,7 +764,7 @@ function repairCanonicalProofSetupAcceptanceContract(
   const command = concreteProofCommandForTask(task)
   const canonical = buildProofSetupTaskContract(parent, now, {
     id: task.id,
-    releaseIds: task.releaseIds?.length ? task.releaseIds : parent.releaseIds,
+    ...proofSetupContractScope(task),
     ...(command ? { command } : {}),
   })
   const previousNotes = Array.isArray(task.notes) ? task.notes : []
@@ -4041,7 +4135,7 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       )
       let changed = 0
       for (const task of queue.tasks as unknown as Task[]) {
-        const preserveCompletedStatus = (task.releaseIds ?? []).some(releaseId => shippedReleaseIds.has(releaseId))
+        const preserveCompletedStatus = proofSetupScopedReleaseIds(task).some(releaseId => shippedReleaseIds.has(releaseId))
         if (migrateProofSetupCommandIdentity(task, now, preserveCompletedStatus)) changed += 1
       }
       if (changed > 0) {
@@ -4530,6 +4624,54 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
           ? `Reprojected release readiness for ${projection.counts.total} scoped task${projection.counts.total === 1 ? '' : 's'} using the selected release's proof children.`
           : 'Recorded an unavailable release readiness projection because the authoritative project state could not be read.',
         affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: INTERNAL_PROOF_RELEASE_CONTEXT_MIGRATION_ID,
+    title: 'Separate internal proof context from release membership',
+    introducedIn: '0.13.65',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Moves hidden proof work out of visible release membership and records one typed proof scope per child so release progress never replaces a feature with its internal verification step.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const typedQueue = queue as unknown as { tasks: Task[]; releases?: ProjectRelease[] } | null
+      const needed = typedQueue ? internalProofReleaseContextNeedsMigration(typedQueue) : false
+      return {
+        needed,
+        affectedPaths: needed
+          ? [projectStateDatabasePath(projectRoot), 'internal proof release membership']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped internal proof scope normalization because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const typedQueue = queue as unknown as { tasks: Task[]; releases?: ProjectRelease[]; lastUpdated?: string }
+      const result = migrateInternalProofReleaseContexts(typedQueue, new Date().toISOString())
+      if (result.normalized > 0) {
+        typedQueue.lastUpdated = new Date().toISOString()
+        writeProjectTaskQueueWithSummary(tasksPath, typedQueue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: result.normalized > 0
+          ? `Normalized ${result.normalized} internal proof scope${result.normalized === 1 ? '' : 's'}; ${result.materialized} fresh active-release proof task${result.materialized === 1 ? '' : 's'} replaced ambiguous historical membership${result.historical > 0 ? ` across ${result.historical} historical record${result.historical === 1 ? '' : 's'}` : ''}.`
+          : 'Internal proof work already uses typed release context and no visible release membership.',
+        affectedPaths: result.normalized > 0 ? [projectStateDatabasePath(projectRoot)] : [],
       }
     },
   },

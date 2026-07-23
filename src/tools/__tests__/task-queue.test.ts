@@ -2531,7 +2531,8 @@ describe('materializeProofSetupTask', () => {
       taskKind: 'verification',
       semanticKind: 'proof_setup',
       projectPath: queue.tasks[0]!.projectPath,
-      releaseIds: ['release-1'],
+      proofForReleaseId: 'release-1',
+      releaseIds: [],
       references: ['docs/release-plan.md'],
       workVisibility: { kind: 'internal_step', countInProjectTotals: false },
       hierarchy: { parentId: 'task-001', relation: 'decomposes' },
@@ -2612,7 +2613,8 @@ describe('materializeProofSetupTask', () => {
     expect(result.childTaskId).toBe('task-001-proof-setup-2')
     expect(child).toMatchObject({
       status: 'ready',
-      releaseIds: ['release-next'],
+      proofForReleaseId: 'release-next',
+      releaseIds: [],
       hierarchy: { parentId: 'task-001', relation: 'decomposes' },
     })
     expect(queue.tasks[0]!.hierarchy?.childIds).toEqual(['task-001-proof-setup'])
@@ -2688,12 +2690,14 @@ describe('prepareReleaseProofRecovery', () => {
     })
     expect(queue.tasks.find(task => task.id === 'task-001-proof-setup')).toMatchObject({
       status: 'ready',
-      releaseIds: ['release-1'],
+      proofForReleaseId: 'release-1',
+      releaseIds: [],
       hierarchy: { parentId: 'task-001', relation: 'decomposes' },
     })
     expect(queue.tasks.find(task => task.id === 'task-002-proof-setup')).toMatchObject({
       status: 'ready',
-      releaseIds: ['release-1'],
+      proofForReleaseId: 'release-1',
+      releaseIds: [],
       hierarchy: { parentId: 'task-002', relation: 'decomposes' },
     })
   })

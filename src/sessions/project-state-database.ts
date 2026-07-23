@@ -1096,6 +1096,11 @@ function taskIdFromReleaseNodeId(value: string): string {
   return value.replace(/^work:/, '').trim()
 }
 
+function taskHasInternalReleaseContext(task: JsonRecord): boolean {
+  const visibility = task.workVisibility
+  return isRecord(visibility) && visibility.countInProjectTotals === false
+}
+
 function releaseMembershipFromDefinitions(releases: readonly JsonRecord[]): ProjectStateDatabaseReleaseMembership[] {
   const rows = new Map<string, ProjectStateDatabaseReleaseMembership>()
   for (const release of releases) {
@@ -1168,6 +1173,17 @@ function releaseDefinitionsWithTaskMembership(
     const taskId = stringValue(task.id)
     if (!taskId) continue
     const nodeId = `work:${taskId}`
+    // Internal steps can retain a release ID as execution context, but they
+    // are not members of the release's visible/project-total scope. Keeping
+    // those two relationships separate prevents a proof child from replacing
+    // the feature it verifies in Map or release progress.
+    if (taskHasInternalReleaseContext(task)) {
+      for (const release of byId.values()) {
+        release.nodeIds = stringArray(release.nodeIds).filter(value => value !== nodeId)
+        release.deferredNodeIds = stringArray(release.deferredNodeIds).filter(value => value !== nodeId)
+      }
+      continue
+    }
     const status = stringValue(task.status)
     const terminal = status === 'archived' || status === 'cancelled'
     const deferred = status === 'shelved'
@@ -3015,7 +3031,14 @@ function readQueueDefinitionFromWorkItemDetails(
   const dependencyIdsByTask = readTaskDependenciesByTask(database)
   const capabilityBindingsByTask = readTaskCapabilityBindingsByTask(database, [...byId.keys()])
   for (const [taskId, task] of byId) {
-    if (tableExists(database, 'release_membership')) task.releaseIds = releaseIdsByTask.get(taskId) ?? []
+    if (tableExists(database, 'release_membership')) {
+      // A visible task's release IDs are normalized membership. Internal
+      // work may carry a distinct typed execution context in its detail, but
+      // it can never be reconstructed as visible release membership.
+      task.releaseIds = taskHasInternalReleaseContext(task)
+        ? []
+        : releaseIdsByTask.get(taskId) ?? []
+    }
     if (tableExists(database, 'task_dependencies')) task.dependsOn = dependencyIdsByTask.get(taskId) ?? []
     const bindings = capabilityBindingsByTask.get(taskId)
     if (bindings) task.capabilityBindings = bindings.map(({ capabilityId, relation }) => ({ capabilityId, relation }))

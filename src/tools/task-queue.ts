@@ -1200,15 +1200,17 @@ export function materializeProofSetupTask(
     return { status: 'already_represented', childTaskId: parent.id }
   }
   const requestedReleaseIds = new Set(options.releaseIds ?? [])
+  const proofReleaseIds = options.releaseIds ?? parent.releaseIds ?? []
   const existing = queue.tasks.find((candidate) => {
     if (candidate.hierarchy?.parentId !== parent.id || !isProofSetupTask(candidate)) return false
     if (['archived', 'cancelled'].includes(candidate.status)) return false
     if (requestedReleaseIds.size > 0 &&
-      !(candidate.releaseIds ?? []).some(releaseId => requestedReleaseIds.has(releaseId))) return false
+      ![candidate.proofForReleaseId, ...(candidate.releaseIds ?? [])]
+        .some(releaseId => releaseId && requestedReleaseIds.has(releaseId))) return false
     // A proof child shared with a shipped release is historical evidence. A
     // later release gets a fresh child even when the old child also names the
     // later release, so the current proof contract never mutates history.
-    const hasShippedMembership = (candidate.releaseIds ?? []).some(releaseId =>
+    const hasShippedMembership = [candidate.proofForReleaseId, ...(candidate.releaseIds ?? [])].some(releaseId =>
       queue.releases?.some(release => release.id === releaseId && release.state === 'shipped') === true,
     )
     return !hasShippedMembership
@@ -1227,7 +1229,7 @@ export function materializeProofSetupTask(
 
   const child = buildProofSetupTaskContract(parent, timestamp, {
     id,
-    releaseIds: options.releaseIds,
+    releaseIds: proofReleaseIds,
   })
 
   queue.tasks.push(child)
@@ -1321,9 +1323,11 @@ export function prepareReleaseProofRecovery(
 export function buildProofSetupTaskContract(
   parent: TaskRecord,
   timestamp: string,
-  options: { id?: string; releaseIds?: readonly string[]; command?: string } = {},
+  options: { id?: string; releaseIds?: readonly string[]; proofForReleaseId?: string; command?: string } = {},
 ): TaskModel {
   const id = options.id ?? `${parent.id}-proof-setup`
+  const requestedReleaseIds = [...new Set(options.releaseIds ?? parent.releaseIds ?? [])]
+  const proofForReleaseId = options.proofForReleaseId ?? (requestedReleaseIds.length === 1 ? requestedReleaseIds[0] : undefined)
   const childStructuredSpec = StructuredSpec.parse({
     whatThisIs: `A bounded proof-setup task for ${parent.title}.`,
     problemContext: 'The selected script-only release requires one exact project-backed command before the containing task can be released.',
@@ -1402,7 +1406,10 @@ export function buildProofSetupTaskContract(
       kind: 'internal_step',
       countInProjectTotals: false,
     },
-    releaseIds: [...(options.releaseIds ?? parent.releaseIds ?? [])],
+    ...(proofForReleaseId ? { proofForReleaseId } : {}),
+    // Internal verification work inherits its execution eligibility through
+    // hierarchy. It never joins the visible release membership relation.
+    releaseIds: [],
     references: [...(parent.references ?? [])],
     delivery: {
       ...(parent.delivery ?? {}),

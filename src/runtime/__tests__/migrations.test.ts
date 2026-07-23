@@ -3931,6 +3931,66 @@ describe('applyProjectMigrations', () => {
       taskId: 'task-legacy',
     })
   })
+
+  it('moves legacy internal proof membership into typed proof scope', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          source: 'user',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-parent'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'task-parent',
+          title: 'Visible feature',
+          status: 'done',
+          releaseIds: ['release-current'],
+        }, {
+          id: 'task-parent-proof',
+          title: 'Internal proof',
+          status: 'ready',
+          semanticKind: 'proof_setup',
+          workKind: 'verification',
+          taskKind: 'verification',
+          workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+          hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' },
+          releaseIds: [],
+        }],
+      },
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    database.prepare("INSERT INTO release_membership (release_id, task_id, disposition) VALUES ('release-current', 'task-parent-proof', 'included')").run()
+    database.close()
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.65/internal-proof-release-context'],
+    })
+
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.65/internal-proof-release-context'])
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      releases: [{ id: 'release-current', nodeIds: ['work:task-parent'] }],
+      tasks: expect.arrayContaining([
+        expect.objectContaining({ id: 'task-parent-proof', proofForReleaseId: 'release-current', releaseIds: [] }),
+      ]),
+    })
+    const after = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(after.prepare('SELECT release_id, task_id FROM release_membership ORDER BY task_id').all()).toEqual([
+      { release_id: 'release-current', task_id: 'task-parent' },
+    ])
+    after.close()
+  })
 })
 
 async function rewriteOwnerInputPrompt(

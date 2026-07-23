@@ -30,11 +30,11 @@ help_summary: |
 
 ### Contract Touch Decision
 
-- Touched contracts: selected-release proof recovery, the task runtime
-  recovery marker, required-migration start readiness, and the shared
-  action-model setup field.
-- Contracts considered but not touched: release membership, task hierarchy,
-  proof evidence schema, owner approval, and provider routing.
+- Touched contracts: selected-release proof recovery, visible release
+  membership, internal proof scope, the task runtime recovery marker,
+  required-migration start readiness, and the shared action-model setup field.
+- Contracts considered but not touched: task hierarchy, proof evidence schema,
+  owner approval, and provider routing.
 - Change: the shared start decision prepares the complete saved release blocker
   set as internal proof work and retains global selected-release scope. The
   task graph and runtime marker commit in one revision-guarded SQLite mutation.
@@ -79,21 +79,34 @@ help_summary: |
   `proof_evidence_missing`. The route now applies the explicit recovery action
   after hard project gates and before any task-level stop result. Recovery
   still validates release membership and revision-guards the batch mutation.
-- Apply/revert: code-only. Revert the queue/runtime transition and migration
-  predicate together; no historical task or release data is rewritten.
+- Scope-model follow-up: normalized release membership treated a proof setup
+  child's release context as visible membership, allowing internal steps to
+  replace their verified features in a release scope. Internal steps now keep
+  typed release context in their task detail but are removed from the one
+  visible membership relation. Activity also uses the shared running focus to
+  expose an explicit Open Work action instead of a blank primary action.
+- Apply/revert: migrate legacy internal proof membership before rendering the
+  selected release. Revert restores the former field only through an explicit
+  migration; it must not re-add internal steps to visible release membership.
 
 ### Schema Migration Decision
 
-- Persisted schema touched: none. Existing `TaskRuntimeState.proofRecovery`
-  records are reused without a shape change.
-- Change class: migration-detection correction. It stops classifying a normal
-  ready proof task as historical recovery while retaining the marker for a
-  terminal task that is actually reopened.
-- Existing data impact: ready proof tasks can run without a false migration
-  gate. Existing recovery markers remain valid and continue to protect their
-  reopened tasks.
-- Migration id: `0.13.32/proof-setup-runtime-recovery-marker`; no new
-  migration or compatibility reader is required.
+- Persisted schema touched: optional `Task.proofForReleaseId`; normalized
+  `release_membership` rows and release node lists.
+- Change class: authority normalization. `releaseIds` remains the one visible
+  product-scope relation; `proofForReleaseId` is the one internal proof
+  context. They are never interchangeable.
+- Existing data impact: migration `0.13.65/internal-proof-release-context`
+  removes internal proof rows from visible release membership. A legacy child
+  with one release association gains that typed scope. A legacy child claiming
+  multiple releases remains historical, and each active release receives a
+  fresh explicitly scoped proof child rather than an arbitrary chosen owner.
+- Compatibility reader: none. Rich task detail reads the typed scope; compact
+  release projections read normalized visible membership. No surface is
+  permitted to reconstruct one from the other.
+- Safety and rollback: migration uses the revisioned current-state writer and
+  typed IDs only. Revert needs a forward migration; it must not restore mixed
+  meaning to `releaseIds`.
 
 
 ## 2026-07-22 Proof recovery reads landed project state

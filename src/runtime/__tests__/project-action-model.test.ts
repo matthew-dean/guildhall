@@ -690,6 +690,30 @@ describe('buildProjectActionModel', () => {
     })
   })
 
+  it('keeps the current running task actionable when compact activity has no task inventory', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'running',
+        focusTaskId: 'task-proof',
+        focusTaskTitle: 'Establish proof',
+        message: 'Guildhall is running "Establish proof".',
+        actionHref: '/work?task=task-proof',
+      },
+      tasks: [],
+      runStatus: 'running',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Establish proof',
+      buttonLabel: 'Open Work',
+      href: '/work?task=task-proof',
+      tone: 'running',
+      taskId: 'task-proof',
+    })
+  })
+
   it('surfaces active work with a block reason as warning state', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },

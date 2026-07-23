@@ -1496,6 +1496,10 @@ export const Task = z.object({
   // Explicit links from a decomposed child to the parent criteria it
   // satisfies. Recovery must use these ids, never search criterion prose.
   parentAcceptanceCriterionIds: z.array(z.string().min(1)).optional(),
+  // `releaseIds` is the visible product-scope membership relation. An
+  // internal proof step is not a release member; this separately records the
+  // one release whose proof it establishes.
+  proofForReleaseId: z.string().min(1).optional(),
   releaseIds: z.array(z.string()).default([]),
   // Work containment is represented by hierarchy links, never by task status.
   // Required migration 0.10.0/task-hierarchy-links converts old status: parent
