@@ -52962,3 +52962,46 @@ Repair:
       the release projector must immediately block.
 - Safety: the new child carries the selected release ID explicitly; source
       task membership is not guessed from prose or duplicated into the parent.
+
+## 2026-07-23 Imported capability scope must survive brief and spec shaping
+
+- [ ] User job: a source-backed task that names a capability chain retains the
+      complete chain through brief, spec, execution, review, and release
+      evidence. A planning agent must not narrow a task from the imported
+      source scope while still presenting a plausible brief for its title.
+
+### Contract Touch Decision
+
+- Work id: `0.13.93/source-capability-coverage-contract`.
+- Touched contracts: imported evidence units, source claims, task scope
+      contract, brief/spec coverage declarations, shaping admission, project
+      map capability projection, and release evidence.
+- Considered but not touched: model prose is display/audit material. It will
+      not be searched for source words or used as the operational coverage
+      test.
+- Required behavior: intake materializes stable capability identities from a
+      source-owned deliverable; a task carries the identities it must cover;
+      brief/spec shaping emits typed coverage links; a task cannot be approved
+      or executed until every required capability identity is covered or has a
+      linked, explicitly deferred child in another scope.
+- Proof required: the Narrative Harness synopsis source chain (outline,
+      characters, character voices, world facts, objects, relationships, and
+      open constraints) cannot be narrowed to a subset by regenerated brief
+      text; coverage survives restart and is shown in Map and Release views.
+- Apply/revert: migrate legacy imported claims into bounded capability records
+      where the source adapter has explicit units. Ambiguous prose remains
+      marked `inferred` and blocks automated approval rather than being
+      heuristically token-matched.
+
+### Schema Migration Decision
+
+- Work id: `0.13.93/source-capability-coverage-contract`.
+- Persisted schema touched: task source/capability contract and compact
+      project capability projection.
+- Change class: authoritative scope normalization.
+- Existing data impact: imported Narrative Harness work with one opaque source
+      claim will be reprojected into stable capability identities only when the
+      source adapter supplies explicit deliverables; otherwise it remains
+      pending structured intake instead of silently losing scope.
+- Safety: capability identity is source-owned and linked by IDs. No provider
+      sentence, keyword, or title truncation can settle coverage.
