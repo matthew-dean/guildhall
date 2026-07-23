@@ -2,7 +2,13 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { AcceptanceCriteria, explicitTaskStructuralIdentity, type ProjectRelease, type Task } from '@guildhall/core'
-import { clearTaskRuntimeState, clearTaskWorkspaceState, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import {
+  clearTaskRuntimeState,
+  clearTaskWorkspaceState,
+  getProjectSystemStatePathFromMemoryDir,
+  inferProjectRootFromMemoryDir,
+  type ProjectStateDatabaseSourceCapability,
+} from '@guildhall/sessions'
 import {
   planEvidenceWorkGraph,
   type EvidenceSource,
@@ -31,6 +37,12 @@ export interface ProjectReintakeInput {
   now?: string
   projectPath?: string
   sources: ProjectReintakeSource[]
+  /**
+   * When supplied by the live product route, this catalog is the only source
+   * allowed to create/reframe executable work. The prose `sources` remain
+   * visible audit evidence and are never parsed into task authority.
+   */
+  sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[]
   tasks: Array<Record<string, unknown>>
   /** Raw authoritative task definitions used only to guard draft application. */
   taskQueueFingerprintTasks?: Array<Record<string, unknown>>
@@ -44,6 +56,7 @@ export interface ProjectReintakeDraft {
   status: 'draft' | 'applied' | 'dismissed'
   taskQueueFingerprint: string
   selectedReleaseId?: string
+  intakeStatus?: 'needs_structured_capability_intake' | 'catalog_ready'
   releases?: ProjectReintakeReleaseDraft[]
   sources: Array<{ path: string; kind: string }>
   summary: {
@@ -104,6 +117,7 @@ export interface ReintakeTaskDraft {
   acceptanceCriteria: Task['acceptanceCriteria']
   references?: string[]
   sourceClaims?: Task['sourceClaims']
+  capabilityBindings?: Task['capabilityBindings']
   releaseIds?: string[]
   stageAlignment?: string
   spec?: string
@@ -141,6 +155,9 @@ export interface ProjectReintakeApplyResult {
 
 export function planProjectReintake(input: ProjectReintakeInput): ProjectReintakeDraft {
   const now = input.now ?? new Date().toISOString()
+  if (input.sourceCapabilities !== undefined) {
+    return planCatalogBackedProjectReintake(input, now)
+  }
   const groups: ReintakeChangeGroup[] = []
   const usedTaskIds = new Set<string>()
   const selectedRelease = selectReintakeRelease(detectSelectedRelease(input.sources), input)
@@ -377,6 +394,74 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     summary: summarize(groups),
     groups,
   }
+}
+
+/**
+ * The live re-intake path does not derive work from Markdown/table prose.
+ * Catalog capability IDs are already source-owned structured facts; this
+ * produces only bounded planning cards, never an execution-ready spec.
+ */
+function planCatalogBackedProjectReintake(
+  input: ProjectReintakeInput,
+  now: string,
+): ProjectReintakeDraft {
+  const selectedRelease = selectReintakeRelease(null, input)
+  const capabilities = input.sourceCapabilities ?? []
+  const existingBindings = new Set(input.tasks.flatMap(task => (
+    Array.isArray(task.capabilityBindings)
+      ? task.capabilityBindings.flatMap(binding => (
+        binding !== null && typeof binding === 'object' && !Array.isArray(binding) &&
+        typeof (binding as { capabilityId?: unknown }).capabilityId === 'string'
+          ? [(binding as { capabilityId: string }).capabilityId]
+          : []
+      ))
+      : []
+  )))
+  const changes: ReintakeChange[] = capabilities
+    .filter(capability => capability.state === 'planned')
+    .filter(capability => !existingBindings.has(capability.id))
+    .map(capability => ({
+      kind: 'create' as const,
+      reason: `Structured source capability ${capability.id} is not yet allocated to project work.`,
+      task: {
+        id: capabilityTaskId(capability.id),
+        title: capability.label,
+        description: `Plan the work needed to satisfy the structured capability ${capability.id}.`,
+        sourceIdentity: capability.id,
+        deliverableName: capability.id,
+        domain: capability.adapterId,
+        status: 'import_draft' as const,
+        priority: 'high' as const,
+        dependsOn: [],
+        acceptanceCriteria: [],
+        references: [...capability.evidenceRefs],
+        capabilityBindings: [{ capabilityId: capability.id, relation: 'plans' }],
+        ...(capability.releaseIds.length > 0 ? { releaseIds: [...capability.releaseIds] } : {}),
+      },
+    }))
+  const groups: ReintakeChangeGroup[] = changes.length > 0 ? [{
+    id: 'structured-capability-catalog',
+    title: 'Allocate structured source capabilities',
+    rationale: 'Each card comes from one typed source capability. It is intake work, not a generated implementation plan.',
+    changes,
+  }] : []
+  const releases = selectedRelease ? releaseDraftsFor(selectedRelease, groups, input.tasks) : []
+  return {
+    id: `reintake-${now.replace(/[^0-9A-Za-z]/g, '').slice(0, 14)}`,
+    createdAt: now,
+    createdBy: 'project-reintake',
+    status: 'draft',
+    taskQueueFingerprint: fingerprint(input.taskQueueFingerprintTasks ?? input.tasks),
+    ...(selectedRelease && releases.length > 0 ? { selectedReleaseId: selectedRelease.id, releases } : {}),
+    intakeStatus: capabilities.length === 0 ? 'needs_structured_capability_intake' : 'catalog_ready',
+    sources: input.sources.map(source => ({ path: source.path, kind: 'evidence' })),
+    summary: summarize(groups),
+    groups,
+  }
+}
+
+function capabilityTaskId(capabilityId: string): string {
+  return `task-capability-${slugify(capabilityId).slice(0, 72)}`
 }
 
 export async function writeProjectReintakeDraft(memoryDir: string, draft: ProjectReintakeDraft): Promise<string> {

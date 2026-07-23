@@ -122,6 +122,46 @@ const scopedNarrativeRelease = [
 ].join('\n')
 
 describe('project re-intake planner', () => {
+  it('does not turn visible Markdown evidence into executable work on the catalog-backed route', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [loomaAuditSource],
+      sourceCapabilities: [],
+      tasks: [],
+    })
+
+    expect(draft.intakeStatus).toBe('needs_structured_capability_intake')
+    expect(draft.groups).toEqual([])
+  })
+
+  it('creates only intake-scoped planning work from a typed catalog capability', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [loomaAuditSource],
+      sourceCapabilities: [{
+        id: 'looma:alert-dialog',
+        adapterId: 'component-audit',
+        adapterSchemaVersion: 1,
+        sourceRevision: 'audit:v1',
+        label: 'Alert dialog capability',
+        state: 'planned',
+        releaseIds: ['release-v1'],
+        dependsOnCapabilityIds: [],
+        evidenceRefs: ['artifact:component-audit'],
+      }],
+      tasks: [],
+    })
+
+    expect(draft.intakeStatus).toBe('catalog_ready')
+    expect(draft.groups[0]?.changes).toEqual([expect.objectContaining({
+      kind: 'create',
+      task: expect.objectContaining({
+        status: 'import_draft',
+        capabilityBindings: [{ capabilityId: 'looma:alert-dialog', relation: 'plans' }],
+      }),
+    })])
+  })
+
   it('treats stale task state as evidence instead of gospel by proposing a reframe', () => {
     const draft = planProjectReintake({
       now,

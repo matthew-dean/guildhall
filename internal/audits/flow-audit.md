@@ -53134,6 +53134,16 @@ Repair:
       summary projection, then verify their displayed scope is identical at a
       single project revision.
 
+### Implementation checkpoint: live re-intake gate
+
+- [x] `/api/project/reintake/rerun` passes the durable capability catalog into
+      the planner. Markdown remains a visible evidence trail but cannot create
+      or reframe work on this live path.
+- [x] An empty catalog returns an explicit structured-intake state with zero
+      changes. A planned catalog capability creates only an `import_draft`
+      planning task with a typed `plans` binding; it cannot become execution
+      work until its brief/spec is shaped and approved through normal gates.
+
 ### Contract Touch Decision: catalog-only adapter write
 
 - Work id: `0.13.94/source-capability-boundary`.

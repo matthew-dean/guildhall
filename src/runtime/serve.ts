@@ -28,6 +28,7 @@ import {
   writeProjectStateDatabaseReleaseSelectionMutation,
   replaceProjectStateDatabaseRepositories,
   registerProjectCacheWorkspace,
+  readProjectStateDatabaseSourceCapabilities,
   emitProjectSummaryInvalidation,
   subscribeProjectSummaryInvalidations,
   upsertTaskRuntimeState,
@@ -12304,9 +12305,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         { includeDefinitions: true },
       )
       const sources = await collectProjectReintakeSources(project.path)
+      // Source prose is visible audit evidence, but it cannot manufacture
+      // project work. The catalog is the sole executable-intake authority.
+      const sourceCapabilities = readProjectStateDatabaseSourceCapabilities(projectTasksPath(project.path)) ?? []
       const draft = planProjectReintake({
         projectPath: project.path,
         sources,
+        sourceCapabilities,
         tasks: currentTasks.effectiveRecords,
         taskQueueFingerprintTasks: queue.tasks,
         releases: queue.releases,
