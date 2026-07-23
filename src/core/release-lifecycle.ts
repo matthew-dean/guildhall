@@ -20,6 +20,20 @@ function sameIds(left: readonly string[] | undefined, right: readonly string[] |
   return normalizedLeft.length === normalizedRight.length && normalizedLeft.every((value, index) => value === normalizedRight[index])
 }
 
+function membershipDifference(
+  current: readonly string[] | undefined,
+  next: readonly string[] | undefined,
+): { removed: string[]; added: string[] } {
+  const currentIds = normalizedIds(current)
+  const nextIds = normalizedIds(next)
+  const nextSet = new Set(nextIds)
+  const currentSet = new Set(currentIds)
+  return {
+    removed: currentIds.filter(id => !nextSet.has(id)),
+    added: nextIds.filter(id => !currentSet.has(id)),
+  }
+}
+
 function taskIdFromNodeId(nodeId: string): string | null {
   return nodeId.startsWith('work:') ? nodeId.slice('work:'.length) || null : null
 }
@@ -60,7 +74,14 @@ export function assertShippedReleaseMutation(input: {
       throw new Error(`Cannot change shipped release ${currentRelease.id} lifecycle; create a new release for new work.`)
     }
     if (!sameIds(currentRelease.nodeIds, nextRelease.nodeIds) || !sameIds(currentRelease.deferredNodeIds, nextRelease.deferredNodeIds)) {
-      throw new Error(`Cannot change membership of shipped release ${currentRelease.id}; create a new release for new work.`)
+      const included = membershipDifference(currentRelease.nodeIds, nextRelease.nodeIds)
+      const deferred = membershipDifference(currentRelease.deferredNodeIds, nextRelease.deferredNodeIds)
+      throw new Error(
+        `Cannot change membership of shipped release ${currentRelease.id}; ` +
+        `included removed [${included.removed.join(', ')}], included added [${included.added.join(', ')}], ` +
+        `deferred removed [${deferred.removed.join(', ')}], deferred added [${deferred.added.join(', ')}]. ` +
+        'Create a new release for new work.',
+      )
     }
 
     for (const nodeId of normalizedIds(currentRelease.nodeIds)) {

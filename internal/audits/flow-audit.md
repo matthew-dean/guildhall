@@ -32,7 +32,8 @@ help_summary: |
 
 - Touched contracts: selected-release proof recovery, visible release
   membership, internal proof scope, the task runtime recovery marker,
-  required-migration start readiness, and the shared action-model setup field.
+  required-migration start readiness, the immutable shipped-release guard, and
+  the shared action-model setup field.
 - Contracts considered but not touched: task hierarchy, proof evidence schema,
   owner approval, and provider routing.
 - Change: the shared start decision prepares the complete saved release blocker
@@ -114,6 +115,9 @@ help_summary: |
   node when task membership is rewritten. Historical delivery membership is a
   snapshot, not a task's current assignment; only attempts to add new shipped
   membership remain invalid.
+- Guard diagnosability: the shipped-release rejection now reports the typed
+  included/deferred node diff. This is evidence for a deterministic repair,
+  never a reason to weaken or bypass the immutable-snapshot boundary.
 - Compatibility reader: none. Rich task detail reads the typed scope; compact
   release projections read normalized visible membership. No surface is
   permitted to reconstruct one from the other.
