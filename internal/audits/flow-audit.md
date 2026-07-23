@@ -53808,6 +53808,39 @@ Repair:
       typed state, not a model-generated phrase or one arbitrary task-ranking
       outcome.
 
+### Release Membership Revision Decision
+
+- Work id: `0.13.69/release-membership-revision`.
+- Finding: `projectRevision` advances for evidence, runtime, and other
+      unrelated changes, while selected-release membership is a distinct
+      normalized relation. A reader cannot prove that saved scope totals were
+      derived from the same membership boundary merely by comparing broad
+      project revisions.
+- Persisted schema: add one singleton `release_membership_state` row with a
+      monotonically increasing `membership_revision`, the project revision at
+      which it was written, and `updated_at`. Do not add a revision column to
+      every relation row and do not copy membership into summaries.
+- Mutation ownership: the full queue snapshot writer, targeted release
+      selection mutation, targeted task-batch mutation, and the explicit
+      accepted-plan materialization migration must all replace/compare the
+      normalized relation through one helper that advances the watermark only
+      when the relation actually changes. Deleting a task's membership uses
+      that same helper.
+- Read ownership: the compact canonical release read exposes the current
+      membership revision. A derived summary records the membership revision
+      it used. Start, Overview, Release, Work, Thread, and Activity may show
+      membership identity on mismatch, but must withhold scope counts,
+      readiness, and primary execution instructions until a summary from that
+      same revision exists.
+- Safety: existing databases receive a watermark from their current relation
+      during migration. Rows with no watermark are stale/unavailable, never
+      silently treated as revision zero. Compare-and-swap writes reject an
+      expected membership revision that no longer matches.
+- Proof: database tests cover each mutation path and no-op writes; summary
+      tests cover mismatched watermark fail-closed behavior; API flow tests
+      compare Start, Overview, Release, Work, Thread, and Activity from one
+      selected Narrative Harness release snapshot.
+
 ### Schema Migration Decision
 
 - Persisted schema touched: additive `planExecution` field inside the derived
