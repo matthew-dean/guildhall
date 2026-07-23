@@ -2274,6 +2274,58 @@ describe('POST /api/project/start', () => {
     expect(body.stopSummary?.reason).not.toBe('all_terminal')
   })
 
+  it('reopens a legacy worktree-sync blocker before Start evaluates unattended progress', async () => {
+    const now = new Date().toISOString()
+    const taskId = 'task-recover-worktree-sync'
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: taskId,
+          title: 'Recover typed worktree sync',
+          description: 'Continue the existing task worktree after a historical merge stop.',
+          domain: 'core',
+          status: 'blocked',
+          priority: 'normal',
+          recoveryCode: 'task_worktree_sync_conflict',
+          blockReason: 'Older Guildhall asked an owner to resolve its task worktree merge.',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(scoped('/api/project/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', taskId }),
+      }),
+    )
+
+    expect(res.status).not.toBe(400)
+    const task = (await readTasks(tmpDir)).find(candidate => candidate.id === taskId)
+    expect(task).toMatchObject({
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+    })
+    expect(task?.blockReason).toBeUndefined()
+    expect(task?.recoveryCode).toBeUndefined()
+  })
+
   it('points Start at imported draft review when no runnable work is available', async () => {
     await writeSystemTasks({
         version: 1,

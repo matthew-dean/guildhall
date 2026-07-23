@@ -53542,6 +53542,10 @@ Repair:
 - [x] Activity's compact live-work list now leads with the supervisor task
       from the same decision packet as its primary action; saved in-flight
       rows are retained as context and cannot displace the live task.
+- [x] Start reopens only the two legacy internal worktree-sync classifications
+      through the same typed recovery primitive before readiness is projected;
+      it no longer lets their historical human-facing prose prevent the
+      orchestrator from re-reading Git.
 - [ ] Extend the compact shared project decision/action projection and its
       Overview, Work, Thread, Activity, and release consumers so a live
       workspace reconciliation is visible identically everywhere. Do this as

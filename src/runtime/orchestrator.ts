@@ -89,6 +89,7 @@ import {
 } from '@guildhall/levers'
 import { buildContext, resolveLikelyTaskFiles } from './context-builder.js'
 import { applyTaskTransition, transitionTaskStatus, type TaskTransitionEvent } from './task-transition.js'
+import { reopenLegacyWorktreeSyncRecovery } from './worktree-sync-recovery.js'
 import { recordTaskReflection } from './learning.js'
 import {
   modelForAgentName,
@@ -9972,6 +9973,11 @@ export class Orchestrator {
         queuedTask.status === 'review' &&
         await this.isRecoverableSelfAuthoredVerificationBlockedTask(queuedTask)
       if (queuedTask.status !== 'blocked' && !reviewVerificationRecovery) continue
+      if (reopenLegacyWorktreeSyncRecovery(queuedTask, now)) {
+        queue.lastUpdated = now
+        changed = true
+        continue
+      }
       if (!this.hasGuildhallOwnershipTrail(queuedTask)) continue
       // Recovery classification is one of the few execution paths that may
       // need historical evidence. Keep the project queue compact, but reopen
@@ -10354,12 +10360,6 @@ export class Orchestrator {
       } else if (task.recoveryCode === 'task_worktree_exists') {
         recoveryNote =
           'User restarted the project after Guildhall had already created the task branch. Reopened the task so Guildhall can attach that existing branch to a task worktree and continue.'
-      } else if (
-        task.recoveryCode === 'task_worktree_sync' ||
-        task.recoveryCode === 'task_worktree_sync_conflict'
-      ) {
-        recoveryNote =
-          'Guildhall reopened the historical worktree synchronization stop. It will inspect the Git worktree directly and either recover the active merge or resume normal synchronization without asking the owner to repair internal Git state.'
       } else {
         continue
       }

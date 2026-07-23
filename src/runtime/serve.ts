@@ -372,6 +372,7 @@ import { attentionItemsForReleaseTruth, attentionProjectionNeedsReleaseReconcili
 import { createProjectProjectionRefreshScheduler, shouldRefreshProjectAtStartup, type ProjectProjectionInvalidation, type ProjectProjectionRefreshScheduler } from './project-projection-refresh.js'
 import { createProjectProjectionFreshnessWatcher } from './project-projection-freshness-watcher.js'
 import { projectRuntimeCompatibilityBlocker, readRuntimePackageVersion } from './runtime-compatibility.js'
+import { reopenLegacyWorktreeSyncRecovery } from './worktree-sync-recovery.js'
 import { ProjectRuntimeSupervisor } from './project-runtime-supervisor.js'
 import {
   findStaleGuildhallProcesses,
@@ -11249,9 +11250,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
         models: resolvedConfig.models,
       })
       const tasksPath = projectTasksPath(project.path)
-      const canonicalState = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+      let canonicalState = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
         ? await readProjectCanonicalCurrentState(project.path)
         : null
+      if (canonicalState) {
+        const recoveryQueue = preserveRuntimeOverlayOnTaskQueueParse({
+          ...canonicalState.rawQueue,
+          tasks: canonicalState.tasks as unknown as Array<Record<string, unknown>>,
+        }, TaskQueue.parse(canonicalState.rawQueue))
+        const now = new Date().toISOString()
+        const reopened = recoveryQueue.tasks.filter(task => reopenLegacyWorktreeSyncRecovery(task, now))
+        if (reopened.length > 0) {
+          await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, {
+            ...recoveryQueue,
+            tasks: recoveryQueue.tasks as unknown as Array<Record<string, unknown>>,
+          }, {
+            projectId: project.id,
+            projectRoot: project.path,
+            expectedQueueRevision: canonicalState.queueRevision,
+            expectedProjectRevision: canonicalState.projectRevision,
+          })
+          canonicalState = await readProjectCanonicalCurrentState(project.path)
+        }
+      }
       const startReadiness = await projectStartReadiness({
         projectPath: project.path,
         resolvedConfig,
