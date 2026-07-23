@@ -171,7 +171,10 @@ export function readProjectStateAuthorityAtBoundary(tasksPath: string): ProjectS
 export interface ProjectCurrentStateReadModel {
   queue: unknown
   scopeRows: ProjectStateDatabaseScopeRow[]
-  /** Selected execution scope derived from this same queue/scope snapshot. */
+  /**
+   * Owner-selected scope from normalized release membership. Scheduler rows
+   * stay separate in `scopeRows` and cannot replace this public boundary.
+   */
   scope: ProjectScope | null
   repositories: ProjectStateDatabaseRepository[]
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
@@ -305,39 +308,18 @@ function projectScopeFromSavedState(input: {
   const id = selectedRelease?.id ?? savedScope?.id
   if (!id) return null
 
-  // Release node lists are read from the normalized release_membership
-  // relation by the sessions queue reader. That is the membership authority.
-  // The route-facing scope, however, is the executable view of that
-  // membership. It comes from the same saved revision's work_scope rows so a
-  // release detail read cannot expose a parent and its materialized child as
-  // two runnable units. The boundary owns both views; routes never choose.
+  // Release node lists are reconstructed from normalized release membership
+  // by the sessions queue reader. They own the selected release boundary.
+  // Scheduler rows deliberately collapse parent/child work, so using them
+  // here caused Release and Start to silently re-count that boundary.
   if (selectedRelease) {
-    const hasSavedScopeRows = input.summary?.freshness === 'current' && input.scopeRows.length > 0
-    const executionRows = hasSavedScopeRows
-      ? executionScopeRows(input.scopeRows)
-      : []
-    if (!hasSavedScopeRows) {
-      return {
-        id,
-        label: selectedRelease.label,
-        kind: selectedRelease.kind as ProjectScope['kind'],
-        source: (selectedRelease.source ?? 'inferred') as ProjectScope['source'],
-        nodeIds: [...(selectedRelease.nodeIds ?? [])],
-        deferredNodeIds: [...(selectedRelease.deferredNodeIds ?? [])],
-        ...(selectedRelease.proofStyle ? { proofStyle: selectedRelease.proofStyle } : {}),
-      }
-    }
     return {
       id,
       label: selectedRelease.label,
       kind: selectedRelease.kind as ProjectScope['kind'],
       source: (selectedRelease.source ?? 'inferred') as ProjectScope['source'],
-      nodeIds: executionRows
-        .filter(row => row.scope === 'included')
-        .map(row => taskScopeNodeId(row.taskId)),
-      deferredNodeIds: executionRows
-        .filter(row => row.scope === 'deferred')
-        .map(row => taskScopeNodeId(row.taskId)),
+      nodeIds: [...(selectedRelease.nodeIds ?? [])],
+      deferredNodeIds: [...(selectedRelease.deferredNodeIds ?? [])],
       ...(selectedRelease.proofStyle ? { proofStyle: selectedRelease.proofStyle } : {}),
     }
   }

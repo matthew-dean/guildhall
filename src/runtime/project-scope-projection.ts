@@ -40,7 +40,7 @@ export interface ProjectScope {
  * view must never redefine how much work belongs to the release.
  */
 export function projectScopeMembershipCounts(
-  scope: Pick<ProjectScope, 'id' | 'kind' | 'nodeIds' | 'deferredNodeIds'>,
+  scope: Pick<ProjectScope, 'id' | 'nodeIds' | 'deferredNodeIds'> & { kind: string },
   releases: readonly ProjectRelease[],
 ): { taskCount: number; deferredTaskCount: number } {
   const release = scope.kind === 'release'

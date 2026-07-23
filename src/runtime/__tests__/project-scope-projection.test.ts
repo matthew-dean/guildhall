@@ -62,6 +62,8 @@ describe('buildProjectScopeProjection', () => {
       label: 'Stage 1',
       kind: 'release',
       state: 'active',
+      source: 'owner_approved',
+      proofStyle: 'unspecified',
       nodeIds: ['work:parent', 'work:also-included'],
       deferredNodeIds: ['work:later-a', 'work:later-b'],
     }])).toEqual({ taskCount: 2, deferredTaskCount: 2 })

@@ -144,6 +144,55 @@ describe('project-state-boundary', () => {
     })
   })
 
+  it('does not let a compact execution row redefine saved release membership', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-membership-boundary-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    try {
+      writeProjectStateDatabaseSnapshot(tasksPath, {
+        projectRoot: root,
+        queue: {
+          version: 1,
+          selectedReleaseId: 'release-1',
+          releases: [{
+            id: 'release-1',
+            label: 'Release 1',
+            kind: 'release',
+            state: 'active',
+            source: 'owner_approved',
+            nodeIds: ['work:parent', 'work:child'],
+            deferredNodeIds: ['work:later'],
+          }],
+          tasks: [
+            { id: 'parent', title: 'Parent', status: 'ready' },
+            { id: 'child', title: 'Child', status: 'ready' },
+            { id: 'later', title: 'Later', status: 'shelved' },
+          ],
+        },
+        summary: null,
+        scopeRows: [{
+          taskId: 'child',
+          scope: 'included',
+          eligibilityReason: 'included_ancestor',
+          hierarchyRole: 'child',
+          handoffState: 'ready',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: [],
+        }],
+      })
+      promoteProjectStateDatabaseAuthority(root)
+
+      expect(readProjectSavedReleaseState(root).scope).toMatchObject({
+        id: 'release-1',
+        nodeIds: ['work:parent', 'work:child'],
+        deferredNodeIds: ['work:later'],
+      })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('records a structured capability snapshot without manufacturing task work', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-capability-catalog-'))
     const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')

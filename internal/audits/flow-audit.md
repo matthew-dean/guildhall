@@ -53723,6 +53723,13 @@ Repair:
       derived projections rebuild from it. Do not re-enable approved-plan
       membership overlays as a fallback reader.
 
+### Implementation Progress
+
+- [x] Saved and live Release boundaries now keep normalized membership separate
+      from hierarchy-compacted execution rows. The next migration step is
+      materializing/reconciling approved-plan membership before a summary or
+      Start response can claim the release is current.
+
 ### Schema Migration Decision
 
 - Persisted schema touched: additive `planExecution` field inside the derived

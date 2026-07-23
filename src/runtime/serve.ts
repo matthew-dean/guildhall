@@ -5791,8 +5791,10 @@ function releaseReadinessReleaseFromScope(input: {
     state: existing.state ?? 'active',
     source: existing.source ?? scope?.source ?? 'inferred',
     description: existing.description ?? null,
-    nodeIds: scope?.nodeIds ?? existing.nodeIds ?? [],
-    deferredNodeIds: scope?.deferredNodeIds ?? existing.deferredNodeIds ?? [],
+    // `scope` may be a hierarchy-compacted scheduler view. It can describe
+    // runnable work, but normalized release membership owns this boundary.
+    nodeIds: existing.nodeIds ?? [],
+    deferredNodeIds: existing.deferredNodeIds ?? [],
     proofStyle: existing.proofStyle ?? 'unspecified',
   }
 }
