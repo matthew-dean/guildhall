@@ -52177,3 +52177,87 @@ Repair:
 - Apply/revert: do not reintroduce a local task exception. Replace this only
       with a richer lifecycle-aware hierarchy relation that preserves the same
       current-versus-historical execution boundary.
+
+## 2026-07-23 Approved spec turn limits stay in Guildhall recovery
+
+- [x] An approved, source-backed task could hit the spec agent's conversation
+      limit and be mislabeled as `human_judgment_required`, despite no owner
+      decision being missing.
+- [x] The orchestrator now keeps that task in `exploring`, records a compact
+      runtime event, resets only the exhausted agent conversation, and retries
+      from the already-approved brief and source evidence.
+- [x] A task without an approved brief retains the existing owner-input path;
+      this recovery neither invents scope nor approves a spec.
+
+### Contract Touch Decision
+
+- Work id: `0.13.76/approved-spec-turn-limit-recovery`.
+- Touched contracts: orchestrator error-to-next-action routing and the shared
+      runtime evidence projection.
+- Considered but not touched: task definition schema, product-brief approval,
+      escalation schema, release scope, and provider prose.
+- Existing data impact: active historical `worker_turn_limit` records raised
+      by `spec-agent` are reinterpreted only when the current task also has an
+      approved brief. They reopen into spec shaping; worker-originated records
+      retain their existing worker recovery behavior.
+- Proof required: a regression proving an approved brief neither creates an
+      owner input nor an escalation, then a second dispatch reaches the normal
+      spec lane; typecheck, contract lint, model-independence, and installed
+      Narrative Harness replay.
+- Apply/revert: remove only with another Guildhall-owned runtime recovery that
+      preserves the same approved-scope boundary. Do not restore a synthetic
+      owner decision for a model conversation limit.
+
+## 2026-07-23 Point edits refresh the shared scope ledger
+
+- [x] An approved brief mutation changed the authoritative task detail but
+      retained the prior `work_scope` row. Overview/Activity could therefore
+      say "needs brief" while the task detail correctly showed an approved
+      brief and spec shaping.
+- [x] Rebuild the affected selected-scope ledger from compact indexed task
+      facts and commit its changed rows with the point detail and summary.
+      This must not reopen unrelated task detail blobs or create a local view
+      interpretation of readiness.
+
+### Contract Touch Decision
+
+- Work id: `0.13.77/indexed-scope-refresh-on-point-mutation`.
+- Touched contracts: compact task summary, derived `work_scope` ledger, and
+      project summary/action projection.
+- Considered but not touched: task-detail schema, release membership schema,
+      raw transcripts, evidence history, owner approval semantics, and model
+      prose.
+- Existing data impact: no schema migration. Subsequent task-detail edits
+      repair stale derived scope rows from authoritative compact facts; no
+      task definition or historical evidence is rewritten.
+- Proof required: a promoted brief mutation must atomically replace the
+      stale brief-cleanup row, change the summary action to spec shaping, and
+      preserve an untouched task's compressed detail payload. Then validate
+      the installed Narrative Harness API/UI state after a replay.
+- Apply/revert: this is a derived-read-model repair. Reverting it restores
+      stale state risk but does not corrupt task definitions; do not replace
+      it with per-view readiness inference.
+
+### Schema Migration Decision
+
+- Work id: `0.13.77/indexed-scope-refresh-on-point-mutation`.
+- Persisted schema touched: derived `work_scope.handoff_state` values.
+- Change class: additive derived-state enum value, `spec_shaping`.
+- Existing data impact: no table migration is required. Existing
+      `not_shaped` rows remain readable and are corrected the next time their
+      task detail or summary projection refreshes; new approved briefs project
+      as `spec_shaping` instead of masquerading as missing briefs.
+- Migration id: none; this is a forward-compatible SQLite text value.
+- Safety: the new state is Guildhall-owned planning work, never an implicit
+      owner approval or permission to broaden release scope.
+- Compatibility reader: the shared scope normalizer preserves old
+      `not_shaped` behavior and recognizes `spec_shaping` as runnable
+      Guildhall planning work.
+- Fixtures and tests: promoted approved-brief mutation, compact action model,
+      release summary, and untouched compressed-detail proof all pass. The
+      installed Narrative Harness replay is fresh and cross-surface state
+      agrees; it now exposes a separate source-structure/spec-intake failure.
+- Owner-facing plan text: an approved brief can move directly into spec
+      shaping; it no longer appears as a request to re-enter the brief.
+- Apply/revert: reverting maps future rows back to the older ambiguous state;
+      it does not alter task detail or release membership.

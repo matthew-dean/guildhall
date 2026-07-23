@@ -960,6 +960,15 @@ function isRecoverableTurnLimitBlocker(task: Task): boolean {
   return hasActiveEscalationRecoveryCode(task, 'worker_turn_limit')
 }
 
+function isRecoverableApprovedSpecTurnLimitBlocker(task: Task): boolean {
+  if (!task.productBrief?.approvedAt?.trim()) return false
+  return (task.escalations ?? []).some((escalation) =>
+    !escalation.resolvedAt &&
+    escalation.recoveryCode === 'worker_turn_limit' &&
+    escalation.agentId === 'spec-agent',
+  )
+}
+
 function summarizeImportedDraftSource(content: string): string {
   const lines = content
     .split(/\r?\n/)
@@ -1040,6 +1049,17 @@ function resolveRecoverableTurnLimitEscalations(task: Task, resolvedAt: string):
       escalation.resolvedBy = 'system'
       escalation.resolution = 'Superseded after the project was explicitly resumed.'
     }
+  }
+}
+
+function resolveRecoverableApprovedSpecTurnLimitEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    if (escalation.recoveryCode !== 'worker_turn_limit' || escalation.agentId !== 'spec-agent') continue
+    escalation.resolvedAt = resolvedAt
+    escalation.resolvedBy = 'system'
+    escalation.resolution =
+      'Recovered as approved-spec runtime work after Guildhall corrected the earlier worker-lane misclassification.'
   }
 }
 
@@ -4403,6 +4423,51 @@ export class Orchestrator {
             })
         if (importedDraftQuestion) {
           return importedDraftQuestion
+        }
+        const approvedSpecRecovery = agent.name === 'spec-agent' &&
+          beforeStatus === 'exploring' &&
+          Boolean(task.productBrief?.approvedAt?.trim())
+        if (approvedSpecRecovery) {
+          const now = this.now()
+          const queue = await this.readQueue()
+          const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+          if (liveTask && liveTask.status === 'exploring') {
+            // An approved brief answers the only owner question in this lane:
+            // what outcome is authorized. A model exhausting one conversation
+            // is operational recovery, not a new approval checkpoint.
+            liveTask.assignedTo = null
+            liveTask.updatedAt = now
+            liveTask.notes = Array.isArray(liveTask.notes) ? liveTask.notes : []
+            liveTask.notes.push({
+              agentId: 'coordinator',
+              role: 'runtime',
+              content:
+                'The spec lane exhausted its conversation before saving a draft. Guildhall kept the approved task in shaping, reset the exhausted conversation, and will retry from the saved brief and source evidence.',
+              timestamp: now,
+            })
+            queue.lastUpdated = now
+            await this.writeQueue(queue)
+            if (typeof agent.resetConversation === 'function') {
+              agent.resetConversation()
+            }
+            await this.emitBackendEvent({
+              type: 'line_complete',
+              task_id: task.id,
+              agent_name: agent.name,
+              message:
+                'The spec lane exhausted its conversation. Guildhall reset that conversation and will retry from the approved brief instead of creating an owner blocker.',
+            })
+            return {
+              kind: 'processed',
+              taskId: task.id,
+              agent: 'coordinator-spec-recovery',
+              beforeStatus,
+              afterStatus: liveTask.status,
+              transitioned: false,
+              note: 'approved spec conversation reset for retry',
+              revisionCount: liveTask.revisionCount,
+            }
+          }
         }
         const escalation = await raiseEscalation({
           tasksPath,
@@ -9743,7 +9808,8 @@ export class Orchestrator {
       let task = queuedTask
       if (
         queuedTask.recoveryCode === 'max_revisions_actionable' ||
-        hasActiveEscalationRecoveryCode(queuedTask, 'max_revisions_actionable')
+        hasActiveEscalationRecoveryCode(queuedTask, 'max_revisions_actionable') ||
+        hasActiveEscalationRecoveryCode(queuedTask, 'worker_turn_limit')
       ) {
         const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
         task = await buildEffectiveTask(projectRoot, queuedTask, { evidence: 'full' }) as unknown as Task
@@ -9927,6 +9993,13 @@ export class Orchestrator {
         recoveryAssignee = null
         recoveryNote =
           'User restarted the project after an old tool/path routing bug blocked this task. Reopened the worker lane so Guildhall can retry with the corrected task-worktree context.'
+      } else if (isRecoverableApprovedSpecTurnLimitBlocker(task)) {
+        resolveRecoverableApprovedSpecTurnLimitEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryStatus = 'exploring'
+        recoveryAssignee = 'spec-agent'
+        recoveryNote =
+          'Guildhall corrected an older spec-agent turn-limit record that had been routed as worker recovery. The approved brief still defines the authorized outcome, so shaping resumes from source evidence without an owner decision.'
       } else if (isRecoverableTurnLimitBlocker(task)) {
         resolveRecoverableTurnLimitEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
@@ -11377,8 +11450,14 @@ export class Orchestrator {
     interruption?: 'turn_limit' | 'timeout'
   }): Promise<TickOutcome | null> {
     const queue = await this.readQueue()
-    const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
-    if (!task) return null
+    const taskIndex = queue.tasks.findIndex((candidate) => candidate.id === input.taskId)
+    if (taskIndex < 0) return null
+    // Queue reads deliberately carry the compact projection. Recovery needs
+    // to compare durable task state, though: otherwise an existing brief or
+    // spec that is omitted from the list row looks like fresh agent progress.
+    // Hydrate only this task through the shared current-state boundary.
+    const task = await this.hydrateEffectiveTaskForDispatch(queue.tasks[taskIndex]!)
+    queue.tasks[taskIndex] = task
 
     const hasSpec = typeof task.spec === 'string' && task.spec.trim().length > 0
     const specChanged = (task.spec ?? '').trim() !== (input.beforeSpec ?? '').trim()

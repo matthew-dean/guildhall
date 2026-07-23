@@ -10154,6 +10154,122 @@ describe('Orchestrator.tick — error handling', () => {
     expect(q.tasks[0]!.escalations).toHaveLength(0)
   })
 
+  it('retries an approved spec after a turn limit without inventing an owner blocker', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'approved-spec',
+        status: 'exploring',
+        title: 'Shape source-backed story context',
+        productBrief: {
+          userJob: 'Turn the approved synopsis into provenance-linked story context.',
+          successMetric: 'The task has a reviewable, source-backed implementation spec.',
+          antiPatterns: [],
+          approvedAt: '2026-07-23T00:00:00.000Z',
+        },
+      }),
+    ])
+    let attempts = 0
+    let resets = 0
+    const spec = {
+      name: 'spec-agent',
+      async generate() {
+        attempts += 1
+        if (attempts === 1) throw new Error('Exceeded maximum turn limit (8)')
+        return { text: 'The fresh spec conversation resumed.' }
+      },
+      resetConversation() {
+        resets += 1
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: spec as any }),
+    })
+
+    const recovered = await orch.tick()
+    expect(recovered).toMatchObject({
+      kind: 'processed',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+    })
+    expect(attempts).toBe(1)
+    expect(resets).toBe(1)
+
+    let queue = await readQueue()
+    let task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.escalations ?? []).toHaveLength(0)
+    expect(task.blockReason).toBeUndefined()
+    expect(await ownerInputsForTask('approved-spec')).toHaveLength(0)
+    expect(task.notes.some((note) =>
+      note.role === 'runtime' && note.content.includes('reset the exhausted conversation'),
+    )).toBe(true)
+
+    const resumed = await orch.tick()
+    expect(resumed).toMatchObject({
+      kind: 'processed',
+      taskId: 'approved-spec',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+    })
+    expect(attempts).toBe(2)
+
+    queue = await readQueue()
+    task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.escalations ?? []).toHaveLength(0)
+    expect(await ownerInputsForTask('approved-spec')).toHaveLength(0)
+  })
+
+  it('reopens an older misclassified approved spec turn limit into the spec lane', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'legacy-approved-spec',
+        status: 'blocked',
+        title: 'Shape source-backed story context',
+        blockReason: 'human_judgment_required: Spec author stopped after hitting its turn limit.',
+        productBrief: {
+          userJob: 'Turn the approved synopsis into provenance-linked story context.',
+          successMetric: 'The task has a reviewable, source-backed implementation spec.',
+          antiPatterns: [],
+          approvedAt: '2026-07-23T00:00:00.000Z',
+        },
+        escalations: [{
+          id: 'esc-legacy-approved-spec-1',
+          taskId: 'legacy-approved-spec',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          recoveryCode: 'worker_turn_limit',
+          summary: 'Spec author stopped after hitting its turn limit.',
+          details: 'Exceeded maximum turn limit (8)',
+          raisedAt: '2026-07-23T00:01:00.000Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'legacy-approved-spec',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+    })
+    expect(spec.calls).toHaveLength(1)
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.escalations[0]?.resolvedBy).toBe('system')
+    expect(task.escalations[0]?.resolution).toContain('approved-spec runtime work')
+    expect(await ownerInputsForTask('legacy-approved-spec')).toHaveLength(0)
+  })
+
   it('asks a concrete owner question when imported draft shaping hits a turn limit without durable progress', async () => {
     await writeQueue([
       mkTask({

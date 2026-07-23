@@ -719,6 +719,111 @@ function indexedScopeSource(value: unknown): ProjectScope['source'] {
     : 'inferred'
 }
 
+/**
+ * Scope is a compact read model, but its handoff rules still need to know
+ * whether a task has a complete approved brief or executable spec. Recreate
+ * only those typed facts from the indexed summary; detail prose and runtime
+ * history deliberately stay out of this projection path.
+ */
+function indexedTaskForScopeProjection(task: ProjectStateDatabaseTask): Task {
+  const record = task as unknown as Record<string, unknown>
+  const currentSummary = isRecord(record.currentSummary) ? record.currentSummary : {}
+  const brief = isRecord(currentSummary.brief) ? currentSummary.brief : {}
+  const acceptanceCriteriaCount = Number(currentSummary.acceptanceCriteriaCount ?? record.acceptanceCriteriaCount ?? 0)
+  const hasBrief = brief.present === true
+  const hasShapedBrief = brief.shaped === true
+  const approvedAt = typeof brief.approvedAt === 'string' && brief.approvedAt.trim()
+    ? brief.approvedAt
+    : undefined
+  return {
+    id: task.id,
+    title: task.title,
+    ...(task.description ? { description: task.description } : {}),
+    ...(task.status ? { status: task.status } : {}),
+    ...(task.domain ? { domain: task.domain } : {}),
+    ...(task.priority ? { priority: task.priority } : {}),
+    ...(task.workKind ? { workKind: task.workKind } : {}),
+    ...(task.semanticKind ? { semanticKind: task.semanticKind } : {}),
+    ...(task.hierarchy ? { hierarchy: task.hierarchy } : {}),
+    ...(task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {}),
+    ...(task.releaseIds.length > 0 ? { releaseIds: task.releaseIds } : {}),
+    ...(task.sourceRefs.length > 0 ? { references: task.sourceRefs } : {}),
+    ...(record.spec === 'present' ? { spec: 'indexed-present' } : {}),
+    ...(acceptanceCriteriaCount > 0
+      ? { acceptanceCriteria: Array.from({ length: acceptanceCriteriaCount }, (_, index) => ({
+          id: `indexed-${task.id}-${index}`,
+          description: 'Indexed acceptance criterion.',
+        })) }
+      : {}),
+    ...(hasBrief
+      ? { productBrief: {
+          ...(approvedAt ? { approvedAt } : {}),
+          ...(brief.userJob === true ? { userJob: 'indexed-present' } : {}),
+          ...(hasShapedBrief ? { whyItMattersNow: 'indexed-present' } : {}),
+          ...(brief.successMetric === true ? { successMetric: 'indexed-present' } : {}),
+          ...(hasShapedBrief ? { nonGoals: ['indexed-present'] } : {}),
+        } }
+      : {}),
+  } as Task
+}
+
+function rebuildScopeRowsFromIndexedState(
+  queue: { releases: readonly Record<string, unknown>[]; selectedReleaseId: string | null },
+  approvedPlan: ProjectSummaryApprovedPlan | null | undefined,
+  tasks: readonly ProjectStateDatabaseTask[],
+  savedScopeRows: readonly ProjectStateDatabaseScopeRow[],
+): ProjectStateDatabaseScopeRow[] {
+  const taskById = new Map(tasks.map(task => [task.id, task]))
+  const proofByTaskId = new Map<string, IndexedCurrentProof>(
+    tasks.flatMap(task => {
+      const proof = indexedCurrentProofForTask(task)
+      return proof ? [[task.id, proof] as const] : []
+    }),
+  )
+  const savedRowsByTaskId = new Map(savedScopeRows.map(row => [row.taskId, row]))
+  const derivedRows = projectSummaryScopeRowsForQueue({
+    version: 1,
+    lastUpdated: new Date(0).toISOString(),
+    tasks: tasks.map(indexedTaskForScopeProjection),
+    releases: queue.releases as ProjectRelease[],
+    ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+  }, approvedPlan, undefined, { currentStateAuthority: 'database' })
+  return derivedRows.map(row => {
+    const task = taskById.get(row.taskId)
+    const proof = task ? indexedCurrentProofForTask(task) : undefined
+    const saved = savedRowsByTaskId.get(row.taskId)
+    const proofBlocked = task && proof
+      ? indexedTaskProofBlocked(task, proof, taskById, proofByTaskId, queue.selectedReleaseId)
+      : (saved?.proofBlocked ?? row.proofBlocked)
+    return {
+      ...row,
+      proofBlocked,
+      ...(proofBlocked ? { blockerSummary: 'Completion proof is missing or stale.' } : {}),
+    }
+  })
+}
+
+/**
+ * Rebuild the selected-scope ledger from compact indexed rows. This is used
+ * after a point task-definition mutation: all affected hierarchy rows update
+ * together, while unrelated rich task details remain unopened.
+ */
+export function projectSummaryScopeRowsFromIndexedState(
+  tasksPath: string,
+  input: { taskOverrides?: readonly ProjectStateDatabaseTask[] } = {},
+): ProjectStateDatabaseScopeRow[] | null {
+  const current = readProjectStateDatabaseProjectionState<ProjectSummaryProjection>(tasksPath, {
+    includeDefinitions: false,
+  })
+  if (!current?.summary) return null
+  const overrides = new Map((input.taskOverrides ?? []).map(task => [task.id, task]))
+  const tasks = current.inventory.tasks.map(task => overrides.get(task.id) ?? task)
+  return rebuildScopeRowsFromIndexedState({
+    releases: current.queue.releases,
+    selectedReleaseId: current.queue.selectedReleaseId ?? null,
+  }, current.summary.payload.approvedPlan, tasks, current.scopeRows)
+}
+
 function indexedProofStyle(value: unknown): ProjectScope['proofStyle'] | undefined {
   return value === 'script_only' || value === 'manual' || value === 'mixed' || value === 'unspecified'
     ? value

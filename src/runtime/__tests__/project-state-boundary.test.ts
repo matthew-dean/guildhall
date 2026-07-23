@@ -801,6 +801,77 @@ describe('project-state-boundary', () => {
     }
   })
 
+  it('refreshes shared scope and action state when a promoted brief becomes approved', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-approved-brief-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    const initialQueue = {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1', label: 'Current work', kind: 'release', state: 'active', source: 'owner_approved',
+        nodeIds: ['work:task-shaping', 'work:task-untouched'], deferredNodeIds: [],
+      }],
+      tasks: [
+        {
+          id: 'task-shaping', title: 'Shape a source-backed spec', status: 'exploring',
+          updatedAt: '2026-07-23T00:00:00.000Z', releaseIds: ['release-1'],
+        },
+        {
+          id: 'task-untouched', title: 'Keep this payload untouched', status: 'ready',
+          updatedAt: '2026-07-23T00:00:00.000Z', releaseIds: ['release-1'],
+          spec: 'Executable proof.', acceptanceCriteria: [{ id: 'ac-untouched', description: 'The proof exists.' }],
+        },
+      ],
+    }
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, initialQueue, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+      const beforeDatabase = new DatabaseSync(projectStateDatabasePath(root), { readOnly: true })
+      const untouchedBefore = beforeDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-untouched') as { payload_gzip: Uint8Array }
+      beforeDatabase.close()
+
+      const result = writePromotedTaskDetailMutation(tasksPath, 'task-shaping', {
+        projectId: 'approved-brief',
+        projectRoot: root,
+        mutate: task => ({
+          ...task,
+          updatedAt: '2026-07-23T00:01:00.000Z',
+          productBrief: {
+            userJob: 'Turn documented story intent into a runnable CLI workflow.',
+            whyItMattersNow: 'The selected release needs an executable spec.',
+            successMetric: 'The spec names its inputs, proof, and review boundary.',
+            nonGoals: ['Do not broaden into a visual editor.'],
+            approvedAt: '2026-07-23T00:01:00.000Z',
+          },
+        }),
+      })
+
+      expect(result?.committedRevision).toBeGreaterThan(0)
+      expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks.find(task => task.id === 'task-shaping'))
+        .toMatchObject({ currentSummary: { brief: { present: true, shaped: true, approvedAt: '2026-07-23T00:01:00.000Z' } } })
+      const summary = readProjectSummaryProjection(tasksPath)
+      expect(summary).not.toBeNull()
+      const primaryAction = summary?.actionModel?.primaryAction
+      expect(primaryAction).not.toBeNull()
+      expect(primaryAction!).toMatchObject({
+        source: 'task',
+        taskId: 'task-shaping',
+        detail: 'Guildhall is shaping a source-backed spec from the approved brief.',
+      })
+      expect(summary!.releaseSummary).toMatchObject({
+        state: 'shaping',
+        blockers: [],
+      })
+      const afterDatabase = new DatabaseSync(projectStateDatabasePath(root), { readOnly: true })
+      const untouchedAfter = afterDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-untouched') as { payload_gzip: Uint8Array }
+      expect(Buffer.from(untouchedAfter.payload_gzip)).toEqual(Buffer.from(untouchedBefore.payload_gzip))
+      afterDatabase.close()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('does not resurrect historical completion when a promoted task is reopened', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-reopen-completion-'))
     const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')

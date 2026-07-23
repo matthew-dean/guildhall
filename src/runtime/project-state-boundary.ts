@@ -56,6 +56,7 @@ import type {
 import {
   PROJECT_SUMMARY_PROJECTION_VERSION,
   buildProjectSummaryProjectionFromIndexedState,
+  projectSummaryScopeRowsFromIndexedState,
   prepareProjectSummaryProjectionFromUnknownQueue,
   readProjectSummaryProjection,
   writeProjectSummaryProjectionFromUnknownQueue,
@@ -1426,7 +1427,7 @@ function writeTargetedTaskMutationIfSafe(
 export interface PromotedTaskDetailMutationOptions {
   projectId?: string | null
   projectRoot?: string
-  /** Preserve the existing scope row when omitted; null removes it. */
+  /** Override the derived scope row only for a deliberately external scope change. */
   scopeRow?: ProjectStateDatabaseScopeRow | null
   mutate: (task: Record<string, unknown>) => Record<string, unknown> | null
 }
@@ -1490,7 +1491,6 @@ function writePromotedTaskDetailMutationOnce(
     nextTask.doneSummaryBundle = currentDefinition.doneSummaryBundle
   }
   nextTask.id = taskId
-  const nextScopeRow = options.scopeRow === undefined ? point.task.scopeRow : options.scopeRow
   const compact = projectStateDatabaseTaskSummary(nextTask)
   const nextIndexedTask = {
     ...point.task,
@@ -1518,15 +1518,30 @@ function writePromotedTaskDetailMutationOnce(
     completedAt: Object.prototype.hasOwnProperty.call(nextTask, 'completedAt')
       ? (typeof nextTask.completedAt === 'string' ? nextTask.completedAt : null)
       : point.task.completedAt,
-    scopeRow: nextScopeRow,
   }
+  const refreshedScopeRows = options.scopeRow === undefined
+    ? projectSummaryScopeRowsFromIndexedState(tasksPath, { taskOverrides: [nextIndexedTask] })
+    : null
+  if (options.scopeRow === undefined && !refreshedScopeRows) return null
+  const nextScopeRows = refreshedScopeRows ?? [options.scopeRow].filter(
+    (row): row is ProjectStateDatabaseScopeRow => row !== null,
+  )
+  const existingScopeRows = readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks
+    .flatMap(task => task.scopeRow ? [task.scopeRow] : []) ?? []
+  const existingScopeByTaskId = scopeRowByTaskId(existingScopeRows)
+  const nextScopeByTaskId = scopeRowByTaskId(nextScopeRows)
+  const scopeRowsEqual = (left: ProjectStateDatabaseScopeRow | undefined, right: ProjectStateDatabaseScopeRow | undefined) =>
+    sameJson(left ?? null, right ?? null)
+  const changedScopeRows = nextScopeRows.filter(row => !scopeRowsEqual(existingScopeByTaskId.get(row.taskId), row))
+  const removeScopeRowTaskIds = [...existingScopeByTaskId.keys()]
+    .filter(scopeTaskId => !nextScopeByTaskId.has(scopeTaskId))
   const generatedAt = typeof nextTask.updatedAt === 'string' ? nextTask.updatedAt : new Date().toISOString()
   const summary = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
     projectId: options.projectId,
     generatedAt,
     sourceQueueLastUpdated: generatedAt,
     taskOverrides: [nextIndexedTask],
-    scopeRowOverrides: [nextScopeRow],
+    scopeRowOverrides: nextScopeRows,
   })
   if (!summary) return null
   const committedRevision = writeProjectStateDatabaseTaskMutation(tasksPath, {
@@ -1535,7 +1550,8 @@ function writePromotedTaskDetailMutationOnce(
     expectedQueueRevision: point.revision,
     expectedProjectRevision: point.projectRevision,
     lastUpdated: generatedAt,
-    scopeRow: nextScopeRow,
+    scopeRows: changedScopeRows,
+    removeScopeRowTaskIds,
   })
   return { committedRevision, task: nextTask }
 }

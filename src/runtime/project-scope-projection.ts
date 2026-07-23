@@ -14,6 +14,7 @@ export type ProjectScopeEligibilityReason = 'included' | 'included_ancestor' | '
 export type ProjectScopeHierarchyRole = 'root' | 'parent' | 'child'
 export type ProjectScopeHandoffState =
   | 'not_shaped'
+  | 'spec_shaping'
   | 'brief_cleanup'
   | 'spec_review'
   | 'ready'
@@ -68,8 +69,10 @@ export function projectScopeRowNeedsOwnerInput(row: Pick<ProjectScopeRow, 'scope
 
 export function projectScopeRowIsGuildhallShaping(row: Pick<ProjectScopeRow, 'scope' | 'status' | 'handoffState'>): boolean {
   return row.scope === 'included' &&
-    row.handoffState === 'not_shaped' &&
-    (row.status === 'exploring' || row.status === 'import_draft')
+    (row.handoffState === 'spec_shaping' || (
+      row.handoffState === 'not_shaped' &&
+      (row.status === 'exploring' || row.status === 'import_draft')
+    ))
 }
 
 /**
@@ -82,7 +85,8 @@ export function normalizeProjectScopeRowReadModel(row: ProjectScopeRow): Project
   const humanBlocking = projectScopeRowIsGuildhallShaping(row)
     ? false
     : row.humanBlocking
-  const canStartShaping = row.scope === 'included' && row.status === 'exploring' && row.handoffState === 'not_shaped'
+  const canStartShaping = row.scope === 'included' && row.status === 'exploring' &&
+    (row.handoffState === 'not_shaped' || row.handoffState === 'spec_shaping')
   const blocksStart = row.scope === 'included' && (
     row.proofBlocked ||
     row.handoffState === 'blocked' ||
@@ -699,6 +703,7 @@ function handoffStateForTask(
   if (status === 'in_progress') return 'paused'
   if (status === 'review' || status === 'gate_check') return 'review'
   if (status === 'spec_review') return 'spec_review'
+  if (status === 'exploring' && hasApprovedCompleteBrief(task) && !hasSpecDraft(task)) return 'spec_shaping'
   if (status === 'ready') {
     if (isReadyForWorkerHandoff(task) || hasInScopeMaterializedChildWork(task, input)) return 'ready'
     return 'brief_cleanup'
@@ -806,6 +811,7 @@ function humanBlockingFor(task: Task, handoffState: ProjectScopeHandoffState, sc
   // Imported and actively exploring work belongs to Guildhall's planning lane.
   // A proposed task is different: it still represents an owner decision about
   // whether that candidate belongs in the plan.
+  if (handoffState === 'spec_shaping') return false
   if (handoffState === 'not_shaped' && (task.status === 'exploring' || task.status === 'import_draft')) return false
   if (handoffState === 'not_shaped') return true
   if (handoffState === 'brief_cleanup' || handoffState === 'blocked') return true
@@ -953,7 +959,8 @@ export function summarizeProjectScopeStart(
   // An exploring task is already in Guildhall's shaping lane. Let Start run
   // that agent work; only raw import drafts, thin ready tasks, and owner-gated
   // reviews should stop the selected scope before execution can begin.
-  const shapingWork = included.find(row => row.status === 'exploring' && row.handoffState === 'not_shaped')
+  const shapingWork = included.find(row => row.status === 'exploring' &&
+    (row.handoffState === 'spec_shaping' || row.handoffState === 'not_shaped'))
   if (shapingWork) {
     return {
       canStart: true,
@@ -962,7 +969,9 @@ export function summarizeProjectScopeStart(
       focusTaskId: shapingWork.taskId,
       focusTaskTitle: shapingWork.title,
       focusKind: 'ready_work',
-      message: `Guildhall is shaping "${shapingWork.title}" from the visible project sources.`,
+      message: shapingWork.handoffState === 'spec_shaping'
+        ? `Guildhall is shaping a source-backed spec for "${shapingWork.title}".`
+        : `Guildhall is shaping "${shapingWork.title}" from the visible project sources.`,
       actionHref: `/work?task=${encodeURIComponent(shapingWork.taskId)}`,
     }
   }
@@ -1095,7 +1104,7 @@ export function summarizeProjectScopeRelease(rows: readonly ProjectScopeRow[]): 
   }
   if (included.length === 0) return { state: 'unknown', blockers: [] }
   if (included.every(row => row.handoffState === 'done')) return { state: 'ready', blockers: [] }
-  if (included.some(row => row.handoffState === 'not_shaped' || row.handoffState === 'brief_cleanup')) return { state: 'shaping', blockers: [] }
+  if (included.some(row => row.handoffState === 'not_shaped' || row.handoffState === 'spec_shaping' || row.handoffState === 'brief_cleanup')) return { state: 'shaping', blockers: [] }
   if (included.some(row => row.handoffState === 'ready' || row.handoffState === 'paused' || row.handoffState === 'review' || row.handoffState === 'spec_review')) {
     return { state: 'active', blockers: [] }
   }
@@ -1105,6 +1114,7 @@ export function summarizeProjectScopeRelease(rows: readonly ProjectScopeRow[]): 
 function blockerLabelFor(row: ProjectScopeRow): string {
   const title = row.title.replace(/[.!?]+$/, '')
   if (row.proofBlocked) return `${title}: completion proof is missing or stale.`
+  if (row.handoffState === 'spec_shaping') return `${title}: Guildhall is shaping a source-backed spec.`
   if (row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped') {
     return `${title}: needs a clearer brief before unattended work can run.`
   }
@@ -1115,6 +1125,7 @@ function blockerLabelFor(row: ProjectScopeRow): string {
 
 function blockerCodeFor(row: ProjectScopeRow): string {
   if (row.proofBlocked) return 'proof_evidence_missing'
+  if (row.handoffState === 'spec_shaping') return 'source_backed_spec_shaping'
   if (row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped') return 'imported_scope_shaping'
   if (row.handoffState === 'spec_review') return 'spec_review_required'
   if (row.handoffState === 'blocked') return 'blocked'

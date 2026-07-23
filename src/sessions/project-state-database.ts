@@ -139,6 +139,14 @@ export interface ProjectStateDatabaseTaskMutation {
   /** Omit to preserve the existing scope row; null removes it. */
   scopeRow?: ProjectStateDatabaseScopeRow | null
   /**
+   * Derived scope rows changed by this point definition edit. A task brief or
+   * hierarchy fact can change a parent/child's selected-scope handoff state,
+   * so the normalized ledger may need more than the edited task's row.
+   */
+  scopeRows?: readonly ProjectStateDatabaseScopeRow[]
+  /** Derived rows that disappeared during the same scope refresh. */
+  removeScopeRowTaskIds?: readonly string[]
+  /**
    * Evidence written with the task mutation. This keeps current task detail,
    * proof, and bounded evidence history under one SQLite transaction.
    */
@@ -3716,7 +3724,7 @@ export function writeProjectStateDatabaseSnapshot(
  * Commit one task against the promoted SQLite current-state authority.
  *
  * This is intentionally narrower than writeProjectStateDatabaseSnapshot: it
- * updates one work item/detail payload and at most one scope row. Existing
+ * updates one work item/detail payload and its changed derived scope rows. Existing
  * detail rows receive the new queue watermark without being decompressed or
  * rewritten so an explicit rich queue read still observes one coherent
  * revision after the transaction commits.
@@ -3738,6 +3746,9 @@ export function writeProjectStateDatabaseTaskMutation(
   }
   if (mutation.scopeRow !== undefined && mutation.scopeRow !== null && mutation.scopeRow.taskId !== taskId) {
     throw new Error(`Targeted current-state mutation scope row must belong to ${taskId}`)
+  }
+  if (mutation.scopeRow !== undefined && mutation.scopeRows !== undefined) {
+    throw new Error('Targeted current-state mutations cannot use scopeRow and scopeRows together')
   }
   const database = openDatabase(projectStateDatabasePathFromTasksPath(tasksPath))
   let committedRevision = 0
@@ -3848,12 +3859,27 @@ export function writeProjectStateDatabaseTaskMutation(
        * updated in this same transaction; scope is separate because it is a
        * derived selected-scope projection.
        */
-      if (mutation.scopeRow !== undefined) {
-        if (mutation.scopeRow === null) {
-          database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(taskId)
-        } else {
-          const row = mutation.scopeRow
-          database.prepare(`
+      const scopeRows = mutation.scopeRows ?? (mutation.scopeRow === undefined
+        ? []
+        : mutation.scopeRow === null ? [] : [mutation.scopeRow])
+      const scopeRowsByTaskId = new Map<string, ProjectStateDatabaseScopeRow>()
+      for (const row of scopeRows) {
+        if (scopeRowsByTaskId.has(row.taskId)) throw new Error(`Targeted current-state mutation received duplicate scope row ${row.taskId}`)
+        if (!database.prepare('SELECT 1 FROM work_items WHERE id = ?').get(row.taskId)) {
+          throw new Error(`Cannot scope unknown work item ${row.taskId}`)
+        }
+        scopeRowsByTaskId.set(row.taskId, row)
+      }
+      const removeScopeRowTaskIds = new Set(mutation.removeScopeRowTaskIds ?? [])
+      if (mutation.scopeRow === null) removeScopeRowTaskIds.add(taskId)
+      for (const scopeTaskId of removeScopeRowTaskIds) {
+        if (scopeRowsByTaskId.has(scopeTaskId)) {
+          throw new Error(`Targeted current-state mutation cannot replace and remove scope row ${scopeTaskId}`)
+        }
+        database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(scopeTaskId)
+      }
+      if (scopeRowsByTaskId.size > 0) {
+        const upsertScopeRow = database.prepare(`
             INSERT INTO work_scope (
               task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
               blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
@@ -3871,7 +3897,9 @@ export function writeProjectStateDatabaseTaskMutation(
               proof_blocked = excluded.proof_blocked,
               blocker_summary = excluded.blocker_summary,
               source_refs_json = excluded.source_refs_json
-          `).run(
+          `)
+        for (const row of scopeRowsByTaskId.values()) {
+          upsertScopeRow.run(
             row.taskId,
             row.scope,
             row.eligibilityReason,
