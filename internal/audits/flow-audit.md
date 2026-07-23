@@ -53655,7 +53655,7 @@ Repair:
 
 ## 2026-07-23 Release membership and executable work are distinct facts
 
-- [ ] User job: when Start says which release it will run, its visible scoped
+- [~] User job: when Start says which release it will run, its visible scoped
       and deferred counts must match Overview and Release. Internal execution
       compaction may choose a child or proof-recovery item, but it must never
       silently redefine the release boundary the user selected.
@@ -53675,7 +53675,7 @@ Repair:
 
 ### Contract Touch Decision
 
-- Work id: `0.13.99/release-membership-vs-execution-view`.
+- Work id: `0.13.66/release-membership-snapshot`.
 - Touched contracts: selected-release presentation summary in Start,
       canonical release membership, and the selected executable scope read.
 - Considered but not touched: task lifecycle, release selection, hierarchy
@@ -53704,12 +53704,12 @@ Repair:
       projection that records the membership revision it used.
 - Change class: authoritative relationship materialization plus derived
       projection versioning. This does not add a second membership store.
-- Existing data impact: an approved plan may describe a different set than
-      existing normalized membership because earlier readers synthesized its
-      shape without a mutation. Such a difference becomes typed
-      `release_membership_reconciliation` state; Start fails closed until the
-      policy can materialize or reconcile it from provenance.
-- Migration id: `0.13.0/release-membership-snapshot`.
+- Existing data impact: an approved plan may describe real task IDs that are
+      absent from existing normalized membership because earlier readers
+      synthesized its shape without a mutation. The migration materializes
+      missing IDs only. An opposite canonical disposition is a typed
+      `release_membership_reconciliation` conflict and is never overwritten.
+- Migration id: `0.13.66/release-membership-snapshot`.
 - Safety: current membership and approved-plan inputs are captured with their
       source revision before a compare-and-swap materialization. An equal or
       newer explicit release edit wins; an older projection cannot overwrite
@@ -53726,9 +53726,18 @@ Repair:
 ### Implementation Progress
 
 - [x] Saved and live Release boundaries now keep normalized membership separate
-      from hierarchy-compacted execution rows. The next migration step is
-      materializing/reconciling approved-plan membership before a summary or
-      Start response can claim the release is current.
+      from hierarchy-compacted execution rows.
+- [x] `0.13.66/release-membership-snapshot` materializes only missing,
+      accepted-plan task IDs into the normalized relation through a
+      queue/project-revision CAS write and rebuilds the shared scope summary in
+      that same mutation.
+- [x] A contrary canonical inclusion/defer disposition is preserved and the
+      migration reports a typed conflict. The registered
+      `release.membershipTaskIds` claim policy makes the same disagreement
+      visible to agent consumers instead of allowing a prose or timing winner.
+- [ ] Start, Overview, Release, Work, Thread, and Activity still need to
+      consume the resulting membership revision token and fail closed when a
+      conflict or stale projection remains.
 
 ### Schema Migration Decision
 

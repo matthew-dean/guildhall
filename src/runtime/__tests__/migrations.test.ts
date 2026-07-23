@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { parse as parseYaml } from 'yaml'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
-import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabaseDetailPathFromTasksPath, projectStateDatabasePath, promoteProjectStateDatabaseAuthority, readProjectStateDatabaseCurrentProofReadModelStatus, readProjectStateDatabaseDiagnosticProjection, readProjectStateDatabaseInventory, readProjectStateDatabaseMetadata, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseSummary, readProjectStateDatabaseTaskOverlay, readProjectStateDatabaseTaskEvidenceAuthority, readProjectStateDatabaseTaskEvidenceCurrent, readProjectStateDatabaseTaskEvidenceHistory, readProjectStateDatabaseTaskPoint, readProjectStateDatabaseTaskOverlayStores, replaceProjectStateDatabaseTaskRuntimes, writeProjectStateDatabaseDiagnosticProjection, writeProjectStateDatabaseSnapshot, PROJECT_STATE_DATABASE_SCHEMA_VERSION } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabaseDetailPathFromTasksPath, projectStateDatabasePath, promoteProjectStateDatabaseAuthority, readProjectStateDatabaseCurrentProofReadModelStatus, readProjectStateDatabaseDiagnosticProjection, readProjectStateDatabaseInventory, readProjectStateDatabaseMetadata, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseSummary, readProjectStateDatabaseTaskOverlay, readProjectStateDatabaseTaskEvidenceAuthority, readProjectStateDatabaseTaskEvidenceCurrent, readProjectStateDatabaseTaskEvidenceHistory, readProjectStateDatabaseTaskPoint, readProjectStateDatabaseTaskOverlayStores, replaceProjectStateDatabaseTaskRuntimes, updateProjectStateDatabaseSummary, writeProjectStateDatabaseDiagnosticProjection, writeProjectStateDatabaseSnapshot, PROJECT_STATE_DATABASE_SCHEMA_VERSION } from '@guildhall/sessions'
 import {
   applyProjectMigrations,
   getProjectMigrationStatus,
@@ -413,6 +413,174 @@ describe('applyProjectMigrations', () => {
       { release_id: 'release-one', task_id: 'task-later', disposition: 'deferred' },
     ])
     migrated.close()
+  })
+
+  it('materializes accepted plan membership once through the normalized relation', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T12:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-first',
+        releases: [{
+          id: 'release-first',
+          label: 'First release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-current'],
+          deferredNodeIds: [],
+        }],
+        tasks: [
+          {
+            id: 'task-current',
+            title: 'Current',
+            description: 'Current release work.',
+            domain: 'runtime',
+            projectPath: projectRoot,
+            status: 'ready',
+            releaseIds: ['release-first'],
+            acceptanceCriteria: [],
+            notes: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-later',
+            title: 'Later',
+            description: 'Deferred release work.',
+            domain: 'runtime',
+            projectPath: projectRoot,
+            status: 'shelved',
+            acceptanceCriteria: [],
+            notes: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      },
+      summary: {
+        projectId: 'migration-test',
+        generatedAt: now,
+        freshness: 'current',
+        approvedPlan: {
+          source: 'workspace_import',
+          recordedAt: now,
+          goalCount: 1,
+          taskCount: 2,
+          milestoneCount: 1,
+          currentTaskCount: 1,
+          laterTaskCount: 1,
+          currentTaskIds: ['task-current'],
+          laterTaskIds: ['task-later'],
+          currentReleaseId: 'release-first',
+          releases: [{
+            id: 'release-first',
+            label: 'First release',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            currentTaskIds: ['task-current'],
+            laterTaskIds: ['task-later'],
+          }],
+        },
+      },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.66/release-membership-snapshot'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.66/release-membership-snapshot'])
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      selectedReleaseId: 'release-first',
+      releases: [{
+        id: 'release-first',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: ['work:task-later'],
+      }],
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.66/release-membership-snapshot'],
+    })).applied).toEqual([])
+  })
+
+  it('refuses an accepted plan that contradicts canonical release membership', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T13:00:00.000Z'
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'release-first',
+      releases: [{
+        id: 'release-first',
+        label: 'First release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: ['work:task-current'],
+      }],
+      tasks: [{
+        id: 'task-current',
+        title: 'Current',
+        description: 'Current release work.',
+        domain: 'runtime',
+        projectPath: projectRoot,
+        status: 'ready',
+        acceptanceCriteria: [],
+        notes: [],
+        createdAt: now,
+        updatedAt: now,
+      }],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    updateProjectStateDatabaseSummary(tasksPath, summary => ({
+      ...summary,
+      approvedPlan: {
+        source: 'workspace_import',
+        recordedAt: now,
+        goalCount: 1,
+        taskCount: 1,
+        milestoneCount: 1,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        currentTaskIds: ['task-current'],
+        laterTaskIds: [],
+        currentReleaseId: 'release-first',
+        releases: [{
+          id: 'release-first',
+          label: 'First release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          currentTaskIds: ['task-current'],
+          laterTaskIds: [],
+        }],
+      },
+    }))
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.66/release-membership-snapshot'],
+    })
+    expect(result.applied).toEqual([])
+    expect(result.failed).toEqual([expect.objectContaining({
+      id: '0.13.66/release-membership-snapshot',
+      error: expect.stringContaining('conflicts with canonical state'),
+    })])
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      releases: [{
+        id: 'release-first',
+        nodeIds: [],
+        deferredNodeIds: ['work:task-current'],
+      }],
+    })
   })
 
   it('retires task, scope, and definition membership mirrors after the relation cutover', async () => {
@@ -1301,7 +1469,8 @@ describe('applyProjectMigrations', () => {
     expect(activeProof).toMatchObject({
       status: 'ready',
       semanticKind: 'proof_setup',
-      releaseIds: ['release-active'],
+      proofForReleaseId: 'release-active',
+      releaseIds: [],
       hierarchy: { parentId: 'parent' },
     })
   })
@@ -2831,7 +3000,8 @@ describe('applyProjectMigrations', () => {
       status: 'done',
       semanticKind: 'proof_setup',
       workVisibility: { kind: 'internal_step', countInProjectTotals: false },
-      releaseIds: ['release-shipped'],
+      proofForReleaseId: 'release-shipped',
+      releaseIds: [],
       hierarchy: { parentId: parent.id, childIds: [], order: 1, relation: 'decomposes' },
       acceptanceCriteria: [],
       notes: [],
@@ -2847,7 +3017,8 @@ describe('applyProjectMigrations', () => {
       status: 'done',
       semanticKind: 'proof_setup',
       workVisibility: { kind: 'internal_step', countInProjectTotals: false },
-      releaseIds: ['release-current'],
+      proofForReleaseId: 'release-current',
+      releaseIds: [],
       hierarchy: { parentId: parent.id, childIds: [], order: 1, relation: 'decomposes' },
       acceptanceCriteria: [{ id: 'ac-current', description: 'Current proof command passes.', verifiedBy: 'automated', command: 'pnpm proof:current', expectedOutputIncludes: ['guildhall-proof:task-release-parent'], met: true }],
       proofPaths: [{

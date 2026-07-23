@@ -53,9 +53,10 @@ import {
   rewriteProjectStateDatabaseTaskSummaries,
   projectStateDatabaseTaskSummary,
   writeProjectStateDatabaseDiagnosticProjection,
+  writeProjectStateDatabaseTaskBatchMutation,
 } from '@guildhall/sessions'
 import type { ProjectStateDatabaseScopeRow } from '@guildhall/sessions'
-import { Task as TaskSchema, TaskRuntimeState, type ProjectRelease } from '@guildhall/core'
+import { Task as TaskSchema, TaskQueue, TaskRuntimeState, type ProjectRelease, type TaskQueue as TaskQueueModel } from '@guildhall/core'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
@@ -63,6 +64,7 @@ import { migrateTaskQuestionsToBoundedChat } from './task-question-migration.js'
 import { migrateTaskHierarchyState } from './task-hierarchy-migration.js'
 import { migrateTaskDeliveryStepState } from './task-delivery-step-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
+import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import {
   backfillTaskEvidenceCurrent,
   backfillTaskStateDatabaseOverlays,
@@ -93,6 +95,8 @@ import {
   projectSummaryProjectionIsCurrent,
   projectSummaryProjectionNeedsBackfill,
   projectSummaryProjectionPath,
+  materializeApprovedPlanReleaseMembership,
+  prepareProjectSummaryProjectionFromUnknownQueue,
   readProjectSummaryProjection,
   readProjectSummaryProjectionForMigration,
   writeProjectSummaryProjection,
@@ -229,6 +233,7 @@ const DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID = '0.13.58/diagnostic-read
 const SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID = '0.13.59/script-only-proof-projection'
 const SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID = '0.13.60/source-capability-summary'
 const INTERNAL_PROOF_RELEASE_CONTEXT_MIGRATION_ID = '0.13.65/internal-proof-release-context'
+const RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID = '0.13.66/release-membership-snapshot'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -1435,6 +1440,98 @@ export async function writeProjectMigrationLedger(
   await fs.mkdir(path.dirname(file), { recursive: true })
   await writeManagedTextFile(file, `${JSON.stringify({ version: 1, records: ledger.records }, null, 2)}\n`, 'utf8')
   recordGuildhallRuntimeWrite(projectRoot, ['project-migrations.v1'])
+}
+
+type ApprovedPlanReleaseMembershipRepair =
+  | { state: 'not_applicable' | 'current' }
+  | {
+      state: 'materialize' | 'conflict'
+      current: Awaited<ReturnType<typeof readProjectCanonicalCurrentState>>
+      queue: TaskQueueModel
+      conflicts: ReturnType<typeof materializeApprovedPlanReleaseMembership>['conflicts']
+    }
+
+/**
+ * An approved plan is allowed to seed membership exactly once through this
+ * explicit repair boundary. Ordinary reads never consult it as a competing
+ * scope source. An opposite normalized disposition is an ambiguous history,
+ * so the repair reports it instead of choosing based on timing or prose.
+ */
+async function inspectApprovedPlanReleaseMembershipRepair(
+  projectRoot: string,
+): Promise<ApprovedPlanReleaseMembershipRepair> {
+  const current = await readProjectCanonicalCurrentState(projectRoot)
+  if (current.authority !== 'database' || !current.summary?.approvedPlan) {
+    return { state: 'not_applicable' }
+  }
+  const parsedQueue = TaskQueue.safeParse(normalizeLegacyTaskQueueForMigration({ version: 1, ...current.rawQueue }))
+  if (!parsedQueue.success) return { state: 'not_applicable' }
+  const queue = parsedQueue.data as TaskQueueModel
+  const materialized = materializeApprovedPlanReleaseMembership(queue, current.summary.approvedPlan)
+  if (materialized.conflicts.length > 0) {
+    return { state: 'conflict', current, queue: materialized.queue, conflicts: materialized.conflicts }
+  }
+  // This repair is deliberately one-way: it only catches an accepted plan
+  // whose real tasks were never materialized into the normalized relation.
+  // A plan that merely adds a release shell or changes non-membership fields
+  // belongs to normal planning, not a historical-state repair.
+  const currentReleasesById = new Map((queue.releases ?? []).map(release => [release.id, release]))
+  const materializedReleases = materialized.queue.releases ?? []
+  const missingMembership = materializedReleases.some(release => {
+    const existing = currentReleasesById.get(release.id)
+    const existingNodeIds = new Set([...(existing?.nodeIds ?? []), ...(existing?.deferredNodeIds ?? [])])
+    return [...release.nodeIds, ...release.deferredNodeIds].some(nodeId => !existingNodeIds.has(nodeId))
+  })
+  return materialized.changed && missingMembership
+    ? { state: 'materialize', current, queue: materialized.queue, conflicts: [] }
+    : { state: 'current' }
+}
+
+async function materializeApprovedPlanReleaseMembershipAtBoundary(
+  projectRoot: string,
+): Promise<{ state: 'not_applicable' | 'current' | 'materialized'; membershipCount: number }> {
+  const repair = await inspectApprovedPlanReleaseMembershipRepair(projectRoot)
+  if (repair.state === 'not_applicable' || repair.state === 'current') {
+    return { state: repair.state, membershipCount: 0 }
+  }
+  if (repair.state === 'conflict') {
+    const details = repair.conflicts
+      .map(conflict => `${conflict.releaseId}/${conflict.taskId}: ${conflict.existing} vs ${conflict.proposed}`)
+      .join(', ')
+    throw new Error(`Approved plan release membership conflicts with canonical state (${details}). Reconcile the registered release.membershipTaskIds claim before retrying.`)
+  }
+  if (repair.state !== 'materialize') {
+    throw new Error('Approved plan release membership repair reached an unsupported state.')
+  }
+  if (repair.current.queueRevision === null || repair.current.projectRevision === null) {
+    throw new Error('Approved plan release membership requires a revisioned canonical queue.')
+  }
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+    projectId: path.basename(projectRoot),
+    projectRoot,
+    queue: repair.queue,
+    projectionTasks: repair.queue.tasks,
+    existingSummary: repair.current.summary,
+  })
+  if (!prepared.parsedQueue || !prepared.scopeRows) {
+    throw new Error('Approved plan release membership could not produce a complete shared projection.')
+  }
+  writeProjectStateDatabaseTaskBatchMutation(tasksPath, {
+    tasks: [],
+    releases: (repair.queue.releases ?? []) as unknown as Record<string, unknown>[],
+    selectedReleaseId: repair.queue.selectedReleaseId ?? null,
+    scopeRows: prepared.scopeRows,
+    summary: prepared.projection as unknown as Record<string, unknown>,
+    expectedQueueRevision: repair.current.queueRevision,
+    expectedProjectRevision: repair.current.projectRevision,
+    lastUpdated: repair.queue.lastUpdated ?? null,
+  })
+  const membershipCount = (repair.queue.releases ?? []).reduce(
+    (count, release) => count + release.nodeIds.length + release.deferredNodeIds.length,
+    0,
+  )
+  return { state: 'materialized', membershipCount }
 }
 
 const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
@@ -3719,6 +3816,37 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID,
+    title: 'Materialize accepted release membership',
+    introducedIn: '0.13.66',
+    scope: 'project',
+    safety: 'required',
+    requirement: 'required',
+    summary: 'Promotes accepted release-plan membership into the normalized relation in one revisioned write, so scope, Start, and release totals do not rely on a read-time plan overlay.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const repair = await inspectApprovedPlanReleaseMembershipRepair(projectRoot)
+      const needed = repair.state === 'materialize' || repair.state === 'conflict'
+      return {
+        needed,
+        affectedPaths: needed
+          ? [projectStateDatabasePath(projectRoot), 'approved plan and normalized release membership relation']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const result = await materializeApprovedPlanReleaseMembershipAtBoundary(projectRoot)
+      return {
+        summary: result.state === 'materialized'
+          ? `Materialized ${result.membershipCount} accepted release membership row${result.membershipCount === 1 ? '' : 's'} into the canonical relation and refreshed the shared scope projection.`
+          : 'No accepted release-plan membership repair was needed.',
+        affectedPaths: result.state === 'materialized'
+          ? [projectStateDatabasePath(projectRoot)]
+          : [],
+      }
+    },
+  },
+  {
     id: COMPACT_READ_MODEL_MIGRATION_ID,
     title: 'Materialize compact task read models',
     introducedIn: '0.13.2',
@@ -5087,6 +5215,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID]: 'migrations.test.ts: realigns promoted summary and scope from current evidence without reading compatibility files',
   [CURRENT_STATUS_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: materializes the shared current task status rule into indexed rows',
   [RELEASE_MEMBERSHIP_MIGRATION_ID]: 'migrations.test.ts: normalizes release membership into one relation',
+  [RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID]: 'migrations.test.ts: materializes accepted plan membership once through the normalized relation',
   [COMPACT_READ_MODEL_MIGRATION_ID]: 'migrations.test.ts: backfills compact graph read models from per-task detail without making ordinary reads hydrate definitions',
   [CURRENT_PROOF_READ_MODEL_MIGRATION_ID]: 'migrations.test.ts: refreshes the bounded current-proof summary after an older compact row was already marked migrated',
   [IMPORTED_SCRIPT_PROOF_CONTRACT_MIGRATION_ID]: 'migrations.test.ts: converts imported bare test conventions into explicit proof setup in a script-only release',
