@@ -5909,6 +5909,22 @@ function compactReleaseReadinessFromProjection(input: {
     : summary?.release
       ? { ...summary.release, state: summary.state }
       : null
+  // Membership is a canonical queue relation; readiness totals belong to a
+  // derived summary. When the summary is stale, returning both makes one
+  // response claim two incompatible release states. Keep the durable release
+  // boundary visible, but require a projection refresh before publishing
+  // progress or a Start-ready verdict.
+  if (input.projection.freshness !== 'current') {
+    return {
+      completeness: 'scope',
+      checksLoaded: false,
+      release,
+      scope: input.scope ?? input.projection.scope,
+      ready: false,
+      requiresRefresh: true,
+      notReadyReason: 'The saved project summary is refreshing.',
+    }
+  }
   const blockers = summary?.blockers ?? []
   const ready = summary?.state === 'ready' && counts.total > 0
   return {

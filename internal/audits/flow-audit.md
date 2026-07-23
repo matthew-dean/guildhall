@@ -53735,6 +53735,11 @@ Repair:
       migration reports a typed conflict. The registered
       `release.membershipTaskIds` claim policy makes the same disagreement
       visible to agent consumers instead of allowing a prose or timing winner.
+- [x] Compact Overview and Release-summary reads now withhold derived
+      readiness totals when their summary freshness is stale, while preserving
+      the canonical release boundary and returning `requiresRefresh`. This
+      prevents one response from blending fresh membership with an older
+      completion state.
 - [ ] Start, Overview, Release, Work, Thread, and Activity still need to
       consume the resulting membership revision token and fail closed when a
       conflict or stale projection remains.

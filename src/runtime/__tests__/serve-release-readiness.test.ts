@@ -4391,6 +4391,7 @@ describe('GET /api/project/release-readiness', () => {
     await commitAndPush('runner proof landed')
 
     const readiness = await (await app.fetch(new Request(projectUrl('/api/project/release-readiness')))).json() as any
+    const compactReadiness = await (await app.fetch(new Request(projectUrl('/api/project/release-readiness/summary')))).json() as any
     const overview = await (await app.fetch(new Request(projectUrl('/api/project?surface=overview')))).json() as any
     const spineBody = await (await app.fetch(new Request(projectUrl('/api/project/spine')))).json() as any
 
@@ -4416,6 +4417,14 @@ describe('GET /api/project/release-readiness', () => {
     ])
     expect(spineBody.summaryFreshness).toBe('stale')
     expect(spineBody.requiresRefresh).toBe(true)
+    expect(compactReadiness).toMatchObject({
+      summaryFreshness: 'stale',
+      requiresRefresh: true,
+      ready: false,
+      release: { id: 'headless-mvp' },
+      scope: { id: 'headless-mvp' },
+    })
+    expect(compactReadiness).not.toHaveProperty('releaseCounts')
   })
 
   it('returns a compact project spine for overview previews without changing the full map spine', async () => {
