@@ -142,7 +142,7 @@ export interface ProjectScopeProjection {
     label: 'Start' | 'Resume' | 'Review' | 'Configure' | 'Answer in Thread'
     focusTaskId?: string
       focusTaskTitle?: string
-      focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input'
+      focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
     count?: number
     message: string
     actionHref: string

@@ -95,6 +95,48 @@ describe('project-summary-projection', () => {
     expect(projectSummaryProjectionIsCurrent(legacy)).toBe(false)
   })
 
+  it('projects an owner spec review separately from owner input', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([task('review-me', 'spec_review', {
+        specReviewGate: {
+          authority: 'owner',
+          requestedAt: now,
+          requestedBy: 'spec-agent',
+          reason: 'spec_handoff',
+        },
+      })], {
+        selectedReleaseId: 'release-1',
+        releases: [{
+          id: 'release-1',
+          label: 'Release 1',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          proofStyle: 'unspecified',
+          nodeIds: ['work:review-me'],
+          deferredNodeIds: [],
+        }],
+      }),
+      generatedAt: now,
+    })
+
+    expect(projection.ownerInput).toBeUndefined()
+    expect(projection.ownerReview).toMatchObject({
+      openCount: 1,
+      next: { taskId: 'review-me', href: '/work?task=review-me' },
+    })
+    expect(projection.decision).toMatchObject({
+      ownerReview: { state: 'required', taskId: 'review-me' },
+      primaryAction: { kind: 'review_spec', targetId: 'review-me', reasonCode: 'owner_review_required' },
+    })
+    expect(projection.nextAction).toMatchObject({
+      code: 'owner_review_required',
+      focusTaskId: 'review-me',
+      focusKind: 'owner_review',
+    })
+  })
+
   it('materializes accepted plan membership without inventing missing work', () => {
     const result = materializeApprovedPlanReleaseMembership(queue([
       task('current', 'ready'),

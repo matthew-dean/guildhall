@@ -368,6 +368,7 @@ describe('Guildhall CLI surface', () => {
           execution: { state: 'complete' as const, code: 'all_terminal' },
           release: { state: 'ready' as const, releaseId: 'release-1', blockerTaskIds: [], proofBlockerTaskIds: [] },
           ownerInput: { state: 'none' as const },
+          ownerReview: { state: 'none' as const },
           primaryAction: { kind: 'review_release' as const, targetId: 'release-1', reasonCode: 'release_ready' },
           conflicts: [],
         },

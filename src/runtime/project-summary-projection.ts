@@ -50,10 +50,11 @@ import { applyProjectActionModelPrimaryAction, applyRuntimeExecutionToProjectDec
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
+import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 22 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 23 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -163,6 +164,15 @@ export interface ProjectSummaryProjection {
       label?: string
       prompt: string
       taskId?: string
+      href?: string
+    } | null
+    updatedAt: string
+  }
+  ownerReview?: {
+    openCount: number
+    next?: {
+      taskId: string
+      label?: string
       href?: string
     } | null
     updatedAt: string
@@ -408,6 +418,54 @@ export function applyOwnerInputToStartReadiness(
   } as ReturnType<typeof summarizeProjectScopeStart>
 }
 
+function ownerReviewForScope(
+  rows: readonly ProjectScopeRow[],
+  tasks: readonly Task[],
+  generatedAt: string,
+): NonNullable<ProjectSummaryProjection['ownerReview']> {
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const pending = executionScopeRows(rows)
+    .filter(row => row.scope === 'included')
+    .flatMap(row => {
+      const task = tasksById.get(row.taskId)
+      return task?.status === 'spec_review' && specReviewRequiresOwnerApproval(task) ? [task] : []
+    })
+  const next = pending[0]
+  return {
+    openCount: pending.length,
+    ...(next ? {
+      next: {
+        taskId: next.id,
+        label: next.title,
+        href: `/work?task=${encodeURIComponent(next.id)}`,
+      },
+    } : {}),
+    updatedAt: generatedAt,
+  }
+}
+
+function applyOwnerReviewToStartReadiness(
+  start: ReturnType<typeof summarizeProjectScopeStart>,
+  ownerReview: ProjectSummaryProjection['ownerReview'] | null | undefined,
+): ReturnType<typeof summarizeProjectScopeStart> {
+  if (!ownerReview || ownerReview.openCount <= 0) return start
+  const label = ownerReview.next?.label?.trim() || ownerReview.next?.taskId || 'This spec'
+  const count = ownerReview.openCount
+  return {
+    ...start,
+    canStart: false,
+    code: 'owner_review_required',
+    label: 'Review',
+    message: count === 1
+      ? `${label} is ready for your review before work can continue`
+      : `${count} specs are ready for your review before work can continue`,
+    actionHref: ownerReview.next?.href ?? '/work',
+    ...(ownerReview.next?.taskId ? { focusTaskId: ownerReview.next.taskId } : {}),
+    focusKind: 'owner_review',
+    count,
+  } as ReturnType<typeof summarizeProjectScopeStart>
+}
+
 export interface ProjectSummaryProjectionInput {
   projectId?: string | null
   projectRoot?: string
@@ -425,6 +483,7 @@ export interface ProjectSummaryProjectionInput {
   execution?: ProjectSummaryProjection['execution']
   runtime?: ProjectSummaryProjection['runtime']
   ownerInput?: ProjectSummaryProjection['ownerInput']
+  ownerReview?: ProjectSummaryProjection['ownerReview']
   expectedQueueRevision?: number | null
   /** Promoted projects read current scope only from normalized SQLite rows. */
   currentStateAuthority?: 'database' | 'legacy'
@@ -704,7 +763,11 @@ export function buildProjectSummaryProjection(
     scopeProjection,
     generatedAt,
   })
-  const start = applyOwnerInputToStartReadiness(scopeProjection.start, input.ownerInput)
+  const ownerReview = input.ownerReview ?? ownerReviewForScope(scopeProjection.rows, tasks, generatedAt)
+  const start = applyOwnerReviewToStartReadiness(
+    applyOwnerInputToStartReadiness(scopeProjection.start, input.ownerInput),
+    ownerReview,
+  )
   const orientationSpine = compactProjectOrientationSpineForMap(buildProjectOrientationSpine({
     projectId: input.projectId ?? '',
     now: generatedAt,
@@ -742,6 +805,7 @@ export function buildProjectSummaryProjection(
     start,
     release: releaseSummary,
     ownerInput: input.ownerInput,
+    ownerReview,
     runStatus: input.execution?.status ?? 'stopped',
     runtimeExecution: input.execution,
   })
@@ -853,6 +917,7 @@ export function buildProjectSummaryProjection(
     ...(input.execution ? { execution: input.execution } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.ownerInput ? { ownerInput: input.ownerInput } : {}),
+    ownerReview,
     nextAction,
     blockers: scopeProjection.release.blockers,
     recentWork,

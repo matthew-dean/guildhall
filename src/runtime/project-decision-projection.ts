@@ -654,8 +654,9 @@ export interface ProjectDecisionProjection {
     proofBlockerTaskIds: string[]
   }
   ownerInput: { state: 'none' | 'required'; requestId?: string }
+  ownerReview: { state: 'none' | 'required'; taskId?: string }
   primaryAction: {
-    kind: 'open_work' | 'resume' | 'review_proof' | 'answer_owner_input' | 'review_release' | 'resolve_conflict' | 'none'
+    kind: 'open_work' | 'resume' | 'review_proof' | 'answer_owner_input' | 'review_spec' | 'review_release' | 'resolve_conflict' | 'none'
     targetId?: string
     reasonCode: string
   }
@@ -674,6 +675,7 @@ export interface ProjectDecisionProjectionInput {
     blockers: Array<{ owningTaskId?: string; code?: string }>
   }
   ownerInput?: { openCount: number; next?: { id: string; taskId?: string } | null } | null
+  ownerReview?: { openCount: number; next?: { taskId: string } | null } | null
   runStatus?: string | null
   /**
    * The supervisor owns this observation. A plan's saved next task is not a
@@ -808,14 +810,17 @@ export function projectDecisionInFlight<T extends {
 function primaryActionForDecision(input: {
   conflicts: ProjectStateConflict[]
   ownerInput: ProjectDecisionProjection['ownerInput']
+  ownerReview: ProjectDecisionProjection['ownerReview']
   execution: ProjectDecisionProjection['execution']
   release: ProjectDecisionProjection['release']
 }): ProjectDecisionProjection['primaryAction'] {
-  const { conflicts, ownerInput, execution, release } = input
+  const { conflicts, ownerInput, ownerReview, execution, release } = input
   return conflicts.length > 0
     ? { kind: 'resolve_conflict' as const, targetId: conflicts[0]!.id, reasonCode: 'state_conflict' }
     : ownerInput.state === 'required'
       ? { kind: 'answer_owner_input' as const, targetId: ownerInput.requestId, reasonCode: 'owner_input_required' }
+      : ownerReview.state === 'required'
+        ? { kind: 'review_spec' as const, targetId: ownerReview.taskId, reasonCode: 'owner_review_required' }
       : execution.state === 'runnable'
         ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
         : execution.state === 'paused'
@@ -842,7 +847,7 @@ export function applyProjectActionModelPrimaryAction(
     code?: string
   } | null | undefined,
 ): ProjectDecisionProjection {
-  if (!action || decision.conflicts.length > 0 || decision.ownerInput.state === 'required') return decision
+  if (!action || decision.conflicts.length > 0 || decision.ownerInput.state === 'required' || decision.ownerReview.state === 'required') return decision
   if (decision.execution.state === 'complete' && decision.release.state === 'ready') return decision
   const taskId = action.taskId?.trim()
   if (!taskId) return decision
@@ -890,6 +895,7 @@ export function applyRuntimeExecutionToProjectDecision(
       primaryAction: primaryActionForDecision({
         conflicts: decision.conflicts,
         ownerInput: decision.ownerInput,
+        ownerReview: decision.ownerReview,
         execution,
         release: decision.release,
       }),
@@ -919,6 +925,7 @@ export function applyRuntimeExecutionToProjectDecision(
     primaryAction: primaryActionForDecision({
       conflicts: decision.conflicts,
       ownerInput: decision.ownerInput,
+      ownerReview: decision.ownerReview,
       execution,
       release: decision.release,
     }),
@@ -955,7 +962,10 @@ export function buildProjectDecisionProjection(input: ProjectDecisionProjectionI
   const ownerInput = input.ownerInput && input.ownerInput.openCount > 0
     ? { state: 'required' as const, ...(input.ownerInput.next?.id ? { requestId: input.ownerInput.next.id } : {}) }
     : { state: 'none' as const }
-  const primaryAction = primaryActionForDecision({ conflicts, ownerInput, execution, release })
+  const ownerReview = input.ownerReview && input.ownerReview.openCount > 0
+    ? { state: 'required' as const, ...(input.ownerReview.next?.taskId ? { taskId: input.ownerReview.next.taskId } : {}) }
+    : { state: 'none' as const }
+  const primaryAction = primaryActionForDecision({ conflicts, ownerInput, ownerReview, execution, release })
   return {
     version: 1,
     projectRevision: input.projectRevision ?? null,
@@ -965,6 +975,7 @@ export function buildProjectDecisionProjection(input: ProjectDecisionProjectionI
     execution,
     release,
     ownerInput,
+    ownerReview,
     primaryAction,
     conflicts,
   }
