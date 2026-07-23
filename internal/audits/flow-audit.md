@@ -52517,6 +52517,11 @@ Repair:
 - [x] That reframe decision explicitly reads bounded task-detail evidence;
       compact current projections remain compact and are not silently widened
       for ordinary list or overview reads.
+- [x] Installed Narrative Harness replay: a delegated owner reran the spec,
+      approved its brief and bounded spec, and observed `ready` with the
+      lifecycle opened at `2026-07-23T04:44:38.054Z`, three unmet criteria,
+      no completion timestamp, and only a historical `reopened` completion
+      bundle. The old completion did not settle the new work.
 
 ### Contract Touch Decision
 
