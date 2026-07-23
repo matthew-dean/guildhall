@@ -89,6 +89,20 @@ help_summary: |
   return the same typed conflict, no action may run, and a single canonical
   repair must make all readers agree at a newer revision.
 
+### Release Membership Replay Finding
+
+- After the current-task reconstruction repair made required migrations visible,
+  Narrative Harness correctly failed `0.13.66/release-membership-snapshot`.
+  The migration attempted to add six current task nodes to the already shipped
+  `stage-1-headless-drafting-and-evaluation-mvp` release instead of resolving
+  them against the active `r1` release container.
+- This is a release-identity authority conflict, not an operator blocker.
+  A shipped release's scope is historical fact and cannot be rewritten. The
+  migration must select the active release identity from canonical current
+  scope/membership state or surface a typed conflict that prevents execution;
+  it must never infer that a historical release is mutable because a plan
+  overlay happened to name it.
+
 ## 2026-07-23 Release Resume Preserves Release Scope During Proof Recovery
 
 - Work id: `0.13.64/release-proof-recovery-batch`.

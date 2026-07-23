@@ -140,6 +140,52 @@ describe('project-summary-projection', () => {
     })
   })
 
+  it('does not reopen a shipped release from an older accepted-plan snapshot', () => {
+    const result = materializeApprovedPlanReleaseMembership(queue([
+      task('historical', 'done'),
+      task('new-work', 'ready'),
+    ], {
+      releases: [{
+        id: 'release-1',
+        label: 'Released scope',
+        kind: 'release',
+        state: 'shipped',
+        source: 'release_plan',
+        proofStyle: 'unspecified',
+        nodeIds: ['work:historical'],
+        deferredNodeIds: [],
+      }],
+      selectedReleaseId: 'release-1',
+    }), {
+      source: 'workspace_import',
+      recordedAt: now,
+      goalCount: 1,
+      taskCount: 1,
+      milestoneCount: 0,
+      currentTaskCount: 1,
+      laterTaskCount: 0,
+      currentTaskIds: ['new-work'],
+      laterTaskIds: [],
+      currentReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Released scope',
+        kind: 'release',
+        state: 'shipped',
+        source: 'release_plan',
+        currentTaskIds: ['new-work'],
+        laterTaskIds: [],
+      }],
+    })
+
+    expect(result.changed).toBe(false)
+    expect(result.conflicts).toEqual([])
+    expect(result.queue.releases?.[0]).toMatchObject({
+      nodeIds: ['work:historical'],
+      deferredNodeIds: [],
+    })
+  })
+
   it('projects scope, counts, and next action without effective-task expansion', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'narrative-harness',

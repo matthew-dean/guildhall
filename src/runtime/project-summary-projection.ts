@@ -492,6 +492,12 @@ export function materializeApprovedPlanReleaseMembership(
     const deferred = new Set(existing?.deferredNodeIds ?? [])
     const add = (taskId: string, disposition: 'included' | 'deferred') => {
       if (!taskIds.has(taskId)) return
+      // An accepted-plan snapshot may outlive the release it originally
+      // described. Once that release is shipped, normalized membership is
+      // historical fact: the snapshot cannot reopen or expand it. Current
+      // work must already be attached to an active release through the
+      // canonical membership relation.
+      if (existing?.state === 'shipped') return
       const nodeId = `work:${taskId}`
       const target = disposition === 'included' ? included : deferred
       const opposite = disposition === 'included' ? deferred : included
