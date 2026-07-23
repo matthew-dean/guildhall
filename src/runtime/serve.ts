@@ -11195,8 +11195,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         (startReadiness.releaseProofRecovery ?? savedReleaseProofRecoveryDecision(
           canonicalState.summary,
           startReadiness.executionScope,
-        )) &&
-        (startReadiness.canStart || startReadiness.code === 'proof_evidence_missing')
+        ))
       ) {
         const releaseProofRecovery = startReadiness.releaseProofRecovery ?? savedReleaseProofRecoveryDecision(
           canonicalState.summary,

@@ -73,6 +73,12 @@ help_summary: |
   action presentation record, so routes reading the decision packet lost it.
   Count now travels as an optional typed execution fact in the one shared
   decision contract and is read directly by every surface.
+- Installed replay follow-up: Start correctly produced a typed release proof
+  recovery batch before it reached an unrelated spec-review gate, but the
+  route only honored that batch when the final visible code was itself
+  `proof_evidence_missing`. The route now applies the explicit recovery action
+  after hard project gates and before any task-level stop result. Recovery
+  still validates release membership and revision-guards the batch mutation.
 - Apply/revert: code-only. Revert the queue/runtime transition and migration
   predicate together; no historical task or release data is rewritten.
 
