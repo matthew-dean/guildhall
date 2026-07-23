@@ -30,7 +30,8 @@ Examples:
 | Fact | Canonical authority | Possible observation | Automatic resolution |
 | --- | --- | --- | --- |
 | selected release | normalized queue selection | stale orientation summary | queue selection wins; summary is stale |
-| release membership | normalized membership relation | imported plan snapshot | membership wins; refresh importer projection |
+| release membership | normalized membership relation | executable work projection or imported plan snapshot | membership wins; refresh the derived projection |
+| executable work view | normalized scope-row projection for the selected release | release membership count | scope rows decide runnable units; they cannot rename or recount the release |
 | task lifecycle | canonical task mutation | worker says it is done | task record wins; worker prose is evidence only |
 | proof result | exact recorded command/verifier result | reviewer says proof passed | verifier wins; rerun the command if evidence is stale |
 | workspace merge | Git index and `MERGE_HEAD` | worker says conflict is resolved | Git wins; refresh Git state |
@@ -59,6 +60,13 @@ Examples:
    verifier run, runtime refresh, or canonical state inspection. Owner input is
    valid only for explicit scope/irreversible product choices, never for
    ordinary work sizing, merge recovery, proof parsing, or agent coordination.
+8. Any mutating response, including Start, carries one resolved snapshot token:
+   project revision, queue revision, selected-release ID, and decision version.
+   It may not combine a newly read runtime observation with a cached release
+   or scope projection. If the token cannot be resolved at one revision, the
+   boundary refreshes/reconciles first or returns a typed `state_refreshing`
+   result; it never emits an apparently precise count that may immediately
+   change after the action starts.
 
 ## Persistence And Idempotency
 
@@ -89,8 +97,13 @@ The existing closed `ProjectStateClaimField` registry is the starting point.
 The migration must finish wiring these fields through the protocol rather than
 adding aliases:
 
-- `project.selectedReleaseId` and `project.scopeSelection`: queue selection,
-  normalized release membership, and scope rows.
+- `project.selectedReleaseId`: queue selection.
+- `release.membership`: normalized release membership relation. This owns the
+  release's public included/deferred totals and survives executable hierarchy
+  compaction.
+- `release.executableWorkView`: normalized scope rows for that selected
+  release. This owns which work unit is runnable next, but does not own a
+  release's public totals, label, or membership.
 - `task.lifecycleStatus`, hierarchy, dependencies, and capability bindings:
   canonical task mutation boundary.
 - `proof.status`: verifier/recorded command evidence.
@@ -136,6 +149,11 @@ agent prose while holding structured claims constant.
   evidence. The release remains unready and schedules verifier recovery.
 - A stale supervisor event names task A; runtime currently owns task B. The
   action, Activity, Work, Thread, and status chrome lead with B.
+- Release membership has 15 included and 33 deferred nodes while scope rows
+  collapse to one runnable proof-recovery child. Start, Overview, and Release
+  report 15/33 as the release boundary; only the scheduler packet reports the
+  compact runnable unit. A Start response from another revision is rejected or
+  marked `state_refreshing`, never allowed to report 15/1 as release totals.
 - Two equal-authority canonical scope writes at one revision disagree. No
   surface chooses either; the project decision exposes one explicit conflict
   and the policy requests the only allowed scope decision.
