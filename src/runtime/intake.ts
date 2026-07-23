@@ -1032,7 +1032,10 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
   const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
-  const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
+  // Reframe is an explicit corrective action, so it may inspect the bounded
+  // task-detail history needed to distinguish a current completion from one
+  // already superseded by a fresh lifecycle.
+  const effectiveTask = await buildEffectiveTask(projectRoot, task, { evidence: 'full' }) as unknown as Task
   // Promoted reads keep resolved escalation history in the evidence detail
   // store rather than on the compact task definition. Reframe must resolve
   // that canonical history, not silently operate on an overlay-free row.

@@ -52514,6 +52514,9 @@ Repair:
 - [x] Reframe treats a `done` projection with a typed `reopened` completion
       summary as historical state, so the corrective action is available
       instead of being vetoed by the status it is meant to repair.
+- [x] That reframe decision explicitly reads bounded task-detail evidence;
+      compact current projections remain compact and are not silently widened
+      for ordinary list or overview reads.
 
 ### Contract Touch Decision
 
