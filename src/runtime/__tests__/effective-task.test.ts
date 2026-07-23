@@ -492,6 +492,29 @@ describe('effective task projection', () => {
     expect(effectiveTaskStatus(reopenedAfterFallback)).toBe('in_progress')
   })
 
+  it('keeps a fresh release lifecycle open when older completion evidence exists', () => {
+    const reopenedForLaterRelease = {
+      id: 'task-story-context',
+      status: 'exploring',
+      completedAt: '2026-07-18T04:28:59.233Z',
+      doneSummaryBundle: {
+        status: 'reopened',
+        completedAt: '2026-07-18T04:28:59.233Z',
+        reopenedAt: '2026-07-23T02:00:00.000Z',
+        summary: { evidence: 'A prior release completed this task.' },
+      },
+      evidence: [{
+        id: 'gate-1',
+        taskId: 'task-story-context',
+        kind: 'gate_result',
+        recordedAt: '2026-07-18T04:28:59.233Z',
+        payload: { gateId: 'proof', passed: true, checkedAt: '2026-07-18T04:28:59.233Z' },
+      }],
+    }
+
+    expect(effectiveTaskStatus(reopenedForLaterRelease)).toBe('exploring')
+  })
+
   it('does not synthesize terminal completion while normalizing a review recovery', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
     const effective = await buildEffectiveTask(projectRoot, legacyTask({

@@ -52064,3 +52064,27 @@ Repair:
       restart with `/api/stale-server` reporting `stale:false`.
 - Apply/revert: do not work around this by duplicating the task card, mutating
       shipped release membership, or weakening shipped-release immutability.
+
+## 2026-07-23 A fresh lifecycle outranks historical completion
+
+- [x] A task reopened to shape current-release work could still be projected
+      as `done`: the effective-status resolver re-applied older completion
+      evidence after the rerun stage had set its durable lifecycle to
+      `exploring`.
+- [x] A `doneSummaryBundle.status = reopened` is now a typed current-lifecycle
+      boundary. Shared task, scope, summary, and detail readers keep the
+      durable current status until new current-release evidence settles it.
+
+### Contract Touch Decision
+
+- Work id: `0.13.72/reopened-current-lifecycle-authority`.
+- Touched contracts: effective task status, current release readiness, and
+      historical completion-evidence precedence.
+- Considered but not touched: shipped delivery snapshots, release membership,
+      task identity, and provider prose.
+- Proof required: focused effective-task regression; installed Narrative
+      Harness task detail and release summary must show the reopened task as
+      current work rather than historical completion.
+- Apply/revert: replace this typed lifecycle boundary only with a dedicated
+      release-delivery state model; do not add a view-local exception for
+      reopened work.

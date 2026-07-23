@@ -68,6 +68,16 @@ export function effectiveTaskStatus(task: unknown): string | undefined {
   if (!task || typeof task !== 'object' || Array.isArray(task)) return undefined
   const record = task as Record<string, unknown>
   const status = typeof record.status === 'string' ? record.status : undefined
+  // A fresh lifecycle deliberately supersedes historical completion. This is
+  // broader than proof recovery: a task can be reopened to shape a new spec
+  // for a later release while an earlier shipped release retains its evidence.
+  // Never let that earlier evidence silently close the current work again.
+  if (
+    record.doneSummaryBundle &&
+    typeof record.doneSummaryBundle === 'object' &&
+    !Array.isArray(record.doneSummaryBundle) &&
+    (record.doneSummaryBundle as Record<string, unknown>).status === 'reopened'
+  ) return status
   if (hasActiveProofRecovery(record)) return status
   // Reopening a falsely completed task must not be immediately re-promoted by
   // older completion proof while the substantive review finding is unresolved.
