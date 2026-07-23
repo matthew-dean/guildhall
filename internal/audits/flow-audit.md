@@ -51978,3 +51978,21 @@ Repair:
 - Proof provided: local checks; installed replay pending.
 - Apply/revert: do not restore unconditional done-task protection; only
       current proof can protect a completed selected-release task.
+
+## 2026-07-23 A matched source task is never recreated
+
+- [x] Re-intake could recognize an existing structured task but still emit a
+      `create` change because only vague matches were labeled reconciliation.
+      That would produce duplicate task identities in the same release.
+- [x] Every matched task now produces a reframe of the existing record. A
+      create is reserved for a source unit with no durable task match.
+
+### Contract Touch Decision
+
+- Work id: `0.13.69/reintake-matched-task-single-record`.
+- Touched contracts: evidence graph to re-intake change mapping.
+- Proof required: typecheck and graph/re-intake suites pass; installed replay
+      has zero creates for matched Narrative Harness source units.
+- Proof provided: local checks; installed replay pending.
+- Apply/revert: never restore matched-task creation; add a new source identity
+      bridge when a historical row cannot be matched.

@@ -780,7 +780,7 @@ function graphTaskChange(
     ? structurallyIncompleteImportRepairDraft(draft as unknown as Record<string, unknown>, selectedRelease, projectPath, now)
     : draft
 
-  if (reframe) {
+  if (existing) {
     return {
       kind: 'reframe',
       taskId: task.id,
@@ -790,7 +790,7 @@ function graphTaskChange(
         status: stringField(existing ?? {}, 'status') ?? 'unknown',
       },
       after,
-      reason: `Reframe from current evidence: ${reframe.reason ?? task.title}`,
+      reason: `Reframe from current evidence: ${reframe?.reason ?? task.title}`,
     }
   }
 
