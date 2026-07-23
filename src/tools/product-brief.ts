@@ -46,6 +46,10 @@ const updateProductBriefInputSchema = z.object({
     .string()
     .optional()
     .describe('Optional brand, voice, or interaction-shape notes when the task touches product surface area'),
+  sourceCapabilityIds: z
+    .array(z.string())
+    .optional()
+    .describe('Required when the task exposes typed source capabilities: list every visible capability ID accepted into this brief.'),
   authoredBy: z
     .string()
     .optional()
@@ -63,6 +67,7 @@ const updateProductBriefInputSchema = z.object({
         antiPatterns: z.union([z.array(z.string()), z.string()]).optional(),
         rolloutPlan: z.string().optional(),
         brandInteractionNotes: z.string().optional(),
+        sourceCapabilityIds: z.array(z.string()).optional(),
       }).passthrough(),
     ])
     .optional()
@@ -91,6 +96,7 @@ interface ResolvedBriefContent {
   antiPatterns: string[]
   rolloutPlan?: string
   brandInteractionNotes?: string
+  sourceCapabilityIds?: string[]
 }
 
 interface BriefLikePayload {
@@ -103,6 +109,7 @@ interface BriefLikePayload {
   antiPatterns?: string[]
   rolloutPlan?: string
   brandInteractionNotes?: string
+  sourceCapabilityIds?: string[]
 }
 
 function fallbackWhyItMattersNow(taskTitle: string, userJob: string, successMetric: string): string {
@@ -200,7 +207,10 @@ function parseBriefLikePayload(raw: unknown): BriefLikePayload | null {
   const usageContext = typeof obj.usageContext === 'string' ? obj.usageContext.trim() : undefined
   const rolloutPlan = typeof obj.rolloutPlan === 'string' ? obj.rolloutPlan.trim() : undefined
   const brandInteractionNotes = typeof obj.brandInteractionNotes === 'string' ? obj.brandInteractionNotes.trim() : undefined
-  if (!userJob && !whyItMattersNow && !successMetric && !antiPatterns?.length && !nonGoals?.length && !rolloutPlan && !audience && !usageContext && !brandInteractionNotes) return null
+  const sourceCapabilityIds = Array.isArray(obj.sourceCapabilityIds)
+    ? obj.sourceCapabilityIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map(value => value.trim())
+    : undefined
+  if (!userJob && !whyItMattersNow && !successMetric && !antiPatterns?.length && !nonGoals?.length && !rolloutPlan && !audience && !usageContext && !brandInteractionNotes && !sourceCapabilityIds?.length) return null
   return {
     ...(userJob ? { userJob } : {}),
     ...(whyItMattersNow ? { whyItMattersNow } : {}),
@@ -211,11 +221,12 @@ function parseBriefLikePayload(raw: unknown): BriefLikePayload | null {
     ...(antiPatterns ? { antiPatterns } : {}),
     ...(rolloutPlan ? { rolloutPlan } : {}),
     ...(brandInteractionNotes ? { brandInteractionNotes } : {}),
+    ...(sourceCapabilityIds?.length ? { sourceCapabilityIds } : {}),
   }
 }
 
 function resolveBriefContent(
-  input: Pick<UpdateProductBriefInput, 'userJob' | 'whyItMattersNow' | 'successMetric' | 'nonGoals' | 'audience' | 'usageContext' | 'antiPatterns' | 'rolloutPlan' | 'brandInteractionNotes' | 'productBrief'>,
+  input: Pick<UpdateProductBriefInput, 'userJob' | 'whyItMattersNow' | 'successMetric' | 'nonGoals' | 'audience' | 'usageContext' | 'antiPatterns' | 'rolloutPlan' | 'brandInteractionNotes' | 'sourceCapabilityIds' | 'productBrief'>,
   taskTitle: string,
 ): ResolvedBriefContent | { error: string } {
   const nested = parseBriefLikePayload(input.productBrief)
@@ -234,6 +245,7 @@ function resolveBriefContent(
   const usageContext = input.usageContext?.trim() || nested?.usageContext?.trim()
   const rolloutPlan = input.rolloutPlan?.trim() || nested?.rolloutPlan?.trim()
   const brandInteractionNotes = input.brandInteractionNotes?.trim() || nested?.brandInteractionNotes?.trim()
+  const sourceCapabilityIds = input.sourceCapabilityIds?.map(id => id.trim()).filter(Boolean) ?? nested?.sourceCapabilityIds
 
   if (userJob && successMetric) {
     const resolvedWhy = whyItMattersNow || fallbackWhyItMattersNow(taskTitle, userJob, successMetric)
@@ -249,6 +261,7 @@ function resolveBriefContent(
       antiPatterns: resolvedAntiPatterns,
       ...(rolloutPlan ? { rolloutPlan } : {}),
       ...(brandInteractionNotes ? { brandInteractionNotes } : {}),
+      ...(sourceCapabilityIds?.length ? { sourceCapabilityIds } : {}),
     }
     const validationError = validateBriefContent(content)
     return validationError ? { error: validationError } : content
@@ -258,6 +271,13 @@ function resolveBriefContent(
     error:
       'Missing userJob/successMetric. Guildhall does not infer durable product briefs from assistant prose; call update-product-brief with the structured brief fields.',
   }
+}
+
+function sameCapabilityScope(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
+  const normalize = (value: readonly string[] | undefined) => [...new Set((value ?? []).map(id => id.trim()).filter(Boolean))].sort()
+  const normalizedLeft = normalize(left)
+  const normalizedRight = normalize(right)
+  return normalizedLeft.length === normalizedRight.length && normalizedLeft.every((id, index) => id === normalizedRight[index])
 }
 
 export async function updateProductBrief(
@@ -291,6 +311,7 @@ export async function updateProductBrief(
       antiPatterns: resolvedAntiPatterns,
       ...(input.rolloutPlan?.trim() ? { rolloutPlan: input.rolloutPlan.trim() } : {}),
       ...(input.brandInteractionNotes?.trim() ? { brandInteractionNotes: input.brandInteractionNotes.trim() } : {}),
+      ...(input.sourceCapabilityIds?.length ? { sourceCapabilityIds: input.sourceCapabilityIds.map(id => id.trim()).filter(Boolean) } : {}),
     })
     if (validationError) return { success: false, error: validationError }
     const brief: ProductBrief = {
@@ -303,13 +324,15 @@ export async function updateProductBrief(
       antiPatterns: resolvedAntiPatterns,
       ...(input.rolloutPlan !== undefined ? { rolloutPlan: input.rolloutPlan } : {}),
       ...(input.brandInteractionNotes?.trim() ? { brandInteractionNotes: input.brandInteractionNotes.trim() } : {}),
+      ...(input.sourceCapabilityIds?.length ? { sourceCapabilityIds: input.sourceCapabilityIds.map(id => id.trim()).filter(Boolean) } : {}),
       authoredBy: input.authoredBy,
       authoredAt: now,
       // Re-authoring after approval drops the approval (it was approved
       // against a different brief body).
       ...(existing?.approvedAt &&
         existing?.userJob === input.userJob &&
-        existing?.successMetric === input.successMetric
+        existing?.successMetric === input.successMetric &&
+        sameCapabilityScope(existing.sourceCapabilityIds, input.sourceCapabilityIds)
         ? { approvedBy: existing.approvedBy, approvedAt: existing.approvedAt }
         : {}),
     }
@@ -394,6 +417,7 @@ export const updateProductBriefTool = defineTool({
       antiPatterns: content.antiPatterns,
       ...(content.rolloutPlan !== undefined ? { rolloutPlan: content.rolloutPlan } : {}),
       ...(content.brandInteractionNotes !== undefined ? { brandInteractionNotes: content.brandInteractionNotes } : {}),
+      ...(content.sourceCapabilityIds !== undefined ? { sourceCapabilityIds: content.sourceCapabilityIds } : {}),
     })
     return {
       output: result.success

@@ -72,6 +72,8 @@ export const StructuredAcceptanceCriterion = z.preprocess((value) => {
   expectedExit: z.enum(['zero', 'non_zero']).optional(),
   expectedOutputIncludes: z.array(z.string()).optional(),
   command: cleanedString('Acceptance criterion command').optional(),
+  /** Source capability IDs this criterion is the explicit proof anchor for. */
+  sourceCapabilityIds: z.array(cleanedString('Acceptance criterion sourceCapabilityId')).optional(),
 }).strict())
 export type StructuredAcceptanceCriterion = z.infer<typeof StructuredAcceptanceCriterion>
 
@@ -123,6 +125,8 @@ export const StructuredSpec = z.object({
   nonGoals: cleanedStringList('nonGoals'),
   proposedDesign: cleanedString('proposedDesign'),
   keyDecisions: cleanedStringList('keyDecisions'),
+  /** Exact capability IDs allocated to this task's plan. */
+  sourceCapabilityIds: z.array(cleanedString('Structured spec sourceCapabilityId')).optional(),
   /** Explicit implementation surfaces; never inferred from rendered prose. */
   targetFiles: z.array(cleanedString('targetFile')).optional(),
   contractSurfaceDeltas: z.array(StructuredSpecContractSurfaceDelta).optional(),

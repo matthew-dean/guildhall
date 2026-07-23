@@ -44,6 +44,7 @@ import { comparableCommand, ensureCommandProofPathsFromAcceptanceCriteria, isCon
 import { normalizeReviewPlanForTask } from './review-planner.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { readPersistedStructuredSelfCritique, reviewVerdictHasStructuredApproval } from './review-contract.js'
+import { validateProductBriefGrounding } from './spec-quality.js'
 import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
 import { projectDecisionStartReadiness, reconcileProjectStateObservation, requireProjectStateClaimPolicy, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
@@ -15165,6 +15166,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
           (nonGoals.length === 0 && antiPatterns.length === 0)
         ) {
           return c.json({ error: 'brief is incomplete — needs userJob, whyItMattersNow, successMetric, and at least one non-goal' }, 400)
+        }
+        const briefGrounding = validateProductBriefGrounding(task as Task, brief as NonNullable<Task['productBrief']>)
+        if (!briefGrounding.ok) {
+          return c.json({
+            error: `brief does not cover the typed source scope: ${briefGrounding.errors.join(' ')}`,
+            code: 'source_capability_coverage_incomplete',
+          }, 400)
         }
         const now = new Date().toISOString()
         brief.approvedBy = approvalActor

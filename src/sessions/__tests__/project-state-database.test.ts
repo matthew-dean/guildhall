@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { gzipSync } from 'node:zlib'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { TaskQueue } from '@guildhall/core'
 
 import { getProjectSystemStatePath } from '../local-history.js'
@@ -46,6 +46,8 @@ import {
   readProjectStateDatabaseTaskEvidenceCurrent,
   readProjectStateDatabaseTaskEvidenceCurrentMany,
   readProjectStateDatabaseTaskEvidenceHistory,
+  readProjectStateDatabaseSourceCapabilities,
+  readProjectStateDatabaseTaskCapabilityBindings,
   readProjectStateDatabaseRepositories,
   readProjectStateDatabaseRepositoriesFromTasksPath,
   readProjectStateDatabaseRepository,
@@ -103,6 +105,62 @@ afterEach(async () => {
 })
 
 describe('project-state database', () => {
+  it('stores source capability scope once and hydrates task bindings from the relation', () => {
+    const capability = {
+      id: 'story:world-state-review',
+      adapterId: 'narrative-harness-release',
+      adapterSchemaVersion: 1,
+      sourceRevision: 'release-plan:v1',
+      label: 'Review world state across time and space',
+      state: 'planned' as const,
+      releaseIds: ['release-headless-mvp'],
+      dependsOnCapabilityIds: [],
+      evidenceRefs: ['artifact:nh-headless-release'],
+    }
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        tasks: [{
+          id: 'task-world-review',
+          title: 'Prove world-state review',
+          status: 'ready',
+          capabilityBindings: [{ capabilityId: capability.id, relation: 'proves' }],
+        }],
+      },
+      sourceCapabilities: [capability],
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+    })
+
+    expect(readProjectStateDatabaseSourceCapabilities(tasksPath)).toEqual([capability])
+    expect(readProjectStateDatabaseTaskCapabilityBindings(tasksPath, ['task-world-review'])?.get('task-world-review')).toEqual([
+      { taskId: 'task-world-review', capabilityId: capability.id, relation: 'proves' },
+    ])
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-world-review')?.definition).toMatchObject({
+      capabilityBindings: [{ capabilityId: capability.id, relation: 'proves' }],
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    const row = database.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-world-review') as { payload_gzip: Uint8Array }
+    database.close()
+    expect(JSON.parse(gunzipSync(row.payload_gzip).toString('utf8'))).not.toHaveProperty('capabilityBindings')
+
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const before = readProjectStateDatabaseQueueRevision(tasksPath)!
+    expect(() => writeProjectStateDatabaseTaskBatchMutation(tasksPath, {
+      expectedQueueRevision: before,
+      expectedProjectRevision: readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!,
+      tasks: [{
+        id: 'task-world-review',
+        title: 'Prove world-state review',
+        status: 'ready',
+        capabilityBindings: [{ capabilityId: 'invented:capability', relation: 'proves' }],
+      }],
+      summary: { generatedAt: '2026-07-23T00:01:00.000Z', freshness: 'current' },
+    })).toThrow('binds unknown source capability invented:capability')
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-world-review')?.definition).toMatchObject({
+      capabilityBindings: [{ capabilityId: capability.id, relation: 'proves' }],
+    })
+  })
+
   it('rejects adding work to a shipped release before replacing current state', () => {
     const release = {
       id: 'release-1',

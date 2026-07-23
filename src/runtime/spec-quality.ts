@@ -1,4 +1,4 @@
-import { StructuredSpec, type Task } from '@guildhall/core'
+import { StructuredSpec, type ProductBrief, type Task } from '@guildhall/core'
 
 export interface SpecQualityResult {
   ok: boolean
@@ -15,7 +15,59 @@ const PROJECT_PATH_PATTERN = /(?:^|[\s`"'(])((?:scripts|src|test|tests|fixtures|
 const MODEL_FAMILY_PATTERN = /\b(?:mixtral|mistral|qwen|deepseek|kimi|glm|nemotron|llama|gemma|phi|command-r|gpt)(?:[A-Za-z0-9./:_-]*)\b/gi
 const INVENTED_SYMBOL_PATTERN = /\b[A-Z][A-Za-z0-9]*(?:Run|Fixture|Agent|Interface|Schema|Harness)\b/g
 
-type GroundingTask = Pick<Task, 'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief' | 'structuredSpec'>
+type GroundingTask = Pick<Task, 'title' | 'description' | 'references' | 'sourceClaims' | 'capabilityBindings' | 'request' | 'requestIntake' | 'productBrief' | 'structuredSpec'>
+
+function sourceCapabilityIds(task: Pick<Task, 'capabilityBindings'>): string[] {
+  return [...new Set((task.capabilityBindings ?? [])
+    .map(binding => binding.capabilityId)
+    .filter(id => id.trim().length > 0))]
+    .sort()
+}
+
+function coverageErrors(input: {
+  task: Pick<Task, 'capabilityBindings'>
+  declaredIds: readonly string[] | undefined
+  label: 'Product brief' | 'Structured spec' | 'Structured acceptance criteria'
+}): string[] {
+  const requiredIds = sourceCapabilityIds(input.task)
+  if (requiredIds.length === 0) return []
+  const declaredIds = [...new Set((input.declaredIds ?? []).map(id => id.trim()).filter(Boolean))].sort()
+  const declared = new Set(declaredIds)
+  const required = new Set(requiredIds)
+  const missing = requiredIds.filter(id => !declared.has(id))
+  const unknown = declaredIds.filter(id => !required.has(id))
+  const errors: string[] = []
+  if (missing.length > 0) {
+    errors.push(`${input.label} omits required source capability IDs: ${missing.join(', ')}.`)
+  }
+  if (unknown.length > 0) {
+    errors.push(`${input.label} names source capability IDs that do not belong to this task: ${unknown.join(', ')}.`)
+  }
+  return errors
+}
+
+function structuredCapabilityCoverageErrors(task: GroundingTask, structured: StructuredSpec): string[] {
+  const capabilityCriterionIds = new Map<string, string[]>()
+  for (const [index, criterion] of structured.acceptanceCriteria.entries()) {
+    const criterionId = `ac-${index + 1}`
+    for (const capabilityId of criterion.sourceCapabilityIds ?? []) {
+      const entries = capabilityCriterionIds.get(capabilityId) ?? []
+      entries.push(criterionId)
+      capabilityCriterionIds.set(capabilityId, entries)
+    }
+  }
+  const scopeErrors = coverageErrors({
+    task,
+    declaredIds: structured.sourceCapabilityIds,
+    label: 'Structured spec',
+  })
+  const criterionErrors = coverageErrors({
+    task,
+    declaredIds: [...capabilityCriterionIds.keys()],
+    label: 'Structured acceptance criteria',
+  })
+  return [...scopeErrors, ...criterionErrors]
+}
 
 function groundingContext(task: GroundingTask, includeProductBrief = true): string {
   return JSON.stringify({
@@ -79,7 +131,7 @@ function validateImportedPlanningText(
 }
 
 export function validateSpecGrounding(task: Pick<Task,
-  'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief' | 'spec' | 'structuredSpec'
+  'title' | 'description' | 'references' | 'sourceClaims' | 'capabilityBindings' | 'request' | 'requestIntake' | 'productBrief' | 'spec' | 'structuredSpec'
 >): SpecGroundingResult {
   if (task.structuredSpec) return validateStructuredSpecGrounding(task)
   return validateImportedPlanningText(task, task.spec?.trim() ?? '', 'Spec', true)
@@ -90,11 +142,12 @@ function validateStructuredSpecGrounding(task: GroundingTask): SpecGroundingResu
   if (!structured.success) {
     return { ok: false, errors: ['Structured spec is invalid and cannot be used as a planning contract.'] }
   }
+  const coverage = structuredCapabilityCoverageErrors(task, structured.data)
   const imported = (task.sourceClaims?.length ?? 0) > 0 ||
     task.requestIntake?.evidenceRefs?.some(ref => /^import:/.test(ref)) === true ||
     (task.references?.length ?? 0) > 0 ||
     task.requestIntake?.createdBy === 'workspace-importer'
-  if (!imported) return { ok: true, errors: [] }
+  if (!imported) return { ok: coverage.length === 0, errors: coverage }
 
   // Only typed executable fields can be checked here. The rest of the
   // structured spec is explanatory prose and must not be searched for model-
@@ -117,20 +170,22 @@ function validateStructuredSpecGrounding(task: GroundingTask): SpecGroundingResu
       errors.push(`Spec acceptance criterion command names model families not present in the visible task/source context: ${models.join(', ')}.`)
     }
   }
-  return { ok: errors.length === 0, errors }
+  return { ok: errors.length === 0 && coverage.length === 0, errors: [...coverage, ...errors] }
 }
 
 export function validateProductBriefGrounding(
   task: GroundingTask,
-  productBrief: NonNullable<Task['productBrief']>,
+  productBrief: ProductBrief,
 ): SpecGroundingResult {
-  void task
-  void productBrief
-  // A product brief is explanatory intent, not an executable contract. Do
-  // not scan its prose for commands, paths, or model names: those words are
-  // valid in arbitrary user language and must not make a model fail intake.
-  // Executable proof belongs in structured acceptance criteria instead.
-  return { ok: true, errors: [] }
+  // A product brief is explanatory intent, not an executable contract. We do
+  // not scan prose for commands, paths, models, or topic words. Its only
+  // operational source-scope assertion is the explicit capability-ID set.
+  const errors = coverageErrors({
+    task,
+    declaredIds: productBrief.sourceCapabilityIds,
+    label: 'Product brief',
+  })
+  return { ok: errors.length === 0, errors }
 }
 
 export function specSectionBody(markdown: string, heading: string): string {

@@ -480,6 +480,14 @@ Each \`acceptanceCriteria[]\` item should be structured JSON, not a loose string
 - expectation
 - verificationMode
 
+If the visible task has typed capability bindings, treat their IDs as the
+accepted scope contract. Put every bound ID on the product brief and top-level
+\`structuredSpec.sourceCapabilityIds\`, then attach every ID to at least one
+\`acceptanceCriteria[].sourceCapabilityIds\` entry. Never invent IDs, infer
+them from prose, or replace them with similarly named text. If the task has no
+typed bindings, do not manufacture a capability list; leave that intake
+decision to the structured source adapter or delegated owner.
+
 Optional per-criterion keys are allowed only when they add real value:
 - evidenceHint
 - negativeCase

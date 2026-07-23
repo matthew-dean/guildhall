@@ -63,7 +63,14 @@ export const PROJECT_STATE_DATABASE_FILE = 'project-state.db'
  * ownership, byte-accounting, and lifecycle boundary without loading those
  * bodies into current-state reads.
  */
-export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 33
+/**
+ * Schema Migration Decision - `0.13.5/source-capability-authority`:
+ * adapter-owned capabilities and task-to-capability bindings are normalized
+ * here. Task detail JSON is hydrated for compatibility and stripped before
+ * persistence. Existing prose/source claims are not backfilled because they
+ * cannot author stable capability identities.
+ */
+export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 34
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_TURNS = 2_000
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_BYTES = 512 * 1024
 export const PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN = 'diagnostics'
@@ -98,6 +105,11 @@ export interface ProjectStateDatabaseSnapshot {
   /** Current runtime is written through its dedicated row, never from the summary payload. */
   runtime?: ProjectStateDatabaseRuntime
   scopeRows?: ProjectStateDatabaseScopeRow[]
+  /**
+   * Complete structured-adapter catalog snapshot. `undefined` preserves the
+   * catalog for compatibility; an explicit empty array clears it atomically.
+   */
+  sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[]
   /** Replace normalized runtime rows in the same commit as the queue. */
   taskRuntimes?: readonly ProjectStateDatabaseTaskRuntime[]
   /** Replace normalized workspace rows in the same commit as the queue. */
@@ -187,6 +199,8 @@ export interface ProjectStateDatabaseTaskBatchMutation {
   removeTaskIds?: readonly string[]
   scopeRows?: readonly ProjectStateDatabaseScopeRow[]
   removeScopeRowTaskIds?: readonly string[]
+  /** Upsert adapter-owned capabilities before validating task bindings. */
+  sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[]
   releases?: readonly JsonRecord[]
   selectedReleaseId?: string | null
   executionPlanActions?: readonly JsonRecord[]
@@ -201,6 +215,29 @@ export interface ProjectStateDatabaseTaskBatchMutation {
   lastUpdated?: string | null
   /** Derived domains to enqueue with this authoritative project revision. */
   projectionDomains?: readonly string[]
+}
+
+export type ProjectStateDatabaseCapabilityState = 'planned' | 'retired'
+export type ProjectStateDatabaseCapabilityRelation = 'plans' | 'implements' | 'integrates' | 'proves' | 'reviews'
+
+/** Stable adapter-owned scope fact. Labels are display material, never identity. */
+export interface ProjectStateDatabaseSourceCapability {
+  id: string
+  adapterId: string
+  adapterSchemaVersion: number
+  sourceRevision: string
+  label: string
+  state: ProjectStateDatabaseCapabilityState
+  releaseIds: readonly string[]
+  dependsOnCapabilityIds: readonly string[]
+  evidenceRefs: readonly string[]
+}
+
+/** The one normalized relation allocating a capability to a work item. */
+export interface ProjectStateDatabaseTaskCapabilityBinding {
+  taskId: string
+  capabilityId: string
+  relation: ProjectStateDatabaseCapabilityRelation
 }
 
 /**
@@ -1480,7 +1517,10 @@ function parseProjectStateDetailStore(bytes: Uint8Array, expectedRevision: numbe
 }
 
 function serializeWorkItemDetail(task: JsonRecord): Buffer {
-  return gzipSync(Buffer.from(`${JSON.stringify(task)}\n`, 'utf8'), { level: 9 })
+  // Bindings are a normalized relation. Persisting this hydrated convenience
+  // field here would reintroduce a second authority on every task edit.
+  const { capabilityBindings: _capabilityBindings, ...detail } = task
+  return gzipSync(Buffer.from(`${JSON.stringify(detail)}\n`, 'utf8'), { level: 9 })
 }
 
 function parseWorkItemDetail(value: unknown): JsonRecord | null {
@@ -1626,6 +1666,7 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
   if (!readOnly) mkdirSync(dirname(databasePath), { recursive: true })
   const database = new DatabaseSync(databasePath, { readOnly })
   database.exec(`PRAGMA busy_timeout = ${readOnly ? PROJECT_STATE_READ_BUSY_TIMEOUT_MS : PROJECT_STATE_WRITE_BUSY_TIMEOUT_MS};`)
+  database.exec('PRAGMA foreign_keys = ON;')
   if (readOnly) return database
   // DELETE avoids read-created -wal/-shm sidecars. Project writes are short,
   // and FULL synchronous durability is more valuable here than WAL's
@@ -1728,6 +1769,33 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
       PRIMARY KEY (release_id, task_id)
     );
     CREATE INDEX IF NOT EXISTS release_membership_task_idx ON release_membership(task_id);
+    -- Structured adapters own capability identity. This table holds the
+    -- source-derived scope fact; no Markdown or task prose can create a row.
+    CREATE TABLE IF NOT EXISTS source_capabilities (
+      capability_id TEXT PRIMARY KEY,
+      adapter_id TEXT NOT NULL,
+      adapter_schema_version INTEGER NOT NULL,
+      source_revision TEXT NOT NULL,
+      label TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('planned', 'retired')),
+      release_ids_json TEXT NOT NULL,
+      depends_on_capability_ids_json TEXT NOT NULL,
+      evidence_refs_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS source_capabilities_adapter_idx
+      ON source_capabilities(adapter_id, source_revision);
+    -- Task JSON carries this relation only when hydrated for a compatibility
+    -- reader. The relation below is the one durable allocation authority.
+    CREATE TABLE IF NOT EXISTS task_capability_bindings (
+      task_id TEXT NOT NULL,
+      capability_id TEXT NOT NULL,
+      relation TEXT NOT NULL CHECK (relation IN ('plans', 'implements', 'integrates', 'proves', 'reviews')),
+      PRIMARY KEY (task_id, capability_id),
+      FOREIGN KEY (task_id) REFERENCES work_items(id) ON DELETE CASCADE,
+      FOREIGN KEY (capability_id) REFERENCES source_capabilities(capability_id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS task_capability_bindings_capability_idx
+      ON task_capability_bindings(capability_id, relation);
     -- A shipped release owns an immutable delivery snapshot. Work definitions
     -- may later be scheduled again without rewriting historical delivery.
     CREATE TABLE IF NOT EXISTS release_delivery_snapshot (
@@ -2407,6 +2475,241 @@ function taskFromRow(row: JsonRecord, includeDefinition = true): ProjectStateDat
   }
 }
 
+const CAPABILITY_RELATIONS = new Set<ProjectStateDatabaseCapabilityRelation>([
+  'plans', 'implements', 'integrates', 'proves', 'reviews',
+])
+
+function taskCapabilityBindingsFromTask(task: JsonRecord): ProjectStateDatabaseTaskCapabilityBinding[] | null {
+  if (!('capabilityBindings' in task)) return null
+  if (!Array.isArray(task.capabilityBindings)) {
+    throw new Error(`Task ${stringValue(task.id) || '(unknown)'} has invalid capability bindings`)
+  }
+  const taskId = stringValue(task.id)
+  if (!taskId) throw new Error('Capability bindings require a task id')
+  const byCapability = new Map<string, ProjectStateDatabaseTaskCapabilityBinding>()
+  for (const value of task.capabilityBindings) {
+    if (!isRecord(value)) throw new Error(`Task ${taskId} has invalid capability binding`)
+    const capabilityId = stringValue(value.capabilityId)
+    const relation = stringValue(value.relation) as ProjectStateDatabaseCapabilityRelation | undefined
+    if (!capabilityId || !relation || !CAPABILITY_RELATIONS.has(relation)) {
+      throw new Error(`Task ${taskId} has invalid capability binding`)
+    }
+    if (byCapability.has(capabilityId)) {
+      throw new Error(`Task ${taskId} binds capability ${capabilityId} more than once`)
+    }
+    byCapability.set(capabilityId, { taskId, capabilityId, relation })
+  }
+  return [...byCapability.values()].sort((left, right) => left.capabilityId.localeCompare(right.capabilityId))
+}
+
+function sourceCapabilityFromInput(input: ProjectStateDatabaseSourceCapability): ProjectStateDatabaseSourceCapability {
+  const id = input.id.trim()
+  const adapterId = input.adapterId.trim()
+  const sourceRevision = input.sourceRevision.trim()
+  const label = input.label.trim()
+  if (!id || !adapterId || !sourceRevision || !label || !Number.isInteger(input.adapterSchemaVersion) || input.adapterSchemaVersion < 1) {
+    throw new Error('Source capabilities require id, adapter identity, revision, label, and a positive schema version')
+  }
+  if (input.state !== 'planned' && input.state !== 'retired') {
+    throw new Error(`Source capability ${id} has invalid state`)
+  }
+  return {
+    id,
+    adapterId,
+    adapterSchemaVersion: input.adapterSchemaVersion,
+    sourceRevision,
+    label,
+    state: input.state,
+    releaseIds: [...new Set(input.releaseIds.map(value => value.trim()).filter(Boolean))].sort(),
+    dependsOnCapabilityIds: [...new Set(input.dependsOnCapabilityIds.map(value => value.trim()).filter(Boolean))].sort(),
+    evidenceRefs: [...new Set(input.evidenceRefs.map(value => value.trim()).filter(Boolean))].sort(),
+  }
+}
+
+function upsertSourceCapabilities(
+  database: DatabaseSync,
+  inputs: readonly ProjectStateDatabaseSourceCapability[],
+): void {
+  const byId = new Map<string, ProjectStateDatabaseSourceCapability>()
+  for (const input of inputs) {
+    const capability = sourceCapabilityFromInput(input)
+    if (byId.has(capability.id)) throw new Error(`Received duplicate source capability ${capability.id}`)
+    byId.set(capability.id, capability)
+  }
+  const upsert = database.prepare(`
+    INSERT INTO source_capabilities (
+      capability_id, adapter_id, adapter_schema_version, source_revision,
+      label, state, release_ids_json, depends_on_capability_ids_json, evidence_refs_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(capability_id) DO UPDATE SET
+      adapter_id = excluded.adapter_id,
+      adapter_schema_version = excluded.adapter_schema_version,
+      source_revision = excluded.source_revision,
+      label = excluded.label,
+      state = excluded.state,
+      release_ids_json = excluded.release_ids_json,
+      depends_on_capability_ids_json = excluded.depends_on_capability_ids_json,
+      evidence_refs_json = excluded.evidence_refs_json
+  `)
+  for (const capability of byId.values()) {
+    upsert.run(
+      capability.id,
+      capability.adapterId,
+      capability.adapterSchemaVersion,
+      capability.sourceRevision,
+      capability.label,
+      capability.state,
+      json(capability.releaseIds),
+      json(capability.dependsOnCapabilityIds),
+      json(capability.evidenceRefs),
+    )
+  }
+}
+
+function replaceSourceCapabilityCatalog(
+  database: DatabaseSync,
+  inputs: readonly ProjectStateDatabaseSourceCapability[],
+): void {
+  const capabilities = inputs.map(sourceCapabilityFromInput)
+  const ids = new Set<string>()
+  for (const capability of capabilities) {
+    if (ids.has(capability.id)) throw new Error(`Received duplicate source capability ${capability.id}`)
+    ids.add(capability.id)
+  }
+  // A source snapshot is explicit authority, so first remove the allocations
+  // it supersedes, then replace source facts and let the same queue write
+  // reallocate only the bindings carried by its task records.
+  database.prepare('DELETE FROM task_capability_bindings').run()
+  database.prepare('DELETE FROM source_capabilities').run()
+  upsertSourceCapabilities(database, capabilities)
+}
+
+function syncTaskCapabilityBindings(
+  database: DatabaseSync,
+  tasks: readonly JsonRecord[],
+  options: { replaceAll?: boolean } = {},
+): void {
+  if (options.replaceAll) database.prepare('DELETE FROM task_capability_bindings').run()
+  const bindingsByTask = new Map<string, ProjectStateDatabaseTaskCapabilityBinding[]>()
+  for (const task of tasks) {
+    const bindings = taskCapabilityBindingsFromTask(task)
+    if (bindings !== null) bindingsByTask.set(stringValue(task.id)!, bindings)
+  }
+  const knownCapabilityIds = new Set(
+    (database.prepare('SELECT capability_id FROM source_capabilities').all() as JsonRecord[])
+      .map(row => stringValue(row.capability_id))
+      .filter((id): id is string => Boolean(id)),
+  )
+  const replaceTask = database.prepare('DELETE FROM task_capability_bindings WHERE task_id = ?')
+  const insert = database.prepare(`
+    INSERT INTO task_capability_bindings (task_id, capability_id, relation)
+    VALUES (?, ?, ?)
+  `)
+  for (const [taskId, bindings] of bindingsByTask) {
+    replaceTask.run(taskId)
+    for (const binding of bindings) {
+      if (!knownCapabilityIds.has(binding.capabilityId)) {
+        throw new Error(`Task ${taskId} binds unknown source capability ${binding.capabilityId}`)
+      }
+      insert.run(binding.taskId, binding.capabilityId, binding.relation)
+    }
+  }
+}
+
+function readTaskCapabilityBindingsByTask(
+  database: DatabaseSync,
+  taskIds: readonly string[],
+): Map<string, ProjectStateDatabaseTaskCapabilityBinding[]> {
+  if (taskIds.length === 0 || !tableExists(database, 'task_capability_bindings')) return new Map()
+  const rows = database.prepare(`
+    SELECT task_id, capability_id, relation
+    FROM task_capability_bindings
+    WHERE task_id IN (${taskIds.map(() => '?').join(', ')})
+    ORDER BY task_id, capability_id
+  `).all(...taskIds) as JsonRecord[]
+  const result = new Map<string, ProjectStateDatabaseTaskCapabilityBinding[]>()
+  for (const row of rows) {
+    const taskId = stringValue(row.task_id)
+    const capabilityId = stringValue(row.capability_id)
+    const relation = stringValue(row.relation) as ProjectStateDatabaseCapabilityRelation | undefined
+    if (!taskId || !capabilityId || !relation || !CAPABILITY_RELATIONS.has(relation)) continue
+    const bindings = result.get(taskId) ?? []
+    bindings.push({ taskId, capabilityId, relation })
+    result.set(taskId, bindings)
+  }
+  return result
+}
+
+function sourceCapabilityFromRow(row: JsonRecord): ProjectStateDatabaseSourceCapability | null {
+  const id = stringValue(row.capability_id)
+  const adapterId = stringValue(row.adapter_id)
+  const sourceRevision = stringValue(row.source_revision)
+  const label = stringValue(row.label)
+  const state = stringValue(row.state) as ProjectStateDatabaseCapabilityState | undefined
+  const adapterSchemaVersion = Number(row.adapter_schema_version)
+  if (!id || !adapterId || !sourceRevision || !label || !Number.isInteger(adapterSchemaVersion) || adapterSchemaVersion < 1) return null
+  if (state !== 'planned' && state !== 'retired') return null
+  return {
+    id,
+    adapterId,
+    adapterSchemaVersion,
+    sourceRevision,
+    label,
+    state,
+    releaseIds: parseJson<string[]>(row.release_ids_json, []),
+    dependsOnCapabilityIds: parseJson<string[]>(row.depends_on_capability_ids_json, []),
+    evidenceRefs: parseJson<string[]>(row.evidence_refs_json, []),
+  }
+}
+
+/** Read the adapter-owned catalog without opening task detail or project history. */
+export function readProjectStateDatabaseSourceCapabilities(
+  tasksPath: string,
+): ProjectStateDatabaseSourceCapability[] | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'source_capabilities')) return []
+    return (database.prepare(`
+      SELECT capability_id, adapter_id, adapter_schema_version, source_revision,
+        label, state, release_ids_json, depends_on_capability_ids_json, evidence_refs_json
+      FROM source_capabilities
+      ORDER BY capability_id
+    `).all() as JsonRecord[])
+      .flatMap(row => {
+        const capability = sourceCapabilityFromRow(row)
+        return capability ? [capability] : []
+      })
+  } finally {
+    database.close()
+  }
+}
+
+/** Read exact task allocation facts without expanding task definition payloads. */
+export function readProjectStateDatabaseTaskCapabilityBindings(
+  tasksPath: string,
+  taskIds: readonly string[],
+): Map<string, ProjectStateDatabaseTaskCapabilityBinding[]> | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const ids = [...new Set(taskIds.filter(id => id.trim().length > 0))].slice(0, 100)
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readTaskCapabilityBindingsByTask(database, ids)
+  } finally {
+    database.close()
+  }
+}
+
 function scopeRowFromRow(row: JsonRecord): ProjectStateDatabaseScopeRow | null {
   const scope = stringValue(row.scope_row_scope)
   if (scope !== 'included' && scope !== 'deferred') return null
@@ -2708,9 +3011,12 @@ function readQueueDefinitionFromWorkItemDetails(
   if (byId.size !== taskRows.length || taskRows.some(row => !byId.has(String(row.id)))) return null
   const releaseIdsByTask = readReleaseMembershipByTask(database)
   const dependencyIdsByTask = readTaskDependenciesByTask(database)
+  const capabilityBindingsByTask = readTaskCapabilityBindingsByTask(database, [...byId.keys()])
   for (const [taskId, task] of byId) {
     if (tableExists(database, 'release_membership')) task.releaseIds = releaseIdsByTask.get(taskId) ?? []
     if (tableExists(database, 'task_dependencies')) task.dependsOn = dependencyIdsByTask.get(taskId) ?? []
+    const bindings = capabilityBindingsByTask.get(taskId)
+    if (bindings) task.capabilityBindings = bindings.map(({ capabilityId, relation }) => ({ capabilityId, relation }))
   }
   const releaseRows = releaseDefinitionsFromDatabase(database)
   return {
@@ -2755,9 +3061,15 @@ function attachWorkItemDetails(
   database: DatabaseSync,
 ): ProjectStateDatabaseTask[] {
   const definitions = readWorkItemDetails(database, tasks.map(task => task.id))
+  const bindingsByTask = readTaskCapabilityBindingsByTask(database, tasks.map(task => task.id))
   return tasks.map(task => ({
     ...task,
-    definition: definitions.get(task.id) ?? {},
+    definition: {
+      ...(definitions.get(task.id) ?? {}),
+      ...(bindingsByTask.has(task.id) ? {
+        capabilityBindings: bindingsByTask.get(task.id)!.map(({ capabilityId, relation }) => ({ capabilityId, relation })),
+      } : {}),
+    },
   }))
 }
 
@@ -2936,6 +3248,9 @@ function writeSnapshotToDatabase(
     database.prepare('DELETE FROM task_dependencies').run()
     database.prepare('DELETE FROM scopes').run()
     database.prepare('DELETE FROM work_scope').run()
+    if (snapshot.sourceCapabilities !== undefined) {
+      replaceSourceCapabilityCatalog(database, snapshot.sourceCapabilities)
+    }
 
     const insertTask = database.prepare(`
       INSERT INTO work_items (
@@ -2966,6 +3281,7 @@ function writeSnapshotToDatabase(
       )
     }
     syncTaskDependencies(database, tasks)
+    syncTaskCapabilityBindings(database, tasks, { replaceAll: snapshot.sourceCapabilities !== undefined })
     deleteOrphanTaskOverlays(database, tasks.map(task => String(task.id ?? '')).filter(Boolean))
 
     const insertScope = database.prepare(`
@@ -3833,6 +4149,7 @@ export function writeProjectStateDatabaseTaskMutation(
         throw new Error(`Cannot mutate current work item ${taskId}: item not found`)
       }
       syncTaskDependencies(database, [mutation.task])
+      syncTaskCapabilityBindings(database, [mutation.task])
 
       // A task edit may legitimately assign or unassign the task from a
       // release. Normalize that relationship in this same transaction. The
@@ -4221,8 +4538,9 @@ export function writeProjectStateDatabaseTaskBatchMutation(
     'selectedReleaseId' in mutation ||
     mutation.executionPlanActions !== undefined ||
     mutation.scopeAuthorityRequests !== undefined
-  if (changedTaskIds.size === 0 && removedTaskIds.length === 0 && !hasEnvelopeMutation) {
-    throw new Error('Targeted task batch mutations require a task or queue-envelope change')
+  const hasCapabilityMutation = mutation.sourceCapabilities !== undefined
+  if (changedTaskIds.size === 0 && removedTaskIds.length === 0 && !hasEnvelopeMutation && !hasCapabilityMutation) {
+    throw new Error('Targeted task batch mutations require a task, capability catalog, or queue-envelope change')
   }
 
   const database = openDatabase(projectStateDatabasePathFromTasksPath(tasksPath))
@@ -4249,6 +4567,9 @@ export function writeProjectStateDatabaseTaskBatchMutation(
       const detailCount = Number((database.prepare('SELECT COUNT(*) AS count FROM work_item_detail').get() as JsonRecord | undefined)?.count ?? 0)
       if (itemCount !== detailCount) {
         throw new Error(`Targeted task batch mutation refused: detail index is incomplete (${detailCount}/${itemCount})`)
+      }
+      if (mutation.sourceCapabilities !== undefined) {
+        upsertSourceCapabilities(database, mutation.sourceCapabilities)
       }
       let normalizedReleaseDefinitions: JsonRecord[] | null = null
       if (mutation.releases !== undefined) {
@@ -4370,6 +4691,7 @@ export function writeProjectStateDatabaseTaskBatchMutation(
         }
         database.prepare('DELETE FROM work_items WHERE id = ?').run(taskId)
       }
+      syncTaskCapabilityBindings(database, changedTasks)
 
       const scopeRows = mutation.scopeRows ?? []
       const scopeRowsByTaskId = new Map<string, ProjectStateDatabaseScopeRow>()

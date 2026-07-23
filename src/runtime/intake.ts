@@ -40,6 +40,7 @@ import {
   productBriefFromSpecCompletionBoundary,
   validateProductBriefGrounding,
   validateSpecCompletionBoundary,
+  validateSpecGrounding,
 } from './spec-quality.js'
 import { taskShapingBlockers } from '@guildhall/shared'
 import { applyTaskShaping } from './task-decomposition.js'
@@ -448,6 +449,13 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     return {
       success: false,
       error: `Spec is not ready for approval: ${specQuality.errors.join(' ')}`,
+    }
+  }
+  const specGrounding = validateSpecGrounding(task)
+  if (!specGrounding.ok) {
+    return {
+      success: false,
+      error: `Spec is not grounded in the typed task/source contract: ${specGrounding.errors.join(' ')}`,
     }
   }
 

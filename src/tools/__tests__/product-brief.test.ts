@@ -175,6 +175,38 @@ describe('updateProductBrief', () => {
     expect(updated.tasks[0]?.productBrief?.antiPatterns).toEqual(['revised prohibition 1', 'revised prohibition 2'])
   })
 
+  it('drops approval when the accepted capability scope changes', async () => {
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    const approvedAt = new Date().toISOString()
+    q.tasks[0]!.capabilityBindings = [
+      { capabilityId: 'cap:world-state', relation: 'plans' },
+      { capabilityId: 'cap:spatial-state', relation: 'plans' },
+    ]
+    q.tasks[0]!.productBrief = {
+      userJob: 'stable job',
+      successMetric: 'stable metric',
+      antiPatterns: [],
+      sourceCapabilityIds: ['cap:world-state'],
+      authoredBy: 'agent:spec-agent',
+      authoredAt: approvedAt,
+      approvedBy: 'human',
+      approvedAt,
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(q, null, 2), 'utf-8')
+
+    await updateProductBrief({
+      tasksPath,
+      taskId: 'task-1',
+      userJob: 'stable job',
+      successMetric: 'stable metric',
+      antiPatterns: [],
+      sourceCapabilityIds: ['cap:world-state', 'cap:spatial-state'],
+      authoredBy: 'agent:spec-agent',
+    })
+    const updated = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(updated.tasks[0]?.productBrief?.approvedAt).toBeUndefined()
+  })
+
   it('returns an error when the task does not exist', async () => {
     const result = await updateProductBrief({
       tasksPath,

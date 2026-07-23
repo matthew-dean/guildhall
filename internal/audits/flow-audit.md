@@ -7863,6 +7863,52 @@ non-JavaScript proof language where possible.
   reviewer-concern migration and cross-surface consumer coverage remain open
   release work; no reviewer prose may become a temporary resolution fallback.
 
+## 2026-07-23 Source capability coverage is a typed planning contract
+
+- Work id: `codex:source-capability-coverage-contract-2026-07-23`.
+- User job: when a source-backed task names several required outcomes, a
+  delegated owner can see and confirm the outcomes once; thereafter Guildhall
+  must reject a brief/spec that drops one, even if its prose sounds plausible.
+- Finding: `TaskSourceClaim` carries title and evidence prose, so it cannot be
+  the capability authority without duplicating source truth on every task.
+  `ProductBrief` and `StructuredSpec` can therefore become narrower without a
+  structural violation. Searching prose for the missing concepts would be
+  model-dependent and is forbidden.
+- Contract Touch Decision:
+  - Touched contracts: normalized source-capability catalog,
+    task-capability binding, `ProductBrief`, `StructuredSpec`, structured
+    acceptance criteria, spec-quality admission, brief/spec approval.
+  - Contract shape: a structured source adapter owns immutable catalog
+    capabilities; a task binds capability IDs with `plans`, `implements`,
+    `integrates`, `proves`, or `reviews` relation. A brief and structured spec
+    declare the exact bound IDs they accept, and a structured spec maps every
+    accepted capability ID to one or more acceptance criteria. Labels/evidence
+    are display/audit material; IDs and links are the operational contract.
+  - Considered but not touched: arbitrary source-bullet parsing, title or
+    description keyword matching, an LLM declaring itself complete, fixed
+    task/step depth. None may infer capability coverage.
+  - Required follow-up: model child/delegated coverage as typed links when a
+    parent scope is materialized into flexible task/step hierarchy; project Map
+    consumes the same capability rows rather than rebuilding them from prose.
+  - Proof required: a source claim with several IDs rejects a narrowed brief,
+    rejects a spec whose acceptance links omit an ID, passes under arbitrary
+    prose variation when links are unchanged, and persists/reloads through the
+    canonical task-state boundary.
+  - Apply/revert behavior: additive fields. Existing unbound tasks retain
+    their behavior but cannot claim source-capability coverage; no migration
+    may invent catalog IDs or bindings by parsing historical prose.
+- Schema Migration Decision:
+  - Persisted schema touched: normalized source-capability and task-binding
+    SQLite tables, product briefs, structured specs, and acceptance criteria.
+  - Change class: additive schema plus read normalization. Existing unbound
+    records are compatible but have no coverage proof.
+  - Safety: structured source adapters or a delegated owner must supply
+    catalog capabilities and bindings from Guildhall-visible source material.
+    The migration never derives either from historical text.
+  - Rollback/revert behavior: removing the gate preserves the explicit records
+    as audit data; it does not rewrite tasks or synthesize a legacy scope.
+- Status: in progress.
+
 ## Surface Matrix
 
 Use this as the canonical user-test matrix. Each row needs either current live
@@ -53070,3 +53116,20 @@ Repair:
       pending structured intake instead of silently losing scope.
 - Safety: capability identity is source-owned and linked by IDs. No provider
       sentence, keyword, or title truncation can settle coverage.
+
+### Implementation checkpoint
+
+- [x] Added SQLite schema v34 `source_capabilities` and
+      `task_capability_bindings` with FK-backed allocation, point-read
+      hydration, and CAS mutation validation.
+- [x] Rich task detail strips `capabilityBindings` before persistence, so a
+      task record cannot become a second source of truth after a normal edit.
+- [x] A regression test proves an unknown capability binding is rejected and
+      a read after restart rehydrates only the normalized binding.
+- [ ] Replace evidence-graph/reintake Markdown and roadmap parsing with
+      structured adapter snapshots. Until that is complete, no Narrative
+      Harness re-intake may claim source-capability coverage from its existing
+      prose claims.
+- [ ] Bind the catalog to Map, Release, Overview, and Work through the shared
+      summary projection, then verify their displayed scope is identical at a
+      single project revision.

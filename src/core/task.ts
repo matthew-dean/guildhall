@@ -520,6 +520,8 @@ export const ProductBrief = z.preprocess(normalizeProductBriefInput, z.object({
   antiPatterns: z.array(z.string()).optional(),     // Legacy/UI alias for nonGoals
   rolloutPlan: z.string().optional(),               // Staging / flagging / migration notes
   brandInteractionNotes: z.string().optional(),     // Optional tone/visual interaction notes
+  /** Explicit source capability IDs accepted by this brief. */
+  sourceCapabilityIds: z.array(z.string().min(1)).optional(),
   authoredBy: z.string().optional(),                // agent id or 'human'
   authoredAt: z.string().optional(),
   approvedBy: z.string().optional(),
@@ -741,6 +743,8 @@ export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.ob
   expectedOutputIncludes: z.array(z.string()).optional(),
   evidenceHint: z.string().optional(),
   negativeCase: z.string().optional(),
+  /** Source capability IDs this criterion proves; never inferred from its description. */
+  sourceCapabilityIds: z.array(z.string().min(1)).optional(),
   met: z.boolean().default(false),
   // Runtime proof projection fields. They remain on the parsed contract so a
   // bounded effective-task read can carry a stale/settled proof state without
@@ -1236,6 +1240,17 @@ export const TaskSourceClaim = z.object({
 })
 export type TaskSourceClaim = z.infer<typeof TaskSourceClaim>
 
+/**
+ * A task's typed relationship to a capability in the normalized source
+ * catalog. The catalog owns identity and source revision; a task only owns
+ * its allocation of work.
+ */
+export const TaskCapabilityBinding = z.object({
+  capabilityId: z.string().min(1),
+  relation: z.enum(['plans', 'implements', 'integrates', 'proves', 'reviews']),
+})
+export type TaskCapabilityBinding = z.infer<typeof TaskCapabilityBinding>
+
 export const ProjectReleaseKind = z.enum(['release', 'milestone', 'marker', 'current_work'])
 export type ProjectReleaseKind = z.infer<typeof ProjectReleaseKind>
 
@@ -1307,6 +1322,8 @@ export const Task = z.object({
   requestIntake: RequestIntake.optional(),
   references: z.array(z.string()).default([]),
   sourceClaims: z.array(TaskSourceClaim).default([]),
+  /** Typed source-capability scope allocated to this task. */
+  capabilityBindings: z.array(TaskCapabilityBinding).optional(),
   /** Stable identity of the source work record that created this task. */
   sourceIdentity: z.string().min(1).optional(),
   /** Explicit structural identity used by evidence-graph reconciliation. */
