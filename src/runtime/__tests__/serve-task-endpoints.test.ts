@@ -3077,7 +3077,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
       new Request(projectUrl('/api/project/task/task-1/rerun-stage'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ stage: 'spec' }),
+        body: JSON.stringify({ stage: 'spec', actor: 'codex_delegated_owner' }),
       }),
     )
     expect(res.status).toBe(200)
@@ -3091,6 +3091,11 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     expect(raw.tasks[0]?.acceptanceCriteria).toEqual([])
     expect(raw.tasks[0]?.productBrief).toBeUndefined()
     expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh spec pass/i)
+    expect(raw.tasks[0]?.notes?.at(-1)).toMatchObject({
+      agentId: 'codex_delegated_owner',
+      role: 'codex_delegated_owner',
+      structured: { source: 'codex_delegated_owner' },
+    })
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/fresh spec pass/i)
   })

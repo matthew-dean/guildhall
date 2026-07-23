@@ -14599,6 +14599,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           stage?: 'spec' | 'review' | 'gate'
           recoveryReason?: string
           recoveryKind?: 'proof' | 'blueprint'
+          actor?: unknown
         }
         if (body.stage !== 'spec' && body.stage !== 'review' && body.stage !== 'gate') {
           return c.json({ error: 'Missing or invalid stage' }, 400)
@@ -14607,6 +14608,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           memoryDir,
           taskId: id,
           stage: body.stage,
+          actor: body.actor === 'codex_delegated_owner' ? 'codex_delegated_owner' : 'human',
           ...(body.recoveryReason?.trim() ? { recoveryReason: body.recoveryReason.trim() } : {}),
           ...(body.recoveryKind ? { recoveryKind: body.recoveryKind } : {}),
         })

@@ -52355,8 +52355,9 @@ Repair:
 ### Contract Touch Decision
 
 - Work id: `0.13.80/delegated-proof-plan-actions`.
-- Touched contracts: task-action request fields for `reframe-task` and
-      `set-acceptance-proof-expectation`, plus their durable audit notes.
+- Touched contracts: task-action request fields for `reframe-task`,
+      `rerun-stage`, and `set-acceptance-proof-expectation`, plus their
+      durable audit notes.
 - Considered but not touched: approval authority, release scope, task
       completion, proof-output parsing, and task schema.
 - Existing data impact: new requests can record `codex_delegated_owner`; old
@@ -52387,7 +52388,9 @@ Repair:
       proof output parsing, approval authority, and model prose.
 - Existing data impact: future reframes persist a `currentLifecycle` overlay
       and mark an inline old done summary as reopened. Historical evidence is
-      retained and is never deleted or reinterpreted.
+      retained and is never deleted or reinterpreted. Any fresh spec rerun now
+      clears its current plan through the shared reset boundary; only the
+      existing bounded proof-setup exception retains its execution blueprint.
 - Required follow-up: rerun the affected Narrative Harness shaping task through
       the installed application and verify it remains `exploring` until a fresh
       spec is recorded.

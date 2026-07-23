@@ -881,6 +881,8 @@ export interface RerunTaskStageInput {
   memoryDir: string
   taskId: string
   stage: 'spec' | 'review' | 'gate'
+  /** Records a delegated owner request without granting the runtime approval authority. */
+  actor?: 'human' | 'codex_delegated_owner'
   /** Reopen a stale current plan for a source-backed spec re-intake. */
   recoveryReason?: string
   /** Only proof recovery writes the proof-specific runtime marker. */
@@ -1373,6 +1375,7 @@ export async function rerunTaskStage(
   }
 
   const now = new Date().toISOString()
+  const actor = input.actor === 'codex_delegated_owner' ? 'codex_delegated_owner' : 'human'
 
   if (input.stage === 'spec') {
     if (task.id === 'task-meta-intake' || task.id === 'task-workspace-import') {
@@ -1400,30 +1403,28 @@ export async function rerunTaskStage(
     task.completedAt = undefined
     task.status = 'exploring'
     task.assignedTo = null
-    // A fresh spec pass replaces the old executable contract. Blueprint
-    // recovery preserves the approved scope boundary, while proof recovery
-    // clears the whole stale plan and re-establishes it from sources.
-    if (input.recoveryKind === 'proof' || input.recoveryKind === 'blueprint') {
-      resetCurrentPlanForProofRecovery(task, {
-        reason:
-          input.recoveryReason?.trim() ||
-          'The current proof plan was cleared for a fresh source-backed spec pass.',
-        now,
-        agentId: 'system',
-        role: input.recoveryKind === 'blueprint' ? 'blueprint-recovery' : 'proof-recovery',
-        ...(input.recoveryKind === 'blueprint' ? { preserveProductBrief: true } : {}),
-      })
-    }
+    // A fresh spec pass always replaces the old executable contract. The
+    // shared reset preserves a bounded proof-setup blueprint in place, while
+    // a blueprint recovery alone retains the approved product brief.
+    resetCurrentPlanForProofRecovery(task, {
+      reason:
+        input.recoveryReason?.trim() ||
+        'The current plan was cleared for a fresh source-backed spec pass.',
+      now,
+      agentId: actor,
+      role: actor,
+      ...(input.recoveryKind === 'blueprint' ? { preserveProductBrief: true } : {}),
+    })
     detachStaleShelvedReverseChildren(queue, task, now)
     task.updatedAt = now
     queue.lastUpdated = now
     task.notes.push({
-      agentId: 'human',
-      role: 'human',
-      content: 'Human requested a fresh spec pass from the current project reality.',
+      agentId: actor,
+      role: actor,
+      content: 'A delegated owner requested a fresh spec pass from the current project reality.',
       structured: {
         event: 'reframe_requested',
-        source: 'human',
+        source: actor,
       },
       timestamp: now,
     })
@@ -1433,7 +1434,7 @@ export async function rerunTaskStage(
       taskId: task.id,
       role: 'system',
       content:
-        'Human requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
+        'A delegated owner requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
     })
     await upsertTaskRuntimeState(projectRoot, task.id, {
       assignedTo: null,
