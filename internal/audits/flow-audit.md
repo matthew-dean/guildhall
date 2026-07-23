@@ -44,6 +44,12 @@ help_summary: |
   is runnable work, not a migration fault.
 - Proof: focused task-queue, action-model, migration, and start-endpoint
   regressions; then installed Narrative Harness replay.
+- Installed replay finding: the first Stage 1 Resume correctly stopped at the
+  visible spec-review gate but did not prepare proof work, because the recovery
+  decision used an internal scope variant while Start exposed the selected
+  release through `executionScope`. Recovery now uses that shared execution
+  scope contract, so the same release identity governs visible state and the
+  mutation decision.
 - Apply/revert: code-only. Revert the queue/runtime transition and migration
   predicate together; no historical task or release data is rewritten.
 

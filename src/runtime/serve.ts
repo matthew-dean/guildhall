@@ -1137,17 +1137,17 @@ type ReleaseProofRecoveryDecision = {
 
 function savedReleaseProofRecoveryDecision(
   summary: ProjectSummaryProjection | null | undefined,
-  scope: ProjectScope | null | undefined,
+  executionScope: StartExecutionScopeSummary | undefined,
   requestedTaskId?: string,
 ): ReleaseProofRecoveryDecision | null {
-  if (requestedTaskId || scope?.kind !== 'release' || !summary) return null
+  if (requestedTaskId || executionScope?.kind !== 'release' || !summary) return null
   const parentTaskIds = [...new Set(summary.releaseSummary.blockers
     .filter(blocker => blocker.code === 'proof_evidence_missing')
     .map(blocker => blocker.owningTaskId ?? blocker.id)
     .filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
     .sort()
   return parentTaskIds.length > 0
-    ? { releaseId: scope.id, parentTaskIds }
+    ? { releaseId: executionScope.id, parentTaskIds }
     : null
 }
 
@@ -9212,7 +9212,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }))
     const releaseProofRecovery = savedReleaseProofRecoveryDecision(
       input.summary,
-      input.scope,
+      executionScope,
       input.requestedTaskId,
     )
     const attachExecutionScope = <T extends { canStart: boolean }>(status: T): T & {
