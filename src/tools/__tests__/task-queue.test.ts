@@ -1736,6 +1736,49 @@ describe('updateTask', () => {
     expect(raw.tasks[0].spec).toContain('Build the thing')
   })
 
+  it('persists agent-read planning evidence and validates a structured spec by its typed contract', async () => {
+    const structuredSpec = {
+      whatThisIs: 'A bounded source-backed contract.',
+      problemContext: 'The current project source names the implementation surface.',
+      goals: ['Preserve the inspected project boundary.'],
+      nonGoals: ['Do not invent an unobserved command.'],
+      keyDecisions: ['Keep executable proof typed.'],
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        scenario: 'Given the inspected project source',
+        expectation: 'The bounded behavior is reviewed against it.',
+        verificationMode: 'review',
+      }],
+      verification: ['Review the inspected project source.'],
+      completionBoundary: {
+        productOutcome: 'The bounded source-backed behavior is defined.',
+        whatGuildhallCanCompleteInCode: 'The implementation contract is saved.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'The registered project.',
+        whatCountsAsDone: 'The structured contract is saved for review.',
+        whatMustBeSplitOrBlocked: 'Split only independent outcomes.',
+      },
+      // Arbitrary prose with a path must remain display-only; only typed
+      // executable fields participate in grounding validation.
+      proposedDesign: 'Use src/pipeline/synopsis.ts as the inspected implementation boundary.',
+    }
+    const result = await updateTask({ tasksPath, taskId: 'task-001', structuredSpec }, {
+      current_agent_id: 'spec-agent',
+      planning_source_evidence: [{ path: '/workspace/src/pipeline/synopsis.ts', commands: [] }],
+    })
+
+    expect(result.success, result.error).toBe(true)
+    expect(result.taskId).toBe('task-001')
+    const saved = readProjectTaskQueueSync(tasksPath).tasks[0]!
+    expect(saved.sourceClaims).toContainEqual(expect.objectContaining({
+      signalId: 'agent-read:/workspace/src/pipeline/synopsis.ts',
+      references: ['/workspace/src/pipeline/synopsis.ts'],
+    }))
+    expect(saved.references).toContain('/workspace/src/pipeline/synopsis.ts')
+    expect(saved.structuredSpec?.proposedDesign).toContain('src/pipeline/synopsis.ts')
+  })
+
   it('does not invent split pressure or child tasks for one bounded artifact patch spec', async () => {
     await updateTask({
       tasksPath,

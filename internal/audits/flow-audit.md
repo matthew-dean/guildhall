@@ -52398,3 +52398,68 @@ Repair:
       and installed replay.
 - Apply/revert: do not remove this boundary without another durable lifecycle
       model; reverting it reintroduces false completion from historical state.
+
+## 2026-07-23 One planning evidence packet for agent reads and spec admission
+
+- [x] The Narrative Harness replay showed a split-brain planning failure: a
+      spec agent could read a registered project source through Guildhall, but
+      the task writer checked only an earlier task snapshot and rejected the
+      resulting structured spec as ungrounded.
+- [x] Successful project reads now retain a bounded typed packet of source
+      paths and exact executable lines. The next `update-task` call uses that
+      packet for grounding and persists compact source claims/references on
+      the accepted task definition. Full tool output remains operational
+      history, not durable task state.
+- [x] Structured specs are admitted through their typed fields. Rendered
+      explanatory prose is display-only and is never scanned for path or
+      command vocabulary.
+
+### Contract Touch Decision
+
+- Work id: `0.13.82/planning-evidence-packet`.
+- Touched contracts: query-loop tool carryover, spec-agent `update-task`
+      metadata, task source claims/references, and structured-spec grounding.
+- Considered but not touched: owner approval, release membership, raw
+      transcripts, proof-output parsing, task hierarchy, and model prose as
+      operational state.
+- Existing data impact: no old task is rewritten. A future accepted spec may
+      add compact `agent-session-read` source claims and references from its
+      own successful Guildhall reads.
+- Required follow-up: replace the remaining per-session metadata transport
+      with the planned shared claim/evidence resolver so every agent and view
+      reads the same authority-ranked packet. Do not loosen grounding or infer
+      source facts from assistant narration while that migration is underway.
+- Proof required: a source-backed structured spec saves through the promoted
+      SQLite writer, persists compact source evidence, permits arbitrary
+      explanatory prose, and still rejects an unobserved typed command. Run
+      task-writer/spec-quality regressions, typecheck, model-independence,
+      contract lint, and a fresh installed Narrative Harness replay.
+- Apply/revert: remove only with an equivalent shared evidence resolver.
+      Reverting restores false “ungrounded” failures for facts Guildhall
+      itself observed.
+
+### Schema Migration Decision
+
+- Work id: `0.13.82/planning-evidence-packet`.
+- Persisted schema touched: existing optional `Task.sourceClaims` and
+      `Task.references` fields; no new table or unbounded transcript field.
+- Change class: additive live population of existing typed source-evidence
+      fields.
+- Existing data impact: legacy records without agent-session claims remain
+      valid. New claims are only appended when an agent successfully saves a
+      planning mutation after a successful read; they never promote failed
+      reads or model prose into authority.
+- Migration id: none. This is an existing forward-compatible task schema.
+- Safety: the source identity and executable lines come from Guildhall tool
+      results, are bounded, and are visible on the task. They are evidence of
+      observation, not permission to approve, broaden scope, or claim proof.
+- Compatibility reader: existing Source Trail, task grounding, and importer
+      readers already consume `sourceClaims` and `references`; absent fields
+      default to empty collections at the parse boundary.
+- Fixtures and tests: task-writer regression covers persistence through the
+      promoted SQLite writer and structured-spec grounding; model-independence
+      confirms no model prose matcher was introduced.
+- Owner-facing plan text: sources Guildhall inspected for a task remain
+      visible as its source trail after it writes the spec.
+- Apply/revert: removing the writer leaves existing compact claims harmless;
+      it must not be replaced by re-reading raw transcripts on each request.

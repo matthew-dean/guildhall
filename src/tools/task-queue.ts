@@ -200,6 +200,48 @@ export interface UpdateTaskResult {
 type TaskRecord = TaskModel
 type TaskQueueRecord = TaskQueueModel
 
+type PlanningSourceEvidence = { path: string; commands: string[] }
+
+function planningSourceClaims(metadata: Record<string, unknown>): NonNullable<TaskRecord['sourceClaims']> {
+  const raw = metadata['planning_source_evidence']
+  if (!Array.isArray(raw)) return []
+  const claims = raw.flatMap((entry): NonNullable<TaskRecord['sourceClaims']> => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const record = entry as Record<string, unknown>
+    const sourcePath = typeof record.path === 'string' ? record.path.trim() : ''
+    if (!sourcePath) return []
+    const commands = Array.isArray(record.commands)
+      ? record.commands.filter((command): command is string => typeof command === 'string' && command.trim().length > 0)
+      : []
+    return [{
+      signalId: `agent-read:${sourcePath}`,
+      source: 'agent-session-read',
+      title: `Inspected ${sourcePath}`,
+      evidence: commands.length > 0
+        ? `Exact executable lines observed: ${commands.join('; ')}`
+        : 'The current planning agent inspected this source through Guildhall.',
+      references: [sourcePath],
+      role: 'reference',
+      structure: 'record',
+      confidence: 'high',
+      linkedTaskHints: [],
+    }]
+  })
+  return claims
+}
+
+function mergePlanningSourceClaims(
+  existing: NonNullable<TaskRecord['sourceClaims']>,
+  observed: NonNullable<TaskRecord['sourceClaims']>,
+): NonNullable<TaskRecord['sourceClaims']> {
+  const byId = new Map<string, NonNullable<TaskRecord['sourceClaims']>[number]>()
+  for (const claim of [...existing, ...observed]) {
+    const key = claim.signalId ?? `${claim.source}:${claim.title}`
+    byId.set(key, claim)
+  }
+  return [...byId.values()]
+}
+
 function changedExistingAcceptanceCommand(
   task: TaskRecord,
   nextCriteria: readonly TaskRecord['acceptanceCriteria'][number][],
@@ -403,8 +445,19 @@ async function updateTaskUnlocked(
       if (proofContractError) return { success: false, taskId, error: proofContractError }
     }
     const nextSpec = renderedStructuredSpec ?? normalizedSpec
+    const observedSourceClaims = planningSourceClaims(metadata)
+    const effectiveSourceClaims = mergePlanningSourceClaims(task.sourceClaims ?? [], observedSourceClaims)
     if (nextSpec) {
-      const grounding = validateSpecGrounding({ ...task, spec: nextSpec })
+      const grounding = validateSpecGrounding({
+        ...task,
+        sourceClaims: effectiveSourceClaims,
+        references: [...new Set([
+          ...(task.references ?? []),
+          ...observedSourceClaims.flatMap((claim) => claim.references),
+        ])],
+        spec: nextSpec,
+        ...(normalizedStructuredSpec ? { structuredSpec: normalizedStructuredSpec } : {}),
+      })
       if (!grounding.ok) {
         return {
           success: false,
@@ -615,6 +668,13 @@ async function updateTaskUnlocked(
     }
 
     if (input.title !== undefined) task.title = input.title
+    if (observedSourceClaims.length > 0) {
+      task.sourceClaims = effectiveSourceClaims
+      task.references = [...new Set([
+        ...(task.references ?? []),
+        ...observedSourceClaims.flatMap((claim) => claim.references),
+      ])]
+    }
     if (input.executionMode !== undefined) task.executionMode = WorkerExecutionMode.parse(input.executionMode)
     if (input.bootstrapRepairOwnership !== undefined) {
       task.bootstrapRepairOwnership = BootstrapRepairOwnership.parse(input.bootstrapRepairOwnership)
@@ -750,6 +810,19 @@ function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+function sameDefinitionValue(key: string, left: unknown, right: unknown): boolean {
+  // The SQLite projection may omit schema-defaulted source collections while
+  // the in-memory Task parser exposes them as []. They mean the same thing;
+  // treating that representation difference as a concurrent edit prevents an
+  // agent from attaching the source evidence it just observed.
+  if (
+    (key === 'references' || key === 'sourceClaims') &&
+    ((left === undefined && Array.isArray(right) && right.length === 0) ||
+      (right === undefined && Array.isArray(left) && left.length === 0))
+  ) return true
+  return sameJson(left, right)
+}
+
 function applyDefinitionDelta(
   currentTask: Record<string, unknown>,
   baselineTask: Record<string, unknown>,
@@ -763,8 +836,8 @@ function applyDefinitionDelta(
   for (const key of changedKeys) {
     const baselineValue = baselineTask[key]
     const nextValue = nextTask[key]
-    if (sameJson(baselineValue, nextValue)) continue
-    if (!sameJson(currentTask[key], baselineValue)) return null
+    if (sameDefinitionValue(key, baselineValue, nextValue)) continue
+    if (!sameDefinitionValue(key, currentTask[key], baselineValue)) return null
     if (nextValue === undefined) delete next[key]
     else next[key] = nextValue
   }
