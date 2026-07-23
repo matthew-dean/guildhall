@@ -5,6 +5,58 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+## 2026-07-23 Explicit Review-Gate and Agent-Disagreement Boundary
+
+- Work id: `0.13.65/explicit-review-gates-and-state-claim-resolution`.
+- User job: when any two Guildhall agents or projections report incompatible
+  project facts, the product must resolve the disagreement through a declared,
+  inspectable authority rule or stop with a specific conflict. It must never
+  let one surface say "I saw it" while another dismisses the same fact as
+  invented. A coordinator must also never label owner approval as an open
+  question, or allow unattended automation to impersonate the owner.
+- Live finding: Narrative Harness stopped as `awaiting_human` because ten
+  `spec_review` tasks were counted as approvals. Its canonical project summary
+  simultaneously reported `ownerInput.openCount: 0` and `canStart: true`.
+  The mismatch is not merely stale UI: one overloaded status was being used as
+  a spec artifact stage, a coordinator-review stage, and an owner-approval
+  gate, while the owner-input record models only explicit questions.
+- Plan: make review authority an explicit, typed task gate; project a separate
+  owner-approval summary from owner questions; make supervisor idleness read
+  that same resolved gate; retain typed claim reconciliation as the only way
+  state producers compare cross-surface facts. `fully_automated` runs may
+  repair Guildhall-owned structure but must neither approve owner gates nor
+  answer owner questions.
+- Proof required: schema/migration coverage for review gates; a coordinator
+  and project-summary agreement regression; an automation regression proving
+  an unattended run does not impersonate the owner; and a Narrative Harness
+  replay where delegated Codex approval is explicit and visible.
+
+### Contract Touch Decision
+
+- Touched contracts: task lifecycle review handoff, owner-input projection,
+  release/start readiness, supervisor idle outcome, and registered
+  project-state claim fields.
+- Considered but not touched: release membership, task hierarchy, provider
+  routing, raw transcript retention, and external connector approvals.
+- Apply/revert: the migration assigns a conservative explicit owner gate to
+  legacy `spec_review` work whose reviewer is unknown. New code must write a
+  reviewer authority at the handoff. Reverting code leaves the added field
+  inert; it does not make an owner approval disappear.
+
+### Schema Migration Decision
+
+- Persisted schema: task definition review-gate metadata and promoted project
+  state schema.
+- Change class: additive, required before a promoted project run may derive
+  owner approval from `spec_review`.
+- Existing data: legacy `spec_review` rows get a conservative `owner` gate
+  rather than guessing that a coordinator may approve them. Future handoffs
+  must write the gate explicitly.
+- Migration id, fixtures, and rollback behavior will be recorded with the
+  implementation once the existing migration registry and task schema owner
+  are updated. The migration must be idempotent and never infer a decision
+  from model prose.
+
 ## 2026-07-23 Release Resume Preserves Release Scope During Proof Recovery
 
 - Work id: `0.13.64/release-proof-recovery-batch`.
