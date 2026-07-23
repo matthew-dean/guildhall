@@ -51836,3 +51836,35 @@ Repair:
 - Proof provided: focused intake and run-once regressions plus typecheck.
 - Apply/revert: revert the intake field and run-once reader together. Do not
       replace the durable reference with UI-only backfill or a repository scan.
+
+## 2026-07-23 Re-intake joins legacy claims to canonical work identity
+
+Finding:
+
+- [x] Narrative Harness re-intake saw legacy task rows with importer-owned
+      high-confidence source claims, but ignored those structured claims
+      because they predated `sourceIdentity` and `deliverableName`. It then
+      proposed duplicate hash-named task records while preserving stale done
+      rows as progress.
+
+Repair:
+
+- [x] Evidence-graph reconciliation now accepts an exact high-confidence
+      importer claim when its source path and linked deliverable match the
+      extracted source unit. A done task with missing current proof is eligible
+      for this reconciliation, not preserved as completed progress.
+
+### Contract Touch Decision
+
+- Work id: `0.13.62/reintake-legacy-source-identity`.
+- Touched contracts: evidence-work identity join and re-intake completed-work
+      eligibility.
+- Considered but not touched: model prose, task-title matching, release scope
+      selection, proof schema, and owner approval.
+- Proof required: a legacy claim maps to its existing task ID; focused graph
+      and project-reintake suites pass; installed Narrative Harness replay
+      proposes reframe/refresh of one current record rather than a duplicate.
+- Proof provided: focused graph regression and suite; installed replay remains
+      the next required proof.
+- Apply/revert: revert the claim matcher and proof-gap eligibility together.
+      Do not use title/description prose as an alternate identity join.

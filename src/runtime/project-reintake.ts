@@ -168,7 +168,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   })
   graphPlan = dedupeTasksCoveredBySelectedReleaseScope(graphPlan, selectedRelease)
   const completedTaskIds = new Set(input.tasks
-    .filter(task => stringField(task, 'status') === 'done')
+    .filter(task => stringField(task, 'status') === 'done' && !taskDoneButProofMissing(task))
     .map(task => stringField(task, 'id'))
     .filter((id): id is string => Boolean(id)))
   const graphTaskIds = new Set(graphPlan.tasks.map(task => task.id))
@@ -179,6 +179,9 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   const allowedDependencyIds = new Set([...graphTaskIds, ...protectedProgressTaskIds]
     .filter(id => !nonBlockingDependencyIds.has(id)))
   const graphChanges = graphPlan.tasks
+    // A historical done flag without current proof is not preserved progress.
+    // Reconcile the same source-owned task so the selected release has one
+    // authoritative record instead of a duplicate replacement tree.
     .filter(task => !completedTaskIds.has(task.id))
     .filter(task => !protectedProgressTaskIds.has(task.id))
     .map(task => graphTaskChange(

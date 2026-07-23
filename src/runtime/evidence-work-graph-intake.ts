@@ -824,7 +824,34 @@ function integrationTargetArea(unit: EvidenceUnit, consumerSurface: string): str
 function findExistingTaskForUnit(unit: EvidenceUnit, existingTasks: Array<Record<string, unknown>>): ExistingTaskMatch | undefined {
   const exactIdentity = existingTasks.find(task => task.sourceIdentity === unit.sourceIdentity)
   if (exactIdentity) return existingTaskMatch(exactIdentity)
+  const claimedSourceIdentity = existingTasks.find(task => taskHasSourceClaimForUnit(task, unit))
+  if (claimedSourceIdentity) return existingTaskMatch(claimedSourceIdentity)
   return findExistingTaskByDeliverable(unit.name, existingTasks)
+}
+
+function taskHasSourceClaimForUnit(task: Record<string, unknown>, unit: EvidenceUnit): boolean {
+  const claims = Array.isArray(task.sourceClaims) ? task.sourceClaims : []
+  const unitTitles = new Set([unit.name, unit.taskTitle ?? `Build ${unit.name}`].map(normalizeForMatch))
+  return claims.some(claim => {
+    if (!claim || typeof claim !== 'object' || Array.isArray(claim)) return false
+    const record = claim as Record<string, unknown>
+    if (record.confidence !== 'high') return false
+    const hints = Array.isArray(record.linkedTaskHints)
+      ? record.linkedTaskHints.filter((value): value is string => typeof value === 'string')
+      : []
+    if (!hints.some(hint => unitTitles.has(normalizeForMatch(hint)))) return false
+    const refs = Array.isArray(record.references)
+      ? record.references.filter((value): value is string => typeof value === 'string')
+      : []
+    return refs.some(ref => unit.sourceRefs.some(source => sourcePathMatches(ref, source.path)))
+  })
+}
+
+function sourcePathMatches(left: string, right: string): boolean {
+  const normalizePath = (value: string) => value.replaceAll('\\', '/').replace(/^import:/, '').replace(/^\/+/, '')
+  const normalizedLeft = normalizePath(left)
+  const normalizedRight = normalizePath(right)
+  return normalizedLeft === normalizedRight || normalizedLeft.endsWith(`/${normalizedRight}`)
 }
 
 function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array<Record<string, unknown>>): ExistingTaskMatch | undefined {

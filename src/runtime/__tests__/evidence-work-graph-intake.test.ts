@@ -453,6 +453,29 @@ describe('evidence-to-work-graph intake', () => {
     ])
   })
 
+  it('reconciles legacy importer source claims into the canonical deliverable identity', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [loomaComponentSource],
+      existingTasks: [{
+        id: 'task-legacy-alert-dialog',
+        status: 'done',
+        sourceClaims: [{
+          source: 'workspace-importer',
+          confidence: 'high',
+          linkedTaskHints: ['Build AlertDialog'],
+          references: ['/workspace/looma/docs/component-library-audit.md'],
+        }],
+      }],
+      refreshStructuredExisting: true,
+    })
+
+    const alertDialog = plan.tasks.find(task => task.deliverableName === 'AlertDialog' && task.kind === 'implementation')
+    expect(alertDialog?.id).toBe('task-legacy-alert-dialog')
+    expect(plan.reconciliations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ existingTaskId: 'task-legacy-alert-dialog' }),
+    ]))
+  })
+
   it('keeps reusable component work split from consumer integration with dependency proof', () => {
     const plan = planEvidenceWorkGraph({
       sources: [releaseMatrixSource],
