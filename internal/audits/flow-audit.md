@@ -52615,3 +52615,28 @@ Repair:
       the overview instead of appearing to need a missing brief.
 - Apply/revert: reverting the version retains the rebuilt summaries; do not
       downgrade their action semantics in place.
+
+### Contract Touch Decision
+
+- Work id: `0.13.86/shared-decision-resolution`.
+- Touched contracts: saved `startReadiness`, persisted action-model cache,
+      diagnostic start output, and the primary action shown by compact
+      project surfaces.
+- Contracts considered but not touched: task definitions, task evidence,
+      release membership, proof evaluation, and owner approval state remain
+      owned by their existing canonical records.
+- Required follow-up: replace the remaining separately persisted decision
+      fragments with one revisioned project decision projection; this change
+      establishes the action-resolution seam without pretending the full
+      consolidation is done.
+- Proof required: a stale cached task action cannot override shared
+      `ready_work`, and a captured current-state read does not apply the
+      saved proof fallback intended only for lean reads.
+- Proof provided: focused `project-action-model` regression, existing
+      compact-summary/projection coverage, and installed Narrative Harness
+      compact-versus-diagnostic replay pending.
+- Waivers: release proof debt remains visible as a release blocker while
+      runnable scoped work may continue; the two states are not conflated.
+- Apply/revert: all product surfaces must call `resolveProjectActionModel`
+      for a saved action. Do not reintroduce view-local task ranking to repair
+      a cached action.

@@ -403,7 +403,7 @@ import {
   runRuntimeBackendSetupAction,
   type RuntimeBackendSetupDetector,
 } from './runtime-backend-setup.js'
-import { applyRunStatusToStartReadiness, buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
+import { applyRunStatusToStartReadiness, buildProjectActionModel, resolveProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { NodeGitDriver } from './git-driver.js'
 import {
   GitStoryClosureState,
@@ -1163,6 +1163,36 @@ function savedProofEvidenceStartBlocker(
     focusKind: 'proof',
     proofTaskIds,
     count,
+  }
+}
+
+function savedReadyWorkStartStatus(
+  summary: ProjectSummaryProjection | null | undefined,
+  requestedTaskId?: string,
+): {
+  canStart: true
+  code: 'ready_work'
+  message: string
+  actionHref: string
+  focusTaskId?: string
+  focusTaskTitle?: string
+  focusKind: 'ready_work'
+  count?: number
+} | null {
+  const nextAction = summary?.nextAction
+  if (!nextAction || nextAction.code !== 'ready_work') return null
+  if (requestedTaskId && nextAction.focusTaskId && nextAction.focusTaskId !== requestedTaskId) return null
+  return {
+    canStart: true,
+    code: 'ready_work',
+    message: nextAction.message,
+    actionHref: nextAction.focusTaskId
+      ? `/work?task=${encodeURIComponent(nextAction.focusTaskId)}`
+      : '/work',
+    ...(nextAction.focusTaskId ? { focusTaskId: nextAction.focusTaskId } : {}),
+    ...(nextAction.focusTaskTitle ? { focusTaskTitle: nextAction.focusTaskTitle } : {}),
+    focusKind: 'ready_work',
+    ...(typeof nextAction.count === 'number' ? { count: nextAction.count } : {}),
   }
 }
 
@@ -2518,7 +2548,20 @@ function summarizeProjectFromProjection(
   // from the compact recent-work rows loses approved brief/spec state and can
   // turn active spec shaping into a false "Needs brief" instruction.
   const actionModel = run && projection.actionModel
-    ? projection.actionModel
+    ? resolveProjectActionModel({
+      stored: projection.actionModel,
+      startReadiness,
+      ownerInput: projection.ownerInput && projection.ownerInput.openCount > 0
+        ? {
+            active: true,
+            label: 'Answer in Thread',
+            detail: projection.ownerInput.next?.prompt ?? 'Open the thread to answer the current question.',
+            href: projection.ownerInput.next?.href ?? '/thread',
+          }
+        : null,
+      runStatus: run.status,
+      runMode: run.mode,
+    })
     : run
     ? buildProjectActionModel({
       startReadiness,
@@ -2551,37 +2594,20 @@ function summarizeProjectFromProjection(
         status: task.status,
       })),
     })
-    : projection.actionModel ?? buildProjectActionModel({
-    startReadiness,
-    ownerInput: projection.ownerInput && projection.ownerInput.openCount > 0
-      ? {
-          active: true,
-          label: 'Answer in Thread',
-          detail: projection.ownerInput.next?.prompt ?? 'Open the thread to answer the current question.',
-          href: projection.ownerInput.next?.href ?? '/thread',
-        }
-      : null,
-    // A live supervisor is the freshest operational observation. After a
-    // restart, the compact execution row is the only durable status; falling
-    // back to "stopped" would make the action model disagree with the saved
-    // project state until another run event arrived.
-    runStatus: projection.execution?.status ?? 'stopped',
-    runMode: projection.execution?.mode,
-    tasks: [
-      ...(projection.nextAction.focusTaskId
-        ? [{
-            taskId: projection.nextAction.focusTaskId,
-            title: projection.nextAction.focusTaskTitle ?? projection.nextAction.focusTaskId,
-            status: projection.nextAction.code === 'ready_work' ? 'ready' : 'blocked',
-          }]
-        : []),
-      ...projection.recentWork,
-    ].filter((task, index, all) => all.findIndex(candidate => candidate.taskId === task.taskId) === index).map(task => ({
-      id: task.taskId,
-      title: task.title,
-      status: task.status,
-    })),
-  })
+    : resolveProjectActionModel({
+      stored: projection.actionModel,
+      startReadiness,
+      ownerInput: projection.ownerInput && projection.ownerInput.openCount > 0
+        ? {
+            active: true,
+            label: 'Answer in Thread',
+            detail: projection.ownerInput.next?.prompt ?? 'Open the thread to answer the current question.',
+            href: projection.ownerInput.next?.href ?? '/thread',
+          }
+        : null,
+      runStatus: projection.execution?.status ?? 'stopped',
+      runMode: projection.execution?.mode,
+    })
   return {
     ...shell,
     projectStatusLoading: false,
@@ -9158,7 +9184,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (terminal?.code === 'proof_evidence_missing') {
       return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
-    const savedProofBlocker = savedProofEvidenceStartBlocker(input.summary, input.requestedTaskId)
+    // The saved proof count is a compact fallback only. When the caller
+    // supplied the current queue, effective tasks, and selected scope, those
+    // facts decide whether work remains runnable; otherwise a completed
+    // release's proof debt could incorrectly hide a ready task.
+    const savedProofBlocker = hasCapturedCurrentState
+      ? null
+      : savedProofEvidenceStartBlocker(input.summary, input.requestedTaskId)
     if (savedProofBlocker) return attachExecutionScope(savedProofBlocker)
 
     if (input.allowTaskReadinessBlocker !== false) {
@@ -9305,7 +9337,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }> {
     const activeRun = supervisor.get(projectId)
     if (activeRun?.status === 'running' || activeRun?.status === 'stopping') return { canStart: true }
-    return await startStatusForPausedLiveWork(projectPath, requestedTaskId, options) ?? { canStart: true }
+    return await startStatusForPausedLiveWork(projectPath, requestedTaskId, options) ??
+      savedReadyWorkStartStatus(options.summary, requestedTaskId) ??
+      { canStart: true }
   }
 
   function startReadinessForTerminalState(terminal: Awaited<ReturnType<typeof terminalStartState>> & {}): {

@@ -497,6 +497,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     href: readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
     tone: readiness.code === 'required_migration_pending' ? 'danger' : readiness.code === 'ready_work' ? 'accent' : 'warn',
     code: readiness.code,
+    ...(readiness.focusTaskId ? { taskId: readiness.focusTaskId } : {}),
   }
 }
 
@@ -631,5 +632,51 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     },
     ownerInput,
     setup,
+  }
+}
+
+/**
+ * A persisted action is a cache of presentation, not an independent decision
+ * source. When the shared readiness result names a current action, rebuild
+ * that action from the readiness contract so compact task points cannot
+ * reinterpret it with missing detail.
+ */
+export function resolveProjectActionModel(input: {
+  stored?: ProjectActionModel | null
+  startReadiness?: ProjectActionStartReadiness | null
+  ownerInput?: ProjectOwnerInputModel | null
+  runStatus?: string | null
+  runMode?: string | null
+}): ProjectActionModel {
+  const readiness = input.startReadiness ?? null
+  const hasResolvedReadiness = Boolean(
+    readiness?.code &&
+    (readiness.canStart || readiness.code !== 'all_terminal'),
+  )
+  if (!hasResolvedReadiness) {
+    return input.stored ?? buildProjectActionModel({
+      startReadiness: readiness,
+      ownerInput: input.ownerInput,
+      runStatus: input.runStatus,
+      runMode: input.runMode,
+      tasks: [],
+    })
+  }
+  const resolved = buildProjectActionModel({
+    startReadiness: readiness,
+    ownerInput: input.ownerInput,
+    runStatus: input.runStatus,
+    runMode: input.runMode,
+    tasks: [],
+  })
+  return {
+    ...(input.stored ?? resolved),
+    primaryAction: resolved.primaryAction,
+    runControl: resolved.runControl,
+    ownerInput: resolved.ownerInput,
+    setup: resolved.setup,
+    secondaryActions: resolved.secondaryActions.length > 0
+      ? resolved.secondaryActions
+      : input.stored?.secondaryActions ?? [],
   }
 }

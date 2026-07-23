@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyRunStatusToStartReadiness, buildProjectActionModel } from '../project-action-model.js'
+import { applyRunStatusToStartReadiness, buildProjectActionModel, resolveProjectActionModel } from '../project-action-model.js'
 
 describe('applyRunStatusToStartReadiness', () => {
   it('does not leave a saved paused action visible while a run is active', () => {
@@ -40,6 +40,44 @@ describe('buildProjectActionModel', () => {
       buttonLabel: 'Open Work',
       href: '/work?task=task-synopsis',
       tone: 'accent',
+    })
+    expect(model.primaryAction?.detail).toBeUndefined()
+  })
+
+  it('resolves a stale persisted task action from shared ready-work state', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: {
+          source: 'task',
+          label: 'Build synopsis expansion',
+          detail: 'Needs brief: finish the handoff before a worker can start.',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-synopsis',
+          tone: 'warn',
+          taskId: 'task-synopsis',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        message: '"Build synopsis expansion" is ready to run.',
+        focusTaskId: 'task-synopsis',
+        focusTaskTitle: 'Build synopsis expansion',
+        focusKind: 'ready_work',
+      },
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Build synopsis expansion',
+      buttonLabel: 'Open Work',
+      href: '/work?task=task-synopsis',
+      tone: 'accent',
+      taskId: 'task-synopsis',
     })
     expect(model.primaryAction?.detail).toBeUndefined()
   })
