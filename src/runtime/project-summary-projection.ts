@@ -7,6 +7,7 @@ import {
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseProjectionState,
   readProjectStateDatabaseQueue,
+  readProjectStateDatabaseReleaseMembershipState,
   readProjectStateDatabaseSourceCapabilities,
   readProjectStateDatabaseSummary,
   readProjectStateDatabaseRevisionFromTasksPath,
@@ -83,6 +84,12 @@ export interface ProjectSummaryProjection {
   projectId: string | null
   generatedAt: string
   freshness: 'current' | 'stale' | 'error'
+  /**
+   * The normalized release-membership relation revision used to build this
+   * summary. The SQLite read boundary compares it with the current relation
+   * before exposing release-derived state as current.
+   */
+  releaseMembershipRevision?: number
   source: {
     taskQueueLastUpdated: string | null
     taskQueueMtimeMs: number | null
@@ -190,6 +197,16 @@ export interface ProjectSummaryProjection {
   }>
   actionModel?: ProjectActionModel | null
   error?: string
+}
+
+function withPersistedReleaseMembershipRevision(
+  tasksPath: string,
+  projection: ProjectSummaryProjection,
+): ProjectSummaryProjection {
+  const membershipState = readProjectStateDatabaseReleaseMembershipState(tasksPath)
+  return membershipState
+    ? { ...projection, releaseMembershipRevision: membershipState.membershipRevision }
+    : projection
 }
 
 /**
@@ -1106,6 +1123,13 @@ export function buildProjectSummaryProjectionFromIndexedState(
   })
   if (!current?.summary) return null
   const base = current.summary.payload
+  const baseSource = base.source && typeof base.source === 'object' && !Array.isArray(base.source)
+    ? base.source
+    : {
+        taskQueueLastUpdated: null,
+        taskQueueMtimeMs: null,
+        workspaceGoalsMtimeMs: null,
+      }
   const sourceCapabilityCatalog = summarizeSourceCapabilityCatalog(readProjectStateDatabaseSourceCapabilities(tasksPath))
   const generatedAt = input.generatedAt ?? new Date().toISOString()
   // Indexed refreshes cannot rebuild the rich orientation tree, but that is
@@ -1311,8 +1335,8 @@ export function buildProjectSummaryProjectionFromIndexedState(
     generatedAt,
     freshness: 'current',
     source: {
-      ...base.source,
-      taskQueueLastUpdated: input.sourceQueueLastUpdated ?? base.source.taskQueueLastUpdated,
+      ...baseSource,
+      taskQueueLastUpdated: input.sourceQueueLastUpdated ?? baseSource.taskQueueLastUpdated,
     },
     counts: {
       ...rawCounts,
@@ -1633,7 +1657,7 @@ export function writeProjectSummaryProjectionFromIndexedState(
       : {}),
     ...(expectedProjectRevision !== null ? { expectedProjectRevision } : {}),
   })
-  return projection
+  return withPersistedReleaseMembershipRevision(tasksPath, projection)
 }
 
 export function buildProjectSummaryProjectionError(input: {
@@ -1744,29 +1768,59 @@ export function writeProjectSummaryProjection(
   const currentStateAuthority = input.currentStateAuthority ?? (
     readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) === 'database' ? 'database' : 'legacy'
   )
+  const canonicalQueueRecord = currentStateAuthority === 'database'
+    ? readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+    : null
+  if (currentStateAuthority === 'database' && canonicalQueueRecord === null) {
+    throw new Error('Cannot refresh a promoted project summary without the canonical queue definition.')
+  }
+  const canonicalQueue = canonicalQueueRecord === null
+    ? null
+    : normalizeLegacyTaskQueueForMigration(canonicalQueueRecord)
+  const capturedProjectRevision = currentStateAuthority === 'database'
+    ? readProjectStateDatabaseRevisionFromTasksPath(tasksPath)
+    : null
   const projection = buildProjectSummaryProjection({
     ...input,
+    ...(canonicalQueue !== null ? { queue: canonicalQueue as TaskQueueModel } : {}),
     currentStateAuthority,
     taskQueueMtimeMs: input.taskQueueMtimeMs ?? taskQueueMtimeMs(tasksPath),
     workspaceGoalsMtimeMs: input.workspaceGoalsMtimeMs ?? workspaceGoalsMtimeMs(tasksPath),
     approvedPlan: input.approvedPlan ?? readApprovedPlan(tasksPath),
     sourceCapabilities: input.sourceCapabilities ?? readProjectStateDatabaseSourceCapabilities(tasksPath),
   })
-  writeProjectStateDatabaseSnapshot(tasksPath, {
-    queue: input.queue,
-    summary: projection,
-    ...(input.execution ? { execution: input.execution } : {}),
-    ...(input.runtime ? { runtime: input.runtime } : {}),
-    ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
-    scopeRows: projectSummaryScopeRowsForQueue(input.queue, projection.approvedPlan, input.projectionTasks, {
-      currentStateAuthority,
-    }),
-    ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
-      ? { expectedQueueRevision: input.expectedQueueRevision }
-      : {}),
-    ...(input.compatibilityExport ? { compatibilityExport: input.compatibilityExport } : {}),
+  const projectedQueue = canonicalQueue !== null
+    ? canonicalQueue as unknown as TaskQueueModel
+    : input.queue
+  const scopeRows = projectSummaryScopeRowsForQueue(projectedQueue, projection.approvedPlan, input.projectionTasks, {
+    currentStateAuthority,
   })
-  return projection
+  if (currentStateAuthority === 'database') {
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: projection,
+      scopeRows,
+      ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
+        ? { expectedQueueRevision: input.expectedQueueRevision }
+        : {}),
+      ...(capturedProjectRevision !== null
+        ? { expectedProjectRevision: capturedProjectRevision }
+        : {}),
+    })
+  } else {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: projectedQueue,
+      summary: projection,
+      ...(input.execution ? { execution: input.execution } : {}),
+      ...(input.runtime ? { runtime: input.runtime } : {}),
+      ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
+      scopeRows,
+      ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
+        ? { expectedQueueRevision: input.expectedQueueRevision }
+        : {}),
+      ...(input.compatibilityExport ? { compatibilityExport: input.compatibilityExport } : {}),
+    })
+  }
+  return withPersistedReleaseMembershipRevision(tasksPath, projection)
 }
 
 export interface PreparedProjectSummaryProjection {
@@ -1901,7 +1955,11 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
     expectedProjectRevision?: number | null
     /** Migration-only request to retain the retired queue export. */
     compatibilityExport?: 'full' | 'compact'
-    /** Refresh a promoted read model without rewriting queue definitions. */
+    /**
+     * Explicit structural queue commit. Promoted projects default to a
+     * summary-only refresh so an incidental projection cannot rewrite a
+     * release relation.
+     */
     queueCommit?: boolean
     /** Migration-only seed for importing the historical summary export. */
     existingSummary?: ProjectSummaryProjection | null
@@ -1920,10 +1978,22 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
   // token belongs to the read that began that work, not to a later read after
   // the projection has already been built.
   const capturedProjectRevision = input.expectedProjectRevision ?? readProjectStateDatabaseRevisionFromTasksPath(tasksPath)
-  const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, input)
-  const { projection, detailQueue, scopeRows } = prepared
   const databaseAuthority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) === 'database'
-  if (input.queueCommit === false && databaseAuthority) {
+  const canonicalQueueRecord = databaseAuthority && input.queueCommit !== true
+    ? readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+    : null
+  if (databaseAuthority && input.queueCommit !== true && canonicalQueueRecord === null) {
+    throw new Error('Cannot refresh a promoted project summary without the canonical queue definition.')
+  }
+  const canonicalQueue = canonicalQueueRecord === null
+    ? null
+    : normalizeLegacyTaskQueueForMigration(canonicalQueueRecord)
+  const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+    ...input,
+    ...(canonicalQueue !== null ? { queue: canonicalQueue } : {}),
+  })
+  const { projection, detailQueue, scopeRows } = prepared
+  if (databaseAuthority && input.queueCommit !== true) {
     const expectedProjectRevision = capturedProjectRevision
     const taskStatusRows = input.projectionTasks
       ? input.projectionTasks.map(task => ({
@@ -1962,7 +2032,7 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
         : {}),
     })
   }
-  return projection
+  return withPersistedReleaseMembershipRevision(tasksPath, projection)
 }
 
 /**
@@ -2179,24 +2249,42 @@ export function backfillProjectSummaryProjection(
   let raw: unknown
   const historicalSummary = readProjectSummaryProjectionForMigration(tasksPath)
   const databaseAuthority = readProjectStateDatabaseAuthorityFromTasksPath(tasksPath) === 'database'
-  try {
-    raw = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
-    if (raw === null && databaseAuthority) {
+  if (databaseAuthority) {
+    const canonicalQueue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+    if (!canonicalQueue) {
       return buildProjectSummaryProjectionError({
         projectId: input.projectId,
         error: new Error('The authoritative project detail store is unavailable; no queue was rebuilt.'),
         generatedAt: input.now,
       })
     }
-    raw ??= JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
-  } catch (error) {
-    if (databaseAuthority) {
-      return buildProjectSummaryProjectionError({
+    const normalizedCanonicalQueue = normalizeLegacyTaskQueueForMigration(canonicalQueue, input.now ?? new Date().toISOString())
+    const parsedCanonicalQueue = TaskQueue.safeParse(normalizedCanonicalQueue)
+    if (parsedCanonicalQueue.success) {
+      return writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
         projectId: input.projectId,
-        error,
+        projectRoot: input.projectRoot,
+        queue: parsedCanonicalQueue.data,
         generatedAt: input.now,
+        queueCommit: false,
+        existingSummary: historicalSummary,
       })
     }
+    const indexed = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: input.projectId,
+      generatedAt: input.now,
+    })
+    if (indexed) return indexed
+    return buildProjectSummaryProjectionError({
+      projectId: input.projectId,
+      error: new Error('The authoritative project index is unavailable; no queue was rebuilt.'),
+      generatedAt: input.now,
+    })
+  }
+  try {
+    raw = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+    raw ??= JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
+  } catch (error) {
     return writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
       projectId: input.projectId,
       projectRoot: input.projectRoot,

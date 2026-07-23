@@ -2254,6 +2254,7 @@ export function writeProjectTaskQueueWithSummary(
   // their own stores and are loaded by detail views.
   writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
     queue: persistedQueue,
+    queueCommit: true,
     projectId: options.projectId,
     projectRoot: options.projectRoot,
     ...(options.expectedQueueRevision !== undefined && options.expectedQueueRevision !== null

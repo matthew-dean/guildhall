@@ -412,6 +412,10 @@ describe('applyProjectMigrations', () => {
       { release_id: 'release-one', task_id: 'task-current', disposition: 'included' },
       { release_id: 'release-one', task_id: 'task-later', disposition: 'deferred' },
     ])
+    expect(migrated.prepare('SELECT membership_revision, project_revision FROM release_membership_state WHERE id = 1').get()).toMatchObject({
+      membership_revision: expect.any(Number),
+      project_revision: expect.any(Number),
+    })
     migrated.close()
   })
 

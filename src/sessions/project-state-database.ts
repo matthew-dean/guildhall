@@ -70,7 +70,7 @@ export const PROJECT_STATE_DATABASE_FILE = 'project-state.db'
  * persistence. Existing prose/source claims are not backfilled because they
  * cannot author stable capability identities.
  */
-export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 34
+export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 35
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_TURNS = 2_000
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_BYTES = 512 * 1024
 export const PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN = 'diagnostics'
@@ -1005,12 +1005,34 @@ function summaryStoragePartsForDatabase(database: DatabaseSync, summary: JsonRec
   return parts
 }
 
+/**
+ * A compact summary may report release totals only for the membership relation
+ * it actually observed. Stamp that relation at the storage boundary, after
+ * any normalized membership mutation in the surrounding transaction.
+ */
+function compactSummaryWithReleaseMembershipRevision(
+  database: DatabaseSync,
+  compact: JsonRecord,
+): JsonRecord {
+  const membershipState = readReleaseMembershipStateFromDatabase(database)
+  if (!membershipState) {
+    const { releaseMembershipRevision: _releaseMembershipRevision, ...withoutMembershipRevision } = compact
+    return withoutMembershipRevision
+  }
+  return {
+    ...compact,
+    releaseMembershipRevision: membershipState.membershipRevision,
+  }
+}
+
 function stripStoredOwnerInputSummary(database: DatabaseSync): void {
   const row = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as JsonRecord | undefined
   if (!row) return
   const summary = parseJson<JsonRecord>(row.payload_json, {})
   const { compact } = summaryStoragePartsForDatabase(database, summary)
-  database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(json(compact))
+  database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(
+    json(compactSummaryWithReleaseMembershipRevision(database, compact)),
+  )
 }
 
 /**
@@ -1247,12 +1269,11 @@ function releaseDefinitionsWithTaskMembership(
   return [...byId.values()]
 }
 
-function syncReleaseMembershipFromDefinitions(
+function syncNormalizedReleaseMembership(
   database: DatabaseSync,
-  releases: readonly JsonRecord[],
+  desired: readonly ProjectStateDatabaseReleaseMembership[],
 ): boolean {
   if (!tableExists(database, 'release_membership')) return false
-  const desired = releaseMembershipFromDefinitions(releases)
   const current = database.prepare(`
     SELECT release_id, task_id, disposition
     FROM release_membership
@@ -1263,7 +1284,13 @@ function syncReleaseMembershipFromDefinitions(
     .map(row => `${row.releaseId}\0${row.taskId}\0${row.disposition}`)
     .sort()
   const changed = currentKeys.length !== desiredKeys.length || currentKeys.some((key, index) => key !== desiredKeys[index])
-  if (!changed) return false
+  if (!changed) {
+    // An intentionally empty relation is still a fact. Seed its first
+    // watermark so optional-release projects never have to pretend that
+    // "no release membership" means "no membership authority".
+    if (!readReleaseMembershipStateFromDatabase(database)) markReleaseMembershipStatePending(database)
+    return false
+  }
   database.prepare('DELETE FROM release_membership').run()
   const insert = database.prepare(`
     INSERT INTO release_membership (release_id, task_id, disposition)
@@ -1274,6 +1301,13 @@ function syncReleaseMembershipFromDefinitions(
   }
   markReleaseMembershipStatePending(database)
   return true
+}
+
+function syncReleaseMembershipFromDefinitions(
+  database: DatabaseSync,
+  releases: readonly JsonRecord[],
+): boolean {
+  return syncNormalizedReleaseMembership(database, releaseMembershipFromDefinitions(releases))
 }
 
 function markReleaseMembershipStatePending(database: DatabaseSync): void {
@@ -3477,7 +3511,14 @@ function writeSnapshotToDatabase(
         source_queue_last_updated = excluded.source_queue_last_updated,
         source_queue_mtime_ms = excluded.source_queue_mtime_ms,
         source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
-    `).run(json(compactSummary), generatedAt, currentRevision(database) + 1, lastUpdated, mtimeMs, goalsMtimeMs)
+    `).run(
+      json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
+      generatedAt,
+      currentRevision(database) + 1,
+      lastUpdated,
+      mtimeMs,
+      goalsMtimeMs,
+    )
 
     const revision = commitAuthoritativeMutation(database, {
       updatedAt: generatedAt,
@@ -3899,14 +3940,14 @@ export function readProjectStateDatabaseReleaseMembershipStatus(
   if (!existsSync(databasePath)) return missing
   const database = openDatabase(databasePath, { readOnly: true })
   try {
-    if (!tableExists(database, 'release_membership')) return missing
+    if (!tableExists(database, 'release_membership') || !tableExists(database, 'release_membership_state')) return missing
     const existing = database.prepare('SELECT release_id, task_id, disposition FROM release_membership').all() as JsonRecord[]
     // A populated normalized relation is already authoritative. Empty is
     // valid only when the current store has no release membership to import.
     const desired = desiredReleaseMembershipFromDatabase(database)
     const existingKey = new Set(existing.map(row => `${row.release_id}\0${row.task_id}\0${row.disposition}`))
     const desiredKey = new Set(desired.map(row => `${row.releaseId}\0${row.taskId}\0${row.disposition}`))
-    const complete = existingKey.size > 0
+    const relationComplete = existingKey.size > 0
       ? desiredKey.size === 0 || (
           existingKey.size === desiredKey.size &&
           [...existingKey].every(key => desiredKey.has(key))
@@ -3914,7 +3955,7 @@ export function readProjectStateDatabaseReleaseMembershipStatus(
       : desiredKey.size === 0
     return {
       schemaPresent: true,
-      complete,
+      complete: relationComplete && readReleaseMembershipStateFromDatabase(database)?.projectRevision !== null,
       membershipCount: existing.length,
       expectedCount: desired.length,
     }
@@ -4045,21 +4086,17 @@ export function migrateProjectStateDatabaseReleaseMembership(
     // migration may import old mirrors into an empty relation, but it must
     // never overwrite a valid relation with intentionally empty compatibility
     // columns from a newer write.
-    if (existing.length > 0) {
-      result.membershipCount = existing.length
-      return
-    }
-    const desired = desiredReleaseMembershipFromDatabase(database)
-    const existingKey = new Set(existing.map(row => `${row.release_id}\0${row.task_id}\0${row.disposition}`))
-    const desiredKey = new Set(desired.map(row => `${row.releaseId}\0${row.taskId}\0${row.disposition}`))
+    const desired = existing.length > 0
+      ? existing.map(row => ({
+          releaseId: String(row.release_id),
+          taskId: String(row.task_id),
+          disposition: String(row.disposition) as ProjectStateDatabaseReleaseMembership['disposition'],
+        }))
+      : desiredReleaseMembershipFromDatabase(database)
     result.membershipCount = desired.length
-    if (existingKey.size === desiredKey.size && [...existingKey].every(key => desiredKey.has(key))) return
-    database.prepare('DELETE FROM release_membership').run()
-    const insert = database.prepare(`
-      INSERT INTO release_membership (release_id, task_id, disposition)
-      VALUES (?, ?, ?)
-    `)
-    for (const row of desired) insert.run(row.releaseId, row.taskId, row.disposition)
+    const relationChanged = syncNormalizedReleaseMembership(database, desired)
+    const state = readReleaseMembershipStateFromDatabase(database)
+    if (!relationChanged && state?.projectRevision !== null) return
     const updatedAt = new Date().toISOString()
     result.revision = commitAuthoritativeMutation(database, {
       updatedAt,
@@ -4067,6 +4104,7 @@ export function migrateProjectStateDatabaseReleaseMembership(
       projectionDomains: ['summary'],
       summaryFreshness: 'stale',
     })
+    finalizeReleaseMembershipState(database, result.revision, updatedAt)
     result.migrated = true
   })
   return result
@@ -4368,7 +4406,7 @@ export function writeProjectStateDatabaseTaskMutation(
           source_queue_mtime_ms = excluded.source_queue_mtime_ms,
           source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
       `).run(
-        json(compactSummary),
+        json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
         generatedAt,
         revision,
         stringValue(source?.taskQueueLastUpdated) ?? stringValue(mutation.summary.sourceQueueLastUpdated) ?? lastUpdated,
@@ -4605,7 +4643,7 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
           source_queue_mtime_ms = excluded.source_queue_mtime_ms,
           source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
       `).run(
-        json(compactSummary),
+        json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
         generatedAt,
         revision,
         stringValue(source?.taskQueueLastUpdated) ?? stringValue(mutation.summary.sourceQueueLastUpdated) ?? lastUpdated,
@@ -4914,7 +4952,7 @@ export function writeProjectStateDatabaseTaskBatchMutation(
           source_queue_mtime_ms = excluded.source_queue_mtime_ms,
           source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
       `).run(
-        json(compactSummary),
+        json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
         generatedAt,
         revision,
         stringValue(source?.taskQueueLastUpdated) ?? stringValue(mutation.summary.sourceQueueLastUpdated) ?? lastUpdated,
@@ -5010,7 +5048,7 @@ export function writeProjectStateDatabaseSummarySnapshot(
           source_queue_mtime_ms = excluded.source_queue_mtime_ms,
           source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
       `).run(
-        json(compactSummary),
+        json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
         stringValue(summary.freshness) ?? 'current',
         generatedAt,
         revision,
@@ -5266,6 +5304,11 @@ function readProjectStateDatabaseSummaryFromDatabase<T = unknown>(
     database,
     parseJson<JsonRecord>(row.payload_json, {}),
   )
+  const membershipState = readReleaseMembershipStateFromDatabase(database)
+  const summaryMembershipRevision = Number(storedSummary.releaseMembershipRevision)
+  const membershipMatches = membershipState !== null &&
+    Number.isInteger(summaryMembershipRevision) &&
+    summaryMembershipRevision === membershipState.membershipRevision
   if (options.includeApprovedPlan !== false && storedSummary.approvedPlan === undefined && tableExists(database, 'project_plan')) {
     storedSummary.approvedPlan = readProjectPlanSnapshot(database)
   }
@@ -5279,7 +5322,9 @@ function readProjectStateDatabaseSummaryFromDatabase<T = unknown>(
   }
   return {
     payload: storedSummary as T,
-    freshness: row.freshness === 'current' && !sourceChanged && summaryRevision === databaseRevision ? 'current' : 'stale',
+    freshness: row.freshness === 'current' && !sourceChanged && summaryRevision === databaseRevision && membershipMatches
+      ? 'current'
+      : 'stale',
     generatedAt: String(row.generated_at ?? ''),
     sourceQueueLastUpdated: typeof row.source_queue_last_updated === 'string' && row.source_queue_last_updated.length > 0
       ? row.source_queue_last_updated
@@ -5967,7 +6012,12 @@ export function updateProjectStateDatabaseSummaryAndCurrentState(
         summaryFreshness: 'preserve',
       })
       database.prepare('UPDATE project_summary SET payload_json = ?, generated_at = ?, freshness = ?, revision = ? WHERE id = 1')
-        .run(json(compactSummary), updatedAt, stringValue(next.freshness) ?? 'current', revision)
+        .run(
+          json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
+          updatedAt,
+          stringValue(next.freshness) ?? 'current',
+          revision,
+        )
       syncProjectPlanSnapshot(database, approvedPlan, updatedAt, revision)
       writeProjectOrientationProjection(database, orientation, updatedAt, revision, { preserveOmitted: true })
       if (result.currentState?.execution) writeCurrentExecutionRow(database, result.currentState.execution)

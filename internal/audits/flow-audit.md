@@ -53816,7 +53816,7 @@ Repair:
       normalized relation. A reader cannot prove that saved scope totals were
       derived from the same membership boundary merely by comparing broad
       project revisions.
-- Persisted schema: add one singleton `release_membership_state` row with a
+- Persisted schema (v35): add one singleton `release_membership_state` row with a
       monotonically increasing `membership_revision`, the project revision at
       which it was written, and `updated_at`. Do not add a revision column to
       every relation row and do not copy membership into summaries.
@@ -53826,6 +53826,11 @@ Repair:
       normalized relation through one helper that advances the watermark only
       when the relation actually changes. Deleting a task's membership uses
       that same helper.
+- Projection boundary: once SQLite is authoritative, summary/backfill APIs
+      read the canonical queue and perform a summary-only compare-and-swap
+      write by default. Only an explicit structural `queueCommit` may replace
+      task or release state. A projection is therefore an observer of release
+      membership, never an alternate writer for it.
 - Read ownership: the compact canonical release read exposes the current
       membership revision. A derived summary records the membership revision
       it used. Start, Overview, Release, Work, Thread, and Activity may show
@@ -53844,6 +53849,13 @@ Repair:
       tests cover mismatched watermark fail-closed behavior; API flow tests
       compare Start, Overview, Release, Work, Thread, and Activity from one
       selected Narrative Harness release snapshot.
+- Proof provided so far: focused SQLite tests prove stable revisions for a
+      no-op task edit, a revision advance for a real membership change, and a
+      stale compact summary when its stamped membership revision disagrees
+      with the normalized relation. A promoted-summary regression also proves
+      that an invented incoming queue cannot rewrite canonical release
+      membership. Cross-surface replay remains open until the compact release
+      reader consumes this watermark.
 
 ### Schema Migration Decision
 

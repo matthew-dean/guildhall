@@ -1254,6 +1254,40 @@ describe('project-state database', () => {
     })
   })
 
+  it('fails closed when a stored summary and release-membership watermark disagree', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          nodeIds: ['work:task-current'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{ id: 'task-current', title: 'Current', status: 'ready', releaseIds: ['release-current'] }],
+      },
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+    })
+
+    expect(readProjectStateDatabaseSummary(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: { releaseMembershipRevision: 1 },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    database.prepare(`
+      UPDATE release_membership_state
+      SET membership_revision = membership_revision + 1,
+          project_revision = NULL,
+          updated_at = NULL
+      WHERE id = 1
+    `).run()
+    database.close()
+
+    expect(readProjectStateDatabaseSummary(tasksPath)).toMatchObject({ freshness: 'stale' })
+  })
+
   it('keeps internal release-context steps out of visible release membership', () => {
     writeProjectStateDatabaseSnapshot(tasksPath, {
       queue: {

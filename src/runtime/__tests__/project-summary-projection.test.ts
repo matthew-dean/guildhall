@@ -1046,6 +1046,49 @@ describe('project-summary-projection', () => {
     expect(readProjectSummaryProjection(tasksPath)).toEqual(result)
   })
 
+  it('does not let a promoted summary refresh rewrite canonical release membership', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-membership-boundary-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const projectQueue = queue([
+      task('canonical-task', 'ready', { releaseIds: ['release-current'] }),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        nodeIds: ['work:canonical-task'],
+        deferredNodeIds: [],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, projectQueue, { projectId: 'project', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 'project',
+      queue: queue([task('invented-task', 'ready', { releaseIds: ['release-current'] })], {
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          nodeIds: ['work:invented-task'],
+          deferredNodeIds: [],
+        }],
+      }),
+    })
+
+    expect(readProjectStateDatabaseQueue(tasksPath)).toMatchObject({
+      tasks: [expect.objectContaining({ id: 'canonical-task' })],
+      releases: [expect.objectContaining({ id: 'release-current', nodeIds: ['work:canonical-task'] })],
+    })
+    expect(readProjectStateDatabaseQueue(tasksPath)?.tasks).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'invented-task' })]),
+    )
+  })
+
   it('does not resurrect a historical summary sidecar during a current read', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-read-boundary-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
