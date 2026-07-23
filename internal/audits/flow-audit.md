@@ -52988,6 +52988,13 @@ Repair:
       characters, character voices, world facts, objects, relationships, and
       open constraints) cannot be narrowed to a subset by regenerated brief
       text; coverage survives restart and is shown in Map and Release views.
+- Live failure captured: on `2026-07-23`, the selected Narrative Harness task
+      retained one high-confidence importer claim with that full chain, but a
+      fresh spec agent twice generated and then returned `characters`, `plot
+      points`, and `themes` only. The second pass received an explicit
+      Guildhall-side correction naming the full source chain. The task remains
+      unapproved in `spec_review`; this is a scope-contract failure, not an
+      owner decision or an implementation blocker.
 - Apply/revert: migrate legacy imported claims into bounded capability records
       where the source adapter has explicit units. Ambiguous prose remains
       marked `inferred` and blocks automated approval rather than being
