@@ -52088,3 +52088,30 @@ Repair:
 - Apply/revert: replace this typed lifecycle boundary only with a dedicated
       release-delivery state model; do not add a view-local exception for
       reopened work.
+
+## 2026-07-23 Briefs carry their documented scope boundary
+
+- [x] The normal brief mutation could add a job, target, and criterion but
+      could not record why the work matters now or what it explicitly excludes.
+      Approval therefore fell back to generic anti-pattern copy.
+- [x] The shared brief action now accepts typed `whyItMattersNow` and
+      `nonGoals`, retaining the legacy `antiPatterns` mirror only for existing
+      readers. A source-grounded owner/delegate can now approve a complete
+      boundary without a project-specific escape hatch.
+- [x] Approval no longer synthesizes a generic spec, criteria, or scope copy.
+      When no concrete source-backed spec exists, the task remains in shaping;
+      the coordinator must create an actual executable contract before review.
+- [x] A blueprint rerun now clears an obsolete executable contract while
+      retaining the approved product brief. This gives existing generic-seed
+      records a typed recovery path without discarding owner-approved scope.
+
+### Contract Touch Decision
+
+- Work id: `0.13.73/structured-brief-boundary`.
+- Touched contracts: task brief mutation and persisted product brief shape.
+- Existing data impact: optional fields only; legacy anti-pattern readers keep
+      receiving the mirrored values.
+- Proof required: promoted action test, typecheck, contract lint, and an
+      installed owner-delegated Narrative Harness brief update.
+- Apply/revert: remove the optional fields only with a replacement structured
+      brief endpoint; do not restore approval-time boilerplate as task data.

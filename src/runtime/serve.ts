@@ -129,7 +129,7 @@ import {
   materializeProofSetupTask,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { acceptanceCriteriaFromStructuredSpec, DesignSystem, explicitTaskStructuralIdentity, renderStructuredSpecMarkdown, StructuredSpec, summarizeDesignSystem, Task as TaskSchema, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
+import { DesignSystem, explicitTaskStructuralIdentity, summarizeDesignSystem, Task as TaskSchema, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -421,7 +421,6 @@ import {
   resolveWorkspaceProjectPathsOrDiscover,
 } from './git-story-policy.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
-import { validateSpecCompletionBoundary } from './spec-quality.js'
 import { hasUsableBlueprint } from './task-plan-recovery.js'
 import { repairCompletionProofCriteriaForProjectWithEvidence } from './stale-blocker-repair.js'
 import {
@@ -1637,104 +1636,10 @@ function projectTasksPath(projectPath: string): string {
   return getProjectSystemStatePath(projectPath, 'TASKS.json')
 }
 
-function displayTaskTitleForRecoverySpec(task: Record<string, unknown>): string {
-  const title = typeof task.title === 'string' ? task.title.trim() : ''
-  if (title) return title
-  const id = typeof task.id === 'string' ? task.id.trim() : ''
-  return id || 'this task'
-}
-
-function briefList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    : []
-}
-
 function canPromoteApprovedBriefToSpecReview(task: Record<string, unknown> | undefined): boolean {
   if (!task) return false
   if (task.status === 'exploring') return true
   return task.status === 'in_progress' && task.assignedTo == null
-}
-
-function seedSpecFromApprovedBrief(task: Record<string, unknown>, now: string): boolean {
-  const brief = task.productBrief as Record<string, unknown> | undefined
-  if (!brief || typeof brief !== 'object') return false
-  if (typeof brief.approvedAt !== 'string' || brief.approvedAt.trim().length === 0) return false
-  if (typeof task.spec === 'string' && task.spec.trim().length > 0) return false
-
-  const title = displayTaskTitleForRecoverySpec(task)
-  const description = typeof task.description === 'string' && task.description.trim().length > 0
-    ? task.description.trim()
-    : title
-  const userJob = typeof brief.userJob === 'string' && brief.userJob.trim().length > 0
-    ? brief.userJob.trim()
-    : `Complete ${title}.`
-  const whyItMattersNow = typeof brief.whyItMattersNow === 'string' && brief.whyItMattersNow.trim().length > 0
-    ? brief.whyItMattersNow.trim()
-    : 'The owner approved this brief, so Guildhall should make durable progress without asking the same intake question again.'
-  const successMetric = typeof brief.successMetric === 'string' && brief.successMetric.trim().length > 0
-    ? brief.successMetric.trim()
-    : `${title} has a reviewable spec, acceptance criteria, and proof boundary.`
-  const nonGoals = [...briefList(brief.nonGoals), ...briefList(brief.antiPatterns)]
-  const uniqueNonGoals = [...new Set(nonGoals)]
-
-  const structuredSpec = StructuredSpec.parse({
-    whatThisIs: `Complete ${title} from the approved product brief and current task evidence.`,
-    problemContext: [
-      `Approved user job: ${userJob}`,
-      `Why it matters now: ${whyItMattersNow}`,
-      `Success metric: ${successMetric}`,
-      `Existing task description: ${description}`,
-    ].join(' '),
-    goals: [
-      'Satisfy the approved user job without asking the owner to repeat answered intake.',
-      'Record which existing artifacts, docs, tasks, or implementation changes satisfy the remaining delta.',
-    ],
-    nonGoals: uniqueNonGoals.length > 0
-      ? uniqueNonGoals
-      : ['Work not implied by the approved brief or current task evidence.'],
-    proposedDesign: 'Use the project surfaces named by the approved brief and current task evidence, recording implementation and proof in their existing durable contracts.',
-    keyDecisions: ['The owner-approved brief is the current scope boundary; newly discovered product decisions remain separate work.'],
-    acceptanceCriteria: [
-      `Given the approved brief, when ${title} is completed, then the delivered work satisfies the approved user job without asking the owner to repeat answered intake.`,
-      `Given the current task evidence, when the task is reviewed, then Guildhall records which existing artifacts, docs, tasks, or implementation changes satisfy the remaining delta.`,
-      'Given the work is complete, when verification runs, then Guildhall records review or command proof sufficient to explain why the task can move to done.',
-    ],
-    verification: [
-      'Review the changed project surfaces against the approved brief and current task evidence.',
-      'Record the observed implementation or proof result against this task.',
-    ],
-    completionBoundary: {
-      productOutcome: successMetric,
-      whatGuildhallCanCompleteInCode: 'The repo-local docs, artifacts, task records, implementation, tests, or proof needed by this approved brief.',
-      externalDependencies: 'None known from the approved brief.',
-      ownerOnlySetup: 'None known after approval.',
-      verificationEnvironment: 'The current registered project and its existing proof surfaces.',
-      whatCountsAsDone: 'The remaining delta is implemented or proven already satisfied, reviewed, and backed by recorded verification.',
-      whatMustBeSplitOrBlocked: 'Only newly discovered work that cannot be resolved from the approved brief and current task evidence.',
-      splitPolicy: 'conditional',
-    },
-  })
-
-  task.structuredSpec = structuredSpec
-  task.spec = renderStructuredSpecMarkdown(structuredSpec)
-  task.acceptanceCriteria = acceptanceCriteriaFromStructuredSpec(structuredSpec)
-  const quality = validateSpecCompletionBoundary(task as unknown as Task)
-  if (!quality.ok) {
-    delete task.spec
-    task.acceptanceCriteria = []
-    return false
-  }
-  const notes = Array.isArray(task.notes) ? [...task.notes as Array<Record<string, unknown>>] : []
-  notes.push({
-    agentId: 'coordinator-recovery',
-    role: 'system',
-    content:
-      'Guildhall wrote a deterministic spec seed from the approved brief so owner-approved intake becomes reviewable work instead of another blocker.',
-    timestamp: now,
-  })
-  task.notes = notes
-  return true
 }
 
 function resolveApprovalSupersededEscalations(
@@ -15178,26 +15083,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return c.json({ error: 'no product brief drafted yet' }, 400)
         }
         if (
-          (typeof brief.whyItMattersNow !== 'string' || !brief.whyItMattersNow.trim()) &&
-          typeof brief.userJob === 'string' &&
-          brief.userJob.trim() &&
-          typeof brief.successMetric === 'string' &&
-          brief.successMetric.trim()
-        ) {
-          brief.whyItMattersNow = `This matters now because Guildhall needs "${String(task.title ?? 'this task')}" framed tightly enough to reach this outcome: ${brief.successMetric.trim()}`
-        }
-        if (
           (!Array.isArray(brief.nonGoals) || brief.nonGoals.length === 0) &&
           Array.isArray(brief.antiPatterns)
         ) {
           brief.nonGoals = brief.antiPatterns
-        }
-        if (
-          (!Array.isArray(brief.nonGoals) || brief.nonGoals.length === 0) &&
-          (!Array.isArray(brief.antiPatterns) || brief.antiPatterns.length === 0)
-        ) {
-          brief.nonGoals = [`Do not let "${String(task.title ?? 'this task')}" quietly expand beyond the approved task boundary.`]
-          brief.antiPatterns = brief.nonGoals
         }
         const nonGoals = Array.isArray(brief.nonGoals)
           ? brief.nonGoals.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
@@ -15253,13 +15142,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           !hasUnansweredQuestions
         ) {
           task.status = 'spec_review'
-        } else if (
-          canPromoteBrief &&
-          !hasConcreteSpecDraft &&
-          !hasUnansweredQuestions &&
-          seedSpecFromApprovedBrief(task, now)
-        ) {
-          task.status = 'spec_review'
+        } else if (canPromoteBrief && !hasConcreteSpecDraft && !hasUnansweredQuestions) {
+          // Brief approval authorizes the scope. It never invents a spec:
+          // source-backed shaping must create the executable contract.
+          task.status = 'exploring'
+          task.assignedTo = null
         }
         task.updatedAt = now
         const resolvedEscalationIds = resolveApprovalSupersededEscalations(
@@ -15779,12 +15666,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
           successTarget?: string
           acceptanceCriterion?: string
           userJob?: string
+          whyItMattersNow?: string
+          nonGoals?: string[]
         }
         const successTarget = (body.successTarget ?? '').trim()
         const acceptanceCriterion = (body.acceptanceCriterion ?? '').trim()
         const userJob = (body.userJob ?? '').trim()
-        if (!successTarget && !acceptanceCriterion && !userJob) {
-          return c.json({ error: 'Add a success target or an acceptance criterion.' }, 400)
+        const whyItMattersNow = (body.whyItMattersNow ?? '').trim()
+        const nonGoals = Array.isArray(body.nonGoals)
+          ? body.nonGoals.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map(value => value.trim())
+          : []
+        if (!successTarget && !acceptanceCriterion && !userJob && !whyItMattersNow && nonGoals.length === 0) {
+          return c.json({ error: 'Add a brief field or an acceptance criterion.' }, 400)
         }
         const tasksPath = projectTasksPath(project.path)
       if (!projectTaskStateExistsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
@@ -15794,6 +15687,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           const noteParts = [
             successTarget ? `Success target: ${successTarget}` : '',
             acceptanceCriterion ? `Acceptance criterion: ${acceptanceCriterion}` : '',
+            whyItMattersNow ? `Why now: ${whyItMattersNow}` : '',
+            nonGoals.length > 0 ? `Scope boundary: ${nonGoals.join(' ')}` : '',
           ].filter(Boolean)
           const promoted = writePromotedTaskDetailMutation(tasksPath, id, {
             projectId: project.id,
@@ -15812,7 +15707,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
               task.productBrief = {
                 ...currentBrief,
                 userJob: fallbackUserJob,
+                ...(whyItMattersNow ? { whyItMattersNow } : {}),
                 ...(successTarget ? { successMetric: successTarget, successCriteria: successTarget } : {}),
+                ...(nonGoals.length > 0 ? { nonGoals, antiPatterns: nonGoals } : {}),
                 authoredBy: currentBrief.authoredBy ?? 'human',
               }
               if (acceptanceCriterion) {
@@ -15870,7 +15767,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.productBrief = {
           ...currentBrief,
           userJob: fallbackUserJob,
+          ...(whyItMattersNow ? { whyItMattersNow } : {}),
           ...(successTarget ? { successMetric: successTarget, successCriteria: successTarget } : {}),
+          ...(nonGoals.length > 0 ? { nonGoals, antiPatterns: nonGoals } : {}),
           authoredBy: currentBrief.authoredBy ?? 'human',
         }
 
@@ -15893,6 +15792,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const noteParts = [
           successTarget ? `Success target: ${successTarget}` : '',
           acceptanceCriterion ? `Acceptance criterion: ${acceptanceCriterion}` : '',
+          whyItMattersNow ? `Why now: ${whyItMattersNow}` : '',
+          nonGoals.length > 0 ? `Scope boundary: ${nonGoals.join(' ')}` : '',
         ].filter(Boolean)
         notes.push({
           agentId: 'human',

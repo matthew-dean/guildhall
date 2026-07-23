@@ -1379,17 +1379,18 @@ export async function rerunTaskStage(
     task.completedAt = undefined
     task.status = 'exploring'
     task.assignedTo = null
-    // A proof recovery replaces a stale executable contract. A blueprint
-    // rerun, by contrast, refines the durable source-grounded brief already
-    // on the task; it must not erase that owner-authored boundary.
-    if (input.recoveryKind === 'proof') {
+    // A fresh spec pass replaces the old executable contract. Blueprint
+    // recovery preserves the approved scope boundary, while proof recovery
+    // clears the whole stale plan and re-establishes it from sources.
+    if (input.recoveryKind === 'proof' || input.recoveryKind === 'blueprint') {
       resetCurrentPlanForProofRecovery(task, {
         reason:
           input.recoveryReason?.trim() ||
           'The current proof plan was cleared for a fresh source-backed spec pass.',
         now,
         agentId: 'system',
-        role: 'proof-recovery',
+        role: input.recoveryKind === 'blueprint' ? 'blueprint-recovery' : 'proof-recovery',
+        ...(input.recoveryKind === 'blueprint' ? { preserveProductBrief: true } : {}),
       })
     }
     detachStaleShelvedReverseChildren(queue, task, now)

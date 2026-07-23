@@ -5078,6 +5078,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
       status: 'exploring',
       productBrief: {
         userJob: 'As a new user I want to X so Y',
+        whyItMattersNow: 'The initial flow needs an explicit value boundary.',
         successMetric: 'Time-to-first-success drops below 60s',
         antiPatterns: ['no dark patterns', 'no jargon in first 3 screens'],
         authoredBy: 'agent:spec-agent',
@@ -5140,7 +5141,9 @@ describe('POST /api/project/task/:id/approve-brief', () => {
       ],
       productBrief: {
         userJob: 'As a new user I want to X so Y',
+        whyItMattersNow: 'The concrete spec needs an owner-approved scope boundary.',
         successMetric: 'Time-to-first-success drops below 60s',
+        nonGoals: ['Do not broaden the concrete spec during approval.'],
         antiPatterns: [],
         authoredBy: 'agent:spec-agent',
         authoredAt: new Date().toISOString(),
@@ -5184,7 +5187,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     expect(q.tasks[0].productBrief.approvedBy).toBe('codex_delegated_owner')
   })
 
-  it('seeds a deterministic spec when an approved exploring brief has no concrete spec yet', async () => {
+  it('keeps an approved brief in source-backed shaping when no concrete spec exists yet', async () => {
     await seedTask('task-1', {
       status: 'exploring',
       spec: undefined,
@@ -5205,18 +5208,16 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body).toMatchObject({ ok: true, status: 'spec_review' })
+    expect(body).toMatchObject({ ok: true, status: 'exploring' })
 
     const q = await readTaskQueue()
-    expect(q.tasks[0].status).toBe('spec_review')
+    expect(q.tasks[0].status).toBe('exploring')
     expect(q.tasks[0].productBrief.approvedBy).toBe('human')
-    expect(q.tasks[0].spec).toContain('## Completion Boundary')
-    expect(q.tasks[0].spec).toContain('Approved user job')
-    expect(q.tasks[0].acceptanceCriteria).toHaveLength(3)
-    expect(q.tasks[0].notes.at(-1)?.content).toContain('deterministic spec seed from the approved brief')
+    expect(q.tasks[0].spec).toBeUndefined()
+    expect(q.tasks[0].acceptanceCriteria).toEqual([])
   })
 
-  it('repairs stale unassigned in-progress approved brief into spec_review', async () => {
+  it('returns stale unassigned in-progress approved brief to source-backed shaping', async () => {
     await seedTask('task-1', {
       status: 'in_progress',
       assignedTo: null,
@@ -5245,13 +5246,13 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body).toMatchObject({ ok: true, status: 'spec_review' })
+    expect(body).toMatchObject({ ok: true, status: 'exploring' })
 
     const q = await readTaskQueue()
-    expect(q.tasks[0].status).toBe('spec_review')
+    expect(q.tasks[0].status).toBe('exploring')
     expect(q.tasks[0].assignedTo).toBeNull()
-    expect(q.tasks[0].spec).toContain('Approved user job')
-    expect(q.tasks[0].acceptanceCriteria).toHaveLength(3)
+    expect(q.tasks[0].spec).toBeUndefined()
+    expect(q.tasks[0].acceptanceCriteria).toEqual([])
     const effective = await readEffectiveTask('task-1')
     expect(effective.runtime?.openEscalationIds).toEqual([])
   })
@@ -5296,12 +5297,12 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body).toMatchObject({ ok: true, status: 'spec_review' })
+    expect(body).toMatchObject({ ok: true, status: 'exploring' })
 
     const q = await readTaskQueue()
-    expect(q.tasks[0].status).toBe('spec_review')
-    expect(q.tasks[0].spec).toContain('Approved user job')
-    expect(q.tasks[0].acceptanceCriteria).toHaveLength(3)
+    expect(q.tasks[0].status).toBe('exploring')
+    expect(q.tasks[0].spec).toBeUndefined()
+    expect(q.tasks[0].acceptanceCriteria).toEqual([])
     expect(q.tasks[0].escalations[0].resolvedBy).toBe('system')
     expect(activeEscalations(q.tasks[0] as any)).toEqual([])
     const effective = await readEffectiveTask('task-1')
@@ -5671,11 +5672,16 @@ describe('promoted ordinary task actions', () => {
     const briefResponse = await postAction('update-brief', {
       successTarget: 'The task has a concrete proof target.',
       acceptanceCriterion: 'The proof target is recorded.',
+      whyItMattersNow: 'The release cannot run without a bounded proof target.',
+      nonGoals: ['Do not replace the source authority with generated records.'],
     })
     expect(briefResponse.status).toBe(200)
     let point = readProjectStateDatabaseTaskPointWithRevision(taskQueuePath(), 'task-1')
     expect(point?.task.definition.productBrief).toMatchObject({
       successMetric: 'The task has a concrete proof target.',
+      whyItMattersNow: 'The release cannot run without a bounded proof target.',
+      nonGoals: ['Do not replace the source authority with generated records.'],
+      antiPatterns: ['Do not replace the source authority with generated records.'],
     })
     expect(point?.task.definition.acceptanceCriteria).toEqual([
       expect.objectContaining({ description: 'The proof target is recorded.' }),
