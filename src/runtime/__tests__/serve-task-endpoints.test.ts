@@ -5514,7 +5514,11 @@ describe('POST /api/project/task/:id/set-acceptance-proof-expectation', () => {
       new Request(projectUrl('/api/project/task/task-1/set-acceptance-proof-expectation'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ criterionId: 'AC-negative', expectedExit: 'non_zero' }),
+        body: JSON.stringify({
+          criterionId: 'AC-negative',
+          expectedExit: 'non_zero',
+          approvalActor: 'codex_delegated_owner',
+        }),
       }),
     )
     const body = (await res.json()) as Record<string, any>
@@ -5538,6 +5542,13 @@ describe('POST /api/project/task/:id/set-acceptance-proof-expectation', () => {
       verificationRecords: [],
     }])
     expect(current?.task.definition.acceptanceCriteriaProofState).toBeUndefined()
+    const evidence = await readTaskEvidence(tmpDir, 'task-1')
+    expect(evidence.at(-1)?.payload).toMatchObject({
+      agentId: 'system:codex_delegated_owner',
+      role: 'codex_delegated_owner',
+      criterionId: 'AC-negative',
+      expectedExit: 'non_zero',
+    })
   })
 })
 

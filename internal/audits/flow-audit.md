@@ -52349,3 +52349,23 @@ Repair:
       still the right proof, or explicitly records that the proof changed.
 - Apply/revert: removing the optional field does not alter historical evidence;
       it would merely remove the admission check for future spec changes.
+
+## 2026-07-23 Delegated owner proof-plan actions retain their actor
+
+### Contract Touch Decision
+
+- Work id: `0.13.80/delegated-proof-plan-actions`.
+- Touched contracts: task-action request fields for `reframe-task` and
+      `set-acceptance-proof-expectation`, plus their durable audit notes.
+- Considered but not touched: approval authority, release scope, task
+      completion, proof-output parsing, and task schema.
+- Existing data impact: new requests can record `codex_delegated_owner`; old
+      requests continue to record `human`. No existing evidence is rewritten.
+- Required follow-up: replay the visible Narrative Harness proof adoption and
+      reframe through the installed application, then ensure a fresh spec
+      preserves the typed proof plan.
+- Proof required: endpoint and intake regressions, typecheck, contract lint,
+      and installed API replay.
+- Apply/revert: removing the optional request field restores the ordinary human
+      default for future requests without changing history. Do not use this
+      actor label to let Guildhall approve a spec or broaden a release.

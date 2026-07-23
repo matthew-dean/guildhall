@@ -424,6 +424,7 @@ describe('reframeTask', () => {
       memoryDir,
       taskId: result.taskId,
       reason: 'The old imported classification is stale.',
+      actor: 'codex_delegated_owner',
     })
 
     expect(reframed.success).toBe(true)
@@ -431,6 +432,13 @@ describe('reframeTask', () => {
     const reframedTask = updated.tasks.find(candidate => candidate.id === result.taskId)!
     expect(reframedTask.status).toBe('exploring')
     expect(reframedTask.taskKind).toBeUndefined()
+    expect(reframedTask.notes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        agentId: 'codex_delegated_owner',
+        role: 'codex_delegated_owner',
+        structured: expect.objectContaining({ source: 'codex_delegated_owner' }),
+      }),
+    ]))
   })
 
   it('keeps proof-specific recovery attached to a proof reframe', async () => {

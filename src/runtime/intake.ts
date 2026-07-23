@@ -908,6 +908,8 @@ export interface ReframeTaskInput {
   memoryDir: string
   taskId: string
   reason?: string | undefined
+  /** Records a delegated owner request without granting the runtime approval authority. */
+  actor?: 'human' | 'codex_delegated_owner'
   /** Explicitly marks a proof reframe; never infer this from reason prose. */
   recoveryKind?: 'proof'
 }
@@ -1050,6 +1052,7 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   const oldStatus = task.status
   const oldTitle = task.title
   const reason = input.reason?.trim()
+  const actor = input.actor === 'codex_delegated_owner' ? 'codex_delegated_owner' : 'human'
   const reframeRequest = [
     'Reframe this existing task from the current project memory and source state.',
     '',
@@ -1086,14 +1089,14 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
     })
   }
   notes.push({
-    agentId: 'human',
-    role: 'human',
+    agentId: actor,
+    role: actor,
     content: reason
       ? `Asked to reframe this task. Reason: ${reason}`
       : 'Asked to reframe this task from current project memory.',
     structured: {
       event: 'reframe_requested',
-      source: 'human',
+      source: actor,
     },
     timestamp: now,
   })
@@ -1105,7 +1108,7 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
         : {
             ...escalation,
             resolvedAt: now,
-            resolvedBy: 'human',
+            resolvedBy: actor,
             resolution: 'Superseded by a task reframe request.',
           }
     ))

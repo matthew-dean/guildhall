@@ -14563,11 +14563,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const body = await c.req.json().catch(() => ({})) as {
           reason?: string
           recoveryKind?: 'proof'
+          actor?: unknown
         }
+        const actor = body.actor === 'codex_delegated_owner'
+          ? 'codex_delegated_owner'
+          : 'human'
         const result = await reframeTask({
           memoryDir,
           taskId: id,
           ...(body.reason ? { reason: body.reason } : {}),
+          actor,
           ...(body.recoveryKind === 'proof' ? { recoveryKind: 'proof' } : {}),
         })
         if (!result.success) return c.json({ error: result.error ?? 'reframe failed' }, 400)
@@ -15544,6 +15549,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           criterionId?: string
           expectedExit?: string
           expectedOutputIncludes?: unknown
+          approvalActor?: unknown
         }
         const criterionId = typeof body.criterionId === 'string' ? body.criterionId.trim() : ''
         const expectedExit = body.expectedExit === 'zero' || body.expectedExit === 'non_zero'
@@ -15554,6 +15560,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
             .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
             .map(value => value.trim())
           : undefined
+        const approvalActor = body.approvalActor === 'codex_delegated_owner'
+          ? 'codex_delegated_owner'
+          : 'human'
         if (!criterionId) return c.json({ error: 'criterionId required' }, 400)
         if (!expectedExit) return c.json({ error: 'expectedExit must be zero or non_zero' }, 400)
 
@@ -15624,8 +15633,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
               action: 'set-acceptance-proof-expectation',
               now,
               note: {
-                agentId: 'system:human',
-                role: 'human',
+                agentId: `system:${approvalActor}`,
+                role: approvalActor,
                 content: `Recorded expected ${expectedExit} exit for acceptance criterion ${criterionId}. Existing proof must be re-run against the updated contract.`,
                 timestamp: now,
                 criterionId,
@@ -15655,8 +15664,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           task.notes = [
             ...(Array.isArray(task.notes) ? task.notes : []),
             {
-              agentId: 'system:human',
-              role: 'human',
+              agentId: `system:${approvalActor}`,
+              role: approvalActor,
               content: `Recorded expected ${expectedExit} exit for acceptance criterion ${criterionId}. Existing proof must be re-run against the updated contract.`,
               timestamp: now,
               criterionId,
