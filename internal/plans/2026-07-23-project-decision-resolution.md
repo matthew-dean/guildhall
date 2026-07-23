@@ -109,9 +109,27 @@ Authority is field-specific. There is deliberately no global rule such as
 | Charter, audience, intent | owner-authored/confirmed field; otherwise explicitly `inferred` | infer with source refs, never call it confirmed |
 | Primary action | derived only from resolved execution, release, and owner-input facts | no direct claim allowed |
 
-The policy registry also defines freshness windows and whether an observation
-is invalidated by a lifecycle or project-revision change. A terminal proof
-claim from an old lifecycle, for example, cannot satisfy a reopened task.
+The policy registry owns allowed authorities, value semantics, and the required
+reconciliation action. Project-revision checks are enforced now. Lifecycle
+freshness is a required follow-up before proof or review claims can be used to
+settle a reopened task; it is not yet safe to imply that a timestamp alone
+settles that question.
+
+### Registered Operational Fields
+
+The resolver has a closed registry for the facts Guildhall currently projects
+across surfaces: selected release and scope, charter confirmation, release
+blocker task IDs, task lifecycle/hierarchy/dependencies/capability bindings,
+review criterion and evidence dispositions, proof status, runtime status, and
+repository landing status. A route or agent cannot add a new field ad hoc.
+
+Each field declares its permitted source classes and recovery action. For
+example, runtime disagreement means refresh runtime evidence; proof evidence
+disagreement means rerun verification; a disagreement about canonical task
+structure means inspect the task boundary. Ordinary task sizing and
+decomposition have no owner-approval path: an agent may propose or apply a
+validated canonical mutation through the task boundary. Owner selection is
+reserved for actual project-scope choices such as release and charter intent.
 
 ## Deterministic Reconciliation
 
@@ -196,6 +214,11 @@ persisted `nextAction` and `actionModel` as independent decision sources.
 5. Remove `nextAction` and `actionModel` from persisted summary authority after
    every consumer uses `ProjectDecisionProjection`. Bump the summary schema and
    rebuild all derived projections; do not preserve dual-reader behavior.
+6. Extend the normalized review/proof records with stable criterion, evidence,
+   lifecycle, and verification-run IDs. The claim resolver remains a
+   non-persistent reconciliation boundary; reviewer prose stays audit material
+   and never becomes a second state store. Once lifecycle freshness is
+   available, reject completion/proof claims that predate a task reopen.
 
 ## Verification
 

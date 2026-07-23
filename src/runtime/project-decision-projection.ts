@@ -35,26 +35,122 @@ export interface ProjectStateClaimPolicy {
 }
 
 /**
+ * A fact is operational only when its identity is declared here. These are
+ * deliberately field names rather than an open-ended agent vocabulary: an
+ * agent can report a typed observation, but cannot invent a new kind of
+ * project truth by naming it persuasively.
+ */
+export type ProjectStateClaimField =
+  | 'project.selectedReleaseId'
+  | 'project.scopeSelection'
+  | 'project.charterConfirmation'
+  | 'release.blockerTaskIds'
+  | 'task.lifecycleStatus'
+  | 'task.hierarchy'
+  | 'task.dependencies'
+  | 'task.capabilityBindings'
+  | 'task.reviewCriterionDisposition'
+  | 'task.reviewEvidenceDisposition'
+  | 'proof.status'
+  | 'runtime.status'
+  | 'repository.landingStatus'
+
+/**
  * The shared registry for facts that cross product surfaces. Adding a field
  * here is an authority decision, not a route-local implementation detail.
  */
-export const PROJECT_STATE_CLAIM_POLICIES: Readonly<Record<string, ProjectStateClaimPolicy>> = {
+export const PROJECT_STATE_CLAIM_POLICIES: Readonly<Record<ProjectStateClaimField, ProjectStateClaimPolicy>> = {
+  'project.selectedReleaseId': {
+    field: 'project.selectedReleaseId',
+    authorities: ['owner_selection', 'canonical_mutation'],
+    reconciliation: 'owner_scope_decision',
+  },
+  'project.scopeSelection': {
+    field: 'project.scopeSelection',
+    authorities: ['owner_selection', 'canonical_mutation'],
+    reconciliation: 'owner_scope_decision',
+  },
+  'project.charterConfirmation': {
+    field: 'project.charterConfirmation',
+    authorities: ['owner_selection', 'canonical_mutation', 'imported_record', 'agent_derivation'],
+    reconciliation: 'owner_scope_decision',
+  },
   'release.blockerTaskIds': {
     field: 'release.blockerTaskIds',
     authorities: ['canonical_mutation', 'agent_derivation'],
     reconciliation: 'inspect_canonical_state',
     valueSemantics: 'unordered_string_set',
   },
+  'task.lifecycleStatus': {
+    field: 'task.lifecycleStatus',
+    authorities: ['canonical_mutation'],
+    reconciliation: 'inspect_canonical_state',
+  },
+  'task.hierarchy': {
+    field: 'task.hierarchy',
+    authorities: ['canonical_mutation'],
+    reconciliation: 'inspect_canonical_state',
+  },
+  'task.dependencies': {
+    field: 'task.dependencies',
+    authorities: ['canonical_mutation'],
+    reconciliation: 'inspect_canonical_state',
+    valueSemantics: 'unordered_string_set',
+  },
+  'task.capabilityBindings': {
+    field: 'task.capabilityBindings',
+    authorities: ['canonical_mutation'],
+    reconciliation: 'inspect_canonical_state',
+  },
+  'task.reviewCriterionDisposition': {
+    field: 'task.reviewCriterionDisposition',
+    authorities: ['canonical_mutation', 'verified_observation', 'agent_derivation'],
+    reconciliation: 'inspect_canonical_state',
+  },
+  'task.reviewEvidenceDisposition': {
+    field: 'task.reviewEvidenceDisposition',
+    authorities: ['canonical_mutation', 'verified_observation', 'agent_derivation'],
+    reconciliation: 'rerun_verification',
+  },
+  'proof.status': {
+    field: 'proof.status',
+    authorities: ['canonical_mutation', 'verified_observation', 'agent_derivation'],
+    reconciliation: 'rerun_verification',
+  },
+  'runtime.status': {
+    field: 'runtime.status',
+    authorities: ['runtime_observation'],
+    reconciliation: 'refresh_runtime',
+  },
+  'repository.landingStatus': {
+    field: 'repository.landingStatus',
+    authorities: ['canonical_mutation', 'verified_observation', 'agent_derivation'],
+    reconciliation: 'inspect_canonical_state',
+  },
 }
 
 export function projectStateClaimPolicy(field: string): ProjectStateClaimPolicy | null {
-  return PROJECT_STATE_CLAIM_POLICIES[field] ?? null
+  return PROJECT_STATE_CLAIM_POLICIES[field as ProjectStateClaimField] ?? null
 }
 
 export function requireProjectStateClaimPolicy(field: string): ProjectStateClaimPolicy {
   const policy = projectStateClaimPolicy(field)
   if (!policy) throw new Error(`No registered project-state claim policy for ${field}.`)
   return policy
+}
+
+/**
+ * Production claim resolution must use the closed registry. The lower-level
+ * resolver remains injectable for isolated policy tests, never for routes or
+ * agent integrations that would otherwise create competing authority rules.
+ */
+export function resolveRegisteredProjectStateClaimSet(
+  input: { projectRevision: number; claims: readonly ProjectStateClaim[] },
+): ProjectStateClaimResolution {
+  return resolveProjectStateClaimSet({
+    ...input,
+    policies: Object.values(PROJECT_STATE_CLAIM_POLICIES),
+  })
 }
 
 export interface ProjectStateConflict {
@@ -434,7 +530,7 @@ export function reconcileProjectStateObservation(input: {
     candidate.subject.id === input.canonicalClaim.subject.id &&
     candidate.field === input.canonicalClaim.field,
   )
-  if (!resolved || resolved.value === undefined) {
+  if (!resolved) {
     return { state: 'unavailable', reconciliation: input.policy.reconciliation, ...fallback }
   }
   const disagreement = resolution.disagreements.find(candidate =>
@@ -451,6 +547,9 @@ export function reconcileProjectStateObservation(input: {
       ...(disagreement ? { disagreement } : {}),
     }
   }
+  if (resolved.value === undefined) {
+    return { state: 'unavailable', reconciliation: input.policy.reconciliation, ...fallback }
+  }
   return stableClaimValue(resolved.value, input.policy) === stableClaimValue(input.observationClaim.value, input.policy)
     ? {
         state: 'confirmed',
@@ -463,6 +562,26 @@ export function reconcileProjectStateObservation(input: {
         ...fallback,
         ...(disagreement ? { disagreement } : {}),
       }
+}
+
+/** Compare two reports through their registered field policy only. */
+export function reconcileRegisteredProjectStateObservation(input: {
+  projectRevision: number
+  canonicalClaim: ProjectStateClaim
+  observationClaim: ProjectStateClaim
+}): ProjectStateObservationAgreement {
+  if (input.canonicalClaim.field !== input.observationClaim.field) {
+    return {
+      state: 'unavailable',
+      canonicalClaimIds: [input.canonicalClaim.id],
+      observationClaimId: input.observationClaim.id,
+      reason: 'incomparable_subject_or_field',
+    }
+  }
+  return reconcileProjectStateObservation({
+    ...input,
+    policy: requireProjectStateClaimPolicy(input.canonicalClaim.field),
+  })
 }
 
 export interface ProjectDecisionProjection {

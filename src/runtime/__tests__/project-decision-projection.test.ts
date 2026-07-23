@@ -1,12 +1,95 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildProjectDecisionProjection,
+  reconcileRegisteredProjectStateObservation,
+  resolveRegisteredProjectStateClaimSet,
   reconcileProjectStateObservation,
   resolveProjectStateClaimSet,
   resolveProjectStateClaims,
 } from '../project-decision-projection.js'
 
 describe('project decision projection', () => {
+  it('resolves any registered agent fact through one closed field policy', () => {
+    const claims = [
+      {
+        id: 'reviewer-a:criterion-voice',
+        projectRevision: 42,
+        subject: { kind: 'task', id: 'task-chapter' },
+        field: 'task.reviewCriterionDisposition',
+        value: { criterionId: 'criterion-voice', disposition: 'satisfied' },
+        authority: 'agent_derivation' as const,
+        actor: 'reviewer-a',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['review:reviewer-a'],
+      },
+      {
+        id: 'reviewer-b:criterion-voice',
+        projectRevision: 42,
+        subject: { kind: 'task', id: 'task-chapter' },
+        field: 'task.reviewCriterionDisposition',
+        value: { criterionId: 'criterion-voice', disposition: 'unsatisfied' },
+        authority: 'agent_derivation' as const,
+        actor: 'reviewer-b',
+        observedAt: '2026-07-23T12:00:01.000Z',
+        evidenceRefs: ['review:reviewer-b'],
+      },
+      {
+        id: 'agent-made-up-action',
+        projectRevision: 42,
+        subject: { kind: 'project', id: 'project' },
+        field: 'project.primaryAction',
+        value: { kind: 'resume' },
+        authority: 'agent_derivation' as const,
+        actor: 'reviewer-c',
+        observedAt: '2026-07-23T12:00:02.000Z',
+        evidenceRefs: ['review:reviewer-c'],
+      },
+    ]
+
+    const resolution = resolveRegisteredProjectStateClaimSet({ projectRevision: 42, claims })
+
+    expect(resolution.resolved).toEqual([expect.objectContaining({
+      subject: { kind: 'task', id: 'task-chapter' },
+      field: 'task.reviewCriterionDisposition',
+      conflict: expect.objectContaining({ reconciliation: 'inspect_canonical_state' }),
+    })])
+    expect(resolution.disagreements).toEqual([expect.objectContaining({
+      state: 'unresolved',
+      contradictoryClaimIds: ['reviewer-a:criterion-voice', 'reviewer-b:criterion-voice'],
+    })])
+    expect(resolution.rejected).toEqual([{ claimId: 'agent-made-up-action', code: 'unregistered_field' }])
+  })
+
+  it('does not let the route choose a custom policy for a registered observation', () => {
+    const agreement = reconcileRegisteredProjectStateObservation({
+      projectRevision: 42,
+      canonicalClaim: {
+        id: 'runtime-canonical',
+        projectRevision: 42,
+        subject: { kind: 'runtime', id: 'project' },
+        field: 'runtime.status',
+        value: { status: 'running' },
+        authority: 'runtime_observation',
+        actor: 'runtime-a',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['runtime:a'],
+      },
+      observationClaim: {
+        id: 'runtime-observation',
+        projectRevision: 42,
+        subject: { kind: 'runtime', id: 'project' },
+        field: 'runtime.status',
+        value: { status: 'stopped' },
+        authority: 'runtime_observation',
+        actor: 'runtime-b',
+        observedAt: '2026-07-23T12:00:01.000Z',
+        evidenceRefs: ['runtime:b'],
+      },
+    })
+
+    expect(agreement).toMatchObject({ state: 'contradictory', reconciliation: 'refresh_runtime' })
+  })
+
   it('keeps runnable work distinct from release proof debt', () => {
     const decision = buildProjectDecisionProjection({
       projectRevision: 42,

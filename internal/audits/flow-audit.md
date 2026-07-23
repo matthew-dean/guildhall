@@ -7832,6 +7832,17 @@ non-JavaScript proof language where possible.
   - require task/release/thread/diagnostic projections to consume this shared
     result when they display the same fact; the release diagnostic now reads
     the registered shared policy and exposes the typed disagreement record.
+- Registered authority checkpoint:
+  - production routes use the closed policy registry rather than supplying a
+    custom precedence rule; unknown fields fail closed as `unregistered_field`;
+  - currently registered facts cover project scope, normalized task structure,
+    review/proof disposition, runtime status, and repository landing status;
+  - a canonical claim can prevail over a lower-authority observation, but the
+    disagreement remains attached to the result so no surface can claim both
+    agents saw the same thing;
+  - equal-authority incompatible observations resolve to an explicit conflict
+    and a typed repair action. They never resolve by agent name, arrival order,
+    timestamp, or model prose.
 - Contract Touch Decision:
   - Touched contracts: project-state claim resolution, structured reviewer
     concerns/adjudication, shared decision projection, diagnostic agreement.
@@ -7840,13 +7851,18 @@ non-JavaScript proof language where possible.
     display/evidence only and cannot resolve state.
   - Required follow-up: replace the obsolete prose-heuristic guidance in the
     disagreement design note; migrate reviewer conflict detection to typed
-    concern IDs where it influences routing.
+    criterion/evidence disposition IDs plus lifecycle and verification-run
+    references where it influences routing.
   - Proof required: permutation/replay tests, equal-authority conflict tests,
     invalid supersession tests, prose-variation tests, and a cross-surface
     projection assertion proving the same conflict/result appears everywhere.
   - Apply/revert behavior: resolver is pure and fail-closed. Reverting the
     new consumers leaves no silent winner because unresolved records remain
     visible rather than being coerced into execution state.
+  - Persisted schema considered: reviewer/proof/adjudication records. Not
+    touched in this first resolver commit: the resolver is an in-memory shared
+    boundary, so no migration is required yet. The follow-up typed reviewer
+    record migration must include its own Schema Migration Decision.
 - Schema Migration Decision:
   - Persisted schema touched: durable agent/reviewer conclusion records only
     if existing reviewer result storage cannot carry typed subject/field and
