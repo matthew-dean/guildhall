@@ -2514,7 +2514,12 @@ function summarizeProjectFromProjection(
     savedStartReadiness,
     run?.status ?? projection.execution?.status,
   )
-  const actionModel = run
+  // A supervisor only owns runtime liveness. Rebuilding a semantic action
+  // from the compact recent-work rows loses approved brief/spec state and can
+  // turn active spec shaping into a false "Needs brief" instruction.
+  const actionModel = run && projection.actionModel
+    ? projection.actionModel
+    : run
     ? buildProjectActionModel({
       startReadiness,
       ownerInput: projection.ownerInput && projection.ownerInput.openCount > 0
