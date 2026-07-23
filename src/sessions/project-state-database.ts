@@ -2923,7 +2923,15 @@ function readQueueDetailsForRevision(
   database?: DatabaseSync,
   options: { migration?: boolean } = {},
 ): ProjectStateDatabaseQueueDefinition | null {
-  if (options.migration && database && tableExists(database, 'queue_detail')) {
+  // An aggregate queue detail blob is a bootstrap/import bridge, never a
+  // competing source once SQLite is promoted. A migration mutating promoted
+  // state must begin with the same normalized task/release relation the
+  // runtime reads, otherwise an old blob can attempt to rewrite a shipped
+  // release snapshot.
+  const databaseIsAuthoritative = Boolean(database && tableExists(database, 'project_meta') &&
+    (database.prepare('SELECT project_state_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined)
+      ?.project_state_authority === 'database')
+  if (options.migration && database && !databaseIsAuthoritative && tableExists(database, 'queue_detail')) {
     try {
       const row = database.prepare('SELECT revision, payload_gzip FROM queue_detail WHERE id = 1').get() as JsonRecord | undefined
       if (row && Number(row.revision) === revision && row.payload_gzip instanceof Uint8Array) {

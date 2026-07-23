@@ -105,6 +105,11 @@ help_summary: |
   The migration preserves its existing membership exactly, removes the child
   from active release membership only, and creates new active-release proof
   work where proof must continue.
+- Read-authority follow-up: promoted SQLite migrations previously preferred an
+  aggregate compatibility queue when one happened to exist. That stale blob
+  could prepare a release rewrite that the canonical shipped-snapshot guard
+  correctly rejected. Promoted migrations now read the same normalized
+  task/release boundary as runtime; aggregate queue detail is bootstrap-only.
 - Compatibility reader: none. Rich task detail reads the typed scope; compact
   release projections read normalized visible membership. No surface is
   permitted to reconstruct one from the other.
