@@ -33,6 +33,7 @@ import {
   registerProjectGraphContractSurface,
   writeLocalProjectGraphDraft,
 } from './project-graph.js'
+import { requestSpecReview } from './spec-review-ownership.js'
 
 // ---------------------------------------------------------------------------
 // FR-14: routing bootstrapping via meta-intake.
@@ -814,7 +815,11 @@ export async function synthesizeMetaIntakeDraft(
 
   const now = new Date().toISOString()
   task.spec = specParts.join('\n') + '\n'
-  task.status = 'spec_review'
+  requestSpecReview(task, {
+    authority: 'owner',
+    requestedAt: now,
+    requestedBy: 'meta-intake-synthesis',
+  })
   task.updatedAt = now
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)

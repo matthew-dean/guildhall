@@ -71,6 +71,56 @@ describe('project migration ledger', () => {
 })
 
 describe('getProjectMigrationStatus', () => {
+  it('backfills only legacy spec-review gates and remains idempotent', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      tasks: [
+        { id: 'task-legacy-review', title: 'Legacy review', status: 'spec_review' },
+        {
+          id: 'task-coordinator-review',
+          title: 'Coordinator review',
+          status: 'spec_review',
+          specReviewGate: {
+            authority: 'coordinator',
+            requestedAt: '2026-07-23T00:00:00.000Z',
+            requestedBy: 'proposal-promoter',
+            reason: 'proposal_promotion',
+          },
+        },
+        { id: 'task-ready', title: 'Ready work', status: 'ready' },
+      ],
+      releases: [],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const first = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.67/explicit-spec-review-gates'],
+    })
+    expect(first.failed).toEqual([])
+    expect(first.applied.map(item => item.id)).toEqual(['0.13.67/explicit-spec-review-gates'])
+
+    const queue = readProjectStateDatabaseQueueDefinition(tasksPath)!
+    const legacy = queue.tasks.find(task => task.id === 'task-legacy-review') as Record<string, unknown>
+    const coordinator = queue.tasks.find(task => task.id === 'task-coordinator-review') as Record<string, unknown>
+    expect(legacy.specReviewGate).toMatchObject({
+      authority: 'owner',
+      requestedBy: 'legacy-spec-review-gate-migration',
+      reason: 'spec_handoff',
+    })
+    expect(coordinator.specReviewGate).toMatchObject({
+      authority: 'coordinator',
+      requestedBy: 'proposal-promoter',
+      reason: 'proposal_promotion',
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.67/explicit-spec-review-gates'],
+    })).applied).toEqual([])
+  })
+
   it('rebuilds an old compact summary with the canonical source-catalog digest', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     writeProjectTaskQueueWithSummary(tasksPath, {

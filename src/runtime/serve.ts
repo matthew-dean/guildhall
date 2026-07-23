@@ -45,6 +45,7 @@ import { closeReleaseIfReady } from './release-lifecycle.js'
 import { comparableCommand, ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand } from './proof-paths.js'
 import { normalizeReviewPlanForTask } from './review-planner.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
+import { requestSpecReview } from './spec-review-ownership.js'
 import { readPersistedStructuredSelfCritique, reviewVerdictHasStructuredApproval } from './review-contract.js'
 import { validateProductBriefGrounding } from './spec-quality.js'
 import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
@@ -15340,7 +15341,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           hasConcreteSpecDraft &&
           !hasUnansweredQuestions
         ) {
-          task.status = 'spec_review'
+          requestSpecReview(task as Task, {
+            authority: 'owner',
+            requestedAt: now,
+            requestedBy: approvalActor,
+          })
         } else if (canPromoteBrief && !hasConcreteSpecDraft && !hasUnansweredQuestions) {
           // Brief approval authorizes the scope. It never invents a spec:
           // source-backed shaping must create the executable contract.

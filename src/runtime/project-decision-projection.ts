@@ -55,6 +55,7 @@ export type ProjectStateClaimField =
   | 'release.membershipTaskIds'
   | 'release.blockerTaskIds'
   | 'task.lifecycleStatus'
+  | 'task.specReviewAuthority'
   | 'task.hierarchy'
   | 'task.dependencies'
   | 'task.capabilityBindings'
@@ -62,6 +63,7 @@ export type ProjectStateClaimField =
   | 'task.reviewEvidenceDisposition'
   | 'proof.status'
   | 'runtime.status'
+  | 'project.executionEligibility'
   | 'workspace.syncState'
   | 'repository.landingStatus'
 
@@ -102,6 +104,11 @@ export const PROJECT_STATE_CLAIM_POLICIES: Readonly<Record<ProjectStateClaimFiel
     authorities: ['canonical_mutation'],
     reconciliation: 'inspect_canonical_state',
   },
+  'task.specReviewAuthority': {
+    field: 'task.specReviewAuthority',
+    authorities: ['canonical_mutation'],
+    reconciliation: 'inspect_canonical_state',
+  },
   'task.hierarchy': {
     field: 'task.hierarchy',
     authorities: ['canonical_mutation'],
@@ -137,6 +144,11 @@ export const PROJECT_STATE_CLAIM_POLICIES: Readonly<Record<ProjectStateClaimFiel
     field: 'runtime.status',
     authorities: ['runtime_observation'],
     reconciliation: 'refresh_runtime',
+  },
+  'project.executionEligibility': {
+    field: 'project.executionEligibility',
+    authorities: ['canonical_mutation', 'agent_derivation'],
+    reconciliation: 'inspect_canonical_state',
   },
   'workspace.syncState': {
     field: 'workspace.syncState',

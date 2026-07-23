@@ -196,6 +196,45 @@ describe('project decision projection', () => {
     })
   })
 
+  it('keeps a coordinator execution report visible when canonical eligibility disagrees', () => {
+    const resolution = resolveRegisteredProjectStateClaimSet({ projectRevision: 42, claims: [
+      {
+        id: 'canonical-execution-eligibility',
+        projectRevision: 42,
+        subject: { kind: 'project', id: 'project' },
+        field: 'project.executionEligibility',
+        value: { state: 'owner_review', taskIds: ['task-spec'] },
+        authority: 'canonical_mutation',
+        actor: 'project-summary',
+        observedAt: '2026-07-23T12:00:00.000Z',
+        evidenceRefs: ['task:task-spec'],
+      },
+      {
+        id: 'coordinator-execution-eligibility',
+        projectRevision: 42,
+        subject: { kind: 'project', id: 'project' },
+        field: 'project.executionEligibility',
+        value: { state: 'runnable', taskIds: ['task-ready'] },
+        authority: 'agent_derivation',
+        actor: 'coordinator',
+        observedAt: '2026-07-23T12:00:01.000Z',
+        evidenceRefs: ['run:coordinator'],
+      },
+    ] })
+
+    expect(resolution.resolved).toEqual([expect.objectContaining({
+      field: 'project.executionEligibility',
+      value: { state: 'owner_review', taskIds: ['task-spec'] },
+      claimIds: ['canonical-execution-eligibility'],
+    })])
+    expect(resolution.disagreements).toEqual([expect.objectContaining({
+      state: 'resolved_by_authority',
+      canonicalClaimIds: ['canonical-execution-eligibility'],
+      contradictoryClaimIds: ['coordinator-execution-eligibility'],
+      reconciliation: 'inspect_canonical_state',
+    })])
+  })
+
   it('leaves contradictory canonical release membership claims unresolved', () => {
     const resolution = resolveRegisteredProjectStateClaimSet({ projectRevision: 42, claims: [
       {

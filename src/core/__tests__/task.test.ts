@@ -80,6 +80,25 @@ describe('Task', () => {
     expect(result.status).toBe('ready')
   })
 
+  it('keeps spec-review authority separate from the lifecycle status', () => {
+    const result = Task.parse({
+      ...validTask,
+      status: 'spec_review',
+      specReviewGate: {
+        authority: 'coordinator',
+        requestedAt: '2026-07-23T12:00:00.000Z',
+        requestedBy: 'proposal-promoter',
+      },
+    })
+
+    expect(result.specReviewGate).toEqual({
+      authority: 'coordinator',
+      requestedAt: '2026-07-23T12:00:00.000Z',
+      requestedBy: 'proposal-promoter',
+      reason: 'spec_handoff',
+    })
+  })
+
   it('applies default priority of normal', () => {
     const { priority, ...withoutPriority } = validTask
     const result = Task.parse(withoutPriority)

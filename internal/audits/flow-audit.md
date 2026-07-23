@@ -52,10 +52,15 @@ help_summary: |
 - Existing data: legacy `spec_review` rows get a conservative `owner` gate
   rather than guessing that a coordinator may approve them. Future handoffs
   must write the gate explicitly.
-- Migration id, fixtures, and rollback behavior will be recorded with the
-  implementation once the existing migration registry and task schema owner
-  are updated. The migration must be idempotent and never infer a decision
-  from model prose.
+- Migration id: `0.13.67/explicit-spec-review-gates`; automatic and required
+  for promoted project-state reads. Fixtures prove that it touches only
+  `spec_review` rows missing the typed gate and that a second pass is a no-op.
+  Reverting code leaves the additive field inert; no owner decision is erased.
+  The migration never infers a decision from model prose.
+- Current implementation note: the additive schema parser and every touched
+  in-process producer now write `specReviewGate`; legacy rows still read as
+  owner-gated until the durable backfill is applied. The next migration unit
+  will persist those fallback gates through the canonical task writer.
 
 ## 2026-07-23 Release Resume Preserves Release Scope During Proof Recovery
 

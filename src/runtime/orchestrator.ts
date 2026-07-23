@@ -210,7 +210,7 @@ import {
   type LandingStrategy,
 } from './merge-dispatcher.js'
 import { workSubtreeIds } from './work-hierarchy.js'
-import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { requestSpecReview, specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import { applyRunAutomationPolicy as applyRunAutomationLeverPolicy } from './run-automation.js'
 import {
   atomicWriteText,
@@ -649,7 +649,12 @@ export function repairWeakRecoverySpecReviewSeedInQueue(
   if (seed.workUnitAnalysis) liveTask.workUnitAnalysis = seed.workUnitAnalysis
   if (seed.references) liveTask.references = seed.references
   attachSelectedReleaseToCurrentRecoveryTask(liveTask, queue)
-  liveTask.status = 'spec_review'
+  requestSpecReview(liveTask, {
+    authority: 'coordinator',
+    requestedAt: input.now,
+    requestedBy: 'coordinator-recovery',
+    reason: 'recovery',
+  })
   liveTask.assignedTo = null
   liveTask.updatedAt = input.now
   if (!Array.isArray(liveTask.notes)) liveTask.notes = []
@@ -4974,7 +4979,13 @@ export class Orchestrator {
           generatedMetaIntakeDraft
         ) {
           taskAfter.spec = generatedMetaIntakeDraft
-          if (taskAfter.status === 'exploring') taskAfter.status = 'spec_review'
+          if (taskAfter.status === 'exploring') {
+            requestSpecReview(taskAfter, {
+              authority: 'owner',
+              requestedAt: this.now(),
+              requestedBy: 'meta-intake',
+            })
+          }
           taskAfter.updatedAt = this.now()
           queueAfter.lastUpdated = this.now()
           await this.writeQueue(queueAfter)
@@ -4988,7 +4999,11 @@ export class Orchestrator {
           typeof taskAfter.spec === 'string' &&
           taskAfter.spec.trim().length > 0
         ) {
-          taskAfter.status = 'spec_review'
+          requestSpecReview(taskAfter, {
+            authority: 'owner',
+            requestedAt: this.now(),
+            requestedBy: 'workspace-import',
+          })
           taskAfter.updatedAt = this.now()
           queueAfter.lastUpdated = this.now()
           await this.writeQueue(queueAfter)
@@ -5006,7 +5021,11 @@ export class Orchestrator {
           !taskHasUnansweredVisibleQuestion(taskAfter) &&
           !this.waitingOwnerInputTaskIds(queueAfter).has(taskAfter.id)
         ) {
-          taskAfter.status = 'spec_review'
+          requestSpecReview(taskAfter, {
+            authority: 'owner',
+            requestedAt: this.now(),
+            requestedBy: 'spec-agent',
+          })
           taskAfter.assignedTo = null
           taskAfter.updatedAt = this.now()
           taskAfter.notes.push({
@@ -7262,7 +7281,12 @@ export class Orchestrator {
         break
       case 'route_to_human':
       case 'route_to_coordinator':
-        target.status = 'spec_review'
+        requestSpecReview(target, {
+          authority: decision.action.kind === 'route_to_human' ? 'owner' : 'coordinator',
+          requestedAt: now,
+          requestedBy: PROPOSAL_PROMOTER_AGENT_ID,
+          reason: 'proposal_promotion',
+        })
         newStatus = 'spec_review'
         break
       case 'auto_promote':
@@ -7327,7 +7351,13 @@ export class Orchestrator {
 
     const beforeStatus = target.status
     target.spec = draft
-    if (target.status === 'exploring') target.status = 'spec_review'
+    if (target.status === 'exploring') {
+      requestSpecReview(target, {
+        authority: 'owner',
+        requestedAt: this.now(),
+        requestedBy: 'spec-agent',
+      })
+    }
     target.updatedAt = this.now()
     queue.lastUpdated = this.now()
     await this.writeQueue(queue)
@@ -11662,7 +11692,11 @@ export class Orchestrator {
       !hasOpenQuestion &&
       !hasWaitingOwnerInput
     ) {
-      task.status = 'spec_review'
+      requestSpecReview(task, {
+        authority: 'owner',
+        requestedAt: this.now(),
+        requestedBy: 'spec-agent',
+      })
       task.updatedAt = this.now()
       queue.lastUpdated = task.updatedAt
       await this.writeQueue(queue)
@@ -11997,7 +12031,12 @@ export class Orchestrator {
       authoredBy: 'coordinator-recovery',
       authoredAt: now,
     }
-    liveTask.status = 'spec_review'
+    requestSpecReview(liveTask, {
+      authority: 'coordinator',
+      requestedAt: now,
+      requestedBy: 'coordinator-recovery',
+      reason: 'recovery',
+    })
     liveTask.assignedTo = null
     liveTask.updatedAt = now
     liveTask.notes.push({
@@ -12351,7 +12390,12 @@ export class Orchestrator {
     if ((!liveTask.domain || liveTask.domain === 'core') && parentTask?.domain) liveTask.domain = parentTask.domain
     if ((liveTask.releaseIds?.length ?? 0) === 0 && parentTask?.releaseIds?.length) liveTask.releaseIds = [...parentTask.releaseIds]
     attachSelectedReleaseToCurrentRecoveryTask(liveTask, queue)
-    liveTask.status = 'spec_review'
+    requestSpecReview(liveTask, {
+      authority: 'coordinator',
+      requestedAt: now,
+      requestedBy: 'coordinator-recovery',
+      reason: 'recovery',
+    })
     liveTask.assignedTo = null
     liveTask.updatedAt = now
     liveTask.notes.push({

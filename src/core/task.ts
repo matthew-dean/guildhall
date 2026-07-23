@@ -24,7 +24,7 @@ const TaskStatusValue = z.enum([
   'proposed',      // FR-21: agent-originated; awaiting promotion per lever `task_origination`
   'import_draft',  // Workspace-imported draft that still needs shaping before normal intake begins
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
-  'spec_review',   // Spec drafted; awaiting owner approval before worker handoff
+  'spec_review',   // Spec drafted; awaiting the typed review gate before worker handoff
   'ready',         // Spec approved, ready for a worker to pick up
   'in_progress',   // Assigned to a worker agent
   'review',        // Worker done, awaiting reviewer agent
@@ -1310,6 +1310,19 @@ export const TaskWorkShape = z.enum([
 export type TaskWorkShape = z.infer<typeof TaskWorkShape>
 
 /**
+ * A lifecycle stage says where work is; a review gate says who may advance
+ * it. Keeping those facts separate prevents `spec_review` from becoming an
+ * ambiguous proxy for either an owner decision or coordinator validation.
+ */
+export const TaskSpecReviewGate = z.object({
+  authority: z.enum(['owner', 'coordinator']),
+  requestedAt: z.string(),
+  requestedBy: z.string(),
+  reason: z.enum(['spec_handoff', 'proposal_promotion', 'recovery']).default('spec_handoff'),
+})
+export type TaskSpecReviewGate = z.infer<typeof TaskSpecReviewGate>
+
+/**
  * Explicit ownership for a bootstrap failure that belongs inside a task's
  * implementation boundary. This must be structured task state; task prose is
  * display/audit content only and cannot change bootstrap routing.
@@ -1376,6 +1389,8 @@ export const Task = z.object({
   // Set by Spec Agent before implementation begins
   spec: z.string().optional(),
   structuredSpec: StructuredSpec.optional(),
+  /** Explicit reviewer authority while status is `spec_review`. */
+  specReviewGate: TaskSpecReviewGate.optional(),
   contractSurfaceReviewPackets: z.array(ContractSurfaceReviewPacket).optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).default([]),
   acceptanceCriteriaProofState: AcceptanceCriteriaProofState.optional(),
