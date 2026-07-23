@@ -461,6 +461,7 @@ function applyOwnerReviewToStartReadiness(
       : `${count} specs are ready for your review before work can continue`,
     actionHref: ownerReview.next?.href ?? '/work',
     ...(ownerReview.next?.taskId ? { focusTaskId: ownerReview.next.taskId } : {}),
+    ...(ownerReview.next?.label?.trim() ? { focusTaskTitle: ownerReview.next.label.trim() } : {}),
     focusKind: 'owner_review',
     count,
   } as ReturnType<typeof summarizeProjectScopeStart>

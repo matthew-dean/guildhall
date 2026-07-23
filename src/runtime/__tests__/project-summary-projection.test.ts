@@ -133,6 +133,7 @@ describe('project-summary-projection', () => {
     expect(projection.nextAction).toMatchObject({
       code: 'owner_review_required',
       focusTaskId: 'review-me',
+      focusTaskTitle: 'review-me',
       focusKind: 'owner_review',
     })
   })
