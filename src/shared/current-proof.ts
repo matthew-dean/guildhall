@@ -135,6 +135,26 @@ function pathIsExecutable(path: RecordValue): boolean {
   })
 }
 
+export function proofPathIsScriptRunnable(proofPath: unknown): boolean {
+  if (typeof proofPath === 'string') return proofPath.trim().length > 0
+  const record = recordValue(proofPath)
+  return record !== null && pathIsExecutable(record)
+}
+
+/** Keep script-only completion proof in the shared proof authority. */
+export function taskHasScriptProofPath(task: unknown): boolean {
+  const record = recordValue(task)
+  if (!record) return false
+  const currentSummary = recordValue(record.currentSummary)
+  const currentProof = recordValue(currentSummary?.proof)
+  if (currentProof?.hasExecutablePath === true) return true
+  if (!Array.isArray(record.proofPaths)) return false
+  if (record.proofPaths.some(proofPathIsScriptRunnable)) return true
+  // A review description cannot turn a non-executable path into script proof.
+  // Script-only releases require an actual command or script path in data.
+  return false
+}
+
 /** Summarize only the current proof contract; history is deliberately ignored. */
 export function summarizeCurrentProof(task: RecordValue): CurrentProofSummary {
   const taskRecord = task

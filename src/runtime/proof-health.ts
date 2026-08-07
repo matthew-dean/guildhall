@@ -1,5 +1,5 @@
 import type { Task } from '@guildhall/core'
-import { commandProofGateMatches, isCurrentProofPathProven } from '@guildhall/shared'
+import { commandProofGateMatches, isCurrentProofPathProven, taskHasScriptProofPath as sharedTaskHasScriptProofPath } from '@guildhall/shared'
 import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
 import { comparableCommand, proofSetupHasTaskIdentity } from './proof-paths.js'
 import { reviewVerdictIsNonSubstantiveFailure } from './review-contract.js'
@@ -559,34 +559,9 @@ export function taskHasNonReviewCommandBackedProof(task: unknown): boolean {
   })
 }
 
-function proofPathIsScriptRunnable(proofPath: unknown): boolean {
-  if (typeof proofPath === 'string') return proofPath.trim().length > 0
-  if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
-  const record = proofPath as Record<string, unknown>
-  if (typeof record.command === 'string' && record.command.trim().length > 0) return true
-  const launchSteps = Array.isArray(record.launchSteps) ? record.launchSteps : []
-  return launchSteps.some((step) =>
-    step &&
-    typeof step === 'object' &&
-    !Array.isArray(step) &&
-    (step as Record<string, unknown>).kind === 'copy_command' &&
-    typeof (step as Record<string, unknown>).command === 'string' &&
-    String((step as Record<string, unknown>).command).trim().length > 0,
-  )
-}
-
 /** Keep script-only completion proof in the shared proof authority. */
 export function taskHasScriptProofPath(task: unknown): boolean {
-  const record = recordValue(task)
-  if (!record) return false
-  const currentSummary = recordValue(record.currentSummary)
-  const currentProof = recordValue(currentSummary?.proof)
-  if (currentProof?.hasExecutablePath === true) return true
-  if (!Array.isArray(record.proofPaths)) return false
-  if (record.proofPaths.some(proofPathIsScriptRunnable)) return true
-  // A review description cannot turn a non-executable path into script proof.
-  // Script-only releases require an actual command or script path in data.
-  return false
+  return sharedTaskHasScriptProofPath(task)
 }
 
 /** A review contract is enough to reopen executable work without re-intaking its scope. */

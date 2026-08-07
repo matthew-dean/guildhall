@@ -48,7 +48,7 @@ import {
   writeProjectTaskQueue,
 } from '@guildhall/runtime/project-state-boundary'
 import { validateSpecGrounding } from '@guildhall/runtime/spec-quality'
-import { taskDoneButProofMissing } from '../runtime/proof-health.js'
+import { taskDoneButProofMissing } from '@guildhall/runtime/proof-health'
 import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, proofSetupHasTaskIdentity } from '@guildhall/runtime/proof-paths'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')

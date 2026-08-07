@@ -3,12 +3,12 @@ import { readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { getDataDir } from '@guildhall/sessions'
+import { atomicWriteText } from '@guildhall/sessions/atomic'
+import { getDataDir } from '@guildhall/sessions/paths'
 import {
   getProjectLocalHistoryDir,
   getProjectSystemStatePath,
-} from '@guildhall/sessions'
-import { atomicWriteText } from '@guildhall/sessions'
+} from '@guildhall/sessions/local-history'
 import type {
   AppendEventInput,
   ArtifactRef,

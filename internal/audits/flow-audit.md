@@ -54433,3 +54433,44 @@ Repair:
       transaction. Existing summaries are refreshed rather than guessed from
       history. Reverting leaves additive audit rows inert and preserves current
       task/release records.
+
+## 2026-08-07 - CI Dependency-Boundary Repair For 0.13.0 Release PR
+
+### Contract Touch Decision
+
+- Work id: `0.13.0/ci-dependency-boundary-repair`.
+- Touched contracts: task queue update tool import boundary and shared current
+      proof helper ownership. Considered but not touched: task queue mutation
+      payload shape, acceptance criteria schema, release readiness semantics,
+      proof path schema, and gate result evidence matching.
+- Required follow-up: none for runtime behavior; keep any future tool-facing
+      runtime helper on an explicit `@guildhall/runtime/*` subpath or move
+      reusable proof predicates into `@guildhall/shared`.
+- Proof required/provided: `pnpm lint:deps` has zero errors after replacing the
+      cross-module relative import and breaking the persistence/session barrel
+      cycle; `pnpm typecheck`, targeted proof-health and persistence tests, and
+      `pnpm build` pass locally.
+- Waivers: dependency-cruiser orphan warnings are existing advisory warnings;
+      no rule was weakened or suppressed.
+- Owner-review items: confirm CI reruns the same Verify workflow on the pushed
+      PR branch and no release artifact step regresses.
+- Apply/revert behavior: this is import-boundary-only code movement. Reverting
+      restores the prior relative import and session barrel dependency, which
+      is expected to fail `pnpm lint:deps`.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope: TypeScript path aliases, Vitest aliases, proof predicate ownership,
+      and import paths only.
+- Change class: no-op for stored project, task, release, evidence, session,
+      or persistence records.
+- Existing data impact: none; readers and writers keep the same serialized
+      payloads and proof decisions.
+- Migration id: not required.
+- Compatibility reader: unchanged.
+- Fixtures/tests: proof-health and file-backed persistence tests cover the
+      moved predicate and leaf import resolution; build verifies bundled
+      runtime resolution.
+- Rollback/revert: remove the new aliases and restore prior imports; no data
+      migration or cleanup is needed.

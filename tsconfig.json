@@ -39,6 +39,7 @@
       "@guildhall/providers": ["./src/providers/index.ts"],
       "@guildhall/runtime": ["./src/runtime/index.ts"],
       "@guildhall/runtime/effective-task": ["./src/runtime/effective-task.ts"],
+      "@guildhall/runtime/proof-health": ["./src/runtime/proof-health.ts"],
       "@guildhall/runtime/proof-paths": ["./src/runtime/proof-paths.ts"],
       "@guildhall/runtime/spec-quality": ["./src/runtime/spec-quality.ts"],
       "@guildhall/runtime/owner-input-store": ["./src/runtime/owner-input-store.ts"],
@@ -48,6 +49,9 @@
       "@guildhall/runtime-container": ["./src/runtime-container/index.ts"],
       "@guildhall/shared": ["./src/shared/index.ts"],
       "@guildhall/sessions": ["./src/sessions/index.ts"],
+      "@guildhall/sessions/atomic": ["./src/sessions/atomic.ts"],
+      "@guildhall/sessions/local-history": ["./src/sessions/local-history.ts"],
+      "@guildhall/sessions/paths": ["./src/sessions/paths.ts"],
       "@guildhall/skills": ["./src/skills/index.ts"],
       "@guildhall/tools": ["./src/tools/index.ts"],
       "@guildhall/web-tokens.css": ["./src/web/tokens.css"]
