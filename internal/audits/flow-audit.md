@@ -44,12 +44,18 @@ help_summary: |
   next step without turning unrelated branch publishing gaps into blocked work.
 - [x] Rerun installed acceptance after rebuild/install/restart to prove the
   repaired `/api/project`, release-readiness API, CLI, and browser surfaces all
-  agree in the installed bundle. The 2026-08-07 run was fresh
-  (`/api/stale-server` `stale:false`) and still failed `25` of `72` checks for
-  real release blockers.
+  agree in the installed bundle. The 2026-08-07 fleet-card repair run was fresh
+  (`/api/stale-server` `stale:false`, startup refresh `errorCount:0`) and
+  still failed `23` of `72` checks for real release blockers.
+- [x] Repair the fleet-card read boundary: current initialized fleet rows no
+  longer retain stale `projectStatusError` text from an older payload, fleet
+  attention is stored as a bounded top-8 projection with the full total
+  preserved, and the fleet decision copy bounds long task-title prose without
+  dropping typed state. Installed `/api/service/projects` now reports all
+  initialized projects as `summaryFreshness:current`; only setup-incomplete
+  `jess` keeps its expected setup error.
 - [ ] Resolve the installed acceptance failures before calling 0.13.0 ready:
-  startup refresh error/fleet-card staleness, the active selected-release
-  lifecycle, unfinished member
+  the active selected-release lifecycle, unfinished member
   `task-synopsis-expansion-into-story-records`, ten owner-review proof-spec
   blockers, Narrative Harness package/proof-contract checks, and mobile
   overflow on Overview, Map, Work, and Release.
@@ -58,6 +64,37 @@ help_summary: |
   proof-spec owner review is settled.
 - [ ] Backfill the existing 0.12.0 remote tag/GitHub Release artifact after
   confirming the local `v0.12.0` tag is the accepted release commit.
+
+### Contract Touch Decision
+
+- Work id: `0.13-release-fleet-current-card-boundary`.
+- Touched contracts: saved fleet summary payload shape,
+  `/api/service/projects` current-card status semantics,
+  `/api/service` and `/api/fleet/attention` bounded fleet card reads, the
+  fleet attention item cache limit, and the release acceptance audit's fleet
+  current-card gate.
+- Considered but not touched: persisted fleet SQLite schema, project summary
+  schema, project decision schema, setup-wizard project initialization
+  semantics, release lifecycle mutation, and GitHub Release artifact naming.
+- Proof required: fleet read-model regression for stale status text on current
+  rows, oversized-prompt fleet-card regression, typecheck, build/install,
+  installed `/api/stale-server`, installed `/api/service/projects`, and the
+  release acceptance audit preserving real release-not-ready blockers.
+- Proof provided: `fleet-read-model-isolation.test.ts` (8 passed),
+  `pnpm typecheck`, `pnpm build`, `pnpm dev:install`,
+  `guildhall stop && guildhall start`, installed `/api/stale-server`
+  `stale:false` with startup `errorCount:0`, installed
+  `/api/service/projects` with all initialized projects current and only
+  setup-incomplete `jess` carrying `projectStatusError`, and
+  `node scripts/release-acceptance-audit.mjs` (`23` of `72` checks still
+  failing).
+- Waivers: none for fleet current-card status. Final 0.13.0 release
+  acceptance remains blocked by release lifecycle, Narrative Harness proof, and
+  mobile geometry failures.
+- Apply/revert: source-only read/projection compaction. Reverting can make a
+  current fleet card inherit stale error text or disappear behind an oversized
+  payload; forward repairs must keep the fleet card bounded and derive status
+  from the fleet row state.
 
 ### Contract Touch Decision
 
@@ -74,8 +111,8 @@ help_summary: |
   real release-not-ready blockers.
 - Proof provided: focused regressions, installed `stale:false` readback,
   `/api/project`/rich-spine/release-readiness/CLI agreement on `15` selected
-  items and `1` deferred item, and an acceptance audit that still fails `25`
-  of `72` checks for the remaining blockers.
+  items and `1` deferred item, and the latest acceptance audit that still
+  fails `23` of `72` checks for the remaining blockers.
 - Apply/revert: source-only read normalization plus summary reprojection
   migrations. Revert requires a forward migration; views must not fall back to
   execution-scope child rows as selected release membership.
@@ -122,8 +159,9 @@ help_summary: |
   artifact naming, and GitHub Release workflow behavior.
 - Required follow-up: finish the actual selected release by resolving the ten
   owner-review proof-spec blockers, the unfinished
-  `task-synopsis-expansion-into-story-records` member, the startup/fleet-card
-  refresh error, Narrative Harness proof/package gaps, and mobile overflow.
+  `task-synopsis-expansion-into-story-records` member, Narrative Harness
+  proof/package gaps, and mobile overflow. Startup/fleet-card refresh is
+  repaired in the installed 2026-08-07 run.
 - Proof required: focused projection/migration regressions, full
   release-readiness route suite, typecheck, installed build/install/restart,
   API/CLI/rich-spine readback, and installed acceptance audit.
@@ -133,8 +171,8 @@ help_summary: |
   `serve-release-readiness.test.ts` (83 passed), `pnpm typecheck`,
   `pnpm build`, `pnpm dev:install`, `guildhall stop && guildhall start`,
   installed `/api/project` Overview/rich-spine/release-readiness/CLI readback,
-  and `node scripts/release-acceptance-audit.mjs` (`25` of `72` checks still
-  failing).
+  and `node scripts/release-acceptance-audit.mjs` (`23` of `72` checks still
+  failing after the fleet-card repair).
 - Waivers: final 0.13.0 release acceptance is not waived; this repair only
   removes the selected-release membership contradiction.
 - Apply/revert: forward migration `0.13.99/release-membership-read-boundary`

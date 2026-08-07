@@ -12,7 +12,7 @@ import {
   upsertFleetSummaryProjection,
 } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
-import { fleetSummaryDependsOnDomains } from '../fleet-summary-projection.js'
+import { deleteFleetSummaryProjectionAtBoundary, fleetSummaryDependsOnDomains } from '../fleet-summary-projection.js'
 import { writeProjectTaskQueue } from '../project-state-boundary.js'
 import { writeProjectSummaryProjectionFromIndexedState } from '../project-summary-projection.js'
 
@@ -72,6 +72,8 @@ describe('fleet read-model isolation', () => {
   let service: ReturnType<typeof buildServeApp>
 
   beforeEach(async () => {
+    deleteFleetSummaryProjectionAtBoundary(HEALTHY_ID)
+    deleteFleetSummaryProjectionAtBoundary(BROKEN_ID)
     tempRoot = await mkdtemp(path.join(os.tmpdir(), 'guildhall-fleet-read-model-'))
     const healthyRoot = path.join(tempRoot, 'healthy')
     const brokenRoot = path.join(tempRoot, 'broken')
@@ -111,6 +113,8 @@ describe('fleet read-model isolation', () => {
   afterEach(async () => {
     unregisterWorkspace(HEALTHY_ID)
     unregisterWorkspace(BROKEN_ID)
+    deleteFleetSummaryProjectionAtBoundary(HEALTHY_ID)
+    deleteFleetSummaryProjectionAtBoundary(BROKEN_ID)
     await rm(tempRoot, { recursive: true, force: true })
   })
 
@@ -200,6 +204,37 @@ describe('fleet read-model isolation', () => {
       taskCounts: { total: 999, active: 999, done: 999 },
       startReadiness: { focusTaskId: 'cache-only-task' },
     })
+  })
+
+  it('drops stale status errors from promoted current fleet rows', async () => {
+    upsertFleetSummaryProjection({
+      projectId: HEALTHY_ID,
+      projectPath: healthy.root,
+      sourceProjectRevision: 999,
+      sourceQueueRevision: 999,
+      refreshedAt: '2099-01-01T00:00:00.000Z',
+      state: 'current',
+      payload: {
+        id: HEALTHY_ID,
+        path: healthy.root,
+        name: HEALTHY_ID,
+        initializationNeeded: false,
+        projectStatusLoading: false,
+        projectStatusError: 'The saved project summary is stale. Run the project-summary migration before relying on fleet status.',
+        summaryFreshness: 'stale',
+        taskCounts: { total: 1, active: 1, done: 0 },
+        startReadiness: { focusTaskId: 'healthy-task' },
+      },
+    })
+
+    const result = await readRoute('/api/service/projects')
+    const project = routeProjects('/api/service/projects', result.body).find(candidate => candidate.id === HEALTHY_ID)
+    expect(project).toMatchObject({
+      summaryFreshness: 'current',
+      taskCounts: { total: 1, active: 1, done: 0 },
+      startReadiness: { focusTaskId: 'healthy-task' },
+    })
+    expect(project?.projectStatusError).toBeUndefined()
   })
 
   it('stores a bounded fleet card when a task title is an oversized prompt', async () => {

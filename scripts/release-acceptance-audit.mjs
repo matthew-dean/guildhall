@@ -153,7 +153,16 @@ async function main() {
     durationMs: fleet.durationMs,
     bytes: fleet.bytes,
   })
-  check('fleet cards are current', projects.every(project => project.projectStatusLoading !== true && typeof project.projectStatusError !== 'string'), projects)
+  const initializedProjects = projects.filter(project => project.initializationNeeded !== true)
+  check('fleet cards are current', initializedProjects.every(project => project.projectStatusLoading !== true && typeof project.projectStatusError !== 'string'), {
+    initializedProjects,
+    setupIncompleteProjects: projects.filter(project => project.initializationNeeded === true).map(project => ({
+      id: project.id,
+      name: project.name,
+      projectStatusError: project.projectStatusError,
+      summaryFreshness: project.summaryFreshness,
+    })),
+  })
 
   const surfaceReads = {}
   for (const surface of ['overview', 'work', 'map']) {

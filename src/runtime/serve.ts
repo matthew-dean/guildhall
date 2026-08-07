@@ -684,7 +684,7 @@ interface ServiceProjectSummary {
   actionModel?: ProjectActionModel | null
 }
 
-const FLEET_ATTENTION_ITEM_LIMIT = 32
+const FLEET_ATTENTION_ITEM_LIMIT = 8
 const FLEET_SUMMARY_TEXT_LIMIT = 512
 
 function fleetText(value: string | undefined | null, fallback: string): string | undefined {
@@ -700,6 +700,67 @@ function compactFleetAction(action: ProjectActionModel['primaryAction']): Projec
     ...(action.detail ? { detail: fleetText(action.detail, 'Open the project to review the current work.') } : {}),
     ...(action.content ? { content: fleetText(action.content, 'Open the project to inspect the full work item.') } : {}),
     buttonLabel: fleetText(action.buttonLabel, 'Open') ?? 'Open',
+  }
+}
+
+function compactFleetDecision(decision: ProjectDecisionProjection): ProjectDecisionProjection {
+  const compactExecution = (
+    execution: ProjectDecisionProjection['execution'],
+  ): ProjectDecisionProjection['execution'] => {
+    const focus = execution.focus
+      ? {
+          taskId: execution.focus.taskId,
+          displayTitle: fleetText(
+            execution.focus.displayTitle,
+            `Work item ${execution.focus.taskId}`,
+          ) ?? `Work item ${execution.focus.taskId}`,
+          ...(execution.focus.taskRevision !== undefined ? { taskRevision: execution.focus.taskRevision } : {}),
+        }
+      : undefined
+    return {
+      state: execution.state,
+      code: execution.code,
+      ...(focus ? { focus } : {}),
+      ...(execution.focusTaskId ? { focusTaskId: execution.focusTaskId } : {}),
+      ...(execution.focusTaskTitle
+        ? {
+            focusTaskTitle: fleetText(
+              execution.focusTaskTitle,
+              execution.focusTaskId ? `Work item ${execution.focusTaskId}` : 'Selected work',
+            ),
+          }
+        : {}),
+      ...(execution.focusKind ? { focusKind: execution.focusKind } : {}),
+      ...(execution.reviewTaskIds?.length ? { reviewTaskIds: [...execution.reviewTaskIds] } : {}),
+      ...(typeof execution.count === 'number' ? { count: execution.count } : {}),
+      ...(execution.message
+        ? { message: fleetText(execution.message, 'Open the project to inspect the current decision.') }
+        : {}),
+    }
+  }
+  return {
+    version: decision.version,
+    projectRevision: decision.projectRevision,
+    queueRevision: decision.queueRevision,
+    generatedAt: decision.generatedAt,
+    ...(decision.planExecution ? { planExecution: compactExecution(decision.planExecution) } : {}),
+    execution: compactExecution(decision.execution),
+    release: {
+      state: decision.release.state,
+      ...(decision.release.releaseId ? { releaseId: decision.release.releaseId } : {}),
+      blockerTaskIds: [...decision.release.blockerTaskIds],
+      proofBlockerTaskIds: [...decision.release.proofBlockerTaskIds],
+    },
+    ownerInput: { ...decision.ownerInput },
+    ownerReview: { ...decision.ownerReview },
+    primaryAction: { ...decision.primaryAction },
+    conflicts: decision.conflicts.map(conflict => ({
+      id: conflict.id,
+      subject: { ...conflict.subject },
+      field: conflict.field,
+      claimIds: [...conflict.claimIds],
+      reconciliation: conflict.reconciliation,
+    })),
   }
 }
 
@@ -803,10 +864,10 @@ function compactFleetSummaryPayload(summary: ServiceProjectSummary): ServiceProj
     ...(summary.taskCounts ? { taskCounts: summary.taskCounts } : {}),
     ...(summary.workProgress ? { workProgress: summary.workProgress } : {}),
     ...(releaseSummary ? { releaseSummary } : {}),
-    // Decision is already a bounded, revisioned projection. Dropping it here
-    // would force fleet cards to infer a competing answer from presentation
-    // caches and leave live Activity with the only authoritative packet.
-    ...(summary.decision ? { decision: summary.decision } : {}),
+    // Keep the fleet copy of the decision structured, but bound display prose
+    // that may mirror a giant task title. Full project routes still serve the
+    // complete decision packet from the project read model.
+    ...(summary.decision ? { decision: compactFleetDecision(summary.decision) } : {}),
     ...(summary.highlights
       ? {
           highlights: {
@@ -2862,15 +2923,16 @@ function readFleetProjectSummaries(
         )
       }
 
+      const { projectStatusError: savedProjectStatusError, ...currentSafePayload } = payload
       const summary: ServiceProjectSummary = {
-        ...payload,
+        ...currentSafePayload,
         projectStatusLoading: false,
         summaryFreshness: freshnessByState[row.state] ?? 'error',
         ...(row.state === 'current'
           ? {}
           : {
               projectStatusError: row.error
-                ?? payload.projectStatusError
+                ?? savedProjectStatusError
                 ?? 'The saved fleet summary needs a background refresh.',
             }),
       }
