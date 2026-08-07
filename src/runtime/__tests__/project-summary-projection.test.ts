@@ -260,7 +260,7 @@ describe('project-summary-projection', () => {
         state: 'active',
         source: 'owner_approved',
         proofStyle: 'unspecified',
-        nodeIds: ['work:current'],
+        nodeIds: [],
         deferredNodeIds: [],
       }],
       selectedReleaseId: 'release-1',
@@ -290,6 +290,53 @@ describe('project-summary-projection', () => {
     expect(result.queue.releases?.[0]).toMatchObject({
       nodeIds: ['work:current'],
       deferredNodeIds: ['work:later'],
+    })
+  })
+
+  it('does not expand queue-owned release membership from an older accepted plan', () => {
+    const result = materializeApprovedPlanReleaseMembership(queue([
+      task('current', 'ready'),
+      task('stale', 'ready'),
+      task('later', 'shelved'),
+    ], {
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        proofStyle: 'unspecified',
+        nodeIds: ['work:current'],
+        deferredNodeIds: [],
+      }],
+      selectedReleaseId: 'release-1',
+    }), {
+      source: 'workspace_import',
+      recordedAt: now,
+      goalCount: 1,
+      taskCount: 3,
+      milestoneCount: 0,
+      currentTaskCount: 2,
+      laterTaskCount: 1,
+      currentTaskIds: ['current', 'stale'],
+      laterTaskIds: ['later'],
+      currentReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        currentTaskIds: ['current', 'stale'],
+        laterTaskIds: ['later'],
+      }],
+    })
+
+    expect(result.changed).toBe(false)
+    expect(result.conflicts).toEqual([])
+    expect(result.queue.releases?.[0]).toMatchObject({
+      nodeIds: ['work:current'],
+      deferredNodeIds: [],
     })
   })
 

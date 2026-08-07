@@ -30,13 +30,18 @@ help_summary: |
   Narrative Harness release membership: `15` included, `14` done, `1`
   unfinished, `1` deferred, and `10` proof blockers for
   `stage-1-headless-drafting-and-evaluation-mvp-r1`.
-- [ ] Repair the remaining surface contradiction: `/api/project` Overview,
-  rich orientation spine, and shared action-model surfaces still expose stale
-  execution-scope counts (`17` included and `32` deferred) while the
-  release-readiness API and CLI expose the selected release's canonical
-  `15`/`1` membership. The focused
+- [x] Repair the selected-release surface contradiction: `/api/project`
+  Overview, rich orientation spine, and shared action-model surfaces now keep
+  the selected release bounded to canonical/materialized membership instead of
+  widening from stale accepted-plan or terminal task-level release ids. The
+  focused
   `does not widen the selected release with an unscoped import duplicate of
-  scoped work` route regression still fails for `/api/project`.
+  scoped work` route regression now passes, and compact Overview uses saved
+  repository diagnostics to show dirty proof-recovery follow-up as the shared
+  next step without turning unrelated branch publishing gaps into blocked work.
+- [ ] Rerun installed acceptance after rebuild/install/restart to prove the
+  repaired `/api/project`, release-readiness API, CLI, and browser surfaces all
+  agree in the shipped bundle.
 - [ ] Resolve the installed acceptance failures before calling 0.13.0 ready:
   startup refresh error/fleet-card staleness, the active selected-release
   lifecycle, unfinished member
@@ -68,6 +73,33 @@ help_summary: |
 - Apply/revert: source-only read normalization plus summary reprojection
   migrations. Revert requires a forward migration; views must not fall back to
   execution-scope child rows as selected release membership.
+
+### Contract Touch Decision
+
+- Work id: `0.13-release-membership-authority-no-stale-plan-expansion`.
+- Touched contracts: selected-release membership projection,
+  approved-plan-to-release materialization, migration
+  `0.13.66/release-membership-snapshot`, the saved release read model's scope
+  normalization, compact Overview diagnostics/start-readiness projection, and
+  the ordinary `/api/project` selected-scope response.
+- Considered but not touched: persisted database schema, task lifecycle
+  values, release lifecycle mutation, release artifact workflow behavior,
+  package artifact naming, and provider/model proof contracts.
+- Required follow-up: rebuild/install/restart, confirm `/api/stale-server`
+  is fresh, rerun `pnpm audit:release-acceptance`, and attach fresh
+  API/CLI/browser evidence before calling 0.13.0 ready.
+- Proof required: scope projection, summary projection, migration, full
+  release-readiness route coverage, contract detector, typecheck, and the
+  release publisher automation tests from the artifact repair.
+- Proof provided: `project-scope-projection.test.ts` (29 passed),
+  `project-summary-projection.test.ts` (46 passed), focused migration slice
+  (5 passed), `serve-release-readiness.test.ts` (83 passed),
+  `scripts/data-layer-guardrails.test.ts` (21 passed), and `pnpm typecheck`.
+- Waivers: installed acceptance and browser screenshots are still pending.
+- Apply/revert: source-only read/projection repair. Reverting can reintroduce
+  stale accepted-plan membership expansion and compact Overview/release
+  next-action disagreement; forward repairs must preserve canonical release
+  membership and never widen it from terminal duplicate rows.
 
 ## 2026-07-23 Explicit Review-Gate and Agent-Disagreement Boundary
 

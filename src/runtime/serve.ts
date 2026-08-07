@@ -5468,6 +5468,100 @@ function compactOrientationMapProgress(value: unknown): Record<string, number> |
   return Object.keys(compact).length > 0 ? compact : null
 }
 
+function repositoryFollowupStartReadinessFromReleaseReadiness(
+  releaseReadiness: unknown,
+  tasks: Array<Record<string, unknown>>,
+  fallbackStartReadiness: {
+    canStart: boolean
+    code?: string
+    message?: string
+    actionHref?: string
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind?: string
+  } | null | undefined,
+): {
+  canStart: false
+  code: 'repository_followup_required'
+  message: string
+  actionHref: string
+  focusTaskId?: string
+  focusTaskTitle?: string
+  focusKind: 'repository_followup'
+  count: number
+} | null {
+  if (!isRecord(releaseReadiness)) return null
+  const diagnostics = isRecord(releaseReadiness.diagnostics) ? releaseReadiness.diagnostics : null
+  const totals = isRecord(diagnostics?.totals) ? diagnostics.totals : isRecord(releaseReadiness.totals) ? releaseReadiness.totals : null
+  const gitStoryBlockingCount = typeof totals?.gitStoryBlockingCount === 'number' ? totals.gitStoryBlockingCount : 0
+  if (gitStoryBlockingCount <= 0) return null
+  if (fallbackStartReadiness?.canStart === true) return null
+  const fallbackCode = fallbackStartReadiness?.code
+  if (
+    fallbackCode &&
+    !['all_terminal', 'no_unattended_progress', 'repository_followup_required'].includes(fallbackCode)
+  ) {
+    return null
+  }
+  const gitStory = isRecord(diagnostics?.gitStory)
+    ? diagnostics.gitStory
+    : isRecord(releaseReadiness.gitStory)
+      ? releaseReadiness.gitStory
+      : null
+  const blockers = Array.isArray(gitStory?.blockers)
+    ? gitStory.blockers.filter(isRecord)
+    : []
+  const first = blockers[0] ?? null
+  const blockerTaskId = typeof first?.taskId === 'string' && first.taskId.trim()
+    ? first.taskId.trim()
+    : undefined
+  const blockerState = typeof first?.state === 'string' ? first.state : undefined
+  if (
+    fallbackCode === 'no_unattended_progress' &&
+    (!blockerTaskId || blockerState !== 'dirty_uncommitted')
+  ) {
+    return null
+  }
+  const reason = typeof first?.reason === 'string' && first.reason.trim()
+    ? first.reason.trim()
+    : typeof first?.label === 'string' && first.label.trim()
+      ? first.label.trim()
+      : 'repository follow-up is still needed.'
+  const nextAction = typeof first?.nextAction === 'string' && first.nextAction.trim()
+    ? first.nextAction.trim()
+    : ''
+  const taskId = blockerTaskId ?? fallbackStartReadiness?.focusTaskId
+  const focusTask = taskId
+    ? tasks.find(task => task.id === taskId)
+    : undefined
+  const focusTaskTitle = typeof focusTask?.title === 'string' && focusTask.title.trim()
+    ? focusTask.title.trim()
+    : typeof fallbackStartReadiness?.focusTaskTitle === 'string' && fallbackStartReadiness.focusTaskTitle.trim()
+      ? fallbackStartReadiness.focusTaskTitle.trim()
+      : undefined
+  const release = isRecord(releaseReadiness.release) ? releaseReadiness.release : null
+  const scope = isRecord(releaseReadiness.scope) ? releaseReadiness.scope : null
+  const scopeLabel = typeof scope?.label === 'string' && scope.label.trim()
+    ? scope.label.trim()
+    : typeof release?.label === 'string' && release.label.trim()
+      ? release.label.trim()
+      : 'The selected release'
+  const next = nextAction && !focusTaskTitle ? ` ${nextAction}` : ''
+  const message = focusTaskTitle
+    ? `"${focusTaskTitle}" cannot resume until repository follow-up is finished: ${reason}${next}`
+    : `${scopeLabel} cannot ship until repository follow-up is finished: ${reason}${next}`
+  return {
+    canStart: false,
+    code: 'repository_followup_required',
+    message,
+    actionHref: '/release',
+    ...(taskId ? { focusTaskId: taskId } : {}),
+    ...(focusTaskTitle ? { focusTaskTitle } : {}),
+    focusKind: 'repository_followup',
+    count: gitStoryBlockingCount,
+  }
+}
+
 function buildOverviewOrientationPreviewSpine(input: {
   projectId: string
   rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string }
@@ -5895,6 +5989,7 @@ function compactReleaseReadinessFromProjection(input: {
   rawQueue?: { releases: ProjectRelease[]; selectedReleaseId?: string }
   scope?: ProjectScope | null
   scopeRows?: readonly ProjectStateDatabaseScopeRow[]
+  diagnostics?: ProjectStateDatabaseDiagnosticProjectionSnapshot | null
 }): Record<string, unknown> {
   const summary = input.projection.releaseSummary
   const fallbackCounts = summary?.counts ?? {
@@ -5935,7 +6030,28 @@ function compactReleaseReadinessFromProjection(input: {
     }
   }
   const blockers = summary?.blockers ?? []
+  const gitDiagnostic = input.diagnostics?.git ?? null
+  const gitStory = gitDiagnostic
+    ? {
+        ready: gitDiagnostic.ready,
+        state: gitDiagnostic.state,
+        blockers: gitDiagnostic.blockers,
+        snapshots: [],
+      }
+    : null
   const ready = summary?.state === 'ready' && counts.total > 0
+  const totals = {
+    tasks: counts.total,
+    // `blocked` already means "blocks this release" in the durable
+    // projection. Owner/proof counts are dimensions of that same set, not
+    // additional blockers to add again.
+    blockingCount: counts.blocked,
+    humanBlockingCount: counts.ownerBlocked,
+    proofEvidenceBlockingCount: counts.proofBlocked,
+    unfinishedCount: counts.unfinished,
+    gitStoryBlockingCount: gitDiagnostic?.blockerCount ?? 0,
+    done: counts.done,
+  }
   return {
     completeness: 'scope',
     checksLoaded: false,
@@ -5959,17 +6075,17 @@ function compactReleaseReadinessFromProjection(input: {
     }),
     statusCounts: summary?.taskStatusCounts ?? {},
     releaseBlockers: blockers,
-    totals: {
-      tasks: counts.total,
-      // `blocked` already means "blocks this release" in the durable
-      // projection. Owner/proof counts are dimensions of that same set, not
-      // additional blockers to add again.
-      blockingCount: counts.blocked,
-      humanBlockingCount: counts.ownerBlocked,
-      proofEvidenceBlockingCount: counts.proofBlocked,
-      unfinishedCount: counts.unfinished,
-      done: counts.done,
-    },
+    ...(gitStory ? { gitStory } : {}),
+    totals,
+    ...(input.diagnostics ? {
+      diagnostics: {
+        freshness: input.diagnostics.freshness,
+        generatedAt: input.diagnostics.generatedAt,
+        sourceRevision: input.diagnostics.sourceRevision,
+        gitStory,
+        totals,
+      },
+    } : {}),
   }
 }
 
@@ -7241,7 +7357,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const compactReleaseReadiness = compactReleaseReadinessFromProjection({
       projection,
       rawQueue: scopeQueue as never,
-        scope: readinessScope as unknown as ProjectScope | null,
+      scope: readinessScope as unknown as ProjectScope | null,
+      diagnostics: overviewState?.diagnostics ?? compactState?.diagnostics ?? null,
     })
     // Pre-promotion projects retain a narrow compatibility path until their
     // first background refresh. Promoted projects must already have the
@@ -7475,6 +7592,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const detailRecentEvents = input.includeDetailSections
       ? supervisor.recent(project.id, undefined, project.path)
       : null
+    const responseStartReadiness = repositoryFollowupStartReadinessFromReleaseReadiness(
+      compactReleaseReadiness,
+      detailResponseTasks as Array<Record<string, unknown>>,
+      summary.startReadiness,
+    ) ?? summary.startReadiness
+    const responseActionModel = responseStartReadiness !== summary.startReadiness
+      ? buildProjectActionModel({
+          startReadiness: responseStartReadiness,
+          inbox: detailInbox,
+          tasks: detailResponseTasks as never,
+          runStatus: run?.status ?? 'stopped',
+          runMode: run?.mode,
+          availability: overviewState?.availability ?? surfaceState?.availability ?? undefined,
+        })
+      : summary.actionModel
     const totalEffectiveCount = responseInventory?.total ?? scopedResponseTasks.length
     const hasMore = responseInventory?.hasMore ?? (responseInventoryLimit !== null && inventoryEnd < totalEffectiveCount)
     return {
@@ -7514,8 +7646,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       },
       workProgress: workProgressFromProjectSummaryProjection(projection),
       releaseReadiness: compactReleaseReadiness,
-      startReadiness: summary.startReadiness,
-      actionModel: summary.actionModel,
+      startReadiness: responseStartReadiness,
+      actionModel: responseActionModel,
       orientationSpine,
       ...(!input.includeDetailSections ? {
         detailPayload: {
@@ -7652,6 +7784,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
             liveDiagnostics: diagnosticRequested,
           })
         : null
+      const responseStartReadiness = repositoryFollowupStartReadinessFromReleaseReadiness(
+        releaseReadiness,
+        currentState.tasks as unknown as Array<Record<string, unknown>>,
+        startReadiness,
+      ) ?? startReadiness
       endReadiness?.()
       const endTasks = startTiming('tasks')
       const tasks = overviewSurface
@@ -7805,7 +7942,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
         },
         charter: reconciledOrientationSpine.charter,
-        startReadiness,
+        startReadiness: responseStartReadiness,
         sourceSpine: reconciledOrientationSpine,
       })
       const orientationSpine = overviewSurface
@@ -7834,13 +7971,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const actionModel = !diagnosticRequested
           ? run
             ? buildProjectActionModel({
-                startReadiness,
+                startReadiness: responseStartReadiness,
                 tasks: tasks as never,
                 runStatus: run.status,
                 runMode: run.mode,
                 availability,
               })
-            : projectedSummary?.actionModel ?? currentState.summary?.actionModel ?? null
+            : responseStartReadiness !== startReadiness
+              ? buildProjectActionModel({
+                  startReadiness: responseStartReadiness,
+                  inbox,
+                  tasks: tasks as never,
+                  thread: thread as never,
+                  runStatus: 'stopped',
+                  availability,
+                })
+              : projectedSummary?.actionModel ?? currentState.summary?.actionModel ?? null
         : (() => {
             const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null
             const actionTasksById = new Map((orientationTasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
@@ -7857,7 +8003,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               ? tasks.filter(task => typeof task.id === 'string' && scopedActionTaskIds.has(task.id))
               : tasks
             return buildProjectActionModel({
-              startReadiness,
+              startReadiness: responseStartReadiness,
               inbox,
               tasks: actionTasks as never,
               thread: thread as never,
@@ -7941,7 +8087,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(gitStory ? { gitStory } : {}),
         ...(releaseReadiness ? { releaseReadiness } : {}),
         ...(currentState.summary?.decision ? { decision: currentState.summary.decision } : {}),
-        startReadiness,
+        startReadiness: responseStartReadiness,
         actionModel,
         orientationSpine: mapSurface
           ? compactOrientationSpineForMapSurface(orientationSpine as unknown as Record<string, unknown>)

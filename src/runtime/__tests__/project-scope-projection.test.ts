@@ -78,6 +78,32 @@ describe('buildProjectScopeProjection', () => {
     expect(selected).toBeNull()
   })
 
+  it('does not widen materialized release membership from stale task release ids', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        task({ id: 'task-current', title: 'Current task', status: 'done', releaseIds: ['stage-1'] }),
+        task({ id: 'task-stale', title: 'Stale imported duplicate', status: 'done', releaseIds: ['stage-1'] }),
+      ],
+    })
+
+    expect(projection.selectedScope?.nodeIds).toEqual(['work:task-current'])
+    expect(projection.rows.find(row => row.taskId === 'task-current')).toMatchObject({ scope: 'included' })
+    expect(projection.rows.find(row => row.taskId === 'task-stale')).toMatchObject({ scope: 'deferred' })
+  })
+
   it('makes script-only proof requirements part of the shared scope projection', () => {
     const projection = buildProjectScopeProjection({
       version: 1,

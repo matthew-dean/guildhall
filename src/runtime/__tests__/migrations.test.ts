@@ -694,7 +694,7 @@ describe('applyProjectMigrations', () => {
     })).applied).toEqual([])
   })
 
-  it('refuses an accepted plan that contradicts canonical release membership', async () => {
+  it('keeps canonical release membership when an accepted plan contradicts it', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     const now = '2026-07-23T13:00:00.000Z'
     writeProjectTaskQueueWithSummary(tasksPath, {
@@ -754,10 +754,7 @@ describe('applyProjectMigrations', () => {
       only: ['0.13.66/release-membership-snapshot'],
     })
     expect(result.applied).toEqual([])
-    expect(result.failed).toEqual([expect.objectContaining({
-      id: '0.13.66/release-membership-snapshot',
-      error: expect.stringContaining('conflicts with canonical state'),
-    })])
+    expect(result.failed).toEqual([])
     expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
       releases: [{
         id: 'release-first',

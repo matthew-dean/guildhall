@@ -559,18 +559,45 @@ function projectScopeFromSavedState(input: {
   const id = selectedRelease?.id ?? savedScope?.id
   if (!id) return null
 
-  // Release node lists are reconstructed from normalized release membership
-  // by the sessions queue reader. They own the selected release boundary.
-  // Scheduler rows deliberately collapse parent/child work, so using them
-  // here caused Release and Start to silently re-count that boundary.
   if (selectedRelease) {
+    const currentSavedScope = input.summary?.freshness === 'current' &&
+      savedScope?.id === selectedRelease.id
+      ? savedScope
+      : null
+    const currentExecutionRows = input.summary?.freshness === 'current'
+      ? executionScopeRows(input.scopeRows)
+      : []
+    const currentIncludedNodeIds = currentExecutionRows
+      .filter(row => row.scope === 'included')
+      .map(row => taskScopeNodeId(row.taskId))
+    const currentDeferredNodeIds = currentExecutionRows
+      .filter(row => row.scope === 'deferred')
+      .map(row => taskScopeNodeId(row.taskId))
+    const currentSavedScopeRecord = currentSavedScope as unknown as Record<string, unknown> | null
+    const currentSavedNodeIds = Array.isArray(currentSavedScopeRecord?.nodeIds)
+      ? currentSavedScopeRecord.nodeIds.filter((value): value is string => typeof value === 'string')
+      : []
+    const currentSavedDeferredNodeIds = Array.isArray(currentSavedScopeRecord?.deferredNodeIds)
+      ? currentSavedScopeRecord.deferredNodeIds.filter((value): value is string => typeof value === 'string')
+      : []
+    // The current saved scope is the hierarchy-normalized selected release
+    // read model. Fall back to the raw release envelope only when that compact
+    // projection is unavailable or stale.
     return {
       id,
       label: selectedRelease.label,
       kind: selectedRelease.kind as ProjectScope['kind'],
       source: (selectedRelease.source ?? 'inferred') as ProjectScope['source'],
-      nodeIds: [...(selectedRelease.nodeIds ?? [])],
-      deferredNodeIds: [...(selectedRelease.deferredNodeIds ?? [])],
+      nodeIds: currentIncludedNodeIds.length > 0
+        ? currentIncludedNodeIds
+        : currentSavedNodeIds.length > 0
+          ? currentSavedNodeIds
+          : [...(selectedRelease.nodeIds ?? [])],
+      deferredNodeIds: currentDeferredNodeIds.length > 0 || currentIncludedNodeIds.length > 0
+        ? currentDeferredNodeIds
+        : currentSavedDeferredNodeIds.length > 0
+          ? currentSavedDeferredNodeIds
+          : [...(selectedRelease.deferredNodeIds ?? [])],
       ...(selectedRelease.proofStyle ? { proofStyle: selectedRelease.proofStyle } : {}),
     }
   }
@@ -977,15 +1004,18 @@ export interface ProjectSurfaceStateReadModel {
 }
 
 /**
- * Overview is a saved-orientation surface. It deliberately reads neither the
- * task inventory nor diagnostics: visible task cards are hydrated later by
- * their saved spine IDs and checked against these same revisions.
+ * Overview is a saved-orientation surface. It deliberately reads no task
+ * inventory: visible task cards are hydrated later by their saved spine IDs
+ * and checked against these same revisions. Saved diagnostics may be read
+ * from the same transaction so repository follow-up does not disagree with
+ * the Release surface.
  */
 export interface ProjectOverviewStateReadModel {
   authority: 'database' | 'legacy'
   summary: ProjectSummaryProjection | null
   /** Current normalized membership for the saved selected release only. */
   scope: ProjectScope | null
+  diagnostics: ProjectStateDatabaseDiagnosticProjection | null
   availability: ProjectStateDatabaseSurfaceState['availability']
   memoryHealth: ProjectStateDatabaseSurfaceState['memoryHealth']
   queueRevision: number | null
@@ -1002,6 +1032,7 @@ export function readProjectOverviewStateAtBoundary(
     {
       includeAvailability: true,
       includeScopeRows: true,
+      includeDiagnostics: true,
       ...(options.includeMemoryHealth ? { includeMemoryHealth: true } : {}),
     },
   )
@@ -1026,6 +1057,7 @@ export function readProjectOverviewStateAtBoundary(
       summary,
       scopeRows: current.scopeRows,
     }),
+    diagnostics: current.diagnostics,
     availability: current.availability,
     memoryHealth: current.memoryHealth,
     queueRevision: current.queueRevision,

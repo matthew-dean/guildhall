@@ -383,8 +383,11 @@ export function selectedProjectScopeForQueue(
 export function releaseToProjectScope(release: ProjectRelease, tasks: readonly Task[]): ProjectScope {
   const nodeIds = new Set<string>((release.nodeIds ?? []).filter(nodeId => !isWorkspaceImportPreviewNodeId(nodeId)))
   const deferredNodeIds = new Set<string>((release.deferredNodeIds ?? []).filter(nodeId => !isWorkspaceImportPreviewNodeId(nodeId)))
+  const hasMaterializedMembership = nodeIds.size > 0 || deferredNodeIds.size > 0
   for (const task of tasks) {
     const nodeId = taskScopeNodeId(task.id)
+    const nodeWasIncluded = nodeIds.has(nodeId)
+    const nodeWasDeferred = deferredNodeIds.has(nodeId)
     if (isProjectSetupTask(task.id)) {
       nodeIds.delete(nodeId)
       deferredNodeIds.delete(nodeId)
@@ -397,7 +400,9 @@ export function releaseToProjectScope(release: ProjectRelease, tasks: readonly T
     }
     if (task.status === 'shelved') {
       nodeIds.delete(nodeId)
-      if (task.releaseIds?.includes(release.id) || deferredNodeIds.has(nodeId)) deferredNodeIds.add(nodeId)
+      if (nodeWasIncluded || nodeWasDeferred || task.releaseIds?.includes(release.id)) {
+        deferredNodeIds.add(nodeId)
+      }
       continue
     }
     const parent = task.hierarchy?.parentId
@@ -411,6 +416,11 @@ export function releaseToProjectScope(release: ProjectRelease, tasks: readonly T
     const taskReleaseIds = task.releaseIds ?? []
     if (taskReleaseIds.length === 0 && task.hierarchy?.parentId) continue
     if (taskReleaseIds.length === 0) continue
+    if (
+      hasMaterializedMembership &&
+      taskHasMaterializedChildScope(task, nodeIds, deferredNodeIds)
+    ) continue
+    if (hasMaterializedMembership && taskStatusIsTerminalForMembership(task.status)) continue
     if (taskReleaseIds.includes(release.id)) {
       if (deferredNodeIds.has(nodeId)) {
         nodeIds.delete(nodeId)
@@ -561,6 +571,7 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
   if (!scope) return null
   const nodeIds = new Set(scope.nodeIds)
   const deferredNodeIds = new Set(scope.deferredNodeIds)
+  const hasMaterializedMembership = nodeIds.size > 0 || deferredNodeIds.size > 0
   const tasksById = new Map(tasks.map(task => [task.id, task] as const))
   const childIdsByParent = buildChildMap(tasks)
   for (const nodeId of [...nodeIds]) {
@@ -571,6 +582,8 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
   }
   for (const task of tasks) {
     const nodeId = taskScopeNodeId(task.id)
+    const nodeWasIncluded = nodeIds.has(nodeId)
+    const nodeWasDeferred = deferredNodeIds.has(nodeId)
     if (isProjectSetupTask(task.id)) {
       nodeIds.delete(nodeId)
       deferredNodeIds.delete(nodeId)
@@ -583,7 +596,9 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
     }
     if (task.status === 'shelved') {
       nodeIds.delete(nodeId)
-      if (deferredNodeIds.has(nodeId) || task.releaseIds?.includes(scope.id)) deferredNodeIds.add(nodeId)
+      if (nodeWasIncluded || nodeWasDeferred || task.releaseIds?.includes(scope.id)) {
+        deferredNodeIds.add(nodeId)
+      }
       continue
     }
     const parent = task.hierarchy?.parentId ? tasksById.get(task.hierarchy.parentId) ?? null : null
@@ -594,7 +609,16 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
       deferredNodeIds.delete(nodeId)
       continue
     }
-    if (task.releaseIds?.includes(scope.id)) {
+    if (
+      task.releaseIds?.includes(scope.id) &&
+      (
+        !hasMaterializedMembership ||
+        (
+          !taskStatusIsTerminalForMembership(task.status) &&
+          !taskHasMaterializedChildScope(task, nodeIds, deferredNodeIds)
+        )
+      )
+    ) {
       if (!deriveTaskWorkVisibility(task, parent).countInProjectTotals) {
         nodeIds.delete(nodeId)
         deferredNodeIds.delete(nodeId)
@@ -623,6 +647,21 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
     nodeIds: [...nodeIds],
     deferredNodeIds: [...deferredNodeIds],
   }
+}
+
+function taskHasMaterializedChildScope(
+  task: Pick<Task, 'hierarchy'>,
+  nodeIds: ReadonlySet<string>,
+  deferredNodeIds: ReadonlySet<string>,
+): boolean {
+  return (task.hierarchy?.childIds ?? []).some(childId => {
+    const nodeId = taskScopeNodeId(childId)
+    return nodeIds.has(nodeId) || deferredNodeIds.has(nodeId)
+  })
+}
+
+function taskStatusIsTerminalForMembership(status: Task['status'] | undefined): boolean {
+  return status === 'done' || status === 'pending_pr'
 }
 
 function buildScopeRow(

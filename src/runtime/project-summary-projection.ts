@@ -582,6 +582,7 @@ export function materializeApprovedPlanReleaseMembership(
             : 'active'
     const included = new Set(existing?.nodeIds ?? [])
     const deferred = new Set(existing?.deferredNodeIds ?? [])
+    const existingHasMaterializedMembership = included.size > 0 || deferred.size > 0
     const add = (taskId: string, disposition: 'included' | 'deferred') => {
       if (!taskIds.has(taskId)) return
       // An accepted-plan snapshot may outlive the release it originally
@@ -590,6 +591,7 @@ export function materializeApprovedPlanReleaseMembership(
       // work must already be attached to an active release through the
       // canonical membership relation.
       if (existing?.state === 'shipped') return
+      if (existingHasMaterializedMembership) return
       const nodeId = `work:${taskId}`
       const target = disposition === 'included' ? included : deferred
       const opposite = disposition === 'included' ? deferred : included
