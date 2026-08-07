@@ -16,10 +16,18 @@ help_summary: |
   existing publisher stopped after local commit/tag creation and printed a
   manual push reminder, which made the release artifact an easy human-memory
   step to miss.
-- Correction: `scripts/publish.mjs` now pushes the release branch and
-  `v<version>` tag to the configured remote by default after the release and
-  post-release commits, then verifies the remote tag. `--no-push` remains for
-  intentionally staged releases.
+- Correction: `scripts/publish.mjs` now commits and tags the release, pushes
+  the release branch plus `v<version>` tag to the configured remote, verifies
+  the remote tag, waits for `guildhall-macos.tar.gz` and its checksum on the
+  GitHub Release, then publishes npm. The post-release package bump is pushed
+  only after npm is live. `--no-push` is now a local staging mode and skips npm
+  publish because the GitHub artifact cannot be verified.
+- Correction: runtime-backed releases no longer downgrade a missing default
+  runtime image digest to a warning. The publisher reads
+  `GUILDHALL_RUNTIME_IMAGE_DIGEST` or resolves the immutable tag through Docker
+  buildx image inspection, then fails closed when no verified digest is
+  available for 0.9+ releases. The runtime-image workflow and local runtime
+  image scripts now cover the 0.13 line instead of the stale 0.11-only tags.
 - [x] Publisher tests cover the default remote branch/tag push and the
   rollback/dry-run paths that intentionally avoid remote publishing.
 - [x] The 0.13 acceptance-gap audit and active shipping-proof plan name the
