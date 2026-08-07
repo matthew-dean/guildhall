@@ -14,6 +14,18 @@ export const TaskRuntimeState = z.object({
     // explanatory evidence and must never be searched to choose a lane.
     kind: z.enum(['proof']).optional(),
     reason: z.string().optional(),
+    // A current-project proof failure after prior landing needs a new branch,
+    // not another pass in the historical worktree that produced the landing.
+    freshWorktree: z.boolean().optional(),
+  }).optional(),
+  // A fresh current lifecycle may supersede a historical completion without
+  // deleting that completion's evidence. This is intentionally general rather
+  // than a proof-recovery flag: spec reruns and later-release work need the
+  // same durable lifecycle boundary.
+  currentLifecycle: z.object({
+    reopenedAt: z.string(),
+    status: z.enum(['exploring']),
+    source: z.enum(['rerun_spec']),
   }).optional(),
   remediationAttempts: z.number().int().nonnegative().optional(),
   // Current worker recovery state belongs in the normalized runtime overlay,
@@ -79,7 +91,20 @@ export const TaskWorkspaceState = z.object({
   worktreePath: z.string().optional(),
   branchName: z.string().optional(),
   baseBranch: z.string().optional(),
+  /** Stable identity for one physical task-worktree attempt. */
+  workspaceAttemptId: z.string().optional(),
   mode: z.enum(['none', 'per_task', 'per_attempt']).optional(),
+  // A Git-observed recovery boundary. The worker receives these exact paths,
+  // but its prose never decides whether the merge is actually resolved.
+  syncRecovery: z.object({
+    kind: z.literal('base_merge_conflict'),
+    workspaceAttemptId: z.string(),
+    baseBranch: z.string(),
+    baseSha: z.string().nullable(),
+    headSha: z.string().nullable(),
+    conflictPaths: z.array(z.string()).min(1).max(128),
+    detectedAt: z.string(),
+  }).optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string(),
 })

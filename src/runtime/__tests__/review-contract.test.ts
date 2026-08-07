@@ -4,6 +4,7 @@ import {
   readStructuredSelfCritique,
   renderStructuredReviewFeedback,
   reviewVerdictHasStructuredApproval,
+  validateStructuredReviewResultTargets,
 } from '../review-contract.js'
 
 describe('review contracts', () => {
@@ -127,8 +128,15 @@ describe('review contracts', () => {
       '```json',
       JSON.stringify({
         verdict: 'revise',
-        acceptedCriteriaIds: ['ac-1'],
-        proofEvidenceIds: ['proof-1'],
+        acceptedCriteriaIds: [],
+        proofEvidenceIds: [],
+        findings: [{
+          targetKind: 'acceptance_criterion',
+          targetId: 'ac-1',
+          disposition: 'unsatisfied',
+          evidenceRefs: ['review:fixture'],
+          workerInstruction: 'Use the recorded proof path.',
+        }],
         revisionItems: ['Use the recorded proof path.'],
         riskItems: ['The release remains unproven.'],
         followUpItems: ['Consider a broader benchmark later.'],
@@ -138,7 +146,6 @@ describe('review contracts', () => {
     ].join('\n'))
 
     expect(feedback).toContain('Use the recorded proof path.')
-    expect(feedback).toContain('Accepted criteria IDs: ac-1')
     expect(feedback).not.toContain('This explanation may use any model vocabulary')
     expect(renderStructuredReviewFeedback('A prose-only review with no machine object.')).toBe('')
   })
@@ -148,8 +155,15 @@ describe('review contracts', () => {
       'A totally different model can explain this however it likes.',
       {
         verdict: 'revise',
-        acceptedCriteriaIds: ['ac-1'],
+        acceptedCriteriaIds: [],
         proofEvidenceIds: [],
+        findings: [{
+          targetKind: 'acceptance_criterion',
+          targetId: 'ac-1',
+          disposition: 'unsatisfied',
+          evidenceRefs: ['review:fixture'],
+          workerInstruction: 'Use the shared review boundary.',
+        }],
         revisionItems: ['Use the shared review boundary.'],
         riskItems: [],
         followUpItems: [],
@@ -158,7 +172,6 @@ describe('review contracts', () => {
     )
 
     expect(feedback).toContain('Use the shared review boundary.')
-    expect(feedback).toContain('Accepted criteria IDs: ac-1')
     expect(feedback).not.toContain('totally different model')
   })
 
@@ -197,5 +210,50 @@ describe('review contracts', () => {
     const approve = JSON.stringify({ verdict: 'approve', acceptedCriteriaIds: ['ac-1'], proofEvidenceIds: [] })
     const revise = JSON.stringify({ verdict: 'revise', acceptedCriteriaIds: [], proofEvidenceIds: [] })
     expect(readStructuredReviewResult(`\`\`\`json\n${approve}\n\`\`\`\n\`\`\`json\n${revise}\n\`\`\``)).toBeNull()
+  })
+
+  it('requires a revision to name an unsatisfied target from the review packet', () => {
+    const result = readStructuredReviewResult(JSON.stringify({
+      verdict: 'revise',
+      acceptedCriteriaIds: [],
+      proofEvidenceIds: [],
+      findings: [{
+        targetKind: 'acceptance_criterion',
+        targetId: 'ac-voice',
+        disposition: 'unsatisfied',
+        evidenceRefs: ['diff:src/voice.ts'],
+        workerInstruction: 'Inspect the voice acceptance criterion.',
+      }],
+      revisionItems: ['Any wording is audit context only.'],
+      riskItems: [],
+      followUpItems: [],
+      advisoryScores: {},
+    }))
+    expect(result).not.toBeNull()
+    expect(validateStructuredReviewResultTargets(result!, {
+      acceptanceCriterionIds: ['ac-voice'],
+      proofEvidenceIds: ['proof-voice'],
+    })).toMatchObject({ verdict: 'revise', findings: [expect.objectContaining({ targetId: 'ac-voice' })] })
+    expect(validateStructuredReviewResultTargets(result!, {
+      acceptanceCriterionIds: [],
+      proofEvidenceIds: ['proof-voice'],
+    })).toBeNull()
+  })
+
+  it('does not promote a legacy revision sentence into a target finding', () => {
+    const legacy = readStructuredReviewResult(JSON.stringify({
+      verdict: 'revise',
+      acceptedCriteriaIds: [],
+      proofEvidenceIds: [],
+      revisionItems: ['Rewrite this using whatever prose the reviewer prefers.'],
+      riskItems: [],
+      followUpItems: [],
+      advisoryScores: {},
+    }))
+    expect(legacy).not.toBeNull()
+    expect(validateStructuredReviewResultTargets(legacy!, {
+      acceptanceCriterionIds: ['ac-voice'],
+      proofEvidenceIds: [],
+    })).toBeNull()
   })
 })

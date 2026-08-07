@@ -13,7 +13,7 @@ import {
 } from '@guildhall/sessions'
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { appendExploringTranscript, replaceExploringTranscript } from '@guildhall/tools'
-import { readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
+import { preserveRuntimeOverlayOnTaskQueueParse, readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
 import { META_INTAKE_TASK_ID } from './project-reserved-task-ids.js'
 import {
   AGENT_SETTINGS_FILENAME,
@@ -33,6 +33,7 @@ import {
   registerProjectGraphContractSurface,
   writeLocalProjectGraphDraft,
 } from './project-graph.js'
+import { requestSpecReview } from './spec-review-ownership.js'
 
 // ---------------------------------------------------------------------------
 // FR-14: routing bootstrapping via meta-intake.
@@ -77,10 +78,10 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
     })
   }
   const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-  if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-  }
-  return TaskQueue.parse(parsed)
+  const queue = TaskQueue.parse(Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : parsed)
+  return preserveRuntimeOverlayOnTaskQueueParse(parsed, queue)
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
@@ -814,7 +815,11 @@ export async function synthesizeMetaIntakeDraft(
 
   const now = new Date().toISOString()
   task.spec = specParts.join('\n') + '\n'
-  task.status = 'spec_review'
+  requestSpecReview(task, {
+    authority: 'owner',
+    requestedAt: now,
+    requestedBy: 'meta-intake-synthesis',
+  })
   task.updatedAt = now
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)

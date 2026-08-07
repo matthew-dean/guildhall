@@ -20,6 +20,17 @@ describe('TaskStatus', () => {
 })
 
 describe('acceptance proof expectations', () => {
+  it('treats an executable command as automated proof even when legacy data calls it review', () => {
+    const criterion = AcceptanceCriteria.parse({
+      id: 'ac-command',
+      description: 'The focused proof passes.',
+      verifiedBy: 'review',
+      command: 'pnpm proof:focused',
+    })
+
+    expect(criterion.verifiedBy).toBe('automated')
+  })
+
   it('preserves explicit non-zero exit and output requirements from a spec', () => {
     const criteria = migrateLegacyAcceptanceCriteriaFromMarkdown(`
 ## Acceptance Criteria
@@ -67,6 +78,25 @@ describe('Task', () => {
   it('normalizes legacy pending tasks to ready', () => {
     const result = Task.parse({ ...validTask, status: 'pending' })
     expect(result.status).toBe('ready')
+  })
+
+  it('keeps spec-review authority separate from the lifecycle status', () => {
+    const result = Task.parse({
+      ...validTask,
+      status: 'spec_review',
+      specReviewGate: {
+        authority: 'coordinator',
+        requestedAt: '2026-07-23T12:00:00.000Z',
+        requestedBy: 'proposal-promoter',
+      },
+    })
+
+    expect(result.specReviewGate).toEqual({
+      authority: 'coordinator',
+      requestedAt: '2026-07-23T12:00:00.000Z',
+      requestedBy: 'proposal-promoter',
+      reason: 'spec_handoff',
+    })
   })
 
   it('applies default priority of normal', () => {

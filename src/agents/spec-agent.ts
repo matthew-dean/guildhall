@@ -111,6 +111,13 @@ reviewable.
      "Given X, when Y, then Z" or similar.
    - "Verification" must name the commands, review proof, browser proof,
      provider proof, or safe launch proof needed before work starts.
+   - When read-tasks shows an existing command-backed acceptance criterion,
+     proof path, or hard gate, the structuredSpec must include proofContract.
+     Set existingCommandDisposition to preserve, replace, or retire. Preserve
+     means copying every known command into structured acceptance criteria;
+     replace means providing a concrete replacement command; retire is only
+     appropriate when the documented task outcome no longer needs executable
+     proof. Never silently turn known command proof into review-only criteria.
    - "Risks / Open Questions" belongs only when there is real uncertainty worth
      carrying forward after intake.
    - A "Completion Boundary" section with these exact fields:
@@ -397,8 +404,24 @@ when the work doesn't span specialist lanes.
 
 ## Rules
 
-- If any acceptance criterion is ambiguous or requires a judgment call you cannot make
-  from context alone, use the raise-escalation tool with reason='spec_ambiguous'.
+- Distinguish an owner decision from ordinary planning decomposition. When an
+  approved brief names a required internal contract, record family, or
+  integration boundary but does not yet define its exact fields, that is not
+  a reason to halt the release or ask the owner to invent implementation
+  details. Create one bounded, same-release child with the add-task tool to
+  define and prove that contract, link it with hierarchy.relation = "decomposes",
+  keep the parent as containing work, and use only the visible source refs.
+  The child must state the contract question, the smallest source-backed
+  deliverable, and how its result will let the parent resume. Do not create a
+  generic Research/Implement/Verify trio or invent fields that the source
+  packet does not support.
+- Raise spec_ambiguous only when the missing fact is an owner/product
+  decision: for example the intended audience, release boundary, user-facing
+  behavior, risk policy, or success condition. A missing internal data shape
+  needed to realize an approved outcome belongs in Guildhall's planning lane.
+- If, after applying that decomposition rule, an acceptance criterion still
+  requires an owner/product judgment you cannot make from context alone, use
+  the raise-escalation tool with reason="spec_ambiguous".
   Do NOT simply add a note or set status to 'blocked' yourself — the escalation tool
   is the single sanctioned path for halting a task.
 - Do not invent product requirements. If owner intent, audience, user flow, risk, or
@@ -456,6 +479,14 @@ Each \`acceptanceCriteria[]\` item should be structured JSON, not a loose string
 - scenario
 - expectation
 - verificationMode
+
+If the visible task has typed capability bindings, treat their IDs as the
+accepted scope contract. Put every bound ID on the product brief and top-level
+\`structuredSpec.sourceCapabilityIds\`, then attach every ID to at least one
+\`acceptanceCriteria[].sourceCapabilityIds\` entry. Never invent IDs, infer
+them from prose, or replace them with similarly named text. If the task has no
+typed bindings, do not manufacture a capability list; leave that intake
+decision to the structured source adapter or delegated owner.
 
 Optional per-criterion keys are allowed only when they add real value:
 - evidenceHint

@@ -19,11 +19,15 @@ import {
   projectStateDatabaseDetailPathFromTasksPath,
   projectStateDatabasePath,
   PROJECT_STATE_DATABASE_SCHEMA_VERSION,
+  markProjectStateDatabaseStale,
   readProjectStateDatabaseMetadata,
   readProjectStateDatabaseAuthority,
+  readProjectStateDatabaseReadBundle,
+  hasProjectStateDatabaseDecisionSnapshot,
   readProjectStateDatabaseQueueDefinitionForMigration,
   readProjectStateDatabaseQueueWithRevision,
   readProjectStateDatabaseInventory,
+  readProjectStateDatabaseDiagnosticProjection,
   readProjectStateDatabaseSummary,
   migrateProjectStateDatabaseQueueDetail,
   migrateProjectStateDatabaseWorkItemDetails,
@@ -51,9 +55,11 @@ import {
   upsertTaskRuntimeState,
   rewriteProjectStateDatabaseTaskSummaries,
   projectStateDatabaseTaskSummary,
+  writeProjectStateDatabaseDiagnosticProjection,
+  writeProjectStateDatabaseTaskBatchMutation,
 } from '@guildhall/sessions'
 import type { ProjectStateDatabaseScopeRow } from '@guildhall/sessions'
-import { Task as TaskSchema, TaskRuntimeState, type ProjectRelease } from '@guildhall/core'
+import { Task as TaskSchema, TaskQueue, TaskRuntimeState, type ProjectRelease, type TaskQueue as TaskQueueModel } from '@guildhall/core'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
@@ -61,6 +67,7 @@ import { migrateTaskQuestionsToBoundedChat } from './task-question-migration.js'
 import { migrateTaskHierarchyState } from './task-hierarchy-migration.js'
 import { migrateTaskDeliveryStepState } from './task-delivery-step-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
+import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import {
   backfillTaskEvidenceCurrent,
   backfillTaskStateDatabaseOverlays,
@@ -81,14 +88,20 @@ import {
 import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.js'
 import { restoreEvacuatedTaskState } from './evacuated-task-state-restore.js'
 import { migrateWorkDecompositionState } from './work-decomposition-migration.js'
+import { validateSpecCompletionBoundary } from './spec-quality.js'
 import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership } from './project-scope-projection.js'
+import { readProjectReleaseState } from './project-state-boundary.js'
 import { buildEffectiveTasks } from './effective-task.js'
 import {
   backfillProjectSummaryProjection,
   buildProjectSummaryProjectionFromIndexedState,
   PROJECT_SUMMARY_PROJECTION_VERSION,
+  projectSummaryProjectionIsCurrent,
   projectSummaryProjectionNeedsBackfill,
   projectSummaryProjectionPath,
+  materializeApprovedPlanReleaseMembership,
+  prepareProjectSummaryProjectionFromUnknownQueue,
+  readProjectSummaryProjection,
   readProjectSummaryProjectionForMigration,
   writeProjectSummaryProjection,
   writeProjectSummaryProjectionFromIndexedState,
@@ -220,6 +233,22 @@ const PROOF_SETUP_EXECUTION_BLUEPRINT_MIGRATION_ID = '0.13.41/proof-setup-execut
 const PROOF_SETUP_ACCEPTANCE_CONTRACT_MIGRATION_ID = '0.13.55/proof-setup-acceptance-contract'
 const PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID = '0.13.56/proof-setup-projection-refresh'
 const PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID = '0.13.57/proof-setup-effective-projection'
+const DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID = '0.13.58/diagnostic-readiness-task-identity'
+const SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID = '0.13.59/script-only-proof-projection'
+const SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID = '0.13.60/source-capability-summary'
+const INTERNAL_PROOF_RELEASE_CONTEXT_MIGRATION_ID = '0.13.65/internal-proof-release-context'
+const RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID = '0.13.66/release-membership-snapshot'
+const SPEC_REVIEW_GATE_MIGRATION_ID = '0.13.67/explicit-spec-review-gates'
+const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
+const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-authority'
+const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
+const DURABLE_DECISION_SNAPSHOT_MIGRATION_ID = '0.13.71/durable-decision-snapshot'
+const INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID = '0.13.72/indexed-release-summary-reprojection'
+const NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID = '0.13.73/named-release-member-counts'
+const INCLUDED_RELEASE_DISPOSITION_COUNT_MIGRATION_ID = '0.13.74/included-release-disposition-counts'
+const CANONICAL_RELEASE_MEMBERSHIP_SUMMARY_MIGRATION_ID = '0.13.75/canonical-release-membership-summary'
+const SELECTED_RELEASE_NODE_MEMBERSHIP_SUMMARY_MIGRATION_ID = '0.13.76/selected-release-node-membership-summary'
+const RELEASE_MEMBERSHIP_READ_BOUNDARY_MIGRATION_ID = '0.13.99/release-membership-read-boundary'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -264,6 +293,75 @@ function taskNeedsProofSetupKindMigration(task: Task): boolean {
   return task.workKind === 'verification' &&
     task.semanticKind !== 'proof_setup' &&
     task.proposalRationale === 'proof-recovery: establish a concrete project-backed proof command for the containing task'
+}
+
+function taskNeedsSpecReviewGateMigration(task: Task): boolean {
+  return task.status === 'spec_review' && task.specReviewGate == null
+}
+
+function migrateLegacySpecReviewGate(task: Task, now: string): boolean {
+  if (!taskNeedsSpecReviewGateMigration(task)) return false
+  task.specReviewGate = {
+    authority: 'owner',
+    requestedAt: task.updatedAt || now,
+    requestedBy: 'legacy-spec-review-gate-migration',
+    reason: 'spec_handoff',
+  }
+  task.updatedAt = now
+  return true
+}
+
+function taskNeedsDurableSpecHandoffMigration(task: Task): boolean {
+  return task.status === 'exploring' &&
+    task.structuredSpec != null &&
+    typeof task.productBrief?.approvedAt === 'string' &&
+    task.productBrief.approvedAt.trim().length > 0 &&
+    !(task.openQuestions ?? []).some(question => !question.answeredAt) &&
+    validateSpecCompletionBoundary(task).ok
+}
+
+function settleDurableSpecHandoff(task: Task, now: string): boolean {
+  if (!taskNeedsDurableSpecHandoffMigration(task)) return false
+  task.status = 'spec_review'
+  task.specReviewGate = {
+    authority: 'owner',
+    requestedAt: now,
+    requestedBy: 'durable-spec-handoff-migration',
+    reason: 'spec_handoff',
+  }
+  task.updatedAt = now
+  return true
+}
+
+function compactSpecReviewAuthorityNeedsMigration(projectRoot: string): boolean {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return false
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const inventory = readProjectStateDatabaseInventory(tasksPath, {
+    includeDefinitions: false,
+  })
+  if (!inventory) return false
+  const ownerReviewTasks = inventory.tasks.filter(task => {
+    if (task.status !== 'spec_review') return false
+    const currentSummary = isRecord(task.currentSummary) ? task.currentSummary : null
+    return currentSummary?.specReviewAuthority === 'owner' && task.scopeRow?.scope === 'included'
+  })
+  const missingAuthority = inventory.tasks.some(task => {
+    if (task.status !== 'spec_review') return false
+    const currentSummary = isRecord(task.currentSummary) ? task.currentSummary : null
+    return currentSummary?.specReviewAuthority !== 'owner' && currentSummary?.specReviewAuthority !== 'coordinator'
+  })
+  const saved = readProjectStateDatabaseSummary<Record<string, unknown>>(tasksPath)?.payload
+  const savedReview = isRecord(saved?.ownerReview) ? saved.ownerReview : null
+  const savedDecision = isRecord(saved?.decision) ? saved.decision : null
+  const savedCount = typeof savedReview?.openCount === 'number' ? savedReview.openCount : 0
+  const savedTaskId = isRecord(savedReview?.next) && typeof savedReview.next.taskId === 'string'
+    ? savedReview.next.taskId
+    : null
+  const decisionReview = isRecord(savedDecision?.ownerReview) ? savedDecision.ownerReview : null
+  return missingAuthority ||
+    savedCount !== ownerReviewTasks.length ||
+    savedTaskId !== (ownerReviewTasks[0]?.id ?? null) ||
+    (ownerReviewTasks.length > 0 && decisionReview?.state !== 'required')
 }
 
 function migrateProofSetupTaskKind(task: Task): boolean {
@@ -319,7 +417,7 @@ function repairProofSetupExecutionBlueprint(
   const command = concreteProofCommandForTask(task)
   const canonical = buildProofSetupTaskContract(parent, now, {
     id: task.id,
-    releaseIds: task.releaseIds?.length ? task.releaseIds : parent.releaseIds,
+    ...proofSetupContractScope(task),
     ...(command ? { command } : {}),
   })
   const previousNotes = Array.isArray(task.notes) ? task.notes : []
@@ -360,7 +458,7 @@ function migrateDeterministicProofSetupContract(
   const command = concreteProofCommandForTask(task)
   const canonical = buildProofSetupTaskContract(parent, now, {
     id: task.id,
-    releaseIds: task.releaseIds?.length ? task.releaseIds : parent.releaseIds,
+    ...proofSetupContractScope(task),
     ...(command ? { command } : {}),
   })
   const previousNotes = Array.isArray(task.notes) ? task.notes : []
@@ -392,6 +490,106 @@ function migrateDeterministicProofSetupContract(
 
 function proofSetupParentId(task: Task): string | undefined {
   return task.hierarchy?.parentId ?? task.delivery?.supports?.[0]
+}
+
+function proofSetupScopedReleaseIds(task: Task): string[] {
+  return [...new Set([
+    ...(task.proofForReleaseId ? [task.proofForReleaseId] : []),
+    ...(task.releaseIds ?? []),
+  ])]
+}
+
+function proofSetupContractScope(task: Task): { proofForReleaseId?: string; releaseIds?: string[] } {
+  if (task.proofForReleaseId) return { proofForReleaseId: task.proofForReleaseId }
+  return task.releaseIds?.length ? { releaseIds: task.releaseIds } : {}
+}
+
+function proofSetupReleaseContextIds(
+  queue: { releases?: ProjectRelease[] },
+  task: Task,
+): string[] {
+  const nodeId = `work:${task.id}`
+  return [...new Set([
+    ...(task.proofForReleaseId ? [task.proofForReleaseId] : []),
+    ...(task.releaseIds ?? []),
+    ...(queue.releases ?? [])
+      .filter(release => release.nodeIds?.includes(nodeId) || release.deferredNodeIds?.includes(nodeId))
+      .map(release => release.id),
+  ])]
+}
+
+function isInternalProofSetupTask(task: Task): boolean {
+  return isProofSetupTask(task) && task.workVisibility?.countInProjectTotals === false
+}
+
+function internalProofReleaseContextNeedsMigration(queue: { tasks: Task[]; releases?: ProjectRelease[] }): boolean {
+  return queue.tasks.some(task => {
+    if (!isInternalProofSetupTask(task)) return false
+    if (task.releaseIds?.length) return true
+    const contextIds = proofSetupReleaseContextIds(queue, task)
+    const hasActiveMembership = (queue.releases ?? []).some(release =>
+      release.state !== 'shipped' &&
+      (release.nodeIds?.includes(`work:${task.id}`) || release.deferredNodeIds?.includes(`work:${task.id}`)),
+    )
+    // A single shipped-snapshot relation can be elevated into typed proof
+    // context without modifying that snapshot. Multiple snapshot relations are
+    // intentionally retained as unassigned historical evidence: choosing one
+    // would invent an ownership fact the old data does not contain.
+    return hasActiveMembership || (!task.proofForReleaseId && contextIds.length === 1)
+  })
+}
+
+function migrateInternalProofReleaseContexts(
+  queue: { tasks: Task[]; releases?: ProjectRelease[] },
+  now: string,
+): { normalized: number; materialized: number; historical: number } {
+  let normalized = 0
+  let materialized = 0
+  let historical = 0
+  for (const task of [...queue.tasks]) {
+    if (!isInternalProofSetupTask(task)) continue
+    const legacyContextIds = proofSetupReleaseContextIds(queue, task)
+    const hadVisibleMembership = (task.releaseIds?.length ?? 0) > 0 ||
+      (queue.releases ?? []).some(release =>
+        release.nodeIds?.includes(`work:${task.id}`) || release.deferredNodeIds?.includes(`work:${task.id}`),
+      )
+    if (!hadVisibleMembership) continue
+
+    // A persisted typed proof scope wins over an obsolete active-membership
+    // row. Internal work is hidden from active product/release scope, but a
+    // shipped release is an immutable historical snapshot: its existing
+    // member rows are evidence, not an obsolete projection to delete.
+    task.releaseIds = []
+    for (const release of queue.releases ?? []) {
+      if (release.state === 'shipped') continue
+      release.nodeIds = (release.nodeIds ?? []).filter(nodeId => nodeId !== `work:${task.id}`)
+      release.deferredNodeIds = (release.deferredNodeIds ?? []).filter(nodeId => nodeId !== `work:${task.id}`)
+    }
+
+    if (!task.proofForReleaseId && legacyContextIds.length === 1) {
+      task.proofForReleaseId = legacyContextIds[0]
+    } else if (!task.proofForReleaseId && legacyContextIds.length > 1) {
+      // One old child claimed multiple release memberships. It cannot be
+      // truthfully assigned to one of them. Keep it as historical evidence
+      // and create fresh, explicitly scoped proof work for every active
+      // release instead of selecting an arbitrary winner.
+      const parentId = proofSetupParentId(task)
+      const parent = parentId ? queue.tasks.find(candidate => candidate.id === parentId) : undefined
+      for (const releaseId of legacyContextIds) {
+        const release = queue.releases?.find(candidate => candidate.id === releaseId)
+        if (!parent || !release || release.state === 'shipped') continue
+        const result = materializeProofSetupTask(queue as Parameters<typeof materializeProofSetupTask>[0], parent, now, {
+          releaseIds: [releaseId],
+          linkParent: false,
+        })
+        if (result.status === 'materialized') materialized += 1
+      }
+      historical += 1
+    }
+    task.updatedAt = now
+    normalized += 1
+  }
+  return { normalized, materialized, historical }
 }
 
 function rawProofPathRecords(task: Task): Array<Record<string, unknown>> {
@@ -438,7 +636,7 @@ function taskNeedsProofSetupCompletionRepair(
 ): boolean {
   if (!isProofSetupTask(task) || task.status !== 'done') return false
 
-  const taskReleaseIds = new Set(task.releaseIds ?? [])
+  const taskReleaseIds = new Set(proofSetupScopedReleaseIds(task))
   const shippedReleaseIds = new Set(
     [...taskReleaseIds].filter(releaseId => releases.some(release => release.id === releaseId && release.state === 'shipped')),
   )
@@ -467,10 +665,29 @@ function taskNeedsProofSetupRuntimeRecovery(
   task: Task,
   runtime: Awaited<ReturnType<typeof readTaskRuntimeStore>>,
 ): boolean {
-  if (!isProofSetupTask(task) || (task.status !== 'done' && task.status !== 'ready')) return false
+  // This migration repairs historical terminal state. A ready proof step may
+  // be newly materialized normal work, and does not need a recovery marker to
+  // be runnable. Treating every unfinished ready step as a migration defect
+  // turns ordinary release progress into a false required-migration blocker.
+  if (!isProofSetupTask(task) || task.status !== 'done') return false
   const recovery = runtime.tasks[task.id]?.proofRecovery
   if (recovery?.kind === 'proof' && typeof recovery.reopenedAt === 'string') return false
   return taskDoneButProofMissing(task)
+}
+
+function proofSetupRuntimeRecoveryIsActionable(
+  task: Task,
+  releases: readonly ProjectRelease[],
+  selectedReleaseId: string | null | undefined,
+): boolean {
+  const taskReleaseIds = proofSetupScopedReleaseIds(task)
+  // A proof repair is executable-release maintenance, never a retrospective
+  // rewrite of historical release evidence. Once a project has a selected
+  // release, only that release may make this migration actionable.
+  if (selectedReleaseId && taskReleaseIds.length > 0 && !taskReleaseIds.includes(selectedReleaseId)) return false
+  return taskReleaseIds.length === 0 || taskReleaseIds.some(releaseId =>
+    releases.some(release => release.id === releaseId && release.state !== 'shipped'),
+  )
 }
 
 function releaseLocalProofSetupRepair(
@@ -479,7 +696,8 @@ function releaseLocalProofSetupRepair(
   releases: readonly ProjectRelease[],
   now: string,
 ): boolean {
-  const taskReleaseIds = new Set(task.releaseIds ?? [])
+  if (task.proofForReleaseId) return false
+  const taskReleaseIds = new Set(proofSetupScopedReleaseIds(task))
   const shippedReleaseIds = [...taskReleaseIds].filter(releaseId =>
     releases.some(release => release.id === releaseId && release.state === 'shipped'),
   )
@@ -643,7 +861,7 @@ function repairCanonicalProofSetupAcceptanceContract(
   const command = concreteProofCommandForTask(task)
   const canonical = buildProofSetupTaskContract(parent, now, {
     id: task.id,
-    releaseIds: task.releaseIds?.length ? task.releaseIds : parent.releaseIds,
+    ...proofSetupContractScope(task),
     ...(command ? { command } : {}),
   })
   const previousNotes = Array.isArray(task.notes) ? task.notes : []
@@ -971,6 +1189,28 @@ async function effectiveCurrentProofReadModelStatus(projectRoot: string): Promis
 }
 
 /**
+ * Older diagnostic snapshots stored task-owned release blockers without the
+ * typed task relation. Repair only IDs that the normalized task inventory can
+ * prove are task IDs; unknown diagnostic observations stay unclassified.
+ */
+function diagnosticReadinessTaskIdentityStatus(projectRoot: string): {
+  taskIds: Set<string>
+  diagnostic: ReturnType<typeof readProjectStateDatabaseDiagnosticProjection>
+  missingTaskIdentityCount: number
+} {
+  const inventory = readProjectStateDatabaseInventory(
+    getProjectSystemStatePath(projectRoot, 'TASKS.json'),
+    { includeDefinitions: false },
+  )
+  const diagnostic = readProjectStateDatabaseDiagnosticProjection(projectRoot)
+  const taskIds = new Set(inventory?.tasks.map(task => task.id) ?? [])
+  const missingTaskIdentityCount = diagnostic?.readiness?.blockers?.filter(blocker =>
+    !blocker.taskId && taskIds.has(blocker.id),
+  ).length ?? 0
+  return { taskIds, diagnostic, missingTaskIdentityCount }
+}
+
+/**
  * Cross the current-state boundary once, then stop carrying old queue files in
  * the normal runtime. Deletion is allowed only after SQLite independently
  * provides every task definition and a current summary.
@@ -1284,6 +1524,133 @@ export async function writeProjectMigrationLedger(
   await fs.mkdir(path.dirname(file), { recursive: true })
   await writeManagedTextFile(file, `${JSON.stringify({ version: 1, records: ledger.records }, null, 2)}\n`, 'utf8')
   recordGuildhallRuntimeWrite(projectRoot, ['project-migrations.v1'])
+}
+
+type ApprovedPlanReleaseMembershipRepair =
+  | { state: 'not_applicable' | 'current' }
+  | {
+      state: 'materialize' | 'conflict'
+      current: Awaited<ReturnType<typeof readProjectCanonicalCurrentState>>
+      queue: TaskQueueModel
+      conflicts: ReturnType<typeof materializeApprovedPlanReleaseMembership>['conflicts']
+    }
+
+/**
+ * An approved plan is allowed to seed membership exactly once through this
+ * explicit repair boundary. Ordinary reads never consult it as a competing
+ * scope source. An opposite normalized disposition is an ambiguous history,
+ * so the repair reports it instead of choosing based on timing or prose.
+ */
+async function inspectApprovedPlanReleaseMembershipRepair(
+  projectRoot: string,
+): Promise<ApprovedPlanReleaseMembershipRepair> {
+  const current = await readProjectCanonicalCurrentState(projectRoot)
+  if (current.authority !== 'database' || !current.summary?.approvedPlan) {
+    return { state: 'not_applicable' }
+  }
+  const parsedQueue = TaskQueue.safeParse(normalizeLegacyTaskQueueForMigration({ version: 1, ...current.rawQueue }))
+  if (!parsedQueue.success) return { state: 'not_applicable' }
+  const queue = parsedQueue.data as TaskQueueModel
+  const materialized = materializeApprovedPlanReleaseMembership(queue, current.summary.approvedPlan)
+  if (materialized.conflicts.length > 0) {
+    return { state: 'conflict', current, queue: materialized.queue, conflicts: materialized.conflicts }
+  }
+  // This repair is deliberately one-way: it only catches an accepted plan
+  // whose real tasks were never materialized into the normalized relation.
+  // A plan that merely adds a release shell or changes non-membership fields
+  // belongs to normal planning, not a historical-state repair.
+  const currentReleasesById = new Map((queue.releases ?? []).map(release => [release.id, release]))
+  const materializedReleases = materialized.queue.releases ?? []
+  const missingMembership = materializedReleases.some(release => {
+    const existing = currentReleasesById.get(release.id)
+    const existingNodeIds = new Set([...(existing?.nodeIds ?? []), ...(existing?.deferredNodeIds ?? [])])
+    return [...release.nodeIds, ...release.deferredNodeIds].some(nodeId => !existingNodeIds.has(nodeId))
+  })
+  return materialized.changed && missingMembership
+    ? { state: 'materialize', current, queue: materialized.queue, conflicts: [] }
+    : { state: 'current' }
+}
+
+async function materializeApprovedPlanReleaseMembershipAtBoundary(
+  projectRoot: string,
+): Promise<{ state: 'not_applicable' | 'current' | 'materialized'; membershipCount: number }> {
+  const repair = await inspectApprovedPlanReleaseMembershipRepair(projectRoot)
+  if (repair.state === 'not_applicable' || repair.state === 'current') {
+    return { state: repair.state, membershipCount: 0 }
+  }
+  if (repair.state === 'conflict') {
+    const details = repair.conflicts
+      .map(conflict => `${conflict.releaseId}/${conflict.taskId}: ${conflict.existing} vs ${conflict.proposed}`)
+      .join(', ')
+    throw new Error(`Approved plan release membership conflicts with canonical state (${details}). Reconcile the registered release.membershipTaskIds claim before retrying.`)
+  }
+  if (repair.state !== 'materialize') {
+    throw new Error('Approved plan release membership repair reached an unsupported state.')
+  }
+  if (repair.current.queueRevision === null || repair.current.projectRevision === null) {
+    throw new Error('Approved plan release membership requires a revisioned canonical queue.')
+  }
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+    projectId: path.basename(projectRoot),
+    projectRoot,
+    queue: repair.queue,
+    projectionTasks: repair.queue.tasks,
+    existingSummary: repair.current.summary,
+  })
+  if (!prepared.parsedQueue || !prepared.scopeRows) {
+    throw new Error('Approved plan release membership could not produce a complete shared projection.')
+  }
+  writeProjectStateDatabaseTaskBatchMutation(tasksPath, {
+    tasks: [],
+    releases: (repair.queue.releases ?? []) as unknown as Record<string, unknown>[],
+    selectedReleaseId: repair.queue.selectedReleaseId ?? null,
+    scopeRows: prepared.scopeRows,
+    summary: prepared.projection as unknown as Record<string, unknown>,
+    expectedQueueRevision: repair.current.queueRevision,
+    expectedProjectRevision: repair.current.projectRevision,
+    lastUpdated: repair.queue.lastUpdated ?? null,
+  })
+  const membershipCount = (repair.queue.releases ?? []).reduce(
+    (count, release) => count + release.nodeIds.length + release.deferredNodeIds.length,
+    0,
+  )
+  return { state: 'materialized', membershipCount }
+}
+
+function compactReleaseProjectionForComparison(summary: unknown): unknown {
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null
+  const record = summary as Record<string, unknown>
+  const releaseSummary = record.releaseSummary
+  const scope = record.scope
+  const nextAction = record.nextAction
+  return {
+    releaseSummary,
+    scope,
+    nextAction,
+  }
+}
+
+function inspectIndexedReleaseSummaryReprojection(projectRoot: string): {
+  needed: boolean
+  before: unknown
+  after: unknown
+} {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') {
+    return { needed: false, before: null, after: null }
+  }
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const stored = readProjectStateDatabaseSummary<Record<string, unknown>>(tasksPath)?.payload ?? null
+  const projected = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+    projectId: path.basename(projectRoot),
+  })
+  const before = compactReleaseProjectionForComparison(stored)
+  const after = compactReleaseProjectionForComparison(projected)
+  return {
+    needed: before !== null && after !== null && JSON.stringify(before) !== JSON.stringify(after),
+    before,
+    after,
+  }
 }
 
 const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
@@ -1756,6 +2123,9 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
     async apply(projectRoot) {
       const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      // This is the pre-SQLite backfill. Its explicit job is to materialize a
+      // compact summary from the historical task queue before database
+      // authority exists; the indexed writer is only valid after that cutover.
       const projection = backfillProjectSummaryProjection(tasksPath, {
         projectId: path.basename(projectRoot),
         projectRoot,
@@ -2873,6 +3243,38 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: '0.13.0/project-decision-projection',
+    title: 'Materialize the shared project decision',
+    introducedIn: '0.13.0',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Builds one revisioned execution and release decision from current project facts so every surface starts from the same answer.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') {
+        return { needed: false, affectedPaths: [] }
+      }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = readProjectSummaryProjectionForMigration(tasksPath)
+      const needed = !projection || !projectSummaryProjectionIsCurrent(projection)
+      return {
+        needed,
+        affectedPaths: needed ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      await realignPromotedSummaryWithEffectiveState(projectRoot)
+      const projection = readProjectSummaryProjection(tasksPath)
+      if (!projection || !projectSummaryProjectionIsCurrent(projection)) {
+        throw new Error('The shared project decision could not be persisted.')
+      }
+      return {
+        summary: `Materialized the shared execution and release decision for the ${projection.counts.total}-task project summary.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
     id: '0.12.31/task-evidence-current-projection',
     title: 'Materialize bounded current task evidence',
     introducedIn: '0.12.31',
@@ -3536,6 +3938,37 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID,
+    title: 'Materialize accepted release membership',
+    introducedIn: '0.13.66',
+    scope: 'project',
+    safety: 'required',
+    requirement: 'required',
+    summary: 'Promotes accepted release-plan membership into the normalized relation in one revisioned write, so scope, Start, and release totals do not rely on a read-time plan overlay.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const repair = await inspectApprovedPlanReleaseMembershipRepair(projectRoot)
+      const needed = repair.state === 'materialize' || repair.state === 'conflict'
+      return {
+        needed,
+        affectedPaths: needed
+          ? [projectStateDatabasePath(projectRoot), 'approved plan and normalized release membership relation']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const result = await materializeApprovedPlanReleaseMembershipAtBoundary(projectRoot)
+      return {
+        summary: result.state === 'materialized'
+          ? `Materialized ${result.membershipCount} accepted release membership row${result.membershipCount === 1 ? '' : 's'} into the canonical relation and refreshed the shared scope projection.`
+          : 'No accepted release-plan membership repair was needed.',
+        affectedPaths: result.state === 'materialized'
+          ? [projectStateDatabasePath(projectRoot)]
+          : [],
+      }
+    },
+  },
+  {
     id: COMPACT_READ_MODEL_MIGRATION_ID,
     title: 'Materialize compact task read models',
     introducedIn: '0.13.2',
@@ -3960,7 +4393,7 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       )
       let changed = 0
       for (const task of queue.tasks as unknown as Task[]) {
-        const preserveCompletedStatus = (task.releaseIds ?? []).some(releaseId => shippedReleaseIds.has(releaseId))
+        const preserveCompletedStatus = proofSetupScopedReleaseIds(task).some(releaseId => shippedReleaseIds.has(releaseId))
         if (migrateProofSetupCommandIdentity(task, now, preserveCompletedStatus)) changed += 1
       }
       if (changed > 0) {
@@ -4044,7 +4477,10 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     scope: 'project',
     safety: 'automatic',
     requirement: 'required',
-    recheckAfterApply: true,
+    // This migration repairs the historical completion transition once. Later
+    // proof-history and projection migrations own newly discovered proof drift;
+    // rechecking this legacy repair would otherwise reopen shipped releases on
+    // every ordinary project action.
     summary: 'Restores the executable proof boundary when a proof-setup task was marked done before its current typed command evidence was verified. Historical shipped release records stay closed.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
@@ -4052,9 +4488,16 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
       const tasks = (queue?.tasks ?? []) as unknown as Task[]
       const releases = (queue?.releases ?? []) as unknown as ProjectRelease[]
+      const releaseState = await readProjectReleaseState(projectRoot)
+      const selectedReleaseId = releaseState.scope?.kind === 'release'
+        ? releaseState.scope.id
+        : releaseState.rawQueue.selectedReleaseId ?? queue?.selectedReleaseId
       const runtime = await readTaskRuntimeStore(projectRoot)
       const taskIds = tasks
-        .filter(task => taskNeedsProofSetupRuntimeRecovery(task, runtime))
+        .filter(task =>
+          taskNeedsProofSetupRuntimeRecovery(task, runtime) &&
+          proofSetupRuntimeRecoveryIsActionable(task, releases, selectedReleaseId),
+        )
         .map(task => task.id)
       return {
         needed: taskIds.length > 0,
@@ -4443,6 +4886,54 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: INTERNAL_PROOF_RELEASE_CONTEXT_MIGRATION_ID,
+    title: 'Separate internal proof context from release membership',
+    introducedIn: '0.13.65',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Moves hidden proof work out of visible release membership and records one typed proof scope per child so release progress never replaces a feature with its internal verification step.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const typedQueue = queue as unknown as { tasks: Task[]; releases?: ProjectRelease[] } | null
+      const needed = typedQueue ? internalProofReleaseContextNeedsMigration(typedQueue) : false
+      return {
+        needed,
+        affectedPaths: needed
+          ? [projectStateDatabasePath(projectRoot), 'internal proof release membership']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped internal proof scope normalization because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const typedQueue = queue as unknown as { tasks: Task[]; releases?: ProjectRelease[]; lastUpdated?: string }
+      const result = migrateInternalProofReleaseContexts(typedQueue, new Date().toISOString())
+      if (result.normalized > 0) {
+        typedQueue.lastUpdated = new Date().toISOString()
+        writeProjectTaskQueueWithSummary(tasksPath, typedQueue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: result.normalized > 0
+          ? `Normalized ${result.normalized} internal proof scope${result.normalized === 1 ? '' : 's'}; ${result.materialized} fresh active-release proof task${result.materialized === 1 ? '' : 's'} replaced ambiguous historical membership${result.historical > 0 ? ` across ${result.historical} historical record${result.historical === 1 ? '' : 's'}` : ''}.`
+          : 'Internal proof work already uses typed release context and no visible release membership.',
+        affectedPaths: result.normalized > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
     id: INDEXED_SEMANTIC_KIND_MIGRATION_ID,
     title: 'Persist semantic task kinds in compact read models',
     introducedIn: '0.13.39',
@@ -4482,6 +4973,425 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       })
       return {
         summary: `Persisted typed semantic kinds for ${rewritten.updatedCount} compact task point${rewritten.updatedCount === 1 ? '' : 's'} and refreshed the shared release projection (${projection.releaseSummary.state}).`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: SPEC_REVIEW_GATE_MIGRATION_ID,
+    title: 'Record explicit spec review gates',
+    introducedIn: '0.13.67',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Records whether each existing spec review is waiting for an owner or coordinator, so runs and project views use one typed approval fact instead of inferring it from a lifecycle label.',
+    async detect(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = (queue?.tasks as unknown as Task[] | undefined)
+        ?.filter(taskNeedsSpecReviewGateMigration)
+        .map(task => task.id) ?? []
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `spec review gates requiring authority (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped explicit spec review gates because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      const tasks = queue.tasks as unknown as Task[]
+      const migrated = tasks.filter(task => migrateLegacySpecReviewGate(task, now))
+      if (migrated.length > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: migrated.length > 0
+          ? `Recorded explicit owner review gates for ${migrated.length} legacy spec${migrated.length === 1 ? '' : 's'}; future coordinator-owned review must be recorded as such when it is created.`
+          : 'Every current spec review already records its review authority.',
+        affectedPaths: migrated.length > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: DURABLE_SPEC_HANDOFF_MIGRATION_ID,
+    title: 'Settle durable spec handoffs',
+    introducedIn: '0.13.68',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Moves an already approved, structurally valid spec out of stale shaping and into its explicit owner review gate, so the coordinator and project summary do not disagree about whether it is runnable.',
+    async detect(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = (queue?.tasks as unknown as Task[] | undefined)
+        ?.filter(taskNeedsDurableSpecHandoffMigration)
+        .map(task => task.id) ?? []
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `durable spec handoffs awaiting typed review (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped durable spec handoff repair because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      const tasks = queue.tasks as unknown as Task[]
+      const settled = tasks.filter(task => settleDurableSpecHandoff(task, now))
+      if (settled.length > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: settled.length > 0
+          ? `Moved ${settled.length} durable spec handoff${settled.length === 1 ? '' : 's'} into explicit owner review; no task was approved or made runnable by this repair.`
+          : 'No durable specs were left in stale shaping state.',
+        affectedPaths: settled.length > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID,
+    title: 'Materialize compact spec review authority',
+    introducedIn: '0.13.69',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Backfills the bounded owner-or-coordinator review authority for existing spec-review task points, so the fast project projection cannot disagree with task detail about whether work needs owner review.',
+    async detect(projectRoot) {
+      const needed = compactSpecReviewAuthorityNeedsMigration(projectRoot)
+      return {
+        needed,
+        affectedPaths: needed
+          ? [projectStateDatabasePath(projectRoot), 'compact spec-review authority points and shared summary']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped compact spec-review authority backfill because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const summaries = queue.tasks.map(task => ({
+        taskId: String(task.id),
+        summary: projectStateDatabaseTaskSummary(task),
+      }))
+      const rewritten = rewriteProjectStateDatabaseTaskSummaries(projectRoot, summaries)
+      const projection = backfillProjectSummaryProjection(tasksPath, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+      })
+      return {
+        summary: `Materialized compact review authority for ${rewritten.updatedCount} task point${rewritten.updatedCount === 1 ? '' : 's'} and refreshed the shared project decision (${projection.decision.primaryAction.kind}).`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: ATOMIC_DECISION_FOCUS_MIGRATION_ID,
+    title: 'Rebuild project decisions with atomic focus references',
+    introducedIn: '0.13.70',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the shared project decision from normalized task points so an advanced focus task cannot retain an earlier task title in Overview, Work, Map, or Start.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = readProjectSummaryProjectionForMigration(tasksPath)
+      return {
+        needed: !projection || !projectSummaryProjectionIsCurrent(projection),
+        affectedPaths: !projection || !projectSummaryProjectionIsCurrent(projection)
+          ? [projectStateDatabasePath(projectRoot), 'shared decision focus reference']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection || !projectSummaryProjectionIsCurrent(projection)) {
+        throw new Error('The shared project decision could not be rebuilt with an atomic focus reference.')
+      }
+      return {
+        summary: 'Rebuilt the shared decision from one normalized task snapshot; focused work now carries its own canonical display identity.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: DURABLE_DECISION_SNAPSHOT_MIGRATION_ID,
+    title: 'Materialize the durable project decision snapshot',
+    introducedIn: '0.13.71',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Records the typed canonical claims and one revision-bound decision packet that Overview, Work, Map, Thread, Release, Activity, and Start share.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      // This migration creates the durable decision capability. A later
+      // runtime/evidence revision can naturally make its packet stale while a
+      // projection job catches up; that is not a schema migration and must not
+      // turn every ordinary action into "migrate again".
+      const needed = !hasProjectStateDatabaseDecisionSnapshot(projectRoot)
+      return {
+        needed,
+        affectedPaths: needed
+          ? [projectStateDatabasePath(projectRoot), 'shared project decision snapshot']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      const bundle = readProjectStateDatabaseReadBundle(tasksPath)
+      if (!projection || !bundle?.stateResolution || bundle.stateResolution.projectRevision !== bundle.projectRevision) {
+        throw new Error('The durable project decision snapshot could not be rebuilt from the current normalized state.')
+      }
+      return {
+        summary: 'Recorded the current normalized release, execution focus, and eligibility as one shared decision snapshot.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID,
+    title: 'Reproject release summary from indexed membership',
+    introducedIn: '0.13.72',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the compact release summary and decision packet from normalized release membership and scope rows when a previously current summary was stamped with stale selected-release counts.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'compact release summary and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The release summary could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt the release summary and shared decision from normalized release membership and scope rows.'
+          : 'Release summary already matched normalized release membership and scope rows.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID,
+    title: 'Align named release counts with membership',
+    introducedIn: '0.13.73',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the compact release summary so a named release counts its selected membership instead of executable child rows while preserving later-work deferred counts.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'named release summary counts and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The named release counts could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt named release counts from selected membership and refreshed the shared decision packet.'
+          : 'Named release counts already matched normalized indexed membership.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: INCLUDED_RELEASE_DISPOSITION_COUNT_MIGRATION_ID,
+    title: 'Count only included release membership',
+    introducedIn: '0.13.74',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds named-release counts from included normalized membership so deferred release rows cannot inflate the selected release total.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'included release membership counts and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The included release membership counts could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt selected release counts from included normalized membership and refreshed the shared decision packet.'
+          : 'Selected release counts already matched included normalized membership.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: CANONICAL_RELEASE_MEMBERSHIP_SUMMARY_MIGRATION_ID,
+    title: 'Read release counts from canonical membership',
+    introducedIn: '0.13.75',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the compact release summary from the normalized release_membership relation so selected release totals cannot be inflated by execution-scope container rewrites.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'canonical release membership summary and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The canonical release membership summary could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt the release summary from canonical normalized membership and refreshed the shared decision packet.'
+          : 'Release summary already matched canonical normalized membership.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: SELECTED_RELEASE_NODE_MEMBERSHIP_SUMMARY_MIGRATION_ID,
+    title: 'Fallback to selected release membership nodes',
+    introducedIn: '0.13.76',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the compact release summary so selected release node IDs remain the membership fallback when execution rows include release-local proof children.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'selected release membership fallback summary and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The selected release membership summary could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt the release summary from selected release membership nodes and refreshed the shared decision packet.'
+          : 'Release summary already matched selected release membership nodes.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: RELEASE_MEMBERSHIP_READ_BOUNDARY_MIGRATION_ID,
+    title: 'Rebuild release membership read boundary',
+    introducedIn: '0.13.99',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds compact release scope and readiness after the selected release read boundary stopped treating execution/proof rows as release membership.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'selected release membership read model and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The release membership read boundary could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt selected release membership and readiness from canonical membership instead of execution rows.'
+          : 'Selected release membership read boundary already matched canonical membership.',
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },
@@ -4671,6 +5581,114 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID,
+    title: 'Type task-owned diagnostic blockers',
+    introducedIn: '0.13.58',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Adds the normalized task relation to older diagnostic readiness blockers only when the current task inventory proves the blocker ID belongs to a task, so observations can be compared deterministically with the project decision.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const status = diagnosticReadinessTaskIdentityStatus(projectRoot)
+      return {
+        needed: status.missingTaskIdentityCount > 0,
+        affectedPaths: status.missingTaskIdentityCount > 0
+          ? [projectStateDatabasePath(projectRoot), `diagnostic readiness (${status.missingTaskIdentityCount} task blocker${status.missingTaskIdentityCount === 1 ? '' : 's'} missing typed ownership)`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const status = diagnosticReadinessTaskIdentityStatus(projectRoot)
+      const diagnostic = status.diagnostic
+      if (!diagnostic?.readiness) {
+        return { summary: 'No saved readiness diagnostic needed task-ownership repair.', affectedPaths: [] }
+      }
+      const blockers = diagnostic.readiness.blockers?.map(blocker =>
+        !blocker.taskId && status.taskIds.has(blocker.id)
+          ? { ...blocker, taskId: blocker.id }
+          : blocker,
+      )
+      writeProjectStateDatabaseDiagnosticProjection(projectRoot, {
+        sourceRevision: diagnostic.sourceRevision,
+        freshness: diagnostic.freshness,
+        generatedAt: diagnostic.generatedAt,
+        git: diagnostic.git,
+        readiness: { ...diagnostic.readiness, ...(blockers ? { blockers } : {}) },
+      })
+      return {
+        summary: `Attached typed task ownership to ${status.missingTaskIdentityCount} saved diagnostic readiness blocker${status.missingTaskIdentityCount === 1 ? '' : 's'} without changing task, proof, release, or runtime state.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID,
+    title: 'Apply script-only proof requirements to compact release state',
+    introducedIn: '0.13.59',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds compact task proof summaries and the selected-release projection so completed work without current proof remains a blocker when the release requires script proof.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), 'compact script-only proof projection']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const result = await realignPromotedSummaryWithEffectiveState(projectRoot)
+      return {
+        summary: `Rebuilt compact proof and release state for ${result.taskCount} task${result.taskCount === 1 ? '' : 's'} from current typed evidence.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID,
+    title: 'Add structured source authority to the shared project summary',
+    introducedIn: '0.13.60',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Rebuilds the compact project summary with the structured source-catalog status so project surfaces do not independently interpret source documents.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = readProjectSummaryProjectionForMigration(tasksPath)
+      const catalog = projection?.sourceCapabilityCatalog
+      const present = Boolean(
+        catalog &&
+        typeof catalog === 'object' &&
+        !Array.isArray(catalog) &&
+        ['unavailable', 'empty', 'ready'].includes((catalog as { availability?: unknown }).availability as string),
+      )
+      return {
+        needed: !present || projection?.version !== PROJECT_SUMMARY_PROJECTION_VERSION,
+        affectedPaths: !present || projection?.version !== PROJECT_SUMMARY_PROJECTION_VERSION
+          ? [projectStateDatabasePath(projectRoot)]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection?.sourceCapabilityCatalog || !projectSummaryProjectionIsCurrent(projection)) {
+        throw new Error('The shared source-catalog summary could not be persisted.')
+      }
+      return {
+        summary: 'Added structured source-catalog status to the shared project summary without changing source capabilities or work.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
 ]
 
 const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
@@ -4720,6 +5738,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.12.23/project-state-single-authority': 'migrations.test.ts: removes duplicate current-state files only after the database queue is readable',
   '0.12.24/project-summary-action-model': 'migrations.test.ts: persists one canonical action model after the database becomes authoritative',
   '0.12.25/project-summary-task-status-counts': 'migrations.test.ts: persists partitioned task-status counts without changing task or release records',
+  '0.13.0/project-decision-projection': 'migrations.test.ts: rebuilds an otherwise version-current summary when the shared decision projection is missing',
   '0.12.34/task-current-inbox-summary': 'migrations.test.ts: materializes current inbox facts without replaying task history',
   '0.12.35/task-essential-current-evidence': 'project-state-database.test.ts: collapses current evidence without deleting historical records',
   '0.12.36/project-summary-current-scope-authority': 'project-summary-projection.test.ts: ignores stale approved-plan identities and keeps replacement work current',
@@ -4737,6 +5756,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID]: 'migrations.test.ts: realigns promoted summary and scope from current evidence without reading compatibility files',
   [CURRENT_STATUS_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: materializes the shared current task status rule into indexed rows',
   [RELEASE_MEMBERSHIP_MIGRATION_ID]: 'migrations.test.ts: normalizes release membership into one relation',
+  [RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID]: 'migrations.test.ts: materializes accepted plan membership once through the normalized relation',
   [COMPACT_READ_MODEL_MIGRATION_ID]: 'migrations.test.ts: backfills compact graph read models from per-task detail without making ordinary reads hydrate definitions',
   [CURRENT_PROOF_READ_MODEL_MIGRATION_ID]: 'migrations.test.ts: refreshes the bounded current-proof summary after an older compact row was already marked migrated',
   [IMPORTED_SCRIPT_PROOF_CONTRACT_MIGRATION_ID]: 'migrations.test.ts: converts imported bare test conventions into explicit proof setup in a script-only release',
@@ -4763,6 +5783,17 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [PROOF_SETUP_ACCEPTANCE_CONTRACT_MIGRATION_ID]: 'migrations.test.ts: canonicalizes proof-setup acceptance criteria without changing release membership',
   [PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID]: 'migrations.test.ts: refreshes release readiness after proof-setup contract normalization',
   [PROOF_SETUP_EFFECTIVE_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: projects proof from the canonical task snapshot and current typed evidence',
+  [DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID]: 'migrations.test.ts: attaches task identity to legacy diagnostic blockers only when the task inventory proves it',
+  [SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects a completed script-only task without proof as a release blocker',
+  [SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID]: 'project-summary-projection.test.ts: publishes source-catalog status from the canonical SQLite catalog',
+  [SPEC_REVIEW_GATE_MIGRATION_ID]: 'migrations.test.ts: backfills only legacy spec-review gates and remains idempotent after canonical task writes',
+  [DURABLE_SPEC_HANDOFF_MIGRATION_ID]: 'migrations.test.ts: settles only an approved, structurally valid spec handoff and never auto-approves it',
+  [DURABLE_DECISION_SNAPSHOT_MIGRATION_ID]: 'migrations.test.ts: rebuilds a missing revision-bound decision packet from normalized state',
+  [INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership',
+  [NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID]: 'migrations.test.ts: aligns named release counts to selected membership when child execution rows are present',
+  [INCLUDED_RELEASE_DISPOSITION_COUNT_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership without counting deferred release rows',
+  [CANONICAL_RELEASE_MEMBERSHIP_SUMMARY_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership through the canonical membership reader',
+  [SELECTED_RELEASE_NODE_MEMBERSHIP_SUMMARY_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership through the selected release membership fallback',
   '0.11.0/project-summary-projection': 'migrations.test.ts: project summary backfill is idempotent and preserves task history',
   '0.11.1/project-summary-projection-v2': 'migrations.test.ts: project summary shape refresh is idempotent and preserves task history',
   '0.11.2/project-summary-projection-setup-state': 'migrations.test.ts: project summary setup-state refresh is idempotent and preserves task history',

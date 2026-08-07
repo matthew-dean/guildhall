@@ -83,6 +83,28 @@ export interface WorkspaceSignal {
   taskDisposition?: 'candidate' | 'context_only' | 'ignore'
 }
 
+/**
+ * A source-owned capability record. Unlike a signal, this is structured
+ * planning input and may seed the durable capability catalog. The identity is
+ * supplied by the adapter; `label` is display text only.
+ */
+export interface SourceCapabilityInput {
+  id: string
+  label: string
+  state: 'planned' | 'retired'
+  releaseIds: readonly string[]
+  dependsOnCapabilityIds: readonly string[]
+  evidenceRefs: readonly string[]
+}
+
+/** One immutable adapter revision, suitable for one CAS catalog write. */
+export interface StructuredSourceCapabilitySnapshot {
+  adapterId: string
+  adapterSchemaVersion: number
+  sourceRevision: string
+  capabilities: readonly SourceCapabilityInput[]
+}
+
 export interface TaskSourceContext {
   projectPath: string
   /**
@@ -108,4 +130,16 @@ export interface TaskSource {
    * executing idempotent shell commands.
    */
   detect(ctx: TaskSourceContext): Promise<readonly WorkspaceSignal[]>
+}
+
+/**
+ * Deliberately separate from `TaskSource`: these adapters are the only intake
+ * providers allowed to create durable executable scope. Markdown, Git, TODO,
+ * and transcript sources may still emit signals/evidence but cannot implement
+ * this interface by scraping text.
+ */
+export interface StructuredSourceCapabilityAdapter {
+  id: string
+  schemaVersion: number
+  snapshot(ctx: TaskSourceContext): Promise<StructuredSourceCapabilitySnapshot>
 }

@@ -310,7 +310,7 @@ const authorInvolvementModesSpecWithoutContracts = [
 ].join('\n')
 
 describe('project re-intake apply', () => {
-  it('applies reframes in place and appends a re-intake note', async () => {
+  it('keeps a thin source row in intake and appends a re-intake note', async () => {
     const existingTask = task({
       id: 'task-039',
       title: 'Build AlertDialog primitive',
@@ -338,13 +338,11 @@ describe('project re-intake apply', () => {
     const reframed = queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-039')
     expect(reframed).toMatchObject({
       title: 'Build AlertDialog',
-      status: 'spec_review',
-      acceptanceCriteria: expect.arrayContaining([expect.objectContaining({ id: 'source-implementation' })]),
-      productBrief: expect.objectContaining({
-        authoredBy: 'project-reintake',
-        userJob: expect.stringContaining('Build AlertDialog'),
-      }),
+      status: 'import_draft',
+      acceptanceCriteria: [],
     })
+    expect(reframed).not.toHaveProperty('structuredSpec')
+    expect(reframed).not.toHaveProperty('acceptanceCriteriaProofState')
     expect(reframed).not.toHaveProperty('taskKind')
     expect(reframed).not.toHaveProperty('sizePlan')
     expect(reframed).not.toHaveProperty('taskReadiness')
@@ -1087,7 +1085,7 @@ describe('project re-intake apply', () => {
       references: ['docs/harness/implementation-roadmap.md', 'docs/specs/schema-contract-roadmap.md'],
       productBrief: expect.objectContaining({
         authoredBy: 'project-reintake',
-        successMetric: expect.stringContaining('cited Stage 1 contracts'),
+        successMetric: expect.stringContaining('cited local contracts'),
       }),
     })
     expect(refreshed?.acceptanceCriteria?.map((criterion: { id?: string }) => criterion.id)).toEqual([
@@ -1167,7 +1165,7 @@ describe('project re-intake apply', () => {
     })
   })
 
-  it('archives without deleting and creates graph tasks with dependency proof fields', async () => {
+  it('archives without deleting and keeps thin integration work in intake', async () => {
     const memoryDir = await makeState([
       task({ id: 'task-old', title: 'Retry project discovery update', status: 'blocked' }),
     ])
@@ -1189,8 +1187,9 @@ describe('project re-intake apply', () => {
     expect(queue.tasks.find((candidate: { title?: string }) => candidate.title === 'Integrate AlertDialog into Knit destructive confirmation flow')).toMatchObject({
       sourceIdentity: 'looma/component/alert-dialog:integration',
       dependsOn: [expect.stringMatching(/^task-/)],
-      acceptanceCriteria: expect.arrayContaining([expect.objectContaining({ id: 'integration-regression-test' })]),
-      proofPaths: expect.arrayContaining([expect.objectContaining({ kind: 'browser' })]),
+      status: 'import_draft',
+      acceptanceCriteria: [],
+      proofPaths: [],
     })
   })
 

@@ -98,6 +98,7 @@ export async function runGate(
       clearTimeout(timeout)
       resolve({
         gateId: gate.id,
+        command: gate.command,
         type: 'hard',
         passed: false,
         output: `spawn error: ${err.message}`,
@@ -111,6 +112,7 @@ export async function runGate(
       if (timedOut) {
         resolve({
           gateId: gate.id,
+          command: gate.command,
           type: 'hard',
           passed: false,
           output: output
@@ -122,6 +124,7 @@ export async function runGate(
       }
       resolve({
         gateId: gate.id,
+        command: gate.command,
         type: 'hard',
         passed: code === 0,
         output,

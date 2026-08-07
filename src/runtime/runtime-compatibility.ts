@@ -107,25 +107,37 @@ export function compareVersions(left: string, right: string): number | null {
   return 0
 }
 
-export function readRuntimePackageVersion(): string {
+export function runtimePackageVersionFromSearchRoots(searchRoots: readonly string[]): string {
   try {
-    let dir = dirname(fileURLToPath(import.meta.url))
-    for (let i = 0; i < 8; i++) {
-      const file = join(dir, 'package.json')
-      if (existsSync(file)) {
-        const parsed = JSON.parse(readFileSync(file, 'utf8')) as { name?: string; version?: string }
-        if (parsed.name === 'guildhall' || parsed.name === '@guildhall/cli') {
-          return parsed.version ?? 'unknown'
+    // Bundled installs may place this module in a flattened chunk directory.
+    // The service process root remains the stable package boundary, so inspect
+    // both locations just as the service's public version endpoint does.
+    for (const start of searchRoots) {
+      let dir = start
+      for (let i = 0; i < 8; i++) {
+        const file = join(dir, 'package.json')
+        if (existsSync(file)) {
+          const parsed = JSON.parse(readFileSync(file, 'utf8')) as { name?: string; version?: string }
+          if (parsed.name === 'guildhall' || parsed.name === '@guildhall/cli') {
+            return parsed.version ?? 'unknown'
+          }
         }
+        const next = dirname(dir)
+        if (next === dir) break
+        dir = next
       }
-      const next = dirname(dir)
-      if (next === dir) break
-      dir = next
     }
   } catch {
     // Fall through to unknown.
   }
   return 'unknown'
+}
+
+export function readRuntimePackageVersion(): string {
+  return runtimePackageVersionFromSearchRoots([
+    dirname(fileURLToPath(import.meta.url)),
+    process.cwd(),
+  ])
 }
 
 export function readProjectRuntimeManifest(projectRoot: string): ProjectRuntimeManifest | null {

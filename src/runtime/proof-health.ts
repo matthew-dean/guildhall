@@ -1,5 +1,5 @@
 import type { Task } from '@guildhall/core'
-import { commandProofGateMatches, isCurrentProofPathProven } from '@guildhall/shared'
+import { commandProofGateMatches, isCurrentProofPathProven, taskHasScriptProofPath as sharedTaskHasScriptProofPath } from '@guildhall/shared'
 import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
 import { comparableCommand, proofSetupHasTaskIdentity } from './proof-paths.js'
 import { reviewVerdictIsNonSubstantiveFailure } from './review-contract.js'
@@ -155,6 +155,7 @@ function activeProofRecoveryReason(task: Record<string, unknown>): string {
 function latestFailedHardGate(task: Record<string, unknown>): Record<string, unknown> | null {
   const gates = (evidencePayloads(task, 'gate_result') ?? (Array.isArray(task.gateResults) ? task.gateResults : []))
     .filter((gate): gate is Record<string, unknown> => Boolean(gate) && typeof gate === 'object' && !Array.isArray(gate))
+  const latestCurrentProofPassAt = latestCurrentCommandProofPassAt(task)
   const latestByGate = new Map<string, Record<string, unknown>>()
   for (const gate of gates) {
     if (gate.type !== 'hard') continue
@@ -166,7 +167,35 @@ function latestFailedHardGate(task: Record<string, unknown>): Record<string, unk
   }
   return [...latestByGate.values()]
     .filter(gate => gate.passed === false || gate.status === 'fail' || gate.status === 'failed')
+    .filter(gate => {
+      if (!Number.isFinite(latestCurrentProofPassAt)) return true
+      const failedAt = Date.parse(String(gate.checkedAt ?? gate.recordedAt ?? ''))
+      return !Number.isFinite(failedAt) || failedAt > latestCurrentProofPassAt
+    })
     .sort((left, right) => Date.parse(String(right.checkedAt ?? right.recordedAt ?? '')) - Date.parse(String(left.checkedAt ?? left.recordedAt ?? '')))[0] ?? null
+}
+
+function latestCurrentCommandProofPassAt(task: Record<string, unknown>): number {
+  const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
+  const commandProofPaths = proofPaths
+    .filter((proof): proof is Record<string, unknown> => Boolean(proof) && typeof proof === 'object' && !Array.isArray(proof))
+    .filter(proof => proof.kind === 'command' && comparableCommand(proof.command))
+  if (commandProofPaths.length === 0) return NaN
+  const gates = (evidencePayloads(task, 'gate_result') ?? (Array.isArray(task.gateResults) ? task.gateResults : []))
+    .filter((gate): gate is Record<string, unknown> => Boolean(gate) && typeof gate === 'object' && !Array.isArray(gate))
+    .filter(gate => gate.passed === true || gate.status === 'pass' || gate.status === 'passed')
+    .filter(gate => commandProofPaths.some(path => commandProofGateMatches(path, gate) || comparableCommand(gate.command) === comparableCommand(path.command)))
+  const gateTimes = gates
+    .map(gate => Date.parse(String(gate.checkedAt ?? gate.recordedAt ?? '')))
+    .filter(Number.isFinite)
+  const verificationTimes = commandProofPaths.flatMap(path =>
+    (Array.isArray(path.verificationRecords) ? path.verificationRecords : [])
+      .filter((record): record is Record<string, unknown> => Boolean(record) && typeof record === 'object' && !Array.isArray(record))
+      .filter(record => record.status === 'passed' && comparableCommand(record.command) === comparableCommand(path.command))
+      .map(record => Date.parse(String(record.recordedAt ?? record.updatedAt ?? '')))
+      .filter(Number.isFinite),
+  )
+  return Math.max(...gateTimes, ...verificationTimes)
 }
 
 function failedHardGateReason(gate: Record<string, unknown> | null): string {
@@ -530,34 +559,9 @@ export function taskHasNonReviewCommandBackedProof(task: unknown): boolean {
   })
 }
 
-function proofPathIsScriptRunnable(proofPath: unknown): boolean {
-  if (typeof proofPath === 'string') return proofPath.trim().length > 0
-  if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
-  const record = proofPath as Record<string, unknown>
-  if (typeof record.command === 'string' && record.command.trim().length > 0) return true
-  const launchSteps = Array.isArray(record.launchSteps) ? record.launchSteps : []
-  return launchSteps.some((step) =>
-    step &&
-    typeof step === 'object' &&
-    !Array.isArray(step) &&
-    (step as Record<string, unknown>).kind === 'copy_command' &&
-    typeof (step as Record<string, unknown>).command === 'string' &&
-    String((step as Record<string, unknown>).command).trim().length > 0,
-  )
-}
-
 /** Keep script-only completion proof in the shared proof authority. */
 export function taskHasScriptProofPath(task: unknown): boolean {
-  const record = recordValue(task)
-  if (!record) return false
-  const currentSummary = recordValue(record.currentSummary)
-  const currentProof = recordValue(currentSummary?.proof)
-  if (currentProof?.hasExecutablePath === true) return true
-  if (!Array.isArray(record.proofPaths)) return false
-  if (record.proofPaths.some(proofPathIsScriptRunnable)) return true
-  // A review description cannot turn a non-executable path into script proof.
-  // Script-only releases require an actual command or script path in data.
-  return false
+  return sharedTaskHasScriptProofPath(task)
 }
 
 /** A review contract is enough to reopen executable work without re-intaking its scope. */

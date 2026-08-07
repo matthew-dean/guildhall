@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { Task } from '@guildhall/core'
 import { validateProductBriefGrounding, validateSpecCompletionBoundary, validateSpecGrounding } from '../spec-quality.js'
 
 const baseTask = {
@@ -16,6 +17,14 @@ const baseTask = {
   request: undefined,
   requestIntake: undefined,
   productBrief: undefined,
+}
+
+const sourceCapabilityTask = {
+  ...baseTask,
+  capabilityBindings: [
+    { capabilityId: 'cap:outline', relation: 'plans' as const },
+    { capabilityId: 'cap:world-facts', relation: 'plans' as const },
+  ] as NonNullable<Task['capabilityBindings']>,
 }
 
 describe('validateSpecGrounding', () => {
@@ -114,6 +123,89 @@ describe('validateProductBriefGrounding', () => {
     })
 
     expect(result).toEqual({ ok: true, errors: [] })
+  })
+
+  it('rejects a source-backed brief that silently omits a required capability ID', () => {
+    const result = validateProductBriefGrounding(sourceCapabilityTask, {
+      userJob: 'Expand the visible story input.',
+      whyItMattersNow: 'The selected scope needs a complete source contract.',
+      successMetric: 'The explicitly accepted source capabilities are planned.',
+      nonGoals: ['Do not add an interface.'],
+      sourceCapabilityIds: ['cap:outline'],
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      errors: ['Product brief omits required source capability IDs: cap:world-facts.'],
+    })
+  })
+})
+
+describe('typed source capability coverage', () => {
+  const structuredSpec = {
+    whatThisIs: 'A bounded source-capability contract.',
+    problemContext: 'The task has two explicit source capabilities.',
+    goals: ['Preserve the declared source scope.'],
+    nonGoals: ['Do not infer scope from prose.'],
+    proposedDesign: 'Use typed capability links.',
+    keyDecisions: ['Each capability has a structured acceptance anchor.'],
+    sourceCapabilityIds: ['cap:outline', 'cap:world-facts'],
+    acceptanceCriteria: [
+      {
+        scenario: 'Given a synopsis',
+        expectation: 'Then an outline is recorded.',
+        verificationMode: 'review' as const,
+        sourceCapabilityIds: ['cap:outline'],
+      },
+      {
+        scenario: 'Given a synopsis',
+        expectation: 'Then world facts are recorded.',
+        verificationMode: 'review' as const,
+        sourceCapabilityIds: ['cap:world-facts'],
+      },
+    ],
+    verification: ['Review typed acceptance evidence.'],
+    completionBoundary: {
+      productOutcome: 'Both declared source capabilities are available.',
+      whatGuildhallCanCompleteInCode: 'Build the bounded source contract.',
+      externalDependencies: 'None known.',
+      ownerOnlySetup: 'None known.',
+      verificationEnvironment: 'The registered project.',
+      whatCountsAsDone: 'Both linked acceptance criteria are satisfied.',
+      whatMustBeSplitOrBlocked: 'New independent outcomes remain separate.',
+    },
+  }
+
+  it('rejects a structured spec whose acceptance links omit a required source capability', () => {
+    const result = validateSpecGrounding({
+      ...sourceCapabilityTask,
+      structuredSpec: {
+        ...structuredSpec,
+        acceptanceCriteria: structuredSpec.acceptanceCriteria.slice(0, 1),
+      },
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      errors: ['Structured acceptance criteria omits required source capability IDs: cap:world-facts.'],
+    })
+  })
+
+  it('uses typed links rather than spec prose to determine source coverage', () => {
+    const terse = validateSpecGrounding({
+      ...sourceCapabilityTask,
+      structuredSpec,
+    })
+    const rewritten = validateSpecGrounding({
+      ...sourceCapabilityTask,
+      structuredSpec: {
+        ...structuredSpec,
+        proposedDesign: 'An entirely different narrative explanation with arbitrary wording.',
+      },
+    })
+
+    expect(rewritten).toEqual(terse)
+    expect(rewritten).toEqual({ ok: true, errors: [] })
   })
 })
 

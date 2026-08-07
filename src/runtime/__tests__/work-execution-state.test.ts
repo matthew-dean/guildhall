@@ -90,6 +90,32 @@ describe('work execution state', () => {
     expect(substep.isRunnable).toBe(true)
   })
 
+  it('allows a fresh parent lifecycle to shape work despite historical child completion', () => {
+    const tasks = [
+      task({
+        id: 'parent',
+        status: 'exploring',
+        hierarchy: { childIds: ['historical-proof'], order: 0 },
+        currentLifecycle: {
+          reopenedAt: '2026-07-23T02:37:56.161Z',
+          status: 'exploring',
+          source: 'rerun_spec',
+        },
+      } as Partial<Task> & { id: string } & { currentLifecycle: unknown }),
+      task({
+        id: 'historical-proof',
+        status: 'done',
+        hierarchy: { parentId: 'parent', childIds: [], order: 0 },
+      }),
+    ]
+
+    expect(deriveWorkExecutionState(tasks, 'parent')).toMatchObject({
+      isContaining: true,
+      isRunnable: true,
+      summaryState: 'ready',
+    })
+  })
+
   it('keeps internal proof children out of visible counts while rolling blockers into parent execution state', () => {
     const tasks = [
       task({

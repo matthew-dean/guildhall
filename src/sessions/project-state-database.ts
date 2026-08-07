@@ -5,7 +5,8 @@ import { dirname, join } from 'node:path'
 
 import { assertShippedReleaseMutation, compactTaskEvidenceEvent, compactTaskEvidencePayload, TaskEvidenceEvent } from '@guildhall/core'
 import type { TaskEvidenceEvent as TaskEvidenceEventRecord } from '@guildhall/core'
-import { ownerInputObjectiveLabel, summarizeCurrentProof } from '@guildhall/shared'
+import { ownerInputObjectiveLabel, summarizeCurrentProof, taskExecutionBlocker } from '@guildhall/shared'
+import { stableJson } from '@guildhall/persistence'
 import { ensureProjectLocalHistoryDir, getProjectLocalHistoryDir, getProjectSystemStatePath } from './local-history.js'
 import { atomicWriteBytes, atomicWriteText } from './atomic.js'
 import { emitProjectSummaryInvalidation, type ProjectStateDomain } from './project-summary-invalidation.js'
@@ -63,7 +64,14 @@ export const PROJECT_STATE_DATABASE_FILE = 'project-state.db'
  * ownership, byte-accounting, and lifecycle boundary without loading those
  * bodies into current-state reads.
  */
-export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 33
+/**
+ * Schema Migration Decision - `0.13.5/source-capability-authority`:
+ * adapter-owned capabilities and task-to-capability bindings are normalized
+ * here. Task detail JSON is hydrated for compatibility and stripped before
+ * persistence. Existing prose/source claims are not backfilled because they
+ * cannot author stable capability identities.
+ */
+export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 36
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_TURNS = 2_000
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_BYTES = 512 * 1024
 export const PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN = 'diagnostics'
@@ -98,6 +106,11 @@ export interface ProjectStateDatabaseSnapshot {
   /** Current runtime is written through its dedicated row, never from the summary payload. */
   runtime?: ProjectStateDatabaseRuntime
   scopeRows?: ProjectStateDatabaseScopeRow[]
+  /**
+   * Complete structured-adapter catalog snapshot. `undefined` preserves the
+   * catalog for compatibility; an explicit empty array clears it atomically.
+   */
+  sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[]
   /** Replace normalized runtime rows in the same commit as the queue. */
   taskRuntimes?: readonly ProjectStateDatabaseTaskRuntime[]
   /** Replace normalized workspace rows in the same commit as the queue. */
@@ -139,6 +152,14 @@ export interface ProjectStateDatabaseTaskMutation {
   /** Omit to preserve the existing scope row; null removes it. */
   scopeRow?: ProjectStateDatabaseScopeRow | null
   /**
+   * Derived scope rows changed by this point definition edit. A task brief or
+   * hierarchy fact can change a parent/child's selected-scope handoff state,
+   * so the normalized ledger may need more than the edited task's row.
+   */
+  scopeRows?: readonly ProjectStateDatabaseScopeRow[]
+  /** Derived rows that disappeared during the same scope refresh. */
+  removeScopeRowTaskIds?: readonly string[]
+  /**
    * Evidence written with the task mutation. This keeps current task detail,
    * proof, and bounded evidence history under one SQLite transaction.
    */
@@ -146,6 +167,16 @@ export interface ProjectStateDatabaseTaskMutation {
     event: TaskEvidenceEventRecord
     retention: ProjectStateDatabaseTaskEvidenceRetentionInput
   }[]
+  /**
+   * The runtime's typed decision packet for the revision this mutation will
+   * create. Keeping this factory at the write boundary lets SQLite allocate
+   * the revision and commit task, summary, and decision together.
+   */
+  stateResolution?: (input: {
+    projectRevision: number
+    queueRevision: number
+    generatedAt: string
+  }) => ProjectStateDatabaseStateResolutionSnapshot
   /** Derived domains to enqueue with this authoritative project revision. */
   projectionDomains?: readonly string[]
 }
@@ -179,6 +210,8 @@ export interface ProjectStateDatabaseTaskBatchMutation {
   removeTaskIds?: readonly string[]
   scopeRows?: readonly ProjectStateDatabaseScopeRow[]
   removeScopeRowTaskIds?: readonly string[]
+  /** Upsert adapter-owned capabilities before validating task bindings. */
+  sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[]
   releases?: readonly JsonRecord[]
   selectedReleaseId?: string | null
   executionPlanActions?: readonly JsonRecord[]
@@ -187,12 +220,37 @@ export interface ProjectStateDatabaseTaskBatchMutation {
     event: TaskEvidenceEventRecord
     retention: ProjectStateDatabaseTaskEvidenceRetentionInput
   }[]
+  /** Replace runtime overlays in the same revision-guarded structural write. */
+  taskRuntimes?: readonly ProjectStateDatabaseTaskRuntime[]
   summary: JsonRecord
   expectedQueueRevision: number
   expectedProjectRevision: number
   lastUpdated?: string | null
   /** Derived domains to enqueue with this authoritative project revision. */
   projectionDomains?: readonly string[]
+}
+
+export type ProjectStateDatabaseCapabilityState = 'planned' | 'retired'
+export type ProjectStateDatabaseCapabilityRelation = 'plans' | 'implements' | 'integrates' | 'proves' | 'reviews'
+
+/** Stable adapter-owned scope fact. Labels are display material, never identity. */
+export interface ProjectStateDatabaseSourceCapability {
+  id: string
+  adapterId: string
+  adapterSchemaVersion: number
+  sourceRevision: string
+  label: string
+  state: ProjectStateDatabaseCapabilityState
+  releaseIds: readonly string[]
+  dependsOnCapabilityIds: readonly string[]
+  evidenceRefs: readonly string[]
+}
+
+/** The one normalized relation allocating a capability to a work item. */
+export interface ProjectStateDatabaseTaskCapabilityBinding {
+  taskId: string
+  capabilityId: string
+  relation: ProjectStateDatabaseCapabilityRelation
 }
 
 /**
@@ -202,6 +260,12 @@ export interface ProjectStateDatabaseTaskBatchMutation {
  */
 export interface ProjectStateDatabaseSummarySnapshot {
   summary: unknown
+  /**
+   * One revision-bound result from the registered project-state claim
+   * resolver. This is an audit/read projection; normalized task, release, and
+   * runtime rows remain the owners of their facts.
+   */
+  stateResolution?: ProjectStateDatabaseStateResolutionSnapshot
   /**
    * The task-status and scope rows produced by one current projection pass.
    * Keeping them in one value makes it explicit that compact status and scope
@@ -219,6 +283,67 @@ export interface ProjectStateDatabaseSummarySnapshot {
   /** Compare-and-swap guard for evidence/runtime writes that do not change the queue revision. */
   expectedProjectRevision?: number | null
   expectedQueueRevision?: number | null
+}
+
+export type ProjectStateDatabaseClaimAuthority =
+  | 'owner_selection'
+  | 'canonical_mutation'
+  | 'verified_observation'
+  | 'runtime_observation'
+  | 'imported_record'
+  | 'agent_derivation'
+  | 'agent_proposal'
+
+export interface ProjectStateDatabaseStateClaim {
+  id: string
+  projectRevision: number
+  subject: { kind: string; id: string }
+  field: string
+  value: unknown
+  authority: ProjectStateDatabaseClaimAuthority
+  actor: string
+  observedAt: string
+  evidenceRefs: readonly string[]
+  basis?: { kind: string; id: string }
+  supersedes?: string
+  /** Resolver rejection retained for audit; rejected claims never decide state. */
+  rejectionCode?: string
+}
+
+export interface ProjectStateDatabaseStateDisagreement {
+  id: string
+  subject: { kind: string; id: string }
+  field: string
+  canonicalClaimIds: readonly string[]
+  contradictoryClaimIds: readonly string[]
+  state: 'resolved_by_authority' | 'unresolved'
+  reconciliation: 'rerun_verification' | 'refresh_runtime' | 'inspect_canonical_state' | 'owner_scope_decision'
+}
+
+/**
+ * The one decision packet a promoted project may serve for a revision. The
+ * packet is derived by runtime policy, then stored beside its claim audit so
+ * session storage does not duplicate policy ownership.
+ */
+export interface ProjectStateDatabaseStateResolutionSnapshot {
+  projectRevision: number
+  queueRevision: number | null
+  generatedAt: string
+  claims: readonly ProjectStateDatabaseStateClaim[]
+  disagreements: readonly ProjectStateDatabaseStateDisagreement[]
+  decision: unknown
+  fingerprint: string
+}
+
+export interface ProjectStateDatabaseStateResolutionRead {
+  projectRevision: number
+  queueRevision: number | null
+  generatedAt: string
+  fingerprint: string
+  decision: unknown
+  disagreements: ProjectStateDatabaseStateDisagreement[]
+  /** Immutable typed observations, opt-in for audit/detail readers. */
+  claims?: ProjectStateDatabaseStateClaim[]
 }
 
 export interface ProjectStateDatabaseCurrentProjection {
@@ -267,6 +392,13 @@ export interface ProjectStateDatabaseReleaseMembership {
   releaseId: string
   taskId: string
   disposition: ProjectStateDatabaseReleaseDisposition
+}
+
+/** One watermark for the normalized release-membership relation. */
+export interface ProjectStateDatabaseReleaseMembershipState {
+  membershipRevision: number
+  projectRevision: number | null
+  updatedAt: string | null
 }
 
 export interface ProjectStateDatabaseTaskRuntime {
@@ -343,6 +475,8 @@ export interface ProjectStateDatabaseExecution {
   stoppedAt?: string | null
   stopRequestedAt?: string | null
   error?: string | null
+  activeTaskId?: string | null
+  activeTaskTitle?: string | null
   updatedAt: string
   payload?: unknown
 }
@@ -666,6 +800,8 @@ export interface ProjectStateDatabaseReadBundle<T = unknown> {
   authority: 'database' | 'legacy'
   queueRevision: number | null
   projectRevision: number | null
+  /** Small queue envelope: release definitions and selection, never task detail. */
+  queue: ProjectStateDatabaseQueue | null
   queueDefinition: ProjectStateDatabaseQueueDefinition | null
   projection: ProjectStateDatabaseProjectionState<T> | null
   taskDetail: ProjectStateDatabaseTaskDetailState<T> | null
@@ -674,6 +810,8 @@ export interface ProjectStateDatabaseReadBundle<T = unknown> {
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
   memoryHealth: ProjectStateDatabaseMemoryHealthProjection | null
   summary: ProjectStateDatabaseSummary<T> | null
+  /** The shared decision packet and active disagreements for this read revision. */
+  stateResolution: ProjectStateDatabaseStateResolutionRead | null
   /** Bounded current evidence for summary-selected work, when requested. */
   currentEvidence: Map<string, ProjectStateDatabaseTaskEvidenceCurrent> | null
   taskOverlays: ProjectStateDatabaseTaskOverlayStores | null
@@ -696,6 +834,10 @@ export interface ProjectStateDatabaseReadBundleOptions extends ProjectStateDatab
   includeAvailability?: boolean
   includeCurrentEvidence?: boolean
   includeMemoryHealth?: boolean
+  /** Include immutable state-claim envelopes for an audit/detail reader. */
+  includeStateClaims?: boolean
+  /** Include normalized scope membership without expanding the work inventory. */
+  includeScopeRows?: boolean
   currentEvidenceTaskIds?: readonly string[]
 }
 
@@ -713,6 +855,8 @@ export interface ProjectStateDatabaseTaskDetailState<T = unknown> {
   queueRevision: number
   projectRevision: number
   summary: ProjectStateDatabaseSummary<T> | null
+  /** The dedicated resolved decision captured with this detail snapshot. */
+  stateResolution: ProjectStateDatabaseStateResolutionRead | null
 }
 
 /**
@@ -945,12 +1089,34 @@ function summaryStoragePartsForDatabase(database: DatabaseSync, summary: JsonRec
   return parts
 }
 
+/**
+ * A compact summary may report release totals only for the membership relation
+ * it actually observed. Stamp that relation at the storage boundary, after
+ * any normalized membership mutation in the surrounding transaction.
+ */
+function compactSummaryWithReleaseMembershipRevision(
+  database: DatabaseSync,
+  compact: JsonRecord,
+): JsonRecord {
+  const membershipState = readReleaseMembershipStateFromDatabase(database)
+  if (!membershipState) {
+    const { releaseMembershipRevision: _releaseMembershipRevision, ...withoutMembershipRevision } = compact
+    return withoutMembershipRevision
+  }
+  return {
+    ...compact,
+    releaseMembershipRevision: membershipState.membershipRevision,
+  }
+}
+
 function stripStoredOwnerInputSummary(database: DatabaseSync): void {
   const row = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as JsonRecord | undefined
   if (!row) return
   const summary = parseJson<JsonRecord>(row.payload_json, {})
   const { compact } = summaryStoragePartsForDatabase(database, summary)
-  database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(json(compact))
+  database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(
+    json(compactSummaryWithReleaseMembershipRevision(database, compact)),
+  )
 }
 
 /**
@@ -1047,6 +1213,11 @@ function taskIdFromReleaseNodeId(value: string): string {
   return value.replace(/^work:/, '').trim()
 }
 
+function taskHasInternalReleaseContext(task: JsonRecord): boolean {
+  const visibility = task.workVisibility
+  return isRecord(visibility) && visibility.countInProjectTotals === false
+}
+
 function releaseMembershipFromDefinitions(releases: readonly JsonRecord[]): ProjectStateDatabaseReleaseMembership[] {
   const rows = new Map<string, ProjectStateDatabaseReleaseMembership>()
   for (const release of releases) {
@@ -1119,6 +1290,18 @@ function releaseDefinitionsWithTaskMembership(
     const taskId = stringValue(task.id)
     if (!taskId) continue
     const nodeId = `work:${taskId}`
+    // Internal steps can retain a release ID as execution context, but they
+    // are not members of an active release's visible/project-total scope.
+    // A shipped release is an immutable historical snapshot, so its existing
+    // membership is preserved rather than rewritten during normalization.
+    if (taskHasInternalReleaseContext(task)) {
+      for (const release of byId.values()) {
+        if (stringValue(release.state) === 'shipped') continue
+        release.nodeIds = stringArray(release.nodeIds).filter(value => value !== nodeId)
+        release.deferredNodeIds = stringArray(release.deferredNodeIds).filter(value => value !== nodeId)
+      }
+      continue
+    }
     const status = stringValue(task.status)
     const terminal = status === 'archived' || status === 'cancelled'
     const deferred = status === 'shelved'
@@ -1129,11 +1312,13 @@ function releaseDefinitionsWithTaskMembership(
     // definition while the task's legacy releaseIds array is empty.
     if (options.clearUnlistedTaskMembership === true) {
       for (const release of byId.values()) {
+        if (stringValue(release.state) === 'shipped') continue
         release.nodeIds = stringArray(release.nodeIds).filter(value => value !== nodeId)
         release.deferredNodeIds = stringArray(release.deferredNodeIds).filter(value => value !== nodeId)
       }
     } else if (releaseIds.length > 0) {
       for (const release of byId.values()) {
+        if (stringValue(release.state) === 'shipped') continue
         if (releaseIds.includes(String(release.id))) continue
         release.nodeIds = stringArray(release.nodeIds).filter(value => value !== nodeId)
         release.deferredNodeIds = stringArray(release.deferredNodeIds).filter(value => value !== nodeId)
@@ -1168,18 +1353,85 @@ function releaseDefinitionsWithTaskMembership(
   return [...byId.values()]
 }
 
-function syncReleaseMembershipFromDefinitions(
+function syncNormalizedReleaseMembership(
   database: DatabaseSync,
-  releases: readonly JsonRecord[],
-): void {
-  if (!tableExists(database, 'release_membership')) return
+  desired: readonly ProjectStateDatabaseReleaseMembership[],
+): boolean {
+  if (!tableExists(database, 'release_membership')) return false
+  const current = database.prepare(`
+    SELECT release_id, task_id, disposition
+    FROM release_membership
+    ORDER BY release_id, task_id
+  `).all() as JsonRecord[]
+  const currentKeys = current.map(row => `${row.release_id}\0${row.task_id}\0${row.disposition}`)
+  const desiredKeys = desired
+    .map(row => `${row.releaseId}\0${row.taskId}\0${row.disposition}`)
+    .sort()
+  const changed = currentKeys.length !== desiredKeys.length || currentKeys.some((key, index) => key !== desiredKeys[index])
+  if (!changed) {
+    // An intentionally empty relation is still a fact. Seed its first
+    // watermark so optional-release projects never have to pretend that
+    // "no release membership" means "no membership authority".
+    if (!readReleaseMembershipStateFromDatabase(database)) markReleaseMembershipStatePending(database)
+    return false
+  }
   database.prepare('DELETE FROM release_membership').run()
   const insert = database.prepare(`
     INSERT INTO release_membership (release_id, task_id, disposition)
     VALUES (?, ?, ?)
   `)
-  for (const row of releaseMembershipFromDefinitions(releases)) {
+  for (const row of desired) {
     insert.run(row.releaseId, row.taskId, row.disposition)
+  }
+  markReleaseMembershipStatePending(database)
+  return true
+}
+
+function syncReleaseMembershipFromDefinitions(
+  database: DatabaseSync,
+  releases: readonly JsonRecord[],
+): boolean {
+  return syncNormalizedReleaseMembership(database, releaseMembershipFromDefinitions(releases))
+}
+
+function markReleaseMembershipStatePending(database: DatabaseSync): void {
+  if (!tableExists(database, 'release_membership_state')) return
+  database.prepare(`
+    INSERT INTO release_membership_state (id, membership_revision, project_revision, updated_at)
+    VALUES (1, 1, NULL, NULL)
+    ON CONFLICT(id) DO UPDATE SET
+      membership_revision = release_membership_state.membership_revision + 1,
+      project_revision = NULL,
+      updated_at = NULL
+  `).run()
+}
+
+function finalizeReleaseMembershipState(
+  database: DatabaseSync,
+  projectRevision: number,
+  updatedAt: string,
+): void {
+  if (!tableExists(database, 'release_membership_state')) return
+  database.prepare(`
+    UPDATE release_membership_state
+    SET project_revision = ?, updated_at = ?
+    WHERE id = 1 AND project_revision IS NULL
+  `).run(projectRevision, updatedAt)
+}
+
+function readReleaseMembershipStateFromDatabase(
+  database: DatabaseSync,
+): ProjectStateDatabaseReleaseMembershipState | null {
+  if (!tableExists(database, 'release_membership_state')) return null
+  const row = database.prepare(`
+    SELECT membership_revision, project_revision, updated_at
+    FROM release_membership_state WHERE id = 1
+  `).get() as JsonRecord | undefined
+  if (!row || !Number.isInteger(Number(row.membership_revision))) return null
+  return {
+    membershipRevision: Number(row.membership_revision),
+    projectRevision: Number.isInteger(Number(row.project_revision)) ? Number(row.project_revision) : null,
+    updatedAt: stringValue(row.updated_at),
   }
 }
 
@@ -1333,12 +1585,42 @@ function taskStatusesFromDatabase(database: DatabaseSync): JsonRecord[] {
   }))
 }
 
+function shippedDeliveryStatusesFromDatabase(database: DatabaseSync): Map<string, string> {
+  const statuses = new Map<string, string>()
+  if (!tableExists(database, 'release_delivery_snapshot')) return statuses
+  const rows = database.prepare('SELECT release_id, task_id, status FROM release_delivery_snapshot').all() as JsonRecord[]
+  for (const row of rows) {
+    const releaseId = stringValue(row.release_id)
+    const taskId = stringValue(row.task_id)
+    const status = stringValue(row.status)
+    if (releaseId && taskId && status) statuses.set(`${releaseId}\0${taskId}`, status)
+  }
+  return statuses
+}
+
+function backfillShippedDeliverySnapshots(database: DatabaseSync): void {
+  if (!tableExists(database, 'release_delivery_snapshot')) return
+  const releases = releaseDefinitionsFromDatabase(database).filter(release => release.state === 'shipped')
+  const statuses = new Map(taskStatusesFromDatabase(database).map(task => [String(task.id), stringValue(task.status)]))
+  const completed = new Map((database.prepare('SELECT id, completed_at FROM work_items').all() as JsonRecord[]).map(row => [String(row.id), stringValue(row.completed_at)]))
+  const insert = database.prepare(`INSERT OR IGNORE INTO release_delivery_snapshot (release_id, task_id, status, completed_at) VALUES (?, ?, ?, ?)`)
+  for (const release of releases) {
+    for (const nodeId of [...stringArray(release.nodeIds), ...stringArray(release.deferredNodeIds)]) {
+      const taskId = taskIdFromReleaseNodeId(nodeId)
+      if (!taskId) continue
+      insert.run(String(release.id), taskId, statuses.get(taskId) ?? 'unknown', completed.get(taskId) ?? null)
+    }
+  }
+}
+
 function assertShippedReleaseWriteAllowed(
   database: DatabaseSync,
   nextReleases: readonly JsonRecord[],
   nextTasks: readonly JsonRecord[],
   options: { nextReleasesComplete?: boolean; nextTasksComplete?: boolean } = {},
 ): void {
+  backfillShippedDeliverySnapshots(database)
+  const shippedDeliveryStatuses = shippedDeliveryStatusesFromDatabase(database)
   assertShippedReleaseMutation({
     currentReleases: releaseDefinitionsFromDatabase(database).map(release => ({
       id: String(release.id),
@@ -1362,6 +1644,7 @@ function assertShippedReleaseWriteAllowed(
     }),
     nextReleasesComplete: options.nextReleasesComplete,
     nextTasksComplete: options.nextTasksComplete,
+    shippedDeliveryStatus: (releaseId, taskId) => shippedDeliveryStatuses.get(`${releaseId}\0${taskId}`),
   })
 }
 
@@ -1439,7 +1722,10 @@ function parseProjectStateDetailStore(bytes: Uint8Array, expectedRevision: numbe
 }
 
 function serializeWorkItemDetail(task: JsonRecord): Buffer {
-  return gzipSync(Buffer.from(`${JSON.stringify(task)}\n`, 'utf8'), { level: 9 })
+  // Bindings are a normalized relation. Persisting this hydrated convenience
+  // field here would reintroduce a second authority on every task edit.
+  const { capabilityBindings: _capabilityBindings, ...detail } = task
+  return gzipSync(Buffer.from(`${JSON.stringify(detail)}\n`, 'utf8'), { level: 9 })
 }
 
 function parseWorkItemDetail(value: unknown): JsonRecord | null {
@@ -1585,6 +1871,7 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
   if (!readOnly) mkdirSync(dirname(databasePath), { recursive: true })
   const database = new DatabaseSync(databasePath, { readOnly })
   database.exec(`PRAGMA busy_timeout = ${readOnly ? PROJECT_STATE_READ_BUSY_TIMEOUT_MS : PROJECT_STATE_WRITE_BUSY_TIMEOUT_MS};`)
+  database.exec('PRAGMA foreign_keys = ON;')
   if (readOnly) return database
   // DELETE avoids read-created -wal/-shm sidecars. Project writes are short,
   // and FULL synchronous durability is more valuable here than WAL's
@@ -1687,6 +1974,51 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
       PRIMARY KEY (release_id, task_id)
     );
     CREATE INDEX IF NOT EXISTS release_membership_task_idx ON release_membership(task_id);
+    -- Membership changes independently from evidence/runtime changes. This
+    -- singleton lets a derived scope prove exactly which relation it used.
+    CREATE TABLE IF NOT EXISTS release_membership_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      membership_revision INTEGER NOT NULL,
+      project_revision INTEGER,
+      updated_at TEXT
+    );
+    -- Structured adapters own capability identity. This table holds the
+    -- source-derived scope fact; no Markdown or task prose can create a row.
+    CREATE TABLE IF NOT EXISTS source_capabilities (
+      capability_id TEXT PRIMARY KEY,
+      adapter_id TEXT NOT NULL,
+      adapter_schema_version INTEGER NOT NULL,
+      source_revision TEXT NOT NULL,
+      label TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('planned', 'retired')),
+      release_ids_json TEXT NOT NULL,
+      depends_on_capability_ids_json TEXT NOT NULL,
+      evidence_refs_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS source_capabilities_adapter_idx
+      ON source_capabilities(adapter_id, source_revision);
+    -- Task JSON carries this relation only when hydrated for a compatibility
+    -- reader. The relation below is the one durable allocation authority.
+    CREATE TABLE IF NOT EXISTS task_capability_bindings (
+      task_id TEXT NOT NULL,
+      capability_id TEXT NOT NULL,
+      relation TEXT NOT NULL CHECK (relation IN ('plans', 'implements', 'integrates', 'proves', 'reviews')),
+      PRIMARY KEY (task_id, capability_id),
+      FOREIGN KEY (task_id) REFERENCES work_items(id) ON DELETE CASCADE,
+      FOREIGN KEY (capability_id) REFERENCES source_capabilities(capability_id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS task_capability_bindings_capability_idx
+      ON task_capability_bindings(capability_id, relation);
+    -- A shipped release owns an immutable delivery snapshot. Work definitions
+    -- may later be scheduled again without rewriting historical delivery.
+    CREATE TABLE IF NOT EXISTS release_delivery_snapshot (
+      release_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      completed_at TEXT,
+      PRIMARY KEY (release_id, task_id)
+    );
+    CREATE INDEX IF NOT EXISTS release_delivery_snapshot_task_idx ON release_delivery_snapshot(task_id);
     CREATE TABLE IF NOT EXISTS project_summary (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       payload_json TEXT NOT NULL,
@@ -1696,6 +2028,55 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
       source_queue_last_updated TEXT,
       source_queue_mtime_ms REAL,
       source_workspace_goals_mtime_ms REAL
+    );
+    -- Claims are immutable typed observations. They audit how an agent or
+    -- canonical boundary saw a registered fact; they never replace normalized
+    -- task, release, or runtime ownership.
+    CREATE TABLE IF NOT EXISTS project_state_claims (
+      claim_id TEXT PRIMARY KEY,
+      project_revision INTEGER NOT NULL,
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      field TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      authority TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      observed_at TEXT NOT NULL,
+      basis_kind TEXT,
+      basis_id TEXT,
+      evidence_refs_json TEXT NOT NULL,
+      supersedes_claim_id TEXT,
+      fingerprint TEXT NOT NULL,
+      rejection_code TEXT
+    );
+    CREATE INDEX IF NOT EXISTS project_state_claims_lookup_idx
+      ON project_state_claims(project_revision, subject_kind, subject_id, field);
+    -- This is replaceable resolver output for one observed revision, rather
+    -- than a second mutable source of project truth.
+    CREATE TABLE IF NOT EXISTS project_state_disagreements (
+      disagreement_id TEXT PRIMARY KEY,
+      project_revision INTEGER NOT NULL,
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      field TEXT NOT NULL,
+      canonical_claim_ids_json TEXT NOT NULL,
+      contradictory_claim_ids_json TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('resolved_by_authority', 'unresolved')),
+      reconciliation TEXT NOT NULL,
+      detected_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS project_state_disagreements_current_idx
+      ON project_state_disagreements(project_revision, state, field);
+    -- A compact decision is kept outside the broad summary payload so every
+    -- current surface consumes one revision-bound packet rather than an
+    -- independently copied decision branch.
+    CREATE TABLE IF NOT EXISTS project_state_decisions (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      project_revision INTEGER NOT NULL,
+      queue_revision INTEGER,
+      generated_at TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      payload_json TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS project_orientation (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -1984,6 +2365,180 @@ function transaction(database: DatabaseSync, work: () => void): void {
   }
 }
 
+function projectStateClaimFingerprint(claim: ProjectStateDatabaseStateClaim): string {
+  return stableJson({
+    projectRevision: claim.projectRevision,
+    subject: claim.subject,
+    field: claim.field,
+    value: claim.value,
+    authority: claim.authority,
+    actor: claim.actor,
+    observedAt: claim.observedAt,
+    evidenceRefs: [...claim.evidenceRefs],
+    basis: claim.basis,
+    supersedes: claim.supersedes,
+    rejectionCode: claim.rejectionCode,
+  })
+}
+
+/** A canonical snapshot refresh is not a second observation of the same fact. */
+function canonicalClaimReplayMatches(existing: JsonRecord, claim: ProjectStateDatabaseStateClaim): boolean {
+  if (claim.authority !== 'canonical_mutation' || claim.actor !== 'project-state-boundary') return false
+  if (String(existing.authority ?? '') !== claim.authority || String(existing.actor ?? '') !== claim.actor) return false
+  return stableJson({
+    projectRevision: Number(existing.project_revision ?? 0),
+    subject: { kind: String(existing.subject_kind ?? ''), id: String(existing.subject_id ?? '') },
+    field: String(existing.field ?? ''),
+    value: parseJson<unknown>(existing.value_json, null),
+    authority: String(existing.authority ?? ''),
+    actor: String(existing.actor ?? ''),
+    evidenceRefs: stringArray(parseJson<unknown>(existing.evidence_refs_json, [])),
+    basis: stringValue(existing.basis_kind) && stringValue(existing.basis_id)
+      ? { kind: stringValue(existing.basis_kind), id: stringValue(existing.basis_id) }
+      : undefined,
+    supersedes: stringValue(existing.supersedes_claim_id) ?? undefined,
+    rejectionCode: stringValue(existing.rejection_code) ?? undefined,
+  }) === stableJson({
+    projectRevision: claim.projectRevision,
+    subject: claim.subject,
+    field: claim.field,
+    value: claim.value,
+    authority: claim.authority,
+    actor: claim.actor,
+    evidenceRefs: [...claim.evidenceRefs],
+    basis: claim.basis,
+    supersedes: claim.supersedes,
+    rejectionCode: claim.rejectionCode,
+  })
+}
+
+function assertProjectStateResolutionSnapshot(
+  snapshot: ProjectStateDatabaseStateResolutionSnapshot,
+  projectRevision: number,
+  queueRevision: number | null,
+): void {
+  if (snapshot.projectRevision !== projectRevision || snapshot.queueRevision !== queueRevision) {
+    throw new Error('Project-state resolution must describe the same project and queue revision as its summary write.')
+  }
+  if (!snapshot.fingerprint.trim() || !Number.isFinite(Date.parse(snapshot.generatedAt))) {
+    throw new Error('Project-state resolution requires a fingerprint and generated timestamp.')
+  }
+  const claimIds = new Set<string>()
+  for (const claim of snapshot.claims) {
+    if (!claim.id.trim() || claimIds.has(claim.id)) {
+      throw new Error('Project-state resolution contains a missing or duplicate claim id.')
+    }
+    claimIds.add(claim.id)
+    if (claim.projectRevision !== projectRevision || !claim.subject.kind.trim() || !claim.subject.id.trim() ||
+      !claim.field.trim() || !claim.actor.trim() || !Number.isFinite(Date.parse(claim.observedAt)) ||
+      !Array.isArray(claim.evidenceRefs) || !claim.evidenceRefs.every(ref => ref.trim().length > 0)) {
+      throw new Error(`Project-state claim ${claim.id} is malformed for its snapshot.`)
+    }
+  }
+  for (const disagreement of snapshot.disagreements) {
+    if (!disagreement.id.trim() || !disagreement.subject.kind.trim() || !disagreement.subject.id.trim() ||
+      !disagreement.field.trim() ||
+      !['resolved_by_authority', 'unresolved'].includes(disagreement.state)) {
+      throw new Error(`Project-state disagreement ${disagreement.id || '<missing>'} is malformed.`)
+    }
+  }
+}
+
+/**
+ * Persist resolver input and output with the snapshot they describe. Claims
+ * are append-only/idempotent; disagreement and decision rows are the current
+ * deterministic resolution for one revision.
+ */
+function writeProjectStateResolution(
+  database: DatabaseSync,
+  snapshot: ProjectStateDatabaseStateResolutionSnapshot,
+  projectRevision: number,
+  queueRevision: number | null,
+): void {
+  assertProjectStateResolutionSnapshot(snapshot, projectRevision, queueRevision)
+  const findClaim = database.prepare(`
+    SELECT fingerprint, project_revision, subject_kind, subject_id, field,
+      value_json, authority, actor, evidence_refs_json, basis_kind, basis_id,
+      supersedes_claim_id, rejection_code
+    FROM project_state_claims WHERE claim_id = ?
+  `)
+  const insertClaim = database.prepare(`
+    INSERT INTO project_state_claims (
+      claim_id, project_revision, subject_kind, subject_id, field, value_json,
+      authority, actor, observed_at, basis_kind, basis_id, evidence_refs_json,
+      supersedes_claim_id, fingerprint, rejection_code
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  for (const claim of snapshot.claims) {
+    const fingerprint = projectStateClaimFingerprint(claim)
+    const existing = findClaim.get(claim.id) as JsonRecord | undefined
+    if (existing && stringValue(existing.fingerprint) !== fingerprint && !canonicalClaimReplayMatches(existing, claim)) {
+      throw new Error(`Project-state claim ${claim.id} was replayed with different content.`)
+    }
+    if (existing) continue
+    insertClaim.run(
+      claim.id,
+      claim.projectRevision,
+      claim.subject.kind,
+      claim.subject.id,
+      claim.field,
+      json(claim.value),
+      claim.authority,
+      claim.actor,
+      claim.observedAt,
+      claim.basis?.kind ?? null,
+      claim.basis?.id ?? null,
+      json(claim.evidenceRefs),
+      claim.supersedes ?? null,
+      fingerprint,
+      claim.rejectionCode ?? null,
+    )
+  }
+  database.prepare('DELETE FROM project_state_disagreements WHERE project_revision = ?').run(projectRevision)
+  const insertDisagreement = database.prepare(`
+    INSERT INTO project_state_disagreements (
+      disagreement_id, project_revision, subject_kind, subject_id, field,
+      canonical_claim_ids_json, contradictory_claim_ids_json, state,
+      reconciliation, detected_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  for (const disagreement of snapshot.disagreements) {
+    insertDisagreement.run(
+      disagreement.id,
+      projectRevision,
+      disagreement.subject.kind,
+      disagreement.subject.id,
+      disagreement.field,
+      json(disagreement.canonicalClaimIds),
+      json(disagreement.contradictoryClaimIds),
+      disagreement.state,
+      disagreement.reconciliation,
+      snapshot.generatedAt,
+    )
+  }
+  // A project revision may receive additional verifier/runtime observations.
+  // Claim IDs remain immutable and idempotent above; the decision is the
+  // resolver's current compact answer over that growing ledger, so it may
+  // legitimately change from runnable to conflicted without a task mutation.
+  database.prepare(`
+    INSERT INTO project_state_decisions (
+      id, project_revision, queue_revision, generated_at, fingerprint, payload_json
+    ) VALUES (1, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      project_revision = excluded.project_revision,
+      queue_revision = excluded.queue_revision,
+      generated_at = excluded.generated_at,
+      fingerprint = excluded.fingerprint,
+      payload_json = excluded.payload_json
+  `).run(
+    projectRevision,
+    queueRevision,
+    snapshot.generatedAt,
+    snapshot.fingerprint,
+    json(snapshot.decision),
+  )
+}
+
 function bumpRevision(database: DatabaseSync, updatedAt: string): number {
   const current = database.prepare('SELECT revision FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
   const revision = Number(current?.revision ?? 0) + 1
@@ -2231,10 +2786,11 @@ function hydrateSummaryFromAuxiliaryRows(database: DatabaseSync, summary: JsonRe
   if (tableExists(database, 'current_execution')) {
     const row = database.prepare(`
       SELECT status, mode, started_at, stopped_at, stop_requested_at, error,
-        updated_at
+        updated_at, payload_json
       FROM current_execution WHERE id = 1
     `).get() as JsonRecord | undefined
     if (row) {
+      const payload = parseJson<JsonRecord>(row.payload_json, {})
       next.execution = {
         status: String(row.status ?? 'stopped'),
         ...(stringValue(row.mode) ? { mode: stringValue(row.mode) } : {}),
@@ -2242,6 +2798,8 @@ function hydrateSummaryFromAuxiliaryRows(database: DatabaseSync, summary: JsonRe
         ...(stringValue(row.stopped_at) ? { stoppedAt: stringValue(row.stopped_at) } : {}),
         ...(stringValue(row.stop_requested_at) ? { stopRequestedAt: stringValue(row.stop_requested_at) } : {}),
         ...(stringValue(row.error) ? { error: stringValue(row.error) } : {}),
+        ...(stringValue(payload?.activeTaskId) ? { activeTaskId: stringValue(payload?.activeTaskId) } : {}),
+        ...(stringValue(payload?.activeTaskTitle) ? { activeTaskTitle: stringValue(payload?.activeTaskTitle) } : {}),
         updatedAt: stringValue(row.updated_at) ?? '',
       }
     }
@@ -2353,6 +2911,241 @@ function taskFromRow(row: JsonRecord, includeDefinition = true): ProjectStateDat
     completedAt: typeof row.completed_at === 'string' ? row.completed_at : null,
     definition: includeDefinition ? parseJson<JsonRecord>(row.definition_json, {}) : {},
     scopeRow: scopeRowFromRow(row),
+  }
+}
+
+const CAPABILITY_RELATIONS = new Set<ProjectStateDatabaseCapabilityRelation>([
+  'plans', 'implements', 'integrates', 'proves', 'reviews',
+])
+
+function taskCapabilityBindingsFromTask(task: JsonRecord): ProjectStateDatabaseTaskCapabilityBinding[] | null {
+  if (!('capabilityBindings' in task)) return null
+  if (!Array.isArray(task.capabilityBindings)) {
+    throw new Error(`Task ${stringValue(task.id) || '(unknown)'} has invalid capability bindings`)
+  }
+  const taskId = stringValue(task.id)
+  if (!taskId) throw new Error('Capability bindings require a task id')
+  const byCapability = new Map<string, ProjectStateDatabaseTaskCapabilityBinding>()
+  for (const value of task.capabilityBindings) {
+    if (!isRecord(value)) throw new Error(`Task ${taskId} has invalid capability binding`)
+    const capabilityId = stringValue(value.capabilityId)
+    const relation = stringValue(value.relation) as ProjectStateDatabaseCapabilityRelation | undefined
+    if (!capabilityId || !relation || !CAPABILITY_RELATIONS.has(relation)) {
+      throw new Error(`Task ${taskId} has invalid capability binding`)
+    }
+    if (byCapability.has(capabilityId)) {
+      throw new Error(`Task ${taskId} binds capability ${capabilityId} more than once`)
+    }
+    byCapability.set(capabilityId, { taskId, capabilityId, relation })
+  }
+  return [...byCapability.values()].sort((left, right) => left.capabilityId.localeCompare(right.capabilityId))
+}
+
+function sourceCapabilityFromInput(input: ProjectStateDatabaseSourceCapability): ProjectStateDatabaseSourceCapability {
+  const id = input.id.trim()
+  const adapterId = input.adapterId.trim()
+  const sourceRevision = input.sourceRevision.trim()
+  const label = input.label.trim()
+  if (!id || !adapterId || !sourceRevision || !label || !Number.isInteger(input.adapterSchemaVersion) || input.adapterSchemaVersion < 1) {
+    throw new Error('Source capabilities require id, adapter identity, revision, label, and a positive schema version')
+  }
+  if (input.state !== 'planned' && input.state !== 'retired') {
+    throw new Error(`Source capability ${id} has invalid state`)
+  }
+  return {
+    id,
+    adapterId,
+    adapterSchemaVersion: input.adapterSchemaVersion,
+    sourceRevision,
+    label,
+    state: input.state,
+    releaseIds: [...new Set(input.releaseIds.map(value => value.trim()).filter(Boolean))].sort(),
+    dependsOnCapabilityIds: [...new Set(input.dependsOnCapabilityIds.map(value => value.trim()).filter(Boolean))].sort(),
+    evidenceRefs: [...new Set(input.evidenceRefs.map(value => value.trim()).filter(Boolean))].sort(),
+  }
+}
+
+function upsertSourceCapabilities(
+  database: DatabaseSync,
+  inputs: readonly ProjectStateDatabaseSourceCapability[],
+): void {
+  const byId = new Map<string, ProjectStateDatabaseSourceCapability>()
+  for (const input of inputs) {
+    const capability = sourceCapabilityFromInput(input)
+    if (byId.has(capability.id)) throw new Error(`Received duplicate source capability ${capability.id}`)
+    byId.set(capability.id, capability)
+  }
+  const upsert = database.prepare(`
+    INSERT INTO source_capabilities (
+      capability_id, adapter_id, adapter_schema_version, source_revision,
+      label, state, release_ids_json, depends_on_capability_ids_json, evidence_refs_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(capability_id) DO UPDATE SET
+      adapter_id = excluded.adapter_id,
+      adapter_schema_version = excluded.adapter_schema_version,
+      source_revision = excluded.source_revision,
+      label = excluded.label,
+      state = excluded.state,
+      release_ids_json = excluded.release_ids_json,
+      depends_on_capability_ids_json = excluded.depends_on_capability_ids_json,
+      evidence_refs_json = excluded.evidence_refs_json
+  `)
+  for (const capability of byId.values()) {
+    upsert.run(
+      capability.id,
+      capability.adapterId,
+      capability.adapterSchemaVersion,
+      capability.sourceRevision,
+      capability.label,
+      capability.state,
+      json(capability.releaseIds),
+      json(capability.dependsOnCapabilityIds),
+      json(capability.evidenceRefs),
+    )
+  }
+}
+
+function replaceSourceCapabilityCatalog(
+  database: DatabaseSync,
+  inputs: readonly ProjectStateDatabaseSourceCapability[],
+): void {
+  const capabilities = inputs.map(sourceCapabilityFromInput)
+  const ids = new Set<string>()
+  for (const capability of capabilities) {
+    if (ids.has(capability.id)) throw new Error(`Received duplicate source capability ${capability.id}`)
+    ids.add(capability.id)
+  }
+  // A source snapshot is explicit authority, so first remove the allocations
+  // it supersedes, then replace source facts and let the same queue write
+  // reallocate only the bindings carried by its task records.
+  database.prepare('DELETE FROM task_capability_bindings').run()
+  database.prepare('DELETE FROM source_capabilities').run()
+  upsertSourceCapabilities(database, capabilities)
+}
+
+function syncTaskCapabilityBindings(
+  database: DatabaseSync,
+  tasks: readonly JsonRecord[],
+  options: { replaceAll?: boolean } = {},
+): void {
+  if (options.replaceAll) database.prepare('DELETE FROM task_capability_bindings').run()
+  const bindingsByTask = new Map<string, ProjectStateDatabaseTaskCapabilityBinding[]>()
+  for (const task of tasks) {
+    const bindings = taskCapabilityBindingsFromTask(task)
+    if (bindings !== null) bindingsByTask.set(stringValue(task.id)!, bindings)
+  }
+  const knownCapabilityIds = new Set(
+    (database.prepare('SELECT capability_id FROM source_capabilities').all() as JsonRecord[])
+      .map(row => stringValue(row.capability_id))
+      .filter((id): id is string => Boolean(id)),
+  )
+  const replaceTask = database.prepare('DELETE FROM task_capability_bindings WHERE task_id = ?')
+  const insert = database.prepare(`
+    INSERT INTO task_capability_bindings (task_id, capability_id, relation)
+    VALUES (?, ?, ?)
+  `)
+  for (const [taskId, bindings] of bindingsByTask) {
+    replaceTask.run(taskId)
+    for (const binding of bindings) {
+      if (!knownCapabilityIds.has(binding.capabilityId)) {
+        throw new Error(`Task ${taskId} binds unknown source capability ${binding.capabilityId}`)
+      }
+      insert.run(binding.taskId, binding.capabilityId, binding.relation)
+    }
+  }
+}
+
+function readTaskCapabilityBindingsByTask(
+  database: DatabaseSync,
+  taskIds: readonly string[],
+): Map<string, ProjectStateDatabaseTaskCapabilityBinding[]> {
+  if (taskIds.length === 0 || !tableExists(database, 'task_capability_bindings')) return new Map()
+  const rows = database.prepare(`
+    SELECT task_id, capability_id, relation
+    FROM task_capability_bindings
+    WHERE task_id IN (${taskIds.map(() => '?').join(', ')})
+    ORDER BY task_id, capability_id
+  `).all(...taskIds) as JsonRecord[]
+  const result = new Map<string, ProjectStateDatabaseTaskCapabilityBinding[]>()
+  for (const row of rows) {
+    const taskId = stringValue(row.task_id)
+    const capabilityId = stringValue(row.capability_id)
+    const relation = stringValue(row.relation) as ProjectStateDatabaseCapabilityRelation | undefined
+    if (!taskId || !capabilityId || !relation || !CAPABILITY_RELATIONS.has(relation)) continue
+    const bindings = result.get(taskId) ?? []
+    bindings.push({ taskId, capabilityId, relation })
+    result.set(taskId, bindings)
+  }
+  return result
+}
+
+function sourceCapabilityFromRow(row: JsonRecord): ProjectStateDatabaseSourceCapability | null {
+  const id = stringValue(row.capability_id)
+  const adapterId = stringValue(row.adapter_id)
+  const sourceRevision = stringValue(row.source_revision)
+  const label = stringValue(row.label)
+  const state = stringValue(row.state) as ProjectStateDatabaseCapabilityState | undefined
+  const adapterSchemaVersion = Number(row.adapter_schema_version)
+  if (!id || !adapterId || !sourceRevision || !label || !Number.isInteger(adapterSchemaVersion) || adapterSchemaVersion < 1) return null
+  if (state !== 'planned' && state !== 'retired') return null
+  return {
+    id,
+    adapterId,
+    adapterSchemaVersion,
+    sourceRevision,
+    label,
+    state,
+    releaseIds: parseJson<string[]>(row.release_ids_json, []),
+    dependsOnCapabilityIds: parseJson<string[]>(row.depends_on_capability_ids_json, []),
+    evidenceRefs: parseJson<string[]>(row.evidence_refs_json, []),
+  }
+}
+
+/** Read the adapter-owned catalog without opening task detail or project history. */
+export function readProjectStateDatabaseSourceCapabilities(
+  tasksPath: string,
+): ProjectStateDatabaseSourceCapability[] | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'source_capabilities')) return []
+    return (database.prepare(`
+      SELECT capability_id, adapter_id, adapter_schema_version, source_revision,
+        label, state, release_ids_json, depends_on_capability_ids_json, evidence_refs_json
+      FROM source_capabilities
+      ORDER BY capability_id
+    `).all() as JsonRecord[])
+      .flatMap(row => {
+        const capability = sourceCapabilityFromRow(row)
+        return capability ? [capability] : []
+      })
+  } finally {
+    database.close()
+  }
+}
+
+/** Read exact task allocation facts without expanding task definition payloads. */
+export function readProjectStateDatabaseTaskCapabilityBindings(
+  tasksPath: string,
+  taskIds: readonly string[],
+): Map<string, ProjectStateDatabaseTaskCapabilityBinding[]> | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const ids = [...new Set(taskIds.filter(id => id.trim().length > 0))].slice(0, 100)
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readTaskCapabilityBindingsByTask(database, ids)
+  } finally {
+    database.close()
   }
 }
 
@@ -2550,7 +3343,15 @@ function readQueueDetailsForRevision(
   database?: DatabaseSync,
   options: { migration?: boolean } = {},
 ): ProjectStateDatabaseQueueDefinition | null {
-  if (options.migration && database && tableExists(database, 'queue_detail')) {
+  // An aggregate queue detail blob is a bootstrap/import bridge, never a
+  // competing source once SQLite is promoted. A migration mutating promoted
+  // state must begin with the same normalized task/release relation the
+  // runtime reads, otherwise an old blob can attempt to rewrite a shipped
+  // release snapshot.
+  const databaseIsAuthoritative = Boolean(database && tableExists(database, 'project_meta') &&
+    (database.prepare('SELECT project_state_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined)
+      ?.project_state_authority === 'database')
+  if (options.migration && database && !databaseIsAuthoritative && tableExists(database, 'queue_detail')) {
     try {
       const row = database.prepare('SELECT revision, payload_gzip FROM queue_detail WHERE id = 1').get() as JsonRecord | undefined
       if (row && Number(row.revision) === revision && row.payload_gzip instanceof Uint8Array) {
@@ -2636,10 +3437,14 @@ function readQueueDefinitionFromWorkItemDetails(
   // Queue order is semantic: hierarchy.childIds and callers that read the
   // rich queue expect the materialized insertion order, not “most recently
   // edited first”. The compact inventory may sort by freshness separately.
-  const taskRows = database.prepare('SELECT id, updated_at, summary_json FROM work_items ORDER BY rowid').all() as JsonRecord[]
+  const taskRows = database.prepare('SELECT * FROM work_items ORDER BY rowid').all() as JsonRecord[]
   const detailRows = database.prepare('SELECT task_id, revision, payload_gzip FROM work_item_detail').all() as JsonRecord[]
   if (detailRows.length !== taskRows.length) return null
   const summaryByTaskId = new Map(taskRows.map(row => [String(row.id), parseJson<JsonRecord>(row.summary_json, {})]))
+  const indexedByTaskId = new Map(taskRows.map(row => {
+    const indexed = taskFromRow(row, false)
+    return [indexed.id, indexed] as const
+  }))
   const byId = new Map<string, JsonRecord>()
   for (const row of detailRows) {
     const taskId = stringValue(row.task_id)
@@ -2649,17 +3454,50 @@ function readQueueDefinitionFromWorkItemDetails(
     // revision without a table-wide metadata rewrite.
     const detail = taskId ? parseWorkItemDetail(row.payload_gzip) : null
     if (!taskId || !detail) return null
+    const indexed = indexedByTaskId.get(taskId)
+    if (!indexed) return null
+    // Detail owns the rich task definition. Indexed columns own current
+    // lifecycle and compact identity fields. A rich migration read must use
+    // the same two ownership layers as the task-detail boundary, otherwise a
+    // stale definition status can make migration planning disagree with the
+    // visible task state at one project revision.
+    const current: JsonRecord = {
+      ...detail,
+      id: indexed.id,
+      title: indexed.title,
+      ...(indexed.description !== null ? { description: indexed.description } : {}),
+      ...(indexed.status !== null ? { status: indexed.status } : {}),
+      ...(indexed.domain !== null ? { domain: indexed.domain } : {}),
+      ...(indexed.priority !== null ? { priority: indexed.priority } : {}),
+      ...(indexed.workKind !== null ? { workKind: indexed.workKind } : {}),
+      ...(indexed.semanticKind !== null && indexed.semanticKind !== undefined ? { semanticKind: indexed.semanticKind } : {}),
+      ...(indexed.hierarchy ? { hierarchy: indexed.hierarchy } : {}),
+      ...(indexed.dependsOn.length > 0 ? { dependsOn: [...indexed.dependsOn] } : {}),
+      ...(indexed.sourceRefs.length > 0 ? { sourceRefs: [...indexed.sourceRefs] } : {}),
+      ...(indexed.updatedAt !== null ? { updatedAt: indexed.updatedAt } : {}),
+      ...(indexed.completedAt !== null ? { completedAt: indexed.completedAt } : {}),
+    }
     const summary = summaryByTaskId.get(taskId) ?? {}
     byId.set(taskId, isRecord(summary.currentSummary)
-      ? { ...detail, currentSummary: summary.currentSummary }
-      : detail)
+      ? { ...current, currentSummary: summary.currentSummary }
+      : current)
   }
   if (byId.size !== taskRows.length || taskRows.some(row => !byId.has(String(row.id)))) return null
   const releaseIdsByTask = readReleaseMembershipByTask(database)
   const dependencyIdsByTask = readTaskDependenciesByTask(database)
+  const capabilityBindingsByTask = readTaskCapabilityBindingsByTask(database, [...byId.keys()])
   for (const [taskId, task] of byId) {
-    if (tableExists(database, 'release_membership')) task.releaseIds = releaseIdsByTask.get(taskId) ?? []
+    if (tableExists(database, 'release_membership')) {
+      // A visible task's release IDs are normalized membership. Internal
+      // work may carry a distinct typed execution context in its detail, but
+      // it can never be reconstructed as visible release membership.
+      task.releaseIds = taskHasInternalReleaseContext(task)
+        ? []
+        : releaseIdsByTask.get(taskId) ?? []
+    }
     if (tableExists(database, 'task_dependencies')) task.dependsOn = dependencyIdsByTask.get(taskId) ?? []
+    const bindings = capabilityBindingsByTask.get(taskId)
+    if (bindings) task.capabilityBindings = bindings.map(({ capabilityId, relation }) => ({ capabilityId, relation }))
   }
   const releaseRows = releaseDefinitionsFromDatabase(database)
   return {
@@ -2704,9 +3542,15 @@ function attachWorkItemDetails(
   database: DatabaseSync,
 ): ProjectStateDatabaseTask[] {
   const definitions = readWorkItemDetails(database, tasks.map(task => task.id))
+  const bindingsByTask = readTaskCapabilityBindingsByTask(database, tasks.map(task => task.id))
   return tasks.map(task => ({
     ...task,
-    definition: definitions.get(task.id) ?? {},
+    definition: {
+      ...(definitions.get(task.id) ?? {}),
+      ...(bindingsByTask.has(task.id) ? {
+        capabilityBindings: bindingsByTask.get(task.id)!.map(({ capabilityId, relation }) => ({ capabilityId, relation })),
+      } : {}),
+    },
   }))
 }
 
@@ -2792,7 +3636,16 @@ function workItemSummary(task: JsonRecord): JsonRecord {
   const sizePlanAction = isRecord(task.sizePlan) && typeof task.sizePlan.action === 'string'
     ? task.sizePlan.action
     : null
+  // Compact readers need to distinguish an owner review from a coordinator
+  // review without reopening the task definition. The field is typed state,
+  // not the review rationale or any model-authored prose.
+  const specReviewAuthority = task.status === 'spec_review'
+    ? (isRecord(task.specReviewGate) && task.specReviewGate.authority === 'coordinator'
+        ? 'coordinator'
+        : 'owner')
+    : null
   const currentProof = currentProofSummary(task)
+  const executionBlocker = taskExecutionBlocker(task)
   summary.currentSummary = {
     imported,
     brief: {
@@ -2804,8 +3657,10 @@ function workItemSummary(task: JsonRecord): JsonRecord {
     },
     acceptanceCriteriaCount,
     proof: currentProof,
+    ...(executionBlocker ? { executionBlocker } : {}),
     ...(taskReadiness ? { taskReadiness } : {}),
     ...(sizePlanAction ? { sizePlanAction } : {}),
+    ...(specReviewAuthority ? { specReviewAuthority } : {}),
   }
   return summary
 }
@@ -2883,6 +3738,9 @@ function writeSnapshotToDatabase(
     database.prepare('DELETE FROM task_dependencies').run()
     database.prepare('DELETE FROM scopes').run()
     database.prepare('DELETE FROM work_scope').run()
+    if (snapshot.sourceCapabilities !== undefined) {
+      replaceSourceCapabilityCatalog(database, snapshot.sourceCapabilities)
+    }
 
     const insertTask = database.prepare(`
       INSERT INTO work_items (
@@ -2913,6 +3771,7 @@ function writeSnapshotToDatabase(
       )
     }
     syncTaskDependencies(database, tasks)
+    syncTaskCapabilityBindings(database, tasks, { replaceAll: snapshot.sourceCapabilities !== undefined })
     deleteOrphanTaskOverlays(database, tasks.map(task => String(task.id ?? '')).filter(Boolean))
 
     const insertScope = database.prepare(`
@@ -2995,7 +3854,14 @@ function writeSnapshotToDatabase(
         source_queue_last_updated = excluded.source_queue_last_updated,
         source_queue_mtime_ms = excluded.source_queue_mtime_ms,
         source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
-    `).run(json(compactSummary), generatedAt, currentRevision(database) + 1, lastUpdated, mtimeMs, goalsMtimeMs)
+    `).run(
+      json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
+      generatedAt,
+      currentRevision(database) + 1,
+      lastUpdated,
+      mtimeMs,
+      goalsMtimeMs,
+    )
 
     const revision = commitAuthoritativeMutation(database, {
       updatedAt: generatedAt,
@@ -3003,6 +3869,7 @@ function writeSnapshotToDatabase(
       projectionDomains: snapshot.projectionDomains,
       summaryFreshness: 'preserve',
     })
+    finalizeReleaseMembershipState(database, revision, generatedAt)
     database.prepare('UPDATE queue_state SET revision = ? WHERE id = 1').run(revision)
     replaceWorkItemDetails(database, tasks, revision)
     database.prepare('UPDATE project_meta SET project_id = ? WHERE id = 1').run(projectId)
@@ -3416,14 +4283,14 @@ export function readProjectStateDatabaseReleaseMembershipStatus(
   if (!existsSync(databasePath)) return missing
   const database = openDatabase(databasePath, { readOnly: true })
   try {
-    if (!tableExists(database, 'release_membership')) return missing
+    if (!tableExists(database, 'release_membership') || !tableExists(database, 'release_membership_state')) return missing
     const existing = database.prepare('SELECT release_id, task_id, disposition FROM release_membership').all() as JsonRecord[]
     // A populated normalized relation is already authoritative. Empty is
     // valid only when the current store has no release membership to import.
     const desired = desiredReleaseMembershipFromDatabase(database)
     const existingKey = new Set(existing.map(row => `${row.release_id}\0${row.task_id}\0${row.disposition}`))
     const desiredKey = new Set(desired.map(row => `${row.releaseId}\0${row.taskId}\0${row.disposition}`))
-    const complete = existingKey.size > 0
+    const relationComplete = existingKey.size > 0
       ? desiredKey.size === 0 || (
           existingKey.size === desiredKey.size &&
           [...existingKey].every(key => desiredKey.has(key))
@@ -3431,7 +4298,7 @@ export function readProjectStateDatabaseReleaseMembershipStatus(
       : desiredKey.size === 0
     return {
       schemaPresent: true,
-      complete,
+      complete: relationComplete && readReleaseMembershipStateFromDatabase(database)?.projectRevision !== null,
       membershipCount: existing.length,
       expectedCount: desired.length,
     }
@@ -3562,21 +4429,17 @@ export function migrateProjectStateDatabaseReleaseMembership(
     // migration may import old mirrors into an empty relation, but it must
     // never overwrite a valid relation with intentionally empty compatibility
     // columns from a newer write.
-    if (existing.length > 0) {
-      result.membershipCount = existing.length
-      return
-    }
-    const desired = desiredReleaseMembershipFromDatabase(database)
-    const existingKey = new Set(existing.map(row => `${row.release_id}\0${row.task_id}\0${row.disposition}`))
-    const desiredKey = new Set(desired.map(row => `${row.releaseId}\0${row.taskId}\0${row.disposition}`))
+    const desired = existing.length > 0
+      ? existing.map(row => ({
+          releaseId: String(row.release_id),
+          taskId: String(row.task_id),
+          disposition: String(row.disposition) as ProjectStateDatabaseReleaseMembership['disposition'],
+        }))
+      : desiredReleaseMembershipFromDatabase(database)
     result.membershipCount = desired.length
-    if (existingKey.size === desiredKey.size && [...existingKey].every(key => desiredKey.has(key))) return
-    database.prepare('DELETE FROM release_membership').run()
-    const insert = database.prepare(`
-      INSERT INTO release_membership (release_id, task_id, disposition)
-      VALUES (?, ?, ?)
-    `)
-    for (const row of desired) insert.run(row.releaseId, row.taskId, row.disposition)
+    const relationChanged = syncNormalizedReleaseMembership(database, desired)
+    const state = readReleaseMembershipStateFromDatabase(database)
+    if (!relationChanged && state?.projectRevision !== null) return
     const updatedAt = new Date().toISOString()
     result.revision = commitAuthoritativeMutation(database, {
       updatedAt,
@@ -3584,6 +4447,7 @@ export function migrateProjectStateDatabaseReleaseMembership(
       projectionDomains: ['summary'],
       summaryFreshness: 'stale',
     })
+    finalizeReleaseMembershipState(database, result.revision, updatedAt)
     result.migrated = true
   })
   return result
@@ -3673,7 +4537,7 @@ export function writeProjectStateDatabaseSnapshot(
  * Commit one task against the promoted SQLite current-state authority.
  *
  * This is intentionally narrower than writeProjectStateDatabaseSnapshot: it
- * updates one work item/detail payload and at most one scope row. Existing
+ * updates one work item/detail payload and its changed derived scope rows. Existing
  * detail rows receive the new queue watermark without being decompressed or
  * rewritten so an explicit rich queue read still observes one coherent
  * revision after the transaction commits.
@@ -3695,6 +4559,9 @@ export function writeProjectStateDatabaseTaskMutation(
   }
   if (mutation.scopeRow !== undefined && mutation.scopeRow !== null && mutation.scopeRow.taskId !== taskId) {
     throw new Error(`Targeted current-state mutation scope row must belong to ${taskId}`)
+  }
+  if (mutation.scopeRow !== undefined && mutation.scopeRows !== undefined) {
+    throw new Error('Targeted current-state mutations cannot use scopeRow and scopeRows together')
   }
   const database = openDatabase(projectStateDatabasePathFromTasksPath(tasksPath))
   let committedRevision = 0
@@ -3741,12 +4608,20 @@ export function writeProjectStateDatabaseTaskMutation(
       const lastUpdated = mutation.lastUpdated ?? stringValue(mutation.task.updatedAt) ?? stringValue(queueRow?.last_updated)
       const { compact: compactSummary, orientation, approvedPlan } = summaryStoragePartsForDatabase(database, mutation.summary)
       const source = isRecord(mutation.summary.source) ? mutation.summary.source : null
-    const revision = commitAuthoritativeMutation(database, {
-      updatedAt: generatedAt,
-      domains: ['queue'],
-      projectionDomains: mutation.projectionDomains,
-      summaryFreshness: 'preserve',
-    })
+      const revision = commitAuthoritativeMutation(database, {
+        updatedAt: generatedAt,
+        domains: ['queue'],
+        projectionDomains: mutation.projectionDomains,
+        summaryFreshness: 'preserve',
+      })
+      // SQLite owns revision allocation. Bind the runtime's shared decision
+      // to those exact tokens here so a normal task edit cannot leave a newer
+      // task/summary paired with yesterday's action packet.
+      const stateResolution = mutation.stateResolution?.({
+        projectRevision: revision,
+        queueRevision: revision,
+        generatedAt,
+      })
 
       const updated = database.prepare(`
         UPDATE work_items SET
@@ -3777,6 +4652,7 @@ export function writeProjectStateDatabaseTaskMutation(
         throw new Error(`Cannot mutate current work item ${taskId}: item not found`)
       }
       syncTaskDependencies(database, [mutation.task])
+      syncTaskCapabilityBindings(database, [mutation.task])
 
       // A task edit may legitimately assign or unassign the task from a
       // release. Normalize that relationship in this same transaction. The
@@ -3784,6 +4660,7 @@ export function writeProjectStateDatabaseTaskMutation(
       // persisted authority used by later reads.
       upsertReleaseDefinitions(database, normalizedReleases)
       syncReleaseMembershipFromDefinitions(database, normalizedReleases)
+      finalizeReleaseMembershipState(database, revision, generatedAt)
 
       /*
        * Keep the existing snapshot-revision invariant for rich queue reads.
@@ -3805,12 +4682,27 @@ export function writeProjectStateDatabaseTaskMutation(
        * updated in this same transaction; scope is separate because it is a
        * derived selected-scope projection.
        */
-      if (mutation.scopeRow !== undefined) {
-        if (mutation.scopeRow === null) {
-          database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(taskId)
-        } else {
-          const row = mutation.scopeRow
-          database.prepare(`
+      const scopeRows = mutation.scopeRows ?? (mutation.scopeRow === undefined
+        ? []
+        : mutation.scopeRow === null ? [] : [mutation.scopeRow])
+      const scopeRowsByTaskId = new Map<string, ProjectStateDatabaseScopeRow>()
+      for (const row of scopeRows) {
+        if (scopeRowsByTaskId.has(row.taskId)) throw new Error(`Targeted current-state mutation received duplicate scope row ${row.taskId}`)
+        if (!database.prepare('SELECT 1 FROM work_items WHERE id = ?').get(row.taskId)) {
+          throw new Error(`Cannot scope unknown work item ${row.taskId}`)
+        }
+        scopeRowsByTaskId.set(row.taskId, row)
+      }
+      const removeScopeRowTaskIds = new Set(mutation.removeScopeRowTaskIds ?? [])
+      if (mutation.scopeRow === null) removeScopeRowTaskIds.add(taskId)
+      for (const scopeTaskId of removeScopeRowTaskIds) {
+        if (scopeRowsByTaskId.has(scopeTaskId)) {
+          throw new Error(`Targeted current-state mutation cannot replace and remove scope row ${scopeTaskId}`)
+        }
+        database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(scopeTaskId)
+      }
+      if (scopeRowsByTaskId.size > 0) {
+        const upsertScopeRow = database.prepare(`
             INSERT INTO work_scope (
               task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
               blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
@@ -3828,7 +4720,9 @@ export function writeProjectStateDatabaseTaskMutation(
               proof_blocked = excluded.proof_blocked,
               blocker_summary = excluded.blocker_summary,
               source_refs_json = excluded.source_refs_json
-          `).run(
+          `)
+        for (const row of scopeRowsByTaskId.values()) {
+          upsertScopeRow.run(
             row.taskId,
             row.scope,
             row.eligibilityReason,
@@ -3863,7 +4757,7 @@ export function writeProjectStateDatabaseTaskMutation(
           source_queue_mtime_ms = excluded.source_queue_mtime_ms,
           source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
       `).run(
-        json(compactSummary),
+        json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
         generatedAt,
         revision,
         stringValue(source?.taskQueueLastUpdated) ?? stringValue(mutation.summary.sourceQueueLastUpdated) ?? lastUpdated,
@@ -3872,6 +4766,9 @@ export function writeProjectStateDatabaseTaskMutation(
       )
       syncProjectPlanSnapshot(database, approvedPlan, generatedAt, revision)
       writeProjectOrientationProjection(database, orientation, generatedAt, revision, { preserveOmitted: true })
+      if (stateResolution) {
+        writeProjectStateResolution(database, stateResolution, revision, revision)
+      }
       for (const entry of mutation.evidence ?? []) {
         const durable = compactTaskEvidenceEvent(TaskEvidenceEvent.parse({ ...entry.event }))
         const retention = validateTaskEvidenceRetention(entry.retention)
@@ -4079,6 +4976,7 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
         projectionDomains: mutation.projectionDomains,
         summaryFreshness: 'preserve',
       })
+      finalizeReleaseMembershipState(database, revision, generatedAt)
       database.prepare(`
         UPDATE queue_state
         SET selected_release_id = ?, last_updated = ?, revision = ?
@@ -4099,7 +4997,7 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
           source_queue_mtime_ms = excluded.source_queue_mtime_ms,
           source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
       `).run(
-        json(compactSummary),
+        json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
         generatedAt,
         revision,
         stringValue(source?.taskQueueLastUpdated) ?? stringValue(mutation.summary.sourceQueueLastUpdated) ?? lastUpdated,
@@ -4148,8 +5046,9 @@ export function writeProjectStateDatabaseTaskBatchMutation(
     'selectedReleaseId' in mutation ||
     mutation.executionPlanActions !== undefined ||
     mutation.scopeAuthorityRequests !== undefined
-  if (changedTaskIds.size === 0 && removedTaskIds.length === 0 && !hasEnvelopeMutation) {
-    throw new Error('Targeted task batch mutations require a task or queue-envelope change')
+  const hasCapabilityMutation = mutation.sourceCapabilities !== undefined
+  if (changedTaskIds.size === 0 && removedTaskIds.length === 0 && !hasEnvelopeMutation && !hasCapabilityMutation && mutation.taskRuntimes === undefined) {
+    throw new Error('Targeted task batch mutations require a task, runtime overlay, capability catalog, or queue-envelope change')
   }
 
   const database = openDatabase(projectStateDatabasePathFromTasksPath(tasksPath))
@@ -4176,6 +5075,9 @@ export function writeProjectStateDatabaseTaskBatchMutation(
       const detailCount = Number((database.prepare('SELECT COUNT(*) AS count FROM work_item_detail').get() as JsonRecord | undefined)?.count ?? 0)
       if (itemCount !== detailCount) {
         throw new Error(`Targeted task batch mutation refused: detail index is incomplete (${detailCount}/${itemCount})`)
+      }
+      if (mutation.sourceCapabilities !== undefined) {
+        upsertSourceCapabilities(database, mutation.sourceCapabilities)
       }
       let normalizedReleaseDefinitions: JsonRecord[] | null = null
       if (mutation.releases !== undefined) {
@@ -4289,13 +5191,18 @@ export function writeProjectStateDatabaseTaskBatchMutation(
 
       for (const taskId of removedTaskIds) {
         deleteTaskDependencies(database, [taskId])
-        database.prepare('DELETE FROM release_membership WHERE task_id = ?').run(taskId)
+        const deletedMembership = database.prepare('DELETE FROM release_membership WHERE task_id = ?').run(taskId)
+        if (Number(deletedMembership.changes ?? 0) > 0) markReleaseMembershipStatePending(database)
         database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(taskId)
         database.prepare('DELETE FROM work_item_detail WHERE task_id = ?').run(taskId)
         for (const table of ['task_execution', 'task_workspace', 'task_proof', 'task_evidence_current']) {
           if (tableExists(database, table)) database.prepare(`DELETE FROM ${table} WHERE task_id = ?`).run(taskId)
         }
         database.prepare('DELETE FROM work_items WHERE id = ?').run(taskId)
+      }
+      syncTaskCapabilityBindings(database, changedTasks)
+      if (mutation.taskRuntimes !== undefined) {
+        replaceTaskOverlayRowsInDatabase(database, 'task_execution', mutation.taskRuntimes)
       }
 
       const scopeRows = mutation.scopeRows ?? []
@@ -4358,6 +5265,7 @@ export function writeProjectStateDatabaseTaskBatchMutation(
         projectionDomains: mutation.projectionDomains,
         summaryFreshness: 'preserve',
       })
+      finalizeReleaseMembershipState(database, revision, generatedAt)
       const upsertDetail = database.prepare(`
         INSERT INTO work_item_detail (task_id, revision, payload_gzip)
         VALUES (?, ?, ?)
@@ -4398,7 +5306,7 @@ export function writeProjectStateDatabaseTaskBatchMutation(
           source_queue_mtime_ms = excluded.source_queue_mtime_ms,
           source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
       `).run(
-        json(compactSummary),
+        json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
         generatedAt,
         revision,
         stringValue(source?.taskQueueLastUpdated) ?? stringValue(mutation.summary.sourceQueueLastUpdated) ?? lastUpdated,
@@ -4467,7 +5375,6 @@ export function writeProjectStateDatabaseSummarySnapshot(
       const source = isRecord(summary.source) ? summary.source : null
       const lastUpdated = stringValue(source?.taskQueueLastUpdated) ?? stringValue(summary.sourceQueueLastUpdated)
       const generatedAt = stringValue(summary.generatedAt) ?? new Date().toISOString()
-      const revision = actualProjectRevision
       const mtimeMs = sourceQueueMtimeMs(tasksPath)
       const goalsMtimeMs = sourceWorkspaceGoalsMtimeMs(tasksPath)
       const currentProjection = snapshot.currentProjection ?? (
@@ -4479,6 +5386,15 @@ export function writeProjectStateDatabaseSummarySnapshot(
           : null
       )
       if (currentProjection) validateCurrentProjectionRows(database, currentProjection)
+      const projectionChangesCurrentState = currentProjection
+        ? currentProjectionChangesCurrentState(database, currentProjection)
+        : false
+      const revision = projectionChangesCurrentState
+        ? bumpRevision(database, generatedAt)
+        : actualProjectRevision
+      const stateResolution = snapshot.stateResolution && projectionChangesCurrentState
+        ? rebaseCanonicalStateResolutionSnapshot(snapshot.stateResolution, revision, actualRevision, generatedAt)
+        : snapshot.stateResolution
       database.prepare(`
         INSERT INTO project_summary (
           id, payload_json, freshness, generated_at,
@@ -4494,7 +5410,7 @@ export function writeProjectStateDatabaseSummarySnapshot(
           source_queue_mtime_ms = excluded.source_queue_mtime_ms,
           source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
       `).run(
-        json(compactSummary),
+        json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
         stringValue(summary.freshness) ?? 'current',
         generatedAt,
         revision,
@@ -4521,8 +5437,47 @@ export function writeProjectStateDatabaseSummarySnapshot(
         }
       }
 
+      if (stateResolution) {
+        writeProjectStateResolution(
+          database,
+          stateResolution,
+          revision,
+          actualRevision,
+        )
+      }
+
       writeProjectOrientationProjection(database, orientation, generatedAt, revision, { preserveOmitted: true })
       markProjectionCurrent(database, 'summary', revision, generatedAt)
+    })
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Commit a resolver-produced observation result without reopening or
+ * reinterpreting task/release state. Callers must first read one bundle and
+ * produce a packet for exactly that revision; a stale observation is refused.
+ */
+export function writeProjectStateDatabaseStateResolutionSnapshot(
+  tasksPath: string,
+  snapshot: ProjectStateDatabaseStateResolutionSnapshot,
+): void {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    throw new Error('Cannot record a project-state observation before project state exists.')
+  }
+  const database = openDatabase(databasePath)
+  try {
+    transaction(database, () => {
+      const projectRevision = currentRevision(database)
+      const queueRevision = tableExists(database, 'queue_state') ? currentQueueRevision(database) : null
+      if (snapshot.projectRevision !== projectRevision || snapshot.queueRevision !== queueRevision) {
+        throw new Error('Stale project-state observation: reread the shared project snapshot before resolving a disagreement.')
+      }
+      writeProjectStateResolution(database, snapshot, projectRevision, queueRevision)
     })
   } finally {
     database.close()
@@ -4549,6 +5504,103 @@ function validateCurrentProjectionRows(
     if (scopeIds.has(taskId)) throw new Error(`Current projection contains duplicate scope row id ${taskId}.`)
     scopeIds.add(taskId)
     if (!taskExists.get(taskId)) throw new Error(`Current projection references unknown scope task ${taskId}.`)
+  }
+}
+
+/**
+ * A compact projection may correct indexed status or scope facts. Those facts
+ * drive the shared decision, so they are current-state mutations rather than
+ * cache churn and must receive their own project revision.
+ */
+function currentProjectionChangesCurrentState(
+  database: DatabaseSync,
+  projection: ProjectStateDatabaseCurrentProjection,
+): boolean {
+  const currentStatus = database.prepare('SELECT status, completed_at FROM work_items WHERE id = ?')
+  for (const row of projection.taskStatusRows) {
+    const taskId = row.taskId.trim()
+    if (!taskId) continue
+    const existing = currentStatus.get(taskId) as JsonRecord | undefined
+    if (!existing || stringValue(existing.status) !== row.status ||
+      stringValue(existing.completed_at) !== (row.completedAt ?? null)) return true
+  }
+
+  const savedScopeRows = database.prepare(`
+    SELECT task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
+      blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
+      blocker_summary, source_refs_json
+    FROM work_scope
+  `).all() as JsonRecord[]
+  const currentByTaskId = new Map(savedScopeRows.flatMap(row => {
+    const parsed = scopeRowFromRow({
+      id: row.task_id,
+      scope_row_scope: row.scope,
+      scope_row_eligibility_reason: row.eligibility_reason,
+      scope_row_hierarchy_role: row.hierarchy_role,
+      scope_row_handoff_state: row.handoff_state,
+      scope_row_blocks_start: row.blocks_start,
+      scope_row_blocks_release: row.blocks_release,
+      scope_row_human_blocking: row.human_blocking,
+      scope_row_count_in_project_totals: row.count_in_project_totals,
+      scope_row_proof_blocked: row.proof_blocked,
+      scope_row_blocker_summary: row.blocker_summary,
+      scope_row_source_refs_json: row.source_refs_json,
+    })
+    return parsed ? [[parsed.taskId, parsed] as const] : []
+  }))
+  if (currentByTaskId.size !== projection.scopeRows.length) return true
+  return projection.scopeRows.some(row => {
+    const current = currentByTaskId.get(row.taskId)
+    return !current || scopeRowKey(current) !== scopeRowKey(row)
+  })
+}
+
+function rebaseCanonicalDecision(decision: unknown, projectRevision: number, queueRevision: number | null, generatedAt: string): unknown {
+  if (!isRecord(decision)) return decision
+  const rebaseExecution = (value: unknown): unknown => {
+    if (!isRecord(value)) return value
+    const focus = isRecord(value.focus)
+      ? { ...value.focus, taskRevision: projectRevision }
+      : value.focus
+    return { ...value, ...(focus !== undefined ? { focus } : {}) }
+  }
+  return {
+    ...decision,
+    projectRevision,
+    queueRevision,
+    generatedAt,
+    execution: rebaseExecution(decision.execution),
+    ...(decision.planExecution !== undefined ? { planExecution: rebaseExecution(decision.planExecution) } : {}),
+  }
+}
+
+function rebaseCanonicalStateResolutionSnapshot(
+  snapshot: ProjectStateDatabaseStateResolutionSnapshot,
+  projectRevision: number,
+  queueRevision: number | null,
+  generatedAt: string,
+): ProjectStateDatabaseStateResolutionSnapshot {
+  if (snapshot.claims.some(claim => claim.authority !== 'canonical_mutation' || claim.actor !== 'project-state-boundary')) {
+    throw new Error('A derived summary cannot rebase a noncanonical project-state observation.')
+  }
+  const claims = snapshot.claims.map(claim => ({
+    ...claim,
+    id: `canonical:${projectRevision}:${claim.subject.kind}:${claim.subject.id}:${claim.field}`,
+    projectRevision,
+    observedAt: generatedAt,
+    value: claim.field === 'project.executionFocus' && isRecord(claim.value)
+      ? { ...claim.value, taskRevision: projectRevision }
+      : claim.value,
+  }))
+  const decision = rebaseCanonicalDecision(snapshot.decision, projectRevision, queueRevision, generatedAt)
+  return {
+    projectRevision,
+    queueRevision,
+    generatedAt,
+    claims,
+    disagreements: snapshot.disagreements,
+    decision,
+    fingerprint: stableJson({ claims, disagreements: snapshot.disagreements, decision }),
   }
 }
 
@@ -4722,6 +5774,70 @@ export function readProjectStateDatabaseShellState<T = unknown>(
   }
 }
 
+function readProjectStateResolutionFromDatabase(
+  database: DatabaseSync,
+  projectRevision: number,
+  options: { includeClaims?: boolean } = {},
+): ProjectStateDatabaseStateResolutionRead | null {
+  if (!tableExists(database, 'project_state_decisions')) return null
+  const row = database.prepare(`
+    SELECT project_revision, queue_revision, generated_at, fingerprint, payload_json
+    FROM project_state_decisions WHERE id = 1
+  `).get() as JsonRecord | undefined
+  if (!row || Number(row.project_revision) !== projectRevision) return null
+  const disagreements = tableExists(database, 'project_state_disagreements')
+    ? (database.prepare(`
+        SELECT disagreement_id, subject_kind, subject_id, field,
+          canonical_claim_ids_json, contradictory_claim_ids_json, state, reconciliation
+        FROM project_state_disagreements
+        WHERE project_revision = ?
+        ORDER BY disagreement_id
+      `).all(projectRevision) as JsonRecord[]).map(record => ({
+        id: String(record.disagreement_id ?? ''),
+        subject: { kind: String(record.subject_kind ?? ''), id: String(record.subject_id ?? '') },
+        field: String(record.field ?? ''),
+        canonicalClaimIds: stringArray(parseJson<unknown>(record.canonical_claim_ids_json, [])),
+        contradictoryClaimIds: stringArray(parseJson<unknown>(record.contradictory_claim_ids_json, [])),
+        state: (record.state === 'unresolved' ? 'unresolved' : 'resolved_by_authority') as ProjectStateDatabaseStateDisagreement['state'],
+        reconciliation: String(record.reconciliation ?? 'inspect_canonical_state') as ProjectStateDatabaseStateDisagreement['reconciliation'],
+      }))
+    : []
+  const claims = options.includeClaims === true && tableExists(database, 'project_state_claims')
+    ? (database.prepare(`
+        SELECT claim_id, project_revision, subject_kind, subject_id, field, value_json,
+          authority, actor, observed_at, basis_kind, basis_id, evidence_refs_json,
+          supersedes_claim_id, rejection_code
+        FROM project_state_claims
+        WHERE project_revision = ?
+        ORDER BY claim_id
+      `).all(projectRevision) as JsonRecord[]).map(record => ({
+        id: String(record.claim_id ?? ''),
+        projectRevision: Number(record.project_revision ?? 0),
+        subject: { kind: String(record.subject_kind ?? ''), id: String(record.subject_id ?? '') },
+        field: String(record.field ?? ''),
+        value: parseJson<unknown>(record.value_json, null),
+        authority: String(record.authority ?? '') as ProjectStateDatabaseClaimAuthority,
+        actor: String(record.actor ?? ''),
+        observedAt: String(record.observed_at ?? ''),
+        evidenceRefs: stringArray(parseJson<unknown>(record.evidence_refs_json, [])),
+        ...(stringValue(record.basis_kind) && stringValue(record.basis_id)
+          ? { basis: { kind: stringValue(record.basis_kind)!, id: stringValue(record.basis_id)! } }
+          : {}),
+        ...(stringValue(record.supersedes_claim_id) ? { supersedes: stringValue(record.supersedes_claim_id)! } : {}),
+        ...(stringValue(record.rejection_code) ? { rejectionCode: stringValue(record.rejection_code)! } : {}),
+      }))
+    : undefined
+  return {
+    projectRevision,
+    queueRevision: typeof row.queue_revision === 'number' ? row.queue_revision : null,
+    generatedAt: String(row.generated_at ?? ''),
+    fingerprint: String(row.fingerprint ?? ''),
+    decision: parseJson<unknown>(row.payload_json, null),
+    disagreements,
+    ...(claims ? { claims } : {}),
+  }
+}
+
 function readProjectStateDatabaseSummaryFromDatabase<T = unknown>(
   database: DatabaseSync,
   tasksPath: string,
@@ -4750,6 +5866,31 @@ function readProjectStateDatabaseSummaryFromDatabase<T = unknown>(
     database,
     parseJson<JsonRecord>(row.payload_json, {}),
   )
+  const stateResolution = readProjectStateResolutionFromDatabase(database, databaseRevision)
+  // The decision has a dedicated compact owner. Old summaries may retain a
+  // compatibility copy until their next refresh, but a matching durable packet
+  // always wins and keeps every surface on the same resolved state.
+  if (stateResolution && stateResolution.decision !== null) storedSummary.decision = stateResolution.decision
+  const decisionProjectRevision = isRecord(storedSummary.decision)
+    ? Number(storedSummary.decision.projectRevision)
+    : null
+  // Compatibility snapshot writers created a v26 summary before the compact
+  // decision had a snapshot token. They remain readable until their next
+  // indexed refresh. A revision-bound decision, however, must have its
+  // dedicated packet; a copied JSON branch is not enough.
+  const requiresStateResolution = authority === 'database' &&
+    Number(storedSummary.version) >= 26 &&
+    Number.isInteger(decisionProjectRevision) &&
+    decisionProjectRevision === databaseRevision
+  const resolutionMatches = !requiresStateResolution || (
+    stateResolution !== null &&
+    stateResolution.queueRevision === (tableExists(database, 'queue_state') ? currentQueueRevision(database) : null)
+  )
+  const membershipState = readReleaseMembershipStateFromDatabase(database)
+  const summaryMembershipRevision = Number(storedSummary.releaseMembershipRevision)
+  const membershipMatches = membershipState !== null &&
+    Number.isInteger(summaryMembershipRevision) &&
+    summaryMembershipRevision === membershipState.membershipRevision
   if (options.includeApprovedPlan !== false && storedSummary.approvedPlan === undefined && tableExists(database, 'project_plan')) {
     storedSummary.approvedPlan = readProjectPlanSnapshot(database)
   }
@@ -4763,11 +5904,32 @@ function readProjectStateDatabaseSummaryFromDatabase<T = unknown>(
   }
   return {
     payload: storedSummary as T,
-    freshness: row.freshness === 'current' && !sourceChanged && summaryRevision === databaseRevision ? 'current' : 'stale',
+    freshness: row.freshness === 'current' && !sourceChanged && summaryRevision === databaseRevision && membershipMatches && resolutionMatches
+      ? 'current'
+      : 'stale',
     generatedAt: String(row.generated_at ?? ''),
     sourceQueueLastUpdated: typeof row.source_queue_last_updated === 'string' && row.source_queue_last_updated.length > 0
       ? row.source_queue_last_updated
       : null,
+  }
+}
+
+/**
+ * Whether this project has ever materialized the durable-decision capability.
+ * This is deliberately different from asking whether the packet is current:
+ * migrations establish storage/schema once, while normal projection freshness
+ * is handled by the revisioned current-state pipeline.
+ */
+export function hasProjectStateDatabaseDecisionSnapshot(projectRoot: string): boolean {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  if (!existsSync(databasePath)) return false
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return tableExists(database, 'project_state_decisions') && Boolean(
+      database.prepare('SELECT 1 FROM project_state_decisions WHERE id = 1').get(),
+    )
+  } finally {
+    database.close()
   }
 }
 
@@ -4881,7 +6043,11 @@ export function readProjectStateDatabaseReadBundle<T = unknown>(
       options.includeProjection === true ||
       options.includeTaskOverlays === true ||
       options.includeRepositories === true ||
-      options.includeDiagnostics === true
+      options.includeDiagnostics === true ||
+      options.includeScopeRows === true
+    const queue = includeStructuredState && hasQueue
+      ? readProjectStateDatabaseQueueEnvelopeFromDatabase(database)
+      : null
     const queueDefinition = options.includeQueueDefinition === true && hasQueue && queueRevision !== null
       ? readQueueDetailsForRevision(tasksPath, queueRevision, database)
       : null
@@ -4892,6 +6058,11 @@ export function readProjectStateDatabaseReadBundle<T = unknown>(
       ? readProjectStateDatabaseTaskDetailStateFromDatabase<T>(database, tasksPath, options.taskDetailId, options)
       : null
     const summary = readProjectStateDatabaseSummaryFromDatabase<T>(database, tasksPath, options)
+    const stateResolution = projectRevision === null
+      ? null
+      : readProjectStateResolutionFromDatabase(database, projectRevision, {
+          includeClaims: options.includeStateClaims === true,
+        })
     const requestedEvidenceIds = options.currentEvidenceTaskIds ?? summaryEvidenceTaskIds(summary?.payload)
     const currentEvidence = options.includeCurrentEvidence === true && hasQueue
       ? tableExists(database, 'task_evidence_current')
@@ -4904,6 +6075,7 @@ export function readProjectStateDatabaseReadBundle<T = unknown>(
       authority,
       queueRevision,
       projectRevision,
+      queue,
       queueDefinition,
       projection,
       taskDetail,
@@ -4918,6 +6090,7 @@ export function readProjectStateDatabaseReadBundle<T = unknown>(
         ? readProjectStateDatabaseMemoryHealthFromDatabase(database)
         : null,
       summary,
+      stateResolution,
       currentEvidence,
       taskOverlays: options.includeTaskOverlays === true && hasQueue
         ? readProjectStateDatabaseTaskOverlayStoresFromDatabase(database)
@@ -5045,6 +6218,7 @@ function readProjectStateDatabaseTaskDetailStateFromDatabase<T = unknown>(
     database,
   )
   const queueRevision = currentQueueRevision(database)
+  const projectRevision = currentRevision(database)
   return {
     queue: readTaskDetailQueueEnvelopeFromDatabase(database, options.includeAggregateTasks === true),
     task,
@@ -5054,8 +6228,9 @@ function readProjectStateDatabaseTaskDetailStateFromDatabase<T = unknown>(
     scopeRows: readScopeRowsFromDatabase(database),
     availability: readProjectStateDatabaseAvailabilityFromDatabase(database),
     queueRevision,
-    projectRevision: currentRevision(database),
+    projectRevision,
     summary: readProjectStateDatabaseSummaryFromDatabase<T>(database, tasksPath, options),
+    stateResolution: readProjectStateResolutionFromDatabase(database, projectRevision),
   }
 }
 
@@ -5406,6 +6581,18 @@ export interface ProjectStateDatabaseSummaryCurrentStatePatch {
   execution?: ProjectStateDatabaseExecution
   /** Explicit current runtime fact; summary payloads cannot update this row. */
   runtime?: ProjectStateDatabaseRuntime
+  /** Explicit availability fact; it shares the summary/decision transaction. */
+  availability?: ProjectStateDatabaseAvailability
+  /**
+   * Runtime policy for the exact revision allocated by this summary/current
+   * state update. This prevents execution and owner-input updates from
+   * advancing state while leaving an old decision packet behind.
+   */
+  stateResolution?: (input: {
+    projectRevision: number
+    queueRevision: number | null
+    generatedAt: string
+  }) => ProjectStateDatabaseStateResolutionSnapshot
 }
 
 export function updateProjectStateDatabaseSummaryAndCurrentState(
@@ -5445,12 +6632,28 @@ export function updateProjectStateDatabaseSummaryAndCurrentState(
         domains: ['queue'],
         summaryFreshness: 'preserve',
       })
+      const stateResolution = result.currentState?.stateResolution?.({
+        projectRevision: revision,
+        queueRevision: tableExists(database, 'queue_state') ? currentQueueRevision(database) : null,
+        generatedAt: updatedAt,
+      })
       database.prepare('UPDATE project_summary SET payload_json = ?, generated_at = ?, freshness = ?, revision = ? WHERE id = 1')
-        .run(json(compactSummary), updatedAt, stringValue(next.freshness) ?? 'current', revision)
+        .run(
+          json(compactSummaryWithReleaseMembershipRevision(database, compactSummary)),
+          updatedAt,
+          stringValue(next.freshness) ?? 'current',
+          revision,
+        )
       syncProjectPlanSnapshot(database, approvedPlan, updatedAt, revision)
       writeProjectOrientationProjection(database, orientation, updatedAt, revision, { preserveOmitted: true })
       if (result.currentState?.execution) writeCurrentExecutionRow(database, result.currentState.execution)
       if (result.currentState?.runtime) writeCurrentRuntimeRow(database, result.currentState.runtime)
+      if (result.currentState?.availability) {
+        writeProjectStateDatabaseAvailabilityRow(database, result.currentState.availability, updatedAt)
+      }
+      if (stateResolution) {
+        writeProjectStateResolution(database, stateResolution, revision, stateResolution.queueRevision)
+      }
       markProjectionCurrent(database, 'summary', revision, updatedAt)
     })
   } finally {
@@ -5758,19 +6961,27 @@ function availabilityFromLegacy(projectRoot: string): ProjectStateDatabaseAvaila
   }
 }
 
-export function writeProjectStateDatabaseAvailability(
-  projectRoot: string,
+function writeProjectStateDatabaseAvailabilityRow(
+  database: DatabaseSync,
   input: ProjectStateDatabaseAvailability,
-  updatedAt = new Date().toISOString(),
+  updatedAt: string,
 ): void {
-  withWritableDatabase(projectRoot, database => {
-    database.prepare(`
+  database.prepare(`
       INSERT INTO project_availability (id, status, paused_at, resumed_at, reason, updated_at, payload_json)
       VALUES (1, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET status = excluded.status, paused_at = excluded.paused_at,
         resumed_at = excluded.resumed_at, reason = excluded.reason, updated_at = excluded.updated_at,
         payload_json = excluded.payload_json
     `).run(input.status, input.pausedAt, input.resumedAt, input.reason ?? null, updatedAt, json(input))
+}
+
+export function writeProjectStateDatabaseAvailability(
+  projectRoot: string,
+  input: ProjectStateDatabaseAvailability,
+  updatedAt = new Date().toISOString(),
+): void {
+  withWritableDatabase(projectRoot, database => {
+    writeProjectStateDatabaseAvailabilityRow(database, input, updatedAt)
     commitAuthoritativeMutation(database, {
       updatedAt,
       domains: ['availability'],
@@ -6296,6 +7507,59 @@ export function readProjectStateDatabaseRevisionFromTasksPath(tasksPath: string)
   try {
     const row = database.prepare('SELECT revision FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
     return row ? Number(row.revision ?? 0) : null
+  } finally {
+    database.close()
+  }
+}
+
+/** Read only the release-membership watermark; this never opens task detail. */
+export function readProjectStateDatabaseReleaseMembershipState(
+  tasksPath: string,
+): ProjectStateDatabaseReleaseMembershipState | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readReleaseMembershipStateFromDatabase(database)
+  } finally {
+    database.close()
+  }
+}
+
+export function readProjectStateDatabaseReleaseMembership(
+  tasksPath: string,
+  releaseId: string,
+): { included: string[]; deferred: string[] } | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const trimmedReleaseId = releaseId.trim()
+  if (!trimmedReleaseId) return null
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'release_membership')) return null
+    const rows = database.prepare(`
+      SELECT task_id, disposition
+      FROM release_membership
+      WHERE release_id = ?
+      ORDER BY rowid
+    `).all(trimmedReleaseId) as JsonRecord[]
+    const included: string[] = []
+    const deferred: string[] = []
+    for (const row of rows) {
+      const taskId = stringValue(row.task_id)
+      if (!taskId) continue
+      if (row.disposition === 'deferred') deferred.push(taskId)
+      else included.push(taskId)
+    }
+    return { included, deferred }
   } finally {
     database.close()
   }
@@ -6867,6 +8131,12 @@ export function appendProjectStateDatabaseTaskEvidence(
       payload: durable.payload,
     })
     appendTaskEvidenceHistory(database, durable, bounded)
+    // Notes are journal/audit material. They are intentionally prohibited
+    // from deciding readiness, scope, proof, or execution, so storing one
+    // must not manufacture a new project revision or invalidate the shared
+    // decision packet. Decision-bearing evidence kinds take the revisioned
+    // path below and are projected through the packet boundary.
+    if (durable.kind === 'note') return
     commitAuthoritativeMutation(database, {
       updatedAt: durable.recordedAt,
       domains: ['evidence'],

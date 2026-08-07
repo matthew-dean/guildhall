@@ -62,10 +62,19 @@ describe('computeBranchName / computeWorktreePath', () => {
   it('per_attempt suffixes with the revision counter', () => {
     const t = task({ id: 'abc', revisionCount: 3 })
     expect(computeBranchName(t, 'per_attempt')).toBe(
-      'guildhall/task-abc/attempt-3',
+      'guildhall/task-abc-attempt-3',
     )
     expect(computeWorktreePath('demo-project', t, 'per_attempt')).toBe(
       path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc', 'attempt-3'),
+    )
+  })
+
+  it('uses attempt zero when a compact legacy task omits revisionCount', () => {
+    const compactTask = { ...task({ id: 'abc' }), revisionCount: undefined } as any
+
+    expect(computeBranchName(compactTask, 'per_attempt')).toBe('guildhall/task-abc-attempt-0')
+    expect(computeWorktreePath('demo-project', compactTask, 'per_attempt')).toBe(
+      path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc', 'attempt-0'),
     )
   })
 
@@ -164,6 +173,40 @@ describe('ensureWorktreeForDispatch', () => {
     expect(driver.state.worktreeSyncs).toHaveLength(1)
   })
 
+  it('returns Git-observed merge recovery instead of turning a named conflict into a blocker', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worktree-sync-recovery-'))
+    const worktreePath = path.join(tmp, 'abc')
+    await fs.mkdir(worktreePath, { recursive: true })
+    const driver = new InMemoryGitDriver({
+      nextWorktreeSyncResult: {
+        ok: false,
+        conflict: true,
+        mergeInProgress: true,
+        conflictPaths: ['package.json', 'src/runtime.ts'],
+      },
+    })
+
+    const result = await ensureWorktreeForDispatch({
+      task: task({
+        id: 'abc',
+        worktreePath,
+        branchName: 'guildhall/task-abc',
+        baseBranch: 'main',
+      }),
+      mode: 'per_task',
+      projectId: 'demo-project',
+      projectPath: '/repo',
+      baseBranch: 'main',
+      gitDriver: driver,
+    })
+
+    expect(result.mergeRecovery).toMatchObject({
+      baseBranch: 'main',
+      conflictPaths: ['package.json', 'src/runtime.ts'],
+    })
+    expect(driver.state.worktreeSyncs).toHaveLength(1)
+  })
+
   it('reattaches when a recorded worktree path no longer exists', async () => {
     const missingPath = path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc')
     await fs.rm(missingPath, { recursive: true, force: true })
@@ -240,7 +283,7 @@ describe('ensureWorktreeForDispatch', () => {
       id: 'abc',
       revisionCount: 1,
       worktreePath: '/repo/.guildhall/worktrees/abc/attempt-0',
-      branchName: 'guildhall/task-abc/attempt-0',
+      branchName: 'guildhall/task-abc-attempt-0',
       baseBranch: 'main',
     })
     const r = await ensureWorktreeForDispatch({
@@ -252,7 +295,7 @@ describe('ensureWorktreeForDispatch', () => {
       gitDriver: driver,
     })
     expect(r.created).toBe(true)
-    expect(r.branchName).toBe('guildhall/task-abc/attempt-1')
+    expect(r.branchName).toBe('guildhall/task-abc-attempt-1')
   })
 
   it('creates sibling repo symlinks for nested multi-repo worktrees', async () => {

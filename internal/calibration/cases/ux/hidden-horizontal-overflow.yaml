@@ -10,6 +10,10 @@ artifacts:
     kind: copy_snippet
     description: Visible work-list evidence and geometry.
     content: "Work list: 2 shown · 8 total. Visible columns: Work, Stage, Part. Right-side columns are clipped at the card edge; DOM shows row right edge beyond card right edge and no scroll region."
+  - id: mobile-project-ticker-release-label
+    kind: copy_snippet
+    description: Mobile route chrome evidence and viewport geometry.
+    content: "Narrative Harness mobile Overview, Map, Work, and Release used a shared project ticker where the selected release label measured 447px inside a 390px viewport. The document scroll width stayed 390px, but the visible span extended past the right edge, so route-level overflow checks failed even though the page did not expose a horizontal scrollbar."
 reviewLanes:
   - ux_comprehension
   - visual_design
@@ -31,10 +35,10 @@ falsePositiveTraps:
     summary: Do not pass the case because the first few columns are readable; the missing columns are part of the work state.
 source:
   kind: production_miss
-  citation: Generalized from Guildhall Narrative Harness work-list overflow miss on 2026-06-15.
+  citation: Generalized from Guildhall Narrative Harness work-list overflow miss on 2026-06-15 and mobile project-ticker release-label overflow on 2026-08-07.
 labelGovernance:
   labeledBy: product-review
-  labeledAt: 2026-06-15T19:20:00.000Z
+  labeledAt: 2026-08-07T19:21:46.000Z
   reviewStatus: seed
 privacyClassification: internal
 negativeControl: false

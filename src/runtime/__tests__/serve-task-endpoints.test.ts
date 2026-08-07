@@ -19,6 +19,8 @@ import {
   readTaskEvidence,
   readTaskRuntimeStore,
   readTaskWorkspaceStore,
+  subscribeProjectSummaryInvalidations,
+  updateProjectStateDatabaseSummaryAndCurrentState,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
@@ -434,15 +436,41 @@ describe('GET /api/project/task/:id', () => {
     await seedTask('task-1')
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
-    expect(res.status).toBe(200)
+    expect(res.status, await res.clone().text()).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.id).toBe('task-1')
     expect(body.task?.status).toBe('in_progress')
+    expect(body.projectRevision).toBeTypeOf('number')
+    expect(body.queueRevision).toBeTypeOf('number')
+    expect(body.decision).toMatchObject({
+      projectRevision: body.projectRevision,
+      queueRevision: body.queueRevision,
+    })
     expect(body.recentEvents).toBeUndefined()
     expect(body.contextDebug).toBeUndefined()
     expect(body.exploringTranscript).toBeUndefined()
     expect(body.threadTurns).toBeUndefined()
     expect(body.detailPayload?.extrasHref).toBe('/api/project/task/task-1/extras')
+  })
+
+  it('keeps task detail inspectable but exposes no action when the shared decision is stale', async () => {
+    await seedTask('task-1')
+    const database = new DatabaseSync(projectStateDatabasePath(tmpDir))
+    try {
+      database.exec('DELETE FROM project_state_decisions')
+    } finally {
+      database.close()
+    }
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      task: { id: 'task-1' },
+      decision: null,
+      decisionFreshness: 'stale',
+      requiresRefresh: true,
+    })
   })
 
   it('keeps durable history out of the initial drawer payload', async () => {
@@ -2067,17 +2095,30 @@ describe('POST /api/project/task/:id/git-story/:closureAction', () => {
       branchName: 'guildhall/task-task-1',
       baseBranch: 'main',
     })
+    // The workspace overlay advances project state after the initial seed.
+    // Apply the required current-state migration before exercising a write.
+    await applyCanonicalMigrations()
     const { app } = buildServeApp({ projectPath: tmpDir })
 
+    const events: Array<{ projectRoot: string; domains: string[] }> = []
+    const unsubscribe = subscribeProjectSummaryInvalidations(event => events.push({
+      projectRoot: event.projectRoot,
+      domains: [...event.domains],
+    }))
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1/git-story/commit'), {
       method: 'POST',
       body: JSON.stringify({ confirmed: true, message: 'record task proof', files: ['src/proof.txt'] }),
       headers: { 'content-type': 'application/json' },
     }))
+    unsubscribe()
 
-    expect(res.status).toBe(200)
+    expect(res.status, await res.clone().text()).toBe(200)
     expect(execFileSync('git', ['status', '--short'], { cwd: taskRepo, encoding: 'utf8' })).toBe('')
     await expect(fs.access(path.join(tmpDir, 'src', 'proof.txt'))).rejects.toThrow()
+    expect(events).toContainEqual({
+      projectRoot: tmpDir,
+      domains: ['repository'],
+    })
   })
 
   it('records a local-only git story override with a required reason', async () => {
@@ -2266,10 +2307,14 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
     })
     expect(q.tasks[0].notes?.at(-1)?.agentId).toBe('system:human')
 
+    const detailAfterHold = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    const detailAfterHoldBody = await detailAfterHold.json() as Record<string, any>
+    expect(detailAfterHoldBody.decisionFreshness, JSON.stringify(detailAfterHoldBody)).toBe('current')
+
     const resumeRes = await app.fetch(
       new Request(projectUrl('/api/project/task/task-1/resume-hold'), { method: 'POST' }),
     )
-    expect(resumeRes.status).toBe(200)
+    expect(resumeRes.status, await resumeRes.clone().text()).toBe(200)
     const resumeBody = (await resumeRes.json()) as Record<string, any>
     expect(resumeBody.status).toBe('review')
 
@@ -2608,6 +2653,99 @@ describe('POST /api/project/task/:id/start', () => {
     }
   })
 
+  it('prepares every selected proof blocker and keeps global Resume scoped to the release', async () => {
+    const now = '2026-07-23T09:00:00.000Z'
+    await seedCanonicalQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        proofStyle: 'script_only',
+        nodeIds: ['work:task-1', 'work:task-2', 'work:task-review'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        id: 'task-1',
+        title: 'Prove author input',
+        description: 'A completed selected-scope task needs current script proof.',
+        domain: 'harness',
+        projectPath: tmpDir,
+        status: 'done',
+        priority: 'normal',
+        releaseIds: ['release-1'],
+        acceptanceCriteria: [{ id: 'ac-1', description: 'A project proof passes.', verifiedBy: 'review', met: true }],
+        createdAt: now,
+        updatedAt: now,
+      }, {
+        id: 'task-2',
+        title: 'Prove chapter review',
+        description: 'A second completed selected-scope task needs current script proof.',
+        domain: 'harness',
+        projectPath: tmpDir,
+        status: 'done',
+        priority: 'normal',
+        releaseIds: ['release-1'],
+        acceptanceCriteria: [{ id: 'ac-1', description: 'A project proof passes.', verifiedBy: 'review', met: true }],
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      }, {
+        id: 'task-review',
+        title: 'Review an unrelated release spec',
+        description: 'This task needs an owner review, but must not stop runnable proof work.',
+        domain: 'harness',
+        projectPath: tmpDir,
+        status: 'spec_review',
+        priority: 'normal',
+        releaseIds: ['release-1'],
+        spec: '## Summary\nReview the unrelated task.\n\n## Acceptance Criteria\n1. The task is approved.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'The task is approved.', verifiedBy: 'review', met: false }],
+        createdAt: now,
+        updatedAt: now,
+      }],
+    })
+    await applyProjectMigrations({
+      projectRoot: tmpDir,
+      only: ['0.13.30/proof-setup-completion-authority'],
+      appVersion: 'serve-task-endpoints-test',
+    })
+    await applyCanonicalMigrations()
+    await refreshCanonicalSummary()
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const response = await app.fetch(new Request(projectUrl('/api/project/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'continuous' }),
+      }))
+      expect(response.status, await response.text()).toBe(200)
+      await vi.waitFor(() => expect(starts.at(-1)).toEqual({}))
+
+      const queue = await readTaskQueue()
+      expect(queue.tasks.filter((task: Record<string, any>) => task.semanticKind === 'proof_setup')).toEqual([
+        expect.objectContaining({ id: 'task-1-proof-setup', status: 'ready', proofForReleaseId: 'release-1', releaseIds: [] }),
+        expect.objectContaining({ id: 'task-2-proof-setup', status: 'ready', proofForReleaseId: 'release-1', releaseIds: [] }),
+      ])
+      const runtime = await readTaskRuntimeStore(tmpDir)
+      expect(runtime.tasks['task-1-proof-setup']?.proofRecovery).toBeUndefined()
+      expect(runtime.tasks['task-2-proof-setup']?.proofRecovery).toBeUndefined()
+      expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-review')).toMatchObject({
+        status: 'spec_review',
+      })
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
   it('lets a specifically requested shaping task start inside the selected scope', async () => {
     const now = new Date().toISOString()
     await seedTasks([
@@ -2696,6 +2834,9 @@ describe('POST /api/project/task/:id/start', () => {
           stopAfterOneTask: true,
         })
       })
+      const detailAfterRecovery = await app.fetch(new Request(projectUrl('/api/project/task/task-model-proof')))
+      const detailAfterRecoveryBody = await detailAfterRecovery.json() as Record<string, any>
+      expect(detailAfterRecoveryBody.decisionFreshness, JSON.stringify(detailAfterRecoveryBody)).toBe('current')
       const queue = await readTaskQueue()
       const task = queue.tasks.find((candidate: Record<string, any>) => candidate.id === 'task-model-proof')
       expect(task).toMatchObject({
@@ -2828,12 +2969,14 @@ describe('POST /api/project/task/:id/approve-spec', () => {
         state: 'active',
         source: 'release_plan',
         proofStyle: 'script_only',
+        nodeIds: ['work:task-1'],
       }],
       tasks: [{
         id: 'task-1',
         title: 'Build the bounded runner',
         status: 'spec_review',
-        releaseIds: ['release-1'],
+        // Visible selected-release membership is normalized on the release
+        // node; task definitions do not duplicate it in `releaseIds`.
         structuredSpec: structuredSpecForTest('Build the bounded runner'),
         createdAt: now,
         updatedAt: now,
@@ -2880,7 +3023,8 @@ describe('POST /api/project/task/:id/approve-spec', () => {
       status: 'ready',
       workKind: 'verification',
       hierarchy: { parentId: 'task-1' },
-      releaseIds: ['release-1'],
+      proofForReleaseId: 'release-1',
+      releaseIds: [],
     })
     expect(queue.tasks[0]?.notes?.at(-1)?.content).toMatch(/linked verification work/i)
   })
@@ -3066,7 +3210,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
       new Request(projectUrl('/api/project/task/task-1/rerun-stage'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ stage: 'spec' }),
+        body: JSON.stringify({ stage: 'spec', actor: 'codex_delegated_owner' }),
       }),
     )
     expect(res.status).toBe(200)
@@ -3080,6 +3224,11 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     expect(raw.tasks[0]?.acceptanceCriteria).toEqual([])
     expect(raw.tasks[0]?.productBrief).toBeUndefined()
     expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh spec pass/i)
+    expect(raw.tasks[0]?.notes?.at(-1)).toMatchObject({
+      agentId: 'codex_delegated_owner',
+      role: 'codex_delegated_owner',
+      structured: { source: 'codex_delegated_owner' },
+    })
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/fresh spec pass/i)
   })
@@ -5067,6 +5216,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
       status: 'exploring',
       productBrief: {
         userJob: 'As a new user I want to X so Y',
+        whyItMattersNow: 'The initial flow needs an explicit value boundary.',
         successMetric: 'Time-to-first-success drops below 60s',
         antiPatterns: ['no dark patterns', 'no jargon in first 3 screens'],
         authoredBy: 'agent:spec-agent',
@@ -5088,6 +5238,38 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     expect(q.tasks[0].productBrief.userJob).toMatch(/new user/)
   })
 
+  it('records an explicitly delegated Codex owner approval without treating it as autonomous approval', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      productBrief: {
+        userJob: 'As an owner I want to approve this bounded brief through my delegated Codex run.',
+        successMetric: 'The task can proceed with a durable, truthful approval record.',
+        nonGoals: ['Do not let Guildhall approve its own work.'],
+        authoredBy: 'agent:spec-agent',
+        authoredAt: new Date().toISOString(),
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/approve-brief'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ approvalActor: 'codex_delegated_owner' }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const q = await readTaskQueue()
+    expect(q.tasks[0].productBrief.approvedBy).toBe('codex_delegated_owner')
+    expect(q.tasks[0].productBrief.approvedAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
+    expect(q.tasks[0].notes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        agentId: 'codex:delegated-owner',
+        content: expect.stringContaining('Guildhall did not approve this brief autonomously.'),
+      }),
+    ]))
+  })
+
   it('promotes an exploring task back to spec_review when the brief is approved after a concrete spec draft already exists', async () => {
     await seedTask('task-1', {
       status: 'exploring',
@@ -5097,7 +5279,9 @@ describe('POST /api/project/task/:id/approve-brief', () => {
       ],
       productBrief: {
         userJob: 'As a new user I want to X so Y',
+        whyItMattersNow: 'The concrete spec needs an owner-approved scope boundary.',
         successMetric: 'Time-to-first-success drops below 60s',
+        nonGoals: ['Do not broaden the concrete spec during approval.'],
         antiPatterns: [],
         authoredBy: 'agent:spec-agent',
         authoredAt: new Date().toISOString(),
@@ -5116,7 +5300,32 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     expect(q.tasks[0].status).toBe('spec_review')
   })
 
-  it('seeds a deterministic spec when an approved exploring brief has no concrete spec yet', async () => {
+  it('passes an explicitly delegated Codex owner actor through spec approval', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      structuredSpec: structuredSpecForTest('Delegated spec approval'),
+      productBrief: {
+        userJob: 'Approve a bounded spec through the delegated Codex run.',
+        successMetric: 'The task advances with the correct approval actor.',
+        nonGoals: ['Do not let automation approve the spec.'],
+        authoredBy: 'project-reintake',
+        authoredAt: new Date().toISOString(),
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1/approve-spec'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approvalActor: 'codex_delegated_owner' }),
+    }))
+
+    expect(res.status).toBe(200)
+    const q = await readTaskQueue()
+    expect(q.tasks[0].status).toBe('ready')
+    expect(q.tasks[0].productBrief.approvedBy).toBe('codex_delegated_owner')
+  })
+
+  it('keeps an approved brief in source-backed shaping when no concrete spec exists yet', async () => {
     await seedTask('task-1', {
       status: 'exploring',
       spec: undefined,
@@ -5137,18 +5346,16 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body).toMatchObject({ ok: true, status: 'spec_review' })
+    expect(body).toMatchObject({ ok: true, status: 'exploring' })
 
     const q = await readTaskQueue()
-    expect(q.tasks[0].status).toBe('spec_review')
+    expect(q.tasks[0].status).toBe('exploring')
     expect(q.tasks[0].productBrief.approvedBy).toBe('human')
-    expect(q.tasks[0].spec).toContain('## Completion Boundary')
-    expect(q.tasks[0].spec).toContain('Approved user job')
-    expect(q.tasks[0].acceptanceCriteria).toHaveLength(3)
-    expect(q.tasks[0].notes.at(-1)?.content).toContain('deterministic spec seed from the approved brief')
+    expect(q.tasks[0].spec).toBeUndefined()
+    expect(q.tasks[0].acceptanceCriteria).toEqual([])
   })
 
-  it('repairs stale unassigned in-progress approved brief into spec_review', async () => {
+  it('returns stale unassigned in-progress approved brief to source-backed shaping', async () => {
     await seedTask('task-1', {
       status: 'in_progress',
       assignedTo: null,
@@ -5177,13 +5384,13 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body).toMatchObject({ ok: true, status: 'spec_review' })
+    expect(body).toMatchObject({ ok: true, status: 'exploring' })
 
     const q = await readTaskQueue()
-    expect(q.tasks[0].status).toBe('spec_review')
+    expect(q.tasks[0].status).toBe('exploring')
     expect(q.tasks[0].assignedTo).toBeNull()
-    expect(q.tasks[0].spec).toContain('Approved user job')
-    expect(q.tasks[0].acceptanceCriteria).toHaveLength(3)
+    expect(q.tasks[0].spec).toBeUndefined()
+    expect(q.tasks[0].acceptanceCriteria).toEqual([])
     const effective = await readEffectiveTask('task-1')
     expect(effective.runtime?.openEscalationIds).toEqual([])
   })
@@ -5228,12 +5435,12 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body).toMatchObject({ ok: true, status: 'spec_review' })
+    expect(body).toMatchObject({ ok: true, status: 'exploring' })
 
     const q = await readTaskQueue()
-    expect(q.tasks[0].status).toBe('spec_review')
-    expect(q.tasks[0].spec).toContain('Approved user job')
-    expect(q.tasks[0].acceptanceCriteria).toHaveLength(3)
+    expect(q.tasks[0].status).toBe('exploring')
+    expect(q.tasks[0].spec).toBeUndefined()
+    expect(q.tasks[0].acceptanceCriteria).toEqual([])
     expect(q.tasks[0].escalations[0].resolvedBy).toBe('system')
     expect(activeEscalations(q.tasks[0] as any)).toEqual([])
     const effective = await readEffectiveTask('task-1')
@@ -5338,7 +5545,11 @@ describe('POST /api/project/task/:id/set-acceptance-command', () => {
       new Request(projectUrl('/api/project/task/task-1/set-acceptance-command'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ criterionId: 'AC-1', command: 'pnpm test -- --runInBand' }),
+        body: JSON.stringify({
+          criterionId: 'AC-1',
+          command: 'pnpm test -- --runInBand',
+          approvalActor: 'codex_delegated_owner',
+        }),
       }),
     )
     const body = (await res.json()) as Record<string, any>
@@ -5356,6 +5567,8 @@ describe('POST /api/project/task/:id/set-acceptance-command', () => {
     }])
     const evidence = await readTaskEvidence(tmpDir, 'task-1')
     expect(evidence.at(-1)?.payload).toMatchObject({
+      agentId: 'system:codex_delegated_owner',
+      role: 'codex_delegated_owner',
       criterionId: 'AC-1',
       command: 'pnpm test -- --runInBand',
     })
@@ -5439,7 +5652,11 @@ describe('POST /api/project/task/:id/set-acceptance-proof-expectation', () => {
       new Request(projectUrl('/api/project/task/task-1/set-acceptance-proof-expectation'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ criterionId: 'AC-negative', expectedExit: 'non_zero' }),
+        body: JSON.stringify({
+          criterionId: 'AC-negative',
+          expectedExit: 'non_zero',
+          approvalActor: 'codex_delegated_owner',
+        }),
       }),
     )
     const body = (await res.json()) as Record<string, any>
@@ -5463,6 +5680,13 @@ describe('POST /api/project/task/:id/set-acceptance-proof-expectation', () => {
       verificationRecords: [],
     }])
     expect(current?.task.definition.acceptanceCriteriaProofState).toBeUndefined()
+    const evidence = await readTaskEvidence(tmpDir, 'task-1')
+    expect(evidence.at(-1)?.payload).toMatchObject({
+      agentId: 'system:codex_delegated_owner',
+      role: 'codex_delegated_owner',
+      criterionId: 'AC-negative',
+      expectedExit: 'non_zero',
+    })
   })
 })
 
@@ -5603,11 +5827,16 @@ describe('promoted ordinary task actions', () => {
     const briefResponse = await postAction('update-brief', {
       successTarget: 'The task has a concrete proof target.',
       acceptanceCriterion: 'The proof target is recorded.',
+      whyItMattersNow: 'The release cannot run without a bounded proof target.',
+      nonGoals: ['Do not replace the source authority with generated records.'],
     })
     expect(briefResponse.status).toBe(200)
     let point = readProjectStateDatabaseTaskPointWithRevision(taskQueuePath(), 'task-1')
     expect(point?.task.definition.productBrief).toMatchObject({
       successMetric: 'The task has a concrete proof target.',
+      whyItMattersNow: 'The release cannot run without a bounded proof target.',
+      nonGoals: ['Do not replace the source authority with generated records.'],
+      antiPatterns: ['Do not replace the source authority with generated records.'],
     })
     expect(point?.task.definition.acceptanceCriteria).toEqual([
       expect.objectContaining({ description: 'The proof target is recorded.' }),
@@ -5729,6 +5958,38 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
     expect(task.blockReason).toBeUndefined()
   })
 
+  it('preserves an explicit Codex owner delegation instead of calling it a human click', async () => {
+    await seedTask('task-1', {
+      status: 'blocked',
+      blockReason: 'Escalation raised',
+      escalations: [{
+        id: 'esc-1',
+        taskId: 'task-1',
+        reason: 'spec_ambiguous',
+        summary: 'The proof contract needs a fresh spec pass.',
+        agentId: 'agent:worker-1',
+        raisedAt: new Date().toISOString(),
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resolve-escalation'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          escalationId: 'esc-1',
+          resolution: 'Re-open proof/spec shaping under the delegated owner mandate.',
+          nextStatus: 'exploring',
+          actor: 'codex_delegated_owner',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const task = await readEffectiveTask('task-1')
+    expect(task.status).toBe('exploring')
+    expect(task.escalations[0].resolvedBy).toBe('codex_delegated_owner')
+  })
+
   it('requires both escalationId and resolution', async () => {
     await seedTask('task-1', { status: 'blocked' })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -5777,7 +6038,7 @@ describe('GET /api/project/activity', () => {
     expect(body.inFlight.map((t: any) => t.id).sort()).toEqual(['t1', 't2'])
   })
 
-  it('reuses the shared action model so blocked work still has a visible next action', async () => {
+  it('keeps Activity decision and action model aligned when blocked and ready work coexist', async () => {
     const now = new Date().toISOString()
     const queue = {
       version: 1,
@@ -5832,25 +6093,14 @@ describe('GET /api/project/activity', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.counts.blocked).toBe(1)
     expect(body.counts.ready).toBe(1)
-    expect(body.topAction).toMatchObject({
-      source: 'task',
-      label: 'Select and prove DeepInfra drafting model',
-      buttonLabel: 'Open Work',
-      href: '/work?task=blocked-task',
-      tone: 'warn',
-      taskId: 'blocked-task',
-    })
-    expect(body.actionModel.primaryAction).toEqual(body.topAction)
+    expect(body.topAction?.taskId).toBe(body.decision?.primaryAction?.targetId)
+    expect(body.actionModel.primaryAction?.taskId).toBe(body.decision?.primaryAction?.targetId)
     expect(body.summary).toMatchObject({
-      label: 'Select and prove DeepInfra drafting model',
-      actionHref: '/work?task=blocked-task',
-      actionLabel: 'Open Work',
-      tone: 'warn',
-      taskId: 'blocked-task',
+      taskId: body.decision?.primaryAction?.targetId,
     })
   })
 
-  it('keeps the live activity action identical to the fleet project summary', async () => {
+  it('keeps live Activity and fleet on the same project decision packet', async () => {
     const now = new Date().toISOString()
     await seedCanonicalQueue({
       version: 1,
@@ -5892,7 +6142,100 @@ describe('GET /api/project/activity', () => {
     expect(activity.releaseSummary).toEqual(projectSummary?.releaseSummary)
     expect(projectSummary?.workProgress?.counts.visibleTotal).toBe(1)
     expect(activity.actionModel).toEqual(projectSummary?.actionModel)
-    expect(activity.topAction).toEqual(projectSummary?.actionModel?.primaryAction)
+    expect(activity.decision).toEqual(projectSummary?.decision)
+    expect(activity.topAction?.taskId).toBe(activity.decision?.primaryAction?.targetId)
+  })
+
+  it('refreshes a stale decision with the bounded typed live execution identity', async () => {
+    const now = new Date().toISOString()
+    await seedCanonicalQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'planned-task',
+          title: 'Old planned work',
+          description: '',
+          domain: 'd',
+          projectPath: tmpDir,
+          status: 'ready',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'live-task',
+          title: 'Prove world-state continuity',
+          description: '',
+          domain: 'd',
+          projectPath: tmpDir,
+          status: 'in_progress',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+    updateProjectStateDatabaseSummaryAndCurrentState(taskQueuePath(), summary => ({
+      summary: {
+        ...summary,
+        freshness: 'stale',
+        decision: {
+          ...(summary.decision as Record<string, unknown>),
+          execution: {
+            state: 'runnable',
+            code: 'ready_work',
+            focusTaskId: 'planned-task',
+            focusTaskTitle: 'Old planned work',
+          },
+          primaryAction: {
+            kind: 'open_work',
+            targetId: 'planned-task',
+            reasonCode: 'ready_work',
+          },
+        },
+      },
+      currentState: {
+        execution: {
+          status: 'running',
+          mode: 'continuous',
+          activeTaskId: 'live-task',
+          activeTaskTitle: 'Prove world-state continuity',
+          updatedAt: now,
+        },
+      },
+    }))
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    const body = await response.json() as Record<string, any>
+
+    expect(response.status).toBe(200)
+    expect(body.summaryFreshness).toBe('stale')
+    expect(body.counts).toEqual({})
+    expect(body.releaseSummary).toMatchObject({
+      release: { id: 'release-current' },
+      state: 'unknown',
+    })
+    expect(body.releaseSummary).not.toHaveProperty('counts')
+    expect(body.decision.execution).toMatchObject({
+      state: 'running',
+      focusTaskId: 'live-task',
+      focusTaskTitle: 'Prove world-state continuity',
+    })
+    expect(body.topAction).toMatchObject({
+      label: 'Prove world-state continuity',
+      href: `/projects/${projectId}/work?task=live-task`,
+      taskId: 'live-task',
+    })
+    expect(body.actionModel.primaryAction).toEqual(body.topAction)
+    expect(body.inFlight[0]).toMatchObject({ id: 'live-task', title: 'Prove world-state continuity' })
   })
 
   it('keeps live event metadata out of ordinary activity polling', async () => {

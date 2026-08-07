@@ -490,6 +490,13 @@ export interface ProjectSummaryRelease {
   updatedAt?: string
 }
 
+export interface ProjectSourceCapabilityCatalog {
+  availability?: 'unavailable' | 'empty' | 'ready' | string
+  total?: number
+  planned?: number
+  retired?: number
+}
+
 export interface ProjectSummaryApprovedPlan {
   source?: 'workspace_import' | string
   recordedAt?: string
@@ -749,6 +756,11 @@ export interface TaskContextPacket {
   }
   proofContext?: {
     proofKind?: string
+    releaseRequirement?: {
+      releaseId?: string
+      proofStyle?: 'script_only'
+      taskContract?: 'attached' | 'missing_contract'
+    }
     requiredProof?: Array<{ primitiveId?: string; primitiveLabel?: string; proof?: string }>
     provesPrimitives?: PrimitiveSummary[]
     existingEvidence?: string[]
@@ -1428,6 +1440,7 @@ export interface StartReadiness {
   focusTaskTitle?: string
   focusKind?: string
   proofTaskIds?: string[]
+  reviewTaskIds?: string[]
   count?: number
   executionScope?: {
     id: string
@@ -1619,6 +1632,7 @@ export interface ProjectDetail {
   }
   workProgress?: ServiceProjectSummary['workProgress']
   releaseSummary?: ProjectSummaryRelease | null
+  sourceCapabilityCatalog?: ProjectSourceCapabilityCatalog | null
   approvedPlan?: ProjectSummaryApprovedPlan | null
   inbox?: ProjectInbox
   run?: ProjectRun | null
@@ -1719,6 +1733,7 @@ export interface ServiceProjectSummary {
     byTaskId: Record<string, unknown>
   }
   releaseSummary?: ProjectSummaryRelease | null
+  sourceCapabilityCatalog?: ProjectSourceCapabilityCatalog | null
   approvedPlan?: ProjectSummaryApprovedPlan | null
   highlights?: {
     activeTaskTitle?: string | null

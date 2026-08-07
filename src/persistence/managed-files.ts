@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText } from '@guildhall/sessions/atomic'
 
 type TextEncodingOption = BufferEncoding | { encoding?: BufferEncoding | null; flag?: string } | null
 type WriteTextOption = BufferEncoding | { encoding?: BufferEncoding | null; mode?: number; flag?: string } | null

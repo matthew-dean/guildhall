@@ -245,6 +245,11 @@ export interface TaskContextPacket {
   }
   proofContext: {
     proofKind?: string
+    releaseRequirement?: {
+      releaseId: string
+      proofStyle: 'script_only'
+      taskContract: 'attached' | 'missing_contract'
+    }
     requiredProof: Array<{ primitiveId: string; primitiveLabel: string; proof: string }>
     provesPrimitives: PrimitiveWithRelations[]
     existingEvidence: string[]

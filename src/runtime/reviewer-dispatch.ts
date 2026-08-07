@@ -4,7 +4,7 @@ import {
   type ScopedGateContext,
 } from '@guildhall/tools'
 import { stableProofPathId } from './proof-paths.js'
-import { readStructuredReviewResult } from './review-contract.js'
+import { readStructuredReviewResult, validateStructuredReviewResultTargets } from './review-contract.js'
 
 // ---------------------------------------------------------------------------
 // FR-27 / AC-18: reviewer dispatch with deterministic fallback.
@@ -68,6 +68,22 @@ function effectiveAcceptanceCriteria(task: Task) {
   // deliberately ignored so a model cannot alter review behavior by changing
   // headings or prose around an unchanged contract.
   return task.acceptanceCriteria
+}
+
+function reviewTargetsForTask(task: Task) {
+  return {
+    acceptanceCriterionIds: effectiveAcceptanceCriteria(task).map(criterion => criterion.id),
+    proofEvidenceIds: (task.proofPaths ?? []).flatMap(path =>
+      (Array.isArray(path.expectedEvidence) ? path.expectedEvidence : [])
+        .flatMap((evidence) => {
+          if (typeof evidence === 'string' && evidence.trim()) return [evidence.trim()]
+          if (evidence && typeof evidence === 'object' && typeof evidence.id === 'string' && evidence.id.trim()) {
+            return [evidence.id.trim()]
+          }
+          return []
+        }),
+    ),
+  }
 }
 
 export function shouldAdvanceToGateCheckPendingHardGates(
@@ -457,10 +473,13 @@ export function recordLlmVerdict(input: {
   const task = input.queue.tasks[idx]!
 
   const reasoning = input.reasoning ?? extractLlmReviewerReasoning(task)
-  const structuredResult = readStructuredReviewResult(
+  const parsedStructuredResult = readStructuredReviewResult(
     reasoning,
     extractLlmReviewerStructured(task),
   )
+  const structuredResult = parsedStructuredResult
+    ? validateStructuredReviewResultTargets(parsedStructuredResult, reviewTargetsForTask(task))
+    : null
   const verdict: ReviewVerdict['verdict'] = structuredResult?.verdict ?? 'revise'
   const normalizedStatus: TaskStatus = verdict === 'approve' ? 'gate_check' : 'in_progress'
   const reason =
@@ -471,6 +490,7 @@ export function recordLlmVerdict(input: {
       : 'LLM reviewer did not return the required structured machine result; review must be rerun.'
 
   const record: ReviewVerdict = {
+    id: `review:${task.id}:reviewer-agent:${input.now}`,
     verdict,
     reviewerPath: 'llm',
     reviewerId: 'reviewer-agent',
@@ -481,6 +501,7 @@ export function recordLlmVerdict(input: {
     ...(structuredResult ? {} : { failureCode: 'invalid_review_contract' as const }),
     ...(structuredResult?.acceptedCriteriaIds.length ? { acceptedCriteriaIds: structuredResult.acceptedCriteriaIds } : {}),
     ...(structuredResult?.proofEvidenceIds.length ? { proofEvidenceIds: structuredResult.proofEvidenceIds } : {}),
+    ...(structuredResult ? { findings: structuredResult.findings } : {}),
     ...((structuredResult?.advisoryScores.recommendationPriority ||
       structuredResult?.advisoryScores.expectedValue ||
       structuredResult?.advisoryScores.deferredRisk) ? {

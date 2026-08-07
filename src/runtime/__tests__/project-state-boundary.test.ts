@@ -10,6 +10,8 @@ import {
   projectStateDatabasePath,
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseTaskOverlay,
+  readProjectStateDatabaseSourceCapabilities,
+  readProjectStateDatabaseReadBundle,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
   writeProjectStateDatabaseAvailability,
@@ -30,9 +32,11 @@ import {
   findForbiddenProjectTaskFields,
   readProjectCanonicalCurrentState,
   readProjectSavedReleaseState,
+  resolveSelectedReleaseTaskContract,
   projectTaskStateExistsSync,
   readProjectCurrentStateModel,
   readProjectMapStateModel,
+  readProjectOverviewStateAtBoundary,
   readProjectStateAuthorityAtBoundary,
   readProjectSurfaceStateAtBoundary,
   readProjectTaskRecordsAtBoundaryWithRevision,
@@ -46,10 +50,320 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueueAtCurrentStateBoundary,
   writeProjectTaskQueueWithSummary,
+  upsertProjectSourceCapabilitiesAtBoundary,
+  resolveProjectStateObservationAtBoundary,
 } from '../project-state-boundary.js'
-import { readProjectSummaryProjection } from '../project-summary-projection.js'
+import { readProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState } from '../project-summary-projection.js'
 
 describe('project-state-boundary', () => {
+  it('resolves two verifier observations deterministically and fails closed on an equal-authority conflict', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-state-arbitration-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, {
+        version: 1,
+        lastUpdated: '2026-07-23T00:00:00.000Z',
+        tasks: [{ id: 'task-proof', title: 'Prove state arbitration', status: 'ready' }],
+        releases: [],
+      }, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+      writeProjectSummaryProjectionFromIndexedState(tasksPath, { projectId: 'state-arbitration' })
+      const revision = readProjectStateDatabaseReadBundle(tasksPath)?.projectRevision
+      expect(revision).toBeTypeOf('number')
+
+      const first = resolveProjectStateObservationAtBoundary(tasksPath, {
+        id: 'verifier:proof:passed',
+        projectRevision: revision!,
+        subject: { kind: 'task', id: 'task-proof' },
+        field: 'proof.status',
+        value: { state: 'passed' },
+        observedAt: '2026-07-23T00:01:00.000Z',
+        evidenceRefs: ['proof:task-proof:passed'],
+        producer: 'verifier',
+      })
+      expect(first.disagreements).toEqual([])
+      expect(first.receipt).toMatchObject({
+        observationClaimId: 'verifier:proof:passed',
+        state: 'confirmed',
+        canonicalClaimIds: ['verifier:proof:passed'],
+        canonicalValue: { state: 'passed' },
+      })
+
+      const dissent = resolveProjectStateObservationAtBoundary(tasksPath, {
+        id: 'agent:proof:failed',
+        projectRevision: revision!,
+        subject: { kind: 'task', id: 'task-proof' },
+        field: 'proof.status',
+        value: { state: 'failed' },
+        observedAt: '2026-07-23T00:01:30.000Z',
+        evidenceRefs: ['agent:proof:failed'],
+        producer: 'agent',
+      })
+      expect(dissent.receipt).toMatchObject({
+        observationClaimId: 'agent:proof:failed',
+        state: 'resolved_by_authority',
+        canonicalClaimIds: ['verifier:proof:passed'],
+        canonicalValue: { state: 'passed' },
+        reconciliation: 'rerun_verification',
+        disagreement: expect.objectContaining({ state: 'resolved_by_authority' }),
+      })
+
+      const second = resolveProjectStateObservationAtBoundary(tasksPath, {
+        id: 'verifier:proof:failed',
+        projectRevision: revision!,
+        subject: { kind: 'task', id: 'task-proof' },
+        field: 'proof.status',
+        value: { state: 'failed' },
+        observedAt: '2026-07-23T00:02:00.000Z',
+        evidenceRefs: ['proof:task-proof:failed'],
+        producer: 'verifier',
+      })
+      expect(second.decision).toMatchObject({
+        execution: { state: 'conflicted', code: 'project_state_conflict' },
+        primaryAction: { kind: 'resolve_conflict', reasonCode: 'project_state_conflict' },
+        conflicts: [expect.objectContaining({ field: 'proof.status', reconciliation: 'rerun_verification' })],
+      })
+      expect(second.disagreements).toEqual([
+        expect.objectContaining({
+          field: 'proof.status',
+          state: 'unresolved',
+          reconciliation: 'rerun_verification',
+          contradictoryClaimIds: ['verifier:proof:failed', 'verifier:proof:passed'],
+        }),
+      ])
+      expect(second.receipt).toMatchObject({
+        observationClaimId: 'verifier:proof:failed',
+        state: 'unresolved',
+        canonicalClaimIds: [],
+        reconciliation: 'rerun_verification',
+      })
+      expect(readProjectSummaryProjection(tasksPath)?.decision).toMatchObject({
+        execution: { state: 'conflicted' },
+        primaryAction: { kind: 'resolve_conflict' },
+      })
+
+      const unauthorized = resolveProjectStateObservationAtBoundary(tasksPath, {
+        id: 'agent:project:selected-release',
+        projectRevision: revision!,
+        subject: { kind: 'project', id: 'state-arbitration' },
+        field: 'project.selectedReleaseId',
+        value: 'release-1',
+        observedAt: '2026-07-23T00:03:00.000Z',
+        evidenceRefs: ['agent:project:selected-release'],
+        producer: 'agent',
+      })
+      expect(unauthorized.receipt).toEqual({
+        observationClaimId: 'agent:project:selected-release',
+        state: 'rejected',
+        canonicalClaimIds: [],
+        rejectionCode: 'unauthorized_authority',
+      })
+      expect(readProjectStateDatabaseReadBundle(tasksPath, { includeStateClaims: true })?.stateResolution?.claims)
+        .toContainEqual(expect.objectContaining({
+          id: 'agent:project:selected-release',
+          rejectionCode: 'unauthorized_authority',
+        }))
+
+      const duplicate = resolveProjectStateObservationAtBoundary(tasksPath, {
+        id: 'verifier:proof:passed',
+        projectRevision: revision!,
+        subject: { kind: 'task', id: 'task-proof' },
+        field: 'proof.status',
+        value: { state: 'failed' },
+        observedAt: '2026-07-23T00:04:00.000Z',
+        evidenceRefs: ['proof:task-proof:replayed-with-different-content'],
+        producer: 'verifier',
+      })
+      expect(duplicate.receipt).toEqual({
+        observationClaimId: 'verifier:proof:passed',
+        state: 'rejected',
+        canonicalClaimIds: [],
+        rejectionCode: 'duplicate_claim_id',
+      })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses normalized queue selection for Overview when the orientation projection is stale', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-overview-scope-authority-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    try {
+      writeProjectStateDatabaseSnapshot(tasksPath, {
+        projectRoot: root,
+        queue: {
+          version: 1,
+          selectedReleaseId: 'release-queue',
+          releases: [{
+            id: 'release-queue',
+            label: 'Queue release',
+            kind: 'release',
+            state: 'active',
+            source: 'owner_approved',
+            nodeIds: ['work:task-queue'],
+            deferredNodeIds: [],
+          }],
+          tasks: [{ id: 'task-queue', title: 'Queue task', status: 'ready' }],
+        },
+        summary: {
+          freshness: 'current',
+          orientationSpine: {
+            selectedRelease: { id: 'release-stale', label: 'Stale orientation release' },
+            releases: [{ id: 'release-stale', label: 'Stale orientation release' }],
+          },
+        },
+        scopeRows: [{
+          taskId: 'task-queue',
+          scope: 'included',
+          eligibilityReason: 'selected release membership',
+          hierarchyRole: 'primary',
+          handoffState: 'ready',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: [],
+        }],
+      })
+      promoteProjectStateDatabaseAuthority(root)
+
+      expect(readProjectOverviewStateAtBoundary(root)?.scope).toMatchObject({
+        id: 'release-queue',
+        nodeIds: ['work:task-queue'],
+      })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses normalized release membership for selected-release proof obligations and reports stale scope rows', () => {
+    const state = {
+      rawQueue: {
+        releases: [{
+          id: 'release-1',
+          label: 'Release 1',
+          kind: 'release',
+          state: 'active',
+          source: 'owner_approved',
+          nodeIds: ['work:task-included'],
+          deferredNodeIds: [],
+          proofStyle: 'script_only',
+        }],
+      },
+      scope: {
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        source: 'owner_approved',
+        nodeIds: ['work:task-included'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      },
+      scopeRows: [{ taskId: 'task-included', scope: 'deferred' }],
+    } as unknown as Parameters<typeof resolveSelectedReleaseTaskContract>[0]
+
+    expect(resolveSelectedReleaseTaskContract(state, 'task-included')).toMatchObject({
+      membership: 'included',
+      executionScope: 'deferred',
+      projectionMismatch: true,
+      requiresScriptProof: true,
+    })
+    expect(resolveSelectedReleaseTaskContract(state, 'task-projection-only')).toMatchObject({
+      membership: 'outside',
+      executionScope: 'outside',
+      projectionMismatch: false,
+      requiresScriptProof: false,
+    })
+  })
+
+  it('does not let a compact execution row redefine saved release membership', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-membership-boundary-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    try {
+      writeProjectStateDatabaseSnapshot(tasksPath, {
+        projectRoot: root,
+        queue: {
+          version: 1,
+          selectedReleaseId: 'release-1',
+          releases: [{
+            id: 'release-1',
+            label: 'Release 1',
+            kind: 'release',
+            state: 'active',
+            source: 'owner_approved',
+            nodeIds: ['work:parent', 'work:child'],
+            deferredNodeIds: ['work:later'],
+          }],
+          tasks: [
+            { id: 'parent', title: 'Parent', status: 'ready' },
+            { id: 'child', title: 'Child', status: 'ready' },
+            { id: 'later', title: 'Later', status: 'shelved' },
+          ],
+        },
+        summary: null,
+        scopeRows: [{
+          taskId: 'child',
+          scope: 'included',
+          eligibilityReason: 'included_ancestor',
+          hierarchyRole: 'child',
+          handoffState: 'ready',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: [],
+        }],
+      })
+      promoteProjectStateDatabaseAuthority(root)
+
+      expect(readProjectSavedReleaseState(root).scope).toMatchObject({
+        id: 'release-1',
+        nodeIds: ['work:parent', 'work:child'],
+        deferredNodeIds: ['work:later'],
+      })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('records a structured capability snapshot without manufacturing task work', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-capability-catalog-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, {
+        version: 1,
+        lastUpdated: '2026-07-23T00:00:00.000Z',
+        tasks: [{ id: 'task-existing', title: 'Existing work', status: 'ready' }],
+        releases: [],
+      }, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+
+      expect(upsertProjectSourceCapabilitiesAtBoundary(tasksPath, [{
+        id: 'narrative:world-state-review',
+        adapterId: 'narrative-release-plan',
+        adapterSchemaVersion: 1,
+        sourceRevision: 'v1',
+        label: 'Review world state',
+        state: 'planned',
+        releaseIds: ['headless-mvp'],
+        dependsOnCapabilityIds: [],
+        evidenceRefs: ['artifact:release-plan'],
+      }], { projectRoot: root })).toBe(true)
+      expect(readProjectStateDatabaseSourceCapabilities(tasksPath)).toEqual([
+        expect.objectContaining({ id: 'narrative:world-state-review' }),
+      ])
+      expect(readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks).toEqual([
+        expect.objectContaining({ id: 'task-existing' }),
+      ])
+      expect(readProjectSummaryProjection(tasksPath)?.sourceCapabilityCatalog).toEqual({
+        availability: 'ready',
+        total: 1,
+        planned: 1,
+        retired: 0,
+      })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('fails closed when a current-state database is present but unreadable', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-corrupt-db-'))
     const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
@@ -264,6 +578,20 @@ describe('project-state-boundary', () => {
         },
         availability: { status: 'paused', reason: 'test pause' },
       })
+      const overview = readProjectOverviewStateAtBoundary(root)
+      expect(overview).toMatchObject({
+        authority: 'database',
+        queueRevision: current.queueRevision,
+        projectRevision: current.projectRevision,
+        // This fixture intentionally carries an older unversioned summary.
+        // Overview reads it through the runtime schema boundary, so it is
+        // visible but stale instead of being accepted as current state.
+        summary: { freshness: 'stale' },
+        availability: { status: 'paused', reason: 'test pause' },
+      })
+      // The Overview boundary intentionally exposes no compact projection:
+      // its task cards must be point-hydrated from saved spine IDs instead.
+      expect(overview).not.toHaveProperty('compact')
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
@@ -779,6 +1107,76 @@ describe('project-state-boundary', () => {
       expect(readProjectStateDatabaseTaskPointWithRevision(tasksPath, 'task-1')?.task.definition.acceptanceCriteria).toHaveLength(2)
       const afterDatabase = new DatabaseSync(projectStateDatabasePath(root), { readOnly: true })
       const untouchedAfter = afterDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-2') as { payload_gzip: Uint8Array }
+      expect(Buffer.from(untouchedAfter.payload_gzip)).toEqual(Buffer.from(untouchedBefore.payload_gzip))
+      afterDatabase.close()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('refreshes shared scope and action state when a promoted brief becomes approved', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-approved-brief-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    const initialQueue = {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1', label: 'Current work', kind: 'release', state: 'active', source: 'owner_approved',
+        nodeIds: ['work:task-shaping', 'work:task-untouched'], deferredNodeIds: [],
+      }],
+      tasks: [
+        {
+          id: 'task-shaping', title: 'Shape a source-backed spec', status: 'exploring',
+          updatedAt: '2026-07-23T00:00:00.000Z', releaseIds: ['release-1'],
+        },
+        {
+          id: 'task-untouched', title: 'Keep this payload untouched', status: 'ready',
+          updatedAt: '2026-07-23T00:00:00.000Z', releaseIds: ['release-1'],
+          spec: 'Executable proof.', acceptanceCriteria: [{ id: 'ac-untouched', description: 'The proof exists.' }],
+        },
+      ],
+    }
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, initialQueue, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+      const beforeDatabase = new DatabaseSync(projectStateDatabasePath(root), { readOnly: true })
+      const untouchedBefore = beforeDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-untouched') as { payload_gzip: Uint8Array }
+      beforeDatabase.close()
+
+      const result = writePromotedTaskDetailMutation(tasksPath, 'task-shaping', {
+        projectId: 'approved-brief',
+        projectRoot: root,
+        mutate: task => ({
+          ...task,
+          updatedAt: '2026-07-23T00:01:00.000Z',
+          productBrief: {
+            userJob: 'Turn documented story intent into a runnable CLI workflow.',
+            whyItMattersNow: 'The selected release needs an executable spec.',
+            successMetric: 'The spec names its inputs, proof, and review boundary.',
+            nonGoals: ['Do not broaden into a visual editor.'],
+            approvedAt: '2026-07-23T00:01:00.000Z',
+          },
+        }),
+      })
+
+      expect(result?.committedRevision).toBeGreaterThan(0)
+      expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks.find(task => task.id === 'task-shaping'))
+        .toMatchObject({ currentSummary: { brief: { present: true, shaped: true, approvedAt: '2026-07-23T00:01:00.000Z' } } })
+      const summary = readProjectSummaryProjection(tasksPath)
+      expect(summary).not.toBeNull()
+      const primaryAction = summary?.actionModel?.primaryAction
+      expect(primaryAction).not.toBeNull()
+      expect(primaryAction!).toMatchObject({
+        source: 'start_readiness',
+        taskId: 'task-shaping',
+      })
+      expect(summary!.releaseSummary).toMatchObject({
+        state: 'shaping',
+        blockers: [],
+      })
+      const afterDatabase = new DatabaseSync(projectStateDatabasePath(root), { readOnly: true })
+      const untouchedAfter = afterDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-untouched') as { payload_gzip: Uint8Array }
       expect(Buffer.from(untouchedAfter.payload_gzip)).toEqual(Buffer.from(untouchedBefore.payload_gzip))
       afterDatabase.close()
     } finally {

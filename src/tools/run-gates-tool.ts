@@ -103,7 +103,7 @@ async function persistGateResultsForCurrentTask(input: {
   cwd: string
   metadata: Record<string, unknown>
   gates: Array<{ id: string; command: string }>
-  results: Array<{ gateId: string; type: 'hard' | 'soft'; passed: boolean; output?: string; checkedAt: string }>
+  results: Array<{ gateId: string; command?: string; type: 'hard' | 'soft'; passed: boolean; output?: string; checkedAt: string }>
 }): Promise<{ persisted: boolean; proofContractFailureIds: string[] }> {
   const taskId = typeof input.metadata['current_task_id'] === 'string'
     ? input.metadata['current_task_id']

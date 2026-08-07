@@ -40,6 +40,7 @@ import {
   productBriefFromSpecCompletionBoundary,
   validateProductBriefGrounding,
   validateSpecCompletionBoundary,
+  validateSpecGrounding,
 } from './spec-quality.js'
 import { taskShapingBlockers } from '@guildhall/shared'
 import { applyTaskShaping } from './task-decomposition.js'
@@ -52,7 +53,10 @@ import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup
 import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
 import {
   sanitizeTaskQueueForProjectWrite,
+  readProjectCanonicalCurrentState,
   readProjectStateAuthorityAtBoundary,
+  resolveSelectedReleaseTaskContract,
+  preserveRuntimeOverlayOnTaskQueueParse,
   writeProjectTaskQueueAtCurrentStateBoundary,
   writePromotedTaskDetailMutation,
   writeProjectTaskQueueWithSummary,
@@ -105,18 +109,26 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
   const queue = TaskQueue.parse(Array.isArray(parsed)
     ? { version: 1, lastUpdated: now, tasks: parsed }
     : parsed)
-  for (const task of queue.tasks) normalizeImportedDraftTask(task)
-  return queue
+  const queueWithRuntime = preserveRuntimeOverlayOnTaskQueueParse(parsed, queue)
+  for (const task of queueWithRuntime.tasks) normalizeImportedDraftTask(task)
+  return queueWithRuntime
 }
 
-async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
+async function writeQueue(
+  memoryDir: string,
+  queue: TaskQueue,
+  options: { expectedQueueRevision?: number | null; expectedProjectRevision?: number | null } = {},
+): Promise<void> {
   const tasksPath = tasksPathFor(memoryDir)
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
-  const expectedQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+  const expectedQueueRevision = options.expectedQueueRevision ?? readProjectStateDatabaseQueueRevision(tasksPath)
   await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
     projectId: path.basename(projectRoot),
     projectRoot,
     ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
+    ...(options.expectedProjectRevision !== null && options.expectedProjectRevision !== undefined
+      ? { expectedProjectRevision: options.expectedProjectRevision }
+      : {}),
   })
 }
 
@@ -151,6 +163,11 @@ export interface IntakeInput {
   taskId?: string
   /** Optional explicit title; defaults to a complete first-line ask or generic fallback. */
   title?: string
+  /**
+   * Durable project sources selected by the invoking surface. They are copied
+   * onto the task so the coordinator sees the same grounding the UI shows.
+   */
+  sourceRefs?: string[]
   /** User-facing routed request metadata for Thread projection. */
   request?: TaskRequest
   /** Optional precomputed intake state when another flow already resolved routing questions. */
@@ -186,6 +203,7 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
   const ownerInput = input.ownerInputOverride !== undefined
     ? input.ownerInputOverride
     : requestIntakeAnalysis.ownerInput
+  const sourceRefs = [...new Set((input.sourceRefs ?? []).map(ref => ref.trim()).filter(Boolean))]
 
   const task: Task = {
     id,
@@ -193,7 +211,7 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     description: input.ask,
     domain: input.domain,
     projectPath: input.projectPath,
-    references: [],
+    references: sourceRefs,
     sourceClaims: [],
     status: 'exploring',
     priority: 'normal',
@@ -386,6 +404,8 @@ export interface ApproveSpecInput {
   taskId: string
   /** Optional note left on the task by the approving human */
   approvalNote?: string
+  /** Explicit owner actor. Automation must never supply the delegated value. */
+  approvalActor?: 'human' | 'codex_delegated_owner'
 }
 
 export interface ApproveSpecResult {
@@ -398,8 +418,36 @@ export interface ApproveSpecResult {
  * Mark a task's spec as approved. A one-task spec moves to `ready`; a spec
  * that names multiple child tasks creates them and keeps this task as `parent`.
  */
+function isProjectRevisionRace(error: unknown): boolean {
+  return error instanceof Error && /Stale (?:targeted )?project mutation|project state changed|expected (?:project )?revision/i.test(error.message)
+}
+
 export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecResult> {
-  const queue = await readQueue(input.memoryDir)
+  // Approval changes task state and can add a release-local proof child. If a
+  // release selection changes while that decision is in flight, discard the
+  // old decision and derive both facts again from one current snapshot.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await approveSpecFromCurrentSnapshot(input)
+    } catch (error) {
+      if (attempt === 0 && isProjectRevisionRace(error)) continue
+      throw error
+    }
+  }
+  throw new Error('Spec approval could not obtain a stable project snapshot.')
+}
+
+async function approveSpecFromCurrentSnapshot(input: ApproveSpecInput): Promise<ApproveSpecResult> {
+  const approvalActor = input.approvalActor ?? 'human'
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const canonicalState = await readProjectCanonicalCurrentState(projectRoot)
+  const currentQueue = {
+    version: 1,
+    ...canonicalState.rawQueue,
+    tasks: canonicalState.tasks.map(task => ({ ...task })),
+  }
+  const parsedQueue = TaskQueue.parse(currentQueue)
+  const queue = preserveRuntimeOverlayOnTaskQueueParse(currentQueue, parsedQueue)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
   if (task.status !== 'spec_review') {
@@ -438,11 +486,20 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       error: `Spec is not ready for approval: ${specQuality.errors.join(' ')}`,
     }
   }
+  const specGrounding = validateSpecGrounding(task)
+  if (!specGrounding.ok) {
+    return {
+      success: false,
+      error: `Spec is not grounded in the typed task/source contract: ${specGrounding.errors.join(' ')}`,
+    }
+  }
 
-  const selectedRelease = (task.releaseIds ?? [])
-    .map(releaseId => queue.releases?.find(release => release.id === releaseId))
-    .find(release => release?.id === queue.selectedReleaseId)
-  const requiresScriptProof = selectedRelease?.proofStyle === 'script_only' && !isProofSetupTask(task)
+  // The selected-release contract comes from the shared canonical boundary.
+  // Approval must not choose a different membership interpretation than
+  // release readiness, Start, or a task command mutation.
+  const selectedReleaseTask = resolveSelectedReleaseTaskContract(canonicalState, task.id)
+  const requiresScriptProof = selectedReleaseTask.requiresScriptProof &&
+    !isProofSetupTask(task)
   let proofSetupTaskId: string | null = null
   const hasConcreteScriptProof = (task.proofPaths ?? []).some(path => (
     path &&
@@ -456,8 +513,9 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   ))
   if (requiresScriptProof && !hasConcreteScriptProof) {
     const now = new Date().toISOString()
-    const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
-    const proofSetup = materializeProofSetupTask(queue, task, now)
+    const proofSetup = materializeProofSetupTask(queue, task, now, {
+      releaseIds: selectedReleaseTask.release?.id ? [selectedReleaseTask.release.id] : [],
+    })
     proofSetupTaskId = proofSetup.childTaskId
     task.proofPaths = replaceGenericProjectProofPathsWithSetup(task)
     task.acceptanceCriteria = task.acceptanceCriteria.map((criterion) => {
@@ -482,12 +540,6 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       timestamp: now,
     })
     queue.lastUpdated = now
-    await writeQueue(input.memoryDir, queue)
-    await upsertTaskRuntimeState(projectRoot, task.id, {
-      assignedTo: null,
-      proofRecovery: undefined,
-      updatedAt: now,
-    })
   }
 
   const now = new Date().toISOString()
@@ -558,7 +610,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     transitionTaskStatus({
       task,
       event: 'mark_ready',
-      actor: 'human',
+      actor: approvalActor,
       evidenceRefs: ['task:approve-spec'],
       now,
     })
@@ -573,7 +625,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     transitionTaskStatus({
       task,
       event: 'mark_ready',
-      actor: 'human',
+      actor: approvalActor,
       evidenceRefs: ['task:approve-spec'],
       now,
     })
@@ -588,7 +640,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     transitionTaskStatus({
       task,
       event: 'mark_ready',
-      actor: 'human',
+      actor: approvalActor,
       evidenceRefs: ['task:approve-spec:research-spike'],
       now,
     })
@@ -598,7 +650,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     transitionTaskStatus({
       task,
       event: 'mark_ready',
-      actor: 'human',
+      actor: approvalActor,
       evidenceRefs: ['task:approve-spec:bounded-child-contract'],
       now,
     })
@@ -611,7 +663,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
         : `Spec approval did not advance ${task.id}; the task is still waiting for spec review.`,
     }
   }
-  approveReintakeBriefWithSpec(task, now)
+  approveReintakeBriefWithSpec(task, now, approvalActor)
   task.updatedAt = now
   resolveSupersededEscalations(task, {
     now,
@@ -623,15 +675,18 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
 
   if (input.approvalNote) {
     task.notes.push({
-      agentId: 'human',
+      agentId: approvalActor,
       role: 'approver',
       content: input.approvalNote,
       timestamp: now,
     })
   }
 
-  await writeQueue(input.memoryDir, queue)
-  await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(input.memoryDir), task.id, {
+  await writeQueue(input.memoryDir, queue, {
+    expectedQueueRevision: canonicalState.queueRevision,
+    expectedProjectRevision: canonicalState.projectRevision,
+  })
+  await upsertTaskRuntimeState(projectRoot, task.id, {
     assignedTo: null,
     proofRecovery: undefined,
     updatedAt: now,
@@ -712,11 +767,11 @@ function settleBoundedChildContractWorkWithoutMaterializedChildren(task: Task): 
   return true
 }
 
-function approveReintakeBriefWithSpec(task: Task, now: string): void {
+function approveReintakeBriefWithSpec(task: Task, now: string, approvalActor: 'human' | 'codex_delegated_owner'): void {
   const brief = task.productBrief
   if (!brief || brief.authoredBy !== 'project-reintake') return
   if (typeof brief.approvedAt === 'string' && brief.approvedAt.trim().length > 0) return
-  brief.approvedBy = 'human'
+  brief.approvedBy = approvalActor
   brief.approvedAt = now
   brief.nonGoals = removeDraftApprovalWarnings(brief.nonGoals)
   brief.antiPatterns = removeDraftApprovalWarnings(brief.antiPatterns)
@@ -872,6 +927,8 @@ export interface RerunTaskStageInput {
   memoryDir: string
   taskId: string
   stage: 'spec' | 'review' | 'gate'
+  /** Records a delegated owner request without granting the runtime approval authority. */
+  actor?: 'human' | 'codex_delegated_owner'
   /** Reopen a stale current plan for a source-backed spec re-intake. */
   recoveryReason?: string
   /** Only proof recovery writes the proof-specific runtime marker. */
@@ -899,6 +956,8 @@ export interface ReframeTaskInput {
   memoryDir: string
   taskId: string
   reason?: string | undefined
+  /** Records a delegated owner request without granting the runtime approval authority. */
+  actor?: 'human' | 'codex_delegated_owner'
   /** Explicitly marks a proof reframe; never infer this from reason prose. */
   recoveryKind?: 'proof'
 }
@@ -1017,14 +1076,19 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
   const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
-  const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
+  // Reframe is an explicit corrective action, so it may inspect the bounded
+  // task-detail history needed to distinguish a current completion from one
+  // already superseded by a fresh lifecycle.
+  const effectiveTask = await buildEffectiveTask(projectRoot, task, { evidence: 'full' }) as unknown as Task
   // Promoted reads keep resolved escalation history in the evidence detail
   // store rather than on the compact task definition. Reframe must resolve
   // that canonical history, not silently operate on an overlay-free row.
   if (Array.isArray(effectiveTask.escalations)) {
     task.escalations = [...effectiveTask.escalations]
   }
-  if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
+  const historicalCompletionAlreadyReopened = task.status === 'done' &&
+    effectiveTask.doneSummaryBundle?.status === 'reopened'
+  if ((task.status === 'done' && !historicalCompletionAlreadyReopened) || task.status === 'shelved' || task.status === 'pending_pr') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
   }
   if (
@@ -1041,6 +1105,7 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   const oldStatus = task.status
   const oldTitle = task.title
   const reason = input.reason?.trim()
+  const actor = input.actor === 'codex_delegated_owner' ? 'codex_delegated_owner' : 'human'
   const reframeRequest = [
     'Reframe this existing task from the current project memory and source state.',
     '',
@@ -1077,14 +1142,14 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
     })
   }
   notes.push({
-    agentId: 'human',
-    role: 'human',
+    agentId: actor,
+    role: actor,
     content: reason
       ? `Asked to reframe this task. Reason: ${reason}`
       : 'Asked to reframe this task from current project memory.',
     structured: {
       event: 'reframe_requested',
-      source: 'human',
+      source: actor,
     },
     timestamp: now,
   })
@@ -1096,7 +1161,7 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
         : {
             ...escalation,
             resolvedAt: now,
-            resolvedBy: 'human',
+            resolvedBy: actor,
             resolution: 'Superseded by a task reframe request.',
           }
     ))
@@ -1104,6 +1169,19 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
 
   delete task.blockReason
   delete task.recoveryCode
+  // Reframing begins a new current lifecycle. Historical completion stays in
+  // the evidence ledger, but it must not settle the newly reopened task.
+  if (task.doneSummaryBundle?.status === 'done') {
+    task.doneSummaryBundle = {
+      ...task.doneSummaryBundle,
+      status: 'reopened',
+      reopenedAt: now,
+      reopenReason: 'A task reframe requested a fresh source-backed plan.',
+      createdAt: now,
+      createdBy: 'reframe-task',
+    }
+  }
+  task.completedAt = undefined
   task.status = 'exploring'
   task.assignedTo = 'spec-agent'
   task.productBrief = undefined
@@ -1150,6 +1228,11 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   // so this reframe cannot immediately erase its own proof marker.
   await upsertTaskRuntimeState(projectRoot, task.id, {
     assignedTo: 'spec-agent',
+    currentLifecycle: {
+      reopenedAt: now,
+      status: 'exploring',
+      source: 'rerun_spec',
+    },
     ...(input.recoveryKind === 'proof'
       ? {
           proofRecovery: {
@@ -1343,6 +1426,7 @@ export async function rerunTaskStage(
   }
 
   const now = new Date().toISOString()
+  const actor = input.actor === 'codex_delegated_owner' ? 'codex_delegated_owner' : 'human'
 
   if (input.stage === 'spec') {
     if (task.id === 'task-meta-intake' || task.id === 'task-workspace-import') {
@@ -1370,28 +1454,28 @@ export async function rerunTaskStage(
     task.completedAt = undefined
     task.status = 'exploring'
     task.assignedTo = null
-    // "Rerun spec" is a new shaping boundary, not a worker retry. Remove the
-    // old executable contract even when the caller did not provide a special
-    // recovery reason; otherwise the coordinator can keep reusing a blueprint
-    // that the user explicitly asked it to replace.
+    // A fresh spec pass always replaces the old executable contract. The
+    // shared reset preserves a bounded proof-setup blueprint in place, while
+    // a blueprint recovery alone retains the approved product brief.
     resetCurrentPlanForProofRecovery(task, {
       reason:
         input.recoveryReason?.trim() ||
-        'The current plan was cleared for a fresh spec pass from current project reality.',
+        'The current plan was cleared for a fresh source-backed spec pass.',
       now,
-      agentId: 'system',
-      role: input.recoveryKind === 'proof' ? 'proof-recovery' : 'spec-recovery',
+      agentId: actor,
+      role: actor,
+      ...(input.recoveryKind === 'blueprint' ? { preserveProductBrief: true } : {}),
     })
     detachStaleShelvedReverseChildren(queue, task, now)
     task.updatedAt = now
     queue.lastUpdated = now
     task.notes.push({
-      agentId: 'human',
-      role: 'human',
-      content: 'Human requested a fresh spec pass from the current project reality.',
+      agentId: actor,
+      role: actor,
+      content: 'A delegated owner requested a fresh spec pass from the current project reality.',
       structured: {
         event: 'reframe_requested',
-        source: 'human',
+        source: actor,
       },
       timestamp: now,
     })
@@ -1401,11 +1485,16 @@ export async function rerunTaskStage(
       taskId: task.id,
       role: 'system',
       content:
-        'Human requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
+        'A delegated owner requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
     })
-    if (input.recoveryKind === 'proof') {
-      await upsertTaskRuntimeState(projectRoot, task.id, {
-        assignedTo: null,
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      assignedTo: null,
+      currentLifecycle: {
+        reopenedAt: now,
+        status: 'exploring',
+        source: 'rerun_spec',
+      },
+      ...(input.recoveryKind === 'proof' ? {
         proofRecovery: {
           reopenedAt: now,
           kind: 'proof',
@@ -1413,9 +1502,9 @@ export async function rerunTaskStage(
             input.recoveryReason?.trim() ||
             'The current proof plan was cleared for a fresh source-backed spec pass.',
         },
-        updatedAt: now,
-      })
-    }
+      } : {}),
+      updatedAt: now,
+    })
     return { success: true, newStatus: 'exploring' }
   }
 

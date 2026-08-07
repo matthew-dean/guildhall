@@ -12,6 +12,7 @@ import {
   isProofSetupTask,
   materializeSplitChildren,
   materializeProofSetupTask,
+  prepareReleaseProofRecovery,
   settleMaterializedSplitReadiness,
 } from '../task-queue.js'
 import {
@@ -182,7 +183,6 @@ describe('updateTask', () => {
       }],
     })
     writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
-
     const result = await updateTask({
       tasksPath,
       taskId: 'task-001',
@@ -346,7 +346,97 @@ describe('updateTask', () => {
     }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
 
     expect(result.success).toBe(false)
-    expect(result.error).toContain('requires note.structured')
+    expect(result.error).toContain('requires one durable self-critique')
+  })
+
+  it('admits review from a previously persisted typed worker self-critique', async () => {
+    seedQueue.tasks[0]!.status = 'in_progress'
+    ;(seedQueue.tasks[0]! as unknown as TaskQueue['tasks'][number]).acceptanceCriteria = [{
+      id: 'AC-1',
+      description: 'Focused task behavior is verified.',
+      verifiedBy: 'automated',
+      met: false,
+    }] as TaskQueue['tasks'][number]['acceptanceCriteria']
+    writeProjectTaskQueue(tasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const metadata = { current_agent_id: 'worker-agent', current_task_project_path: tmpDir }
+
+    const noteResult = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'in_progress',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: 'Implementation and focused verification are ready for review.',
+        structured: {
+          acceptanceCriteria: [{ id: 'AC-1', status: 'met' }],
+          changedFiles: ['src/index.ts'],
+          verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+          proofEvidenceIds: [],
+        },
+      },
+    }, metadata)
+    expect(noteResult.success).toBe(true)
+
+    const reviewResult = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'review',
+    }, metadata)
+
+    expect(reviewResult.success).toBe(true)
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]).toMatchObject({ status: 'review' })
+  })
+
+  it('does not reuse a typed worker self-critique after its task contract changes', async () => {
+    seedQueue.tasks[0]!.status = 'in_progress'
+    ;(seedQueue.tasks[0]! as unknown as TaskQueue['tasks'][number]).acceptanceCriteria = [{
+      id: 'AC-1',
+      description: 'The focused behavior is verified.',
+      verifiedBy: 'automated',
+      met: false,
+    }] as TaskQueue['tasks'][number]['acceptanceCriteria']
+    writeProjectTaskQueue(tasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const workerMetadata = { current_agent_id: 'worker-agent', current_task_project_path: tmpDir }
+
+    expect((await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: 'Typed handoff is ready.',
+        structured: {
+          acceptanceCriteria: [{ id: 'AC-1', status: 'met' }],
+          changedFiles: ['src/index.ts'],
+          verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+          proofEvidenceIds: [],
+        },
+      },
+    }, workerMetadata)).success).toBe(true)
+
+    const contractUpdate = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'The focused behavior and its edge condition are verified.',
+        verifiedBy: 'automated',
+        met: false,
+      }],
+    }, { current_agent_id: 'spec-agent', current_task_project_path: tmpDir })
+    expect(contractUpdate.success, contractUpdate.error).toBe(true)
+
+    const reviewResult = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'review',
+    }, workerMetadata)
+
+    expect(reviewResult.success).toBe(false)
+    expect(reviewResult.error).toContain('requires one durable self-critique')
   })
 
   it('rejects a worker handoff whose structured criterion IDs do not match the task', async () => {
@@ -584,7 +674,7 @@ describe('updateTask', () => {
     }, { current_agent_id: 'worker-agent', current_task_project_path: tmpDir })
 
     expect(result.success).toBe(false)
-    expect(result.error).toContain('requires a self-critique note')
+    expect(result.error).toContain('requires one durable self-critique')
     expect(readProjectTaskQueueSync(tasksPath).tasks.find((task) => task.id === child.childTaskId)?.status)
       .toBe('in_progress')
   })
@@ -1737,6 +1827,88 @@ describe('updateTask', () => {
     expect(raw.tasks[0].spec).toContain('Build the thing')
   })
 
+  it('persists agent-read planning evidence and validates a structured spec by its typed contract', async () => {
+    const structuredSpec = {
+      whatThisIs: 'A bounded source-backed contract.',
+      problemContext: 'The current project source names the implementation surface.',
+      goals: ['Preserve the inspected project boundary.'],
+      nonGoals: ['Do not invent an unobserved command.'],
+      keyDecisions: ['Keep executable proof typed.'],
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        scenario: 'Given the inspected project source',
+        expectation: 'The bounded behavior is reviewed against it.',
+        verificationMode: 'review',
+      }],
+      verification: ['Review the inspected project source.'],
+      completionBoundary: {
+        productOutcome: 'The bounded source-backed behavior is defined.',
+        whatGuildhallCanCompleteInCode: 'The implementation contract is saved.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'The registered project.',
+        whatCountsAsDone: 'The structured contract is saved for review.',
+        whatMustBeSplitOrBlocked: 'Split only independent outcomes.',
+      },
+      // Arbitrary prose with a path must remain display-only; only typed
+      // executable fields participate in grounding validation.
+      proposedDesign: 'Use src/pipeline/synopsis.ts as the inspected implementation boundary.',
+    }
+    const result = await updateTask({ tasksPath, taskId: 'task-001', structuredSpec }, {
+      current_agent_id: 'spec-agent',
+      planning_source_evidence: [{ path: '/workspace/src/pipeline/synopsis.ts', commands: [] }],
+    })
+
+    expect(result.success, result.error).toBe(true)
+    expect(result.taskId).toBe('task-001')
+    const saved = readProjectTaskQueueSync(tasksPath).tasks[0]!
+    expect(saved.sourceClaims).toContainEqual(expect.objectContaining({
+      signalId: 'agent-read:/workspace/src/pipeline/synopsis.ts',
+      references: ['/workspace/src/pipeline/synopsis.ts'],
+    }))
+    expect(saved.references).toContain('/workspace/src/pipeline/synopsis.ts')
+    expect(saved.structuredSpec?.proposedDesign).toContain('src/pipeline/synopsis.ts')
+  })
+
+  it('normalizes malformed display-only structured spec fields without relaxing typed proof fields', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A bounded contract.',
+        problemContext: 'The task has a defined source boundary.',
+        goals: ['Save a reviewable spec.'],
+        nonGoals: ['Do not infer proof from prose.'],
+        proposedDesign: 'Persist the typed planning contract.',
+        keyDecisions: ['Keep proof fields structured.'],
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          scenario: 'Given the saved contract',
+          expectation: 'A reviewer can inspect it.',
+          verificationMode: 'review',
+        }],
+        verification: [{ kind: 'review', target: 'task contract' }],
+        completionBoundary: {
+          productOutcome: 'A valid spec exists.',
+          whatGuildhallCanCompleteInCode: 'Save the planning contract.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'The registered project.',
+          whatCountsAsDone: 'The contract is ready for review.',
+          whatMustBeSplitOrBlocked: 'Split only independent outcomes.',
+        },
+        componentApiShape: { function: 'saveContract' },
+        performanceReliabilitySecurity: ['No untyped proof is accepted.'],
+      },
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result.success, result.error).toBe(true)
+    const saved = readProjectTaskQueueSync(tasksPath).tasks[0]!
+    expect(saved.structuredSpec?.verification).toEqual(['{"kind":"review","target":"task contract"}'])
+    expect(saved.structuredSpec?.componentApiShape).toBe('{"function":"saveContract"}')
+    expect(saved.structuredSpec?.performanceReliabilitySecurity).toBe('["No untyped proof is accepted."]')
+  })
+
   it('does not invent split pressure or child tasks for one bounded artifact patch spec', async () => {
     await updateTask({
       tasksPath,
@@ -1827,6 +1999,168 @@ describe('updateTask', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toContain('Workers cannot mark command-backed acceptance criteria as met')
+  })
+
+  it('does not let an active task silently replace its existing proof command', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        status: 'in_progress',
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The focused proof passes.',
+          verifiedBy: 'automated',
+          command: 'pnpm proof:current',
+        }],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'The focused proof passes.',
+        verifiedBy: 'review',
+        command: 'pnpm proof:invented-replacement',
+      }],
+    }, { current_agent_id: 'worker-agent' })
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('active executable contract'),
+    })
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.acceptanceCriteria[0]).toMatchObject({
+      command: 'pnpm proof:current',
+      verifiedBy: 'automated',
+    })
+  })
+
+  it('does not let a fresh structured spec erase recorded command proof into review-only criteria', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        gateResults: [{
+          gateId: 'focused-proof',
+          command: 'pnpm test -- focused-proof',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-07-22T00:00:00.000Z',
+        }],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: 'gate-proof-focused',
+      kind: 'gate_result',
+      recordedAt: '2026-07-22T00:00:00.000Z',
+      payload: {
+        gateId: 'focused-proof',
+        command: 'pnpm test -- focused-proof',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-07-22T00:00:00.000Z',
+      },
+    })
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A focused proof-preservation fixture.',
+        problemContext: 'The task has previously recorded a concrete proof command.',
+        goals: ['Keep the focused behavior verifiable.'],
+        nonGoals: ['Do not replace the proof plan without declaring it.'],
+        proposedDesign: 'Preserve the bounded task behavior.',
+        keyDecisions: ['Use the current task record.'],
+        acceptanceCriteria: [{
+          scenario: 'Given the focused fixture',
+          expectation: 'Then the behavior can be reviewed.',
+          verificationMode: 'review',
+        }],
+        verification: ['Review the focused behavior.'],
+        completionBoundary: {
+          productOutcome: 'The focused behavior remains verifiable.',
+          whatGuildhallCanCompleteInCode: 'The focused implementation and proof contract.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'The local test environment.',
+          whatCountsAsDone: 'The focused behavior is proven.',
+          whatMustBeSplitOrBlocked: 'None.',
+        },
+      },
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('proofContract must explicitly preserve, replace, or retire'),
+    })
+  })
+
+  it('requires a preserved command to remain in the structured acceptance contract', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        gateResults: [{
+          gateId: 'focused-proof',
+          command: 'pnpm test -- focused-proof',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-07-22T00:00:00.000Z',
+        }],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: 'gate-proof-focused',
+      kind: 'gate_result',
+      recordedAt: '2026-07-22T00:00:00.000Z',
+      payload: {
+        gateId: 'focused-proof',
+        command: 'pnpm test -- focused-proof',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-07-22T00:00:00.000Z',
+      },
+    })
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A focused proof-preservation fixture.',
+        problemContext: 'The task has previously recorded a concrete proof command.',
+        goals: ['Keep the focused behavior verifiable.'],
+        nonGoals: ['Do not replace the proof plan without declaring it.'],
+        proposedDesign: 'Preserve the bounded task behavior.',
+        keyDecisions: ['Keep the recorded proof command.'],
+        proofContract: { existingCommandDisposition: 'preserve' },
+        acceptanceCriteria: [{
+          scenario: 'Given the focused fixture',
+          expectation: 'Then the focused command passes.',
+          verificationMode: 'automated',
+          command: 'pnpm test -- focused-proof',
+        }],
+        verification: ['Run pnpm test -- focused-proof.'],
+        completionBoundary: {
+          productOutcome: 'The focused behavior remains verifiable.',
+          whatGuildhallCanCompleteInCode: 'The focused implementation and proof contract.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'The local test environment.',
+          whatCountsAsDone: 'The focused behavior is proven.',
+          whatMustBeSplitOrBlocked: 'None.',
+        },
+      },
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result).toMatchObject({ success: true })
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.acceptanceCriteria).toEqual([
+      expect.objectContaining({ command: 'pnpm test -- focused-proof', verifiedBy: 'automated' }),
+    ])
   })
 
   it('does not let Markdown headings or question-shaped prose change spec_review promotion', async () => {
@@ -2197,7 +2531,8 @@ describe('materializeProofSetupTask', () => {
       taskKind: 'verification',
       semanticKind: 'proof_setup',
       projectPath: queue.tasks[0]!.projectPath,
-      releaseIds: ['release-1'],
+      proofForReleaseId: 'release-1',
+      releaseIds: [],
       references: ['docs/release-plan.md'],
       workVisibility: { kind: 'internal_step', countInProjectTotals: false },
       hierarchy: { parentId: 'task-001', relation: 'decomposes' },
@@ -2263,7 +2598,8 @@ describe('materializeProofSetupTask', () => {
         semanticKind: 'proof_setup',
         workKind: 'verification',
         taskKind: 'verification',
-        releaseIds: ['release-shipped', 'release-next'],
+        proofForReleaseId: 'release-shipped',
+        releaseIds: [],
         hierarchy: { parentId: 'task-001', childIds: [], order: 0, relation: 'decomposes' },
       }],
     })
@@ -2278,7 +2614,8 @@ describe('materializeProofSetupTask', () => {
     expect(result.childTaskId).toBe('task-001-proof-setup-2')
     expect(child).toMatchObject({
       status: 'ready',
-      releaseIds: ['release-next'],
+      proofForReleaseId: 'release-next',
+      releaseIds: [],
       hierarchy: { parentId: 'task-001', relation: 'decomposes' },
     })
     expect(queue.tasks[0]!.hierarchy?.childIds).toEqual(['task-001-proof-setup'])
@@ -2302,6 +2639,146 @@ describe('materializeProofSetupTask', () => {
       childTaskId: proofTask.id,
     })
     expect(queue.tasks).toHaveLength(beforeCount)
+  })
+})
+
+describe('prepareReleaseProofRecovery', () => {
+  it('materializes every selected proof blocker and reopens only its existing internal proof step', () => {
+    const timestamp = '2026-07-23T09:00:00.000Z'
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-001', 'work:task-002'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        id: 'task-001',
+        status: 'done',
+        releaseIds: ['release-1'],
+      }, {
+        ...seedQueue.tasks[0],
+        id: 'task-002',
+        status: 'done',
+        releaseIds: ['release-1'],
+      }],
+    })
+    const historical = materializeProofSetupTask(queue, queue.tasks[0]!, timestamp, {
+      releaseIds: ['release-1'],
+    })
+    const historicalTask = queue.tasks.find(task => task.id === historical.childTaskId)!
+    historicalTask.status = 'done'
+    historicalTask.completedAt = timestamp
+
+    const result = prepareReleaseProofRecovery(queue, {
+      parentTaskIds: ['task-002', 'task-001', 'task-001'],
+      releaseId: 'release-1',
+      timestamp,
+    })
+
+    expect(result).toEqual({
+      materializedTaskIds: ['task-002-proof-setup'],
+      reopenedTaskIds: ['task-001-proof-setup'],
+      representedTaskIds: ['task-001-proof-setup'],
+      rejectedParentTaskIds: [],
+    })
+    expect(queue.tasks.find(task => task.id === 'task-001-proof-setup')).toMatchObject({
+      status: 'ready',
+      proofForReleaseId: 'release-1',
+      releaseIds: [],
+      hierarchy: { parentId: 'task-001', relation: 'decomposes' },
+    })
+    expect(queue.tasks.find(task => task.id === 'task-002-proof-setup')).toMatchObject({
+      status: 'ready',
+      proofForReleaseId: 'release-1',
+      releaseIds: [],
+      hierarchy: { parentId: 'task-002', relation: 'decomposes' },
+    })
+  })
+
+  it('returns a reviewed proof child to ready work when its current proof is missing', () => {
+    const timestamp = '2026-07-23T09:00:00.000Z'
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-001'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        id: 'task-001',
+        status: 'done',
+        releaseIds: ['release-1'],
+      }],
+    })
+    const historical = materializeProofSetupTask(queue, queue.tasks[0]!, timestamp, {
+      releaseIds: ['release-1'],
+    })
+    const proofTask = queue.tasks.find(task => task.id === historical.childTaskId)!
+    proofTask.status = 'review'
+
+    const result = prepareReleaseProofRecovery(queue, {
+      parentTaskIds: ['task-001'],
+      releaseId: 'release-1',
+      timestamp,
+    })
+
+    expect(result).toEqual({
+      materializedTaskIds: [],
+      reopenedTaskIds: ['task-001-proof-setup'],
+      representedTaskIds: ['task-001-proof-setup'],
+      rejectedParentTaskIds: [],
+    })
+    expect(queue.tasks.find(task => task.id === 'task-001-proof-setup')).toMatchObject({ status: 'ready' })
+  })
+
+  it('rejects a blocker that is not a member of the selected release', () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        id: 'later-task',
+        status: 'done',
+        releaseIds: ['release-later'],
+      }],
+    })
+
+    expect(prepareReleaseProofRecovery(queue, {
+      parentTaskIds: ['later-task'],
+      releaseId: 'release-1',
+      timestamp: '2026-07-23T09:00:00.000Z',
+    })).toEqual({
+      materializedTaskIds: [],
+      reopenedTaskIds: [],
+      representedTaskIds: [],
+      rejectedParentTaskIds: ['later-task'],
+    })
+    expect(queue.tasks).toHaveLength(1)
   })
 })
 

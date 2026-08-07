@@ -43,7 +43,7 @@
   type SortKey = 'title' | 'status' | 'area' | 'priority' | 'updated' | 'revisions'
   type SortDir = 'asc' | 'desc'
   type WorkView = 'list' | 'board'
-  type WorkFilter = 'queued' | 'scope' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'needs-you'
+  type WorkFilter = 'queued' | 'scope' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'review' | 'needs-you'
 
   const STATUS_SORT_ORDER: Record<string, number> = {
     proposed: 0,
@@ -118,6 +118,7 @@
     { value: 'all', label: 'All' },
     { value: 'blocked', label: 'Blocked' },
     { value: 'needs-proof', label: 'Needs proof' },
+    { value: 'review', label: 'Review required' },
     { value: 'needs-you', label: 'Needs you' },
   ]
 
@@ -182,6 +183,10 @@
       .filter((id): id is string => Boolean(id))
     return new Set(ids)
   })
+  // This set comes from the same selected-release snapshot that produced the
+  // primary Review action. Work only presents it; it never re-decides who is
+  // reviewable from task prose or a route-local status scan.
+  const ownerReviewTaskIds = $derived.by(() => new Set(detail.startReadiness?.reviewTaskIds ?? []))
   const scopeByTaskId = $derived.by(() => {
     const entries = (detail.orientationSpine?.scopeRows ?? [])
       .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
@@ -486,6 +491,7 @@
   function workFilterForTask(task: Task): WorkFilter {
     if (isProofMissingTask(task)) return 'needs-proof'
     if (task.status === 'blocked') return 'blocked'
+    if (isSelectedScopeOwnerReview(task)) return 'review'
     if (hasOpenQuestion(task)) return 'needs-you'
     if (isQueuedWorkTask(task)) return 'queued'
     if (isPlanningTask(task)) return 'planning'
@@ -538,6 +544,10 @@
     return Boolean(task.openQuestions?.some(question => !question.answeredAt && !question.answer))
   }
 
+  function isSelectedScopeOwnerReview(task: Task): boolean {
+    return ownerReviewTaskIds.has(task.id)
+  }
+
   function isQueuedWorkTask(task: Task): boolean {
     if (hasUnmetDependencies(task, tasks)) return false
     if (task.status === 'ready') return isCompleteForWorkerHandoff(task)
@@ -559,6 +569,7 @@
     if (workFilter === 'planning') return 'No planning work.'
     if (workFilter === 'blocked') return 'No blocked work.'
     if (workFilter === 'needs-proof') return 'No proof gaps.'
+    if (workFilter === 'review') return 'No selected-scope reviews are waiting.'
     if (workFilter === 'needs-you') return 'Nothing needs you.'
     return 'No matching work.'
   }
@@ -569,6 +580,7 @@
     if (workFilter === 'planning') return 'Planning, intake, and spec items will appear here while they are being shaped.'
     if (workFilter === 'blocked') return 'Blocked work will appear here once a task cannot continue.'
     if (workFilter === 'needs-proof') return 'Completed work with missing release proof will appear here.'
+    if (workFilter === 'review') return 'Owner-held specs in the selected release will appear here when review is required.'
     if (workFilter === 'needs-you') return 'Questions and owner-held work will appear here when input is needed.'
     return 'Adjust the filter to inspect a different slice of the project.'
   }
@@ -588,6 +600,7 @@
     if (workFilter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
     if (workFilter === 'blocked') return task.status === 'blocked'
     if (workFilter === 'needs-proof') return isProofMissingTask(task)
+    if (workFilter === 'review') return isSelectedScopeOwnerReview(task)
     if (workFilter === 'needs-you') return hasOpenQuestion(task)
     return false
   }

@@ -36,6 +36,7 @@ import {
   type CoordinatorDomain,
   type ProgressEntry,
   TaskRuntimeState,
+  type TaskWorkspaceState,
   parseTaskRuntimeField,
 } from '@guildhall/core'
 import {
@@ -88,6 +89,7 @@ import {
 } from '@guildhall/levers'
 import { buildContext, resolveLikelyTaskFiles } from './context-builder.js'
 import { applyTaskTransition, transitionTaskStatus, type TaskTransitionEvent } from './task-transition.js'
+import { reopenLegacyWorktreeSyncRecovery } from './worktree-sync-recovery.js'
 import { recordTaskReflection } from './learning.js'
 import {
   modelForAgentName,
@@ -104,6 +106,7 @@ import { buildPromptCacheKey } from './prompt-cache.js'
 import { resolveModelApiPolicy, type ModelApiRole } from './model-api-policy.js'
 import { repairStaleBlockersInQueue } from './stale-blocker-repair.js'
 import { buildEffectiveTask } from './effective-task.js'
+import { currentLifecycleForTask } from './current-lifecycle.js'
 import { taskCompletionProofSatisfiedByLinkedChildren } from './project-scope-projection.js'
 import {
   hasActiveProofRecovery,
@@ -207,7 +210,7 @@ import {
   type LandingStrategy,
 } from './merge-dispatcher.js'
 import { workSubtreeIds } from './work-hierarchy.js'
-import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { requestSpecReview, specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import { applyRunAutomationPolicy as applyRunAutomationLeverPolicy } from './run-automation.js'
 import {
   atomicWriteText,
@@ -318,6 +321,7 @@ const PROPOSAL_PROMOTER_AGENT_ID = 'proposal-promoter'
 const PRE_REJECTION_POLICY_AGENT_ID = 'pre-rejection-policy'
 
 type AgentGenerateResult = Awaited<ReturnType<OrchestratorAgent['generate']>>
+type WorktreeSyncRecovery = NonNullable<TaskWorkspaceState['syncRecovery']>
 
 function isFrontendUiReviewTask(task: Task): boolean {
   return hasStructuredSurface(task, 'component')
@@ -351,6 +355,44 @@ function taskHasConcreteProjectProofCommand(task: Task): boolean {
       !Array.isArray(path) &&
       typeof path.command === 'string' &&
       isConcreteProjectProofCommand(path.command),
+    ),
+  )
+}
+
+function landedTaskWorkRequiresProjectCheckoutProof(task: Task): boolean {
+  if (!isProofSetupTask(task)) return false
+  if (!['merged', 'pushed', 'push_failed_degraded'].includes(task.mergeRecord?.result ?? '')) return false
+  const commands = task.acceptanceCriteria
+    .map((criterion) => typeof criterion.command === 'string' ? comparableCommand(criterion.command) : null)
+    .filter((command): command is string => Boolean(command))
+  if (commands.length === 0 || !taskHasConcreteProjectProofCommand(task)) return false
+  const projectCheckoutCommands = new Set(
+    (task.proofPaths ?? []).flatMap((path) => {
+      const records = path && typeof path === 'object' && Array.isArray(path.verificationRecords)
+        ? path.verificationRecords
+        : []
+      return records.flatMap((record) =>
+        record.executionRoot === 'project_checkout' && typeof record.command === 'string'
+          ? [comparableCommand(record.command)]
+          : [],
+      )
+    }),
+  )
+  return commands.some((command) => !projectCheckoutCommands.has(command))
+}
+
+function proofRecoveryNeedsFreshWorktree(task: Task): boolean {
+  const recovery = (task as Task & {
+    proofRecovery?: { freshWorktree?: unknown }
+    runtime?: { proofRecovery?: { freshWorktree?: unknown } }
+  }).proofRecovery ?? (task as Task & {
+    runtime?: { proofRecovery?: { freshWorktree?: unknown } }
+  }).runtime?.proofRecovery
+  if (recovery?.freshWorktree === true) return true
+  if (!['merged', 'pushed', 'push_failed_degraded'].includes(task.mergeRecord?.result ?? '')) return false
+  return (task.proofPaths ?? []).some((path) =>
+    Array.isArray(path?.verificationRecords) && path.verificationRecords.some((record) =>
+      record.executionRoot === 'project_checkout' && record.status === 'failed',
     ),
   )
 }
@@ -597,6 +639,7 @@ export function repairWeakRecoverySpecReviewSeedInQueue(
     : queue.tasks.find((candidate) => shouldRepairWeakRecoverySpecReviewSeed(candidate, queue))
   if (!liveTask || !shouldRepairWeakRecoverySpecReviewSeed(liveTask, queue)) return null
   const seed = buildRecoverySpecSeedForTask(liveTask, queue, input.now)
+  if (!seed.references?.length) return null
   if (!seed.productBrief || !validateProductBriefGrounding(liveTask, seed.productBrief).ok) return null
 
   liveTask.structuredSpec = seed.structuredSpec
@@ -606,7 +649,12 @@ export function repairWeakRecoverySpecReviewSeedInQueue(
   if (seed.workUnitAnalysis) liveTask.workUnitAnalysis = seed.workUnitAnalysis
   if (seed.references) liveTask.references = seed.references
   attachSelectedReleaseToCurrentRecoveryTask(liveTask, queue)
-  liveTask.status = 'spec_review'
+  requestSpecReview(liveTask, {
+    authority: 'coordinator',
+    requestedAt: input.now,
+    requestedBy: 'coordinator-recovery',
+    reason: 'recovery',
+  })
   liveTask.assignedTo = null
   liveTask.updatedAt = input.now
   if (!Array.isArray(liveTask.notes)) liveTask.notes = []
@@ -920,6 +968,15 @@ function isRecoverableTurnLimitBlocker(task: Task): boolean {
   return hasActiveEscalationRecoveryCode(task, 'worker_turn_limit')
 }
 
+function isRecoverableApprovedSpecTurnLimitBlocker(task: Task): boolean {
+  if (!task.productBrief?.approvedAt?.trim()) return false
+  return (task.escalations ?? []).some((escalation) =>
+    !escalation.resolvedAt &&
+    escalation.recoveryCode === 'worker_turn_limit' &&
+    escalation.agentId === 'spec-agent',
+  )
+}
+
 function summarizeImportedDraftSource(content: string): string {
   const lines = content
     .split(/\r?\n/)
@@ -1000,6 +1057,17 @@ function resolveRecoverableTurnLimitEscalations(task: Task, resolvedAt: string):
       escalation.resolvedBy = 'system'
       escalation.resolution = 'Superseded after the project was explicitly resumed.'
     }
+  }
+}
+
+function resolveRecoverableApprovedSpecTurnLimitEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    if (escalation.recoveryCode !== 'worker_turn_limit' || escalation.agentId !== 'spec-agent') continue
+    escalation.resolvedAt = resolvedAt
+    escalation.resolvedBy = 'system'
+    escalation.resolution =
+      'Recovered as approved-spec runtime work after Guildhall corrected the earlier worker-lane misclassification.'
   }
 }
 
@@ -3098,6 +3166,10 @@ export class Orchestrator {
 
     for (const root of queue.tasks) {
       if (isSelectedTaskClosureDone(root)) continue
+      // A parent deliberately reopened for a fresh lifecycle needs a new
+      // shaping/worker result. Historical descendants are evidence of the old
+      // lifecycle, not completion of the current one.
+      if (currentLifecycleForTask(root) != null) continue
       const childIds = workSubtreeIds(queue.tasks, root.id).filter(id => id !== root.id)
       if (childIds.length === 0) continue
       const childrenComplete = childIds.every(id => {
@@ -3207,6 +3279,10 @@ export class Orchestrator {
   async dispatchOne(task: Task, queueBefore: TaskQueue): Promise<TickOutcome> {
     if (task.status === 'exploring' || task.status === 'spec_review' || task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
       task = await this.hydrateEffectiveTaskForDispatch(task)
+    }
+    let activeWorktreeSyncRecovery = await this.refreshWorktreeSyncRecovery(task)
+    if (activeWorktreeSyncRecovery && task.status !== 'in_progress') {
+      return await this.returnTaskToWorktreeSyncRecovery(task, activeWorktreeSyncRecovery)
     }
     // Execution is never valid without the current implementation contract.
     // This guard covers tasks that arrived through an older retry path or a
@@ -3410,10 +3486,14 @@ export class Orchestrator {
     // identifies an actual repository.
     const worktreeMode = repositoryStatus?.repository === false
       ? 'none'
+      : proofRecoveryNeedsFreshWorktree(task)
+        ? 'per_attempt'
       : configuredWorktreeMode
-    let activeWorktreePath = effectiveTaskProjectPath
+    let activeWorktreePath = activeWorktreeSyncRecovery
+      ? task.worktreePath ?? effectiveTaskProjectPath
+      : effectiveTaskProjectPath
     const baseBranch = await this.resolveBaseBranch(effectiveTaskProjectPath)
-    if (worktreeMode !== 'none' && !shouldSkipGitIsolation(task, agent.name)) {
+    if (!activeWorktreeSyncRecovery && worktreeMode !== 'none' && !shouldSkipGitIsolation(task, agent.name)) {
       if (!task.worktreePath) {
         const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
         if (!repoClean) {
@@ -3561,6 +3641,21 @@ export class Orchestrator {
           gitDriver: this.gitDriver,
         })
         activeWorktreePath = ensured.worktreePath
+        const persistedWorkspace = (task as Task & { workspace?: TaskWorkspaceState }).workspace
+        const workspaceAttemptId = (!ensured.created ? persistedWorkspace?.workspaceAttemptId : undefined) ??
+          `${ensured.branchName}:${this.now()}`
+        const syncRecovery = ensured.mergeRecovery
+          ? {
+              kind: 'base_merge_conflict' as const,
+              workspaceAttemptId,
+              baseBranch: ensured.mergeRecovery.baseBranch,
+              baseSha: ensured.mergeRecovery.baseSha,
+              headSha: ensured.mergeRecovery.headSha,
+              conflictPaths: ensured.mergeRecovery.conflictPaths,
+              detectedAt: this.now(),
+            }
+          : undefined
+        if (syncRecovery) activeWorktreeSyncRecovery = syncRecovery
         await upsertTaskWorkspaceState(
           inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
           task.id,
@@ -3568,7 +3663,9 @@ export class Orchestrator {
             worktreePath: ensured.worktreePath,
             branchName: ensured.branchName,
             baseBranch: ensured.baseBranch,
+            workspaceAttemptId,
             mode: worktreeMode,
+            ...(syncRecovery ? { syncRecovery } : {}),
             updatedAt: this.now(),
           },
         )
@@ -3676,6 +3773,7 @@ export class Orchestrator {
     })
     let handedOffBootstrapVerificationThisDispatch = false
     if (
+      !activeWorktreeSyncRecovery &&
       wtBootstrap &&
       wtBootstrap.commands.length > 0 &&
       activeWorktreePath !== effectiveTaskProjectPath
@@ -3889,6 +3987,13 @@ export class Orchestrator {
       effectiveTaskProjectPath,
       activeWorktreePath,
     )
+    const worktreeSyncRecoveryInstructions = activeWorktreeSyncRecovery
+      ? [
+          '**Worktree merge recovery:** Git has an unfinished merge from the current base branch.',
+          `Resolve only the reported conflict paths (${activeWorktreeSyncRecovery.conflictPaths.join(', ')}) in ${activeWorktreePath}, stage the resolution, and finish the merge commit before continuing ordinary task work.`,
+          `The base branch is ${activeWorktreeSyncRecovery.baseBranch}. Do not declare this resolved, move to review, or ask the owner to choose a side until \`git status\` shows the merge is complete.`,
+        ].join('\n')
+      : null
 
     const prompt = [
       ctx.formatted,
@@ -3918,6 +4023,7 @@ export class Orchestrator {
           })]
         : []),
       ...(immediateResumeInstructions ? ['', immediateResumeInstructions] : []),
+      ...(worktreeSyncRecoveryInstructions ? ['', worktreeSyncRecoveryInstructions] : []),
       ...(slotPromptRule ? ['', slotPromptRule] : []),
       '',
       promptSuffix,
@@ -3991,6 +4097,9 @@ export class Orchestrator {
         ...(activeTaskWorktreeProjectPath !== activeWorktreePath
           ? { current_task_worktree_project_path: activeTaskWorktreeProjectPath }
           : {}),
+        ...(activeWorktreeSyncRecovery
+          ? { current_task_worktree_sync_recovery: activeWorktreeSyncRecovery }
+          : {}),
         ...(likelyTargetFiles.length > 0
           ? { current_task_likely_target_files: likelyTargetFiles }
           : {}),
@@ -4054,6 +4163,7 @@ export class Orchestrator {
     await this.emitBackendEvent({
       type: 'agent_started',
       task_id: task.id,
+      task_title: task.title,
       agent_name: agent.name,
       from_status: beforeStatus,
       message: `${agent.name} is working on ${task.title}`,
@@ -4357,6 +4467,51 @@ export class Orchestrator {
             })
         if (importedDraftQuestion) {
           return importedDraftQuestion
+        }
+        const approvedSpecRecovery = agent.name === 'spec-agent' &&
+          beforeStatus === 'exploring' &&
+          Boolean(task.productBrief?.approvedAt?.trim())
+        if (approvedSpecRecovery) {
+          const now = this.now()
+          const queue = await this.readQueue()
+          const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+          if (liveTask && liveTask.status === 'exploring') {
+            // An approved brief answers the only owner question in this lane:
+            // what outcome is authorized. A model exhausting one conversation
+            // is operational recovery, not a new approval checkpoint.
+            liveTask.assignedTo = null
+            liveTask.updatedAt = now
+            liveTask.notes = Array.isArray(liveTask.notes) ? liveTask.notes : []
+            liveTask.notes.push({
+              agentId: 'coordinator',
+              role: 'runtime',
+              content:
+                'The spec lane exhausted its conversation before saving a draft. Guildhall kept the approved task in shaping, reset the exhausted conversation, and will retry from the saved brief and source evidence.',
+              timestamp: now,
+            })
+            queue.lastUpdated = now
+            await this.writeQueue(queue)
+            if (typeof agent.resetConversation === 'function') {
+              agent.resetConversation()
+            }
+            await this.emitBackendEvent({
+              type: 'line_complete',
+              task_id: task.id,
+              agent_name: agent.name,
+              message:
+                'The spec lane exhausted its conversation. Guildhall reset that conversation and will retry from the approved brief instead of creating an owner blocker.',
+            })
+            return {
+              kind: 'processed',
+              taskId: task.id,
+              agent: 'coordinator-spec-recovery',
+              beforeStatus,
+              afterStatus: liveTask.status,
+              transitioned: false,
+              note: 'approved spec conversation reset for retry',
+              revisionCount: liveTask.revisionCount,
+            }
+          }
         }
         const escalation = await raiseEscalation({
           tasksPath,
@@ -4824,7 +4979,13 @@ export class Orchestrator {
           generatedMetaIntakeDraft
         ) {
           taskAfter.spec = generatedMetaIntakeDraft
-          if (taskAfter.status === 'exploring') taskAfter.status = 'spec_review'
+          if (taskAfter.status === 'exploring') {
+            requestSpecReview(taskAfter, {
+              authority: 'owner',
+              requestedAt: this.now(),
+              requestedBy: 'meta-intake',
+            })
+          }
           taskAfter.updatedAt = this.now()
           queueAfter.lastUpdated = this.now()
           await this.writeQueue(queueAfter)
@@ -4838,7 +4999,11 @@ export class Orchestrator {
           typeof taskAfter.spec === 'string' &&
           taskAfter.spec.trim().length > 0
         ) {
-          taskAfter.status = 'spec_review'
+          requestSpecReview(taskAfter, {
+            authority: 'owner',
+            requestedAt: this.now(),
+            requestedBy: 'workspace-import',
+          })
           taskAfter.updatedAt = this.now()
           queueAfter.lastUpdated = this.now()
           await this.writeQueue(queueAfter)
@@ -4856,7 +5021,11 @@ export class Orchestrator {
           !taskHasUnansweredVisibleQuestion(taskAfter) &&
           !this.waitingOwnerInputTaskIds(queueAfter).has(taskAfter.id)
         ) {
-          taskAfter.status = 'spec_review'
+          requestSpecReview(taskAfter, {
+            authority: 'owner',
+            requestedAt: this.now(),
+            requestedBy: 'spec-agent',
+          })
           taskAfter.assignedTo = null
           taskAfter.updatedAt = this.now()
           taskAfter.notes.push({
@@ -6117,12 +6286,29 @@ export class Orchestrator {
     }
 
     let tick = 0
+    let staleTargetedBatchRetries = 0
     while (tick < maxTicks) {
       tick++
-      const raw = await this.tick({
-        ...(stopAfterOneTask ? { dispatchLimit: 1 } : {}),
-        ...(preferredTaskId ? { preferredTaskId } : {}),
-      })
+      let raw: TickOutcome
+      try {
+        raw = await this.tick({
+          ...(stopAfterOneTask ? { dispatchLimit: 1 } : {}),
+          ...(preferredTaskId ? { preferredTaskId } : {}),
+        })
+        staleTargetedBatchRetries = 0
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        if (/^Stale targeted task batch:/.test(message) && staleTargetedBatchRetries < 3) {
+          staleTargetedBatchRetries += 1
+          tick -= 1
+          console.warn(
+            `[guildhall] project state changed during targeted dispatch; refreshing and retrying (${staleTargetedBatchRetries}/3).`,
+          )
+          await new Promise(resolve => setTimeout(resolve, Math.min(250 * staleTargetedBatchRetries, 750)))
+          continue
+        }
+        throw err
+      }
 
       // FR-24: flatten batch outcomes from fanout dispatch so the logging /
       // backend-event paths keep their one-entry-per-task shape.
@@ -7095,7 +7281,12 @@ export class Orchestrator {
         break
       case 'route_to_human':
       case 'route_to_coordinator':
-        target.status = 'spec_review'
+        requestSpecReview(target, {
+          authority: decision.action.kind === 'route_to_human' ? 'owner' : 'coordinator',
+          requestedAt: now,
+          requestedBy: PROPOSAL_PROMOTER_AGENT_ID,
+          reason: 'proposal_promotion',
+        })
         newStatus = 'spec_review'
         break
       case 'auto_promote':
@@ -7160,7 +7351,13 @@ export class Orchestrator {
 
     const beforeStatus = target.status
     target.spec = draft
-    if (target.status === 'exploring') target.status = 'spec_review'
+    if (target.status === 'exploring') {
+      requestSpecReview(target, {
+        authority: 'owner',
+        requestedAt: this.now(),
+        requestedBy: 'spec-agent',
+      })
+    }
     target.updatedAt = this.now()
     queue.lastUpdated = this.now()
     await this.writeQueue(queue)
@@ -7501,7 +7698,15 @@ export class Orchestrator {
     task: Task,
   ): Promise<TickOutcome | null> {
     const proofRecovery = (task as Task & { proofRecovery?: unknown }).proofRecovery
-    if (task.status !== 'in_progress' || !proofRecovery || typeof proofRecovery !== 'object') return null
+    const needsLandedCheckoutProof = landedTaskWorkRequiresProjectCheckoutProof(task)
+    // A landed task gets one authoritative project-checkout proof attempt.
+    // If it fails, the failure requires a fresh worker worktree; repeatedly
+    // routing it back to the landed checkout can never change the result.
+    const needsInitialLandedCheckoutProof = needsLandedCheckoutProof && !proofRecoveryNeedsFreshWorktree(task)
+    if (
+      task.status !== 'in_progress' ||
+      ((!proofRecovery || typeof proofRecovery !== 'object') && !needsLandedCheckoutProof)
+    ) return null
     const commandCriterionIds = new Set(
       task.acceptanceCriteria
         .filter((criterion) => typeof criterion.command === 'string' && criterion.command.trim())
@@ -7513,7 +7718,7 @@ export class Orchestrator {
     // A failed authoritative command gate is now a worker-repair handoff. Do
     // not route the same unchanged checkout back through the proof gate on
     // every tick; the worker must get a chance to address the recorded output.
-    const reopenedAt = typeof (proofRecovery as { reopenedAt?: unknown }).reopenedAt === 'string'
+    const reopenedAt = typeof (proofRecovery as { reopenedAt?: unknown } | undefined)?.reopenedAt === 'string'
       ? Date.parse((proofRecovery as { reopenedAt: string }).reopenedAt)
       : NaN
     const hasFailedCommandSinceRecovery = Number.isFinite(reopenedAt) && task.gateResults.some((gate) =>
@@ -7523,7 +7728,7 @@ export class Orchestrator {
       Number.isFinite(Date.parse(gate.checkedAt)) &&
       Date.parse(gate.checkedAt) > reopenedAt,
     )
-    if (hasFailedCommandSinceRecovery) return null
+    if (!needsInitialLandedCheckoutProof && hasFailedCommandSinceRecovery) return null
 
     const beforeStatus = task.status
     return await this.withQueueWriteLock(async () => {
@@ -7589,8 +7794,15 @@ export class Orchestrator {
       .filter(({ criterion }) => shouldRunAcceptanceCommandCriterion(task, criterion))
     if (commandCriteria.length === 0) return null
 
+    // A task reopened solely to refresh stale proof may still retain the
+    // checkout from its original implementation attempt. Once that attempt
+    // has landed, the project checkout is the authoritative code state. A
+    // gate must never rerun against the old branch and report a missing
+    // command that is present in the landed project.
+    const taskWorkIsLanded = !proofRecoveryNeedsFreshWorktree(task) &&
+      ['merged', 'pushed', 'push_failed_degraded'].includes(task.mergeRecord?.result ?? '')
     const taskProjectPath =
-      typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
+      !taskWorkIsLanded && typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
         ? task.worktreePath.trim()
         : this.resolveEffectiveTaskProjectPath(task)
     const gates = commandCriteria.map(({ criterion }) => ({
@@ -7661,7 +7873,13 @@ export class Orchestrator {
       current.updatedAt = now
       queue.lastUpdated = now
       current.proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(current, now)
-      recordCommandProofPathResults(current, gates, results, 'acceptance-command-gates')
+      recordCommandProofPathResults(
+        current,
+        gates,
+        results,
+        'acceptance-command-gates',
+        taskWorkIsLanded ? 'project_checkout' : 'task_worktree',
+      )
 
       const scopedHardGateDisposition = !allPassed
         ? summarizeScopedHardGateDisposition(
@@ -7719,6 +7937,7 @@ export class Orchestrator {
         ensureWorkerOwnership(current)
         current.completedAt = undefined
         current.revisionCount += 1
+        const needsFreshWorktree = taskWorkIsLanded
         current.notes.push({
           agentId: 'acceptance-command-gates',
           role: 'gate-checker',
@@ -7734,6 +7953,17 @@ export class Orchestrator {
           timestamp: now,
         })
         await this.writeQueue(queue)
+        if (needsFreshWorktree) {
+          await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
+            proofRecovery: {
+              reopenedAt: now,
+              kind: 'proof',
+              reason: 'Current project proof failed after prior landing.',
+              freshWorktree: true,
+            },
+            updatedAt: now,
+          })
+        }
         await this.logTickProgress({
           task: current,
           agent: 'acceptance-command-gates',
@@ -8812,10 +9042,9 @@ export class Orchestrator {
       )
     }
 
-    // Policy selection + prior-rounds extraction for same-persona-repeat
-    // dissent detection. When the lever is
-    // `coordinator_adjudicates_on_conflict`, `aggregate.needsAdjudication`
-    // may flip true — we branch on it below.
+    // Policy selection plus prior-round extraction for audit and bounded retry
+    // accounting. `aggregate.needsAdjudication` can only come from opposite
+    // typed findings on one target, never from persona recurrence.
     const policy = await this.resolveReviewerFanoutPolicy(task.domain)
     const priorRounds = extractPriorVerdictRounds(task.reviewVerdicts)
     const aggregate = aggregateFanout(verdicts, { policy, priorRounds })
@@ -8833,7 +9062,7 @@ export class Orchestrator {
       // expert agreed and which objected.
       const now = this.now()
       for (const v of verdicts) {
-        t.reviewVerdicts.push(personaVerdictToReviewRecord(v, { now }))
+        t.reviewVerdicts.push(personaVerdictToReviewRecord(v, { now, taskId: t.id }))
       }
       await this.persistReviewerRuns({
         task: t,
@@ -8844,7 +9073,7 @@ export class Orchestrator {
 
       const repeatedAfterCoordinatorAdjudication =
         aggregate.verdict === 'revise' &&
-        hasPriorAdjudicationForDissent(t, aggregate.dissenting)
+        hasPriorAdjudicationForConflict(t, aggregate.conflicts)
       if (repeatedAfterCoordinatorAdjudication) {
         await this.writeQueue(queue)
         const dissenterSlugs = aggregate.dissenting.map((d) => d.guildSlug)
@@ -8878,20 +9107,13 @@ export class Orchestrator {
         } as TickOutcome
       }
 
-      // Under `coordinator_adjudicates_on_conflict`, recurrent same-persona
-      // dissent short-circuits to the domain coordinator instead of looping
-      // the worker. The worker will re-enter in_progress only after the
-      // coordinator lands a binding AdjudicationRecord with scoped
-      // instructions.
+      // A typed target conflict routes through the coordinator recovery
+      // boundary. Persona recurrence alone remains an audit signal, not a
+      // conflict or an automatic authority decision.
       const shouldInspectRepeatedHandoff =
         aggregate.verdict === 'revise' &&
-        (aggregate.needsAdjudication ||
-          hasOverlappingPriorDissent(aggregate.dissenting, priorRounds))
+        aggregate.needsAdjudication
       if (shouldInspectRepeatedHandoff) {
-        if (!aggregate.needsAdjudication) {
-          aggregate.needsAdjudication = true
-          aggregate.adjudicationTrigger = 'policy_conflict'
-        }
         const adjudicationOutcome = await this.routeToCoordinatorAdjudication({
           queue,
           task: t,
@@ -8953,6 +9175,10 @@ export class Orchestrator {
         proofEvidenceIds: [...new Set(
           aggregate.dissenting.flatMap(verdict => verdict.proofEvidenceIds ?? []),
         )],
+        findings: aggregate.dissenting.flatMap(verdict => verdict.findings ?? []),
+        // Kept in the audit record for historical inspection. Worker context
+        // renders typed findings only; model-authored revision strings cannot
+        // create executable work by themselves.
         revisionItems: aggregate.dissenting.flatMap(verdict => verdict.revisionItems ?? []),
         riskItems: aggregate.dissenting.flatMap(verdict => verdict.riskItems ?? []),
         followUpItems: aggregate.dissenting.flatMap(verdict => verdict.followUpItems ?? []),
@@ -9055,7 +9281,7 @@ export class Orchestrator {
       const effective = await buildEffectiveTask(projectRoot, current, { evidence: 'full' }) as unknown as Task
       const now = this.now()
       effective.reviewVerdicts.push(
-        ...verdicts.map((verdict) => personaVerdictToReviewRecord(verdict, { now })),
+        ...verdicts.map((verdict) => personaVerdictToReviewRecord(verdict, { now, taskId: effective.id })),
       )
       const failureCodes = [...new Set(verdicts.map((verdict) => verdict.failureCode ?? 'invalid_review_contract'))]
       effective.notes.push({
@@ -9118,10 +9344,10 @@ export class Orchestrator {
           recipeVersion: recipe.version,
           lanes: recipe.lanes,
           verdict: verdict.verdict,
-          findings: verdict.revisionItems.map((item) => ({
+          findings: (verdict.findings ?? []).map((finding) => ({
             lane: recipe.lanes[0] ?? 'test_adequacy',
-            severity: 'high',
-            summary: item,
+            severity: finding.disposition === 'unsatisfied' ? 'high' : 'low',
+            summary: finding.workerInstruction ?? `${finding.targetKind}:${finding.targetId} is ${finding.disposition}`,
           })),
           recordedAt: input.recordedAt,
           recordedBy: `reviewer-fanout:${verdict.guildSlug}`,
@@ -9141,26 +9367,10 @@ export class Orchestrator {
   }
 
   /**
-   * Route a fan-out aggregate with `needsAdjudication: true` to the domain
-   * coordinator. The coordinator receives the verdict set + dissent
-   * transcript, produces a binding AdjudicationRecord (appended to
-   * `task.adjudications`), and either:
-   *   - Advances the task to `gate_check` with superseded dissenters
-   *     recorded (coordinator resolved the conflict in favor of approving
-   *     the work).
-   *   - Bounces to `in_progress` with the coordinator's `scopeInstructions`
-   *     as the worker prompt, rather than the raw dissent (worker cannot
-   *     relitigate; it executes within the adjudicated scope).
-   *   - Raises an escalation if the coordinator cannot decide
-   *     autonomously under the current `remediation_autonomy` posture.
-   *
-   * This method builds the record deterministically from the aggregate; the
-   * live coordinator LLM pass will be layered on later (FR-32 remediation
-   * loop extension). For now we record a deterministic "keep the dissent's
-   * scoped instructions, mark recurrent-dissent as the trigger" decision
-   * and bounce to the worker with those instructions — which is still a
-   * meaningful improvement: the worker's prompt is the specific list of
-   * changes, not the full conflict transcript.
+   * Route a typed review-target conflict to its deterministic recovery action.
+   * Persona identity, response order, and reviewer prose cannot select a
+   * winner. The record names the exact findings in disagreement and either
+   * re-runs proof verification or returns a canonical target for inspection.
    */
   private async routeToCoordinatorAdjudication(input: {
     queue: TaskQueue
@@ -9174,36 +9384,50 @@ export class Orchestrator {
     const coord = this.opts.agents.coordinators[input.task.domain]
     const coordinatorId = coord?.name ?? 'coordinator-default'
 
-    // For v1: the deterministic adjudication record. Every dissenter is
-    // recorded as a "winning concern" (we treat all dissents as load-
-    // bearing until an LLM coordinator pass overrides). The worker gets
-    // scoped instructions = the union of dissent revision items, framed as
-    // the coordinator's decision.
     const dissenterSlugs = input.aggregate.dissenting.map(d => d.guildSlug)
+    const conflictKeys = new Set(input.aggregate.conflicts
+      .map(conflict => `${conflict.targetKind}:${conflict.targetId}`))
+    const conflictFindingRefs = input.task.reviewVerdicts
+      .filter(verdict => verdict.recordedAt === input.now)
+      .flatMap(verdict => (verdict.findings ?? [])
+        .filter(finding => conflictKeys.has(`${finding.targetKind}:${finding.targetId}`))
+        .map(finding => `${verdict.id ?? `review:${input.task.id}:${verdict.reviewerId ?? 'unknown'}:${input.now}`}:${finding.targetKind}:${finding.targetId}`))
+      .sort()
+    const resolution: AdjudicationRecord['resolution'] = input.aggregate.conflicts.length > 0 &&
+      input.aggregate.conflicts.every(conflict => conflict.targetKind === 'proof_evidence')
+      ? 'rerun_verification'
+      : 'inspect_canonical_task'
     const scopeInstructions = [...new Set(
       input.aggregate.dissenting
-        .flatMap(d => d.revisionItems)
-        .filter(item => item.trim().length > 0),
+        .flatMap(d => d.findings ?? [])
+        .filter(finding => finding.disposition === 'unsatisfied' && conflictKeys.has(`${finding.targetKind}:${finding.targetId}`))
+        .map(finding => finding.workerInstruction?.trim() || `Inspect ${finding.targetKind.replace(/_/g, ' ')} ${finding.targetId}.`),
     )]
 
     const rationale = [
-      `Reviewer fan-out round ${input.round} produced recurring dissent from`,
-      `${dissenterSlugs.join(', ')}. Guildhall routed this repeated handoff`,
-      `to the domain coordinator (${input.task.domain}) before bouncing the`,
-      'task back to the worker again.',
+      `Reviewer fan-out round ${input.round} produced incompatible typed`,
+      `findings for ${input.aggregate.conflicts.map(conflict => `${conflict.targetKind}:${conflict.targetId}`).join(', ')}.`,
+      `Guildhall routed the conflict to the domain coordinator (${input.task.domain}).`,
       '',
-      'Decision (deterministic v1): keep each dissenting persona\'s scoped',
-      'instructions. Worker executes the scoped list; the dissent transcript',
-      'is NOT in the worker prompt so the worker cannot relitigate.',
+      `Recovery action: ${resolution}. No reviewer or persona is recorded as`,
+      'a winner. The next transition is selected only from the contested target type.',
     ].join('\n')
 
     const adjudication: AdjudicationRecord = {
       round: input.round,
-      trigger: input.aggregate.adjudicationTrigger ?? 'same_persona_repeat_dissent',
+      trigger: input.aggregate.adjudicationTrigger ?? 'policy_conflict',
       dissenters: dissenterSlugs,
-      winningConcerns: dissenterSlugs,
+      winningConcerns: [],
       supersededConcerns: [],
-      summary: `Coordinator adjudicated: worker to address ${scopeInstructions.length} scoped item${scopeInstructions.length === 1 ? '' : 's'} from ${dissenterSlugs.join(', ')}`,
+      findingRefs: conflictFindingRefs,
+      contestedTargets: input.aggregate.conflicts.map(conflict => ({
+        targetKind: conflict.targetKind,
+        targetId: conflict.targetId,
+      })),
+      resolution,
+      summary: resolution === 'rerun_verification'
+        ? `Coordinator requested verification rerun for ${conflictFindingRefs.length} conflicting review finding${conflictFindingRefs.length === 1 ? '' : 's'}.`
+        : `Coordinator requested canonical task inspection for ${conflictFindingRefs.length} conflicting review finding${conflictFindingRefs.length === 1 ? '' : 's'}.`,
       rationale,
       scopeInstructions,
       decidedBy: 'coordinator',
@@ -9222,11 +9446,13 @@ export class Orchestrator {
       `**Coordinator:** ${coordinatorId}`,
       `**Trigger:** ${adjudication.trigger} (round ${adjudication.round})`,
       `**Dissenters:** ${dissenterSlugs.join(', ') || 'none'}`,
+      `**Finding references:** ${conflictFindingRefs.join(', ') || 'none'}`,
+      `**Recovery action:** ${resolution}`,
       '',
       '**Rationale:**',
       rationale,
       '',
-      '**Scoped instructions to worker:**',
+      '**Target-anchored instructions:**',
       ...scopeInstructions.map(i => `- ${i}`),
       '',
       '---',
@@ -9239,13 +9465,50 @@ export class Orchestrator {
       // the load-bearing trail.
     }
 
-    // Build the worker's next prompt from scope instructions only.
+    if (resolution === 'rerun_verification') {
+      input.task.notes.push({
+        agentId: coordinatorId,
+        role: 'coordinator',
+        content: `${adjudication.summary}\n\n${rationale}`,
+        timestamp: input.now,
+      })
+      transitionTaskStatus({
+        task: input.task,
+        event: 'start_gate_check',
+        actor: coordinatorId,
+        evidenceRefs: conflictFindingRefs,
+        now: input.now,
+      })
+      input.task.updatedAt = input.now
+      input.queue.lastUpdated = input.now
+      await this.writeQueue(input.queue)
+      await this.logTickProgress({
+        task: input.task,
+        agent: coordinatorId,
+        beforeStatus: input.beforeStatus,
+        afterStatus: 'gate_check',
+        transitioned: true,
+        note: 'coordinator requested verification rerun for typed reviewer conflict',
+      })
+      return {
+        kind: 'processed',
+        taskId: input.task.id,
+        agent: coordinatorId,
+        beforeStatus: input.beforeStatus,
+        afterStatus: 'gate_check',
+        transitioned: true,
+        note: 'coordinator requested verification rerun for typed reviewer conflict',
+        revisionCount: input.task.revisionCount,
+      } as TickOutcome
+    }
+
+    // Build the worker's next prompt from target-anchored instructions only.
     const scopedFeedback = [
       `**Coordinator adjudication (round ${adjudication.round}):**`,
       '',
       adjudication.summary,
       '',
-      '**Scoped instructions (address exactly these items):**',
+      '**Target-anchored instructions (inspect exactly these items):**',
       ...scopeInstructions.map(i => `- ${i}`),
     ].join('\n')
 
@@ -9259,7 +9522,7 @@ export class Orchestrator {
       task: input.task,
       event: 'revise',
       actor: coordinatorId,
-      evidenceRefs: dissenterSlugs.map((slug) => `reviewer-fanout:${slug}`),
+      evidenceRefs: conflictFindingRefs,
       now: input.now,
     })
     ensureWorkerOwnership(input.task)
@@ -9297,7 +9560,7 @@ export class Orchestrator {
       beforeStatus: input.beforeStatus,
       afterStatus: 'in_progress',
       transitioned: true,
-      note: `coordinator adjudicated (dissenters: ${dissenterSlugs.join(', ')}) → scoped rework`,
+      note: 'coordinator requested canonical task inspection for typed reviewer conflict',
     })
     return {
       kind: 'processed',
@@ -9306,7 +9569,7 @@ export class Orchestrator {
       beforeStatus: input.beforeStatus,
       afterStatus: 'in_progress',
       transitioned: true,
-      note: `coordinator adjudicated (dissenters: ${dissenterSlugs.join(', ')}) → scoped rework`,
+      note: 'coordinator requested canonical task inspection for typed reviewer conflict',
       revisionCount: input.task.revisionCount,
     } as TickOutcome
   }
@@ -9545,6 +9808,108 @@ export class Orchestrator {
   }
 
   /**
+   * Git owns merge completion. A worker may report that it resolved a conflict,
+   * but the normalized workspace fact clears only after a fresh Git read.
+   */
+  private async refreshWorktreeSyncRecovery(task: Task): Promise<WorktreeSyncRecovery | null> {
+    const workspace = (task as Task & { workspace?: TaskWorkspaceState }).workspace
+    const recovery = workspace?.syncRecovery
+    if (!recovery) return null
+    const worktreePath = task.worktreePath ?? workspace?.worktreePath
+    if (!worktreePath) return recovery
+    const observed = await this.gitDriver.worktreeMergeState(
+      resolveRuntimePath(worktreePath),
+      recovery.baseBranch,
+    )
+    if (observed.mergeInProgress || observed.conflictPaths.length > 0) {
+      const next: WorktreeSyncRecovery = {
+        ...recovery,
+        ...(observed.conflictPaths.length > 0
+          ? { conflictPaths: [...observed.conflictPaths].sort() }
+          : {}),
+        baseSha: observed.baseSha,
+        headSha: observed.headSha,
+      }
+      if (JSON.stringify(next) !== JSON.stringify(recovery)) {
+        await upsertTaskWorkspaceState(
+          inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+          task.id,
+          { syncRecovery: next, updatedAt: this.now() },
+        )
+        ;(task as Task & { workspace?: TaskWorkspaceState }).workspace = { ...workspace!, syncRecovery: next }
+      }
+      return next
+    }
+    await upsertTaskWorkspaceState(
+      inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+      task.id,
+      { syncRecovery: undefined, updatedAt: this.now() },
+    )
+    if (workspace) {
+      const { syncRecovery: _syncRecovery, ...clearedWorkspace } = workspace
+      ;(task as Task & { workspace?: TaskWorkspaceState }).workspace = clearedWorkspace
+    }
+    return null
+  }
+
+  private async returnTaskToWorktreeSyncRecovery(
+    task: Task,
+    recovery: WorktreeSyncRecovery,
+  ): Promise<TickOutcome> {
+    const queue = await this.readQueue()
+    const current = queue.tasks.find(candidate => candidate.id === task.id)
+    if (!current) {
+      return {
+        kind: 'agent-error',
+        taskId: task.id,
+        agent: 'worktree-sync-recovery',
+        error: `Task ${task.id} disappeared before worktree recovery could resume.`,
+      }
+    }
+    const beforeStatus = current.status
+    if (current.status === 'review' || current.status === 'gate_check') {
+      transitionTaskStatus({
+        task: current,
+        event: 'revise',
+        actor: 'worktree-sync-recovery',
+        evidenceRefs: ['task:worktree-sync:git-merge-still-active'],
+        now: this.now(),
+      })
+    } else if (current.status === 'blocked') {
+      transitionTaskStatus({
+        task: current,
+        event: 'recover_to_in_progress',
+        actor: 'worktree-sync-recovery',
+        evidenceRefs: ['task:worktree-sync:git-merge-still-active'],
+        now: this.now(),
+      })
+    }
+    current.assignedTo = 'worker-agent'
+    current.blockReason = undefined
+    current.recoveryCode = undefined
+    current.updatedAt = this.now()
+    queue.lastUpdated = current.updatedAt
+    await this.writeQueue(queue)
+    await this.logTickProgress({
+      task: current,
+      agent: 'worktree-sync-recovery',
+      beforeStatus,
+      afterStatus: current.status,
+      transitioned: beforeStatus !== current.status,
+      note: `Git merge remains active for ${recovery.conflictPaths.join(', ')}; returning work to the worker recovery lane.`,
+    })
+    return {
+      kind: 'processed',
+      taskId: current.id,
+      agent: 'worktree-sync-recovery',
+      beforeStatus,
+      afterStatus: current.status,
+      transitioned: beforeStatus !== current.status,
+      revisionCount: current.revisionCount,
+    }
+  }
+
+  /**
    * FR-24: read the `worktree_isolation` lever. Falls back to `'none'` on
    * error so a malformed lever file doesn't block progress.
    */
@@ -9639,6 +10004,11 @@ export class Orchestrator {
         queuedTask.status === 'review' &&
         await this.isRecoverableSelfAuthoredVerificationBlockedTask(queuedTask)
       if (queuedTask.status !== 'blocked' && !reviewVerificationRecovery) continue
+      if (reopenLegacyWorktreeSyncRecovery(queuedTask, now)) {
+        queue.lastUpdated = now
+        changed = true
+        continue
+      }
       if (!this.hasGuildhallOwnershipTrail(queuedTask)) continue
       // Recovery classification is one of the few execution paths that may
       // need historical evidence. Keep the project queue compact, but reopen
@@ -9647,7 +10017,8 @@ export class Orchestrator {
       let task = queuedTask
       if (
         queuedTask.recoveryCode === 'max_revisions_actionable' ||
-        hasActiveEscalationRecoveryCode(queuedTask, 'max_revisions_actionable')
+        hasActiveEscalationRecoveryCode(queuedTask, 'max_revisions_actionable') ||
+        hasActiveEscalationRecoveryCode(queuedTask, 'worker_turn_limit')
       ) {
         const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
         task = await buildEffectiveTask(projectRoot, queuedTask, { evidence: 'full' }) as unknown as Task
@@ -9831,6 +10202,13 @@ export class Orchestrator {
         recoveryAssignee = null
         recoveryNote =
           'User restarted the project after an old tool/path routing bug blocked this task. Reopened the worker lane so Guildhall can retry with the corrected task-worktree context.'
+      } else if (isRecoverableApprovedSpecTurnLimitBlocker(task)) {
+        resolveRecoverableApprovedSpecTurnLimitEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryStatus = 'exploring'
+        recoveryAssignee = 'spec-agent'
+        recoveryNote =
+          'Guildhall corrected an older spec-agent turn-limit record that had been routed as worker recovery. The approved brief still defines the authorized outcome, so shaping resumes from source evidence without an owner decision.'
       } else if (isRecoverableTurnLimitBlocker(task)) {
         resolveRecoverableTurnLimitEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
@@ -11281,8 +11659,14 @@ export class Orchestrator {
     interruption?: 'turn_limit' | 'timeout'
   }): Promise<TickOutcome | null> {
     const queue = await this.readQueue()
-    const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
-    if (!task) return null
+    const taskIndex = queue.tasks.findIndex((candidate) => candidate.id === input.taskId)
+    if (taskIndex < 0) return null
+    // Queue reads deliberately carry the compact projection. Recovery needs
+    // to compare durable task state, though: otherwise an existing brief or
+    // spec that is omitted from the list row looks like fresh agent progress.
+    // Hydrate only this task through the shared current-state boundary.
+    const task = await this.hydrateEffectiveTaskForDispatch(queue.tasks[taskIndex]!)
+    queue.tasks[taskIndex] = task
 
     const hasSpec = typeof task.spec === 'string' && task.spec.trim().length > 0
     const specChanged = (task.spec ?? '').trim() !== (input.beforeSpec ?? '').trim()
@@ -11308,7 +11692,11 @@ export class Orchestrator {
       !hasOpenQuestion &&
       !hasWaitingOwnerInput
     ) {
-      task.status = 'spec_review'
+      requestSpecReview(task, {
+        authority: 'owner',
+        requestedAt: this.now(),
+        requestedBy: 'spec-agent',
+      })
       task.updatedAt = this.now()
       queue.lastUpdated = task.updatedAt
       await this.writeQueue(queue)
@@ -11643,7 +12031,12 @@ export class Orchestrator {
       authoredBy: 'coordinator-recovery',
       authoredAt: now,
     }
-    liveTask.status = 'spec_review'
+    requestSpecReview(liveTask, {
+      authority: 'coordinator',
+      requestedAt: now,
+      requestedBy: 'coordinator-recovery',
+      reason: 'recovery',
+    })
     liveTask.assignedTo = null
     liveTask.updatedAt = now
     liveTask.notes.push({
@@ -11985,6 +12378,7 @@ export class Orchestrator {
     if (!isDurableDraftRecoveryRetry && !shouldSeedFromParent && !titleWasRepaired && opts.force !== true) return null
 
     const seed = buildRecoverySpecSeedForTask(liveTask, queue, now)
+    if (!seed.references?.length) return null
     const parentId = liveTask.hierarchy?.parentId ?? liveTask.delivery?.supports?.[0]
     const parentTask = parentId ? queue.tasks.find((candidate) => candidate.id === parentId) : undefined
     if (!seed.productBrief || !validateProductBriefGrounding(liveTask, seed.productBrief).ok) return null
@@ -11996,7 +12390,12 @@ export class Orchestrator {
     if ((!liveTask.domain || liveTask.domain === 'core') && parentTask?.domain) liveTask.domain = parentTask.domain
     if ((liveTask.releaseIds?.length ?? 0) === 0 && parentTask?.releaseIds?.length) liveTask.releaseIds = [...parentTask.releaseIds]
     attachSelectedReleaseToCurrentRecoveryTask(liveTask, queue)
-    liveTask.status = 'spec_review'
+    requestSpecReview(liveTask, {
+      authority: 'coordinator',
+      requestedAt: now,
+      requestedBy: 'coordinator-recovery',
+      reason: 'recovery',
+    })
     liveTask.assignedTo = null
     liveTask.updatedAt = now
     liveTask.notes.push({
@@ -13434,8 +13833,8 @@ function extractStructuredHandoff(task: Task): NonNullable<StructuredSelfCritiqu
  * Rebuild prior fan-out rounds from the flat `task.reviewVerdicts` trail.
  * Verdicts recorded within the same ISO second are treated as one round
  * (the fan-out persists every persona's verdict with the same `recordedAt`).
- * The most-recent round is placed last in the returned list so
- * `findRecurrentDissent` can compare against `priorRounds.at(-1)`.
+ * The most-recent round is placed last for audit and bounded retry accounting;
+ * prior persona identity is never used to infer a substantive conflict.
  *
  * Each element is a PersonaVerdict-shaped slice derived from the stored
  * ReviewVerdict — `guildSlug` comes from `failingSignals[0]` (fan-out
@@ -13851,42 +14250,16 @@ function latestApprovingReviewEvidenceRefs(task: Task): string[] {
   return verdict ? [`review:${verdict.recordedAt}`] : ['review:approved']
 }
 
-function sortedDissenterSlugs(dissenting: readonly PersonaVerdict[]): string[] {
-  return [...new Set(dissenting.map((verdict) => verdict.guildSlug).filter(Boolean))].sort()
-}
-
-function sameDissenterSet(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false
-  return left.every((slug, index) => slug === right[index])
-}
-
-function hasOverlappingPriorDissent(
-  dissenting: readonly PersonaVerdict[],
-  priorRounds: readonly (readonly PersonaVerdict[])[],
-): boolean {
-  const current = new Set(sortedDissenterSlugs(dissenting))
-  if (current.size === 0) return false
-  return priorRounds.some((round) =>
-    round.some((verdict) =>
-      verdict.verdict === 'revise' && current.has(verdict.guildSlug),
-    ),
-  )
-}
-
-function hasPriorAdjudicationForDissent(
+function hasPriorAdjudicationForConflict(
   task: Task,
-  dissenting: readonly PersonaVerdict[],
+  conflicts: ReadonlyArray<{ targetKind: string; targetId: string }>,
 ): boolean {
-  const current = sortedDissenterSlugs(dissenting)
-  if (current.length === 0) return false
+  if (conflicts.length === 0) return false
+  const current = new Set(conflicts.map(conflict => `${conflict.targetKind}:${conflict.targetId}`))
   return (task.adjudications ?? []).some((record) =>
     record.decidedBy === 'coordinator' &&
-    sameDissenterSet(sortedDissenterSlugsFromRecord(record.dissenters), current),
+    (record.contestedTargets ?? []).some(target => current.has(`${target.targetKind}:${target.targetId}`)),
   )
-}
-
-function sortedDissenterSlugsFromRecord(dissenters: readonly string[]): string[] {
-  return [...new Set(dissenters.filter(Boolean))].sort()
 }
 
 function resolvedScopeDecisionTexts(task: Task): string[] {

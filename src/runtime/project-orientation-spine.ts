@@ -312,13 +312,25 @@ export function reconcileOrientationSpineWithReleaseTruth(
       if (taskId && !rowTaskIds.has(taskId)) terminalIncludedTaskIds.add(taskId)
     }
   }
+  // Internal proof/setup children are not independently counted in a release,
+  // but their stale pins must not outlive a terminal included parent. Follow
+  // the saved hierarchy here rather than treating a child-only gap as a new
+  // release blocker.
+  const terminalHierarchyTaskIds = new Set(terminalIncludedTaskIds)
+  const collectTerminalDescendants = (node: OrientationNode, parentIsTerminal = false): void => {
+    const taskId = node.id.startsWith('work:') ? node.id.slice('work:'.length) : null
+    const terminal = parentIsTerminal || (taskId !== null && terminalIncludedTaskIds.has(taskId))
+    if (terminal && taskId) terminalHierarchyTaskIds.add(taskId)
+    for (const child of node.children) collectTerminalDescendants(child, terminal)
+  }
+  spine.roots.forEach(root => collectTerminalDescendants(root))
   const proofGapBelongsToClosedTask = (gap: OrientationGap): boolean => gap.kind === 'proof_needed' && gap.refs.some(ref => {
     const taskId = ref.replace(/^task:/, '').replace(/^work:/, '')
-    return terminalIncludedTaskIds.has(taskId)
+    return terminalHierarchyTaskIds.has(taskId)
   })
   const patchNode = (node: OrientationNode): OrientationNode => {
     const taskId = node.id.startsWith('work:') ? node.id.slice('work:'.length) : null
-    const terminal = releaseIsProven && terminalIncludedTaskIds.has(taskId ?? '')
+    const terminal = releaseIsProven && terminalHierarchyTaskIds.has(taskId ?? '')
     const children = node.children.map(patchNode)
     return {
       ...node,
@@ -357,7 +369,9 @@ export function reconcileOrientationSpineWithReleaseTruth(
   const retainedCompletionNote = releaseIsProven ? null : existingTopBlocker
   const progress = {
     ...spine.summary.progress,
-    total: truth.counts.total + truth.counts.deferred,
+    // Progress answers "how complete is this selected scope?" Deferred work
+    // is deliberately reported beside it, never folded into the denominator.
+    total: truth.counts.total,
     done: truth.counts.done,
     deferred: truth.counts.deferred,
     blocked: truth.state === 'blocked' ? truth.counts.unfinished : 0,
@@ -578,6 +592,8 @@ export interface OrientationWorkspaceImportDraftContext {
   domain?: string
   refs?: string[]
   role?: 'capability' | 'reference' | 'brief_input'
+  /** A record is durable project structure; notes remain intake evidence. */
+  structure?: 'record' | 'note'
   scopeHint?: 'current' | 'later'
   releaseIds?: string[]
   linkedTaskHints?: string[]
@@ -1667,11 +1683,11 @@ function mergeWorkspaceImportContexts(input: {
           releaseCheckIds: [],
         },
         source: {
-          kind: 'inferred',
+          kind: context.structure === 'record' ? 'import' : 'inferred',
           refs: context.refs?.length ? context.refs : ['workspace-import:draft'],
           confidence: 'medium',
           freshness: 'fresh',
-          inferred: true,
+          inferred: context.structure !== 'record',
           refreshedAt: input.now,
         },
         visibility: { kind: 'supporting', countInProjectTotals: false },
@@ -1714,11 +1730,11 @@ function mergeWorkspaceImportContexts(input: {
           releaseCheckIds: [],
         },
       source: {
-        kind: 'inferred',
+        kind: contexts.every(context => context.structure === 'record') ? 'import' : 'inferred',
         refs: children.flatMap(child => child.source.refs),
         confidence: 'medium',
         freshness: 'fresh',
-        inferred: true,
+        inferred: !contexts.every(context => context.structure === 'record'),
         refreshedAt: input.now,
       },
       visibility: { kind: 'supporting', countInProjectTotals: false },
@@ -2190,7 +2206,9 @@ function startReadinessWithFocus(
   const focusTaskId = startReadiness.focusTaskId ?? (hrefTaskId ? decodeURIComponent(hrefTaskId) : undefined) ?? scopeProjection?.start.focusTaskId
   if (!focusTaskId) return startReadiness
   const taskTitle = tasks.find(task => task.id === focusTaskId)?.title
-  const focusTaskTitle = startReadiness.focusTaskTitle ?? taskTitle ?? (
+  // The task point is canonical display identity for a focus ID. A saved
+  // readiness title can explain the action, but it cannot rename that task.
+  const focusTaskTitle = taskTitle ?? startReadiness.focusTaskTitle ?? (
     scopeProjection?.start.focusTaskId === focusTaskId ? scopeProjection.start.focusTaskTitle : undefined
   )
   return {
@@ -2324,7 +2342,19 @@ function sourceHealth(nodes: OrientationNode[], gaps: OrientationGap[]): Orienta
     .filter(gap => gap.kind === 'missing_source_provenance')
     .reduce((sum, gap) => sum + Math.max(1, gap.refs.length), 0)
   return {
-    inferred: allNodes.filter(node => node.source.inferred).length,
+    // Persisted map projections intentionally omit per-node source detail.
+    // Missing display provenance is not an inference and must not make a
+    // source-health refresh fail.
+    inferred: allNodes.filter(node => node.source?.inferred === true).length,
+    documented: allNodes.filter(node =>
+      node.visibility.kind === 'supporting' && node.kind === 'feature' && node.source?.inferred === false,
+    ).length,
+    deferred: allNodes.filter(node =>
+      node.visibility.kind === 'supporting' &&
+      node.kind === 'feature' &&
+      node.source?.inferred === false &&
+      node.maturity === 'deferred',
+    ).length,
     conflicts: gaps.filter(gap => gap.kind === 'source_conflict').length,
     gaps: sourceGaps,
   }

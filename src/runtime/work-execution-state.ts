@@ -3,6 +3,7 @@ import { buildWorkHierarchy, needsOwnerAction, workSubtreeIds } from './work-hie
 import { deriveProjectWorkProgress } from './work-progress.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 import { taskDoneButProofMissing } from './proof-health.js'
+import { currentLifecycleForTask } from './current-lifecycle.js'
 
 export type WorkExecutionSummaryState =
   | 'ready'
@@ -180,7 +181,11 @@ function deriveLeafRunnableState(tasks: Task[], workId: string): boolean {
   if (!task) return false
   const hasDescendants = descendantsFor(tasks, workId).length > 0
   const reopenedForOwnProof = task.status === 'in_progress' && taskDoneButProofMissing(task)
-  if (hasDescendants && !reopenedForOwnProof) return false
+  // A rerun starts a new lifecycle on the parent. Historical child work must
+  // remain inspectable, but it cannot prevent the parent from receiving the
+  // new spec pass that will decide whether any child work still belongs in it.
+  const hasCurrentLifecycle = currentLifecycleForTask(task) != null
+  if (hasDescendants && !reopenedForOwnProof && !hasCurrentLifecycle) return false
   if (hasBlockReason(task)) return false
   if (decompositionBlocksDispatch(task)) return false
   const visibility = visibilityForTask(task, tasks)

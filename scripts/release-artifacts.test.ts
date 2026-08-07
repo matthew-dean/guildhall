@@ -135,9 +135,9 @@ describe('release artifact contract', () => {
     const workflow = read('.github/workflows/runtime-image.yml')
 
     expect(workflow).toContain('ghcr.io/matthew-dean/guildhall-runtime-debian')
-    expect(workflow).toContain("'v0.11.*'")
-    expect(workflow).toContain('0.11.0-trixie-node22-python313-playwright')
-    expect(workflow).toContain('0.11-trixie-node22-python313-playwright')
+    expect(workflow).toContain("'v0.13.*'")
+    expect(workflow).toContain('0.13.0-trixie-node22-python313-playwright')
+    expect(workflow).toContain('0.13-trixie-node22-python313-playwright')
     expect(workflow).toContain('runtime/Containerfile')
     expect(workflow).toContain('docker/metadata-action')
     expect(workflow).toContain('docker/build-push-action')
@@ -164,10 +164,12 @@ describe('release artifact contract', () => {
     expect(buildScript).toContain('podman')
     expect(smokeScript).toContain('docker')
     expect(smokeScript).toContain('podman')
+    expect(buildScript).toContain('buildReleaseManifest')
+    expect(smokeScript).toContain('buildReleaseManifest')
     expect(buildScript).toContain('DOCKER_BUILDKIT')
     expect(buildScript).toContain('GUILDHALL_CONTAINER_BUILD_TIMEOUT_MS')
-    expect(buildScript).toContain('0.11.0-trixie-node22-python313-playwright')
-    expect(buildScript).toContain('0.11-trixie-node22-python313-playwright')
+    expect(buildScript).toContain('GUILDHALL_RUNTIME_IMAGE_VERSION')
+    expect(smokeScript).toContain('GUILDHALL_RUNTIME_IMAGE_VERSION')
   })
 
   it('keeps runtime image build context narrow and excludes git sockets', () => {

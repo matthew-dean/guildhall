@@ -50,6 +50,7 @@ import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
 import { buildSemanticIndexPrompt, codebaseMapPath, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
 import { censusProjectCache, getProjectStateDir } from '@guildhall/sessions'
+import { clearStopRequested } from './stop-requested.js'
 import type { ConsumerReturnPacket, DeliveryReceipt } from './project-graph.js'
 import { detectWorkspaceSignals, formWorkspaceHypothesis, type WorkspaceImportDraft, type WorkspaceSignal } from './workspace-import/index.js'
 import { buildWorkspaceImportReview, type WorkspaceImportReview } from './workspace-import/review.js'
@@ -735,6 +736,40 @@ export interface CliProjectStatus {
   recentWork: ProjectSummaryProjection['recentWork']
 }
 
+function cliReleaseSummaryFromSavedScope(state: ProjectSavedReleaseReadModel): ProjectSummaryReleaseSummary | null {
+  const summary = state.summary?.releaseSummary
+  if (!summary) return null
+  const scope = state.scope
+  if (!scope || scope.nodeIds.length === 0 || state.scopeRows.length === 0) return summary
+  const releaseTaskIds = new Set(
+    scope.nodeIds
+      .map(nodeId => nodeId.replace(/^work:/, '').trim())
+      .filter(Boolean),
+  )
+  if (releaseTaskIds.size === 0) return summary
+  const releaseRows = state.scopeRows.filter(row => releaseTaskIds.has(row.taskId))
+  const done = releaseRows.filter(row => row.handoffState === 'done').length
+  return {
+    ...summary,
+    counts: {
+      total: releaseTaskIds.size,
+      done,
+      unfinished: Math.max(0, releaseTaskIds.size - done),
+      ready: releaseRows.filter(row => row.handoffState === 'ready').length,
+      active: releaseRows.filter(row => row.handoffState === 'paused' || row.handoffState === 'review').length,
+      blocked: releaseRows.filter(row => row.blocksRelease).length,
+      deferred: scope.deferredNodeIds.length,
+      ownerBlocked: releaseRows.filter(row => row.humanBlocking).length,
+      proofBlocked: releaseRows.filter(row => row.proofBlocked).length,
+    },
+    taskStatusCounts: releaseRows.reduce<Record<string, number>>((counts, row) => {
+      const status = row.handoffState || 'unknown'
+      counts[status] = (counts[status] ?? 0) + 1
+      return counts
+    }, {}),
+  }
+}
+
 /**
  * Format the bounded saved project projection for the CLI. This intentionally
  * does not reopen the task queue or derive a second release summary: the CLI
@@ -755,7 +790,7 @@ export function buildCliProjectStatus(input: {
     freshness: summary?.freshness ?? 'missing',
     queueRevision: input.state.queueRevision,
     projectRevision: input.state.projectRevision,
-    release: summary?.releaseSummary ?? null,
+    release: cliReleaseSummaryFromSavedScope(input.state),
     scope: input.state.scope
       ? {
           id: input.state.scope.id,
@@ -868,6 +903,10 @@ async function cmdRun() {
     process.exit(1)
   }
 
+  // A previous cooperative stop must not cancel a new explicit CLI run.
+  // The dashboard supervisor clears this before it claims work; the CLI owns
+  // the same boundary when it runs the orchestrator directly.
+  await clearStopRequested(getProjectStateDir(workspace.root))
   const { runOrchestrator } = await import('./orchestrator.js')
   await runOrchestrator(workspace.config, {
     ...runOptions,
@@ -878,7 +917,7 @@ async function cmdTask() {
   const pos = positionals()
   const subcommand = pos[0]
   if (subcommand !== 'run-once') {
-    console.error('[guildhall] Usage: guildhall task run-once "<prompt>" [--from-file prompt.md] [--automation fully-automated] [--proof browser] [--output report.json]')
+    console.error('[guildhall] Usage: guildhall task run-once "<prompt>" [--title "Short request title"] [--from-file prompt.md] [--automation fully-automated] [--proof browser] [--output report.json]')
     process.exit(1)
   }
 

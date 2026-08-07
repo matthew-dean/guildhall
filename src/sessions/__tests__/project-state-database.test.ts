@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { gzipSync } from 'node:zlib'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { TaskQueue } from '@guildhall/core'
 
 import { getProjectSystemStatePath } from '../local-history.js'
@@ -26,9 +26,11 @@ import {
   readProjectStateDatabaseQueue,
   readProjectStateDatabaseQueueRevision,
   readProjectStateDatabaseQueueDefinition,
+  readProjectStateDatabaseQueueDefinitionForMigration,
   readProjectStateDatabaseReadBundle,
   readProjectStateDatabaseSurfaceState,
   readProjectStateDatabaseRevisionFromTasksPath,
+  readProjectStateDatabaseReleaseMembershipState,
   readProjectStateDatabaseQueueWithRevision,
   readProjectStateDatabaseSummary,
   readProjectStateDatabaseShellState,
@@ -46,6 +48,8 @@ import {
   readProjectStateDatabaseTaskEvidenceCurrent,
   readProjectStateDatabaseTaskEvidenceCurrentMany,
   readProjectStateDatabaseTaskEvidenceHistory,
+  readProjectStateDatabaseSourceCapabilities,
+  readProjectStateDatabaseTaskCapabilityBindings,
   readProjectStateDatabaseRepositories,
   readProjectStateDatabaseRepositoriesFromTasksPath,
   readProjectStateDatabaseRepository,
@@ -103,6 +107,62 @@ afterEach(async () => {
 })
 
 describe('project-state database', () => {
+  it('stores source capability scope once and hydrates task bindings from the relation', () => {
+    const capability = {
+      id: 'story:world-state-review',
+      adapterId: 'narrative-harness-release',
+      adapterSchemaVersion: 1,
+      sourceRevision: 'release-plan:v1',
+      label: 'Review world state across time and space',
+      state: 'planned' as const,
+      releaseIds: ['release-headless-mvp'],
+      dependsOnCapabilityIds: [],
+      evidenceRefs: ['artifact:nh-headless-release'],
+    }
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        tasks: [{
+          id: 'task-world-review',
+          title: 'Prove world-state review',
+          status: 'ready',
+          capabilityBindings: [{ capabilityId: capability.id, relation: 'proves' }],
+        }],
+      },
+      sourceCapabilities: [capability],
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+    })
+
+    expect(readProjectStateDatabaseSourceCapabilities(tasksPath)).toEqual([capability])
+    expect(readProjectStateDatabaseTaskCapabilityBindings(tasksPath, ['task-world-review'])?.get('task-world-review')).toEqual([
+      { taskId: 'task-world-review', capabilityId: capability.id, relation: 'proves' },
+    ])
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-world-review')?.definition).toMatchObject({
+      capabilityBindings: [{ capabilityId: capability.id, relation: 'proves' }],
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    const row = database.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-world-review') as { payload_gzip: Uint8Array }
+    database.close()
+    expect(JSON.parse(gunzipSync(row.payload_gzip).toString('utf8'))).not.toHaveProperty('capabilityBindings')
+
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const before = readProjectStateDatabaseQueueRevision(tasksPath)!
+    expect(() => writeProjectStateDatabaseTaskBatchMutation(tasksPath, {
+      expectedQueueRevision: before,
+      expectedProjectRevision: readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!,
+      tasks: [{
+        id: 'task-world-review',
+        title: 'Prove world-state review',
+        status: 'ready',
+        capabilityBindings: [{ capabilityId: 'invented:capability', relation: 'proves' }],
+      }],
+      summary: { generatedAt: '2026-07-23T00:01:00.000Z', freshness: 'current' },
+    })).toThrow('binds unknown source capability invented:capability')
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-world-review')?.definition).toMatchObject({
+      capabilityBindings: [{ capabilityId: capability.id, relation: 'proves' }],
+    })
+  })
+
   it('rejects adding work to a shipped release before replacing current state', () => {
     const release = {
       id: 'release-1',
@@ -1125,6 +1185,13 @@ describe('project-state database', () => {
     promoteProjectStateDatabaseAuthority(projectRoot)
     const queueRevision = readProjectStateDatabaseQueueRevision(tasksPath)!
     const projectRevision = readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!
+    const initialState = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(initialState.prepare('SELECT membership_revision, project_revision FROM release_membership_state WHERE id = 1').get()).toMatchObject({
+      membership_revision: 1,
+      project_revision: expect.any(Number),
+    })
+    initialState.close()
+    expect(readProjectStateDatabaseReleaseMembershipState(tasksPath)).toMatchObject({ membershipRevision: 1 })
 
     writeProjectStateDatabaseTaskMutation(tasksPath, {
       expectedQueueRevision: queueRevision,
@@ -1134,6 +1201,7 @@ describe('project-state database', () => {
     })
 
     const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(database.prepare('SELECT membership_revision FROM release_membership_state WHERE id = 1').get()).toEqual({ membership_revision: 1 })
     expect(database.prepare('SELECT release_id, task_id, disposition FROM release_membership ORDER BY task_id').all()).toEqual([
       { release_id: 'release-current', task_id: 'task-current', disposition: 'included' },
       { release_id: 'release-current', task_id: 'task-later', disposition: 'deferred' },
@@ -1167,6 +1235,10 @@ describe('project-state database', () => {
       summary: { generatedAt: '2026-07-15T00:01:00.000Z', freshness: 'current' },
     })
     const afterEdit = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(afterEdit.prepare('SELECT membership_revision, project_revision FROM release_membership_state WHERE id = 1').get()).toMatchObject({
+      membership_revision: 2,
+      project_revision: expect.any(Number),
+    })
     expect(afterEdit.prepare('SELECT release_id, task_id, disposition FROM release_membership ORDER BY task_id').all()).toEqual([
       { release_id: 'release-current', task_id: 'task-later', disposition: 'deferred' },
     ])
@@ -1175,11 +1247,132 @@ describe('project-state database', () => {
       { release_ids_json: '[]' },
     ])
     afterEdit.close()
+    expect(readProjectStateDatabaseReleaseMembershipState(tasksPath)).toMatchObject({ membershipRevision: 2 })
 
     expect(readProjectStateDatabaseTask(tasksPath, 'task-current')).toMatchObject({
       id: 'task-current',
       releaseIds: [],
     })
+  })
+
+  it('fails closed when a stored summary and release-membership watermark disagree', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          nodeIds: ['work:task-current'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{ id: 'task-current', title: 'Current', status: 'ready', releaseIds: ['release-current'] }],
+      },
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+    })
+
+    expect(readProjectStateDatabaseSummary(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: { releaseMembershipRevision: 1 },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    database.prepare(`
+      UPDATE release_membership_state
+      SET membership_revision = membership_revision + 1,
+          project_revision = NULL,
+          updated_at = NULL
+      WHERE id = 1
+    `).run()
+    database.close()
+
+    expect(readProjectStateDatabaseSummary(tasksPath)).toMatchObject({ freshness: 'stale' })
+  })
+
+  it('keeps internal release-context steps out of visible release membership', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          nodeIds: ['work:task-parent', 'work:task-parent-proof'],
+          deferredNodeIds: [],
+        }],
+        tasks: [
+          { id: 'task-parent', title: 'Feature proof', status: 'done', releaseIds: ['release-current'] },
+          {
+            id: 'task-parent-proof',
+            title: 'Establish proof',
+            status: 'ready',
+            proofForReleaseId: 'release-current',
+            releaseIds: [],
+            workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+            hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' },
+          },
+        ],
+      },
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(database.prepare('SELECT release_id, task_id, disposition FROM release_membership ORDER BY task_id').all()).toEqual([
+      { release_id: 'release-current', task_id: 'task-parent', disposition: 'included' },
+    ])
+    database.close()
+
+    expect(readProjectStateDatabaseQueue(tasksPath)).toMatchObject({
+      releases: [{ id: 'release-current', nodeIds: ['work:task-parent'] }],
+      tasks: [
+        { id: 'task-parent', releaseIds: ['release-current'] },
+        { id: 'task-parent-proof' },
+      ],
+    })
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      tasks: [
+        { id: 'task-parent', releaseIds: ['release-current'] },
+        { id: 'task-parent-proof', proofForReleaseId: 'release-current', releaseIds: [] },
+      ],
+    })
+  })
+
+  it('preserves an immutable shipped snapshot when normalizing internal proof scope', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        releases: [{
+          id: 'release-shipped',
+          label: 'Shipped release',
+          kind: 'release',
+          state: 'shipped',
+          nodeIds: ['work:task-parent', 'work:task-parent-proof'],
+          deferredNodeIds: [],
+        }],
+        tasks: [
+          { id: 'task-parent', title: 'Feature proof', status: 'done', releaseIds: ['release-shipped'] },
+          {
+            id: 'task-parent-proof',
+            title: 'Historical proof',
+            status: 'done',
+            semanticKind: 'proof_setup',
+            proofForReleaseId: 'release-shipped',
+            workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+            hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' },
+            releaseIds: [],
+          },
+        ],
+      },
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(database.prepare('SELECT release_id, task_id, disposition FROM release_membership ORDER BY task_id').all()).toEqual([
+      { release_id: 'release-shipped', task_id: 'task-parent', disposition: 'included' },
+      { release_id: 'release-shipped', task_id: 'task-parent-proof', disposition: 'included' },
+    ])
+    database.close()
   })
 
   it('does not resurrect a dependency from the JSON mirror after normalized edges change', () => {
@@ -2249,7 +2442,8 @@ describe('project-state database', () => {
       { id: 'note-2', payload: { content: 'Essential note 2' } },
       { id: 'note-3', payload: { content: 'Essential note 3 updated' } },
     ])
-    expect(readProjectStateDatabaseSummary(tasksPath)?.freshness).toBe('stale')
+    // A note is durable audit history, not a readiness/proof/routing input.
+    expect(readProjectStateDatabaseSummary(tasksPath)?.freshness).toBe('current')
   })
 
   it('caps oversized retention requests and ordinary history reads', () => {
@@ -2333,7 +2527,11 @@ describe('project-state database', () => {
       payload: {
         agentId: 'worker-agent',
         role: 'self-critique',
-        content: `${'model prose '.repeat(300)}\n\`\`\`json\n${JSON.stringify(machineSelfCritique)}\n\`\`\``,
+        // Operational review data arrives as structured data. The narrative
+        // stream is retained only as bounded audit material and is never
+        // reparsed to recover a hidden contract.
+        structured: { kind: 'worker_self_critique', ...machineSelfCritique },
+        content: 'model prose '.repeat(300),
         timestamp: '2026-07-14T00:01:00.000Z',
       },
     })
@@ -2345,7 +2543,7 @@ describe('project-state database', () => {
         ...machineSelfCritique,
       },
     })
-    expect(String(current?.byKind.note?.[0]?.payload.content)).not.toContain(JSON.stringify(machineSelfCritique))
+    expect(String(current?.byKind.note?.[0]?.payload.content)).toContain('[current evidence detail omitted]')
 
     upsertProjectStateDatabaseTaskProof(projectRoot, {
       taskId: 'task-1',
@@ -2591,6 +2789,34 @@ describe('project-state database', () => {
     expect(readProjectStateDatabaseTask(tasksPath, 'task-1')?.definition).toMatchObject({
       spec: 'Full detail is not part of the mutable current-state row.',
     })
+  })
+
+  it('reconstructs migration detail with the indexed current lifecycle', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        tasks: [{
+          id: 'task-1',
+          title: 'Current lifecycle wins',
+          status: 'ready',
+          structuredSpec: { whatThisIs: 'A durable task definition.' },
+        }],
+      },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+    })
+
+    // Simulate the old split representation: detail still contains `ready`,
+    // while the normalized current lifecycle has advanced to `exploring`.
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    database.prepare('UPDATE work_items SET status = ? WHERE id = ?').run('exploring', 'task-1')
+    database.close()
+
+    expect(readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)?.tasks).toEqual([
+      expect.objectContaining({
+        id: 'task-1',
+        status: 'exploring',
+        structuredSpec: { whatThisIs: 'A durable task definition.' },
+      }),
+    ])
   })
 
   it('does not allocate for live-state reads and imports legacy records only through an explicit migration', async () => {

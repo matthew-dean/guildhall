@@ -236,6 +236,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
   if (readiness.code === 'scope_source_conflict') return 'Open map'
   if (readiness.code === 'repository_followup_required') return 'Open release'
+  if (readiness.code === 'ready_work') return 'Open Work'
   if (readiness.code === 'paused_live_work') return 'Open Work'
   if (readiness.code === 'no_unattended_progress') {
     if (readiness.focusKind === 'blocked_work') return 'Open Work'
@@ -275,6 +276,7 @@ function isProviderReadinessCode(code: string | undefined): boolean {
 }
 
 function startReadinessActionLabel(readiness: ProjectActionStartReadiness): string {
+  if (readiness.code === 'ready_work') return readiness.focusTaskTitle?.trim() || readiness.message || 'Ready work'
   if (readiness.code === 'required_migration_pending') return 'Required migration'
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs shaping'
@@ -452,6 +454,11 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
   const task = ranked[0]
   if (!task) return null
   const cleanup = needsBriefCleanup(task)
+  const approvedBriefNeedsSpec =
+    task.status === 'exploring' &&
+    hasApprovedProductBrief(task) &&
+    hasCompleteProductBrief(task) &&
+    !hasSpecDraft(task)
   const blockedReason = taskBlockedReason(task)
   const blocked = task.status === 'blocked' || blockedReason !== null
   return {
@@ -459,6 +466,8 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
     label: taskLabel(task),
     detail: blockedReason
       ? blockedReason
+      : approvedBriefNeedsSpec
+      ? 'Guildhall is shaping a source-backed spec from the approved brief.'
       : cleanup
       ? 'Needs brief: finish the handoff before a worker can start.'
       : task.description,
@@ -475,15 +484,20 @@ function threadHrefForTask(taskId: string | undefined): string {
 
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
   const label = readiness.code === 'owner_input_required' ? 'Answer in Thread' : startReadinessActionLabel(readiness)
-  const detail = readiness.message && readiness.message !== label ? readiness.message : undefined
+  const detail = readiness.code === 'ready_work'
+    ? undefined
+    : readiness.message && readiness.message !== label
+      ? readiness.message
+      : undefined
   return {
     source: readiness.code === 'owner_input_required' ? 'owner_input' : 'start_readiness',
     label,
     detail,
     buttonLabel: startReadinessButtonLabel(readiness),
-    href: readiness.actionHref ?? '/overview',
-    tone: readiness.code === 'required_migration_pending' ? 'danger' : 'warn',
+    href: readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
+    tone: readiness.code === 'required_migration_pending' ? 'danger' : readiness.code === 'ready_work' ? 'accent' : 'warn',
     code: readiness.code,
+    ...(readiness.focusTaskId ? { taskId: readiness.focusTaskId } : {}),
   }
 }
 
@@ -553,6 +567,23 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
         : startReadinessAction(startReadiness),
     )
   }
+  // Start readiness owns whether work is runnable. Compact summaries omit
+  // brief/spec detail, so task ranking must never reinterpret a ready item as
+  // blocked or incomplete merely because that detail is intentionally absent.
+  if (startReadiness?.canStart && startReadiness.code === 'ready_work') {
+    candidates.push(startReadinessAction(startReadiness))
+  }
+  if (running && startReadiness?.focusTaskId) {
+    candidates.push({
+      source: 'start_readiness',
+      label: startReadiness.focusTaskTitle?.trim() || 'Current work',
+      detail: startReadiness.message,
+      buttonLabel: 'Open Work',
+      href: startReadiness.actionHref ?? workHrefForTask(startReadiness.focusTaskId),
+      tone: 'running',
+      taskId: startReadiness.focusTaskId,
+    })
+  }
   if (setupBlocksStart && ownerInput.href) {
     candidates.push({
       source: 'owner_input',
@@ -612,5 +643,54 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     },
     ownerInput,
     setup,
+  }
+}
+
+/**
+ * A persisted action is a cache of presentation, not an independent decision
+ * source. When the shared readiness result names a current action, rebuild
+ * that action from the readiness contract so compact task points cannot
+ * reinterpret it with missing detail.
+ */
+export function resolveProjectActionModel(input: {
+  stored?: ProjectActionModel | null
+  startReadiness?: ProjectActionStartReadiness | null
+  ownerInput?: ProjectOwnerInputModel | null
+  runStatus?: string | null
+  runMode?: string | null
+}): ProjectActionModel {
+  const readiness = input.startReadiness ?? null
+  const hasResolvedReadiness = Boolean(
+    readiness?.code &&
+    (readiness.canStart || readiness.code !== 'all_terminal'),
+  )
+  if (!hasResolvedReadiness) {
+    return input.stored ?? buildProjectActionModel({
+      startReadiness: readiness,
+      ownerInput: input.ownerInput,
+      runStatus: input.runStatus,
+      runMode: input.runMode,
+      tasks: [],
+    })
+  }
+  const resolved = buildProjectActionModel({
+    startReadiness: readiness,
+    ownerInput: input.ownerInput,
+    runStatus: input.runStatus,
+    runMode: input.runMode,
+    tasks: [],
+  })
+  return {
+    ...(input.stored ?? resolved),
+    primaryAction: resolved.primaryAction,
+    runControl: resolved.runControl,
+    ownerInput: resolved.ownerInput,
+    // Setup state depends on the task inventory, which a compact current-state
+    // refresh deliberately does not reload. Keep its saved projection instead
+    // of deriving a false "fresh intake" state from an empty placeholder list.
+    setup: input.stored?.setup ?? resolved.setup,
+    secondaryActions: resolved.secondaryActions.length > 0
+      ? resolved.secondaryActions
+      : input.stored?.secondaryActions ?? [],
   }
 }

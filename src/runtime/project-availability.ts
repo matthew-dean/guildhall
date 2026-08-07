@@ -1,7 +1,9 @@
 import {
+  getProjectSystemStatePath,
   readProjectStateDatabaseAvailability,
   writeProjectStateDatabaseAvailability,
 } from '@guildhall/sessions'
+import { updateProjectSummaryProjection } from './project-summary-projection.js'
 
 export interface ProjectAvailabilityState {
   status: 'active' | 'paused'
@@ -32,7 +34,12 @@ export async function pauseProjectAvailability(
     resumedAt: null,
     ...(options.reason ? { reason: options.reason } : {}),
   }
-  writeProjectStateDatabaseAvailability(projectPath, next, next.pausedAt ?? new Date().toISOString())
+  // Availability and the decision packet are one current-state mutation.
+  const updated = updateProjectSummaryProjection(getProjectSystemStatePath(projectPath, 'TASKS.json'), { availability: next })
+  // A project with no initialized summary cannot have an action packet yet.
+  // Preserve the first-run availability record; promoted projects always take
+  // the atomic summary/current-state path above.
+  if (!updated) writeProjectStateDatabaseAvailability(projectPath, next, next.pausedAt ?? new Date().toISOString())
   return next
 }
 
@@ -45,6 +52,7 @@ export async function resumeProjectAvailability(
     pausedAt: null,
     resumedAt: options.now?.() ?? new Date().toISOString(),
   }
-  writeProjectStateDatabaseAvailability(projectPath, next, next.resumedAt ?? new Date().toISOString())
+  const updated = updateProjectSummaryProjection(getProjectSystemStatePath(projectPath, 'TASKS.json'), { availability: next })
+  if (!updated) writeProjectStateDatabaseAvailability(projectPath, next, next.resumedAt ?? new Date().toISOString())
   return next
 }

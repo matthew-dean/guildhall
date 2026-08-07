@@ -1,5 +1,5 @@
 import { TaskQueue, type ProjectRelease, type Task, type TaskQueue as TaskQueueModel } from '@guildhall/core'
-import { readManagedTextFileSync } from '@guildhall/persistence'
+import { readManagedTextFileSync, stableJson } from '@guildhall/persistence'
 import {
   readProjectStateDatabaseAuthorityFromTasksPath,
   readProjectStateDatabaseAuthority,
@@ -7,17 +7,24 @@ import {
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseProjectionState,
   readProjectStateDatabaseQueue,
+  readProjectStateDatabaseReleaseMembership,
+  readProjectStateDatabaseReleaseMembershipState,
+  readProjectStateDatabaseSourceCapabilities,
   readProjectStateDatabaseSummary,
   readProjectStateDatabaseRevisionFromTasksPath,
   readProjectStateDatabaseQueueDefinitionForMigration,
+  readProjectStateDatabaseQueueRevision,
   writeProjectStateDatabaseSummarySnapshot,
   updateProjectStateDatabaseSummaryAndCurrentState,
   writeProjectStateDatabaseSnapshot,
   type ProjectStateDatabaseScopeRow,
+  type ProjectStateDatabaseSourceCapability,
   type ProjectStateDatabaseTask,
   type ProjectStateDatabaseTaskEvidenceRetentionInput,
+  type ProjectStateDatabaseAvailability,
   type ProjectStateDatabaseTaskRuntime,
   type ProjectStateDatabaseTaskStatusRow,
+  type ProjectStateDatabaseStateResolutionSnapshot,
 } from '@guildhall/sessions'
 import { dirname, join } from 'node:path'
 import { statSync } from 'node:fs'
@@ -39,15 +46,30 @@ import {
   buildProjectOrientationSpine,
   compactProjectOrientationSpineForMap,
   reconcileOrientationSpineWithReleaseTruth,
+  type OrientationReleaseState,
+  type OrientationReleaseTruth,
+  type OrientationWorkspaceImportDraftContext,
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
 import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
+import {
+  applyProjectActionModelPrimaryAction,
+  applyRuntimeExecutionToProjectDecision,
+  buildProjectDecisionProjection,
+  projectDecisionStartReadiness,
+  resolveRegisteredProjectStateClaimSet,
+  type ProjectDecisionProjection,
+  type ProjectDecisionTaskRef,
+  type ProjectStateClaim,
+} from './project-decision-projection.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
+import { taskDoneButProofMissingForScope } from './proof-health.js'
+import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 17 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 28 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -78,6 +100,12 @@ export interface ProjectSummaryProjection {
   projectId: string | null
   generatedAt: string
   freshness: 'current' | 'stale' | 'error'
+  /**
+   * The normalized release-membership relation revision used to build this
+   * summary. The SQLite read boundary compares it with the current relation
+   * before exposing release-derived state as current.
+   */
+  releaseMembershipRevision?: number
   source: {
     taskQueueLastUpdated: string | null
     taskQueueMtimeMs: number | null
@@ -108,9 +136,23 @@ export interface ProjectSummaryProjection {
     proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
   } | null
   orientation: ProjectOrientationSnapshot | null
+  /**
+   * Small, source-backed records that describe the project independently of
+   * executable work. They are persisted with the shared summary so Map does
+   * not reopen a workspace-import scan on every request.
+   */
+  documentedStructure: OrientationWorkspaceImportDraftContext[]
+  /**
+   * Compact, revision-aligned status of the adapter-owned source catalog.
+   * Consumers use this instead of independently reading or interpreting
+   * source documents when explaining whether scope can be scheduled.
+   */
+  sourceCapabilityCatalog: ProjectSummarySourceCapabilityCatalog
   orientationSpine: ProjectOrientationSpine | null
   approvedPlan: ProjectSummaryApprovedPlan | null
   releaseSummary: ProjectSummaryReleaseSummary
+  /** The sole compact authority for execution, release, and primary-action decisions. */
+  decision: ProjectDecisionProjection
   execution?: {
     status: 'running' | 'stopping' | 'stopped' | 'error' | string
     mode?: 'continuous' | 'one_task' | string
@@ -118,6 +160,10 @@ export interface ProjectSummaryProjection {
     stoppedAt?: string | null
     stopRequestedAt?: string | null
     error?: string | null
+    /** The task currently held by a live supervisor worker, if any. */
+    activeTaskId?: string | null
+    /** Typed display identity paired with `activeTaskId`; never parsed from prose. */
+    activeTaskTitle?: string | null
     updatedAt: string
   }
   runtime?: {
@@ -133,6 +179,17 @@ export interface ProjectSummaryProjection {
       label?: string
       prompt: string
       taskId?: string
+      href?: string
+    } | null
+    updatedAt: string
+  }
+  ownerReview?: {
+    openCount: number
+    /** Ordered, selected-scope membership behind the owner-review count. */
+    taskIds: string[]
+    next?: {
+      taskId: string
+      label?: string
       href?: string
     } | null
     updatedAt: string
@@ -167,6 +224,36 @@ export interface ProjectSummaryProjection {
   }>
   actionModel?: ProjectActionModel | null
   error?: string
+}
+
+function withPersistedReleaseMembershipRevision(
+  tasksPath: string,
+  projection: ProjectSummaryProjection,
+): ProjectSummaryProjection {
+  const membershipState = readProjectStateDatabaseReleaseMembershipState(tasksPath)
+  return membershipState
+    ? { ...projection, releaseMembershipRevision: membershipState.membershipRevision }
+    : projection
+}
+
+/**
+ * Older summary writers may have persisted an action model after its decision
+ * packet. Normalize that bounded pair at the shared summary boundary so every
+ * promoted reader receives one primary action without reopening task detail.
+ */
+export function synchronizeProjectSummaryDecision(
+  summary: ProjectSummaryProjection,
+): ProjectSummaryProjection {
+  if (!summary.decision || typeof summary.decision !== 'object') return summary
+  const decision = applyProjectActionModelPrimaryAction(summary.decision, summary.actionModel?.primaryAction)
+  return decision === summary.decision ? summary : { ...summary, decision }
+}
+
+export interface ProjectSummarySourceCapabilityCatalog {
+  availability: 'unavailable' | 'empty' | 'ready'
+  total: number
+  planned: number
+  retired: number
 }
 
 export interface ProjectSummaryReleaseSummary {
@@ -227,9 +314,13 @@ function indexedCurrentProofForTask(task: ProjectStateDatabaseTask): IndexedCurr
 function indexedTaskHasCompletionProofGap(
   task: ProjectStateDatabaseTask,
   proof: IndexedCurrentProof | undefined,
+  proofStyle: ProjectScope['proofStyle'] | undefined,
 ): boolean {
   const status = String(task.status ?? '')
   if (status !== 'done' && status !== 'pending_pr') return false
+  // The selected release contract is part of the compact state. A script-only
+  // release makes an absent proof record an explicit gap, not an implicit pass.
+  if (taskDoneButProofMissingForScope(task, proofStyle)) return true
   if (!proof) return false
   if (['needed', 'partial'].includes(proof.state)) return true
   // A compact point can legitimately say `none` while still carrying the
@@ -295,6 +386,7 @@ function indexedTaskCompletionProofSatisfiedByLinkedChildren(
   tasksById: ReadonlyMap<string, ProjectStateDatabaseTask>,
   proofByTaskId: ReadonlyMap<string, IndexedCurrentProof>,
   selectedReleaseId: string | null,
+  proofStyle: ProjectScope['proofStyle'] | undefined,
   visiting = new Set<string>(),
 ): boolean {
   if (visiting.has(task.id)) return false
@@ -304,8 +396,8 @@ function indexedTaskCompletionProofSatisfiedByLinkedChildren(
   return children.every(child => {
     const status = String(child.status ?? '')
     if (status !== 'done' && status !== 'pending_pr') return false
-    if (!indexedTaskHasCompletionProofGap(child, proofByTaskId.get(child.id))) return true
-    return indexedTaskCompletionProofSatisfiedByLinkedChildren(child, tasksById, proofByTaskId, selectedReleaseId, nextVisiting)
+    if (!indexedTaskHasCompletionProofGap(child, proofByTaskId.get(child.id), proofStyle)) return true
+    return indexedTaskCompletionProofSatisfiedByLinkedChildren(child, tasksById, proofByTaskId, selectedReleaseId, proofStyle, nextVisiting)
   })
 }
 
@@ -315,9 +407,10 @@ function indexedTaskProofBlocked(
   tasksById: ReadonlyMap<string, ProjectStateDatabaseTask>,
   proofByTaskId: ReadonlyMap<string, IndexedCurrentProof>,
   selectedReleaseId: string | null,
+  proofStyle: ProjectScope['proofStyle'] | undefined,
 ): boolean {
-  if (indexedTaskCompletionProofSatisfiedByLinkedChildren(task, tasksById, proofByTaskId, selectedReleaseId)) return false
-  return indexedTaskHasCompletionProofGap(task, proof)
+  if (indexedTaskCompletionProofSatisfiedByLinkedChildren(task, tasksById, proofByTaskId, selectedReleaseId, proofStyle)) return false
+  return indexedTaskHasCompletionProofGap(task, proof, proofStyle)
 }
 
 export function applyOwnerInputToStartReadiness(
@@ -342,6 +435,70 @@ export function applyOwnerInputToStartReadiness(
   } as ReturnType<typeof summarizeProjectScopeStart>
 }
 
+function ownerReviewForScope(
+  rows: readonly ProjectScopeRow[],
+  tasks: readonly Task[],
+  generatedAt: string,
+): NonNullable<ProjectSummaryProjection['ownerReview']> {
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const pending = executionScopeRows(rows)
+    .filter(row => row.scope === 'included')
+    .flatMap(row => {
+      const task = tasksById.get(row.taskId)
+      return task?.status === 'spec_review' && specReviewRequiresOwnerApproval(task) ? [task] : []
+    })
+  const next = pending[0]
+  return {
+    openCount: pending.length,
+    taskIds: pending.map(task => task.id),
+    ...(next ? {
+      next: {
+        taskId: next.id,
+        label: next.title,
+        href: `/work?task=${encodeURIComponent(next.id)}`,
+      },
+    } : {}),
+    updatedAt: generatedAt,
+  }
+}
+
+function canonicalDecisionTaskRefs(
+  tasks: readonly { id: string; title: string; updatedAt?: string | null }[],
+  projectRevision?: number | null,
+): ProjectDecisionTaskRef[] {
+  return tasks
+    .filter(task => task.id.trim().length > 0 && task.title.trim().length > 0)
+    .map(task => ({
+      taskId: task.id,
+      displayTitle: task.title,
+      ...(projectRevision !== undefined && projectRevision !== null ? { taskRevision: projectRevision } : {}),
+    }))
+}
+
+function applyOwnerReviewToStartReadiness(
+  start: ReturnType<typeof summarizeProjectScopeStart>,
+  ownerReview: ProjectSummaryProjection['ownerReview'] | null | undefined,
+): ReturnType<typeof summarizeProjectScopeStart> {
+  if (!ownerReview || ownerReview.openCount <= 0) return start
+  const label = ownerReview.next?.label?.trim() || ownerReview.next?.taskId || 'This spec'
+  const count = ownerReview.openCount
+  return {
+    ...start,
+    canStart: false,
+    code: 'owner_review_required',
+    label: 'Review',
+    message: count === 1
+      ? `${label} is ready for your review before work can continue`
+      : `${count} specs are ready for your review before work can continue`,
+    actionHref: ownerReview.next?.href ?? '/work',
+    ...(ownerReview.next?.taskId ? { focusTaskId: ownerReview.next.taskId } : {}),
+    ...(ownerReview.next?.label?.trim() ? { focusTaskTitle: ownerReview.next.label.trim() } : {}),
+    focusKind: 'owner_review',
+    ...(ownerReview.taskIds.length > 0 ? { reviewTaskIds: [...ownerReview.taskIds] } : {}),
+    count,
+  } as ReturnType<typeof summarizeProjectScopeStart>
+}
+
 export interface ProjectSummaryProjectionInput {
   projectId?: string | null
   projectRoot?: string
@@ -353,9 +510,13 @@ export interface ProjectSummaryProjectionInput {
   workspaceGoalsMtimeMs?: number | null
   approvedPlan?: ProjectSummaryApprovedPlan | null
   orientation?: ProjectOrientationSnapshot | null
+  documentedStructure?: OrientationWorkspaceImportDraftContext[]
+  /** Structured source authority captured with this summary revision. */
+  sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[] | null
   execution?: ProjectSummaryProjection['execution']
   runtime?: ProjectSummaryProjection['runtime']
   ownerInput?: ProjectSummaryProjection['ownerInput']
+  ownerReview?: ProjectSummaryProjection['ownerReview']
   expectedQueueRevision?: number | null
   /** Promoted projects read current scope only from normalized SQLite rows. */
   currentStateAuthority?: 'database' | 'legacy'
@@ -363,15 +524,128 @@ export interface ProjectSummaryProjectionInput {
   compatibilityExport?: 'full' | 'compact'
 }
 
+function summarizeSourceCapabilityCatalog(
+  capabilities: readonly ProjectStateDatabaseSourceCapability[] | null | undefined,
+): ProjectSummarySourceCapabilityCatalog {
+  if (capabilities === null || capabilities === undefined) {
+    return { availability: 'unavailable', total: 0, planned: 0, retired: 0 }
+  }
+  const planned = capabilities.filter(capability => capability.state === 'planned').length
+  const retired = capabilities.filter(capability => capability.state === 'retired').length
+  return {
+    availability: capabilities.length === 0 ? 'empty' : 'ready',
+    total: capabilities.length,
+    planned,
+    retired,
+  }
+}
+
 export function projectSummaryProjectionPath(tasksPath: string): string {
   return join(dirname(tasksPath), PROJECT_SUMMARY_PROJECTION_FILE)
 }
 
+export type ApprovedPlanReleaseMembershipConflict = {
+  releaseId: string
+  taskId: string
+  existing: 'included' | 'deferred'
+  proposed: 'included' | 'deferred'
+}
+
 /**
- * Give the compact read model the release envelope already described by an
- * approved plan. This is an in-memory projection only: the queue remains the
- * authoritative execution record and is never mutated here.
+ * Prepare an accepted plan for one atomic release-membership write. This does
+ * not invent tasks from plan text. Explicit opposite dispositions become
+ * typed conflicts instead of a silent overwrite.
  */
+export function materializeApprovedPlanReleaseMembership(
+  queue: TaskQueueModel,
+  approvedPlan: ProjectSummaryApprovedPlan | null | undefined,
+): { queue: TaskQueueModel; changed: boolean; conflicts: ApprovedPlanReleaseMembershipConflict[] } {
+  if (!approvedPlan || approvedPlan.releases.length === 0) return { queue, changed: false, conflicts: [] }
+  const taskIds = new Set(queue.tasks.map(task => task.id))
+  const existingById = new Map((queue.releases ?? []).map(release => [release.id, release]))
+  const conflicts: ApprovedPlanReleaseMembershipConflict[] = []
+  let changed = false
+  const planReleases: ProjectRelease[] = approvedPlan.releases.map(release => {
+    const existing = existingById.get(release.id)
+    const kind: ProjectRelease['kind'] = release.kind === 'milestone' ? 'milestone' : 'release'
+    const source: ProjectRelease['source'] = release.source === 'release_plan' || release.source === 'spec' || release.source === 'inferred'
+      ? release.source
+      : 'owner_approved'
+    const state: ProjectRelease['state'] = release.state === 'planned'
+      ? 'planned'
+      : release.state === 'completed'
+        ? 'shipped'
+        : release.state === 'archived'
+          ? 'deferred'
+          : release.state === 'ready' || release.state === 'shipped' || release.state === 'deferred'
+            ? release.state
+            : 'active'
+    const included = new Set(existing?.nodeIds ?? [])
+    const deferred = new Set(existing?.deferredNodeIds ?? [])
+    const existingHasMaterializedMembership = included.size > 0 || deferred.size > 0
+    const add = (taskId: string, disposition: 'included' | 'deferred') => {
+      if (!taskIds.has(taskId)) return
+      // An accepted-plan snapshot may outlive the release it originally
+      // described. Once that release is shipped, normalized membership is
+      // historical fact: the snapshot cannot reopen or expand it. Current
+      // work must already be attached to an active release through the
+      // canonical membership relation.
+      if (existing?.state === 'shipped') return
+      const nodeId = `work:${taskId}`
+      const target = disposition === 'included' ? included : deferred
+      const opposite = disposition === 'included' ? deferred : included
+      if (opposite.has(nodeId)) {
+        if (existingHasMaterializedMembership) return
+        conflicts.push({
+          releaseId: release.id,
+          taskId,
+          existing: disposition === 'included' ? 'deferred' : 'included',
+          proposed: disposition,
+        })
+      } else if (!target.has(nodeId) && !existingHasMaterializedMembership) {
+        target.add(nodeId)
+        changed = true
+      }
+    }
+    for (const taskId of release.currentTaskIds) add(taskId, 'included')
+    for (const taskId of release.laterTaskIds) add(taskId, 'deferred')
+    const materialized: ProjectRelease = {
+      ...(existing ?? {
+        id: release.id,
+        label: release.label,
+        kind,
+        state,
+        source,
+        proofStyle: 'unspecified',
+        nodeIds: [],
+        deferredNodeIds: [],
+      }),
+      id: release.id,
+      label: existing?.label ?? release.label,
+      kind: existing?.kind ?? kind,
+      state: existing?.state ?? state,
+      source: existing?.source ?? source,
+      nodeIds: [...included],
+      deferredNodeIds: [...deferred],
+    }
+    if (!existing || JSON.stringify(existing.nodeIds ?? []) !== JSON.stringify(materialized.nodeIds) ||
+      JSON.stringify(existing.deferredNodeIds ?? []) !== JSON.stringify(materialized.deferredNodeIds)) changed = true
+    return materialized
+  })
+  const releases = [
+    ...planReleases,
+    ...(queue.releases ?? []).filter(release => !planReleases.some(candidate => candidate.id === release.id)),
+  ]
+  const selectedReleaseId = queue.selectedReleaseId || approvedPlan.currentReleaseId || undefined
+  if (selectedReleaseId !== queue.selectedReleaseId) changed = true
+  return {
+    queue: { ...queue, releases, ...(selectedReleaseId ? { selectedReleaseId } : {}) },
+    changed,
+    conflicts,
+  }
+}
+
+/** Legacy read compatibility only; promoted readers do not use this overlay. */
 export function queueForProjectSummaryScope(
   queue: TaskQueueModel,
   approvedPlan: ProjectSummaryApprovedPlan | null | undefined,
@@ -386,9 +660,6 @@ export function queueForProjectSummaryScope(
   const knownPlanTaskIds = new Set([...planTaskIds].filter(taskId => currentTaskIds.has(taskId)))
   const knownCurrentTaskIds = new Set(approvedPlan.currentTaskIds.filter(taskId => currentTaskIds.has(taskId)))
   const knownLaterTaskIds = new Set(approvedPlan.laterTaskIds.filter(taskId => currentTaskIds.has(taskId)))
-  // An approved plan can seed a release before the queue has materialized its
-  // assignments. Once the queue has explicit membership, keep that membership
-  // authoritative; otherwise a stale plan row can silently become runnable.
   const queueOwnsReleaseMembership = (releaseId: string): boolean =>
     (queue.releases ?? []).some(release => release.id === releaseId && [
       ...(release.nodeIds ?? []),
@@ -398,10 +669,6 @@ export function queueForProjectSummaryScope(
   const currentReleaseId = approvedPlan.currentReleaseId ??
     approvedPlan.releases.find(release => release.currentTaskIds.some(taskId => knownCurrentTaskIds.has(taskId)))?.id ??
     null
-  // Workspace import plans are snapshots, not a second task identity system.
-  // If an intake refresh replaced task IDs, keep real queue work current and
-  // discard phantom plan references instead of turning the project into an
-  // apparently complete release with zero included work.
   const unassignedCurrentTaskIds = [...currentTaskIds].filter(taskId =>
     !knownPlanTaskIds.has(taskId) &&
     !knownLaterTaskIds.has(taskId) &&
@@ -531,7 +798,11 @@ export function buildProjectSummaryProjection(
     scopeProjection,
     generatedAt,
   })
-  const start = applyOwnerInputToStartReadiness(scopeProjection.start, input.ownerInput)
+  const ownerReview = input.ownerReview ?? ownerReviewForScope(scopeProjection.rows, tasks, generatedAt)
+  const start = applyOwnerInputToStartReadiness(
+    applyOwnerReviewToStartReadiness(scopeProjection.start, ownerReview),
+    input.ownerInput,
+  )
   const orientationSpine = compactProjectOrientationSpineForMap(buildProjectOrientationSpine({
     projectId: input.projectId ?? '',
     now: generatedAt,
@@ -545,33 +816,69 @@ export function buildProjectSummaryProjection(
     runStatus: input.execution?.status ?? 'stopped',
     runMode: input.execution?.mode,
     sourceRefs: input.orientation?.sourceRefs ?? [],
+    ...(input.documentedStructure?.length
+      ? {
+          workspaceImportDraft: {
+            tasks: [],
+            contexts: input.documentedStructure,
+            source: {
+              kind: 'import',
+              refs: input.documentedStructure.flatMap(context => context.refs ?? []).slice(0, 24),
+              confidence: 'medium',
+              freshness: 'fresh',
+              inferred: false,
+              refreshedAt: generatedAt,
+            },
+          },
+        }
+      : {}),
   }))
+  const sourceCapabilityCatalog = summarizeSourceCapabilityCatalog(input.sourceCapabilities)
   const recentWork = recentWorkForTasks(tasks)
-  const nextAction = {
-    ...(start.code ? { code: start.code } : {}),
-    label: start.label,
-    message: start.message,
-    ...(typeof start.count === 'number' ? { count: start.count } : {}),
-    ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
-    ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
-    ...(start.focusKind ? { focusKind: start.focusKind } : {}),
-  }
+  const initialDecision = buildProjectDecisionProjection({
+    generatedAt,
+    start,
+    release: releaseSummary,
+    ownerInput: input.ownerInput,
+    ownerReview,
+    runStatus: input.execution?.status ?? 'stopped',
+    runtimeExecution: input.execution,
+    canonicalTaskRefs: canonicalDecisionTaskRefs(tasks),
+  })
+  // Start readiness remains an execution fact. The summary action is what a
+  // person should do next, so a finished release must not surface the stale
+  // "no runnable work" transport message as though more work were expected.
+  const releaseReadyForReview = releaseSummary.state === 'ready' && start.code === 'all_terminal'
+  const decisionStart = projectDecisionStartReadiness(initialDecision)
+  const nextAction: ProjectSummaryProjection['nextAction'] = releaseReadyForReview
+    ? {
+        code: 'release_ready',
+        label: 'Review project state' as const,
+        message: 'Review completed scope.',
+      }
+    : {
+        ...(start.code ? { code: start.code } : {}),
+        label: start.label,
+        message: start.message,
+        ...(typeof start.count === 'number' ? { count: start.count } : {}),
+        ...(decisionStart.focusTaskId ? { focusTaskId: decisionStart.focusTaskId } : {}),
+        ...(decisionStart.focusTaskTitle ? { focusTaskTitle: decisionStart.focusTaskTitle } : {}),
+        ...(decisionStart.focusKind ? { focusKind: decisionStart.focusKind } : {}),
+      }
   const startReadiness = {
-    canStart: start.canStart,
+    ...decisionStart,
     ...(nextAction.code ? { code: nextAction.code } : {}),
     message: nextAction.message,
-    ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
-    ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
-    ...(start.focusKind ? { focusKind: start.focusKind } : {}),
-    ...(typeof start.count === 'number' ? { count: start.count } : {}),
+    ...(typeof decisionStart.count === 'number' ? { count: decisionStart.count } : {}),
+    ...(ownerReview?.taskIds.length ? { reviewTaskIds: [...ownerReview.taskIds] } : {}),
     executionScope: selectedScope
       ? {
           id: selectedScope.id,
           label: selectedScope.label,
           kind: selectedScope.kind,
           source: selectedScope.source,
-          taskCount: scopeProjection.counts.included,
-          deferredTaskCount: scopeProjection.counts.deferred,
+          taskCount: releaseSummary.counts.total,
+          deferredTaskCount: releaseSummary.counts.deferred,
         }
       : undefined,
   }
@@ -598,6 +905,7 @@ export function buildProjectSummaryProjection(
       ...recentWork.map(task => ({ id: task.taskId, title: task.title, status: task.status })),
     ].filter((task, index, all) => all.findIndex(candidate => candidate.id === task.id) === index),
   })
+  const decision = applyProjectActionModelPrimaryAction(initialDecision, actionModel.primaryAction)
 
   return {
     version: PROJECT_SUMMARY_PROJECTION_VERSION,
@@ -624,18 +932,27 @@ export function buildProjectSummaryProjection(
           label: selectedScope.label,
           kind: selectedScope.kind,
           source: selectedScope.source,
-          included: scopeProjection.counts.included,
-          deferred: scopeProjection.counts.deferred,
+          included: releaseSummary.counts.total,
+          deferred: releaseSummary.counts.deferred,
           ...(selectedScope.proofStyle ? { proofStyle: selectedScope.proofStyle } : {}),
         }
       : null,
     orientation: input.orientation ?? null,
+    documentedStructure: (input.documentedStructure ?? []).map(context => ({
+      ...context,
+      ...(context.refs ? { refs: [...context.refs] } : {}),
+      ...(context.releaseIds ? { releaseIds: [...context.releaseIds] } : {}),
+      ...(context.linkedTaskHints ? { linkedTaskHints: [...context.linkedTaskHints] } : {}),
+    })),
+    sourceCapabilityCatalog,
     orientationSpine,
     approvedPlan,
     releaseSummary,
+    decision,
     ...(input.execution ? { execution: input.execution } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.ownerInput ? { ownerInput: input.ownerInput } : {}),
+    ownerReview,
     nextAction,
     blockers: scopeProjection.release.blockers,
     recentWork,
@@ -679,10 +996,136 @@ function indexedScopeSource(value: unknown): ProjectScope['source'] {
     : 'inferred'
 }
 
+/**
+ * Scope is a compact read model, but its handoff rules still need to know
+ * whether a task has a complete approved brief or executable spec. Recreate
+ * only those typed facts from the indexed summary; detail prose and runtime
+ * history deliberately stay out of this projection path.
+ */
+function indexedTaskForScopeProjection(task: ProjectStateDatabaseTask): Task {
+  const record = task as unknown as Record<string, unknown>
+  const currentSummary = isRecord(record.currentSummary) ? record.currentSummary : {}
+  const brief = isRecord(currentSummary.brief) ? currentSummary.brief : {}
+  const executionBlocker = isRecord(currentSummary.executionBlocker) &&
+    typeof currentSummary.executionBlocker.reason === 'string' &&
+    currentSummary.executionBlocker.reason.trim()
+    ? currentSummary.executionBlocker.reason.trim()
+    : undefined
+  const specReviewAuthority = currentSummary.specReviewAuthority === 'owner' || currentSummary.specReviewAuthority === 'coordinator'
+    ? currentSummary.specReviewAuthority
+    : undefined
+  const acceptanceCriteriaCount = Number(currentSummary.acceptanceCriteriaCount ?? record.acceptanceCriteriaCount ?? 0)
+  const hasBrief = brief.present === true
+  const hasShapedBrief = brief.shaped === true
+  const approvedAt = typeof brief.approvedAt === 'string' && brief.approvedAt.trim()
+    ? brief.approvedAt
+    : undefined
+  return {
+    id: task.id,
+    title: task.title,
+    ...(task.description ? { description: task.description } : {}),
+    ...(task.status ? { status: task.status } : {}),
+    ...(task.domain ? { domain: task.domain } : {}),
+    ...(task.priority ? { priority: task.priority } : {}),
+    ...(task.workKind ? { workKind: task.workKind } : {}),
+    ...(task.semanticKind ? { semanticKind: task.semanticKind } : {}),
+    ...(task.hierarchy ? { hierarchy: task.hierarchy } : {}),
+    ...(task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {}),
+    ...(task.releaseIds.length > 0 ? { releaseIds: task.releaseIds } : {}),
+    ...(task.sourceRefs.length > 0 ? { references: task.sourceRefs } : {}),
+    ...(executionBlocker ? { blockReason: executionBlocker } : {}),
+    ...(task.status === 'spec_review' && specReviewAuthority
+      ? { specReviewGate: { authority: specReviewAuthority } }
+      : {}),
+    ...(record.spec === 'present' ? { spec: 'indexed-present' } : {}),
+    ...(acceptanceCriteriaCount > 0
+      ? { acceptanceCriteria: Array.from({ length: acceptanceCriteriaCount }, (_, index) => ({
+          id: `indexed-${task.id}-${index}`,
+          description: 'Indexed acceptance criterion.',
+        })) }
+      : {}),
+    ...(hasBrief
+      ? { productBrief: {
+          ...(approvedAt ? { approvedAt } : {}),
+          ...(brief.userJob === true ? { userJob: 'indexed-present' } : {}),
+          ...(hasShapedBrief ? { whyItMattersNow: 'indexed-present' } : {}),
+          ...(brief.successMetric === true ? { successMetric: 'indexed-present' } : {}),
+          ...(hasShapedBrief ? { nonGoals: ['indexed-present'] } : {}),
+        } }
+      : {}),
+  } as Task
+}
+
+function rebuildScopeRowsFromIndexedState(
+  queue: { releases: readonly Record<string, unknown>[]; selectedReleaseId: string | null },
+  approvedPlan: ProjectSummaryApprovedPlan | null | undefined,
+  tasks: readonly ProjectStateDatabaseTask[],
+  savedScopeRows: readonly ProjectStateDatabaseScopeRow[],
+): ProjectStateDatabaseScopeRow[] {
+  const selectedProofStyle = selectedReleaseProofStyle(queue.releases, queue.selectedReleaseId)
+  const taskById = new Map(tasks.map(task => [task.id, task]))
+  const proofByTaskId = new Map<string, IndexedCurrentProof>(
+    tasks.flatMap(task => {
+      const proof = indexedCurrentProofForTask(task)
+      return proof ? [[task.id, proof] as const] : []
+    }),
+  )
+  const savedRowsByTaskId = new Map(savedScopeRows.map(row => [row.taskId, row]))
+  const derivedRows = projectSummaryScopeRowsForQueue({
+    version: 1,
+    lastUpdated: new Date(0).toISOString(),
+    tasks: tasks.map(indexedTaskForScopeProjection),
+    releases: queue.releases as ProjectRelease[],
+    ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+  }, approvedPlan, undefined, { currentStateAuthority: 'database' })
+  return derivedRows.map(row => {
+    const task = taskById.get(row.taskId)
+    const proof = task ? indexedCurrentProofForTask(task) : undefined
+    const saved = savedRowsByTaskId.get(row.taskId)
+    const proofBlocked = task
+      ? indexedTaskProofBlocked(task, proof, taskById, proofByTaskId, queue.selectedReleaseId, selectedProofStyle)
+      : (saved?.proofBlocked ?? row.proofBlocked)
+    return {
+      ...row,
+      proofBlocked,
+      ...(proofBlocked ? { blockerSummary: 'Completion proof is missing or stale.' } : {}),
+    }
+  })
+}
+
+/**
+ * Rebuild the selected-scope ledger from compact indexed rows. This is used
+ * after a point task-definition mutation: all affected hierarchy rows update
+ * together, while unrelated rich task details remain unopened.
+ */
+export function projectSummaryScopeRowsFromIndexedState(
+  tasksPath: string,
+  input: { taskOverrides?: readonly ProjectStateDatabaseTask[] } = {},
+): ProjectStateDatabaseScopeRow[] | null {
+  const current = readProjectStateDatabaseProjectionState<ProjectSummaryProjection>(tasksPath, {
+    includeDefinitions: false,
+  })
+  if (!current?.summary) return null
+  const overrides = new Map((input.taskOverrides ?? []).map(task => [task.id, task]))
+  const tasks = current.inventory.tasks.map(task => overrides.get(task.id) ?? task)
+  return rebuildScopeRowsFromIndexedState({
+    releases: current.queue.releases,
+    selectedReleaseId: current.queue.selectedReleaseId ?? null,
+  }, current.summary.payload.approvedPlan, tasks, current.scopeRows)
+}
+
 function indexedProofStyle(value: unknown): ProjectScope['proofStyle'] | undefined {
   return value === 'script_only' || value === 'manual' || value === 'mixed' || value === 'unspecified'
     ? value
     : undefined
+}
+
+function selectedReleaseProofStyle(
+  releases: readonly Record<string, unknown>[],
+  selectedReleaseId: string | null,
+): ProjectScope['proofStyle'] | undefined {
+  if (!selectedReleaseId) return undefined
+  return indexedProofStyle(releases.find(release => release.id === selectedReleaseId)?.proofStyle)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -734,6 +1177,14 @@ function indexedActionTasks(
     const briefSummary: Record<string, unknown> = isRecord(currentSummary.brief) ? currentSummary.brief : {}
     const acceptanceCount = Number(currentSummary.acceptanceCriteriaCount ?? taskRecord.acceptanceCriteriaCount ?? 0)
     const row = rowsByTaskId.get(task.id)
+    const approvedBriefNeedsSpec = Boolean(
+      briefSummary.present &&
+      typeof briefSummary.approvedAt === 'string' &&
+      briefSummary.approvedAt.trim().length > 0 &&
+      briefSummary.shaped &&
+      task.status === 'exploring' &&
+      taskRecord.spec !== 'present',
+    )
     return {
       id: task.id,
       title: task.title,
@@ -747,7 +1198,8 @@ function indexedActionTasks(
         parentId: typeof task.hierarchy.parentId === 'string' ? task.hierarchy.parentId : undefined,
         childIds: Array.isArray(task.hierarchy.childIds) ? task.hierarchy.childIds.filter((id): id is string => typeof id === 'string') : undefined,
       } : undefined,
-      needsBriefCleanup: row?.handoffState === 'brief_cleanup' || row?.handoffState === 'not_shaped',
+      needsBriefCleanup: row?.handoffState === 'brief_cleanup' ||
+        (row?.handoffState === 'not_shaped' && !approvedBriefNeedsSpec),
       spec: taskRecord.spec === 'present' || row?.handoffState === 'ready' ? 'indexed-present' : undefined,
       acceptanceCriteria: Array.from({ length: Number.isFinite(acceptanceCount) ? acceptanceCount : 0 }, () => ({})),
       productBrief: briefSummary.present
@@ -783,6 +1235,14 @@ export function buildProjectSummaryProjectionFromIndexedState(
   })
   if (!current?.summary) return null
   const base = current.summary.payload
+  const baseSource = base.source && typeof base.source === 'object' && !Array.isArray(base.source)
+    ? base.source
+    : {
+        taskQueueLastUpdated: null,
+        taskQueueMtimeMs: null,
+        workspaceGoalsMtimeMs: null,
+      }
+  const sourceCapabilityCatalog = summarizeSourceCapabilityCatalog(readProjectStateDatabaseSourceCapabilities(tasksPath))
   const generatedAt = input.generatedAt ?? new Date().toISOString()
   // Indexed refreshes cannot rebuild the rich orientation tree, but that is
   // not a reason to skip the compact summary. Promoted projects can predate
@@ -793,6 +1253,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const queue = current.queue
   const releases = queue.releases as readonly Record<string, unknown>[]
   const selectedReleaseId = queue.selectedReleaseId ?? null
+  const selectedProofStyle = selectedReleaseProofStyle(releases, selectedReleaseId)
   const taskOverrides = new Map((input.taskOverrides ?? []).map(task => [task.id, task]))
   const tasks = inventory.tasks.map(task => taskOverrides.get(task.id) ?? task)
   const tasksById = new Map(tasks.map(task => [task.id, task]))
@@ -830,9 +1291,9 @@ export function buildProjectSummaryProjectionFromIndexedState(
     const indexedTask = tasksById.get(row.taskId)
     const explicitRow = scopeRowOverrides.get(row.taskId)
     const indexedProofGap = indexedTask
-      ? indexedTaskProofBlocked(indexedTask, currentProofByTaskId.get(row.taskId), tasksById, currentProofByTaskId, selectedReleaseId)
+      ? indexedTaskProofBlocked(indexedTask, currentProofByTaskId.get(row.taskId), tasksById, currentProofByTaskId, selectedReleaseId, selectedProofStyle)
       : false
-    const proofBlocked = currentProofByTaskId.has(row.taskId)
+    const proofBlocked = indexedTask
       ? indexedProofGap
       : Boolean(explicitRow?.proofBlocked ?? row.proofBlocked)
     // Scope rows are persisted projections, not a second source of proof
@@ -848,11 +1309,21 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const executionRows = indexedExecutionRows(rows)
   const includedRows = executionRows.filter(row => row.scope === 'included')
   const deferredRows = executionRows.filter(row => row.scope === 'deferred')
+  const ownerReview = ownerReviewForScope(
+    indexedScopeRowsAsProjectScopeRows(rows),
+    tasks.map(indexedTaskForScopeProjection),
+    generatedAt,
+  )
+  // A question is a direct decision request. Keep its precedence over an
+  // available review identical to the shared decision packet.
   const start = applyOwnerInputToStartReadiness(
-    indexedStartReadiness(rows, releases, selectedReleaseId, tasks),
+    applyOwnerReviewToStartReadiness(
+      indexedStartReadiness(rows, releases, selectedReleaseId, tasks),
+      ownerReview,
+    ),
     base.ownerInput,
   )
-  const nextAction: ProjectSummaryProjection['nextAction'] = {
+  let nextAction: ProjectSummaryProjection['nextAction'] = {
     ...(start.code ? { code: start.code } : {}),
     label: start.label,
     message: start.message,
@@ -872,7 +1343,35 @@ export function buildProjectSummaryProjectionFromIndexedState(
     : selectedReleaseRow
   const indexedRelease = summarizeProjectScopeRelease(indexedScopeRowsAsProjectScopeRows(rows))
   const taskReleaseBlockers = indexedRelease.blockers
-  const releaseExecutionRows = includedRows.filter(row => row.hierarchyRole !== 'parent' || !includedRows.some(child => child.parentTaskId === row.taskId))
+  const canonicalReleaseMembership = selectedReleaseId
+    ? readProjectStateDatabaseReleaseMembership(tasksPath, selectedReleaseId)
+    : null
+  const selectedReleaseTaskIds = selectedRelease
+    ? releaseMembershipTaskIds(selectedRelease, 'nodeIds')
+    : []
+  const releaseMemberTaskIds = canonicalReleaseMembership
+    ? new Set(canonicalReleaseMembership.included)
+    : selectedReleaseTaskIds.length > 0
+    ? new Set(selectedReleaseTaskIds)
+    : selectedReleaseId
+    ? new Set(rows
+        .filter(row => row.scope === 'included' && tasksById.get(row.taskId)?.releaseIds.includes(selectedReleaseId))
+        .map(row => row.taskId))
+    : new Set<string>()
+  const releaseMembershipRows = releaseMemberTaskIds.size > 0
+    ? rows.filter(row => releaseMemberTaskIds.has(row.taskId))
+    : selectedRelease ? rowsForReleaseMembership(rows, selectedRelease, 'nodeIds') : []
+  const releaseExecutionRows = releaseMembershipRows.length > 0
+    ? releaseMembershipRows
+    : includedRows
+      .filter(row => row.countInProjectTotals !== false)
+      .filter(row => row.hierarchyRole !== 'parent' || !includedRows.some(child =>
+        child.parentTaskId === row.taskId && child.countInProjectTotals !== false,
+      ))
+  const releaseIncluded = selectedRelease
+    ? (releaseMemberTaskIds.size || selectedReleaseTaskIds.length)
+    : releaseExecutionRows.length
+  const releaseDeferred = deferredRows.length
   const releaseSummary: ProjectSummaryReleaseSummary = {
     scopeMode: selectedRelease ? 'named_release' : 'unreleased',
     release: selectedRelease
@@ -886,13 +1385,13 @@ export function buildProjectSummaryProjectionFromIndexedState(
       : null,
     state: indexedRelease.state,
     counts: {
-      total: releaseExecutionRows.length,
+      total: releaseIncluded,
       done: releaseExecutionRows.filter(row => row.handoffState === 'done').length,
-      unfinished: releaseExecutionRows.filter(row => row.handoffState !== 'done').length,
+      unfinished: Math.max(0, releaseIncluded - releaseExecutionRows.filter(row => row.handoffState === 'done').length),
       ready: releaseExecutionRows.filter(row => row.handoffState === 'ready').length,
       active: releaseExecutionRows.filter(row => ['paused', 'review'].includes(row.handoffState)).length,
       blocked: releaseExecutionRows.filter(row => row.blocksRelease).length,
-      deferred: deferredRows.length,
+      deferred: releaseDeferred,
       ownerBlocked: releaseExecutionRows.filter(row => projectScopeRowNeedsOwnerInput({
         scope: row.scope,
         status: row.status as ProjectScopeRow['status'],
@@ -905,24 +1404,52 @@ export function buildProjectSummaryProjectionFromIndexedState(
     blockers: taskReleaseBlockers,
     updatedAt: generatedAt,
   }
+  const initialDecision = buildProjectDecisionProjection({
+    projectRevision: current.projectRevision,
+    queueRevision: current.queueRevision,
+    generatedAt,
+    start,
+    release: releaseSummary,
+    ownerInput: base.ownerInput,
+    ownerReview,
+    runStatus: base.execution?.status ?? 'stopped',
+    runtimeExecution: base.execution,
+    canonicalTaskRefs: canonicalDecisionTaskRefs(tasks, current.projectRevision),
+  })
+  const decisionStart = projectDecisionStartReadiness(initialDecision)
+  nextAction = {
+    ...nextAction,
+    ...(decisionStart.focusTaskId ? { focusTaskId: decisionStart.focusTaskId } : {}),
+    ...(decisionStart.focusTaskTitle ? { focusTaskTitle: decisionStart.focusTaskTitle } : {}),
+    ...(decisionStart.focusKind ? { focusKind: decisionStart.focusKind } : {}),
+    ...(typeof decisionStart.count === 'number' ? { count: decisionStart.count } : {}),
+    ...(ownerReview?.taskIds.length ? { reviewTaskIds: [...ownerReview.taskIds] } : {}),
+  }
+  if (releaseSummary.state === 'ready' && start.code === 'all_terminal') {
+    nextAction = {
+      code: 'release_ready',
+      label: 'Review project state',
+      message: 'Review completed scope.',
+    }
+  }
   const rawCounts = summarizeRawTaskCounts(tasks)
   const actionModel = buildProjectActionModel({
     startReadiness: {
-      canStart: start.canStart,
-      ...(start.code ? { code: start.code } : {}),
-      message: start.message,
-      ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
-      ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
-      ...(start.focusKind ? { focusKind: start.focusKind } : {}),
-      ...(start.count ? { count: start.count } : {}),
+      ...decisionStart,
+      ...(nextAction.code ? { code: nextAction.code } : {}),
+      message: nextAction.message,
+      ...(nextAction.focusTaskId ? { focusTaskId: nextAction.focusTaskId } : {}),
+      ...(nextAction.focusTaskTitle ? { focusTaskTitle: nextAction.focusTaskTitle } : {}),
+      ...(nextAction.focusKind ? { focusKind: nextAction.focusKind } : {}),
+      ...(nextAction.count ? { count: nextAction.count } : {}),
       executionScope: selectedRelease
         ? {
             id: String(selectedRelease.id),
             label: String(selectedRelease.label ?? selectedRelease.id),
             kind: String(selectedRelease.kind ?? 'release'),
             source: typeof selectedRelease.source === 'string' ? selectedRelease.source : undefined,
-            taskCount: includedRows.length,
-            deferredTaskCount: deferredRows.length,
+            taskCount: releaseSummary.counts.total,
+            deferredTaskCount: releaseSummary.counts.deferred,
           }
         : undefined,
     },
@@ -937,14 +1464,15 @@ export function buildProjectSummaryProjectionFromIndexedState(
     runStatus: base.execution?.status ?? 'stopped',
     tasks: indexedActionTasks(tasks, rowsByTaskId),
   })
+  const decision = applyProjectActionModelPrimaryAction(initialDecision, actionModel.primaryAction)
   const scope = selectedRelease
     ? {
         id: String(selectedRelease.id),
         label: String(selectedRelease.label ?? selectedRelease.id),
         kind: String(selectedRelease.kind ?? 'release'),
         source: indexedScopeSource(selectedRelease.source),
-        included: includedRows.length,
-        deferred: deferredRows.length,
+        included: releaseSummary.counts.total,
+        deferred: releaseSummary.counts.deferred,
         ...(indexedProofStyle(selectedRelease.proofStyle)
           ? { proofStyle: indexedProofStyle(selectedRelease.proofStyle) }
           : {}),
@@ -955,6 +1483,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     releaseSummary,
     rows,
     nextAction,
+    focus: initialDecision.execution.focus,
     currentProofByTaskId,
   })
   return {
@@ -964,8 +1493,8 @@ export function buildProjectSummaryProjectionFromIndexedState(
     generatedAt,
     freshness: 'current',
     source: {
-      ...base.source,
-      taskQueueLastUpdated: input.sourceQueueLastUpdated ?? base.source.taskQueueLastUpdated,
+      ...baseSource,
+      taskQueueLastUpdated: input.sourceQueueLastUpdated ?? baseSource.taskQueueLastUpdated,
     },
     counts: {
       ...rawCounts,
@@ -982,8 +1511,10 @@ export function buildProjectSummaryProjectionFromIndexedState(
       proofBlocked: includedRows.filter(row => row.proofBlocked).length,
     },
     scope,
+    sourceCapabilityCatalog,
     orientationSpine: currentOrientationSpine,
     releaseSummary,
+    decision,
     nextAction,
     blockers: taskReleaseBlockers,
     recentWork: recentWorkForTasks(tasks.map(task => ({
@@ -1000,6 +1531,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
       ...(task.updatedAt ? { updatedAt: task.updatedAt } : {}),
     }))),
     actionModel,
+    ownerReview,
   }
 }
 
@@ -1017,6 +1549,7 @@ function synchronizeIndexedOrientationSpine(
     releaseSummary: ProjectSummaryReleaseSummary
     rows: readonly IndexedSummaryScopeRow[]
     nextAction: ProjectSummaryProjection['nextAction']
+    focus?: ProjectDecisionTaskRef
     currentProofByTaskId: ReadonlyMap<string, IndexedCurrentProof>
   },
 ): ProjectSummaryProjection['orientationSpine'] {
@@ -1039,7 +1572,10 @@ function synchronizeIndexedOrientationSpine(
               source: releasePatch.source as typeof release.source,
             }
           : {}),
-        state: input.releaseSummary.state,
+        // A release record's lifecycle is durable. `releaseSummary.state` is
+        // current readiness and belongs on the release summary, not in the
+        // historical release record rendered by Map or Release.
+        state: releasePatch?.state as OrientationReleaseState ?? release.state,
       } as (typeof spine.releases)[number]
     : release
   const selectedRelease = (spine.selectedRelease && spine.selectedRelease.id === releaseId
@@ -1052,7 +1588,7 @@ function synchronizeIndexedOrientationSpine(
               source: releasePatch.source as typeof spine.selectedRelease.source,
             }
           : {}),
-        state: input.releaseSummary.state,
+        state: releasePatch?.state as OrientationReleaseState ?? spine.selectedRelease.state,
       }
     : spine.selectedRelease) as typeof spine.selectedRelease
   const rowById = new Map(input.rows.map(row => [row.taskId, row]))
@@ -1091,6 +1627,11 @@ function synchronizeIndexedOrientationSpine(
     : input.releaseSummary.state === 'blocked'
       ? `${label} needs attention.`
       : `${label} is in progress.`
+  const activePins = input.focus
+    ? spine.activePins.map(pin => pin.id === `start-focus:${input.focus!.taskId}`
+      ? { ...pin, nodeId: `work:${input.focus!.taskId}`, label: input.focus!.displayTitle }
+      : pin)
+    : spine.activePins
   const patchNode = (node: ProjectOrientationSpine['roots'][number]): ProjectOrientationSpine['roots'][number] => {
     const taskId = node.id.startsWith('work:') ? node.id.slice('work:'.length) : null
     const currentProof = taskId ? input.currentProofByTaskId.get(taskId) : undefined
@@ -1137,10 +1678,11 @@ function synchronizeIndexedOrientationSpine(
       includedWorkCount: counts.total,
       deferredCount: counts.deferred,
       deferredWorkCount: counts.deferred,
-      topBlocker: input.nextAction.code === 'all_terminal' && outsideWork.count > 0
+      topBlocker: input.nextAction.code === 'all_terminal'
         ? input.nextAction.message
         : blockers[0]?.label ?? null,
       nextAction: input.nextAction.message,
+      pinnedNow: input.focus ? [input.focus.displayTitle] : spine.summary.pinnedNow,
       progress,
     },
     scopeRows,
@@ -1153,10 +1695,12 @@ function synchronizeIndexedOrientationSpine(
       blockers,
     },
     proofContracts,
+    activePins,
     roots: spine.roots.map(patchNode),
     },
     {
-      state: input.releaseSummary.state,
+    state: input.releaseSummary.state,
+      ...(releasePatch?.state ? { lifecycleState: releasePatch.state as OrientationReleaseTruth['lifecycleState'] } : {}),
       counts: {
         total: counts.total,
         done: counts.done,
@@ -1167,6 +1711,134 @@ function synchronizeIndexedOrientationSpine(
       blockers,
     },
   )
+}
+
+function canonicalDecisionClaimId(
+  projectRevision: number,
+  subject: { kind: string; id: string },
+  field: string,
+): string {
+  return `canonical:${projectRevision}:${subject.kind}:${subject.id}:${field}`
+}
+
+/**
+ * Materialize only the compact facts which the shared decision packet needs.
+ * Task/release/runtime rows remain canonical; this ledger makes it explicit
+ * which revision and registered facts produced a cross-surface action.
+ */
+export function canonicalDecisionStateResolution(input: {
+  projectId: string | null
+  projectRevision: number
+  queueRevision: number | null
+  selectedReleaseId: string | null
+  decision: ProjectDecisionProjection
+  generatedAt: string
+  releaseSummary?: ProjectSummaryReleaseSummary | null
+  releaseMembershipTaskIds?: readonly string[]
+}): ProjectStateDatabaseStateResolutionSnapshot {
+  // The decision is authoritative only for the revision that produced its
+  // registered claims. Projection builders may start from an older compact
+  // summary, so bind the payload itself here instead of trusting a copied
+  // revision token from that input.
+  const decision: ProjectDecisionProjection = {
+    ...input.decision,
+    projectRevision: input.projectRevision,
+    queueRevision: input.queueRevision,
+    generatedAt: input.generatedAt,
+  }
+  const project = { kind: 'project', id: input.projectId ?? 'unknown-project' }
+  const claim = <T>(subject: ProjectStateClaim['subject'], field: ProjectStateClaim['field'], value: T): ProjectStateClaim<T> => ({
+    id: canonicalDecisionClaimId(input.projectRevision, subject, field),
+    projectRevision: input.projectRevision,
+    subject,
+    field,
+    value,
+    authority: 'canonical_mutation',
+    actor: 'project-state-boundary',
+    observedAt: input.generatedAt,
+    evidenceRefs: [],
+  })
+  const focus = decision.planExecution?.focus ?? decision.execution.focus
+  const claims: ProjectStateClaim[] = [
+    claim(project, 'project.selectedReleaseId', input.selectedReleaseId),
+    claim(project, 'project.executionFocus', focus
+      ? { taskId: focus.taskId, taskRevision: focus.taskRevision ?? input.projectRevision }
+      : null),
+    claim(project, 'project.executionEligibility', {
+      state: input.decision.planExecution?.state ?? input.decision.execution.state,
+      code: input.decision.planExecution?.code ?? input.decision.execution.code,
+      primaryAction: decision.primaryAction,
+    }),
+  ]
+  if (input.selectedReleaseId && input.releaseSummary?.release?.id === input.selectedReleaseId) {
+    const release = { kind: 'release', id: input.selectedReleaseId }
+    const summary = input.releaseSummary
+    claims.push(
+      claim(release, 'release.lifecycleState', summary.release!.state),
+      claim(release, 'release.membershipTaskIds', [...new Set(input.releaseMembershipTaskIds ?? [])].sort()),
+      claim(release, 'release.readiness', {
+        state: summary.state,
+        counts: summary.counts,
+        blockerTaskIds: summary.blockers
+          .map(blocker => blocker.owningTaskId ?? blocker.id)
+          .filter((taskId): taskId is string => Boolean(taskId))
+          .sort(),
+      }),
+    )
+  }
+  const resolution = resolveRegisteredProjectStateClaimSet({
+    projectRevision: input.projectRevision,
+    claims,
+  })
+  const disagreements = resolution.disagreements.map(disagreement => ({
+    id: disagreement.id,
+    subject: disagreement.subject,
+    field: disagreement.field,
+    canonicalClaimIds: disagreement.canonicalClaimIds,
+    contradictoryClaimIds: disagreement.contradictoryClaimIds,
+    state: disagreement.state,
+    reconciliation: disagreement.reconciliation,
+  }))
+  const fingerprint = stableJson({
+    claims,
+    resolved: resolution.resolved,
+    rejected: resolution.rejected,
+    disagreements,
+    decision,
+  })
+  return {
+    projectRevision: input.projectRevision,
+    queueRevision: input.queueRevision,
+    generatedAt: input.generatedAt,
+    claims,
+    disagreements,
+    decision,
+    fingerprint,
+  }
+}
+
+function canonicalReleaseMembershipTaskIds(projection: Pick<ProjectSummaryProjection, 'orientationSpine'>): string[] {
+  return [...new Set((projection.orientationSpine?.selectedRelease?.nodeIds ?? [])
+    .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice('work:'.length) : nodeId)
+    .filter(Boolean))]
+    .sort()
+}
+
+function releaseMembershipTaskIds(release: unknown, field: 'nodeIds' | 'deferredNodeIds'): string[] {
+  if (!release || typeof release !== 'object' || Array.isArray(release)) return []
+  return stringArray((release as Record<string, unknown>)[field])
+    .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice('work:'.length) : nodeId)
+    .filter(Boolean)
+}
+
+function rowsForReleaseMembership<T extends { taskId: string }>(
+  rows: readonly T[],
+  release: unknown,
+  field: 'nodeIds' | 'deferredNodeIds',
+): T[] {
+  const taskIds = new Set(releaseMembershipTaskIds(release, field))
+  if (taskIds.size === 0) return []
+  return rows.filter(row => taskIds.has(row.taskId))
 }
 
 /**
@@ -1195,6 +1867,10 @@ export function writeProjectSummaryProjectionFromIndexedState(
     ...(indexedState?.inventory.tasks ?? []),
     ...(input.taskOverrides ?? []),
   ].map(task => [task.id, task]))
+  const selectedProofStyle = selectedReleaseProofStyle(
+    indexedState?.queue.releases ?? [],
+    indexedState?.queue.selectedReleaseId ?? null,
+  )
   const currentProofByTaskId = new Map<string, IndexedCurrentProof>(
     [...taskById.values()].flatMap(task => {
       const proof = indexedCurrentProofForTask(task)
@@ -1209,7 +1885,7 @@ export function writeProjectSummaryProjectionFromIndexedState(
     .map(row => {
       const task = taskById.get(row.taskId)
       const proof = task ? indexedCurrentProofForTask(task) : undefined
-      const proofBlocked = indexedTaskProofBlocked(task!, proof, taskById, currentProofByTaskId, indexedState?.queue.selectedReleaseId ?? null) ||
+      const proofBlocked = indexedTaskProofBlocked(task!, proof, taskById, currentProofByTaskId, indexedState?.queue.selectedReleaseId ?? null, selectedProofStyle) ||
         (!proof && !currentProofByTaskId.has(task!.id) && Boolean(row.proofBlocked))
       const normalized = normalizeProjectScopeRowReadModel({
         ...row,
@@ -1267,6 +1943,18 @@ export function writeProjectSummaryProjectionFromIndexedState(
   const snapshotProjection = currentProjection
     ? { currentProjection }
     : statusProjection
+  const stateResolution = expectedProjectRevision === null
+    ? undefined
+    : canonicalDecisionStateResolution({
+        projectId: projection.projectId,
+        projectRevision: expectedProjectRevision,
+        queueRevision: indexedState?.queueRevision ?? null,
+        selectedReleaseId: indexedState?.queue.selectedReleaseId ?? null,
+        decision: projection.decision,
+        generatedAt: projection.generatedAt,
+        releaseSummary: projection.releaseSummary,
+        releaseMembershipTaskIds: canonicalReleaseMembershipTaskIds(projection),
+      })
   /*
    * Indexed proof refreshes must publish the corrected scope rows as well as
    * the compact summary. Otherwise Release/Overview can be current while
@@ -1275,12 +1963,13 @@ export function writeProjectSummaryProjectionFromIndexedState(
   writeProjectStateDatabaseSummarySnapshot(tasksPath, {
     summary: projection,
     ...snapshotProjection,
+    ...(stateResolution ? { stateResolution } : {}),
     ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
       ? { expectedQueueRevision: input.expectedQueueRevision }
       : {}),
     ...(expectedProjectRevision !== null ? { expectedProjectRevision } : {}),
   })
-  return projection
+  return withPersistedReleaseMembershipRevision(tasksPath, projection)
 }
 
 export function buildProjectSummaryProjectionError(input: {
@@ -1290,6 +1979,8 @@ export function buildProjectSummaryProjectionError(input: {
   workspaceGoalsMtimeMs?: number | null
   approvedPlan?: ProjectSummaryApprovedPlan | null
   orientation?: ProjectOrientationSnapshot | null
+  documentedStructure?: OrientationWorkspaceImportDraftContext[]
+  sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[] | null
   error: unknown
   generatedAt?: string
   execution?: ProjectSummaryProjection['execution']
@@ -1323,6 +2014,13 @@ export function buildProjectSummaryProjectionError(input: {
     },
     scope: null,
     orientation: input.orientation ?? null,
+    documentedStructure: (input.documentedStructure ?? []).map(context => ({
+      ...context,
+      ...(context.refs ? { refs: [...context.refs] } : {}),
+      ...(context.releaseIds ? { releaseIds: [...context.releaseIds] } : {}),
+      ...(context.linkedTaskHints ? { linkedTaskHints: [...context.linkedTaskHints] } : {}),
+    })),
+    sourceCapabilityCatalog: summarizeSourceCapabilityCatalog(input.sourceCapabilities),
     orientationSpine: null,
     approvedPlan: input.approvedPlan ?? null,
     releaseSummary: {
@@ -1344,6 +2042,22 @@ export function buildProjectSummaryProjectionError(input: {
       blockers: [],
       updatedAt: input.generatedAt ?? new Date().toISOString(),
     },
+    decision: buildProjectDecisionProjection({
+      generatedAt: input.generatedAt ?? new Date().toISOString(),
+      start: {
+        canStart: false,
+        code: 'summary_unavailable',
+        message: 'The project summary could not be refreshed from its task state.',
+      },
+      release: {
+        scopeMode: 'unavailable',
+        release: null,
+        state: 'unknown',
+        blockers: [],
+      },
+      ownerInput: input.ownerInput,
+      runStatus: input.execution?.status ?? 'stopped',
+    }),
     ...(input.execution ? { execution: input.execution } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.ownerInput ? { ownerInput: input.ownerInput } : {}),
@@ -1366,28 +2080,72 @@ export function writeProjectSummaryProjection(
   const currentStateAuthority = input.currentStateAuthority ?? (
     readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) === 'database' ? 'database' : 'legacy'
   )
+  const canonicalQueueRecord = currentStateAuthority === 'database'
+    ? readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+    : null
+  if (currentStateAuthority === 'database' && canonicalQueueRecord === null) {
+    throw new Error('Cannot refresh a promoted project summary without the canonical queue definition.')
+  }
+  const canonicalQueue = canonicalQueueRecord === null
+    ? null
+    : normalizeLegacyTaskQueueForMigration(canonicalQueueRecord)
+  const capturedProjectRevision = currentStateAuthority === 'database'
+    ? readProjectStateDatabaseRevisionFromTasksPath(tasksPath)
+    : null
   const projection = buildProjectSummaryProjection({
     ...input,
+    ...(canonicalQueue !== null ? { queue: canonicalQueue as TaskQueueModel } : {}),
     currentStateAuthority,
     taskQueueMtimeMs: input.taskQueueMtimeMs ?? taskQueueMtimeMs(tasksPath),
     workspaceGoalsMtimeMs: input.workspaceGoalsMtimeMs ?? workspaceGoalsMtimeMs(tasksPath),
     approvedPlan: input.approvedPlan ?? readApprovedPlan(tasksPath),
+    sourceCapabilities: input.sourceCapabilities ?? readProjectStateDatabaseSourceCapabilities(tasksPath),
   })
-  writeProjectStateDatabaseSnapshot(tasksPath, {
-    queue: input.queue,
-    summary: projection,
-    ...(input.execution ? { execution: input.execution } : {}),
-    ...(input.runtime ? { runtime: input.runtime } : {}),
-    ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
-    scopeRows: projectSummaryScopeRowsForQueue(input.queue, projection.approvedPlan, input.projectionTasks, {
-      currentStateAuthority,
-    }),
-    ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
-      ? { expectedQueueRevision: input.expectedQueueRevision }
-      : {}),
-    ...(input.compatibilityExport ? { compatibilityExport: input.compatibilityExport } : {}),
+  const projectedQueue = canonicalQueue !== null
+    ? canonicalQueue as unknown as TaskQueueModel
+    : input.queue
+  const scopeRows = projectSummaryScopeRowsForQueue(projectedQueue, projection.approvedPlan, input.projectionTasks, {
+    currentStateAuthority,
   })
-  return projection
+  const stateResolution = capturedProjectRevision === null
+    ? undefined
+    : canonicalDecisionStateResolution({
+        projectId: projection.projectId,
+        projectRevision: capturedProjectRevision,
+        queueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
+        selectedReleaseId: (canonicalQueue as { selectedReleaseId?: string } | null)?.selectedReleaseId ?? null,
+        decision: projection.decision,
+        generatedAt: projection.generatedAt,
+        releaseSummary: projection.releaseSummary,
+        releaseMembershipTaskIds: canonicalReleaseMembershipTaskIds(projection),
+      })
+  if (currentStateAuthority === 'database') {
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: projection,
+      scopeRows,
+      ...(stateResolution ? { stateResolution } : {}),
+      ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
+        ? { expectedQueueRevision: input.expectedQueueRevision }
+        : {}),
+      ...(capturedProjectRevision !== null
+        ? { expectedProjectRevision: capturedProjectRevision }
+        : {}),
+    })
+  } else {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: projectedQueue,
+      summary: projection,
+      ...(input.execution ? { execution: input.execution } : {}),
+      ...(input.runtime ? { runtime: input.runtime } : {}),
+      ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
+      scopeRows,
+      ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
+        ? { expectedQueueRevision: input.expectedQueueRevision }
+        : {}),
+      ...(input.compatibilityExport ? { compatibilityExport: input.compatibilityExport } : {}),
+    })
+  }
+  return withPersistedReleaseMembershipRevision(tasksPath, projection)
 }
 
 export interface PreparedProjectSummaryProjection {
@@ -1409,6 +2167,9 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
     projectRoot?: string
     queue: unknown
     projectionTasks?: TaskQueueModel['tasks']
+    /** Compact source-backed project skeleton, never a raw intake scan. */
+    documentedStructure?: OrientationWorkspaceImportDraftContext[]
+    sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[] | null
     generatedAt?: string
     /** Migration-only seed for importing the historical summary export. */
     existingSummary?: ProjectSummaryProjection | null
@@ -1457,6 +2218,8 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
         currentStateAuthority: databaseAuthority ? 'database' : 'legacy',
         projectionTasks,
         ...supplemental,
+        documentedStructure: input.documentedStructure ?? supplemental.documentedStructure,
+        sourceCapabilities: input.sourceCapabilities ?? readProjectStateDatabaseSourceCapabilities(tasksPath),
         orientation,
       })
     : buildProjectSummaryProjectionError({
@@ -1467,6 +2230,8 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
         workspaceGoalsMtimeMs: goalsMtimeMs,
         approvedPlan,
         ...supplemental,
+        documentedStructure: input.documentedStructure ?? supplemental.documentedStructure,
+        sourceCapabilities: input.sourceCapabilities ?? readProjectStateDatabaseSourceCapabilities(tasksPath),
         orientation,
       })
   const detailQueue = parsed.success
@@ -1508,12 +2273,18 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
     projectRoot?: string
     queue: unknown
     projectionTasks?: TaskQueueModel['tasks']
+    /** Compact source-backed project skeleton, never a raw intake scan. */
+    documentedStructure?: OrientationWorkspaceImportDraftContext[]
     generatedAt?: string
     expectedQueueRevision?: number | null
     expectedProjectRevision?: number | null
     /** Migration-only request to retain the retired queue export. */
     compatibilityExport?: 'full' | 'compact'
-    /** Refresh a promoted read model without rewriting queue definitions. */
+    /**
+     * Explicit structural queue commit. Promoted projects default to a
+     * summary-only refresh so an incidental projection cannot rewrite a
+     * release relation.
+     */
     queueCommit?: boolean
     /** Migration-only seed for importing the historical summary export. */
     existingSummary?: ProjectSummaryProjection | null
@@ -1532,11 +2303,35 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
   // token belongs to the read that began that work, not to a later read after
   // the projection has already been built.
   const capturedProjectRevision = input.expectedProjectRevision ?? readProjectStateDatabaseRevisionFromTasksPath(tasksPath)
-  const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, input)
-  const { projection, detailQueue, scopeRows } = prepared
   const databaseAuthority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) === 'database'
-  if (input.queueCommit === false && databaseAuthority) {
+  const canonicalQueueRecord = databaseAuthority && input.queueCommit !== true
+    ? readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+    : null
+  if (databaseAuthority && input.queueCommit !== true && canonicalQueueRecord === null) {
+    throw new Error('Cannot refresh a promoted project summary without the canonical queue definition.')
+  }
+  const canonicalQueue = canonicalQueueRecord === null
+    ? null
+    : normalizeLegacyTaskQueueForMigration(canonicalQueueRecord)
+  const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+    ...input,
+    ...(canonicalQueue !== null ? { queue: canonicalQueue } : {}),
+  })
+  const { projection, detailQueue, scopeRows } = prepared
+  if (databaseAuthority && input.queueCommit !== true) {
     const expectedProjectRevision = capturedProjectRevision
+    const stateResolution = expectedProjectRevision === null
+      ? undefined
+      : canonicalDecisionStateResolution({
+          projectId: projection.projectId,
+          projectRevision: expectedProjectRevision,
+          queueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
+          selectedReleaseId: (canonicalQueue as { selectedReleaseId?: string } | null)?.selectedReleaseId ?? null,
+          decision: projection.decision,
+          generatedAt: projection.generatedAt,
+          releaseSummary: projection.releaseSummary,
+          releaseMembershipTaskIds: canonicalReleaseMembershipTaskIds(projection),
+        })
     const taskStatusRows = input.projectionTasks
       ? input.projectionTasks.map(task => ({
           taskId: task.id,
@@ -1552,6 +2347,7 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
             ...(scopeRows ? { scopeRows } : {}),
             ...(taskStatusRows ? { taskStatusRows } : {}),
           }),
+      ...(stateResolution ? { stateResolution } : {}),
       ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
         ? { expectedQueueRevision: input.expectedQueueRevision }
         : {}),
@@ -1574,7 +2370,7 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
         : {}),
     })
   }
-  return projection
+  return withPersistedReleaseMembershipRevision(tasksPath, projection)
 }
 
 /**
@@ -1591,6 +2387,7 @@ export function updateProjectSummaryProjection(
     runtime?: Partial<NonNullable<ProjectSummaryProjection['runtime']>>
     ownerInput?: Partial<NonNullable<ProjectSummaryProjection['ownerInput']>>
     orientation?: ProjectOrientationSnapshot | null
+    availability?: ProjectStateDatabaseAvailability
   },
 ): ProjectSummaryProjection | null {
   const now = new Date().toISOString()
@@ -1630,8 +2427,13 @@ export function updateProjectSummaryProjection(
         : {}),
       ...(patch.orientation !== undefined ? { orientation: patch.orientation } : {}),
     }
+    if (patch.execution && next.decision && next.execution) {
+      next.decision = applyRuntimeExecutionToProjectDecision(next.decision, next.execution)
+    }
+    const resolvedNext = next
+    if (!resolvedNext) throw new Error('Project summary update did not produce a projection.')
     return {
-      summary: next as unknown as Record<string, unknown>,
+      summary: resolvedNext as unknown as Record<string, unknown>,
       currentState: {
         ...(patch.execution && next.execution
           ? { execution: next.execution }
@@ -1639,6 +2441,18 @@ export function updateProjectSummaryProjection(
         ...(patch.runtime && next.runtime
           ? { runtime: next.runtime }
           : {}),
+        ...(patch.availability ? { availability: patch.availability } : {}),
+        stateResolution: ({ projectRevision, queueRevision, generatedAt }) =>
+          canonicalDecisionStateResolution({
+            projectId: resolvedNext.projectId,
+            projectRevision,
+            queueRevision,
+            selectedReleaseId: resolvedNext.releaseSummary.release?.id ?? null,
+            decision: resolvedNext.decision,
+            generatedAt,
+            releaseSummary: resolvedNext.releaseSummary,
+            releaseMembershipTaskIds: canonicalReleaseMembershipTaskIds(resolvedNext),
+          }),
       },
     }
   })
@@ -1648,22 +2462,24 @@ export function updateProjectSummaryProjection(
 function existingProjectionFields(
   tasksPath: string,
   seed?: ProjectSummaryProjection | null,
-): Pick<ProjectSummaryProjectionInput, 'execution' | 'runtime' | 'ownerInput' | 'orientation'> {
+): Pick<ProjectSummaryProjectionInput, 'execution' | 'runtime' | 'ownerInput' | 'orientation' | 'documentedStructure'> {
   const existing = seed ?? readProjectSummaryProjection(tasksPath)
   return {
     ...(existing?.execution ? { execution: existing.execution } : {}),
     ...(existing?.runtime ? { runtime: existing.runtime } : {}),
     ...(existing?.ownerInput ? { ownerInput: existing.ownerInput } : {}),
     ...(existing?.orientation ? { orientation: existing.orientation } : {}),
+    ...(existing?.documentedStructure?.length ? { documentedStructure: existing.documentedStructure } : {}),
   }
 }
 
 export function readProjectSummaryProjection(tasksPath: string): ProjectSummaryProjection | null {
   const databaseSummary = readProjectStateDatabaseSummary<ProjectSummaryProjection>(tasksPath)
   if (databaseSummary) {
+    const summary = synchronizeProjectSummaryDecision(databaseSummary.payload)
     return {
-      ...databaseSummary.payload,
-      freshness: databaseSummary.payload.version === PROJECT_SUMMARY_PROJECTION_VERSION
+      ...summary,
+      freshness: projectSummaryProjectionIsCurrent(summary)
         ? databaseSummary.freshness
         : 'stale',
     }
@@ -1688,7 +2504,7 @@ export function readProjectSummaryProjectionForMigration(tasksPath: string): Pro
       (parsed.version !== PROJECT_SUMMARY_PROJECTION_VERSION && !LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS.has(parsed.version))) {
       return null
     }
-    if (LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS.has(parsed.version)) {
+    if (LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS.has(parsed.version) || !projectSummaryProjectionIsCurrent(parsed)) {
       return { ...parsed, freshness: 'stale' } as unknown as ProjectSummaryProjection
     }
     const recordedMtimeMs = parsed.source?.taskQueueMtimeMs
@@ -1733,10 +2549,11 @@ export function readProjectSummaryShellProjection(tasksPath: string): ProjectSum
       includeApprovedPlan: false,
     })
     if (databaseSummary) {
+      const summary = synchronizeProjectSummaryDecision(databaseSummary.payload)
       return {
-        ...databaseSummary.payload,
+        ...summary,
         orientationSpine: null,
-        freshness: databaseSummary.payload.version === PROJECT_SUMMARY_PROJECTION_VERSION
+        freshness: projectSummaryProjectionIsCurrent(summary)
           ? databaseSummary.freshness
           : 'stale',
       }
@@ -1745,6 +2562,48 @@ export function readProjectSummaryShellProjection(tasksPath: string): ProjectSum
     // A corrupt or locked project stays visible as unavailable; it cannot fail the fleet shell.
   }
   return null
+}
+
+/**
+ * A matching version alone is not enough. Derived projection fields can be
+ * introduced by a partial writer or a failed upgrade; a summary without the
+ * shared decision packet must refresh instead of presenting old caches as
+ * current project state.
+ */
+export function projectSummaryProjectionIsCurrent(value: Pick<ProjectSummaryProjection, 'version' | 'decision' | 'sourceCapabilityCatalog'> | Record<string, unknown>): boolean {
+  if (value.version !== PROJECT_SUMMARY_PROJECTION_VERSION) return false
+  const decision = value.decision
+  const sourceCapabilityCatalog = value.sourceCapabilityCatalog
+  const decisionExecution = decision && typeof decision === 'object' && !Array.isArray(decision)
+    ? (decision as { execution?: unknown }).execution
+    : null
+  const focusIsAtomic = !decisionExecution || typeof decisionExecution !== 'object' || Array.isArray(decisionExecution)
+    ? false
+    : (() => {
+        const execution = decisionExecution as { focusTaskId?: unknown; focusTaskTitle?: unknown; focus?: unknown }
+        if (typeof execution.focusTaskId !== 'string' || !execution.focusTaskId.trim()) return true
+        if (!execution.focus || typeof execution.focus !== 'object' || Array.isArray(execution.focus)) return false
+        const focus = execution.focus as { taskId?: unknown; displayTitle?: unknown }
+        return focus.taskId === execution.focusTaskId &&
+          typeof focus.displayTitle === 'string' && focus.displayTitle.trim().length > 0 &&
+          (typeof execution.focusTaskTitle !== 'string' || focus.displayTitle === execution.focusTaskTitle)
+      })()
+  return Boolean(
+    decision &&
+    typeof decision === 'object' &&
+    !Array.isArray(decision) &&
+    (decision as { version?: unknown }).version === 1 &&
+    (decision as { planExecution?: unknown }).planExecution &&
+    typeof (decision as { planExecution?: unknown }).planExecution === 'object' &&
+    !Array.isArray((decision as { planExecution?: unknown }).planExecution) &&
+    typeof ((decision as { planExecution?: { state?: unknown } }).planExecution?.state) === 'string' &&
+    typeof ((decision as { planExecution?: { code?: unknown } }).planExecution?.code) === 'string' &&
+    focusIsAtomic &&
+    sourceCapabilityCatalog &&
+    typeof sourceCapabilityCatalog === 'object' &&
+    !Array.isArray(sourceCapabilityCatalog) &&
+    ['unavailable', 'empty', 'ready'].includes((sourceCapabilityCatalog as { availability?: unknown }).availability as string),
+  )
 }
 
 export function projectSummaryProjectionNeedsBackfill(tasksPath: string): boolean {
@@ -1758,24 +2617,42 @@ export function backfillProjectSummaryProjection(
   let raw: unknown
   const historicalSummary = readProjectSummaryProjectionForMigration(tasksPath)
   const databaseAuthority = readProjectStateDatabaseAuthorityFromTasksPath(tasksPath) === 'database'
-  try {
-    raw = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
-    if (raw === null && databaseAuthority) {
+  if (databaseAuthority) {
+    const canonicalQueue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+    if (!canonicalQueue) {
       return buildProjectSummaryProjectionError({
         projectId: input.projectId,
         error: new Error('The authoritative project detail store is unavailable; no queue was rebuilt.'),
         generatedAt: input.now,
       })
     }
-    raw ??= JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
-  } catch (error) {
-    if (databaseAuthority) {
-      return buildProjectSummaryProjectionError({
+    const normalizedCanonicalQueue = normalizeLegacyTaskQueueForMigration(canonicalQueue, input.now ?? new Date().toISOString())
+    const parsedCanonicalQueue = TaskQueue.safeParse(normalizedCanonicalQueue)
+    if (parsedCanonicalQueue.success) {
+      return writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
         projectId: input.projectId,
-        error,
+        projectRoot: input.projectRoot,
+        queue: parsedCanonicalQueue.data,
         generatedAt: input.now,
+        queueCommit: false,
+        existingSummary: historicalSummary,
       })
     }
+    const indexed = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: input.projectId,
+      generatedAt: input.now,
+    })
+    if (indexed) return indexed
+    return buildProjectSummaryProjectionError({
+      projectId: input.projectId,
+      error: new Error('The authoritative project index is unavailable; no queue was rebuilt.'),
+      generatedAt: input.now,
+    })
+  }
+  try {
+    raw = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+    raw ??= JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
+  } catch (error) {
     return writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
       projectId: input.projectId,
       projectRoot: input.projectRoot,
@@ -1848,13 +2725,17 @@ function buildReleaseSummary(input: {
   scopeProjection: ReturnType<typeof buildProjectScopeProjection>
   generatedAt: string
 }): ProjectSummaryReleaseSummary {
-  const rows = input.scopeProjection.rows.filter(row => row.scope === 'included')
-  const executionRows = executionScopeRows(rows)
-  const included = executionRows.length
-  const done = executionRows.filter(row => row.handoffState === 'done').length
   const release = input.scopeProjection.selectedScope
     ? (input.queue.releases ?? []).find(candidate => candidate.id === input.scopeProjection.selectedScope?.id) ?? null
     : null
+  const rows = input.scopeProjection.rows.filter(row => row.scope === 'included')
+  const releaseRows = release ? rowsForReleaseMembership(rows, release, 'nodeIds') : []
+  const executionRows = releaseRows.length > 0 ? releaseRows : executionScopeRows(rows)
+  const included = release
+    ? releaseMembershipTaskIds(release, 'nodeIds').length
+    : executionRows.length
+  const done = executionRows.filter(row => row.handoffState === 'done').length
+  const deferred = input.scopeProjection.counts.deferred
   const releaseMetadata = release
     ? {
         id: release.id,
@@ -1878,9 +2759,9 @@ function buildReleaseSummary(input: {
       // from progressing, not only tasks whose literal status is blocked.
       // Brief/spec gaps and missing proof are just as material to readiness.
       blocked: executionRows.filter(row => row.blocksRelease).length,
-      deferred: input.scopeProjection.counts.deferred,
-      ownerBlocked: input.scopeProjection.counts.ownerBlocked,
-      proofBlocked: input.scopeProjection.counts.proofBlocked,
+      deferred,
+      ownerBlocked: executionRows.filter(row => projectScopeRowNeedsOwnerInput(row)).length,
+      proofBlocked: executionRows.filter(row => row.proofBlocked).length,
     },
     taskStatusCounts: taskStatusCounts(executionRows),
     blockers: input.scopeProjection.release.blockers,

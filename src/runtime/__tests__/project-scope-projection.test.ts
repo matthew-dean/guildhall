@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Task, TaskQueue } from '@guildhall/core'
-import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, selectedProjectScopeForQueue } from '../project-scope-projection.js'
+import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, projectScopeMembershipCounts, selectedProjectScopeForQueue } from '../project-scope-projection.js'
 
 const now = '2026-07-04T12:00:00.000Z'
 
@@ -51,6 +51,24 @@ function queue(tasks: Task[]): TaskQueue {
 }
 
 describe('buildProjectScopeProjection', () => {
+  it('keeps public release membership totals when execution scope is compacted', () => {
+    expect(projectScopeMembershipCounts({
+      id: 'stage-1',
+      kind: 'release',
+      nodeIds: ['work:parent'],
+      deferredNodeIds: ['work:execution-only-deferred'],
+    }, [{
+      id: 'stage-1',
+      label: 'Stage 1',
+      kind: 'release',
+      state: 'active',
+      source: 'owner_approved',
+      proofStyle: 'unspecified',
+      nodeIds: ['work:parent', 'work:also-included'],
+      deferredNodeIds: ['work:later-a', 'work:later-b'],
+    }])).toEqual({ taskCount: 2, deferredTaskCount: 2 })
+  })
+
   it('does not manufacture a release from task membership during a current-state read', () => {
     const selected = selectedProjectScopeForQueue({
       tasks: [task({ id: 'task-unreleased', releaseIds: ['release-in-task-only'] })],
@@ -58,6 +76,32 @@ describe('buildProjectScopeProjection', () => {
     })
 
     expect(selected).toBeNull()
+  })
+
+  it('does not widen materialized release membership from stale task release ids', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        task({ id: 'task-current', title: 'Current task', status: 'done', releaseIds: ['stage-1'] }),
+        task({ id: 'task-stale', title: 'Stale imported duplicate', status: 'done', releaseIds: ['stage-1'] }),
+      ],
+    })
+
+    expect(projection.selectedScope?.nodeIds).toEqual(['work:task-current'])
+    expect(projection.rows.find(row => row.taskId === 'task-current')).toMatchObject({ scope: 'included' })
+    expect(projection.rows.find(row => row.taskId === 'task-stale')).toMatchObject({ scope: 'deferred' })
   })
 
   it('makes script-only proof requirements part of the shared scope projection', () => {
@@ -138,7 +182,8 @@ describe('buildProjectScopeProjection', () => {
           status: 'done',
           semanticKind: 'proof_setup',
           workVisibility: { kind: 'internal_step', countInProjectTotals: false },
-          releaseIds: ['stage-1-shipped'],
+          proofForReleaseId: 'stage-1-shipped',
+          releaseIds: [],
           hierarchy: { parentId: 'task-parent', childIds: [], order: 1, relation: 'decomposes' },
         }),
         task({
@@ -147,7 +192,8 @@ describe('buildProjectScopeProjection', () => {
           status: 'done',
           semanticKind: 'proof_setup',
           workVisibility: { kind: 'internal_step', countInProjectTotals: false },
-          releaseIds: ['stage-1-r1'],
+          proofForReleaseId: 'stage-1-r1',
+          releaseIds: [],
           hierarchy: { parentId: 'task-parent', childIds: [], order: 1, relation: 'decomposes' },
           acceptanceCriteria: [{
             id: 'ac-1',

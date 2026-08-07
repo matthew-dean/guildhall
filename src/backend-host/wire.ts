@@ -137,6 +137,8 @@ export const backendEventSchema = z.object({
   // and `escalation_raised` events. The remainder of the union members leave
   // them unset.
   task_id: z.string().nullish(),
+  /** Typed identity for compact live-execution projections; never parse `message`. */
+  task_title: z.string().nullish(),
   from_status: z.string().nullish(),
   to_status: z.string().nullish(),
   agent_name: z.string().nullish(),

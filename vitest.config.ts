@@ -27,6 +27,10 @@ export default defineConfig({
         replacement: resolve(__dirname, 'src/runtime/proof-paths.ts'),
       },
       {
+        find: '@guildhall/runtime/proof-health',
+        replacement: resolve(__dirname, 'src/runtime/proof-health.ts'),
+      },
+      {
         find: '@guildhall/runtime/spec-quality',
         replacement: resolve(__dirname, 'src/runtime/spec-quality.ts'),
       },
@@ -45,6 +49,18 @@ export default defineConfig({
       {
         find: '@guildhall/runtime/task-transition',
         replacement: resolve(__dirname, 'src/runtime/task-transition.ts'),
+      },
+      {
+        find: '@guildhall/sessions/atomic',
+        replacement: resolve(__dirname, 'src/sessions/atomic.ts'),
+      },
+      {
+        find: '@guildhall/sessions/local-history',
+        replacement: resolve(__dirname, 'src/sessions/local-history.ts'),
+      },
+      {
+        find: '@guildhall/sessions/paths',
+        replacement: resolve(__dirname, 'src/sessions/paths.ts'),
       },
       {
         find: '@guildhall/levers/profiles',

@@ -2,7 +2,13 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { AcceptanceCriteria, explicitTaskStructuralIdentity, type ProjectRelease, type Task } from '@guildhall/core'
-import { getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import {
+  clearTaskRuntimeState,
+  clearTaskWorkspaceState,
+  getProjectSystemStatePathFromMemoryDir,
+  inferProjectRootFromMemoryDir,
+  type ProjectStateDatabaseSourceCapability,
+} from '@guildhall/sessions'
 import {
   planEvidenceWorkGraph,
   type EvidenceSource,
@@ -22,7 +28,7 @@ import {
   importedContractStructuralRepairReadiness,
   importedContractWorkIsStructurallyIncomplete,
 } from './imported-work-integrity.js'
-import { taskDoneButProofMissing } from './proof-health.js'
+import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { readProjectTaskQueueForMutationSync, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
 
 export type ProjectReintakeSource = EvidenceSource
@@ -31,8 +37,16 @@ export interface ProjectReintakeInput {
   now?: string
   projectPath?: string
   sources: ProjectReintakeSource[]
+  /**
+   * When supplied by the live product route, this catalog is the only source
+   * allowed to create/reframe executable work. The prose `sources` remain
+   * visible audit evidence and are never parsed into task authority.
+   */
+  sourceCapabilities?: readonly ProjectStateDatabaseSourceCapability[]
   tasks: Array<Record<string, unknown>>
-  releases?: Array<Pick<ProjectRelease, 'id' | 'label' | 'state' | 'nodeIds' | 'deferredNodeIds' | 'supersedesReleaseId'>>
+  /** Raw authoritative task definitions used only to guard draft application. */
+  taskQueueFingerprintTasks?: Array<Record<string, unknown>>
+  releases?: Array<Pick<ProjectRelease, 'id' | 'label' | 'state' | 'nodeIds' | 'deferredNodeIds' | 'supersedesReleaseId'> & Pick<Partial<ProjectRelease>, 'proofStyle'>>
 }
 
 export interface ProjectReintakeDraft {
@@ -42,6 +56,7 @@ export interface ProjectReintakeDraft {
   status: 'draft' | 'applied' | 'dismissed'
   taskQueueFingerprint: string
   selectedReleaseId?: string
+  intakeStatus?: 'needs_structured_capability_intake' | 'catalog_ready'
   releases?: ProjectReintakeReleaseDraft[]
   sources: Array<{ path: string; kind: string }>
   summary: {
@@ -66,7 +81,7 @@ export interface ReintakeChangeGroup {
 
 export type ReintakeChange =
   | { kind: 'keep'; taskId: string; reason: string }
-  | { kind: 'reframe'; taskId: string; before: TaskSummary; after: ReintakeTaskDraft; reason: string }
+  | { kind: 'reframe'; taskId: string; before: TaskSummary; after: ReintakeTaskDraft; reopenForProof?: boolean; reason: string }
   | ReintakeMergeChange
   | { kind: 'archive'; taskId: string; reason: string; archiveCode?: 'unsupported_weak_preimplementation' | string }
   | { kind: 'create'; task: ReintakeTaskDraft; reason: string }
@@ -102,6 +117,7 @@ export interface ReintakeTaskDraft {
   acceptanceCriteria: Task['acceptanceCriteria']
   references?: string[]
   sourceClaims?: Task['sourceClaims']
+  capabilityBindings?: Task['capabilityBindings']
   releaseIds?: string[]
   stageAlignment?: string
   spec?: string
@@ -139,11 +155,17 @@ export interface ProjectReintakeApplyResult {
 
 export function planProjectReintake(input: ProjectReintakeInput): ProjectReintakeDraft {
   const now = input.now ?? new Date().toISOString()
+  if (input.sourceCapabilities !== undefined) {
+    return planCatalogBackedProjectReintake(input, now)
+  }
   const groups: ReintakeChangeGroup[] = []
   const usedTaskIds = new Set<string>()
   const selectedRelease = selectReintakeRelease(detectSelectedRelease(input.sources), input)
   const protectedProgressTaskIds = new Set(input.tasks
     .filter(task => isStartedOrCompletedTask(task) && !importedContractWorkIsStructurallyIncomplete(task))
+    // A completion claim without the selected release's current proof is a
+    // repair candidate, not immutable historical progress.
+    .filter(task => stringField(task, 'status') !== 'done' || !taskNeedsCurrentScopeProof(task, selectedRelease))
     .map(task => stringField(task, 'id'))
     .filter((id): id is string => Boolean(id)))
 
@@ -168,7 +190,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   })
   graphPlan = dedupeTasksCoveredBySelectedReleaseScope(graphPlan, selectedRelease)
   const completedTaskIds = new Set(input.tasks
-    .filter(task => stringField(task, 'status') === 'done')
+    .filter(task => stringField(task, 'status') === 'done' && !taskNeedsCurrentScopeProof(task, selectedRelease))
     .map(task => stringField(task, 'id'))
     .filter((id): id is string => Boolean(id)))
   const graphTaskIds = new Set(graphPlan.tasks.map(task => task.id))
@@ -179,6 +201,9 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   const allowedDependencyIds = new Set([...graphTaskIds, ...protectedProgressTaskIds]
     .filter(id => !nonBlockingDependencyIds.has(id)))
   const graphChanges = graphPlan.tasks
+    // A historical done flag without current proof is not preserved progress.
+    // Reconcile the same source-owned task so the selected release has one
+    // authoritative record instead of a duplicate replacement tree.
     .filter(task => !completedTaskIds.has(task.id))
     .filter(task => !protectedProgressTaskIds.has(task.id))
     .map(task => graphTaskChange(
@@ -363,12 +388,80 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     createdAt: now,
     createdBy: 'project-reintake',
     status: 'draft',
-    taskQueueFingerprint: fingerprint(input.tasks),
+    taskQueueFingerprint: fingerprint(input.taskQueueFingerprintTasks ?? input.tasks),
     ...(selectedRelease && releases.length > 0 ? { selectedReleaseId: selectedRelease.id, releases } : {}),
     sources: input.sources.map(source => ({ path: source.path, kind: 'source' })),
     summary: summarize(groups),
     groups,
   }
+}
+
+/**
+ * The live re-intake path does not derive work from Markdown/table prose.
+ * Catalog capability IDs are already source-owned structured facts; this
+ * produces only bounded planning cards, never an execution-ready spec.
+ */
+function planCatalogBackedProjectReintake(
+  input: ProjectReintakeInput,
+  now: string,
+): ProjectReintakeDraft {
+  const selectedRelease = selectReintakeRelease(null, input)
+  const capabilities = input.sourceCapabilities ?? []
+  const existingBindings = new Set(input.tasks.flatMap(task => (
+    Array.isArray(task.capabilityBindings)
+      ? task.capabilityBindings.flatMap(binding => (
+        binding !== null && typeof binding === 'object' && !Array.isArray(binding) &&
+        typeof (binding as { capabilityId?: unknown }).capabilityId === 'string'
+          ? [(binding as { capabilityId: string }).capabilityId]
+          : []
+      ))
+      : []
+  )))
+  const changes: ReintakeChange[] = capabilities
+    .filter(capability => capability.state === 'planned')
+    .filter(capability => !existingBindings.has(capability.id))
+    .map(capability => ({
+      kind: 'create' as const,
+      reason: `Structured source capability ${capability.id} is not yet allocated to project work.`,
+      task: {
+        id: capabilityTaskId(capability.id),
+        title: capability.label,
+        description: `Plan the work needed to satisfy the structured capability ${capability.id}.`,
+        sourceIdentity: capability.id,
+        deliverableName: capability.id,
+        domain: capability.adapterId,
+        status: 'import_draft' as const,
+        priority: 'high' as const,
+        dependsOn: [],
+        acceptanceCriteria: [],
+        references: [...capability.evidenceRefs],
+        capabilityBindings: [{ capabilityId: capability.id, relation: 'plans' }],
+        ...(capability.releaseIds.length > 0 ? { releaseIds: [...capability.releaseIds] } : {}),
+      },
+    }))
+  const groups: ReintakeChangeGroup[] = changes.length > 0 ? [{
+    id: 'structured-capability-catalog',
+    title: 'Allocate structured source capabilities',
+    rationale: 'Each card comes from one typed source capability. It is intake work, not a generated implementation plan.',
+    changes,
+  }] : []
+  const releases = selectedRelease ? releaseDraftsFor(selectedRelease, groups, input.tasks) : []
+  return {
+    id: `reintake-${now.replace(/[^0-9A-Za-z]/g, '').slice(0, 14)}`,
+    createdAt: now,
+    createdBy: 'project-reintake',
+    status: 'draft',
+    taskQueueFingerprint: fingerprint(input.taskQueueFingerprintTasks ?? input.tasks),
+    ...(selectedRelease && releases.length > 0 ? { selectedReleaseId: selectedRelease.id, releases } : {}),
+    intakeStatus: capabilities.length === 0 ? 'needs_structured_capability_intake' : 'catalog_ready',
+    sources: input.sources.map(source => ({ path: source.path, kind: 'evidence' })),
+    summary: summarize(groups),
+    groups,
+  }
+}
+
+function capabilityTaskId(capabilityId: string): string {
+  return `task-capability-${slugify(capabilityId).slice(0, 72)}`
 }
 
 export async function writeProjectReintakeDraft(memoryDir: string, draft: ProjectReintakeDraft): Promise<string> {
@@ -433,6 +526,14 @@ export async function applyProjectReintakeDraft(input: {
     projectRoot: inferProjectRootFromMemoryDir(input.memoryDir),
     expectedQueueRevision: queueRead.expectedQueueRevision,
   })
+  // A re-intake reframe changes the authoritative planning state. Runtime and
+  // worktree overlays from an old execution must not re-promote a stale done
+  // status over the newly reopened task.
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  await Promise.all([...refreshedTaskIds].flatMap(taskId => [
+    clearTaskRuntimeState(projectRoot, taskId),
+    clearTaskWorkspaceState(projectRoot, taskId),
+  ]))
   await appendReintakeProgress(input.memoryDir, draft, groups.length, now)
   await writeProjectReintakeDraft(input.memoryDir, { ...draft, status: 'applied' })
   return { success: true, appliedGroups: groups.length }
@@ -472,9 +573,9 @@ function applyChange(
       ...withHistoricalReleaseMembership(change.after, shippedReleaseIdsByTask.get(change.taskId)),
       id: change.taskId,
       // Keep active work active. A completed task with no current proof is
-      // intentionally reopened into review; its historical notes/evidence
+      // intentionally reopened; its historical notes/evidence
       // remain attached to the same task record.
-      status: change.reopenForProof ? 'review' : (stringField(existing, 'status') ?? change.after.status),
+      status: change.reopenForProof ? change.after.status : (stringField(existing, 'status') ?? change.after.status),
       updatedAt: now,
       notes: [
         ...notes,
@@ -499,6 +600,10 @@ function applyChange(
     Object.assign(existing, {
       ...withHistoricalReleaseMembership(change.after, shippedReleaseIdsByTask.get(change.taskId)),
       id: change.taskId,
+      // Reframe is only planned for non-running work. Its regenerated source
+      // contract owns the planning status so stale `done`, `blocked`, or
+      // `spec_review` labels cannot outvote the new intake boundary.
+      status: change.after.status,
       updatedAt: now,
       notes: [
         ...notes,
@@ -619,9 +724,11 @@ function clearStaleReintakeDerivedFields(task: Record<string, unknown>): void {
     'productBrief',
     'requestIntake',
     'sizePlan',
+    'structuredSpec',
     'taskKind',
     'taskReadiness',
     'workUnitAnalysis',
+    'acceptanceCriteriaProofState',
   ]) {
     delete task[key]
   }
@@ -772,7 +879,7 @@ function graphTaskChange(
     ? structurallyIncompleteImportRepairDraft(draft as unknown as Record<string, unknown>, selectedRelease, projectPath, now)
     : draft
 
-  if (reframe) {
+  if (existing) {
     return {
       kind: 'reframe',
       taskId: task.id,
@@ -782,7 +889,10 @@ function graphTaskChange(
         status: stringField(existing ?? {}, 'status') ?? 'unknown',
       },
       after,
-      reason: `Reframe from current evidence: ${reframe.reason ?? task.title}`,
+      // A historical completion without the selected release's required proof
+      // cannot survive a re-intake merely because the task identity matched.
+      ...(taskNeedsCurrentScopeProof(existing, selectedRelease) ? { reopenForProof: true } : {}),
+      reason: `Reframe from current evidence: ${reframe?.reason ?? task.title}`,
     }
   }
 
@@ -948,18 +1058,31 @@ function evidenceTaskToDraft(
       spec: evidenceTaskSpec({ task, references, acceptanceCriteria: [], sources, contractNames }),
     }, now)
     : undefined
-  const importedBlueprint = projectPath && hasConcreteSourceEvidence
+  const importedBlueprint = hasConcreteSourceEvidence
     ? buildImportedBlueprintSeed(
       evidenceTaskToMaterializedImportTask(task, normalizedReferences, hasConcreteSourceEvidence),
       normalizedReferences,
-      projectPath,
+      projectPath ?? '',
       now,
+      sourceContentsByReference(sources, projectPath ?? ''),
     )
     : null
+  // A document reference or a roadmap table row grounds the task's identity,
+  // but it is not a complete implementation contract. Only a blueprint with
+  // documented proof or non-generic typed criteria can move work to review.
+  // This keeps re-intake from laundering generic importer prose into a
+  // seemingly executable spec.
+  const reviewableBlueprint = Boolean(
+    importedBlueprint &&
+    importedBlueprint.status === 'spec_review' &&
+    hasConcreteReintakeBlueprint(importedBlueprint),
+  )
   const sourceShapedCriteria = reintakeAcceptanceCriteria(task, contractNames)
-  const acceptanceCriteriaSource = reintakePrototypeTaskKind(task)
-    ? sourceShapedCriteria
-    : importedBlueprint?.acceptanceCriteria ?? sourceShapedCriteria
+  const acceptanceCriteriaSource = reviewableBlueprint
+    ? (reintakePrototypeTaskKind(task)
+        ? sourceShapedCriteria
+        : importedBlueprint?.acceptanceCriteria ?? sourceShapedCriteria)
+    : []
   const acceptanceCriteria = AcceptanceCriteria.array().parse(acceptanceCriteriaSource.map(criterion => ({
     ...criterion,
     id: criterion.id,
@@ -968,16 +1091,6 @@ function evidenceTaskToDraft(
     source: criterion.source ?? 'inferred',
     met: false,
   })))
-  const evidenceReviewable = hasReviewableReintakeBlueprint(
-    task,
-    references,
-    acceptanceCriteria,
-    contractNames,
-    hasConcreteSourceEvidence,
-  )
-  const reviewableBlueprint = importedBlueprint
-    ? (importedBlueprint.status === 'spec_review' && hasConcreteReintakeBlueprint(importedBlueprint)) || evidenceReviewable
-    : evidenceReviewable
   return {
     id: task.id,
     title: task.title,
@@ -1004,7 +1117,9 @@ function evidenceTaskToDraft(
     ...(releaseIds?.length ? { releaseIds } : {}),
     ...(importedBlueprint?.sourceClaims?.length ? { sourceClaims: importedBlueprint.sourceClaims } : {}),
     ...(task.stageAlignment ? { stageAlignment: task.stageAlignment } : {}),
-    spec: importedBlueprint?.spec ?? evidenceTaskSpec({ task, references, acceptanceCriteria, sources, contractNames }),
+    spec: reviewableBlueprint
+      ? importedBlueprint?.spec ?? evidenceTaskSpec({ task, references, acceptanceCriteria, sources, contractNames })
+      : evidenceTaskIntakeDraftSpec(task, references),
     ...(importedBlueprint?.structuredSpec ? { structuredSpec: importedBlueprint.structuredSpec } : {}),
     ...(reviewableBlueprint ? { productBrief: reintakeOwnedProductBrief(importedBlueprint?.productBrief) ?? reintakeProductBrief(task, contractNames) } : {}),
     proofPaths: (reviewableBlueprint
@@ -1024,6 +1139,34 @@ function evidenceTaskToDraft(
     ...(importedBlueprint?.blockerPlans ? { blockerPlans: importedBlueprint.blockerPlans } : {}),
     ...(importedBlueprint?.contextBudget ? { contextBudget: importedBlueprint.contextBudget } : {}),
   }
+}
+
+function sourceContentsByReference(
+  sources: ProjectReintakeSource[],
+  projectPath: string,
+): ReadonlyMap<string, string> {
+  const contents = new Map<string, string>()
+  for (const source of sources) {
+    contents.set(source.path, source.content)
+    contents.set(source.path.replace(/\\/g, '/'), source.content)
+    if (!path.isAbsolute(source.path)) {
+      contents.set(path.resolve(projectPath, source.path), source.content)
+    }
+  }
+  return contents
+}
+
+function evidenceTaskIntakeDraftSpec(task: EvidenceTask, references: string[]): string {
+  return [
+    '## Intake needed',
+    `The cited sources establish **${task.title}** as scoped work, but they do not yet provide a task-specific proof contract.`,
+    '',
+    '## Source trail',
+    ...(references.length > 0 ? references.map(reference => `- ${reference}`) : ['- No source reference was retained.']),
+    '',
+    '## Next action',
+    'Shape a bounded spec with the concrete behavior, acceptance criteria, and proof path before this task can enter review.',
+  ].join('\n')
 }
 
 function sourceEvidenceSupportsBlueprint(
@@ -1361,25 +1504,6 @@ function reintakePrototypeTaskKind(
   return null
 }
 
-function hasReviewableReintakeBlueprint(
-  task: EvidenceTask,
-  references: string[],
-  acceptanceCriteria: Task['acceptanceCriteria'],
-  contractNames: string[],
-  sourceEvidenceIsConcrete = false,
-): boolean {
-  if (contractShapedImportHasNoConcreteContracts({ semanticKind: task.semanticKind, contractNames })) return false
-  return (
-    references.length > 0 &&
-    acceptanceCriteria.length > 0 &&
-    (
-      contractNames.length > 0 ||
-      task.proofPaths.some(path => path.source === 'documented') ||
-      sourceEvidenceIsConcrete
-    )
-  )
-}
-
 function reintakeProductBrief(task: EvidenceTask, contractNames: string[]): NonNullable<Task['productBrief']> {
   const prototypeKind = reintakePrototypeTaskKind(task)
   let successMetric = `${task.title} is specified from current source evidence with a clear proof boundary before implementation starts.`
@@ -1471,6 +1595,10 @@ type SelectedRelease = {
   scopeSourcePath?: string
   proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
   supersedesReleaseId?: string
+}
+
+function taskNeedsCurrentScopeProof(task: unknown, selectedRelease: SelectedRelease | null): boolean {
+  return taskDoneButProofMissingForScope(task, selectedRelease?.proofStyle)
 }
 
 function releaseProofStyleFromSource(content: string): SelectedRelease['proofStyle'] {
@@ -1667,6 +1795,7 @@ function selectReintakeRelease(
       id: reconciled.id,
       label: reconciled.label,
       supersedesReleaseId: reconciled.supersedesReleaseId,
+      ...(selectedRelease.proofStyle ? {} : reconciled.proofStyle ? { proofStyle: reconciled.proofStyle } : {}),
     }
   }
 
@@ -1825,7 +1954,7 @@ function refreshCurrentEvidenceChanges(
         status: existingStatus,
       },
       after,
-      reopenForProof: existingStatus === 'done' && taskDoneButProofMissing(existing),
+      reopenForProof: existingStatus === 'done' && taskNeedsCurrentScopeProof(existing, selectedRelease),
       reason: 'The current source trail names a more concrete proof path than the saved task plan.',
     })
   }

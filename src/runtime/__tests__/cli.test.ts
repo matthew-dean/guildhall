@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getProjectSystemStatePath } from '@guildhall/sessions'
+import { PROJECT_SUMMARY_PROJECTION_VERSION } from '../project-summary-projection.js'
 import {
   semanticCompletionBudget,
   semanticRepairCompletionBudget,
@@ -326,7 +327,32 @@ describe('Guildhall CLI surface', () => {
       queueRevision: 12,
       projectRevision: 14,
       rawQueue: { releases: [], selectedReleaseId: 'release-1' },
-      scopeRows: [],
+      scopeRows: [
+        {
+          taskId: 'task-1',
+          scope: 'included' as const,
+          eligibilityReason: 'selected' as const,
+          hierarchyRole: 'root' as const,
+          handoffState: 'done' as const,
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          proofBlocked: false,
+          sourceRefs: ['task:task-1'],
+        },
+        {
+          taskId: 'task-2',
+          scope: 'deferred' as const,
+          eligibilityReason: 'outside_selected_scope' as const,
+          hierarchyRole: 'root' as const,
+          handoffState: 'deferred' as const,
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          proofBlocked: false,
+          sourceRefs: ['task:task-2'],
+        },
+      ],
       scope: {
         id: 'release-1',
         label: 'Release 1',
@@ -338,7 +364,7 @@ describe('Guildhall CLI surface', () => {
       repositories: [],
       diagnostics: null,
       summary: {
-        version: 17 as const,
+        version: PROJECT_SUMMARY_PROJECTION_VERSION,
         projectId: 'demo',
         generatedAt: '2026-07-19T00:00:00.000Z',
         freshness: 'current' as const,
@@ -346,16 +372,30 @@ describe('Guildhall CLI surface', () => {
         counts: { total: 2, active: 0, draftReview: 0, blocked: 0, done: 1, shelved: 0, included: 1, deferred: 1, ready: 0, paused: 0, ownerBlocked: 0, proofBlocked: 0, byStatus: { done: 1 } },
         scope: { id: 'release-1', label: 'Release 1', kind: 'release' as const, source: 'release_plan', included: 1, deferred: 1 },
         orientation: null,
+        documentedStructure: [],
+        sourceCapabilityCatalog: { availability: 'empty' as const, total: 0, planned: 0, retired: 0 },
         orientationSpine: null,
         approvedPlan: null,
         releaseSummary: {
           scopeMode: 'named_release' as const,
           release: { id: 'release-1', label: 'Release 1', kind: 'release' as const, state: 'shipped', source: 'release_plan' },
           state: 'ready' as const,
-          counts: { total: 1, done: 1, unfinished: 0, ready: 0, active: 0, blocked: 0, deferred: 1, ownerBlocked: 0, proofBlocked: 0 },
-          taskStatusCounts: { done: 1 },
+          counts: { total: 2, done: 0, unfinished: 2, ready: 1, active: 0, blocked: 1, deferred: 7, ownerBlocked: 1, proofBlocked: 1 },
+          taskStatusCounts: { ready: 1, blocked: 1 },
           blockers: [],
           updatedAt: '2026-07-19T00:00:00.000Z',
+        },
+        decision: {
+          version: 1 as const,
+          projectRevision: 1,
+          queueRevision: 1,
+          generatedAt: '2026-07-19T00:00:00.000Z',
+          execution: { state: 'complete' as const, code: 'all_terminal' },
+          release: { state: 'ready' as const, releaseId: 'release-1', blockerTaskIds: [], proofBlockerTaskIds: [] },
+          ownerInput: { state: 'none' as const },
+          ownerReview: { state: 'none' as const },
+          primaryAction: { kind: 'review_release' as const, targetId: 'release-1', reasonCode: 'release_ready' },
+          conflicts: [],
         },
         nextAction: { label: 'Review' as const, message: 'Review completed scope.' },
         blockers: [],

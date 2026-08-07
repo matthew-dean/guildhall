@@ -1308,9 +1308,15 @@ function renderDeliverySpineContext(packet: TaskContextPacket): string {
     lines.push('')
   }
   const proof = packet.proofContext
-  if (proof.proofKind || proof.requiredProof.length > 0 || proof.provesPrimitives.length > 0) {
+  if (proof.proofKind || proof.releaseRequirement || proof.requiredProof.length > 0 || proof.provesPrimitives.length > 0) {
     lines.push('### Proof')
     if (proof.proofKind) lines.push(`Proof kind: ${proof.proofKind}`)
+    if (proof.releaseRequirement) {
+      lines.push(`Selected release proof policy: ${proof.releaseRequirement.proofStyle}`)
+      lines.push(proof.releaseRequirement.taskContract === 'attached'
+        ? 'This task has a typed script-proof contract.'
+        : 'This task is missing its typed script-proof contract. Return it to the proof/spec lane; do not invent a command from documentation.')
+    }
     if (proof.provesPrimitives.length > 0) {
       lines.push(`This task proves: ${proof.provesPrimitives.map(primitive => primitive.label).join(', ')}`)
     }

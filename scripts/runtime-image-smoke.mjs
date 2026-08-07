@@ -1,11 +1,16 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { buildReleaseManifest } from './release-manifest.mjs'
 
+const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8'))
+const releaseManifest = buildReleaseManifest({
+  guildhallVersion: process.env.GUILDHALL_RUNTIME_IMAGE_VERSION ?? manifest.version,
+})
 const image = process.env.GUILDHALL_RUNTIME_IMAGE
-  ?? 'ghcr.io/matthew-dean/guildhall-runtime-debian:0.11.0-trixie-node22-python313-playwright'
+  ?? `${releaseManifest.runtime.defaultImage.registry}/${releaseManifest.runtime.defaultImage.repository}:${releaseManifest.runtime.defaultImage.immutableTag}`
 const projectRoot = process.cwd()
 const explicitGuildhallHome = process.env.GUILDHALL_HOME?.trim()
 const guildhallHome = explicitGuildhallHome
@@ -25,7 +30,7 @@ function available(command, args) {
 function chooseEngine() {
   if (available('docker', ['info'])) return 'docker'
   if (available('podman', ['info'])) return 'podman'
-  throw new Error('Neither Docker nor Podman is running. Start Docker Desktop or Podman, then retry.')
+  throw new Error('Neither Docker nor Podman is running. Start Colima/Docker or Podman, then retry.')
 }
 
 const engine = process.env.GUILDHALL_CONTAINER_SMOKE_ENGINE || chooseEngine()

@@ -46,7 +46,7 @@ jobs:
         run: pnpm test:ui:install
 
       - name: Unit and integration tests
-        run: pnpm test
+        run: pnpm test:release
 
       - name: Build
         run: pnpm build

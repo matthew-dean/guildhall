@@ -15,6 +15,7 @@ import {
   projectRuntimeCompatibilityBlocker,
   readProjectRuntimeManifest,
   recordGuildhallRuntimeWrite,
+  runtimePackageVersionFromSearchRoots,
 } from '../runtime-compatibility.js'
 
 let tmp: string
@@ -35,6 +36,22 @@ describe('compareVersions', () => {
     expect(compareVersions('0.8', '0.8.0')).toBe(0)
     expect(compareVersions('0.8.1', '0.8.0')).toBe(1)
     expect(compareVersions('0.7.9', '0.8.0')).toBe(-1)
+  })
+})
+
+describe('runtime package identity', () => {
+  it('finds an installed package from the process root when a bundled module has no package ancestor', async () => {
+    const bundledChunk = path.join(tmp, 'bundle', 'dist', 'chunks')
+    const installedApp = path.join(tmp, 'installed', 'app')
+    await fs.mkdir(bundledChunk, { recursive: true })
+    await fs.mkdir(installedApp, { recursive: true })
+    await fs.writeFile(
+      path.join(installedApp, 'package.json'),
+      JSON.stringify({ name: 'guildhall', version: '9.9.9' }),
+      'utf8',
+    )
+
+    expect(runtimePackageVersionFromSearchRoots([bundledChunk, installedApp])).toBe('9.9.9')
   })
 })
 

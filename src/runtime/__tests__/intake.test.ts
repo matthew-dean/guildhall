@@ -19,6 +19,8 @@ import {
   getProjectSystemStatePathFromMemoryDir,
   getProjectTranscriptPath,
   readTaskRuntimeStore,
+  appendTaskEvidence,
+  upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 import { listOwnerInputRequests } from '../owner-input-store.js'
 import { buildEffectiveTask } from '../effective-task.js'
@@ -164,6 +166,22 @@ describe('createExploringTask', () => {
     const transcript = await fs.readFile(result.transcriptPath, 'utf-8')
     expect(transcript).toContain('Add a ghost button variant')
     expect(transcript).toContain('user')
+  })
+
+  it('persists invoking-surface source references on a new task', async () => {
+    await createExploringTask({
+      memoryDir,
+      ask: 'Re-intake the current release from its documented project sources.',
+      domain: 'looma',
+      projectPath: '/projects/looma',
+      sourceRefs: ['docs/project-brief.md', 'docs/current-release.md', 'docs/project-brief.md'],
+    })
+
+    const queue = await readQueue()
+    expect(queue.tasks[0]?.references).toEqual([
+      'docs/project-brief.md',
+      'docs/current-release.md',
+    ])
   })
 
   it('attaches an automatic pressure-test summary to small tasks', async () => {
@@ -408,6 +426,7 @@ describe('reframeTask', () => {
       memoryDir,
       taskId: result.taskId,
       reason: 'The old imported classification is stale.',
+      actor: 'codex_delegated_owner',
     })
 
     expect(reframed.success).toBe(true)
@@ -415,6 +434,18 @@ describe('reframeTask', () => {
     const reframedTask = updated.tasks.find(candidate => candidate.id === result.taskId)!
     expect(reframedTask.status).toBe('exploring')
     expect(reframedTask.taskKind).toBeUndefined()
+    expect(reframedTask.notes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        agentId: 'codex_delegated_owner',
+        role: 'codex_delegated_owner',
+        structured: expect.objectContaining({ source: 'codex_delegated_owner' }),
+      }),
+    ]))
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks[result.taskId]?.currentLifecycle).toMatchObject({
+      status: 'exploring',
+      source: 'rerun_spec',
+    })
   })
 
   it('keeps proof-specific recovery attached to a proof reframe', async () => {
@@ -436,6 +467,60 @@ describe('reframeTask', () => {
     const runtime = await readTaskRuntimeStore(tmpDir)
     expect(runtime.tasks[result.taskId]?.proofRecovery?.kind).toBe('proof')
     expect(runtime.tasks[result.taskId]?.proofRecovery?.reason).toContain('project-backed proof command')
+  })
+
+  it('reframes a stale done projection whose completion has already been reopened', async () => {
+    const result = await createExploringTask({
+      memoryDir,
+      ask: 'Rebuild the synopsis expansion plan',
+      domain: 'docs',
+      projectPath: '/projects/narrative-harness',
+    })
+    const reopenedAt = '2026-07-23T04:27:00.000Z'
+    const mutation = writePromotedTaskDetailMutation(tasksPath, result.taskId, {
+      projectRoot: tmpDir,
+      mutate: task => ({ ...task, status: 'done' }),
+    })
+    expect(mutation).not.toBeNull()
+    await appendTaskEvidence(tmpDir, result.taskId, {
+      id: 'historical-completion-reopened',
+      kind: 'completion_summary',
+      recordedAt: reopenedAt,
+      payload: {
+        taskId: result.taskId,
+        status: 'reopened',
+        reopenedAt,
+        summary: {
+          journey: 'Historical implementation completed in an earlier lifecycle.',
+          decision: 'Historical completion was superseded by a fresh plan.',
+          evidence: 'Earlier proof remains historical evidence.',
+          learningCandidates: [],
+          openResidue: 'Fresh planning remains open.',
+        },
+        retention: {
+          transcriptPrimaryArtifact: false,
+          compactedFullTranscript: false,
+          fullEvidenceAvailable: true,
+        },
+        evidenceRefs: [],
+        createdAt: reopenedAt,
+        createdBy: 'rerun-stage',
+      },
+    })
+
+    const reframed = await reframeTask({
+      memoryDir,
+      taskId: result.taskId,
+      reason: 'The terminal projection is historical, not current work.',
+      actor: 'codex_delegated_owner',
+    })
+
+    expect(reframed).toEqual({ success: true, newStatus: 'exploring' })
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks[result.taskId]?.currentLifecycle).toMatchObject({
+      status: 'exploring',
+      source: 'rerun_spec',
+    })
   })
 })
 
@@ -471,6 +556,28 @@ describe('approveSpec', () => {
     expect(result.newStatus).toBe('ready')
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('ready')
+  })
+
+  it('preserves a fresh lifecycle fence while approving its new spec', async () => {
+    const reopenedAt = '2026-07-23T04:27:00.000Z'
+    await upsertTaskRuntimeState(tmpDir, 'task-001', {
+      currentLifecycle: {
+        reopenedAt,
+        status: 'exploring',
+        source: 'rerun_spec',
+      },
+      updatedAt: reopenedAt,
+    })
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result).toEqual({ success: true, newStatus: 'ready' })
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks['task-001']?.currentLifecycle).toEqual({
+      reopenedAt,
+      status: 'exploring',
+      source: 'rerun_spec',
+    })
   })
 
   it('keeps the approved spec and materializes missing script proof as linked verification work', async () => {
@@ -510,9 +617,12 @@ describe('approveSpec', () => {
     expect(parent.acceptanceCriteria[0]?.verificationState).toBe('stale')
     expect(proofSetup).toMatchObject({
       title: 'Establish concrete proof for Add ghost button',
-      status: 'exploring',
+      // This is generated, bounded verification work, not a fresh request
+      // that needs another exploratory/spec loop.
+      status: 'ready',
       hierarchy: { parentId: task.id },
-      releaseIds: ['release-1'],
+      proofForReleaseId: 'release-1',
+      releaseIds: [],
       workVisibility: { kind: 'internal_step', countInProjectTotals: false },
     })
     expect(parent.hierarchy?.childIds).toContain(proofSetup?.id)

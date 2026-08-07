@@ -15,6 +15,7 @@ import {
   writeProjectDeliveryModel,
 } from '../delivery-spine.js'
 import {
+  contextPacketFromDeliveryReadProjection,
   readProjectDeliveryReadProjection,
   readProjectDeliveryReadProjectionWithAuthority,
   refreshProjectDeliveryReadProjection,
@@ -97,6 +98,11 @@ function queue(projectRoot: string): TaskQueue {
       task('work-ready', 'ready', {
         projectPath: projectRoot,
         releaseIds: ['release-current'],
+        proofPaths: [{
+          kind: 'command',
+          command: 'node scripts/proof-work-ready.mjs',
+          expectedEvidence: ['work-ready'],
+        }],
         delivery: { driver: 'primary', usesPrimitives: ['proof-ready'], provesPrimitives: [] },
       }),
       task('work-proof', 'ready', {
@@ -179,7 +185,37 @@ describe('delivery read projection', () => {
     expect(result.primitives.primitives).toHaveLength(1)
     expect(result.primitives.hasMore).toBe(true)
     expect(result.selectedReleaseId).toBe('release-current')
+    expect(result.selectedRelease).toEqual({ id: 'release-current', proofStyle: 'script_only' })
     expect(result.model.primitives).toHaveLength(2)
+  })
+
+  it('projects selected script-only proof policy into task context without deriving a command', async () => {
+    await seed()
+    await refreshProjectDeliveryReadProjection(projectRoot!)
+
+    const attachedProjection = await readProjectDeliveryReadProjection(projectRoot!, {
+      queue: false,
+      taskId: 'work-ready',
+    })
+    expect(attachedProjection.status).toBe('current')
+    if (attachedProjection.status !== 'current') throw new Error('expected current projection')
+    expect(contextPacketFromDeliveryReadProjection(attachedProjection, projectRoot!)?.proofContext.releaseRequirement).toEqual({
+      releaseId: 'release-current',
+      proofStyle: 'script_only',
+      taskContract: 'attached',
+    })
+
+    const missingProjection = await readProjectDeliveryReadProjection(projectRoot!, {
+      queue: false,
+      taskId: 'work-proof',
+    })
+    expect(missingProjection.status).toBe('current')
+    if (missingProjection.status !== 'current') throw new Error('expected current projection')
+    expect(contextPacketFromDeliveryReadProjection(missingProjection, projectRoot!)?.proofContext.releaseRequirement).toEqual({
+      releaseId: 'release-current',
+      proofStyle: 'script_only',
+      taskContract: 'missing_contract',
+    })
   })
 
   it('returns relationship facts from indexed edges without an aggregate task select', async () => {

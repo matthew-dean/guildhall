@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText } from '@guildhall/sessions/atomic'
 
 export function writeJsonFile(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })

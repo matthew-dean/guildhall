@@ -72,6 +72,8 @@ export const StructuredAcceptanceCriterion = z.preprocess((value) => {
   expectedExit: z.enum(['zero', 'non_zero']).optional(),
   expectedOutputIncludes: z.array(z.string()).optional(),
   command: cleanedString('Acceptance criterion command').optional(),
+  /** Source capability IDs this criterion is the explicit proof anchor for. */
+  sourceCapabilityIds: z.array(cleanedString('Acceptance criterion sourceCapabilityId')).optional(),
 }).strict())
 export type StructuredAcceptanceCriterion = z.infer<typeof StructuredAcceptanceCriterion>
 
@@ -107,6 +109,15 @@ export const StructuredSpecContractSurfaceDelta = z.object({
 }).strict()
 export type StructuredSpecContractSurfaceDelta = z.infer<typeof StructuredSpecContractSurfaceDelta>
 
+/**
+ * A fresh blueprint must account for executable proof already recorded on the
+ * task. This is a typed planning decision, not an inference from spec prose.
+ */
+export const StructuredSpecProofContract = z.object({
+  existingCommandDisposition: z.enum(['preserve', 'replace', 'retire']),
+}).strict()
+export type StructuredSpecProofContract = z.infer<typeof StructuredSpecProofContract>
+
 export const StructuredSpec = z.object({
   whatThisIs: cleanedString('whatThisIs'),
   problemContext: cleanedString('problemContext'),
@@ -114,9 +125,12 @@ export const StructuredSpec = z.object({
   nonGoals: cleanedStringList('nonGoals'),
   proposedDesign: cleanedString('proposedDesign'),
   keyDecisions: cleanedStringList('keyDecisions'),
+  /** Exact capability IDs allocated to this task's plan. */
+  sourceCapabilityIds: z.array(cleanedString('Structured spec sourceCapabilityId')).optional(),
   /** Explicit implementation surfaces; never inferred from rendered prose. */
   targetFiles: z.array(cleanedString('targetFile')).optional(),
   contractSurfaceDeltas: z.array(StructuredSpecContractSurfaceDelta).optional(),
+  proofContract: StructuredSpecProofContract.optional(),
   acceptanceCriteria: z.array(StructuredAcceptanceCriterion)
     .refine((values) => values.length > 0, { message: 'acceptanceCriteria must include at least one item.' }),
   verification: cleanedStringList('verification'),
@@ -195,6 +209,9 @@ export function renderStructuredSpecMarkdown(spec: StructuredSpec): string {
   if (spec.dataModelSchemaChanges) appendSection(parts, 'Data Model / Schema Changes', [spec.dataModelSchemaChanges])
   appendSection(parts, 'Key Decisions', renderBulletList(spec.keyDecisions))
   if (spec.contractSurfaceDeltas?.length) appendSection(parts, 'Contract Surface Deltas', renderContractSurfaceDeltas(spec.contractSurfaceDeltas))
+  if (spec.proofContract) appendSection(parts, 'Proof Contract', [
+    `- Existing command disposition: ${spec.proofContract.existingCommandDisposition}`,
+  ])
   appendSection(parts, 'Acceptance Criteria', renderAcceptanceCriteria(spec.acceptanceCriteria))
   appendSection(parts, 'Verification', renderBulletList(spec.verification))
   if (spec.migrationRollout) appendSection(parts, 'Migration / Rollout', [spec.migrationRollout])

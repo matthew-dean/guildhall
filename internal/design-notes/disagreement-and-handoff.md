@@ -9,12 +9,13 @@ help_summary: |
 
 # Disagreement & handoff — design notes
 
-**Status:** draft · pre-SPEC · 2026-04-23
+**Status:** partially superseded · deterministic state resolution introduced 2026-07-23
 
-This document captures two open design questions that surfaced after the
-Guilds subsystem landed. Both will fold into SPEC.md once the shapes are
-validated through real task runs; keeping them here first so the spec stays
-authoritative while the design settles.
+This document captures two design questions that surfaced after the Guilds
+subsystem landed. The original reviewer-conflict proposal below is retained
+only as historical context. Its prose/keyword-based detection is not an
+implementation path: model language is evidence, never an authority signal.
+The binding direction is the typed, deterministic protocol below.
 
 The questions:
 
@@ -32,181 +33,85 @@ The questions:
 
 ## 1. Disagreement adjudication
 
-### Current behavior (as of the Guilds landing)
+### Current binding direction
 
-`aggregateFanout` in `src/runtime/reviewer-fanout.ts` treats review as
-**strict-all consensus**: every persona must approve for the task to
-advance. Any single `revise` combines all dissenters' feedback into one
-prompt for the worker and bounces the task to `in_progress`. Revision
-counting + `maxRevisions` escalation mirrors the existing reviewer path.
+Every conclusion that can affect plan, scope, readiness, proof, execution,
+or release state is a typed claim over one stable subject and field. An agent
+may submit a claim and evidence references, but it cannot write the resolved
+fact itself.
 
-This works for *additive* conflicts — "add focus ring" + "don't blow the
-bundle budget" can both be satisfied by the worker choosing its
-implementation carefully. It fails for *substantive* conflicts:
-
-- Security Engineer: "Require email verification before a user can
-  post."
-- UX Engineer / Product Designer: "Email verification before first post
-  kills new-user activation."
-
-The worker in round 1 can't adjudicate between these because the decision
-isn't technical — it's about which business value wins. Looping the
-worker through N revisions just exhausts `maxRevisions` and escalates to
-human, but by then the audit trail is a pile of failed attempts with no
-structured decision record.
-
-### The shape
-
-Four layers of resolution, escalating only when the cheaper layer fails:
-
-#### Layer 1 — Worker-as-synthesizer (default)
-
-Worker reads all dissenting revisions, attempts a single change that
-addresses every one. Suitable for additive conflicts. No new
-infrastructure — this is today's behavior and stays the default.
-
-#### Layer 2 — Coordinator-as-adjudicator (on detected conflict)
-
-When the fan-out aggregation detects a substantive conflict — defined by
-the heuristic in §1.1 below — the task routes to the **Coordinator**
-(FR-02 domain owner) instead of bouncing to the worker.
-
-The Coordinator receives:
-
-- The full task spec + acceptance criteria.
-- Every persona's verdict, tagged with guild slug.
-- The set of dissenters and their revision items.
-- The persisted conflict record (which personas, which rounds).
-- The parent goal's guardrails (FR-23) so the decision can be checked
-  against the business envelope.
-
-The Coordinator emits a **binding decision** logged to DECISIONS.md:
-
-```yaml
-kind: reviewer-fanout-adjudication
-task: task-123
-trigger: same-persona-repeat-dissent
-dissenters: [security-engineer, frontend-engineer]
-decision: "Security requirement wins: ship with email verification.
-  Refine UX by deferring the gate until second post (see rationale).
-  Worker re-scoped accordingly."
-winning_concerns: [security-engineer]
-superseded_concerns: [frontend-engineer.ux-activation]
-rationale: |
-  Goal guardrail "SOC-2 compliance by Q3" is load-bearing; the
-  activation delta is measurable but reversible. Deferring the gate to
-  second post satisfies both within the envelope.
-scope_instructions:
-  - "Keep email verification before any posting action"
-  - "Allow one draft post in an unverified state to preserve activation"
-rolled_forward: true
-policy_version: v1
+```ts
+type Claim = {
+  id: string                 // idempotency identity, never reused with new data
+  projectRevision: number    // claims never cross revisions
+  subject: { kind: string; id: string }
+  field: string              // registered field only
+  value: unknown             // typed/schema-validated value for the field
+  authority: Authority       // declared precedence class, not agent prestige
+  actor: string
+  observedAt: string
+  evidenceRefs: string[]
+  supersedes?: string        // explicit, same-subject/field, policy-authorized
+}
 ```
 
-The worker's next prompt is the **scoped instructions** only, not the
-original conflict. This prevents the worker from relitigating the
-Coordinator's decision.
+The field registry provides a declared authority order, value semantics, and
+one prescribed reconciliation action. It is a closed registry: an
+unregistered field, ambiguous policy, divergent reuse of a claim ID, or
+invalid supersession is rejected. Arrival order, reviewer wording, timestamps,
+and model identity do not pick a winner.
 
-Workers *never* adjudicate between expert personas. That authority lives
-with the Coordinator (or human, §1.4).
+For each `(subject, field)` group the resolver publishes exactly one of:
 
-#### Layer 3 — Reviewer deliberation (optional, opt-in)
+1. A canonical typed value, with every agreeing claim ID.
+2. A canonical typed value **and** a `resolved_by_authority` disagreement:
+   a stronger source has a declared precedence, but the contrary evidence is
+   still visible and has a deterministic refresh/verification action.
+3. An `unresolved` disagreement: equally authoritative incompatible claims.
+   Work whose transition depends on the field cannot proceed until the policy
+   action creates a new valid claim or an owner-scope decision is explicitly
+   required by that field's policy.
 
-For projects that want softer consensus: after round 1, each dissenting
-persona sees the *other* dissenters' verdicts and gets a chance to
-**amend** its own revision items. This produces synthesized verdicts
-("Security Engineer: given the UX concern, deferring verification to
-second post is acceptable") without coordinator intervention.
+The current shared resolver lives in
+`src/runtime/project-decision-projection.ts`; all current-state presentations
+must consume its projection rather than reinterpreting agent output locally.
+The status, task, release, map, and diagnostics surfaces may present the
+result differently, but may not independently resolve it.
 
-Cost: N extra LLM calls per round. Useful when the provider is cheap and
-the roster is small, not when dispatching local models.
+Reviewer work follows the same rule. Review prose remains an audit trace.
+Operational reviewer concerns must be IDs selected from the task/review-plan
+contract (for example acceptance-criterion, proof-evidence, or review-lane
+IDs). A reviewer can mark those IDs satisfied, unsatisfied, or advisory; it
+cannot create a routing rule by describing a concern in different words.
+Reviewer findings are now first-class typed review claims. Fan-out may route a
+substantive conflict only when two findings disagree on the same target.
 
-Opt-in via lever `reviewer_fanout_policy: deliberate_before_adjudicate`.
+New reviewer records now write typed findings. Each finding names an existing
+acceptance criterion or proof-evidence ID and says `satisfied`, `unsatisfied`,
+or `advisory`. A `revise` result with no typed unsatisfied finding is invalid
+rather than becoming a worker command. Historical records remain visible, but
+neither their persona identity nor their revision text can trigger coordinator
+adjudication.
 
-#### Layer 4 — Human-as-adjudicator (escalation)
+### Legacy-record boundary
 
-If the Coordinator's remediation choices are exhausted (FR-32
-`escalate_to_human`), the task raises an escalation with the full
-dissent + adjudication history attached. The human issues a binding
-decision recorded the same way the Coordinator's would be.
+Older reviewer records may have persona labels, free-form revision items, or
+legacy `winningConcerns` fields. Guildhall preserves those records for audit
+only. They cannot route work, decide a winner, create a blocker, or satisfy a
+review requirement. A migration may enrich an old record only when it can map
+the record to an existing typed target and evidence reference without guessing.
 
-### 1.1 Detection heuristic: when to trigger Layer 2
+The active policy has three outcomes:
 
-The cheap heuristic to avoid false positives:
+1. Compatible findings return work with only typed unsatisfied targets and
+   their task-local instructions.
+2. Contradictory findings on a proof target rerun the canonical verification.
+3. Contradictory findings on a scope target return the task to canonical task
+   inspection and replanning; no reviewer persona wins by identity or prose.
 
-1. **Same-persona-repeat-dissent**: the same persona emits `revise`
-   across two consecutive rounds. Attribution is by the persisted reviewer
-   identity; reviewer prose is never compared because wording changes must not
-   alter orchestration state.
-2. **Mutual-exclusion keywords**: any revision item contains a
-   negation-of-another-item pattern (`"do NOT do X"` where another
-   persona asked for X). Detected via a simple regex scan; false
-   positives are fine because the coordinator can always return "no
-   conflict, retry with worker."
-3. **Explicit escalation by a persona**: any persona's revision item
-   that names another persona's concern as "blocking my review" (e.g.
-   Security Engineer: "Cannot approve while the UX flow bypasses auth
-   as suggested by the UX Engineer"). Detected via a structured hint
-   the persona prompt can emit: `**Conflict:** <other-slug>` line.
-
-Tuning: start with just (1). Add (2) and (3) only if round-1 worker
-synthesis proves unreliable in practice.
-
-### 1.2 The lever
-
-```yaml
-reviewer_fanout_policy:
-  - strict           # current: strict-all, worker synthesizes or loops to maxRevisions
-  - coordinator_adjudicates_on_conflict  # recommended default once implemented
-  - deliberate_before_adjudicate         # Layer 3 opt-in
-  - advisory                             # any approval passes; dissents become notes
-  - majority                             # ≥50% of applicable personas must approve
-```
-
-Scope: per-domain. A high-stakes domain (billing, auth) can pick
-`coordinator_adjudicates_on_conflict` while a low-stakes one
-(internal-tool UI) stays `strict`.
-
-### 1.3 Audit trail requirements
-
-Every adjudication decision writes:
-
-- A **DECISIONS.md** entry in the shape shown in §Layer 2 above.
-- Per-persona `ReviewVerdict` records on the task stay unchanged —
-  they're the inputs the adjudicator reasoned over.
-- A new `AdjudicationRecord` on the task: `{round, trigger,
-  dissenters[], winningConcerns[], supersededConcerns[], rationale,
-  scopeInstructions[], decidedBy, decidedAt}`. Persisted alongside
-  `reviewVerdicts`.
-
-The dashboard's Experts tab (separate work — see dashboard observability)
-renders each persona's verdict **plus** the adjudication that superseded
-it, so the audit trail is visible without grepping DECISIONS.md.
-
-### 1.4 Roles that are NOT the adjudicator
-
-- **A dedicated "Adjudicator" persona** — unnecessary. The Coordinator
-  already carries domain context + decision authority per FR-02.
-  Adding a parallel role would split that authority.
-- **The Project Manager** (overseer) — adjudicates process conflicts,
-  not substantive ones. A PM shouldn't decide whether security beats UX.
-- **The worker** — never. Workers execute within scope; they don't
-  decide which experts' scopes win.
-
-### 1.5 Open questions
-
-- How do we detect repeated dissent without model prose? The current contract
-  uses stable reviewer identity and deliberately does not infer semantic
-  overlap from free-form revision text.
-  which adds cost.
-- Should the Coordinator's adjudication decision be *itself* reviewable
-  by a human before the worker sees it, for high-stakes domains? Probably
-  yes under a strict governance posture; should be a lever position.
-- What happens when two Coordinators' domains both apply (cross-domain
-  conflict)? Use the CrossDomainRequest protocol from FR-02; extend it
-  with an `adjudication` request type.
-
----
+If the protocol cannot derive a typed target, it fails closed as invalid review
+evidence. That is a repairable system error, not an invitation to make a
+free-form judgment.
 
 ## 2. Agent handoff within one task
 
@@ -359,18 +264,10 @@ These are complementary, not redundant.
 
 ## Next steps
 
-Neither item blocks the in-flight dashboard observability work. Once
-that's landed:
-
-1. **Disagreement adjudication (§1)** — add the
-   `reviewer_fanout_policy` lever with positions `strict` (current)
-   and `coordinator_adjudicates_on_conflict`. Ship the
-   same-persona-repeat-dissent heuristic. Dashboard renders the
-   adjudication record alongside the dissenting verdicts.
-2. **Agent handoff (§2)** — start with a minimal `handoff_sequence`
-   field on Task and orchestrator support for two-step sequences
-   (engineer → engineer). Copywriter/specialist edit access comes
-   later once the edit-tool grant mechanism is designed.
-
-Both absorb into SPEC.md once a real workload has stressed them and the
-shape holds up.
+1. Project reviewer records and coordinator outputs through the shared
+   project-state resolver so every user-facing surface reports the same
+   contested targets and recovery action.
+2. Replace legacy review records during normal rewrite only when their typed
+   subject and evidence can be established without inference.
+3. Keep the separate handoff design above isolated until it has a typed
+   task-contract proposal and a real workload to validate it.

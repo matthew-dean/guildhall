@@ -1,15 +1,48 @@
 // @vitest-environment happy-dom
 import '@testing-library/jest-dom/vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { path } from '../../../lib/nav.svelte.js'
 import ProjectMapTab from '../ProjectMapTab.svelte'
 
 describe('ProjectMapTab', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/project/source-capabilities')) {
+        return new Response(JSON.stringify({ availability: 'empty', capabilities: [] }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ error: 'not mocked' }), { status: 404 })
+    }))
+  })
+
   afterEach(() => {
     cleanup()
     path.value = '/'
     vi.restoreAllMocks()
+  })
+
+  it('distinguishes structured capability scope from visible source evidence without a second catalog read', () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ error: 'not mocked' }), { status: 404 }))
+    vi.stubGlobal('fetch', fetch)
+    render(ProjectMapTab, {
+      activeProjectId: 'narrative-harness',
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        sourceCapabilityCatalog: { availability: 'ready', total: 2, planned: 2, retired: 0 },
+        orientationSpine: {
+          summary: { includedWorkCount: 0, deferredWorkCount: 0 },
+          roots: [],
+          nodes: {},
+          sourceTrail: [{ label: 'Source docs', value: '1 source document', detail: 'release-plan.md', tone: 'ok' }],
+        },
+      },
+    })
+
+    expect(screen.getByText('2 structured capabilities')).toBeInTheDocument()
+    expect(screen.getByText('Typed source scope can be allocated to planning work without reading document prose as authority.')).toBeInTheDocument()
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('renders the 1,000-foot capability lanes and honest source trail from the orientation spine', async () => {
@@ -181,7 +214,7 @@ describe('ProjectMapTab', () => {
     expect(screen.getByRole('heading', { name: 'Proof mode' })).toBeInTheDocument()
     expect(screen.getAllByText('Headless proof').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByRole('heading', { name: 'Scope ledger' })).toBeInTheDocument()
-    expect(screen.getByText('1 current work item · 1 later work item')).toBeInTheDocument()
+    expect(screen.getByText('1 visible scope row · 1 later scope row')).toBeInTheDocument()
     expect(screen.getByText('Current')).toBeInTheDocument()
     expect(screen.queryByText('Now')).not.toBeInTheDocument()
     expect(screen.getByText('Paused · directly assigned · Source: implementation-roadmap.md')).toBeInTheDocument()
@@ -195,7 +228,7 @@ describe('ProjectMapTab', () => {
     expect(screen.getByText('Script or command proof for Coherence reviewer MVP.')).toBeInTheDocument()
     expect(screen.getByText('2 source documents')).toBeInTheDocument()
     expect(screen.getByText('implementation-roadmap.md, architecture-notes.md')).toBeInTheDocument()
-    expect(screen.getByText('Headless MVP contains 2 assigned work items and 0 later.')).toBeInTheDocument()
+    expect(screen.getByText('Headless MVP contains 2 executable work items and 0 later.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Release blockers' })).toBeInTheDocument()
     expect(screen.getByText('3 local commits are not pushed.')).toBeInTheDocument()
     expect(screen.getByText('Source: implementation-roadmap.md')).toBeInTheDocument()
@@ -203,7 +236,7 @@ describe('ProjectMapTab', () => {
     expect(screen.getByText('Document-level artifact references are not attached to every lane yet.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Gaps to resolve' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Open questions' })).not.toBeInTheDocument()
-    expect(container.querySelectorAll('.source-fact')).toHaveLength(5)
+    expect(container.querySelectorAll('.source-fact')).toHaveLength(6)
     expect(container.querySelector('.source-row')).toBeNull()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Coherence reviewer MVP Active' }))
@@ -274,7 +307,7 @@ describe('ProjectMapTab', () => {
       name: 'Keep "Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing."',
     }))
 
-    expect(fetchCalls).toEqual([{
+    expect(fetchCalls.filter(call => call.url.includes('/api/project/source-conflicts/reconcile'))).toEqual([{
       url: '/api/project/source-conflicts/reconcile?projectId=narrative-harness',
       body: {
         keepTaskId: 'task-rich',
@@ -332,7 +365,7 @@ describe('ProjectMapTab', () => {
             {
               label: 'Scope',
               value: 'Release Plan',
-              detail: 'Stage 1 contains 1 assigned work item and 2 later.',
+              detail: 'Stage 1 contains 1 executable work item and 2 later.',
               tone: 'ok',
             },
           ],
@@ -344,7 +377,7 @@ describe('ProjectMapTab', () => {
     expect(screen.getByRole('heading', { name: 'Source trail' })).toBeInTheDocument()
     expect(screen.getByText('2 source documents')).toBeInTheDocument()
     expect(screen.getByText('implementation-roadmap.md, architecture-notes.md')).toBeInTheDocument()
-    expect(screen.getByText('Stage 1 contains 1 assigned work item and 2 later.')).toBeInTheDocument()
+    expect(screen.getByText('Stage 1 contains 1 executable work item and 2 later.')).toBeInTheDocument()
     expect(screen.queryByText('old-local-source.md')).not.toBeInTheDocument()
   })
 
@@ -423,7 +456,7 @@ describe('ProjectMapTab', () => {
     expect(screen.getByText('E2E tests: login flow')).toBeInTheDocument()
     expect(screen.queryByText('Later imported work 0')).not.toBeInTheDocument()
     expect(screen.queryByText('Later imported work 79')).not.toBeInTheDocument()
-    expect(screen.getByText('Stage 1: V1 Release Hardening contains 2 assigned work items and 80 later.')).toBeInTheDocument()
+    expect(screen.getByText('Stage 1: V1 Release Hardening contains 2 executable work items and 80 later.')).toBeInTheDocument()
   })
 
   it('shows every current scope row before summarizing later rows', () => {
@@ -489,7 +522,7 @@ describe('ProjectMapTab', () => {
       activeProjectId: 'narrative-harness',
     })
 
-    expect(screen.getAllByText('9 current work items · 21 later work items').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('9 visible scope rows · 21 later scope rows').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Define spatial/geographic continuity review lane')).toBeInTheDocument()
     expect(screen.getByText('17 additional work items are summarized here; open Work for the full ledger.')).toBeInTheDocument()
   })
@@ -781,12 +814,66 @@ describe('ProjectMapTab', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Select' }))
 
-    expect(fetchCalls).toEqual([
+    expect(fetchCalls.filter(call => call.url.includes('/api/project/release/select'))).toEqual([
       {
         url: '/api/project/release/select?projectId=narrative-harness',
         body: { releaseId: 'release-2', projectId: 'narrative-harness' },
       },
     ])
     expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('separates current execution from product scope and shipped history', () => {
+    const { container } = render(ProjectMapTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        orientationSpine: {
+          selectedRelease: {
+            id: 'release-2',
+            label: 'Headless MVP (reconciled plan)',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            nodeIds: Array.from({ length: 15 }, (_, index) => `work:feature-${index + 1}`),
+          },
+          releases: [
+            {
+              id: 'release-1',
+              label: 'Headless MVP',
+              kind: 'release',
+              state: 'shipped',
+              source: 'release_plan',
+              nodeIds: Array.from({ length: 15 }, (_, index) => `work:feature-${index + 1}`),
+            },
+            {
+              id: 'release-2',
+              label: 'Headless MVP (reconciled plan)',
+              kind: 'release',
+              state: 'active',
+              source: 'release_plan',
+              nodeIds: Array.from({ length: 15 }, (_, index) => `work:feature-${index + 1}`),
+            },
+          ],
+          summary: {
+            selectedScopeLabel: 'Headless MVP (reconciled plan)',
+            selectedReleaseLabel: 'Headless MVP (reconciled plan)',
+            includedWorkCount: 4,
+            deferredWorkCount: 32,
+            progress: { total: 4, done: 3, deferred: 32 },
+          },
+          roots: [],
+          nodes: {},
+          gaps: [],
+          sourceHealth: { inferred: 0, gaps: 0 },
+        },
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByText('Current release')).toBeInTheDocument()
+    expect(container.textContent).toContain('3/4 executable work items complete · 15 product boundaries · 32 later work items')
+    expect(container.textContent).toContain('15 delivered product boundaries · historical release')
+    expect(screen.queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
   })
 })

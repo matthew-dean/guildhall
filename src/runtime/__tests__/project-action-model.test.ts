@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyRunStatusToStartReadiness, buildProjectActionModel } from '../project-action-model.js'
+import { applyRunStatusToStartReadiness, buildProjectActionModel, resolveProjectActionModel } from '../project-action-model.js'
 
 describe('applyRunStatusToStartReadiness', () => {
   it('does not leave a saved paused action visible while a run is active', () => {
@@ -20,6 +20,102 @@ describe('applyRunStatusToStartReadiness', () => {
 })
 
 describe('buildProjectActionModel', () => {
+  it('uses shared ready-work state instead of inferring brief cleanup from a compact task point', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        message: '"Build synopsis expansion" is ready to run.',
+        focusTaskId: 'task-synopsis',
+        focusTaskTitle: 'Build synopsis expansion',
+        focusKind: 'ready_work',
+      },
+      // Saved summary projections intentionally omit rich brief/spec fields.
+      tasks: [{ id: 'task-synopsis', title: 'Build synopsis expansion', status: 'ready' }],
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Build synopsis expansion',
+      buttonLabel: 'Open Work',
+      href: '/work?task=task-synopsis',
+      tone: 'accent',
+    })
+    expect(model.primaryAction?.detail).toBeUndefined()
+    expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
+  })
+
+  it('resolves a stale persisted task action from shared ready-work state', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: {
+          source: 'task',
+          label: 'Build synopsis expansion',
+          detail: 'Needs brief: finish the handoff before a worker can start.',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-synopsis',
+          tone: 'warn',
+          taskId: 'task-synopsis',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        message: '"Build synopsis expansion" is ready to run.',
+        focusTaskId: 'task-synopsis',
+        focusTaskTitle: 'Build synopsis expansion',
+        focusKind: 'ready_work',
+      },
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Build synopsis expansion',
+      buttonLabel: 'Open Work',
+      href: '/work?task=task-synopsis',
+      tone: 'accent',
+      taskId: 'task-synopsis',
+    })
+    expect(model.primaryAction?.detail).toBeUndefined()
+    expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
+  })
+
+  it('does not let a contradictory ready-work hint override the shared readiness authority', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-story-context',
+        focusTaskTitle: 'Build story context',
+      },
+      tasks: [{
+        id: 'task-story-context',
+        title: 'Build story context',
+        status: 'exploring',
+        productBrief: {
+          approvedAt: '2026-07-23T02:00:00.000Z',
+          userJob: 'Keep author records immutable.',
+          whyItMattersNow: 'Drafting needs trustworthy context.',
+          successMetric: 'Derived records retain source links.',
+          nonGoals: ['Do not replace author records.'],
+        },
+        acceptanceCriteria: [],
+      }],
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Build story context',
+      buttonLabel: 'Open Work',
+    })
+    expect(model.primaryAction?.detail).toBeUndefined()
+  })
+
   it('normalizes risky start blockers into terse shared actions', () => {
     const importDrafts = buildProjectActionModel({
       startReadiness: {
@@ -591,6 +687,30 @@ describe('buildProjectActionModel', () => {
       label: 'Stopping',
       startEnabled: false,
       disabledReason: 'Pause requested. Guildhall is waiting for active work to stop.',
+    })
+  })
+
+  it('keeps the current running task actionable when compact activity has no task inventory', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'running',
+        focusTaskId: 'task-proof',
+        focusTaskTitle: 'Establish proof',
+        message: 'Guildhall is running "Establish proof".',
+        actionHref: '/work?task=task-proof',
+      },
+      tasks: [],
+      runStatus: 'running',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Establish proof',
+      buttonLabel: 'Open Work',
+      href: '/work?task=task-proof',
+      tone: 'running',
+      taskId: 'task-proof',
     })
   })
 

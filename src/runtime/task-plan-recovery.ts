@@ -17,7 +17,7 @@ export function hasUsableBlueprint(task: Task): boolean {
  */
 export function resetCurrentPlanForProofRecovery(
   task: Task,
-  input: { reason: string; now: string; agentId?: string; role?: string },
+  input: { reason: string; now: string; agentId?: string; role?: string; preserveProductBrief?: boolean },
 ): void {
   // A proof-setup task is already the smallest executable proof boundary.
   // Clearing its blueprint would turn a bounded recovery into generic spec
@@ -39,7 +39,7 @@ export function resetCurrentPlanForProofRecovery(
   task.proofPaths = undefined
   task.recoveryCode = undefined
   task.acceptanceCriteria = []
-  task.productBrief = undefined
+  if (!input.preserveProductBrief) task.productBrief = undefined
   task.spec = undefined
   task.structuredSpec = undefined
   task.contractSurfaceReviewPackets = undefined

@@ -665,6 +665,30 @@ describe('resolveEffectiveTaskSuccessGates', () => {
     }])
   })
 
+  it('rejects a missing PNPM script before a stale command can enter a recovery loop', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ scripts: { 'proof:current': 'node proof.mjs' } }),
+      'utf8',
+    )
+
+    expect(findInvalidAutomatedAcceptanceCommands({
+      projectPath: tmpDir,
+      task: {
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'local proof command runs',
+          verifiedBy: 'automated',
+          command: 'pnpm run proof-missing',
+        }],
+      } as any,
+    })).toEqual([{
+      criterionId: 'ac-1',
+      command: 'pnpm run proof-missing',
+      reason: 'The PNPM script `proof-missing` is not present in the registered project package contract.',
+    }])
+  })
+
   it('rewrites pnpm test -- <file> vitest commands into direct single-file runs', async () => {
     const webDir = path.join(tmpDir, 'web')
     await fs.mkdir(path.join(webDir, 'tests/unit/shared'), { recursive: true })

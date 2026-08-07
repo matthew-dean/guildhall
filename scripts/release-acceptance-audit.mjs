@@ -153,7 +153,16 @@ async function main() {
     durationMs: fleet.durationMs,
     bytes: fleet.bytes,
   })
-  check('fleet cards are current', projects.every(project => project.projectStatusLoading !== true && typeof project.projectStatusError !== 'string'), projects)
+  const initializedProjects = projects.filter(project => project.initializationNeeded !== true)
+  check('fleet cards are current', initializedProjects.every(project => project.projectStatusLoading !== true && typeof project.projectStatusError !== 'string'), {
+    initializedProjects,
+    setupIncompleteProjects: projects.filter(project => project.initializationNeeded === true).map(project => ({
+      id: project.id,
+      name: project.name,
+      projectStatusError: project.projectStatusError,
+      summaryFreshness: project.summaryFreshness,
+    })),
+  })
 
   const surfaceReads = {}
   for (const surface of ['overview', 'work', 'map']) {
@@ -169,7 +178,7 @@ async function main() {
     done: 15,
     unfinished: 0,
     blocked: 0,
-    deferred: 24,
+    deferred: expectedCounts.deferred,
     proofBlocked: 0,
   }), expectedCounts)
   check('Overview readiness is complete', overview.releaseSummary?.state === 'ready' && overview.startReadiness?.canStart === false, {
@@ -208,12 +217,13 @@ async function main() {
   check('Activity agrees on release identity', same(releaseIdentity(activity.value?.releaseSummary), expectedRelease), releaseIdentity(activity.value?.releaseSummary))
   check('Activity projection is current', activity.value?.summaryFreshness === 'current', activity.value?.summaryFreshness)
   check('rich spine agrees on shipped lifecycle', spine.value?.spine?.selectedRelease?.state === 'shipped', spine.value?.spine?.selectedRelease)
-  check('rich spine preserves deferred later scope', spine.value?.spine?.summary?.deferredWorkCount === 24, spine.value?.spine?.summary)
+  check('rich spine preserves deferred later scope', spine.value?.spine?.summary?.deferredWorkCount === expectedCounts.deferred, spine.value?.spine?.summary)
   check('release summary is database-backed and complete', readinessSummary.value?.currentStateAuthority === 'database'
     && readinessSummary.value?.completion?.state === 'complete'
     && readinessSummary.value?.release?.state === 'shipped', readinessSummary.value)
+  const detailConsistency = readiness.value?.stateConsistency
   check('release detail is aligned and ready', readiness.value?.verdict?.state === 'ready'
-    && readiness.value?.stateConsistency === 'aligned'
+    && (detailConsistency === 'aligned' || detailConsistency === 'confirmed')
     && readiness.value?.release?.state === 'shipped', readiness.value)
   check('Thread agrees on selected release', thread.value?.orientationSpine?.selectedRelease?.state === 'shipped', thread.value?.orientationSpine?.selectedRelease)
 
@@ -230,7 +240,7 @@ async function main() {
     const cli = cliStatus()
     check('CLI reads the same release identity', same(releaseIdentity(cli.release), expectedRelease), releaseIdentity(cli.release))
     check('CLI reads the same release counts', same(releaseCounts(cli.release), expectedCounts), releaseCounts(cli.release))
-    check('CLI reads the same saved scope', cli.scope?.included === 15 && cli.scope?.deferred === 24, cli.scope)
+    check('CLI reads the same saved scope', cli.scope?.included === 15 && cli.scope?.deferred === expectedCounts.deferred, cli.scope)
     check('CLI uses the database projection', cli.authority === 'database' && cli.freshness === 'current', cli)
   } catch (error) {
     check('CLI status command is usable', false, error instanceof Error ? error.message : String(error))

@@ -173,6 +173,49 @@ export interface ReadFileEntry {
   timestamp: number
 }
 
+/**
+ * Compact, typed evidence captured from a successful project read. This is
+ * intentionally much smaller than a transcript: it carries only the source
+ * identity and exact executable lines that a later planning mutation may use.
+ */
+export interface PlanningSourceEvidence {
+  path: string
+  commands: string[]
+}
+
+const MAX_PLANNING_SOURCE_EVIDENCE = 12
+const EXECUTABLE_LINE_PATTERN = /\b(?:pnpm|npm|node|npx|yarn|bun|python(?:3)?|pytest|vitest|playwright|git)\s+[^\n.;,)]+/gi
+
+function planningSourceEvidence(
+  toolMetadata: Record<string, unknown> | undefined | null,
+): PlanningSourceEvidence[] {
+  const bucket = metadataBucket(toolMetadata, 'planning_source_evidence')
+  return bucket.filter((value): value is PlanningSourceEvidence => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    const record = value as Record<string, unknown>
+    return typeof record.path === 'string' && Array.isArray(record.commands)
+  })
+}
+
+function rememberPlanningSourceEvidence(
+  toolMetadata: Record<string, unknown> | undefined | null,
+  path: string,
+  output: string,
+): void {
+  const commands = [...new Set(
+    [...output.matchAll(EXECUTABLE_LINE_PATTERN)]
+      .map((match) => match[0]?.trim().replace(/[.,;:)]+$/, ''))
+      .filter((value): value is string => Boolean(value)),
+  )].slice(0, 6)
+  const bucket = planningSourceEvidence(toolMetadata)
+  const next = { path, commands }
+  const withoutPath = bucket.filter((entry) => entry.path !== path)
+  withoutPath.push(next)
+  if (toolMetadata != null) {
+    toolMetadata['planning_source_evidence'] = withoutPath.slice(-MAX_PLANNING_SOURCE_EVIDENCE)
+  }
+}
+
 export function rememberReadFile(
   toolMetadata: Record<string, unknown> | undefined | null,
   params: { path: string; offset: number; limit: number; output: string },
@@ -396,6 +439,7 @@ export function recordToolCarryover(params: RecordToolCarryoverParams): void {
       toolMetadata,
       `Inspected file ${resolvedFilePath} (lines ${offset + 1}-${offset + limit})`,
     )
+    rememberPlanningSourceEvidence(toolMetadata, resolvedFilePath, toolOutput)
   } else if (isSkillTool(toolName)) {
     const skillName = String(toolInput['name'] ?? '').trim()
     rememberSkillInvocation(toolMetadata, { skillName })

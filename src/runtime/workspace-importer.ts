@@ -40,9 +40,10 @@ import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup
 import {
   contractShapedImportHasNoConcreteContracts,
 } from './imported-work-integrity.js'
-import { readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
+import { preserveRuntimeOverlayOnTaskQueueParse, readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './project-reserved-task-ids.js'
 import { writeProjectSummaryProjectionFromUnknownQueue } from './project-summary-projection.js'
+import type { OrientationWorkspaceImportDraftContext } from './project-orientation-spine.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -91,11 +92,12 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
     })
   }
   const parsed = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw
-  const queue = Array.isArray(parsed)
+  const queue = TaskQueue.parse(Array.isArray(parsed)
     ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-    : TaskQueue.parse(parsed)
-  for (const task of queue.tasks) normalizeImportedDraftTask(task)
-  return queue
+    : parsed)
+  const queueWithRuntime = preserveRuntimeOverlayOnTaskQueueParse(parsed, queue)
+  for (const task of queueWithRuntime.tasks) normalizeImportedDraftTask(task)
+  return queueWithRuntime
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
@@ -470,6 +472,22 @@ export async function rerunWorkspaceImportTask(
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
 
+  const documentedStructure = documentedStructuralContextsForProjection(draft.context)
+  await recordWorkspaceStructuralSnapshot({
+    memoryDir: input.memoryDir,
+    documentedStructure,
+    recordedAt: now,
+    dismissed: false,
+  })
+  const currentTasksPath = workspaceImportTasksPath(input.memoryDir)
+  const expectedQueueRevision = readProjectStateDatabaseQueueRevision(currentTasksPath)
+  writeProjectSummaryProjectionFromUnknownQueue(currentTasksPath, {
+    queue,
+    documentedStructure,
+    queueCommit: false,
+    ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
+  })
+
   const goalsPath = getProjectSystemStatePathFromMemoryDir(input.memoryDir, WORKSPACE_GOALS_FILE)
   if (await fs.stat(goalsPath).then(() => true).catch(() => false)) {
     try {
@@ -479,13 +497,6 @@ export async function rerunWorkspaceImportTask(
         delete raw.dismissedAt
         raw.recordedAt = now
         await writeManagedTextFile(goalsPath, JSON.stringify(raw, null, 2), 'utf-8')
-        const currentTasksPath = workspaceImportTasksPath(input.memoryDir)
-        const expectedQueueRevision = readProjectStateDatabaseQueueRevision(currentTasksPath)
-        writeProjectSummaryProjectionFromUnknownQueue(currentTasksPath, {
-          queue,
-          queueCommit: false,
-          ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
-        })
       }
     } catch {
       // Ignore malformed dismissed-state files; the rerun task/transcript are the source of truth.
@@ -499,6 +510,45 @@ export async function rerunWorkspaceImportTask(
     inventory,
     draft,
   }
+}
+
+/**
+ * Close a deliberately dismissed import at the same queue authority that
+ * created it. A dismissed draft is not runnable work and must not leave the
+ * reserved setup task in `exploring` to block an otherwise valid release.
+ */
+export async function dismissWorkspaceImportTask(input: {
+  memoryDir: string
+  projectPath: string
+}): Promise<{ dismissed: boolean }> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find(candidate => candidate.id === WORKSPACE_IMPORT_TASK_ID)
+  const now = new Date().toISOString()
+  if (task && task.status !== 'done') {
+    task.status = 'done'
+    task.updatedAt = now
+    task.notes = [
+      ...(task.notes ?? []),
+      {
+        role: 'system',
+        agentId: 'workspace-importer-agent',
+        timestamp: now,
+        content: 'Workspace import dismissed; no imported work was accepted into the current run boundary.',
+      },
+    ]
+    queue.lastUpdated = now
+    await writeQueue(input.memoryDir, queue)
+  }
+  const transcript = await replaceExploringTranscript({
+    memoryDir: input.memoryDir,
+    taskId: WORKSPACE_IMPORT_TASK_ID,
+    role: 'system',
+    content: 'Workspace import dismissed. The temporary source scan was not accepted as executable project work.',
+  })
+  if (!transcript.success) {
+    throw new Error(`Could not compact dismissed workspace-import history: ${transcript.error ?? 'unknown error'}`)
+  }
+  return { dismissed: Boolean(task) }
 }
 
 /**
@@ -1857,7 +1907,7 @@ export interface ApproveWorkspaceImportResult {
 }
 
 const WORKSPACE_GOALS_FILE = 'workspace-goals.json'
-export const WORKSPACE_GOALS_STRUCTURAL_VERSION = 3
+export const WORKSPACE_GOALS_STRUCTURAL_VERSION = 4
 
 export interface WorkspaceImportScopeSnapshot {
   goalCount: number
@@ -1877,6 +1927,9 @@ export interface WorkspaceGoalsState {
   releases?: ParsedRelease[]
   tasks: ParsedTask[]
   milestones: ParsedMilestone[]
+  /** Small source-backed records retained after transient import review ends. */
+  documentedStructure: OrientationWorkspaceImportDraftContext[]
+  /** @deprecated Temporary scan material. New writes always leave this empty. */
   context: DraftContext[]
   approved: WorkspaceImportScopeSnapshot
   detected: WorkspaceImportScopeSnapshot | null
@@ -1894,7 +1947,7 @@ export interface WorkspaceImportSummary {
 
 export function workspaceGoalsNeedStructuralRefresh(state: WorkspaceGoalsState | null | undefined): boolean {
   if (!state) return false
-  const hasStructuralContext = state.context.some(context =>
+  const hasStructuralContext = state.documentedStructure.length > 0 || state.context.some(context =>
     context.role === 'brief_input' || context.role === 'capability',
   )
   if (!hasStructuralContext) return false
@@ -2107,6 +2160,9 @@ export function parseWorkspaceGoalsState(raw: unknown): WorkspaceGoalsState | nu
         ...(entry.linkedTaskHints ? { linkedTaskHints: [...entry.linkedTaskHints] } : {}),
       }))
     : []
+  const documentedStructure = Array.isArray(record.documentedStructure)
+    ? record.documentedStructure.filter(isOrientationStructuralContext).map(copyOrientationStructuralContext)
+    : documentedStructuralContextsForProjection(context)
   const parsedSnapshot = workspaceScopeSnapshotFromParsed({ goals, tasks, milestones })
   const approvedSnapshot = parseWorkspaceScopeSnapshot(record.approved)
   const detectedSnapshot = parseWorkspaceScopeSnapshot(record.detected)
@@ -2127,6 +2183,7 @@ export function parseWorkspaceGoalsState(raw: unknown): WorkspaceGoalsState | nu
     ...(releases.length > 0 ? { releases } : {}),
     tasks,
     milestones,
+    documentedStructure,
     context,
     approved: approved ?? parsedSnapshot,
     detected,
@@ -2134,6 +2191,106 @@ export function parseWorkspaceGoalsState(raw: unknown): WorkspaceGoalsState | nu
     ...(dismissed ? { dismissed: true } : {}),
     ...(typeof record.dismissedAt === 'string' ? { dismissedAt: record.dismissedAt } : {}),
   }
+}
+
+function isOrientationStructuralContext(raw: unknown): raw is OrientationWorkspaceImportDraftContext {
+  return Boolean(raw) && typeof raw === 'object' &&
+    typeof (raw as OrientationWorkspaceImportDraftContext).id === 'string' &&
+    typeof (raw as OrientationWorkspaceImportDraftContext).title === 'string' &&
+    typeof (raw as OrientationWorkspaceImportDraftContext).description === 'string' &&
+    (raw as OrientationWorkspaceImportDraftContext).role === 'capability' &&
+    (raw as OrientationWorkspaceImportDraftContext).structure === 'record'
+}
+
+function copyOrientationStructuralContext(context: OrientationWorkspaceImportDraftContext): OrientationWorkspaceImportDraftContext {
+  return {
+    ...context,
+    ...(context.refs ? { refs: [...context.refs] } : {}),
+    ...(context.releaseIds ? { releaseIds: [...context.releaseIds] } : {}),
+    ...(context.linkedTaskHints ? { linkedTaskHints: [...context.linkedTaskHints] } : {}),
+  }
+}
+
+function stableStructuralContextId(context: Pick<DraftContext, 'label' | 'source' | 'references'>): string {
+  const key = [context.source, context.label, ...(context.references ?? []).slice().sort()].join('\n')
+  let hash = 2166136261
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `import-structure-${(hash >>> 0).toString(36)}`
+}
+
+/**
+ * Intake scans can be large, but the project skeleton is not. Retain only
+ * explicit durable capability records, never the detector's prose fragments.
+ */
+export function documentedStructuralContextsForProjection(
+  contexts: readonly DraftContext[],
+): OrientationWorkspaceImportDraftContext[] {
+  return contexts
+    .filter(context => context.role === 'capability' && context.structure === 'record')
+    .map(context => ({
+      id: stableStructuralContextId(context),
+      title: context.label,
+      description: context.excerpt,
+      ...(context.domain ? { domain: context.domain } : {}),
+      ...(context.references?.length ? { refs: [...context.references] } : {}),
+      role: 'capability' as const,
+      structure: 'record' as const,
+      ...(context.scopeHint ? { scopeHint: context.scopeHint } : {}),
+      ...(context.releaseIds?.length ? { releaseIds: [...context.releaseIds] } : {}),
+      ...(context.linkedTaskHints?.length ? { linkedTaskHints: [...context.linkedTaskHints] } : {}),
+    }))
+}
+
+async function recordWorkspaceStructuralSnapshot(input: {
+  memoryDir: string
+  documentedStructure: readonly OrientationWorkspaceImportDraftContext[]
+  recordedAt: string
+  dismissed: boolean
+}): Promise<void> {
+  const current = await readWorkspaceGoalsState(input.memoryDir)
+  const emptySnapshot: WorkspaceImportScopeSnapshot = {
+    goalCount: 0,
+    taskCount: 0,
+    milestoneCount: 0,
+    currentTaskCount: 0,
+    laterTaskCount: 0,
+    taskIds: [],
+    currentTaskIds: [],
+    laterTaskIds: [],
+  }
+  const next: WorkspaceGoalsState = {
+    version: WORKSPACE_GOALS_STRUCTURAL_VERSION,
+    recordedAt: input.recordedAt,
+    goals: current?.goals ?? [],
+    ...(current?.releases?.length ? { releases: current.releases } : {}),
+    tasks: current?.tasks ?? [],
+    milestones: current?.milestones ?? [],
+    documentedStructure: input.documentedStructure.map(copyOrientationStructuralContext),
+    context: [],
+    approved: current?.approved ?? emptySnapshot,
+    detected: current?.detected ?? null,
+    ...(input.dismissed ? { dismissed: true, dismissedAt: input.recordedAt } : {}),
+  }
+  await writeManagedTextFile(
+    workspaceImportStatePath(input.memoryDir, WORKSPACE_GOALS_FILE),
+    JSON.stringify(next, null, 2),
+    'utf-8',
+  )
+}
+
+export async function dismissWorkspaceImportState(input: {
+  memoryDir: string
+}): Promise<void> {
+  const current = await readWorkspaceGoalsState(input.memoryDir)
+  await recordWorkspaceStructuralSnapshot({
+    memoryDir: input.memoryDir,
+    documentedStructure: current?.documentedStructure ?? [],
+    recordedAt: new Date().toISOString(),
+    dismissed: true,
+  })
 }
 
 function scopeSnapshotNeedsMembershipHydration(
@@ -2827,16 +2984,18 @@ function importedTaskHasBlueprintSeed(task: MaterializedImportTask, evidenceDeta
   })) {
     return false
   }
+  const hasTypedTaskContract = (
+    (task.contractNames?.length ?? 0) > 0 ||
+    task.proofPaths?.some(path => path.source === 'documented') === true ||
+    importedPrototypeTaskKind(task) !== null ||
+    task.semanticKind === 'contract' ||
+    task.semanticKind === 'reviewer_lane' ||
+    task.semanticKind === 'workflow'
+  )
   return (
-    Boolean(task.evidenceGraphTask) ||
-    (
-      (task.references?.length ?? 0) > 0 &&
-      (task.acceptanceCriteria?.length ?? 0) > 0 &&
-      (
-        (task.proofPaths?.length ?? 0) > 0 ||
-        typeof task.whyThisMayMatter === 'string'
-      )
-    )
+    (task.references?.length ?? 0) > 0 &&
+    (task.acceptanceCriteria?.length ?? 0) > 0 &&
+    hasTypedTaskContract
   )
 }
 
@@ -4170,6 +4329,7 @@ function importedReferenceSlug(reference: string): string | null {
 function extractReferenceEvidenceDetail(
   task: MaterializedImportTask,
   workspaceProjectPath: string,
+  referenceContents?: ReadonlyMap<string, string>,
 ): ImportedEvidenceDetail {
   // Source evidence is selected from explicit references and structured
   // sections. A task title is display text, not a source-retrieval key.
@@ -4198,9 +4358,11 @@ function extractReferenceEvidenceDetail(
   const titleSuggestsContracts = task.semanticKind === 'contract'
 
   for (const reference of task.references) {
-    const content = readImportedReferenceContent(reference, workspaceProjectPath)
-    if (!content) continue
     const normalizedReference = reference.replace(/\\/g, '/')
+    const content = referenceContents?.get(reference) ??
+      referenceContents?.get(normalizedReference) ??
+      readImportedReferenceContent(reference, workspaceProjectPath)
+    if (!content) continue
     const inventoryStyleReference = /remaining-spec-decomposition-inventory\.md$/i.test(normalizedReference)
     for (const statement of extractGoalStatements(content)) {
       if (!goalStatements.includes(statement)) goalStatements.push(statement)
@@ -5231,12 +5393,13 @@ export function buildImportedBlueprintSeed(
   normalizedReferences: readonly string[],
   workspaceProjectPath: string,
   now: string,
+  referenceContents?: ReadonlyMap<string, string>,
 ): ImportedBlueprintSeed {
   const normalizedTask: MaterializedImportTask = {
     ...task,
     references: [...normalizedReferences],
   }
-  const evidenceDetail = extractReferenceEvidenceDetail(normalizedTask, workspaceProjectPath)
+  const evidenceDetail = extractReferenceEvidenceDetail(normalizedTask, workspaceProjectPath, referenceContents)
   const acceptanceCriteria = materializedAcceptanceCriteria(normalizedTask, evidenceDetail)
   const evidenceRefs = normalizedReferences.map(ref => `import:${ref}`)
   const sourceClaims = task.sourceClaims && task.sourceClaims.length > 0
@@ -5812,7 +5975,8 @@ export async function approveWorkspaceImport(
           ...(materializedParsed.releases?.length ? { releases: [...materializedParsed.releases] } : {}),
           tasks: [...materializedParsed.tasks],
           milestones: [...materializedParsed.milestones],
-          context: approvedContext,
+          documentedStructure: documentedStructuralContextsForProjection(approvedContext),
+          context: [],
           approved: approvedSnapshot,
           detected: detectedSnapshot,
         } satisfies WorkspaceGoalsState,

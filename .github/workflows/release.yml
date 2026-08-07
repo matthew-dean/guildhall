@@ -46,7 +46,7 @@ jobs:
           pnpm docs:check-help-sync
           pnpm docs:build
           pnpm lint:deps
-          pnpm test
+          pnpm test:release
           pnpm model:bakeoff
 
       - name: Build macOS package

@@ -24,7 +24,7 @@ const TaskStatusValue = z.enum([
   'proposed',      // FR-21: agent-originated; awaiting promotion per lever `task_origination`
   'import_draft',  // Workspace-imported draft that still needs shaping before normal intake begins
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
-  'spec_review',   // Spec drafted; awaiting owner approval before worker handoff
+  'spec_review',   // Spec drafted; awaiting the typed review gate before worker handoff
   'ready',         // Spec approved, ready for a worker to pick up
   'in_progress',   // Assigned to a worker agent
   'review',        // Worker done, awaiting reviewer agent
@@ -181,11 +181,27 @@ export const AgentNote = z.object({
 })
 export type AgentNote = z.infer<typeof AgentNote>
 
+/**
+ * A reviewer finding is a claim about one existing, machine-addressable part
+ * of task completion. The explanation may help a worker, but its wording can
+ * never become the identity or disposition of the finding.
+ */
+export const ReviewFinding = z.object({
+  targetKind: z.enum(['acceptance_criterion', 'proof_evidence']),
+  targetId: z.string().min(1),
+  disposition: z.enum(['satisfied', 'unsatisfied', 'advisory']),
+  evidenceRefs: z.array(z.string()).default([]),
+  workerInstruction: z.string().optional(),
+})
+export type ReviewFinding = z.infer<typeof ReviewFinding>
+
 // FR-26 / FR-27 / AC-18: every reviewer verdict is persisted on the task so
 // the audit trail shows what was decided, by which path, when, and against
 // which policy version. `reviewerPath` distinguishes LLM-run reviews from
 // deterministic fallbacks — the machine-readable field for AC-18.
 export const ReviewVerdict = z.object({
+  /** Stable review-run identity for finding and adjudication references. */
+  id: z.string().optional(),
   verdict: z.enum(['approve', 'revise']),
   reviewerPath: z.enum(['llm', 'deterministic']),
   /** Stable reviewer/persona identity for cross-round attribution. */
@@ -218,6 +234,11 @@ export const ReviewVerdict = z.object({
   acceptedCriteriaIds: z.array(z.string()).optional(),
   /** Stable proof evidence IDs the reviewer explicitly verified. */
   proofEvidenceIds: z.array(z.string()).optional(),
+  /**
+   * Typed review conclusions. New writes populate this array; the older ID
+   * lists remain readable during migration but cannot drive adjudication.
+   */
+  findings: z.array(ReviewFinding).optional(),
   /** Optional structured advisory dimensions shown in the review UI. */
   advisoryScores: z.object({
     recommendationPriority: z.enum(['low', 'medium', 'high']).optional(),
@@ -247,10 +268,22 @@ export const AdjudicationRecord = z.object({
   trigger: z.enum(['same_persona_repeat_dissent', 'explicit_request', 'policy_conflict']),
   /** Guild slugs whose revise verdicts this record resolves. */
   dissenters: z.array(z.string()).default([]),
-  /** Guild slugs whose concerns won. */
+  /**
+   * Legacy display field. New resolution records reference finding IDs, never
+   * reviewer/persona names; old data remains readable while it ages out.
+   */
   winningConcerns: z.array(z.string()).default([]),
-  /** Guild slugs whose concerns were superseded. */
+  /** Legacy display field; see resolved/superseded finding references below. */
   supersededConcerns: z.array(z.string()).default([]),
+  /** Stable review-finding references that caused this recovery action. */
+  findingRefs: z.array(z.string()).optional(),
+  /** The exact targets that were contested when this recovery was scheduled. */
+  contestedTargets: z.array(z.object({
+    targetKind: z.enum(['acceptance_criterion', 'proof_evidence']),
+    targetId: z.string().min(1),
+  })).optional(),
+  /** The only operational consequence a coordinator may select. */
+  resolution: z.enum(['replan_task', 'rerun_verification', 'inspect_canonical_task']).optional(),
   /** One-line headline for CLI / PROGRESS.md. */
   summary: z.string(),
   /** Full rationale — references spec, goal guardrails, and the dissent. */
@@ -520,6 +553,8 @@ export const ProductBrief = z.preprocess(normalizeProductBriefInput, z.object({
   antiPatterns: z.array(z.string()).optional(),     // Legacy/UI alias for nonGoals
   rolloutPlan: z.string().optional(),               // Staging / flagging / migration notes
   brandInteractionNotes: z.string().optional(),     // Optional tone/visual interaction notes
+  /** Explicit source capability IDs accepted by this brief. */
+  sourceCapabilityIds: z.array(z.string().min(1)).optional(),
   authoredBy: z.string().optional(),                // agent id or 'human'
   authoredAt: z.string().optional(),
   approvedBy: z.string().optional(),
@@ -687,6 +722,7 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
     ? parseScenarioExpectationFromDescription(normalizedDescription)
     : { scenario: rawScenario, expectation: rawExpectation }
 
+  const hasExecutableCommand = typeof criterion.command === 'string' && criterion.command.trim().length > 0
   const baseCriterion = {
     ...criterion,
     id: typeof criterion.id === 'string' && criterion.id.trim()
@@ -697,12 +733,12 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
     ...(normalizedDescription ? { description: normalizedDescription } : {}),
     ...(rawScenario ? { scenario: rawScenario } : normalizedScenarioExpectation.scenario ? { scenario: normalizedScenarioExpectation.scenario } : {}),
     ...(rawExpectation ? { expectation: rawExpectation } : normalizedScenarioExpectation.expectation ? { expectation: normalizedScenarioExpectation.expectation } : {}),
-    verifiedBy: verifiedBy ?? 'review',
+    // `command` is an executable acceptance contract. It cannot coexist with
+    // a narrative verifier: command gates record its observed result.
+    verifiedBy: hasExecutableCommand ? 'automated' : verifiedBy ?? 'review',
   }
 
-  if (verifiedBy === undefined && typeof criterion.command === 'string' && criterion.command.trim()) {
-    return { ...baseCriterion, verifiedBy: 'automated' }
-  }
+  if (hasExecutableCommand) return baseCriterion
   if (typeof verifiedBy !== 'string') return baseCriterion
   if ((ACCEPTANCE_VERIFIERS as readonly string[]).includes(verifiedBy)) return baseCriterion
 
@@ -740,6 +776,8 @@ export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.ob
   expectedOutputIncludes: z.array(z.string()).optional(),
   evidenceHint: z.string().optional(),
   negativeCase: z.string().optional(),
+  /** Source capability IDs this criterion proves; never inferred from its description. */
+  sourceCapabilityIds: z.array(z.string().min(1)).optional(),
   met: z.boolean().default(false),
   // Runtime proof projection fields. They remain on the parsed contract so a
   // bounded effective-task read can carry a stale/settled proof state without
@@ -1235,6 +1273,17 @@ export const TaskSourceClaim = z.object({
 })
 export type TaskSourceClaim = z.infer<typeof TaskSourceClaim>
 
+/**
+ * A task's typed relationship to a capability in the normalized source
+ * catalog. The catalog owns identity and source revision; a task only owns
+ * its allocation of work.
+ */
+export const TaskCapabilityBinding = z.object({
+  capabilityId: z.string().min(1),
+  relation: z.enum(['plans', 'implements', 'integrates', 'proves', 'reviews']),
+})
+export type TaskCapabilityBinding = z.infer<typeof TaskCapabilityBinding>
+
 export const ProjectReleaseKind = z.enum(['release', 'milestone', 'marker', 'current_work'])
 export type ProjectReleaseKind = z.infer<typeof ProjectReleaseKind>
 
@@ -1259,6 +1308,19 @@ export const TaskWorkShape = z.enum([
   'generic',
 ])
 export type TaskWorkShape = z.infer<typeof TaskWorkShape>
+
+/**
+ * A lifecycle stage says where work is; a review gate says who may advance
+ * it. Keeping those facts separate prevents `spec_review` from becoming an
+ * ambiguous proxy for either an owner decision or coordinator validation.
+ */
+export const TaskSpecReviewGate = z.object({
+  authority: z.enum(['owner', 'coordinator']),
+  requestedAt: z.string(),
+  requestedBy: z.string(),
+  reason: z.enum(['spec_handoff', 'proposal_promotion', 'recovery']).default('spec_handoff'),
+})
+export type TaskSpecReviewGate = z.infer<typeof TaskSpecReviewGate>
 
 /**
  * Explicit ownership for a bootstrap failure that belongs inside a task's
@@ -1306,6 +1368,8 @@ export const Task = z.object({
   requestIntake: RequestIntake.optional(),
   references: z.array(z.string()).default([]),
   sourceClaims: z.array(TaskSourceClaim).default([]),
+  /** Typed source-capability scope allocated to this task. */
+  capabilityBindings: z.array(TaskCapabilityBinding).optional(),
   /** Stable identity of the source work record that created this task. */
   sourceIdentity: z.string().min(1).optional(),
   /** Explicit structural identity used by evidence-graph reconciliation. */
@@ -1325,6 +1389,8 @@ export const Task = z.object({
   // Set by Spec Agent before implementation begins
   spec: z.string().optional(),
   structuredSpec: StructuredSpec.optional(),
+  /** Explicit reviewer authority while status is `spec_review`. */
+  specReviewGate: TaskSpecReviewGate.optional(),
   contractSurfaceReviewPackets: z.array(ContractSurfaceReviewPacket).optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).default([]),
   acceptanceCriteriaProofState: AcceptanceCriteriaProofState.optional(),
@@ -1445,6 +1511,10 @@ export const Task = z.object({
   // Explicit links from a decomposed child to the parent criteria it
   // satisfies. Recovery must use these ids, never search criterion prose.
   parentAcceptanceCriterionIds: z.array(z.string().min(1)).optional(),
+  // `releaseIds` is the visible product-scope membership relation. An
+  // internal proof step is not a release member; this separately records the
+  // one release whose proof it establishes.
+  proofForReleaseId: z.string().min(1).optional(),
   releaseIds: z.array(z.string()).default([]),
   // Work containment is represented by hierarchy links, never by task status.
   // Required migration 0.10.0/task-hierarchy-links converts old status: parent

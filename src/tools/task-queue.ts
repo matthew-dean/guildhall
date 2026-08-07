@@ -1,6 +1,7 @@
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, stableJson, writeManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
@@ -35,6 +36,7 @@ import {
   atomicWriteText,
   inferProjectRootFromMemoryDir,
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+  readProjectStateDatabaseTaskEvidenceCurrent,
   upsertTaskRuntimeState,
   withProjectStateWriteLock,
 } from '@guildhall/sessions'
@@ -46,7 +48,7 @@ import {
   writeProjectTaskQueue,
 } from '@guildhall/runtime/project-state-boundary'
 import { validateSpecGrounding } from '@guildhall/runtime/spec-quality'
-import { taskDoneButProofMissing } from '../runtime/proof-health.js'
+import { taskDoneButProofMissing } from '@guildhall/runtime/proof-health'
 import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, proofSetupHasTaskIdentity } from '@guildhall/runtime/proof-paths'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
@@ -167,6 +169,89 @@ function normalizeUpdateTaskNote(
   return { agentId, role, content }
 }
 
+/**
+ * A worker may save its machine handoff as one durable mutation and move to
+ * review in the next mutation. Review admission reads the compact current
+ * evidence projection rather than requiring the agent to repeat the packet
+ * or reconstruct it from prose.
+ */
+function workerHandoffContractFingerprint(task: z.infer<typeof Task>): string {
+  // This is an opaque system stamp, not a model-authored field. It binds a
+  // worker's self-critique to exactly the acceptance and proof contract that
+  // Guildhall will evaluate at review admission.
+  const contract = {
+    taskId: task.id,
+    acceptanceCriteria: task.acceptanceCriteria,
+    proofPaths: task.proofPaths ?? [],
+    delivery: task.delivery ?? null,
+    parentAcceptanceCriterionIds: task.parentAcceptanceCriterionIds ?? [],
+  }
+  return createHash('sha256').update(stableJson(contract)).digest('hex')
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function stampWorkerSelfCritiqueContract(
+  note: NonNullable<TaskModel['notes']>[number],
+  task: z.infer<typeof Task>,
+): NonNullable<TaskModel['notes']>[number] {
+  if (note.agentId !== 'worker-agent' || note.role !== 'self-critique' || !isRecord(note.structured)) return note
+  if (extractStructuredSelfCritique({ content: '', structured: note.structured }) === null) return note
+  return {
+    ...note,
+    structured: {
+      ...note.structured,
+      guildhallHandoffContract: workerHandoffContractFingerprint(task),
+    },
+  }
+}
+
+function persistedWorkerSelfCritique(
+  projectRoot: string,
+  task: z.infer<typeof Task>,
+): Record<string, unknown> | null {
+  const notes = readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, task.id)?.byKind.note ?? []
+  const expectedContract = workerHandoffContractFingerprint(task)
+  for (const record of [...notes].reverse()) {
+    const payload = record.payload
+    const agentId = typeof payload.agentId === 'string' ? payload.agentId.trim() : ''
+    const role = typeof payload.role === 'string' ? payload.role.trim() : ''
+    if (agentId !== 'worker-agent' || role !== 'self-critique') continue
+    if (!isRecord(payload.structured) || payload.structured.guildhallHandoffContract !== expectedContract) continue
+    const structured = extractStructuredSelfCritique({ content: '', structured: payload.structured })
+    if (structured !== null) return structured
+  }
+  return null
+}
+
+function normalizeStructuredSpecDisplayField(value: unknown): unknown {
+  if (typeof value === 'string' || value === undefined) return value
+  // These fields are rendered explanatory material. Preserve a malformed
+  // model shape deterministically for review instead of throwing away an
+  // otherwise valid typed planning contract. Operational fields such as
+  // acceptance criteria and proof contracts remain schema-strict.
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function normalizeStructuredSpecInput(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const record = value as Record<string, unknown>
+  return {
+    ...record,
+    verification: Array.isArray(record.verification)
+      ? record.verification.map(normalizeStructuredSpecDisplayField)
+      : record.verification,
+    componentApiShape: normalizeStructuredSpecDisplayField(record.componentApiShape),
+    performanceReliabilitySecurity: normalizeStructuredSpecDisplayField(record.performanceReliabilitySecurity),
+  }
+}
+
 const updateTaskInputSchema = z.object({
   tasksPath: TASKS_PATH_SCHEMA,
   taskId: z.string().optional(),
@@ -180,7 +265,7 @@ const updateTaskInputSchema = z.object({
   blockReason: z.string().optional(),
   humanJudgment: z.string().optional(),
   spec: z.string().optional(),
-  structuredSpec: StructuredSpec.optional(),
+  structuredSpec: z.preprocess(normalizeStructuredSpecInput, StructuredSpec).optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
   parentAcceptanceCriterionIds: z.array(z.string().min(1)).optional(),
   workUnitAnalysis: WorkUnitAnalysis.optional(),
@@ -198,6 +283,123 @@ export interface UpdateTaskResult {
 
 type TaskRecord = TaskModel
 type TaskQueueRecord = TaskQueueModel
+
+type PlanningSourceEvidence = { path: string; commands: string[] }
+
+function planningSourceClaims(metadata: Record<string, unknown>): NonNullable<TaskRecord['sourceClaims']> {
+  const raw = metadata['planning_source_evidence']
+  if (!Array.isArray(raw)) return []
+  const claims = raw.flatMap((entry): NonNullable<TaskRecord['sourceClaims']> => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const record = entry as Record<string, unknown>
+    const sourcePath = typeof record.path === 'string' ? record.path.trim() : ''
+    if (!sourcePath) return []
+    const commands = Array.isArray(record.commands)
+      ? record.commands.filter((command): command is string => typeof command === 'string' && command.trim().length > 0)
+      : []
+    return [{
+      signalId: `agent-read:${sourcePath}`,
+      source: 'agent-session-read',
+      title: `Inspected ${sourcePath}`,
+      evidence: commands.length > 0
+        ? `Exact executable lines observed: ${commands.join('; ')}`
+        : 'The current planning agent inspected this source through Guildhall.',
+      references: [sourcePath],
+      role: 'reference',
+      structure: 'record',
+      confidence: 'high',
+      linkedTaskHints: [],
+    }]
+  })
+  return claims
+}
+
+function mergePlanningSourceClaims(
+  existing: NonNullable<TaskRecord['sourceClaims']>,
+  observed: NonNullable<TaskRecord['sourceClaims']>,
+): NonNullable<TaskRecord['sourceClaims']> {
+  const byId = new Map<string, NonNullable<TaskRecord['sourceClaims']>[number]>()
+  for (const claim of [...existing, ...observed]) {
+    const key = claim.signalId ?? `${claim.source}:${claim.title}`
+    byId.set(key, claim)
+  }
+  return [...byId.values()]
+}
+
+function changedExistingAcceptanceCommand(
+  task: TaskRecord,
+  nextCriteria: readonly TaskRecord['acceptanceCriteria'][number][],
+): { criterionId: string; current: string; next: string } | null {
+  const nextById = new Map(nextCriteria.map((criterion) => [criterion.id, criterion] as const))
+  for (const current of task.acceptanceCriteria) {
+    const currentCommand = typeof current.command === 'string' ? current.command.trim() : ''
+    if (!currentCommand) continue
+    const nextCommand = typeof nextById.get(current.id)?.command === 'string'
+      ? nextById.get(current.id)!.command!.trim()
+      : ''
+    if (nextCommand !== currentCommand) {
+      return { criterionId: current.id, current: currentCommand, next: nextCommand }
+    }
+  }
+  return null
+}
+
+function acceptanceContractIsActive(task: TaskRecord): boolean {
+  return ['ready', 'in_progress', 'review', 'gate_check', 'pending_pr', 'done'].includes(task.status)
+}
+
+function knownCommandProofs(
+  task: TaskRecord,
+  currentEvidence?: { byKind?: Record<string, Array<{ payload?: unknown }>> } | null,
+): string[] {
+  const evidenceGates = (currentEvidence?.byKind?.['gate_result'] ?? [])
+    .map((event) => GateResult.safeParse(event.payload))
+    .filter((result): result is { success: true; data: z.infer<typeof GateResult> } => result.success)
+    .map((result) => result.data)
+  const commands = [
+    ...task.acceptanceCriteria.map((criterion) => criterion.command),
+    ...(task.proofPaths ?? []).map((path) => path?.kind === 'command' ? path.command : undefined),
+    ...task.gateResults
+      .filter((gate) => gate.type === 'hard' && gate.passed)
+      .map((gate) => gate.command),
+    ...evidenceGates
+      .filter((gate) => gate.type === 'hard' && gate.passed)
+      .map((gate) => gate.command),
+  ]
+    .filter((command): command is string => typeof command === 'string' && command.trim().length > 0)
+    .map((command) => command.trim())
+  return [...new Set(commands)]
+}
+
+function validateStructuredProofContract(
+  task: TaskRecord,
+  spec: z.infer<typeof StructuredSpec>,
+  currentEvidence?: { byKind?: Record<string, Array<{ payload?: unknown }>> } | null,
+): string | null {
+  const existingCommands = knownCommandProofs(task, currentEvidence)
+  if (existingCommands.length === 0) return null
+
+  const disposition = spec.proofContract?.existingCommandDisposition
+  if (!disposition) {
+    return 'This task has recorded command-backed proof. structuredSpec.proofContract must explicitly preserve, replace, or retire that proof instead of silently omitting it.'
+  }
+
+  const nextCommands = new Set(
+    spec.acceptanceCriteria
+      .map((criterion) => criterion.command?.trim())
+      .filter((command): command is string => Boolean(command)),
+  )
+  if (disposition === 'preserve') {
+    const missing = existingCommands.filter((command) => !nextCommands.has(command))
+    if (missing.length > 0) {
+      return `structuredSpec.proofContract preserves recorded command proof, but these commands are missing from its acceptance criteria: ${missing.join(', ')}.`
+    }
+  }
+  if (disposition === 'replace' && nextCommands.size === 0) {
+    return 'structuredSpec.proofContract replaces recorded command proof, so it must provide at least one replacement command in acceptance criteria.'
+  }
+  return null
+}
 
 function inferMetadataTaskId(metadata: Record<string, unknown> = {}): string | null {
   const taskId = metadata['current_task_id']
@@ -282,22 +484,6 @@ async function updateTaskUnlocked(
     const normalizedNote = normalizeUpdateTaskNote(input.note, metadata)
     if (
       currentAgentId === 'worker-agent' &&
-      normalizedNote?.role === 'self-critique' &&
-      input.status === 'review' &&
-      extractStructuredSelfCritique({
-        content: '',
-        structured: normalizedNote.structured,
-      }) === null
-    ) {
-      return {
-        success: false,
-        taskId,
-        error:
-          'Worker self-critique requires note.structured with acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds. Keep prose in note.content; Guildhall never derives state from it.',
-      }
-    }
-    if (
-      currentAgentId === 'worker-agent' &&
       input.gateResults?.some((result) => result.type === 'hard')
     ) {
       return {
@@ -318,9 +504,28 @@ async function updateTaskUnlocked(
     const renderedStructuredSpec = normalizedStructuredSpec
       ? normalizeSpecForTaskProjectPath(renderStructuredSpecMarkdown(normalizedStructuredSpec), task.projectPath)
       : undefined
+    if (normalizedStructuredSpec) {
+      const currentEvidence = readProjectStateDatabaseTaskEvidenceCurrent(
+        projectRootForTaskState(input.tasksPath, task),
+        task.id,
+      )
+      const proofContractError = validateStructuredProofContract(task, normalizedStructuredSpec, currentEvidence)
+      if (proofContractError) return { success: false, taskId, error: proofContractError }
+    }
     const nextSpec = renderedStructuredSpec ?? normalizedSpec
+    const observedSourceClaims = planningSourceClaims(metadata)
+    const effectiveSourceClaims = mergePlanningSourceClaims(task.sourceClaims ?? [], observedSourceClaims)
     if (nextSpec) {
-      const grounding = validateSpecGrounding({ ...task, spec: nextSpec })
+      const grounding = validateSpecGrounding({
+        ...task,
+        sourceClaims: effectiveSourceClaims,
+        references: [...new Set([
+          ...(task.references ?? []),
+          ...observedSourceClaims.flatMap((claim) => claim.references),
+        ])],
+        spec: nextSpec,
+        ...(normalizedStructuredSpec ? { structuredSpec: normalizedStructuredSpec } : {}),
+      })
       if (!grounding.ok) {
         return {
           success: false,
@@ -335,10 +540,27 @@ async function updateTaskUnlocked(
       ? z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
         .map((criterion) => normalizeAcceptanceCriterionForTaskProjectPath(criterion, task.projectPath))
       : undefined
+    if (normalizedAcceptanceCriteria && acceptanceContractIsActive(task)) {
+      const changedCommand = changedExistingAcceptanceCommand(task, normalizedAcceptanceCriteria)
+      if (changedCommand) {
+        return {
+          success: false,
+          taskId,
+          error:
+            `Acceptance command ${changedCommand.criterionId} is an active executable contract and cannot be replaced or removed by update-task. ` +
+            'Return the task to exploring/spec_review and save a deliberate re-plan before changing its proof command.',
+        }
+      }
+    }
     const baseAcceptanceCriteria = normalizedAcceptanceCriteria ?? task.acceptanceCriteria
-    const workerSelfCritique = currentAgentId === 'worker-agent' && normalizedNote?.role === 'self-critique'
+    const workerSelfCritiqueFromMutation = currentAgentId === 'worker-agent' && normalizedNote?.role === 'self-critique'
       ? extractStructuredSelfCritique({ content: '', structured: normalizedNote.structured })
       : null
+    const workerSelfCritique = workerSelfCritiqueFromMutation ?? (
+      currentAgentId === 'worker-agent' && input.status === 'review'
+        ? persistedWorkerSelfCritique(projectRootForTaskState(input.tasksPath, task), task)
+        : null
+    )
     const effectiveAcceptanceCriteria = materializeProofCommandFromWorkerHandoff(
       task,
       baseAcceptanceCriteria,
@@ -348,20 +570,12 @@ async function updateTaskUnlocked(
       ? effectiveAcceptanceCriteria
       : undefined
     if (currentAgentId === 'worker-agent' && input.status === 'review') {
-      if (normalizedNote?.role !== 'self-critique') {
-        return {
-          success: false,
-          taskId,
-          error:
-            'Worker review handoff requires a self-critique note with typed acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds fields. Guildhall never derives a handoff from prose.',
-        }
-      }
       if (!workerSelfCritique) {
         return {
           success: false,
           taskId,
           error:
-            'Worker self-critique requires note.structured with the typed acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds fields. Guildhall never derives a handoff from prose.',
+            'Worker review handoff requires one durable self-critique with typed acceptanceCriteria, changedFiles, verificationCommands, and proofEvidenceIds. Persist it in this update or an earlier worker update; Guildhall never derives a handoff from prose.',
         }
       }
       const expectedIds = effectiveAcceptanceCriteria.map((criterion) => criterion.id)
@@ -519,6 +733,13 @@ async function updateTaskUnlocked(
     }
 
     if (input.title !== undefined) task.title = input.title
+    if (observedSourceClaims.length > 0) {
+      task.sourceClaims = effectiveSourceClaims
+      task.references = [...new Set([
+        ...(task.references ?? []),
+        ...observedSourceClaims.flatMap((claim) => claim.references),
+      ])]
+    }
     if (input.executionMode !== undefined) task.executionMode = WorkerExecutionMode.parse(input.executionMode)
     if (input.bootstrapRepairOwnership !== undefined) {
       task.bootstrapRepairOwnership = BootstrapRepairOwnership.parse(input.bootstrapRepairOwnership)
@@ -583,9 +804,6 @@ async function updateTaskUnlocked(
       ? z.array(GateResult).parse(input.gateResults)
       : []
     if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
-    const noteEvidence = normalizedNote
-      ? { ...normalizedNote, timestamp: new Date().toISOString() }
-      : null
     const shouldRefreshSizePlan =
       (nextSpec !== undefined && nextSpec.trim() !== '') ||
       input.workUnitAnalysis !== undefined
@@ -607,6 +825,9 @@ async function updateTaskUnlocked(
     }
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
+    const noteEvidence = normalizedNote
+      ? stampWorkerSelfCritiqueContract({ ...normalizedNote, timestamp: task.updatedAt }, task)
+      : null
 
     const taskProjectRoot = projectRootForTaskState(input.tasksPath, task, metadata)
     const taskIdsUnchanged = queue.tasks.length === originalTaskIds.size &&
@@ -654,6 +875,26 @@ function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+function sameDefinitionValue(key: string, left: unknown, right: unknown): boolean {
+  // The SQLite projection may omit schema-defaulted source collections while
+  // the in-memory Task parser exposes them as []. They mean the same thing;
+  // treating that representation difference as a concurrent edit prevents an
+  // agent from attaching the source evidence it just observed.
+  if (
+    (key === 'references' || key === 'sourceClaims') &&
+    ((left === undefined && Array.isArray(right) && right.length === 0) ||
+      (right === undefined && Array.isArray(left) && left.length === 0))
+  ) return true
+  if (key === 'acceptanceCriteria') {
+    const normalized = (value: unknown): unknown => {
+      const parsed = z.array(AcceptanceCriteria).safeParse(value)
+      return parsed.success ? parsed.data : value
+    }
+    return sameJson(normalized(left), normalized(right))
+  }
+  return sameJson(left, right)
+}
+
 function applyDefinitionDelta(
   currentTask: Record<string, unknown>,
   baselineTask: Record<string, unknown>,
@@ -667,8 +908,8 @@ function applyDefinitionDelta(
   for (const key of changedKeys) {
     const baselineValue = baselineTask[key]
     const nextValue = nextTask[key]
-    if (sameJson(baselineValue, nextValue)) continue
-    if (!sameJson(currentTask[key], baselineValue)) return null
+    if (sameDefinitionValue(key, baselineValue, nextValue)) continue
+    if (!sameDefinitionValue(key, currentTask[key], baselineValue)) return null
     if (nextValue === undefined) delete next[key]
     else next[key] = nextValue
   }
@@ -959,17 +1200,18 @@ export function materializeProofSetupTask(
     return { status: 'already_represented', childTaskId: parent.id }
   }
   const requestedReleaseIds = new Set(options.releaseIds ?? [])
+  const proofReleaseIds = options.releaseIds ?? parent.releaseIds ?? []
   const existing = queue.tasks.find((candidate) => {
     if (candidate.hierarchy?.parentId !== parent.id || !isProofSetupTask(candidate)) return false
     if (['archived', 'cancelled'].includes(candidate.status)) return false
     if (requestedReleaseIds.size > 0 &&
-      !(candidate.releaseIds ?? []).some(releaseId => requestedReleaseIds.has(releaseId))) return false
+      !(candidate.proofForReleaseId && requestedReleaseIds.has(candidate.proofForReleaseId))) return false
     // A proof child shared with a shipped release is historical evidence. A
     // later release gets a fresh child even when the old child also names the
     // later release, so the current proof contract never mutates history.
-    const hasShippedMembership = (candidate.releaseIds ?? []).some(releaseId =>
-      queue.releases?.some(release => release.id === releaseId && release.state === 'shipped') === true,
-    )
+    const hasShippedMembership = candidate.proofForReleaseId
+      ? queue.releases?.some(release => release.id === candidate.proofForReleaseId && release.state === 'shipped') === true
+      : false
     return !hasShippedMembership
   })
   if (existing) {
@@ -986,7 +1228,7 @@ export function materializeProofSetupTask(
 
   const child = buildProofSetupTaskContract(parent, timestamp, {
     id,
-    releaseIds: options.releaseIds,
+    releaseIds: proofReleaseIds,
   })
 
   queue.tasks.push(child)
@@ -1009,6 +1251,73 @@ export function materializeProofSetupTask(
 }
 
 /**
+ * Turn a selected release's known proof blockers into its existing internal
+ * verification work in one deterministic mutation. The caller supplies the
+ * blocker identities from the shared scope projection; this helper only
+ * maintains the task graph and never re-derives readiness from prose.
+ */
+export function prepareReleaseProofRecovery(
+  queue: TaskQueueRecord,
+  input: {
+    parentTaskIds: readonly string[]
+    releaseId: string
+    timestamp: string
+  },
+): {
+  materializedTaskIds: string[]
+  reopenedTaskIds: string[]
+  representedTaskIds: string[]
+  rejectedParentTaskIds: string[]
+} {
+  const materializedTaskIds: string[] = []
+  const reopenedTaskIds: string[] = []
+  const representedTaskIds: string[] = []
+  const rejectedParentTaskIds: string[] = []
+  const release = queue.releases?.find(candidate => candidate.id === input.releaseId)
+  for (const parentTaskId of [...new Set(input.parentTaskIds)].sort()) {
+    const parent = queue.tasks.find(task => task.id === parentTaskId)
+    const isReleaseMember = Boolean(
+      release && (
+        (release.nodeIds ?? []).includes(`work:${parentTaskId}`)
+      ),
+    )
+    if (!parent || !isReleaseMember || ['archived', 'cancelled', 'shelved'].includes(parent.status)) {
+      rejectedParentTaskIds.push(parentTaskId)
+      continue
+    }
+    const result = materializeProofSetupTask(queue, parent, input.timestamp, {
+      releaseIds: [input.releaseId],
+    })
+    const proofTask = queue.tasks.find(task => task.id === result.childTaskId)
+    if (!proofTask) continue
+    if (result.status === 'materialized') materializedTaskIds.push(proofTask.id)
+    else representedTaskIds.push(proofTask.id)
+
+    // A proof child in a terminal handoff or review state is not runnable when
+    // its parent still lacks current proof. The failed/absent proof is the
+    // authoritative outcome, so return that same bounded child to ready work
+    // instead of leaving Start to rediscover an already-represented blocker.
+    // Do not override genuinely blocked work: it may carry an external
+    // constraint that recovery cannot truthfully erase.
+    if (['done', 'pending_pr', 'review'].includes(proofTask.status)) {
+      const priorStatus = proofTask.status
+      proofTask.status = 'ready'
+      proofTask.assignedTo = null
+      delete proofTask.completedAt
+      proofTask.updatedAt = input.timestamp
+      proofTask.notes.push({
+        agentId: 'proof-recovery',
+        role: 'coordinator',
+        content: `Returned ${proofTask.id} from ${priorStatus} because the selected release still lacks current proof for ${parent.id}.`,
+        timestamp: input.timestamp,
+      })
+      reopenedTaskIds.push(proofTask.id)
+    }
+  }
+  return { materializedTaskIds, reopenedTaskIds, representedTaskIds, rejectedParentTaskIds }
+}
+
+/**
  * Build the one canonical proof-setup task contract. Existing generated proof
  * children use this same builder during migration so creation and repair
  * cannot drift into two subtly different task shapes.
@@ -1016,9 +1325,11 @@ export function materializeProofSetupTask(
 export function buildProofSetupTaskContract(
   parent: TaskRecord,
   timestamp: string,
-  options: { id?: string; releaseIds?: readonly string[]; command?: string } = {},
+  options: { id?: string; releaseIds?: readonly string[]; proofForReleaseId?: string; command?: string } = {},
 ): TaskModel {
   const id = options.id ?? `${parent.id}-proof-setup`
+  const requestedReleaseIds = [...new Set(options.releaseIds ?? parent.releaseIds ?? [])]
+  const proofForReleaseId = options.proofForReleaseId ?? (requestedReleaseIds.length === 1 ? requestedReleaseIds[0] : undefined)
   const childStructuredSpec = StructuredSpec.parse({
     whatThisIs: `A bounded proof-setup task for ${parent.title}.`,
     problemContext: 'The selected script-only release requires one exact project-backed command before the containing task can be released.',
@@ -1097,7 +1408,10 @@ export function buildProofSetupTaskContract(
       kind: 'internal_step',
       countInProjectTotals: false,
     },
-    releaseIds: [...(options.releaseIds ?? parent.releaseIds ?? [])],
+    ...(proofForReleaseId ? { proofForReleaseId } : {}),
+    // Internal verification work inherits its execution eligibility through
+    // hierarchy. It never joins the visible release membership relation.
+    releaseIds: [],
     references: [...(parent.references ?? [])],
     delivery: {
       ...(parent.delivery ?? {}),

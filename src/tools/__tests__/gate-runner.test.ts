@@ -32,6 +32,7 @@ describe('runGate', () => {
     const result = await runGate(mkGate({ command: 'true' }), { cwd: tmpDir })
     expect(result.passed).toBe(true)
     expect(result.gateId).toBe('test-gate')
+    expect(result.command).toBe('true')
     expect(result.type).toBe('hard')
   })
 

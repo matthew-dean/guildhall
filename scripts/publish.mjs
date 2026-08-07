@@ -21,9 +21,11 @@
  *   6. Rebuild `dist/` fresh.
  *   7. Build the macOS packaged artifact used by the curl installer.
  *   8. Verify package contents exclude raw docs/ but keep generated help.
- *   9. `npm publish` with `--access=public`.
- *   10. Commit the release snapshot and tag `v<version>`.
- *   11. Move `package.json` to the next development version and commit that bump.
+ *   9. Commit the release snapshot and tag `v<version>`.
+ *   10. Push the branch and tag so the GitHub release artifact workflow runs.
+ *   11. Wait for the GitHub Release tarball and checksum.
+ *   12. `npm publish` with `--access=public`.
+ *   13. Move `package.json` to the next development version and commit/push that bump.
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
@@ -37,6 +39,8 @@
  *   --next-version <v>    Version to write back into package.json after a real
  *                         release commit/tag. Defaults to the next patch after
  *                         the published release version.
+ *   --remote <name>       Git remote to push release refs (defaults to origin).
+ *   --no-push             Stage the release commit/tag locally and skip npm publish.
  *
  * Usage:
  *   node scripts/publish.mjs 0.4.0
@@ -49,7 +53,12 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, wri
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { assertRuntimeReleaseReady, buildReleaseManifest } from './release-manifest.mjs'
+import {
+  RUNTIME_IMAGE_REPOSITORY,
+  RUNTIME_IMAGE_TAG_SUFFIX,
+  assertRuntimeReleaseReady,
+  buildReleaseManifest,
+} from './release-manifest.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST = join(ROOT, 'package.json')
@@ -67,6 +76,7 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
   process.exit(args.includes('--help') || args.includes('-h') ? 0 : 1)
 }
 
+const positionalArgs = collectPositionalArgs(args)
 const flags = {
   dryRun: args.includes('--dry-run'),
   skipTests: args.includes('--skip-tests'),
@@ -74,6 +84,8 @@ const flags = {
   allowBranch: args.includes('--allow-branch'),
   tag: takeFlagValue('--tag') ?? 'latest',
   nextVersion: takeFlagValue('--next-version') ?? null,
+  remote: takeFlagValue('--remote') ?? 'origin',
+  pushRemote: !args.includes('--no-push'),
 }
 const originalManifestText = readFileSync(MANIFEST, 'utf-8')
 let restoreManifestOnExit = false
@@ -88,8 +100,9 @@ process.on('exit', () => {
   if (restoreManifestOnExit) writeFileSync(MANIFEST, originalManifestText)
   if (releaseArtifactRollback.active) restoreReleaseArtifacts()
 })
-const versionArg = args.find((a) => !a.startsWith('--'))
+const versionArg = positionalArgs[0]
 if (!versionArg) die('Missing version argument. Pass a semver or `patch`/`minor`/`major`.')
+if (positionalArgs.length > 1) die(`Unexpected positional arguments: ${positionalArgs.slice(1).join(' ')}`)
 
 // ---------------------------------------------------------------------------
 // 1. Resolve target version
@@ -114,7 +127,7 @@ if (publishedVersion === nextVersion && !flags.dryRun) {
 // 2. Git preflight
 // ---------------------------------------------------------------------------
 
-preflightGit()
+const releaseBranch = preflightGit()
 
 // ---------------------------------------------------------------------------
 // 3. Bump the manifest
@@ -132,16 +145,12 @@ if (manifest.version !== nextVersion) {
 
 const releaseManifest = buildReleaseManifest({
   guildhallVersion: nextVersion,
+  runtimeImageDigest: flags.dryRun ? null : resolveRuntimeImageDigest(nextVersion),
 })
 try {
   assertRuntimeReleaseReady(releaseManifest, { dryRun: flags.dryRun })
 } catch (error) {
-  const message = error instanceof Error ? error.message : String(error)
-  if (!flags.dryRun && /requires a verified default runtime image digest before release/.test(message)) {
-    warn(`${message} Continuing with the immutable runtime image tag only; the current tag-driven runtime-image workflow does not make the digest available before publish.`)
-  } else {
-    die(message)
-  }
+  die(error instanceof Error ? error.message : String(error))
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +175,7 @@ const releaseHelpDocsEnv = flags.dryRun
 // ---------------------------------------------------------------------------
 
 if (!flags.skipTests) {
-  log('Running typecheck, docs build, model-independence, lint:deps, and tests...')
+  log('Running typecheck, docs build, model-independence, lint:deps, and release tests...')
   run('pnpm', ['typecheck'])
   run('pnpm', ['docs:build'], releaseHelpDocsEnv)
   run('pnpm', ['lint:deps'])
@@ -174,7 +183,7 @@ if (!flags.skipTests) {
   // Guildhall meaning. Keep this adversarial gate explicit and visible rather
   // than relying on the much larger suite to make that contract obvious.
   run('pnpm', ['model:independence'])
-  run('pnpm', ['test'])
+  run('pnpm', ['test:release'])
 } else {
   warn('Skipping gate (--skip-tests). Build still runs.')
 }
@@ -200,29 +209,17 @@ run('node', ['scripts/build-macos-package.mjs', '--skip-build'])
 log('Checking npm package contents...')
 assertNoDocsInPackage()
 
-// ---------------------------------------------------------------------------
-// 9. Publish
-// ---------------------------------------------------------------------------
-
-const publishArgs = ['publish', '--access=public', '--tag', flags.tag]
-if (flags.dryRun) publishArgs.push('--dry-run')
-
-log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [dry-run]' : ''}...`)
-run('npm', publishArgs)
-if (!flags.dryRun) {
-  restoreManifestOnExit = false
-  cleanupReleaseArtifactBackups()
-  releaseArtifactRollback.active = false
-}
-
-// ---------------------------------------------------------------------------
-// 10. Commit + tag
-// ---------------------------------------------------------------------------
-
 if (flags.dryRun) {
+  const publishArgs = ['publish', '--access=public', '--tag', flags.tag, '--dry-run']
+  log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag}) [dry-run]...`)
+  run('npm', publishArgs)
   warn('Dry-run: skipping git commit + tag and restoring package.json.')
   process.exit(0)
 }
+
+// ---------------------------------------------------------------------------
+// 9. Commit + tag
+// ---------------------------------------------------------------------------
 
 log('Committing version bump + tagging...')
 const releasePaths = [
@@ -243,7 +240,38 @@ if (gitRefExists(`refs/tags/v${nextVersion}`)) {
   run('git', ['tag', `v${nextVersion}`])
 }
 
+restoreManifestOnExit = false
+cleanupReleaseArtifactBackups()
+releaseArtifactRollback.active = false
+
+if (postReleaseVersion) {
+  if (!flags.pushRemote) {
+    warn(`--no-push: staged release commit and v${nextVersion} tag locally; skipping npm publish because GitHub release artifacts cannot be verified.`)
+    log(`  Push when ready: git push ${flags.remote} HEAD:${releaseBranch} refs/tags/v${nextVersion}`)
+    process.exit(0)
+  }
+}
+
+if (flags.pushRemote) {
+  pushReleaseRefs(releaseBranch, nextVersion)
+  waitForReleaseArtifacts(nextVersion)
+} else {
+  warn(`--no-push: staged release commit and v${nextVersion} tag locally; skipping npm publish because GitHub release artifacts cannot be verified.`)
+  log(`  Push when ready: git push ${flags.remote} HEAD:${releaseBranch} refs/tags/v${nextVersion}`)
+  process.exit(0)
+}
+
+// ---------------------------------------------------------------------------
+// 10. Publish after GitHub artifacts exist
+// ---------------------------------------------------------------------------
+
+const publishArgs = ['publish', '--access=public', '--tag', flags.tag]
+
+log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})...`)
+run('npm', publishArgs)
+
 log(`\n✓ Published guildhall@${nextVersion}`)
+
 if (postReleaseVersion) {
   const nextManifest = readJson(MANIFEST)
   nextManifest.version = postReleaseVersion
@@ -255,8 +283,7 @@ if (postReleaseVersion) {
     warn(`package.json already at ${postReleaseVersion}; skipping post-release bump commit.`)
   }
 }
-log(`  Push when ready:  git push origin main --follow-tags`)
-log(`  Pushing v${nextVersion} triggers the GitHub release workflow for guildhall-macos.tar.gz.`)
+pushPostReleaseBranch(releaseBranch)
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -277,6 +304,8 @@ Flags:
   --tag <dist-tag>   npm dist-tag (default: latest; use 'next' for pre-releases).
   --next-version <v> Version to restore into package.json after a real release
                      (default: next patch after the published release).
+  --remote <name>    Git remote to push release refs (default: origin).
+  --no-push          Stage the release commit/tag locally and skip npm publish.
   -h, --help         Show this help.
 `)
 }
@@ -287,6 +316,21 @@ function takeFlagValue(flag) {
   const v = args[i + 1]
   if (!v || v.startsWith('--')) die(`Flag ${flag} requires a value.`)
   return v
+}
+
+function collectPositionalArgs(argv) {
+  const valueFlags = new Set(['--tag', '--next-version', '--remote'])
+  const positional = []
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]
+    if (valueFlags.has(arg)) {
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--')) continue
+    positional.push(arg)
+  }
+  return positional
 }
 
 function log(msg) {
@@ -409,6 +453,38 @@ function runCaptureOptional(cmd, argv) {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return result
+}
+
+function resolveRuntimeImageDigest(version) {
+  if (!runtimeDigestRequired(version)) return null
+  if (process.env.GUILDHALL_RUNTIME_IMAGE_DIGEST) {
+    return process.env.GUILDHALL_RUNTIME_IMAGE_DIGEST
+  }
+
+  const image = `${RUNTIME_IMAGE_REPOSITORY}:${version}-${RUNTIME_IMAGE_TAG_SUFFIX}`
+  const result = spawnSync('docker', [
+    'buildx',
+    'imagetools',
+    'inspect',
+    image,
+    '--format',
+    '{{json .Manifest.Digest}}',
+  ], {
+    cwd: ROOT,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (result.status !== 0) return null
+  const digest = `${result.stdout ?? ''}`.trim().replace(/^"|"$/g, '')
+  return digest.startsWith('sha256:') ? digest : null
+}
+
+function runtimeDigestRequired(version) {
+  const match = /^(\d+)\.(\d+)\./.exec(version)
+  if (!match) return false
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  return major > 0 || minor >= 9
 }
 
 function hasStagedDiff(paths) {
@@ -551,4 +627,87 @@ function preflightGit() {
   if (status && !flags.allowDirty) {
     die('Working tree is dirty. Commit or stash first, or pass --allow-dirty.')
   }
+
+  if (!flags.dryRun && flags.pushRemote) {
+    assertPushRemoteReady(branch, nextVersion)
+  }
+
+  return branch
+}
+
+function assertPushRemoteReady(branch, version) {
+  const remoteUrl = runCaptureOptional('git', ['remote', 'get-url', flags.remote])
+  if (remoteUrl.status !== 0 || !`${remoteUrl.stdout ?? ''}`.trim()) {
+    die(`Remote "${flags.remote}" is not configured. Add it, pass --remote <name>, or use --no-push for a staged release.`)
+  }
+  if (remoteRefExists(flags.remote, `refs/tags/v${version}`)) {
+    die(`Remote tag v${version} already exists on ${flags.remote}; refusing to publish a release that cannot create a fresh GitHub artifact.`)
+  }
+  const remoteBranch = remoteRefExists(flags.remote, `refs/heads/${branch}`)
+  if (!remoteBranch) {
+    warn(`Remote branch ${flags.remote}/${branch} does not exist yet; the release push will create it.`)
+  }
+}
+
+function remoteRefExists(remote, ref) {
+  const result = spawnSync('git', ['ls-remote', '--exit-code', remote, ref], {
+    cwd: ROOT,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (result.status === 0) return true
+  if (result.status === 2) return false
+  die(`Command failed: git ls-remote --exit-code ${remote} ${ref}\n${result.stderr ?? ''}`.trim())
+}
+
+function pushReleaseRefs(branch, version) {
+  const tagRef = `refs/tags/v${version}`
+  log(`Pushing ${branch} and v${version} to ${flags.remote}...`)
+  run('git', ['push', '--atomic', flags.remote, `HEAD:${branch}`, tagRef])
+
+  const localTag = runCapture('git', ['rev-parse', tagRef]).trim()
+  const remoteTagLine = runCapture('git', ['ls-remote', '--tags', flags.remote, tagRef]).trim()
+  const remoteTag = remoteTagLine.split(/\s+/)[0]
+  if (remoteTag !== localTag) {
+    die(`Remote tag verification failed for v${version}: expected ${localTag}, got ${remoteTag || '(missing)'}.`)
+  }
+  log(`Pushed ${branch} and v${version} to ${flags.remote}.`)
+}
+
+function pushPostReleaseBranch(branch) {
+  log(`Pushing post-release ${branch} to ${flags.remote}...`)
+  run('git', ['push', flags.remote, `HEAD:${branch}`])
+}
+
+function waitForReleaseArtifacts(version) {
+  const assetNames = ['guildhall-macos.tar.gz', 'guildhall-macos.tar.gz.sha256']
+  const timeoutMs = Number(process.env.GUILDHALL_RELEASE_ARTIFACT_TIMEOUT_MS ?? 30 * 60 * 1000)
+  const pollMs = Number(process.env.GUILDHALL_RELEASE_ARTIFACT_POLL_MS ?? 15 * 1000)
+  const deadline = Date.now() + timeoutMs
+
+  log(`Waiting for GitHub release artifacts for v${version}...`)
+  while (Date.now() <= deadline) {
+    const missing = assetNames.filter((assetName) => !releaseAssetExists(version, assetName))
+    if (missing.length === 0) {
+      log(`GitHub release artifacts for v${version} are available.`)
+      return
+    }
+    warn(`Release artifacts not ready yet: ${missing.join(', ')}`)
+    sleep(Math.max(250, pollMs))
+  }
+
+  die(`Timed out waiting for GitHub release artifacts for v${version}: ${assetNames.join(', ')}`)
+}
+
+function releaseAssetExists(version, assetName) {
+  const url = `https://github.com/matthew-dean/guildhall/releases/download/v${version}/${assetName}`
+  const result = spawnSync('curl', ['-fsIL', '--max-time', '20', url], {
+    cwd: ROOT,
+    stdio: 'ignore',
+  })
+  return result.status === 0
+}
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }

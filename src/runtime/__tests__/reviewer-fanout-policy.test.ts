@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   aggregateFanout,
-  findRecurrentDissent,
+  findTypedFindingConflicts,
   type PersonaVerdict,
 } from '../reviewer-fanout.js'
 
@@ -21,6 +21,15 @@ function pv(
     verdict,
     reasoning: `${slug} ${verdict}`,
     revisionItems: items,
+    ...(verdict === 'revise' && items.length > 0 ? {
+      findings: [{
+        targetKind: 'acceptance_criterion' as const,
+        targetId: `ac-${slug}`,
+        disposition: 'unsatisfied' as const,
+        evidenceRefs: [],
+        workerInstruction: items[0],
+      }],
+    } : {}),
     rawOutput: '',
   }
 }
@@ -94,74 +103,49 @@ describe('aggregateFanout — coordinator_adjudicates_on_conflict', () => {
     expect(agg.needsAdjudication).toBeUndefined()
   })
 
-  it('flags adjudication when the same persona dissents two rounds in a row', () => {
-    const priorRound = [
-      pv('security-engineer', 'revise', [
-        'Require email verification before any posting action',
-      ]),
-    ]
-    const currentRound = [
-      pv('security-engineer', 'revise', [
-        'Require email verification before any posting action',
-      ]),
-    ]
-    const agg = aggregateFanout(currentRound, {
+  it('does not treat repeated persona dissent as an adjudication conflict', () => {
+    const agg = aggregateFanout([pv('security-engineer', 'revise', ['Require email verification'])], {
       policy: 'coordinator_adjudicates_on_conflict',
-      priorRounds: [priorRound],
+      priorRounds: [[pv('security-engineer', 'revise', ['Require email verification'])]],
     })
     expect(agg.verdict).toBe('revise')
-    expect(agg.needsAdjudication).toBe(true)
-    expect(agg.adjudicationTrigger).toBe('same_persona_repeat_dissent')
-  })
-
-  it('does not flag when dissenting persona changes between rounds', () => {
-    const prior = [pv('a', 'revise', ['fix x'])]
-    const current = [pv('b', 'revise', ['fix y'])]
-    const agg = aggregateFanout(current, {
-      policy: 'coordinator_adjudicates_on_conflict',
-      priorRounds: [prior],
-    })
     expect(agg.needsAdjudication).toBeUndefined()
   })
 
-  it('does not depend on whether the same persona changed its prose', () => {
-    const prior = [pv('a', 'revise', ['Fix the focus ring on the primary button'])]
-    const current = [pv('a', 'revise', ['Update error copy for empty-state variant'])]
-    const agg = aggregateFanout(current, {
+  it('flags incompatible findings on one target regardless of persona wording', () => {
+    const satisfied = {
+      targetKind: 'acceptance_criterion' as const,
+      targetId: 'ac-identity',
+      disposition: 'satisfied' as const,
+      evidenceRefs: ['diff:src/auth.ts'],
+    }
+    const unsatisfied = {
+      targetKind: 'acceptance_criterion' as const,
+      targetId: 'ac-identity',
+      disposition: 'unsatisfied' as const,
+      evidenceRefs: ['diff:src/auth.ts'],
+      workerInstruction: 'Inspect the email-verification completion path.',
+    }
+    const agg = aggregateFanout([
+      { ...pv('security-engineer', 'revise', ['Different prose entirely']), findings: [unsatisfied] },
+      { ...pv('copywriter', 'approve'), findings: [satisfied] },
+    ], {
       policy: 'coordinator_adjudicates_on_conflict',
-      priorRounds: [prior],
     })
     expect(agg.needsAdjudication).toBe(true)
-    expect(agg.adjudicationTrigger).toBe('same_persona_repeat_dissent')
-  })
-})
-
-describe('findRecurrentDissent', () => {
-  it('returns empty when there are no prior rounds', () => {
-    expect(
-      findRecurrentDissent([pv('a', 'revise', ['fix'])], []),
-    ).toEqual([])
+    expect(agg.adjudicationTrigger).toBe('policy_conflict')
+    expect(agg.conflicts).toEqual([{
+      targetKind: 'acceptance_criterion',
+      targetId: 'ac-identity',
+      satisfiedBy: ['copywriter'],
+      unsatisfiedBy: ['security-engineer'],
+    }])
   })
 
-  it('identifies a persona whose dissent repeats across rounds by identity', () => {
-    const prior = [pv('a', 'revise', ['verify user email before post'])]
-    const current = [pv('a', 'revise', ['verify the user email before posting'])]
-    expect(findRecurrentDissent(current, [prior])).toEqual(['a'])
-  })
-
-  it('still identifies the persona when its wording changes', () => {
-    const prior = [pv('a', 'revise', ['fix button focus ring color'])]
-    const current = [
-      pv('a', 'revise', ['switch from rem to px throughout stylesheet']),
-    ]
-    expect(findRecurrentDissent(current, [prior])).toEqual(['a'])
-  })
-
-  it('compares against the most recent prior round only', () => {
-    const r1 = [pv('a', 'revise', ['verify email before posting'])]
-    const r2 = [pv('a', 'approve')] // persona briefly approved
-    const current = [pv('a', 'revise', ['verify email before posting'])]
-    // `a` approved in r2, breaking the chain → no adjudication flag.
-    expect(findRecurrentDissent(current, [r1, r2])).toEqual([])
+  it('does not turn advisory findings into a conflict', () => {
+    expect(findTypedFindingConflicts([
+      { ...pv('a', 'approve'), findings: [{ targetKind: 'proof_evidence', targetId: 'proof-1', disposition: 'satisfied', evidenceRefs: [] }] },
+      { ...pv('b', 'revise'), findings: [{ targetKind: 'proof_evidence', targetId: 'proof-1', disposition: 'advisory', evidenceRefs: [] }] },
+    ])).toEqual([])
   })
 })

@@ -14,6 +14,7 @@ export type ProjectScopeEligibilityReason = 'included' | 'included_ancestor' | '
 export type ProjectScopeHierarchyRole = 'root' | 'parent' | 'child'
 export type ProjectScopeHandoffState =
   | 'not_shaped'
+  | 'spec_shaping'
   | 'brief_cleanup'
   | 'spec_review'
   | 'ready'
@@ -31,6 +32,24 @@ export interface ProjectScope {
   nodeIds: string[]
   deferredNodeIds: string[]
   proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
+}
+
+/**
+ * Public scope totals describe the owner-selected boundary. Scheduler rows can
+ * collapse parent/child work into fewer runnable units, but that execution
+ * view must never redefine how much work belongs to the release.
+ */
+export function projectScopeMembershipCounts(
+  scope: Pick<ProjectScope, 'id' | 'nodeIds' | 'deferredNodeIds'> & { kind: string },
+  releases: readonly ProjectRelease[],
+): { taskCount: number; deferredTaskCount: number } {
+  const release = scope.kind === 'release'
+    ? releases.find(candidate => candidate.id === scope.id)
+    : undefined
+  return {
+    taskCount: release?.nodeIds.length ?? scope.nodeIds.length,
+    deferredTaskCount: release?.deferredNodeIds.length ?? scope.deferredNodeIds.length,
+  }
 }
 
 type ProofScope = {
@@ -68,8 +87,10 @@ export function projectScopeRowNeedsOwnerInput(row: Pick<ProjectScopeRow, 'scope
 
 export function projectScopeRowIsGuildhallShaping(row: Pick<ProjectScopeRow, 'scope' | 'status' | 'handoffState'>): boolean {
   return row.scope === 'included' &&
-    row.handoffState === 'not_shaped' &&
-    (row.status === 'exploring' || row.status === 'import_draft')
+    (row.handoffState === 'spec_shaping' || (
+      row.handoffState === 'not_shaped' &&
+      (row.status === 'exploring' || row.status === 'import_draft')
+    ))
 }
 
 /**
@@ -82,7 +103,8 @@ export function normalizeProjectScopeRowReadModel(row: ProjectScopeRow): Project
   const humanBlocking = projectScopeRowIsGuildhallShaping(row)
     ? false
     : row.humanBlocking
-  const canStartShaping = row.scope === 'included' && row.status === 'exploring' && row.handoffState === 'not_shaped'
+  const canStartShaping = row.scope === 'included' && row.status === 'exploring' &&
+    (row.handoffState === 'not_shaped' || row.handoffState === 'spec_shaping')
   const blocksStart = row.scope === 'included' && (
     row.proofBlocked ||
     row.handoffState === 'blocked' ||
@@ -119,8 +141,10 @@ export interface ProjectScopeProjection {
     code?: string
     label: 'Start' | 'Resume' | 'Review' | 'Configure' | 'Answer in Thread'
     focusTaskId?: string
-      focusTaskTitle?: string
-      focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input'
+    focusTaskTitle?: string
+    focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
+    /** Exact selected-scope records behind an owner-review action. */
+    reviewTaskIds?: string[]
     count?: number
     message: string
     actionHref: string
@@ -172,6 +196,7 @@ export interface ProjectScopeTaskInput {
   id: string
   status?: TaskStatus
   releaseIds?: readonly string[]
+  proofForReleaseId?: string
   semanticKind?: string
   hierarchy?: { parentId?: string; childIds?: string[] }
 }
@@ -358,8 +383,11 @@ export function selectedProjectScopeForQueue(
 export function releaseToProjectScope(release: ProjectRelease, tasks: readonly Task[]): ProjectScope {
   const nodeIds = new Set<string>((release.nodeIds ?? []).filter(nodeId => !isWorkspaceImportPreviewNodeId(nodeId)))
   const deferredNodeIds = new Set<string>((release.deferredNodeIds ?? []).filter(nodeId => !isWorkspaceImportPreviewNodeId(nodeId)))
+  const hasMaterializedMembership = nodeIds.size > 0 || deferredNodeIds.size > 0
   for (const task of tasks) {
     const nodeId = taskScopeNodeId(task.id)
+    const nodeWasIncluded = nodeIds.has(nodeId)
+    const nodeWasDeferred = deferredNodeIds.has(nodeId)
     if (isProjectSetupTask(task.id)) {
       nodeIds.delete(nodeId)
       deferredNodeIds.delete(nodeId)
@@ -372,7 +400,9 @@ export function releaseToProjectScope(release: ProjectRelease, tasks: readonly T
     }
     if (task.status === 'shelved') {
       nodeIds.delete(nodeId)
-      if (task.releaseIds?.includes(release.id) || deferredNodeIds.has(nodeId)) deferredNodeIds.add(nodeId)
+      if (nodeWasIncluded || nodeWasDeferred || task.releaseIds?.includes(release.id)) {
+        deferredNodeIds.add(nodeId)
+      }
       continue
     }
     const parent = task.hierarchy?.parentId
@@ -386,6 +416,11 @@ export function releaseToProjectScope(release: ProjectRelease, tasks: readonly T
     const taskReleaseIds = task.releaseIds ?? []
     if (taskReleaseIds.length === 0 && task.hierarchy?.parentId) continue
     if (taskReleaseIds.length === 0) continue
+    if (
+      hasMaterializedMembership &&
+      taskHasMaterializedChildScope(task, nodeIds, deferredNodeIds)
+    ) continue
+    if (hasMaterializedMembership && taskStatusIsTerminalForMembership(task.status)) continue
     if (taskReleaseIds.includes(release.id)) {
       if (deferredNodeIds.has(nodeId)) {
         nodeIds.delete(nodeId)
@@ -422,7 +457,7 @@ export function taskScopeEligibility(
   if (
     scope.kind === 'release' &&
     task.semanticKind === 'proof_setup' &&
-    !task.releaseIds?.includes(scope.id)
+    task.proofForReleaseId !== scope.id
   ) {
     // Proof setup is release-local executable work. A historical proof child
     // remains readable, but ancestor membership must not make it an active
@@ -522,7 +557,7 @@ function proofChildBelongsToSelectedScope(
   // historical proof children must not keep the current parent blocked (or
   // satisfy it) through ancestor membership alone.
   if (!selectedScope || selectedScope.kind !== 'release' || child.semanticKind !== 'proof_setup') return true
-  return child.releaseIds?.includes(selectedScope.id) === true
+  return child.proofForReleaseId === selectedScope.id
 }
 
 function currentTaskForProjection(task: Task): Task {
@@ -536,6 +571,7 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
   if (!scope) return null
   const nodeIds = new Set(scope.nodeIds)
   const deferredNodeIds = new Set(scope.deferredNodeIds)
+  const hasMaterializedMembership = nodeIds.size > 0 || deferredNodeIds.size > 0
   const tasksById = new Map(tasks.map(task => [task.id, task] as const))
   const childIdsByParent = buildChildMap(tasks)
   for (const nodeId of [...nodeIds]) {
@@ -546,6 +582,8 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
   }
   for (const task of tasks) {
     const nodeId = taskScopeNodeId(task.id)
+    const nodeWasIncluded = nodeIds.has(nodeId)
+    const nodeWasDeferred = deferredNodeIds.has(nodeId)
     if (isProjectSetupTask(task.id)) {
       nodeIds.delete(nodeId)
       deferredNodeIds.delete(nodeId)
@@ -558,7 +596,9 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
     }
     if (task.status === 'shelved') {
       nodeIds.delete(nodeId)
-      if (deferredNodeIds.has(nodeId) || task.releaseIds?.includes(scope.id)) deferredNodeIds.add(nodeId)
+      if (nodeWasIncluded || nodeWasDeferred || task.releaseIds?.includes(scope.id)) {
+        deferredNodeIds.add(nodeId)
+      }
       continue
     }
     const parent = task.hierarchy?.parentId ? tasksById.get(task.hierarchy.parentId) ?? null : null
@@ -569,7 +609,16 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
       deferredNodeIds.delete(nodeId)
       continue
     }
-    if (task.releaseIds?.includes(scope.id)) {
+    if (
+      task.releaseIds?.includes(scope.id) &&
+      (
+        !hasMaterializedMembership ||
+        (
+          !taskStatusIsTerminalForMembership(task.status) &&
+          !taskHasMaterializedChildScope(task, nodeIds, deferredNodeIds)
+        )
+      )
+    ) {
       if (!deriveTaskWorkVisibility(task, parent).countInProjectTotals) {
         nodeIds.delete(nodeId)
         deferredNodeIds.delete(nodeId)
@@ -598,6 +647,21 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
     nodeIds: [...nodeIds],
     deferredNodeIds: [...deferredNodeIds],
   }
+}
+
+function taskHasMaterializedChildScope(
+  task: Pick<Task, 'hierarchy'>,
+  nodeIds: ReadonlySet<string>,
+  deferredNodeIds: ReadonlySet<string>,
+): boolean {
+  return (task.hierarchy?.childIds ?? []).some(childId => {
+    const nodeId = taskScopeNodeId(childId)
+    return nodeIds.has(nodeId) || deferredNodeIds.has(nodeId)
+  })
+}
+
+function taskStatusIsTerminalForMembership(status: Task['status'] | undefined): boolean {
+  return status === 'done' || status === 'pending_pr'
 }
 
 function buildScopeRow(
@@ -699,6 +763,7 @@ function handoffStateForTask(
   if (status === 'in_progress') return 'paused'
   if (status === 'review' || status === 'gate_check') return 'review'
   if (status === 'spec_review') return 'spec_review'
+  if (status === 'exploring' && hasApprovedCompleteBrief(task) && !hasSpecDraft(task)) return 'spec_shaping'
   if (status === 'ready') {
     if (isReadyForWorkerHandoff(task) || hasInScopeMaterializedChildWork(task, input)) return 'ready'
     return 'brief_cleanup'
@@ -806,6 +871,7 @@ function humanBlockingFor(task: Task, handoffState: ProjectScopeHandoffState, sc
   // Imported and actively exploring work belongs to Guildhall's planning lane.
   // A proposed task is different: it still represents an owner decision about
   // whether that candidate belongs in the plan.
+  if (handoffState === 'spec_shaping') return false
   if (handoffState === 'not_shaped' && (task.status === 'exploring' || task.status === 'import_draft')) return false
   if (handoffState === 'not_shaped') return true
   if (handoffState === 'brief_cleanup' || handoffState === 'blocked') return true
@@ -924,6 +990,25 @@ export function summarizeProjectScopeStart(
       actionHref: `/work?task=${encodeURIComponent(paused.taskId)}`,
     }
   }
+  // An exploring task is already in Guildhall's shaping lane. Let Start run
+  // that agent work before unrelated ready work. It is the live continuation
+  // of the selected scope, not merely another candidate in a task ranking.
+  const shapingWork = included.find(row => row.status === 'exploring' &&
+    (row.handoffState === 'spec_shaping' || row.handoffState === 'not_shaped'))
+  if (shapingWork) {
+    return {
+      canStart: true,
+      code: 'ready_work',
+      label: 'Start',
+      focusTaskId: shapingWork.taskId,
+      focusTaskTitle: shapingWork.title,
+      focusKind: 'ready_work',
+      message: shapingWork.handoffState === 'spec_shaping'
+        ? `Guildhall is shaping a source-backed spec for "${shapingWork.title}".`
+        : `Guildhall is shaping "${shapingWork.title}" from the visible project sources.`,
+      actionHref: `/work?task=${encodeURIComponent(shapingWork.taskId)}`,
+    }
+  }
   const ready = included.find(row => row.handoffState === 'ready')
   if (ready) {
     return {
@@ -948,22 +1033,6 @@ export function summarizeProjectScopeStart(
       focusKind: 'ready_work',
       message: `"${specWork.title}" is ready for spec work.`,
       actionHref: `/work?task=${encodeURIComponent(specWork.taskId)}`,
-    }
-  }
-  // An exploring task is already in Guildhall's shaping lane. Let Start run
-  // that agent work; only raw import drafts, thin ready tasks, and owner-gated
-  // reviews should stop the selected scope before execution can begin.
-  const shapingWork = included.find(row => row.status === 'exploring' && row.handoffState === 'not_shaped')
-  if (shapingWork) {
-    return {
-      canStart: true,
-      code: 'ready_work',
-      label: 'Start',
-      focusTaskId: shapingWork.taskId,
-      focusTaskTitle: shapingWork.title,
-      focusKind: 'ready_work',
-      message: `Guildhall is shaping "${shapingWork.title}" from the visible project sources.`,
-      actionHref: `/work?task=${encodeURIComponent(shapingWork.taskId)}`,
     }
   }
   const blocked = included.find(row => row.handoffState === 'blocked')
@@ -1077,9 +1146,14 @@ export function summarizeProjectScopeStart(
 }
 
 export function summarizeProjectScopeRelease(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['release'] {
-  const included = executionRows(rows).filter(row => row.scope === 'included')
-  const blockers = executionRows(rows)
-    .filter(row => row.scope === 'included' && row.blocksRelease)
+  // Internal steps can be executable without becoming visible release work.
+  // The parent product task remains the release boundary and carries any
+  // proof debt; otherwise a recovery child would inflate totals or make a
+  // release appear to regress from completed to unfinished.
+  const included = executionRows(rows)
+    .filter(row => row.scope === 'included' && row.countInProjectTotals !== false)
+  const blockers = included
+    .filter(row => row.blocksRelease)
     .map(row => ({
       id: row.taskId,
       owningTaskId: row.taskId,
@@ -1095,7 +1169,7 @@ export function summarizeProjectScopeRelease(rows: readonly ProjectScopeRow[]): 
   }
   if (included.length === 0) return { state: 'unknown', blockers: [] }
   if (included.every(row => row.handoffState === 'done')) return { state: 'ready', blockers: [] }
-  if (included.some(row => row.handoffState === 'not_shaped' || row.handoffState === 'brief_cleanup')) return { state: 'shaping', blockers: [] }
+  if (included.some(row => row.handoffState === 'not_shaped' || row.handoffState === 'spec_shaping' || row.handoffState === 'brief_cleanup')) return { state: 'shaping', blockers: [] }
   if (included.some(row => row.handoffState === 'ready' || row.handoffState === 'paused' || row.handoffState === 'review' || row.handoffState === 'spec_review')) {
     return { state: 'active', blockers: [] }
   }
@@ -1105,6 +1179,7 @@ export function summarizeProjectScopeRelease(rows: readonly ProjectScopeRow[]): 
 function blockerLabelFor(row: ProjectScopeRow): string {
   const title = row.title.replace(/[.!?]+$/, '')
   if (row.proofBlocked) return `${title}: completion proof is missing or stale.`
+  if (row.handoffState === 'spec_shaping') return `${title}: Guildhall is shaping a source-backed spec.`
   if (row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped') {
     return `${title}: needs a clearer brief before unattended work can run.`
   }
@@ -1115,6 +1190,7 @@ function blockerLabelFor(row: ProjectScopeRow): string {
 
 function blockerCodeFor(row: ProjectScopeRow): string {
   if (row.proofBlocked) return 'proof_evidence_missing'
+  if (row.handoffState === 'spec_shaping') return 'source_backed_spec_shaping'
   if (row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped') return 'imported_scope_shaping'
   if (row.handoffState === 'spec_review') return 'spec_review_required'
   if (row.handoffState === 'blocked') return 'blocked'

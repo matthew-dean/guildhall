@@ -362,6 +362,42 @@ describe('effective task projection', () => {
     })
   })
 
+  it('lets a current lifecycle reopen historical completion until fresh completion evidence arrives', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-current-lifecycle-'))
+    const reopenedAt = '2026-05-24T22:00:00.000Z'
+    await promoteProjectStateDatabaseAuthority(projectRoot)
+    await upsertTaskRuntimeState(projectRoot, 'task-auth-complete', {
+      currentLifecycle: {
+        reopenedAt,
+        status: 'exploring',
+        source: 'rerun_spec',
+      },
+      updatedAt: reopenedAt,
+    })
+    const task = legacyTask({
+      status: 'done',
+      completedAt: '2026-05-24T21:00:00.000Z',
+    })
+
+    const reopened = await buildEffectiveTask(projectRoot, task)
+
+    expect(reopened.status).toBe('exploring')
+    expect(reopened.completedAt).toBeUndefined()
+    expect(reopened.runtime?.currentLifecycle).toMatchObject({ reopenedAt, status: 'exploring' })
+
+    await appendTaskEvidence(projectRoot, 'task-auth-complete', {
+      id: 'completion-after-reopen',
+      kind: 'completion_summary',
+      recordedAt: '2026-05-24T22:01:00.000Z',
+      payload: { taskId: 'task-auth-complete', status: 'done' },
+    })
+
+    const settled = await buildEffectiveTask(projectRoot, task)
+
+    expect(settled.status).toBe('done')
+    expect(settled.runtime?.currentLifecycle).toBeUndefined()
+  })
+
   it('repairs older Guildhall bootstrap verification ellipses in effective evidence', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
     await appendTaskEvidence(projectRoot, 'task-auth-complete', {
@@ -490,6 +526,29 @@ describe('effective task projection', () => {
     }
 
     expect(effectiveTaskStatus(reopenedAfterFallback)).toBe('in_progress')
+  })
+
+  it('keeps a fresh release lifecycle open when older completion evidence exists', () => {
+    const reopenedForLaterRelease = {
+      id: 'task-story-context',
+      status: 'exploring',
+      completedAt: '2026-07-18T04:28:59.233Z',
+      doneSummaryBundle: {
+        status: 'reopened',
+        completedAt: '2026-07-18T04:28:59.233Z',
+        reopenedAt: '2026-07-23T02:00:00.000Z',
+        summary: { evidence: 'A prior release completed this task.' },
+      },
+      evidence: [{
+        id: 'gate-1',
+        taskId: 'task-story-context',
+        kind: 'gate_result',
+        recordedAt: '2026-07-18T04:28:59.233Z',
+        payload: { gateId: 'proof', passed: true, checkedAt: '2026-07-18T04:28:59.233Z' },
+      }],
+    }
+
+    expect(effectiveTaskStatus(reopenedForLaterRelease)).toBe('exploring')
   })
 
   it('does not synthesize terminal completion while normalizing a review recovery', async () => {

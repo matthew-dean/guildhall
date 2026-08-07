@@ -6,12 +6,14 @@ on:
       - 'v0.9.*'
       - 'v0.10.*'
       - 'v0.11.*'
+      - 'v0.12.*'
+      - 'v0.13.*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Guildhall version to tag, for example 0.11.0'
+        description: 'Guildhall version to tag, for example 0.13.0'
         required: true
-        default: '0.11.0'
+        default: '0.13.0'
 
 permissions:
   contents: read
@@ -73,8 +75,8 @@ jobs:
           context: .
           file: runtime/Containerfile
           push: true
-          # Example 0.11.0 tags:
-          # ghcr.io/matthew-dean/guildhall-runtime-debian:0.11.0-trixie-node22-python313-playwright
-          # ghcr.io/matthew-dean/guildhall-runtime-debian:0.11-trixie-node22-python313-playwright
+          # Example 0.13.0 tags:
+          # ghcr.io/matthew-dean/guildhall-runtime-debian:0.13.0-trixie-node22-python313-playwright
+          # ghcr.io/matthew-dean/guildhall-runtime-debian:0.13-trixie-node22-python313-playwright
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

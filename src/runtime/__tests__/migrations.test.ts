@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { parse as parseYaml } from 'yaml'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
-import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabaseDetailPathFromTasksPath, projectStateDatabasePath, promoteProjectStateDatabaseAuthority, readProjectStateDatabaseCurrentProofReadModelStatus, readProjectStateDatabaseInventory, readProjectStateDatabaseMetadata, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseSummary, readProjectStateDatabaseTaskOverlay, readProjectStateDatabaseTaskEvidenceAuthority, readProjectStateDatabaseTaskEvidenceCurrent, readProjectStateDatabaseTaskEvidenceHistory, readProjectStateDatabaseTaskPoint, readProjectStateDatabaseTaskOverlayStores, replaceProjectStateDatabaseTaskRuntimes, writeProjectStateDatabaseSnapshot, PROJECT_STATE_DATABASE_SCHEMA_VERSION } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabaseDetailPathFromTasksPath, projectStateDatabasePath, promoteProjectStateDatabaseAuthority, readProjectStateDatabaseCurrentProofReadModelStatus, readProjectStateDatabaseDiagnosticProjection, readProjectStateDatabaseInventory, readProjectStateDatabaseMetadata, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseSummary, readProjectStateDatabaseTaskOverlay, readProjectStateDatabaseTaskEvidenceAuthority, readProjectStateDatabaseTaskEvidenceCurrent, readProjectStateDatabaseTaskEvidenceHistory, readProjectStateDatabaseTaskPoint, readProjectStateDatabaseTaskOverlayStores, replaceProjectStateDatabaseTaskRuntimes, updateProjectStateDatabaseSummary, writeProjectStateDatabaseDiagnosticProjection, writeProjectStateDatabaseSnapshot, PROJECT_STATE_DATABASE_SCHEMA_VERSION } from '@guildhall/sessions'
 import {
   applyProjectMigrations,
   getProjectMigrationStatus,
@@ -18,6 +18,7 @@ import { PROJECT_SUMMARY_PROJECTION_VERSION, readProjectSummaryProjection, write
 import { projectTaskStateExistsSync, readProjectTaskQueueSync, writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
 import { appendTaskEvidence, compressedTaskEvidencePath, readTaskEvidence, readTaskRuntimeStore, runtimeStatePath, taskEvidencePath, upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
 import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from '../delivery-read-projection.js'
+import { buildEffectiveTasks } from '../effective-task.js'
 
 let tmp: string
 let projectRoot: string
@@ -71,6 +72,219 @@ describe('project migration ledger', () => {
 })
 
 describe('getProjectMigrationStatus', () => {
+  it('backfills only legacy spec-review gates and remains idempotent', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      tasks: [
+        { id: 'task-legacy-review', title: 'Legacy review', status: 'spec_review' },
+        {
+          id: 'task-coordinator-review',
+          title: 'Coordinator review',
+          status: 'spec_review',
+          specReviewGate: {
+            authority: 'coordinator',
+            requestedAt: '2026-07-23T00:00:00.000Z',
+            requestedBy: 'proposal-promoter',
+            reason: 'proposal_promotion',
+          },
+        },
+        { id: 'task-ready', title: 'Ready work', status: 'ready' },
+      ],
+      releases: [],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const first = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.67/explicit-spec-review-gates'],
+    })
+    expect(first.failed).toEqual([])
+    expect(first.applied.map(item => item.id)).toEqual(['0.13.67/explicit-spec-review-gates'])
+
+    const queue = readProjectStateDatabaseQueueDefinition(tasksPath)!
+    const legacy = queue.tasks.find(task => task.id === 'task-legacy-review') as Record<string, unknown>
+    const coordinator = queue.tasks.find(task => task.id === 'task-coordinator-review') as Record<string, unknown>
+    expect(legacy.specReviewGate).toMatchObject({
+      authority: 'owner',
+      requestedBy: 'legacy-spec-review-gate-migration',
+      reason: 'spec_handoff',
+    })
+    expect(coordinator.specReviewGate).toMatchObject({
+      authority: 'coordinator',
+      requestedBy: 'proposal-promoter',
+      reason: 'proposal_promotion',
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.67/explicit-spec-review-gates'],
+    })).applied).toEqual([])
+  })
+
+  it('backfills compact review authority and rebuilds the shared decision', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      tasks: [{
+        id: 'task-owner-review',
+        title: 'Owner review',
+        status: 'spec_review',
+        releaseIds: ['release-1'],
+        specReviewGate: {
+          authority: 'owner',
+          requestedAt: '2026-07-23T00:00:00.000Z',
+          requestedBy: 'spec-agent',
+          reason: 'spec_handoff',
+        },
+      }],
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-owner-review'],
+        deferredNodeIds: [],
+      }],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const taskRow = database.prepare('SELECT summary_json FROM work_items WHERE id = ?').get('task-owner-review') as { summary_json: string }
+    const staleTaskSummary = JSON.parse(taskRow.summary_json) as Record<string, unknown>
+    delete (staleTaskSummary.currentSummary as Record<string, unknown>).specReviewAuthority
+    database.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?').run(JSON.stringify(staleTaskSummary), 'task-owner-review')
+    const summaryRow = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const staleProjection = JSON.parse(summaryRow.payload_json) as Record<string, unknown>
+    delete staleProjection.ownerReview
+    ;(staleProjection.decision as Record<string, unknown>).ownerReview = { state: 'none' }
+    ;(staleProjection.decision as Record<string, unknown>).primaryAction = { kind: 'none', reasonCode: 'summary_unavailable' }
+    database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(staleProjection))
+    database.close()
+
+    const first = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.69/compact-spec-review-authority'],
+    })
+    expect(first.failed).toEqual([])
+    expect(first.applied.map(item => item.id)).toEqual(['0.13.69/compact-spec-review-authority'])
+    expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks[0]?.currentSummary).toMatchObject({
+      specReviewAuthority: 'owner',
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.69/compact-spec-review-authority'],
+    })).applied).toEqual([])
+  })
+
+  it('settles an approved durable spec handoff without approving the spec', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const structuredSpec = {
+      whatThisIs: 'A bounded migration fixture.',
+      problemContext: 'The project needs a settled review handoff.',
+      goals: ['Record the review gate.'],
+      nonGoals: ['Do not widen scope.'],
+      proposedDesign: 'Use the typed task state.',
+      keyDecisions: ['Keep authority explicit.'],
+      acceptanceCriteria: [{
+        scenario: 'Given the durable spec',
+        expectation: 'Then its review gate is recorded.',
+        verificationMode: 'review',
+      }],
+      verification: ['Review the typed task state.'],
+      completionBoundary: {
+        productOutcome: 'The review handoff is explicit.',
+        whatGuildhallCanCompleteInCode: 'Record the typed review gate.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'The local test process.',
+        whatCountsAsDone: 'The focused state test passes.',
+        whatMustBeSplitOrBlocked: 'Nothing.',
+        splitPolicy: 'none',
+      },
+    }
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      tasks: [{
+        id: 'task-stale-handoff',
+        title: 'Stale handoff',
+        status: 'exploring',
+        structuredSpec,
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The review gate is recorded.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        productBrief: {
+          userJob: 'Use the reviewable result.',
+          whyItMattersNow: 'The task has a finished spec and must stop pretending it is still shaping.',
+          successMetric: 'The task has a typed review gate.',
+          nonGoals: ['Do not approve the spec automatically.'],
+          antiPatterns: ['Do not approve the spec automatically.'],
+          approvedAt: '2026-07-23T00:00:00.000Z',
+          approvedBy: 'codex_delegated_owner',
+        },
+      }],
+      releases: [],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const first = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.68/settle-durable-spec-handoffs'],
+    })
+    expect(first.failed).toEqual([])
+    const task = readProjectStateDatabaseQueueDefinition(tasksPath)!.tasks[0] as Record<string, unknown>
+    expect(task.status).toBe('spec_review')
+    expect(task.specReviewGate).toMatchObject({
+      authority: 'owner',
+      requestedBy: 'durable-spec-handoff-migration',
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.68/settle-durable-spec-handoffs'],
+    })).applied).toEqual([])
+  })
+
+  it('rebuilds an old compact summary with the canonical source-catalog digest', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      tasks: [{ id: 'task-current', title: 'Current work', status: 'ready' }],
+      releases: [],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const row = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const legacy = JSON.parse(row.payload_json) as Record<string, unknown>
+    legacy.version = 21
+    delete legacy.sourceCapabilityCatalog
+    database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(legacy))
+    database.close()
+
+    const first = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.60/source-capability-summary'],
+    })
+    expect(first.failed).toEqual([])
+    expect(first.applied.map(item => item.id)).toEqual(['0.13.60/source-capability-summary'])
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
+      version: PROJECT_SUMMARY_PROJECTION_VERSION,
+      sourceCapabilityCatalog: { availability: 'empty', total: 0, planned: 0, retired: 0 },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.60/source-capability-summary'],
+    })).applied).toEqual([])
+  })
+
   it('does not re-block an applied scope migration for valid non-task release nodes', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     const now = '2026-07-15T12:00:00.000Z'
@@ -378,7 +592,266 @@ describe('applyProjectMigrations', () => {
       { release_id: 'release-one', task_id: 'task-current', disposition: 'included' },
       { release_id: 'release-one', task_id: 'task-later', disposition: 'deferred' },
     ])
+    expect(migrated.prepare('SELECT membership_revision, project_revision FROM release_membership_state WHERE id = 1').get()).toMatchObject({
+      membership_revision: expect.any(Number),
+      project_revision: expect.any(Number),
+    })
     migrated.close()
+  })
+
+  it('materializes accepted plan membership once through the normalized relation', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T12:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-first',
+        releases: [{
+          id: 'release-first',
+          label: 'First release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: [],
+          deferredNodeIds: [],
+        }],
+        tasks: [
+          {
+            id: 'task-current',
+            title: 'Current',
+            description: 'Current release work.',
+            domain: 'runtime',
+            projectPath: projectRoot,
+            status: 'ready',
+            acceptanceCriteria: [],
+            notes: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-later',
+            title: 'Later',
+            description: 'Deferred release work.',
+            domain: 'runtime',
+            projectPath: projectRoot,
+            status: 'shelved',
+            acceptanceCriteria: [],
+            notes: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      },
+      summary: {
+        projectId: 'migration-test',
+        generatedAt: now,
+        freshness: 'current',
+        approvedPlan: {
+          source: 'workspace_import',
+          recordedAt: now,
+          goalCount: 1,
+          taskCount: 2,
+          milestoneCount: 1,
+          currentTaskCount: 1,
+          laterTaskCount: 1,
+          currentTaskIds: ['task-current'],
+          laterTaskIds: ['task-later'],
+          currentReleaseId: 'release-first',
+          releases: [{
+            id: 'release-first',
+            label: 'First release',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            currentTaskIds: ['task-current'],
+            laterTaskIds: ['task-later'],
+          }],
+        },
+      },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.66/release-membership-snapshot'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.66/release-membership-snapshot'])
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      selectedReleaseId: 'release-first',
+      releases: [{
+        id: 'release-first',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: ['work:task-later'],
+      }],
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.66/release-membership-snapshot'],
+    })).applied).toEqual([])
+  })
+
+  it('does not widen partial canonical release membership from an accepted plan', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T12:30:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-first',
+        releases: [{
+          id: 'release-first',
+          label: 'First release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-current'],
+          deferredNodeIds: [],
+        }],
+        tasks: [
+          {
+            id: 'task-current',
+            title: 'Current',
+            description: 'Current release work.',
+            domain: 'runtime',
+            projectPath: projectRoot,
+            status: 'ready',
+            releaseIds: ['release-first'],
+            acceptanceCriteria: [],
+            notes: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-later',
+            title: 'Later',
+            description: 'Deferred work from a stale plan.',
+            domain: 'runtime',
+            projectPath: projectRoot,
+            status: 'shelved',
+            acceptanceCriteria: [],
+            notes: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      },
+      summary: {
+        projectId: 'migration-test',
+        generatedAt: now,
+        freshness: 'current',
+        approvedPlan: {
+          source: 'workspace_import',
+          recordedAt: now,
+          goalCount: 1,
+          taskCount: 2,
+          milestoneCount: 1,
+          currentTaskCount: 1,
+          laterTaskCount: 1,
+          currentTaskIds: ['task-current'],
+          laterTaskIds: ['task-later'],
+          currentReleaseId: 'release-first',
+          releases: [{
+            id: 'release-first',
+            label: 'First release',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            currentTaskIds: ['task-current'],
+            laterTaskIds: ['task-later'],
+          }],
+        },
+      },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.66/release-membership-snapshot'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied).toEqual([])
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      selectedReleaseId: 'release-first',
+      releases: [{
+        id: 'release-first',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+      }],
+    })
+  })
+
+  it('keeps canonical release membership when an accepted plan contradicts it', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T13:00:00.000Z'
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'release-first',
+      releases: [{
+        id: 'release-first',
+        label: 'First release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: ['work:task-current'],
+      }],
+      tasks: [{
+        id: 'task-current',
+        title: 'Current',
+        description: 'Current release work.',
+        domain: 'runtime',
+        projectPath: projectRoot,
+        status: 'ready',
+        acceptanceCriteria: [],
+        notes: [],
+        createdAt: now,
+        updatedAt: now,
+      }],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    updateProjectStateDatabaseSummary(tasksPath, summary => ({
+      ...summary,
+      approvedPlan: {
+        source: 'workspace_import',
+        recordedAt: now,
+        goalCount: 1,
+        taskCount: 1,
+        milestoneCount: 1,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        currentTaskIds: ['task-current'],
+        laterTaskIds: [],
+        currentReleaseId: 'release-first',
+        releases: [{
+          id: 'release-first',
+          label: 'First release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          currentTaskIds: ['task-current'],
+          laterTaskIds: [],
+        }],
+      },
+    }))
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.66/release-membership-snapshot'],
+    })
+    expect(result.applied).toEqual([])
+    expect(result.failed).toEqual([])
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      releases: [{
+        id: 'release-first',
+        nodeIds: [],
+        deferredNodeIds: ['work:task-current'],
+      }],
+    })
   })
 
   it('retires task, scope, and definition membership mirrors after the relation cutover', async () => {
@@ -874,7 +1347,7 @@ describe('applyProjectMigrations', () => {
     expect((queue?.tasks[0]?.hierarchy as { childIds?: string[] } | undefined)?.childIds).toEqual([])
     expect(queue?.tasks[0]?.deliverySteps).toEqual([])
     expect(queue?.tasks[1]?.dependsOn).toEqual([])
-    expect(queue?.releases?.[0]?.nodeIds).toEqual(['work:parent-proof'])
+    expect(queue?.releases?.[0]?.nodeIds).toEqual(['work:parent-proof', 'work:dependent-work'])
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.13.21/remove-recursive-proof-setup-tasks'],
@@ -1076,10 +1549,39 @@ describe('applyProjectMigrations', () => {
     expect((task?.notes as Array<Record<string, unknown>> | undefined)?.at(-1)?.structured).toMatchObject({
       event: 'proof_setup_reopened_before_proof',
     })
+    // A ready proof step without a recovery marker is ordinary runnable work,
+    // not a historical terminal state that should block Start on migration.
+    replaceProjectStateDatabaseTaskRuntimes(projectRoot, [])
+    expect((await getProjectMigrationStatus({
+      projectRoot,
+      only: ['0.13.32/proof-setup-runtime-recovery-marker'],
+    })).blocked).toEqual([])
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.13.30/proof-setup-completion-authority'],
     })).applied).toEqual([])
+
+    // A later regression must be owned by the later proof-health migrations,
+    // not by replaying this historical repair forever. In particular, a stale
+    // old task record cannot make an already-applied migration block every
+    // ordinary project action.
+    const queueAfterRepair = readProjectStateDatabaseQueueDefinition(tasksPath)
+    const staleHistoricalTask = queueAfterRepair?.tasks.find(candidate => candidate.id === 'proof-child')
+    if (!queueAfterRepair || !staleHistoricalTask) throw new Error('Expected proof setup fixture after migration.')
+    staleHistoricalTask.status = 'done'
+    staleHistoricalTask.completedAt = now
+    writeProjectTaskQueueWithSummary(tasksPath, queueAfterRepair, {
+      projectId: 'migration-test',
+      projectRoot,
+      compactCompatibility: true,
+    })
+    const statusAfterHistoricalDrift = await getProjectMigrationStatus({
+      projectRoot,
+      only: ['0.13.30/proof-setup-completion-authority'],
+    })
+    expect(statusAfterHistoricalDrift.blocked).toEqual([])
+    expect(statusAfterHistoricalDrift.applied.map(item => item.id))
+      .toEqual(['0.13.30/proof-setup-completion-authority'])
   })
 
   it('restores a cleared proof-setup execution blueprint without sending it through generic spec intake', async () => {
@@ -1238,7 +1740,8 @@ describe('applyProjectMigrations', () => {
     expect(activeProof).toMatchObject({
       status: 'ready',
       semanticKind: 'proof_setup',
-      releaseIds: ['release-active'],
+      proofForReleaseId: 'release-active',
+      releaseIds: [],
       hierarchy: { parentId: 'parent' },
     })
   })
@@ -1620,7 +2123,6 @@ describe('applyProjectMigrations', () => {
     expect(readProjectStateDatabaseTaskOverlay(projectRoot, 'task-overlay')).toMatchObject({
       runtime: { payload: { assignedTo: 'worker-agent', revisionCount: 3 } },
       workspace: { payload: { branchName: 'guildhall/task-task-overlay' } },
-      latestProof: { kind: 'note', payload: { content: 'Keep this history.' } },
     })
     expect(await fs.readFile(evidencePath, 'utf8')).toBe(beforeEvidence)
     expect((await applyProjectMigrations({ projectRoot, only: ['0.12.14/task-current-overlay'] })).applied).toEqual([])
@@ -1716,6 +2218,680 @@ describe('applyProjectMigrations', () => {
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.12.24/project-summary-action-model'],
+    })).applied).toEqual([])
+  })
+
+  it('rebuilds an otherwise version-current summary when the durable decision packet is absent', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T12:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        tasks: [{
+          id: 'task-decision-projection',
+          title: 'Decision projection task',
+          status: 'ready',
+          createdAt: now,
+          updatedAt: now,
+        }],
+      },
+      summary: {
+        projectId: 'migration-test',
+        generatedAt: now,
+        freshness: 'current',
+        source: {
+          taskQueueLastUpdated: now,
+          workspaceGoalsMtimeMs: null,
+        },
+      },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    expect(writeProjectSummaryProjectionFromIndexedState(tasksPath, { projectId: 'migration-test' })).toMatchObject({
+      decision: { version: 1 },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const row = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const summary = JSON.parse(row.payload_json) as Record<string, unknown>
+    delete summary.decision
+    database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(summary))
+    database.prepare('DELETE FROM project_state_decisions').run()
+    database.close()
+
+    const before = readProjectSummaryProjection(tasksPath)
+    expect(before?.freshness).toBe('stale')
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.71/durable-decision-snapshot'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.71/durable-decision-snapshot'])
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
+      version: PROJECT_SUMMARY_PROJECTION_VERSION,
+      freshness: 'current',
+      decision: { version: 1 },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.71/durable-decision-snapshot'],
+    })).applied).toEqual([])
+  })
+
+  it('reprojects stale current release counts from normalized indexed membership', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T14:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-one', 'work:task-two'],
+          deferredNodeIds: ['work:task-later'],
+        }],
+        tasks: [
+          { id: 'task-one', title: 'One', status: 'done' },
+          { id: 'task-two', title: 'Two', status: 'done' },
+          { id: 'task-later', title: 'Later', status: 'ready' },
+        ],
+      },
+      summary: {
+        projectId: 'migration-test',
+        generatedAt: now,
+        freshness: 'current',
+      },
+      scopeRows: [
+        {
+          taskId: 'task-one',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'root',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-one'],
+        },
+        {
+          taskId: 'task-two',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'root',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-two'],
+        },
+        {
+          taskId: 'task-later',
+          scope: 'deferred',
+          eligibilityReason: 'outside_selected_scope',
+          hierarchyRole: 'root',
+          handoffState: 'deferred',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-later'],
+        },
+      ],
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    expect(writeProjectSummaryProjectionFromIndexedState(tasksPath, { projectId: 'migration-test' })).toMatchObject({
+      releaseSummary: {
+        counts: {
+          total: 2,
+          done: 2,
+          deferred: 1,
+        },
+      },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const row = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const stale = JSON.parse(row.payload_json) as Record<string, any>
+    stale.releaseSummary = {
+      ...stale.releaseSummary,
+      counts: {
+        ...stale.releaseSummary.counts,
+        total: 1,
+        done: 1,
+        unfinished: 0,
+        deferred: 9,
+      },
+    }
+    stale.scope = {
+      ...stale.scope,
+      included: 1,
+      deferred: 9,
+    }
+    stale.nextAction = {
+      code: 'stale_release_summary',
+      label: 'Review',
+      message: 'Stale release summary.',
+    }
+    database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(stale))
+    database.close()
+
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 1,
+            deferred: 9,
+          },
+        },
+      },
+    })
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.72/indexed-release-summary-reprojection'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.72/indexed-release-summary-reprojection'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 2,
+            done: 2,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 2,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.72/indexed-release-summary-reprojection'],
+    })).applied).toEqual([])
+
+    const inflatedDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const inflatedRow = inflatedDatabase.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const inflated = JSON.parse(inflatedRow.payload_json) as Record<string, any>
+    inflated.releaseSummary = {
+      ...inflated.releaseSummary,
+      counts: {
+        ...inflated.releaseSummary.counts,
+        total: 3,
+        done: 2,
+        unfinished: 1,
+      },
+    }
+    inflated.scope = {
+      ...inflated.scope,
+      included: 3,
+    }
+    inflatedDatabase.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(inflated))
+    inflatedDatabase.close()
+
+    const dispositionResult = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.74/included-release-disposition-counts'],
+    })
+    expect(dispositionResult.failed).toEqual([])
+    expect(dispositionResult.applied.map(item => item.id)).toEqual(['0.13.74/included-release-disposition-counts'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 2,
+            done: 2,
+            unfinished: 0,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 2,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.74/included-release-disposition-counts'],
+    })).applied).toEqual([])
+
+    const canonicalDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const canonicalRow = canonicalDatabase.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const canonical = JSON.parse(canonicalRow.payload_json) as Record<string, any>
+    canonical.releaseSummary = {
+      ...canonical.releaseSummary,
+      counts: {
+        ...canonical.releaseSummary.counts,
+        total: 3,
+        done: 2,
+        unfinished: 1,
+      },
+    }
+    canonical.scope = {
+      ...canonical.scope,
+      included: 3,
+    }
+    canonicalDatabase.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(canonical))
+    canonicalDatabase.close()
+
+    const canonicalResult = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.75/canonical-release-membership-summary'],
+    })
+    expect(canonicalResult.failed).toEqual([])
+    expect(canonicalResult.applied.map(item => item.id)).toEqual(['0.13.75/canonical-release-membership-summary'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 2,
+            done: 2,
+            unfinished: 0,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 2,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.75/canonical-release-membership-summary'],
+    })).applied).toEqual([])
+
+    const fallbackDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const fallbackRow = fallbackDatabase.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const fallback = JSON.parse(fallbackRow.payload_json) as Record<string, any>
+    fallback.releaseSummary = {
+      ...fallback.releaseSummary,
+      counts: {
+        ...fallback.releaseSummary.counts,
+        total: 3,
+        done: 2,
+        unfinished: 1,
+      },
+    }
+    fallback.scope = {
+      ...fallback.scope,
+      included: 3,
+    }
+    fallbackDatabase.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(fallback))
+    fallbackDatabase.close()
+
+    const fallbackResult = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.76/selected-release-node-membership-summary'],
+    })
+    expect(fallbackResult.failed).toEqual([])
+    expect(fallbackResult.applied.map(item => item.id)).toEqual(['0.13.76/selected-release-node-membership-summary'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 2,
+            done: 2,
+            unfinished: 0,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 2,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.76/selected-release-node-membership-summary'],
+    })).applied).toEqual([])
+
+    const readBoundaryDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const readBoundaryRow = readBoundaryDatabase.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const readBoundary = JSON.parse(readBoundaryRow.payload_json) as Record<string, any>
+    readBoundary.releaseSummary = {
+      ...readBoundary.releaseSummary,
+      counts: {
+        ...readBoundary.releaseSummary.counts,
+        total: 3,
+        done: 2,
+        unfinished: 1,
+      },
+    }
+    readBoundary.scope = {
+      ...readBoundary.scope,
+      included: 3,
+    }
+    readBoundaryDatabase.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(readBoundary))
+    readBoundaryDatabase.close()
+
+    const readBoundaryResult = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.99/release-membership-read-boundary'],
+    })
+    expect(readBoundaryResult.failed).toEqual([])
+    expect(readBoundaryResult.applied.map(item => item.id)).toEqual(['0.13.99/release-membership-read-boundary'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 2,
+            done: 2,
+            unfinished: 0,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 2,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.99/release-membership-read-boundary'],
+    })).applied).toEqual([])
+  })
+
+  it('aligns named release counts to selected membership when child execution rows are present', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T14:30:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-parent-one', 'work:task-parent-two', 'work:task-parent-three'],
+          deferredNodeIds: [],
+        }],
+        tasks: [
+          {
+            id: 'task-parent-one',
+            title: 'Parent one',
+            status: 'done',
+            hierarchy: { childIds: ['task-child-one'], relation: 'contains' },
+          },
+          {
+            id: 'task-child-one',
+            title: 'Child one',
+            status: 'done',
+            hierarchy: { parentId: 'task-parent-one', childIds: [], relation: 'decomposes' },
+          },
+          {
+            id: 'task-parent-two',
+            title: 'Parent two',
+            status: 'done',
+            hierarchy: { childIds: ['task-child-two'], relation: 'contains' },
+          },
+          {
+            id: 'task-child-two',
+            title: 'Child two',
+            status: 'done',
+            hierarchy: { parentId: 'task-parent-two', childIds: [], relation: 'decomposes' },
+          },
+          { id: 'task-parent-three', title: 'Parent three', status: 'done' },
+          { id: 'task-later', title: 'Later', status: 'ready' },
+        ],
+      },
+      summary: {
+        projectId: 'migration-test',
+        generatedAt: now,
+        freshness: 'current',
+      },
+      scopeRows: [
+        {
+          taskId: 'task-parent-one',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'parent',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-parent-one'],
+        },
+        {
+          taskId: 'task-child-one',
+          parentTaskId: 'task-parent-one',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'child',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-child-one'],
+        },
+        {
+          taskId: 'task-parent-two',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'parent',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-parent-two'],
+        },
+        {
+          taskId: 'task-child-two',
+          parentTaskId: 'task-parent-two',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'child',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-child-two'],
+        },
+        {
+          taskId: 'task-parent-three',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'root',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-parent-three'],
+        },
+        {
+          taskId: 'task-later',
+          scope: 'deferred',
+          eligibilityReason: 'outside_selected_scope',
+          hierarchyRole: 'root',
+          handoffState: 'deferred',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-later'],
+        },
+      ],
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    expect(writeProjectSummaryProjectionFromIndexedState(tasksPath, { projectId: 'migration-test' })).toMatchObject({
+      releaseSummary: {
+        counts: {
+          total: 3,
+          done: 3,
+          deferred: 1,
+        },
+      },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const row = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const stale = JSON.parse(row.payload_json) as Record<string, any>
+    stale.releaseSummary = {
+      ...stale.releaseSummary,
+      counts: {
+        ...stale.releaseSummary.counts,
+        total: 2,
+        done: 2,
+        unfinished: 0,
+      },
+    }
+    stale.scope = {
+      ...stale.scope,
+      included: 2,
+    }
+    database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(stale))
+    database.close()
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.73/named-release-member-counts'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.73/named-release-member-counts'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 3,
+            done: 3,
+            unfinished: 0,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 3,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.73/named-release-member-counts'],
+    })).applied).toEqual([])
+  })
+
+  it('attaches task identity to legacy diagnostic blockers only when the task inventory proves it', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-23T12:00:00.000Z',
+        tasks: [{ id: 'task-proven', title: 'Proven task', status: 'done' }],
+      },
+      summary: { generatedAt: '2026-07-23T12:00:00.000Z', freshness: 'current' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const revision = readProjectStateDatabaseMetadata(projectRoot)?.revision
+    expect(revision).toBeTypeOf('number')
+    writeProjectStateDatabaseDiagnosticProjection(projectRoot, {
+      sourceRevision: revision!,
+      freshness: 'current',
+      generatedAt: '2026-07-23T12:01:00.000Z',
+      git: null,
+      readiness: {
+        ready: false,
+        code: 'proof_evidence_missing',
+        message: 'Proof is missing.',
+        blockerCount: 2,
+        unfinishedCount: 0,
+        blockers: [
+          { id: 'task-proven', label: 'Proof is missing.' },
+          { id: 'external-check', label: 'External verification is pending.' },
+        ],
+      },
+    })
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.58/diagnostic-readiness-task-identity'],
+    })
+
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.58/diagnostic-readiness-task-identity'])
+    expect(readProjectStateDatabaseDiagnosticProjection(projectRoot)?.readiness?.blockers).toEqual([
+      expect.objectContaining({ id: 'task-proven', taskId: 'task-proven' }),
+      expect.objectContaining({ id: 'external-check' }),
+    ])
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.58/diagnostic-readiness-task-identity'],
+    })).applied).toEqual([])
+  })
+
+  it('reprojects a completed script-only task without proof as a release blocker', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T12:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-without-proof'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'task-without-proof',
+          title: 'Completed task without proof',
+          status: 'done',
+          releaseIds: ['release-current'],
+          createdAt: now,
+          updatedAt: now,
+          completedAt: now,
+        }],
+      },
+      summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.59/script-only-proof-projection'],
+    })
+
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.59/script-only-proof-projection'])
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
+      freshness: 'current',
+      releaseSummary: {
+        state: 'blocked',
+        counts: { total: 1, done: 1, proofBlocked: 1 },
+        blockers: [expect.objectContaining({
+          id: 'task-without-proof',
+          code: 'proof_evidence_missing',
+        })],
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.59/script-only-proof-projection'],
     })).applied).toEqual([])
   })
 
@@ -1976,6 +3152,14 @@ describe('applyProjectMigrations', () => {
           learningCandidates: [],
           openResidue: 'No open residue recorded.',
         },
+        retention: {
+          transcriptPrimaryArtifact: false,
+          compactedFullTranscript: true,
+          fullEvidenceAvailable: true,
+        },
+        evidenceRefs: [],
+        createdAt: completedAt,
+        createdBy: 'migration-test',
       },
     }
     writeProjectStateDatabaseSnapshot(tasksPath, {
@@ -1994,6 +3178,16 @@ describe('applyProjectMigrations', () => {
         }],
         tasks: [task],
       },
+      evidence: [{
+        event: {
+          id: 'completion-task-effective-done',
+          taskId: task.id,
+          kind: 'completion_summary',
+          recordedAt: completedAt,
+          payload: task.doneSummaryBundle,
+        },
+        retention: { maxRecords: 8, maxBytes: 64 * 1024 },
+      }],
       summary: { projectId: 'migration-test', generatedAt: now, freshness: 'current', version: 12 },
       scopeRows: [{
         taskId: task.id,
@@ -2010,11 +3204,28 @@ describe('applyProjectMigrations', () => {
       projectRoot,
     })
     promoteProjectStateDatabaseAuthority(projectRoot)
+    expect(readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, task.id)).toMatchObject({
+      byKind: {
+        completion_summary: [
+          expect.objectContaining({
+            payload: expect.objectContaining({ status: 'done', completedAt }),
+          }),
+        ],
+      },
+    })
 
     const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
     database.prepare('UPDATE work_items SET status = ?, completed_at = NULL WHERE id = ?').run('blocked', task.id)
     database.prepare('UPDATE work_scope SET handoff_state = ?, blocks_release = 1, human_blocking = 1 WHERE task_id = ?').run('blocked', task.id)
     database.close()
+    const effective = (await buildEffectiveTasks(projectRoot, readProjectStateDatabaseQueueDefinition(tasksPath)!.tasks as any, {
+      evidence: 'current',
+    }))[0]!
+    expect(effective).toMatchObject({
+      id: task.id,
+      status: 'done',
+      completedAt,
+    })
     writeProjectSummaryProjectionFromIndexedState(tasksPath, {
       projectId: 'migration-test',
       generatedAt: now,
@@ -2607,7 +3818,8 @@ describe('applyProjectMigrations', () => {
       status: 'done',
       semanticKind: 'proof_setup',
       workVisibility: { kind: 'internal_step', countInProjectTotals: false },
-      releaseIds: ['release-shipped'],
+      proofForReleaseId: 'release-shipped',
+      releaseIds: [],
       hierarchy: { parentId: parent.id, childIds: [], order: 1, relation: 'decomposes' },
       acceptanceCriteria: [],
       notes: [],
@@ -2623,7 +3835,8 @@ describe('applyProjectMigrations', () => {
       status: 'done',
       semanticKind: 'proof_setup',
       workVisibility: { kind: 'internal_step', countInProjectTotals: false },
-      releaseIds: ['release-current'],
+      proofForReleaseId: 'release-current',
+      releaseIds: [],
       hierarchy: { parentId: parent.id, childIds: [], order: 1, relation: 'decomposes' },
       acceptanceCriteria: [{ id: 'ac-current', description: 'Current proof command passes.', verifiedBy: 'automated', command: 'pnpm proof:current', expectedOutputIncludes: ['guildhall-proof:task-release-parent'], met: true }],
       proofPaths: [{
@@ -3705,6 +4918,116 @@ describe('applyProjectMigrations', () => {
       id: 'cmd-legacy',
       projectId: 'migration-test',
       taskId: 'task-legacy',
+    })
+  })
+
+  it('moves legacy internal proof membership into typed proof scope', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          source: 'user',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-parent'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'task-parent',
+          title: 'Visible feature',
+          status: 'done',
+          releaseIds: ['release-current'],
+        }, {
+          id: 'task-parent-proof',
+          title: 'Internal proof',
+          status: 'ready',
+          semanticKind: 'proof_setup',
+          workKind: 'verification',
+          taskKind: 'verification',
+          workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+          hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' },
+          releaseIds: [],
+        }],
+      },
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    database.prepare("INSERT INTO release_membership (release_id, task_id, disposition) VALUES ('release-current', 'task-parent-proof', 'included')").run()
+    database.close()
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.65/internal-proof-release-context'],
+    })
+
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.65/internal-proof-release-context'])
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      releases: [{ id: 'release-current', nodeIds: ['work:task-parent'] }],
+      tasks: expect.arrayContaining([
+        expect.objectContaining({ id: 'task-parent-proof', proofForReleaseId: 'release-current', releaseIds: [] }),
+      ]),
+    })
+    const after = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(after.prepare('SELECT release_id, task_id FROM release_membership ORDER BY task_id').all()).toEqual([
+      { release_id: 'release-current', task_id: 'task-parent' },
+    ])
+    after.close()
+  })
+
+  it('keeps historical internal proof members in a shipped release snapshot', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        releases: [{
+          id: 'release-shipped',
+          label: 'Shipped release',
+          kind: 'release',
+          state: 'shipped',
+          source: 'user',
+          proofStyle: 'script_only',
+          nodeIds: ['work:task-parent', 'work:task-parent-proof'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'task-parent',
+          title: 'Visible feature',
+          status: 'done',
+          releaseIds: ['release-shipped'],
+        }, {
+          id: 'task-parent-proof',
+          title: 'Historical internal proof',
+          status: 'done',
+          semanticKind: 'proof_setup',
+          workKind: 'verification',
+          taskKind: 'verification',
+          workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+          hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' },
+          releaseIds: ['release-shipped'],
+        }],
+      },
+      summary: { generatedAt: '2026-07-23T00:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.65/internal-proof-release-context'],
+    })
+
+    expect(result.failed).toEqual([])
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      releases: [{ id: 'release-shipped', nodeIds: ['work:task-parent', 'work:task-parent-proof'] }],
+      tasks: expect.arrayContaining([
+        expect.objectContaining({ id: 'task-parent-proof', proofForReleaseId: 'release-shipped', releaseIds: [] }),
+      ]),
     })
   })
 })

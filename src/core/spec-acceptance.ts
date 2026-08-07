@@ -19,6 +19,7 @@ export function acceptanceCriteriaFromStructuredSpec(spec: StructuredSpec | unde
     ...(criterion.expectedOutputIncludes ? { expectedOutputIncludes: criterion.expectedOutputIncludes } : {}),
     ...(criterion.evidenceHint ? { evidenceHint: criterion.evidenceHint } : {}),
     ...(criterion.negativeCase ? { negativeCase: criterion.negativeCase } : {}),
+    ...(criterion.sourceCapabilityIds ? { sourceCapabilityIds: criterion.sourceCapabilityIds } : {}),
     met: false,
   }))
 }

@@ -160,8 +160,13 @@ function visibleProjectTasks(detail: ProjectDetail): Task[] {
   const allTasks = detail.tasks ?? []
   const progressByTaskId = detail.workProgress?.byTaskId ?? {}
   const primaryActionTaskId = detail.actionModel?.primaryAction?.taskId
+  const ownerReviewTaskIds = new Set(detail.startReadiness?.reviewTaskIds ?? [])
   return allTasks.filter(task => {
     if (task.id && task.id === primaryActionTaskId) return true
+    // A shared decision may hold review work that is normally an internal
+    // proof step. Its exact ids are a user-facing contract, so the generic
+    // backlog visibility policy cannot hide it before Work can render it.
+    if (task.id && ownerReviewTaskIds.has(task.id)) return true
     if (['in_progress', 'review', 'gate_check'].includes(task.status ?? '')) return true
     const id = typeof task.id === 'string' ? task.id : ''
     const progress = id ? progressByTaskId[id] as { visibility?: { kind?: string; countInProjectTotals?: boolean } } | undefined : undefined

@@ -68,6 +68,44 @@ describe('buildWorkSurface', () => {
     expect(model.importDraftCount).toBe(1)
   })
 
+  it('keeps decision-backed owner reviews visible even when they are internal proof steps', () => {
+    const detail: ProjectDetail = {
+      tasks: [
+        { id: 'task-primary', status: 'ready', title: 'Current implementation task' },
+        { id: 'task-proof-review', status: 'spec_review', title: 'Review the selected proof' },
+        { id: 'task-hidden-proof', status: 'spec_review', title: 'Unselected internal proof' },
+      ],
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        reviewTaskIds: ['task-proof-review'],
+      },
+      workProgress: {
+        counts: {
+          visibleTotal: 1,
+          visibleActive: 1,
+          visibleBlocked: 0,
+          visibleDone: 0,
+          visibleShelved: 0,
+          deliveryTotal: 1,
+          deliveryRequired: 1,
+          deliveryDone: 0,
+          deliveryBlocked: 0,
+        },
+        byTaskId: {
+          'task-primary': { visibility: { kind: 'primary', countInProjectTotals: true } },
+          'task-proof-review': { visibility: { kind: 'internal_step', countInProjectTotals: false } },
+          'task-hidden-proof': { visibility: { kind: 'internal_step', countInProjectTotals: false } },
+        },
+      },
+    }
+
+    expect(buildWorkSurface(detail).tasks.map(task => task.id)).toEqual([
+      'task-primary',
+      'task-proof-review',
+    ])
+  })
+
   it('keeps non-total supporting work out of ordinary work surfaces', () => {
     const detail: ProjectDetail = {
       tasks: [
