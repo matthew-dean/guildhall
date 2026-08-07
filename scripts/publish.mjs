@@ -175,7 +175,7 @@ const releaseHelpDocsEnv = flags.dryRun
 // ---------------------------------------------------------------------------
 
 if (!flags.skipTests) {
-  log('Running typecheck, docs build, model-independence, lint:deps, and tests...')
+  log('Running typecheck, docs build, model-independence, lint:deps, and release tests...')
   run('pnpm', ['typecheck'])
   run('pnpm', ['docs:build'], releaseHelpDocsEnv)
   run('pnpm', ['lint:deps'])
@@ -183,7 +183,7 @@ if (!flags.skipTests) {
   // Guildhall meaning. Keep this adversarial gate explicit and visible rather
   // than relying on the much larger suite to make that contract obvious.
   run('pnpm', ['model:independence'])
-  run('pnpm', ['test'])
+  run('pnpm', ['test:release'])
 } else {
   warn('Skipping gate (--skip-tests). Build still runs.')
 }

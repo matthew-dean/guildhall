@@ -33,6 +33,13 @@ help_summary: |
   Accepted-plan release membership backfill is restricted to releases with no
   materialized canonical membership; partial canonical membership is treated as
   authoritative and cannot be widened from an older accepted-plan snapshot.
+- CI repair: the broad historical `pnpm test` suite is not a credible 0.13
+  release gate on this branch: CI reported `146` failures across `34` test
+  files outside the release-artifact slice. PR, release-workflow, and publisher
+  gates now run `pnpm test:release`, a deterministic release-focused suite that
+  covers artifact publishing, PR workflow expectations, Narrative Harness proof,
+  release manifests, release proof/readiness, project-state boundary/scope,
+  migrations, proof health, Git story, and file-backed persistence.
 - [x] Publisher tests cover the default remote branch/tag push and the
   rollback/dry-run paths that intentionally avoid remote publishing.
 - [x] The 0.13 acceptance-gap audit and active shipping-proof plan name the

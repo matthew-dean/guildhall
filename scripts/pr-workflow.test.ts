@@ -38,7 +38,7 @@ describe('PR workflow', () => {
       'pnpm docs:check-help-sync',
       'pnpm lint:deps',
       'pnpm test:ui:install',
-      'pnpm test',
+      'pnpm test:release',
       'pnpm build',
       'pnpm test:ui',
     ])
