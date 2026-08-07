@@ -7,6 +7,7 @@ import {
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseProjectionState,
   readProjectStateDatabaseQueue,
+  readProjectStateDatabaseReleaseMembership,
   readProjectStateDatabaseReleaseMembershipState,
   readProjectStateDatabaseSourceCapabilities,
   readProjectStateDatabaseSummary,
@@ -874,8 +875,8 @@ export function buildProjectSummaryProjection(
           label: selectedScope.label,
           kind: selectedScope.kind,
           source: selectedScope.source,
-          taskCount: scopeProjection.counts.included,
-          deferredTaskCount: scopeProjection.counts.deferred,
+          taskCount: releaseSummary.counts.total,
+          deferredTaskCount: releaseSummary.counts.deferred,
         }
       : undefined,
   }
@@ -929,8 +930,8 @@ export function buildProjectSummaryProjection(
           label: selectedScope.label,
           kind: selectedScope.kind,
           source: selectedScope.source,
-          included: scopeProjection.counts.included,
-          deferred: scopeProjection.counts.deferred,
+          included: releaseSummary.counts.total,
+          deferred: releaseSummary.counts.deferred,
           ...(selectedScope.proofStyle ? { proofStyle: selectedScope.proofStyle } : {}),
         }
       : null,
@@ -1340,11 +1341,35 @@ export function buildProjectSummaryProjectionFromIndexedState(
     : selectedReleaseRow
   const indexedRelease = summarizeProjectScopeRelease(indexedScopeRowsAsProjectScopeRows(rows))
   const taskReleaseBlockers = indexedRelease.blockers
-  const releaseExecutionRows = includedRows
-    .filter(row => row.countInProjectTotals !== false)
-    .filter(row => row.hierarchyRole !== 'parent' || !includedRows.some(child =>
-      child.parentTaskId === row.taskId && child.countInProjectTotals !== false,
-    ))
+  const canonicalReleaseMembership = selectedReleaseId
+    ? readProjectStateDatabaseReleaseMembership(tasksPath, selectedReleaseId)
+    : null
+  const selectedReleaseTaskIds = selectedRelease
+    ? releaseMembershipTaskIds(selectedRelease, 'nodeIds')
+    : []
+  const releaseMemberTaskIds = canonicalReleaseMembership
+    ? new Set(canonicalReleaseMembership.included)
+    : selectedReleaseTaskIds.length > 0
+    ? new Set(selectedReleaseTaskIds)
+    : selectedReleaseId
+    ? new Set(rows
+        .filter(row => row.scope === 'included' && tasksById.get(row.taskId)?.releaseIds.includes(selectedReleaseId))
+        .map(row => row.taskId))
+    : new Set<string>()
+  const releaseMembershipRows = releaseMemberTaskIds.size > 0
+    ? rows.filter(row => releaseMemberTaskIds.has(row.taskId))
+    : selectedRelease ? rowsForReleaseMembership(rows, selectedRelease, 'nodeIds') : []
+  const releaseExecutionRows = releaseMembershipRows.length > 0
+    ? releaseMembershipRows
+    : includedRows
+      .filter(row => row.countInProjectTotals !== false)
+      .filter(row => row.hierarchyRole !== 'parent' || !includedRows.some(child =>
+        child.parentTaskId === row.taskId && child.countInProjectTotals !== false,
+      ))
+  const releaseIncluded = selectedRelease
+    ? (releaseMemberTaskIds.size || selectedReleaseTaskIds.length)
+    : releaseExecutionRows.length
+  const releaseDeferred = deferredRows.length
   const releaseSummary: ProjectSummaryReleaseSummary = {
     scopeMode: selectedRelease ? 'named_release' : 'unreleased',
     release: selectedRelease
@@ -1358,13 +1383,13 @@ export function buildProjectSummaryProjectionFromIndexedState(
       : null,
     state: indexedRelease.state,
     counts: {
-      total: releaseExecutionRows.length,
+      total: releaseIncluded,
       done: releaseExecutionRows.filter(row => row.handoffState === 'done').length,
-      unfinished: releaseExecutionRows.filter(row => row.handoffState !== 'done').length,
+      unfinished: Math.max(0, releaseIncluded - releaseExecutionRows.filter(row => row.handoffState === 'done').length),
       ready: releaseExecutionRows.filter(row => row.handoffState === 'ready').length,
       active: releaseExecutionRows.filter(row => ['paused', 'review'].includes(row.handoffState)).length,
       blocked: releaseExecutionRows.filter(row => row.blocksRelease).length,
-      deferred: deferredRows.length,
+      deferred: releaseDeferred,
       ownerBlocked: releaseExecutionRows.filter(row => projectScopeRowNeedsOwnerInput({
         scope: row.scope,
         status: row.status as ProjectScopeRow['status'],
@@ -1421,8 +1446,8 @@ export function buildProjectSummaryProjectionFromIndexedState(
             label: String(selectedRelease.label ?? selectedRelease.id),
             kind: String(selectedRelease.kind ?? 'release'),
             source: typeof selectedRelease.source === 'string' ? selectedRelease.source : undefined,
-            taskCount: includedRows.length,
-            deferredTaskCount: deferredRows.length,
+            taskCount: releaseSummary.counts.total,
+            deferredTaskCount: releaseSummary.counts.deferred,
           }
         : undefined,
     },
@@ -1444,8 +1469,8 @@ export function buildProjectSummaryProjectionFromIndexedState(
         label: String(selectedRelease.label ?? selectedRelease.id),
         kind: String(selectedRelease.kind ?? 'release'),
         source: indexedScopeSource(selectedRelease.source),
-        included: includedRows.length,
-        deferred: deferredRows.length,
+        included: releaseSummary.counts.total,
+        deferred: releaseSummary.counts.deferred,
         ...(indexedProofStyle(selectedRelease.proofStyle)
           ? { proofStyle: indexedProofStyle(selectedRelease.proofStyle) }
           : {}),
@@ -1795,6 +1820,23 @@ function canonicalReleaseMembershipTaskIds(projection: Pick<ProjectSummaryProjec
     .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice('work:'.length) : nodeId)
     .filter(Boolean))]
     .sort()
+}
+
+function releaseMembershipTaskIds(release: unknown, field: 'nodeIds' | 'deferredNodeIds'): string[] {
+  if (!release || typeof release !== 'object' || Array.isArray(release)) return []
+  return stringArray((release as Record<string, unknown>)[field])
+    .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice('work:'.length) : nodeId)
+    .filter(Boolean)
+}
+
+function rowsForReleaseMembership<T extends { taskId: string }>(
+  rows: readonly T[],
+  release: unknown,
+  field: 'nodeIds' | 'deferredNodeIds',
+): T[] {
+  const taskIds = new Set(releaseMembershipTaskIds(release, field))
+  if (taskIds.size === 0) return []
+  return rows.filter(row => taskIds.has(row.taskId))
 }
 
 /**
@@ -2681,13 +2723,17 @@ function buildReleaseSummary(input: {
   scopeProjection: ReturnType<typeof buildProjectScopeProjection>
   generatedAt: string
 }): ProjectSummaryReleaseSummary {
-  const rows = input.scopeProjection.rows.filter(row => row.scope === 'included')
-  const executionRows = executionScopeRows(rows)
-  const included = executionRows.length
-  const done = executionRows.filter(row => row.handoffState === 'done').length
   const release = input.scopeProjection.selectedScope
     ? (input.queue.releases ?? []).find(candidate => candidate.id === input.scopeProjection.selectedScope?.id) ?? null
     : null
+  const rows = input.scopeProjection.rows.filter(row => row.scope === 'included')
+  const releaseRows = release ? rowsForReleaseMembership(rows, release, 'nodeIds') : []
+  const executionRows = releaseRows.length > 0 ? releaseRows : executionScopeRows(rows)
+  const included = release
+    ? releaseMembershipTaskIds(release, 'nodeIds').length
+    : executionRows.length
+  const done = executionRows.filter(row => row.handoffState === 'done').length
+  const deferred = input.scopeProjection.counts.deferred
   const releaseMetadata = release
     ? {
         id: release.id,
@@ -2711,9 +2757,9 @@ function buildReleaseSummary(input: {
       // from progressing, not only tasks whose literal status is blocked.
       // Brief/spec gaps and missing proof are just as material to readiness.
       blocked: executionRows.filter(row => row.blocksRelease).length,
-      deferred: input.scopeProjection.counts.deferred,
-      ownerBlocked: input.scopeProjection.counts.ownerBlocked,
-      proofBlocked: input.scopeProjection.counts.proofBlocked,
+      deferred,
+      ownerBlocked: executionRows.filter(row => projectScopeRowNeedsOwnerInput(row)).length,
+      proofBlocked: executionRows.filter(row => row.proofBlocked).length,
     },
     taskStatusCounts: taskStatusCounts(executionRows),
     blockers: input.scopeProjection.release.blockers,

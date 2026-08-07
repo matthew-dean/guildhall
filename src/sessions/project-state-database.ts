@@ -7530,6 +7530,41 @@ export function readProjectStateDatabaseReleaseMembershipState(
   }
 }
 
+export function readProjectStateDatabaseReleaseMembership(
+  tasksPath: string,
+  releaseId: string,
+): { included: string[]; deferred: string[] } | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const trimmedReleaseId = releaseId.trim()
+  if (!trimmedReleaseId) return null
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'release_membership')) return null
+    const rows = database.prepare(`
+      SELECT task_id, disposition
+      FROM release_membership
+      WHERE release_id = ?
+      ORDER BY rowid
+    `).all(trimmedReleaseId) as JsonRecord[]
+    const included: string[] = []
+    const deferred: string[] = []
+    for (const row of rows) {
+      const taskId = stringValue(row.task_id)
+      if (!taskId) continue
+      if (row.disposition === 'deferred') deferred.push(taskId)
+      else included.push(taskId)
+    }
+    return { included, deferred }
+  } finally {
+    database.close()
+  }
+}
+
 function readProjectStateDatabaseAuthorityFromDatabase(database: DatabaseSync): ProjectStateDatabaseAuthority {
   try {
     const row = database.prepare('SELECT project_state_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined

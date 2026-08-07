@@ -26,8 +26,48 @@ help_summary: |
   remaining 0.13 path: repair the selected-release contradiction, rerun the
   installed acceptance sequence, attach fresh route/API/CLI proof, then publish
   through the automated artifact path.
+- [x] Installed release-readiness API and CLI now agree on the selected
+  Narrative Harness release membership: `15` included, `14` done, `1`
+  unfinished, `1` deferred, and `10` proof blockers for
+  `stage-1-headless-drafting-and-evaluation-mvp-r1`.
+- [ ] Repair the remaining surface contradiction: `/api/project` Overview,
+  rich orientation spine, and shared action-model surfaces still expose stale
+  execution-scope counts (`17` included and `32` deferred) while the
+  release-readiness API and CLI expose the selected release's canonical
+  `15`/`1` membership. The focused
+  `does not widen the selected release with an unscoped import duplicate of
+  scoped work` route regression still fails for `/api/project`.
+- [ ] Resolve the installed acceptance failures before calling 0.13.0 ready:
+  startup refresh error/fleet-card staleness, the active selected-release
+  lifecycle, unfinished member
+  `task-synopsis-expansion-into-story-records`, ten owner-review proof-spec
+  blockers, Narrative Harness package/proof-contract checks, and mobile
+  overflow on Overview, Map, Work, and Release.
+- [ ] Decide whether `audit:release-acceptance` should keep targeting the
+  active `r1` release or be rebaselined to a later accepted release after the
+  proof-spec owner review is settled.
 - [ ] Backfill the existing 0.12.0 remote tag/GitHub Release artifact after
   confirming the local `v0.12.0` tag is the accepted release commit.
+
+### Contract Touch Decision
+
+- Work id: `0.13-release-readiness-membership-counts`.
+- Touched contracts: compact release-summary read counts,
+  release-readiness summary/detail API counts, CLI status JSON release counts,
+  normalized `release_membership` reads, and migration ledger entries
+  `0.13.72` through `0.13.76`.
+- Considered but not touched: persisted database schema, release lifecycle
+  mutation, task-state mutation, publish artifact manifest schema, and GitHub
+  Release artifact naming.
+- Proof required: projection/migration/CLI regressions, contract detector,
+  typecheck, installed API/CLI readback, and the acceptance audit preserving
+  real release-not-ready blockers.
+- Proof provided: focused regressions, installed `stale:false` readback, API
+  and CLI agreement on `15` selected items, and an acceptance audit that still
+  fails `28` of `72` checks for the remaining blockers.
+- Apply/revert: source-only read normalization plus summary reprojection
+  migrations. Revert requires a forward migration; views must not fall back to
+  execution-scope child rows as selected release membership.
 
 ## 2026-07-23 Explicit Review-Gate and Agent-Disagreement Boundary
 

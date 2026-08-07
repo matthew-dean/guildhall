@@ -513,6 +513,54 @@ describe('project-summary-projection', () => {
     expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks.every(task => Object.keys(task.definition).length === 0)).toBe(true)
   })
 
+  it('uses canonical release membership before executable child rows for indexed release counts', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-index-node-membership-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('feature-one', 'done', {
+        releaseIds: ['release-current'],
+        hierarchy: { childIds: ['feature-one-proof'], relation: 'contains' },
+      }),
+      task('feature-one-proof', 'spec_review', {
+        hierarchy: { parentId: 'feature-one', childIds: [], relation: 'decomposes' },
+      }),
+      task('feature-two', 'done', {
+        releaseIds: ['release-current'],
+        hierarchy: { childIds: ['feature-two-proof'], relation: 'contains' },
+      }),
+      task('feature-two-proof', 'blocked', {
+        hierarchy: { parentId: 'feature-two', childIds: [], relation: 'decomposes' },
+      }),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:feature-one', 'work:feature-two'],
+        deferredNodeIds: [],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'parity', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    const indexed = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'parity',
+      generatedAt: now,
+      sourceQueueLastUpdated: now,
+    })
+
+    expect(indexed?.releaseSummary.counts).toMatchObject({
+      total: 2,
+      done: 2,
+      unfinished: 0,
+    })
+    expect(indexed?.releaseSummary.taskStatusCounts).toEqual({ done: 2 })
+    expect(indexed?.scope).toMatchObject({ included: 2 })
+  })
+
   it('keeps the indexed orientation note when a named release has later work', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-later-work-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')

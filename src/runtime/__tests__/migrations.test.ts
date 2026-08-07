@@ -2192,6 +2192,471 @@ describe('applyProjectMigrations', () => {
     })).applied).toEqual([])
   })
 
+  it('reprojects stale current release counts from normalized indexed membership', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T14:00:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-one', 'work:task-two'],
+          deferredNodeIds: ['work:task-later'],
+        }],
+        tasks: [
+          { id: 'task-one', title: 'One', status: 'done' },
+          { id: 'task-two', title: 'Two', status: 'done' },
+          { id: 'task-later', title: 'Later', status: 'ready' },
+        ],
+      },
+      summary: {
+        projectId: 'migration-test',
+        generatedAt: now,
+        freshness: 'current',
+      },
+      scopeRows: [
+        {
+          taskId: 'task-one',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'root',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-one'],
+        },
+        {
+          taskId: 'task-two',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'root',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-two'],
+        },
+        {
+          taskId: 'task-later',
+          scope: 'deferred',
+          eligibilityReason: 'outside_selected_scope',
+          hierarchyRole: 'root',
+          handoffState: 'deferred',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-later'],
+        },
+      ],
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    expect(writeProjectSummaryProjectionFromIndexedState(tasksPath, { projectId: 'migration-test' })).toMatchObject({
+      releaseSummary: {
+        counts: {
+          total: 2,
+          done: 2,
+          deferred: 1,
+        },
+      },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const row = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const stale = JSON.parse(row.payload_json) as Record<string, any>
+    stale.releaseSummary = {
+      ...stale.releaseSummary,
+      counts: {
+        ...stale.releaseSummary.counts,
+        total: 1,
+        done: 1,
+        unfinished: 0,
+        deferred: 9,
+      },
+    }
+    stale.scope = {
+      ...stale.scope,
+      included: 1,
+      deferred: 9,
+    }
+    stale.nextAction = {
+      code: 'stale_release_summary',
+      label: 'Review',
+      message: 'Stale release summary.',
+    }
+    database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(stale))
+    database.close()
+
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 1,
+            deferred: 9,
+          },
+        },
+      },
+    })
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.72/indexed-release-summary-reprojection'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.72/indexed-release-summary-reprojection'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 2,
+            done: 2,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 2,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.72/indexed-release-summary-reprojection'],
+    })).applied).toEqual([])
+
+    const inflatedDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const inflatedRow = inflatedDatabase.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const inflated = JSON.parse(inflatedRow.payload_json) as Record<string, any>
+    inflated.releaseSummary = {
+      ...inflated.releaseSummary,
+      counts: {
+        ...inflated.releaseSummary.counts,
+        total: 3,
+        done: 2,
+        unfinished: 1,
+      },
+    }
+    inflated.scope = {
+      ...inflated.scope,
+      included: 3,
+    }
+    inflatedDatabase.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(inflated))
+    inflatedDatabase.close()
+
+    const dispositionResult = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.74/included-release-disposition-counts'],
+    })
+    expect(dispositionResult.failed).toEqual([])
+    expect(dispositionResult.applied.map(item => item.id)).toEqual(['0.13.74/included-release-disposition-counts'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 2,
+            done: 2,
+            unfinished: 0,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 2,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.74/included-release-disposition-counts'],
+    })).applied).toEqual([])
+
+    const canonicalDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const canonicalRow = canonicalDatabase.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const canonical = JSON.parse(canonicalRow.payload_json) as Record<string, any>
+    canonical.releaseSummary = {
+      ...canonical.releaseSummary,
+      counts: {
+        ...canonical.releaseSummary.counts,
+        total: 3,
+        done: 2,
+        unfinished: 1,
+      },
+    }
+    canonical.scope = {
+      ...canonical.scope,
+      included: 3,
+    }
+    canonicalDatabase.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(canonical))
+    canonicalDatabase.close()
+
+    const canonicalResult = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.75/canonical-release-membership-summary'],
+    })
+    expect(canonicalResult.failed).toEqual([])
+    expect(canonicalResult.applied.map(item => item.id)).toEqual(['0.13.75/canonical-release-membership-summary'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 2,
+            done: 2,
+            unfinished: 0,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 2,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.75/canonical-release-membership-summary'],
+    })).applied).toEqual([])
+
+    const fallbackDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const fallbackRow = fallbackDatabase.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const fallback = JSON.parse(fallbackRow.payload_json) as Record<string, any>
+    fallback.releaseSummary = {
+      ...fallback.releaseSummary,
+      counts: {
+        ...fallback.releaseSummary.counts,
+        total: 3,
+        done: 2,
+        unfinished: 1,
+      },
+    }
+    fallback.scope = {
+      ...fallback.scope,
+      included: 3,
+    }
+    fallbackDatabase.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(fallback))
+    fallbackDatabase.close()
+
+    const fallbackResult = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.76/selected-release-node-membership-summary'],
+    })
+    expect(fallbackResult.failed).toEqual([])
+    expect(fallbackResult.applied.map(item => item.id)).toEqual(['0.13.76/selected-release-node-membership-summary'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 2,
+            done: 2,
+            unfinished: 0,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 2,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.76/selected-release-node-membership-summary'],
+    })).applied).toEqual([])
+  })
+
+  it('aligns named release counts to selected membership when child execution rows are present', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T14:30:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-parent-one', 'work:task-parent-two', 'work:task-parent-three'],
+          deferredNodeIds: [],
+        }],
+        tasks: [
+          {
+            id: 'task-parent-one',
+            title: 'Parent one',
+            status: 'done',
+            hierarchy: { childIds: ['task-child-one'], relation: 'contains' },
+          },
+          {
+            id: 'task-child-one',
+            title: 'Child one',
+            status: 'done',
+            hierarchy: { parentId: 'task-parent-one', childIds: [], relation: 'decomposes' },
+          },
+          {
+            id: 'task-parent-two',
+            title: 'Parent two',
+            status: 'done',
+            hierarchy: { childIds: ['task-child-two'], relation: 'contains' },
+          },
+          {
+            id: 'task-child-two',
+            title: 'Child two',
+            status: 'done',
+            hierarchy: { parentId: 'task-parent-two', childIds: [], relation: 'decomposes' },
+          },
+          { id: 'task-parent-three', title: 'Parent three', status: 'done' },
+          { id: 'task-later', title: 'Later', status: 'ready' },
+        ],
+      },
+      summary: {
+        projectId: 'migration-test',
+        generatedAt: now,
+        freshness: 'current',
+      },
+      scopeRows: [
+        {
+          taskId: 'task-parent-one',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'parent',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-parent-one'],
+        },
+        {
+          taskId: 'task-child-one',
+          parentTaskId: 'task-parent-one',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'child',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-child-one'],
+        },
+        {
+          taskId: 'task-parent-two',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'parent',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-parent-two'],
+        },
+        {
+          taskId: 'task-child-two',
+          parentTaskId: 'task-parent-two',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'child',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-child-two'],
+        },
+        {
+          taskId: 'task-parent-three',
+          scope: 'included',
+          eligibilityReason: 'selected',
+          hierarchyRole: 'root',
+          handoffState: 'done',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-parent-three'],
+        },
+        {
+          taskId: 'task-later',
+          scope: 'deferred',
+          eligibilityReason: 'outside_selected_scope',
+          hierarchyRole: 'root',
+          handoffState: 'deferred',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: ['task:task-later'],
+        },
+      ],
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    expect(writeProjectSummaryProjectionFromIndexedState(tasksPath, { projectId: 'migration-test' })).toMatchObject({
+      releaseSummary: {
+        counts: {
+          total: 3,
+          done: 3,
+          deferred: 1,
+        },
+      },
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const row = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const stale = JSON.parse(row.payload_json) as Record<string, any>
+    stale.releaseSummary = {
+      ...stale.releaseSummary,
+      counts: {
+        ...stale.releaseSummary.counts,
+        total: 2,
+        done: 2,
+        unfinished: 0,
+      },
+    }
+    stale.scope = {
+      ...stale.scope,
+      included: 2,
+    }
+    database.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(stale))
+    database.close()
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.73/named-release-member-counts'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.73/named-release-member-counts'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 3,
+            done: 3,
+            unfinished: 0,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 3,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.73/named-release-member-counts'],
+    })).applied).toEqual([])
+  })
+
   it('attaches task identity to legacy diagnostic blockers only when the task inventory proves it', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     writeProjectStateDatabaseSnapshot(tasksPath, {

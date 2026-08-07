@@ -19,6 +19,7 @@ import {
   projectStateDatabaseDetailPathFromTasksPath,
   projectStateDatabasePath,
   PROJECT_STATE_DATABASE_SCHEMA_VERSION,
+  markProjectStateDatabaseStale,
   readProjectStateDatabaseMetadata,
   readProjectStateDatabaseAuthority,
   readProjectStateDatabaseReadBundle,
@@ -242,6 +243,11 @@ const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
 const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-authority'
 const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
 const DURABLE_DECISION_SNAPSHOT_MIGRATION_ID = '0.13.71/durable-decision-snapshot'
+const INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID = '0.13.72/indexed-release-summary-reprojection'
+const NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID = '0.13.73/named-release-member-counts'
+const INCLUDED_RELEASE_DISPOSITION_COUNT_MIGRATION_ID = '0.13.74/included-release-disposition-counts'
+const CANONICAL_RELEASE_MEMBERSHIP_SUMMARY_MIGRATION_ID = '0.13.75/canonical-release-membership-summary'
+const SELECTED_RELEASE_NODE_MEMBERSHIP_SUMMARY_MIGRATION_ID = '0.13.76/selected-release-node-membership-summary'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -1609,6 +1615,41 @@ async function materializeApprovedPlanReleaseMembershipAtBoundary(
     0,
   )
   return { state: 'materialized', membershipCount }
+}
+
+function compactReleaseProjectionForComparison(summary: unknown): unknown {
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null
+  const record = summary as Record<string, unknown>
+  const releaseSummary = record.releaseSummary
+  const scope = record.scope
+  const nextAction = record.nextAction
+  return {
+    releaseSummary,
+    scope,
+    nextAction,
+  }
+}
+
+function inspectIndexedReleaseSummaryReprojection(projectRoot: string): {
+  needed: boolean
+  before: unknown
+  after: unknown
+} {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') {
+    return { needed: false, before: null, after: null }
+  }
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const stored = readProjectStateDatabaseSummary<Record<string, unknown>>(tasksPath)?.payload ?? null
+  const projected = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+    projectId: path.basename(projectRoot),
+  })
+  const before = compactReleaseProjectionForComparison(stored)
+  const after = compactReleaseProjectionForComparison(projected)
+  return {
+    needed: before !== null && after !== null && JSON.stringify(before) !== JSON.stringify(after),
+    before,
+    after,
+  }
 }
 
 const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
@@ -5145,6 +5186,181 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID,
+    title: 'Reproject release summary from indexed membership',
+    introducedIn: '0.13.72',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the compact release summary and decision packet from normalized release membership and scope rows when a previously current summary was stamped with stale selected-release counts.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'compact release summary and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The release summary could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt the release summary and shared decision from normalized release membership and scope rows.'
+          : 'Release summary already matched normalized release membership and scope rows.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID,
+    title: 'Align named release counts with membership',
+    introducedIn: '0.13.73',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the compact release summary so a named release counts its selected membership instead of executable child rows while preserving later-work deferred counts.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'named release summary counts and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The named release counts could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt named release counts from selected membership and refreshed the shared decision packet.'
+          : 'Named release counts already matched normalized indexed membership.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: INCLUDED_RELEASE_DISPOSITION_COUNT_MIGRATION_ID,
+    title: 'Count only included release membership',
+    introducedIn: '0.13.74',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds named-release counts from included normalized membership so deferred release rows cannot inflate the selected release total.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'included release membership counts and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The included release membership counts could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt selected release counts from included normalized membership and refreshed the shared decision packet.'
+          : 'Selected release counts already matched included normalized membership.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: CANONICAL_RELEASE_MEMBERSHIP_SUMMARY_MIGRATION_ID,
+    title: 'Read release counts from canonical membership',
+    introducedIn: '0.13.75',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the compact release summary from the normalized release_membership relation so selected release totals cannot be inflated by execution-scope container rewrites.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'canonical release membership summary and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The canonical release membership summary could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt the release summary from canonical normalized membership and refreshed the shared decision packet.'
+          : 'Release summary already matched canonical normalized membership.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: SELECTED_RELEASE_NODE_MEMBERSHIP_SUMMARY_MIGRATION_ID,
+    title: 'Fallback to selected release membership nodes',
+    introducedIn: '0.13.76',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the compact release summary so selected release node IDs remain the membership fallback when execution rows include release-local proof children.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'selected release membership fallback summary and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The selected release membership summary could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt the release summary from selected release membership nodes and refreshed the shared decision packet.'
+          : 'Release summary already matched selected release membership nodes.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
     id: PROOF_SETUP_EXECUTION_BLUEPRINT_MIGRATION_ID,
     title: 'Restore proof-setup execution blueprints',
     introducedIn: '0.13.41',
@@ -5537,6 +5753,11 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [SPEC_REVIEW_GATE_MIGRATION_ID]: 'migrations.test.ts: backfills only legacy spec-review gates and remains idempotent after canonical task writes',
   [DURABLE_SPEC_HANDOFF_MIGRATION_ID]: 'migrations.test.ts: settles only an approved, structurally valid spec handoff and never auto-approves it',
   [DURABLE_DECISION_SNAPSHOT_MIGRATION_ID]: 'migrations.test.ts: rebuilds a missing revision-bound decision packet from normalized state',
+  [INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership',
+  [NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID]: 'migrations.test.ts: aligns named release counts to selected membership when child execution rows are present',
+  [INCLUDED_RELEASE_DISPOSITION_COUNT_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership without counting deferred release rows',
+  [CANONICAL_RELEASE_MEMBERSHIP_SUMMARY_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership through the canonical membership reader',
+  [SELECTED_RELEASE_NODE_MEMBERSHIP_SUMMARY_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership through the selected release membership fallback',
   '0.11.0/project-summary-projection': 'migrations.test.ts: project summary backfill is idempotent and preserves task history',
   '0.11.1/project-summary-projection-v2': 'migrations.test.ts: project summary shape refresh is idempotent and preserves task history',
   '0.11.2/project-summary-projection-setup-state': 'migrations.test.ts: project summary setup-state refresh is idempotent and preserves task history',

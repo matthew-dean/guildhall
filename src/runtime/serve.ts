@@ -5894,9 +5894,10 @@ function compactReleaseReadinessFromProjection(input: {
   projection: ProjectSummaryProjection
   rawQueue?: { releases: ProjectRelease[]; selectedReleaseId?: string }
   scope?: ProjectScope | null
+  scopeRows?: readonly ProjectStateDatabaseScopeRow[]
 }): Record<string, unknown> {
   const summary = input.projection.releaseSummary
-  const counts = summary?.counts ?? {
+  const fallbackCounts = summary?.counts ?? {
     total: 0,
     done: 0,
     unfinished: 0,
@@ -5907,6 +5908,7 @@ function compactReleaseReadinessFromProjection(input: {
     ownerBlocked: 0,
     proofBlocked: 0,
   }
+  const counts = releaseCountsFromScopeRows(input.scope ?? null, input.scopeRows ?? [], fallbackCounts)
   const release = input.rawQueue
     ? releaseReadinessReleaseFromScope({
         rawQueue: input.rawQueue,
@@ -5968,6 +5970,38 @@ function compactReleaseReadinessFromProjection(input: {
       unfinishedCount: counts.unfinished,
       done: counts.done,
     },
+  }
+}
+
+function releaseCountsFromScopeRows(
+  scope: ProjectScope | null,
+  scopeRows: readonly ProjectStateDatabaseScopeRow[],
+  fallback: NonNullable<ProjectSummaryProjection['releaseSummary']>['counts'],
+): NonNullable<ProjectSummaryProjection['releaseSummary']>['counts'] {
+  if (!scope || scope.nodeIds.length === 0 || scopeRows.length === 0) return fallback
+  const releaseTaskIds = new Set(
+    scope.nodeIds
+      .map(nodeId => nodeId.replace(/^work:/, '').trim())
+      .filter(Boolean),
+  )
+  if (releaseTaskIds.size === 0) return fallback
+  const releaseRows = scopeRows.filter(row => releaseTaskIds.has(row.taskId))
+  const done = releaseRows.filter(row => row.handoffState === 'done').length
+  return {
+    total: releaseTaskIds.size,
+    done,
+    unfinished: Math.max(0, releaseTaskIds.size - done),
+    ready: releaseRows.filter(row => row.handoffState === 'ready').length,
+    active: releaseRows.filter(row => row.handoffState === 'paused' || row.handoffState === 'review').length,
+    blocked: releaseRows.filter(row => row.blocksRelease).length,
+    deferred: scope.deferredNodeIds.length,
+    ownerBlocked: releaseRows.filter(row => projectScopeRowNeedsOwnerInput({
+      scope: row.scope,
+      status: row.handoffState as ProjectScopeRow['status'],
+      handoffState: row.handoffState as ProjectScopeRow['handoffState'],
+      humanBlocking: row.humanBlocking,
+    })).length,
+    proofBlocked: releaseRows.filter(row => row.proofBlocked).length,
   }
 }
 
@@ -17170,6 +17204,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
     } as OrientationRelease
   }
 
+  function releaseReadinessCountsFromSavedScope(
+    state: ProjectReleaseReadModel,
+    fallback: NonNullable<ProjectSummaryProjection['releaseSummary']>['counts'],
+  ): NonNullable<ProjectSummaryProjection['releaseSummary']>['counts'] {
+    return releaseCountsFromScopeRows(state.scope, state.scopeRows, fallback)
+  }
+
   async function buildProjectReleaseReadinessPayload(input: {
     state: ProjectReleaseReadModel
     startReadiness?: Awaited<ReturnType<typeof projectStartReadinessForProject>>
@@ -17184,7 +17225,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const summaryFreshness = state.summary?.freshness ?? 'missing'
     const savedScope = releaseReadinessSavedScope(state)
     const savedRelease = releaseReadinessSavedRelease(state, savedScope)
-    const savedCounts = savedReleaseSummary?.counts ?? {
+    const savedCounts = releaseReadinessCountsFromSavedScope(state, savedReleaseSummary?.counts ?? {
       total: 0,
       done: 0,
       unfinished: 0,
@@ -17194,7 +17235,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       deferred: 0,
       ownerBlocked: 0,
       proofBlocked: 0,
-    }
+    })
     const savedBlockers = savedReleaseSummary?.blockers ?? []
     const savedDiagnosticBlockers = state.diagnostics?.readiness?.blockers ?? (
       state.diagnostics?.git?.blockers.map(blocker => ({
@@ -17776,6 +17817,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           projection,
           rawQueue: state.rawQueue,
           scope: state.scope,
+          scopeRows: state.scopeRows,
         }),
         summaryFreshness: projection.freshness,
         generatedAt: projection.generatedAt,
