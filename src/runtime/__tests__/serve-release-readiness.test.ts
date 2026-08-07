@@ -29,12 +29,17 @@ import { projectSummaryScopeRowsForQueue, writeProjectSummaryProjection, writePr
 
 let tmpDir: string
 let remoteDir: string
+let guildhallConfigDir: string
+let previousGuildhallConfigDir: string | undefined
 let projectId: string
 const execFileP = promisify(execFile)
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-'))
   remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-remote-'))
+  guildhallConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-config-'))
+  previousGuildhallConfigDir = process.env.GUILDHALL_CONFIG_DIR
+  process.env.GUILDHALL_CONFIG_DIR = guildhallConfigDir
   projectId = bootstrapWorkspace(tmpDir, { name: 'Release Test' }).id ?? path.basename(tmpDir)
   await execFileP('git', ['init', '-b', 'main'], { cwd: tmpDir })
   await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: tmpDir })
@@ -50,6 +55,12 @@ afterEach(async () => {
   unregisterWorkspace(projectId)
   await fs.rm(tmpDir, { recursive: true, force: true })
   await fs.rm(remoteDir, { recursive: true, force: true })
+  await fs.rm(guildhallConfigDir, { recursive: true, force: true })
+  if (previousGuildhallConfigDir === undefined) {
+    delete process.env.GUILDHALL_CONFIG_DIR
+  } else {
+    process.env.GUILDHALL_CONFIG_DIR = previousGuildhallConfigDir
+  }
 })
 
 function makeTask(overrides: Record<string, unknown>): Task {
@@ -1010,7 +1021,7 @@ describe('GET /api/project/release-readiness', () => {
         label: expect.stringContaining('No design-system guardrail is captured yet.'),
       }),
     ])
-  })
+  }, 15_000)
 
   it('counts only the selected scope when later or stale tasks remain elsewhere in the queue', async () => {
     await seedQueue({

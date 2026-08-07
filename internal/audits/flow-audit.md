@@ -22,12 +22,14 @@ help_summary: |
   GitHub Release, then publishes npm. The post-release package bump is pushed
   only after npm is live. `--no-push` is now a local staging mode and skips npm
   publish because the GitHub artifact cannot be verified.
-- Correction: runtime-backed releases no longer downgrade a missing default
-  runtime image digest to a warning. The publisher reads
-  `GUILDHALL_RUNTIME_IMAGE_DIGEST` or resolves the immutable tag through Docker
-  buildx image inspection, then fails closed when no verified digest is
-  available for 0.9+ releases. The runtime-image workflow and local runtime
-  image scripts now cover the 0.13 line instead of the stale 0.11-only tags.
+- Correction: runtime-backed releases are now a one-command path. The
+  publisher dispatches the `runtime-image.yml` workflow for the target version
+  when the immutable GHCR image is missing, waits for that run, resolves the
+  pushed image digest from GHCR, records it in the release manifest, then
+  continues to docs, macOS artifacts, GitHub Release assets, and npm publish.
+  The runtime-image workflow is idempotent and skips rebuilding an immutable
+  tag that already exists, so the digest recorded by the publisher cannot be
+  overwritten by the later release-tag workflow.
 - Review repair: Greptile flagged two P1 release-readiness defects. Release
   branch/tag publication now uses an atomic ref push before artifact polling.
   Accepted-plan release membership backfill is restricted to releases with no

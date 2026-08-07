@@ -33,6 +33,7 @@ async function createMinimalReleaseFixture(tmp: string): Promise<void> {
 
   await fs.copyFile(path.join(root, 'scripts/publish.mjs'), path.join(tmp, 'scripts/publish.mjs'))
   await fs.copyFile(path.join(root, 'scripts/release-manifest.mjs'), path.join(tmp, 'scripts/release-manifest.mjs'))
+  await fs.copyFile(path.join(root, 'scripts/resolve-runtime-image-digest.mjs'), path.join(tmp, 'scripts/resolve-runtime-image-digest.mjs'))
   await fs.copyFile(path.join(root, 'scripts/version-docs.mjs'), path.join(tmp, 'scripts/version-docs.mjs'))
   await fs.copyFile(path.join(root, 'scripts/docs-generation.mjs'), path.join(tmp, 'scripts/docs-generation.mjs'))
   await fs.writeFile(
@@ -77,9 +78,32 @@ describe('release publish script', () => {
       await createMinimalReleaseFixture(tmp)
       await fs.mkdir(path.join(tmp, 'docs/versions/0.5.0/guide'), { recursive: true })
       await fs.writeFile(path.join(tmp, 'docs/versions/0.5.0/guide/quick-start.md'), '# Old patch docs\n')
+      await fs.writeFile(
+        path.join(tmp, 'scripts/version-docs.mjs'),
+        [
+          'import { mkdirSync, writeFileSync } from "node:fs"',
+          'import { join } from "node:path"',
+          'const version = process.argv[2]',
+          'mkdirSync(join(process.cwd(), "docs/versions", version, "guide"), { recursive: true })',
+          'writeFileSync(join(process.cwd(), "docs/versions", version, "guide/quick-start.md"), "# New docs\\n")',
+          '',
+        ].join('\n'),
+      )
 
       const fakeBin = path.join(tmp, 'fake-bin')
       await fs.mkdir(fakeBin)
+      await writeExecutable(
+        path.join(fakeBin, 'npm'),
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "view" ]; then',
+          '  exit 1',
+          'fi',
+          'echo "unexpected npm args: $*" >&2',
+          'exit 1',
+          '',
+        ].join('\n'),
+      )
       const fakePnpm = path.join(fakeBin, 'pnpm')
       await writeExecutable(fakePnpm, '#!/bin/sh\nexit 1\n')
 
@@ -114,7 +138,7 @@ describe('release publish script', () => {
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 
   it('skips docs versioning during dry-run publish', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-script-'))
@@ -376,7 +400,7 @@ describe('release publish script', () => {
     }
   })
 
-  it('refuses a runtime-backed release without a verified image digest', async () => {
+  it('publishes and records the runtime image digest automatically for runtime-backed releases', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-script-'))
     try {
       await createMinimalReleaseFixture(tmp)
@@ -387,9 +411,40 @@ describe('release publish script', () => {
       await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
 
       const fakeBin = path.join(tmp, 'fake-bin')
+      const operationLog = path.join(tmp, 'release-order.log')
+      const digestFixture = path.join(tmp, 'digest-sequence.txt')
+      await fs.writeFile(digestFixture, 'missing\nsha256:feedface\n')
       await fs.mkdir(fakeBin)
-      await writeExecutable(path.join(fakeBin, 'docker'), '#!/bin/sh\nexit 1\n')
       await writeExecutable(path.join(fakeBin, 'pnpm'), '#!/bin/sh\nexit 0\n')
+      await writeExecutable(
+        path.join(fakeBin, 'gh'),
+        [
+          '#!/bin/sh',
+          'printf "gh %s\\n" "$*" >> "$PUBLISH_TEST_LOG"',
+          'if [ "$1" = "workflow" ] && [ "$2" = "run" ]; then',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "run" ] && [ "$2" = "list" ]; then',
+          '  printf \'[{"databaseId":12345,"createdAt":"2099-01-01T00:00:00Z","displayTitle":"Runtime image 0.9.0","url":"https://example.test/run"}]\\n\'',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "run" ] && [ "$2" = "watch" ]; then',
+          '  exit 0',
+          'fi',
+          'echo "unexpected gh args: $*" >&2',
+          'exit 1',
+          '',
+        ].join('\n'),
+      )
+      await writeExecutable(
+        path.join(fakeBin, 'curl'),
+        [
+          '#!/bin/sh',
+          'printf "curl %s\\n" "$*" >> "$PUBLISH_TEST_LOG"',
+          'exit 0',
+          '',
+        ].join('\n'),
+      )
       await writeExecutable(
         path.join(fakeBin, 'npm'),
         [
@@ -403,6 +458,7 @@ describe('release publish script', () => {
           '  exit 0',
           'fi',
           'if [ "$1" = "publish" ]; then',
+          '  printf "npm publish\\n" >> "$PUBLISH_TEST_LOG"',
           '  exit 0',
           'fi',
           'echo "unexpected npm args: $*" >&2',
@@ -420,7 +476,13 @@ describe('release publish script', () => {
 
       const result = await execFileP('node', ['scripts/publish.mjs', '0.9.0', '--skip-tests'], {
         cwd: tmp,
-        env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}` },
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
+          PUBLISH_TEST_LOG: operationLog,
+          GUILDHALL_RUNTIME_IMAGE_DIGEST_FIXTURE_FILE: digestFixture,
+        },
+        timeout: 10_000,
       }).then(
         ({ stdout, stderr }) => ({ status: 0, output: stdout + stderr }),
         (error: { code?: number; stdout?: string; stderr?: string }) => ({
@@ -429,12 +491,15 @@ describe('release publish script', () => {
         }),
       )
 
-      expect(result.status).not.toBe(0)
-      expect(result.output).toContain('Guildhall 0.9.0 requires a verified default runtime image digest before release.')
-      expect(result.output).not.toContain('Continuing with the immutable runtime image tag only')
-      expect(result.output).not.toContain('Publishing guildhall@0.9.0')
+      const orderLog = await fs.readFile(operationLog, 'utf8')
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('Publishing runtime image ghcr.io/matthew-dean/guildhall-runtime-debian:0.9.0-trixie-node22-python313-playwright via GitHub Actions')
+      expect(result.output).toContain('Verified runtime image digest for ghcr.io/matthew-dean/guildhall-runtime-debian:0.9.0-trixie-node22-python313-playwright: sha256:feedface')
+      expect(result.output).toContain('Publishing guildhall@0.9.0')
+      expect(orderLog).toContain('gh workflow run runtime-image.yml')
+      expect(orderLog.indexOf('gh run watch')).toBeLessThan(orderLog.indexOf('npm publish'))
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 })

@@ -1,4 +1,5 @@
 name: Publish runtime image
+run-name: Runtime image ${{ inputs.version || github.ref_name }}
 
 on:
   push:
@@ -33,7 +34,7 @@ jobs:
     name: Build and publish runtime image
     runs-on: ubuntu-24.04
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.existing.outputs.digest || steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -68,8 +69,20 @@ jobs:
             type=raw,value=${{ steps.version.outputs.version }}-${{ env.RUNTIME_TAG_SUFFIX }}
             type=raw,value=${{ steps.version.outputs.minor }}-${{ env.RUNTIME_TAG_SUFFIX }}
 
+      - name: Check existing immutable runtime image
+        id: existing
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          digest="$(node scripts/resolve-runtime-image-digest.mjs "${{ steps.version.outputs.version }}" || true)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          if [ -n "$digest" ]; then
+            echo "Runtime image already exists: $digest"
+          fi
+
       - name: Build and push runtime image
         id: build
+        if: steps.existing.outputs.digest == ''
         uses: docker/build-push-action@v6
         with:
           context: .

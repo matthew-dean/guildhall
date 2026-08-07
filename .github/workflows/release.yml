@@ -40,6 +40,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Resolve runtime image digest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ "$version" = "$GITHUB_REF_NAME" ]; then
+            version="$(node -p "require('./package.json').version")"
+          fi
+          minor="$(printf '%s\n' "$version" | awk -F. '{ print $1 "." $2 }')"
+          if [ "$(printf '%s\n' "$minor" | awk -F. '{ print ($1 > 0 || $2 >= 9) ? "yes" : "no" }')" = "no" ]; then
+            echo "Runtime image digest is not required for Guildhall $version."
+            exit 0
+          fi
+          digest="$(node scripts/resolve-runtime-image-digest.mjs "$version" --wait)"
+          echo "GUILDHALL_RUNTIME_IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          echo "Resolved runtime image digest for Guildhall $version: $digest"
+
       - name: Verify release gates
         run: |
           pnpm typecheck

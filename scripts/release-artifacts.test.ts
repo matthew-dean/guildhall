@@ -141,7 +141,19 @@ describe('release artifact contract', () => {
     expect(workflow).toContain('runtime/Containerfile')
     expect(workflow).toContain('docker/metadata-action')
     expect(workflow).toContain('docker/build-push-action')
+    expect(workflow).toContain('Check existing immutable runtime image')
+    expect(workflow).toContain('scripts/resolve-runtime-image-digest.mjs')
+    expect(workflow).toContain("if: steps.existing.outputs.digest == ''")
     expect(workflow).toContain('outputs.digest')
+  })
+
+  it('resolves the runtime image digest before building release artifacts', () => {
+    const workflow = read('.github/workflows/release.yml')
+
+    expect(workflow).toContain('Resolve runtime image digest')
+    expect(workflow).toContain('node scripts/resolve-runtime-image-digest.mjs "$version" --wait')
+    expect(workflow).toContain('GUILDHALL_RUNTIME_IMAGE_DIGEST=$digest')
+    expect(workflow.indexOf('Resolve runtime image digest')).toBeLessThan(workflow.indexOf('Build macOS package'))
   })
 
   it('keeps package install lazy by not pulling runtime images from installer paths', () => {

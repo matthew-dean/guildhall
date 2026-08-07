@@ -14,18 +14,20 @@
  *   2. Refuse to run on a dirty worktree or when not on `main` (override with
  *      `--allow-dirty` / `--allow-branch`).
  *   3. Bump the root `package.json` to the new version.
- *   4. For real publishes, update public docs pointers and cut the one-time
+ *   4. For real publishes, publish or verify the default runtime image and
+ *      record its digest in the release manifest.
+ *   5. For real publishes, update public docs pointers and cut the one-time
  *      docs/versions/<version> snapshot from canonical docs. Dry-runs skip this.
- *   5. Typecheck + docs build + model-independence + tests + dep-cruise as
+ *   6. Typecheck + docs build + model-independence + tests + dep-cruise as
  *      the pre-publish gate.
- *   6. Rebuild `dist/` fresh.
- *   7. Build the macOS packaged artifact used by the curl installer.
- *   8. Verify package contents exclude raw docs/ but keep generated help.
- *   9. Commit the release snapshot and tag `v<version>`.
- *   10. Push the branch and tag so the GitHub release artifact workflow runs.
- *   11. Wait for the GitHub Release tarball and checksum.
- *   12. `npm publish` with `--access=public`.
- *   13. Move `package.json` to the next development version and commit/push that bump.
+ *   7. Rebuild `dist/` fresh.
+ *   8. Build the macOS packaged artifact used by the curl installer.
+ *   9. Verify package contents exclude raw docs/ but keep generated help.
+ *   10. Commit the release snapshot and tag `v<version>`.
+ *   11. Push the branch and tag so the GitHub release artifact workflow runs.
+ *   12. Wait for the GitHub Release tarball and checksum.
+ *   13. `npm publish` with `--access=public`.
+ *   14. Move `package.json` to the next development version and commit/push that bump.
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
@@ -40,7 +42,8 @@
  *                         release commit/tag. Defaults to the next patch after
  *                         the published release version.
  *   --remote <name>       Git remote to push release refs (defaults to origin).
- *   --no-push             Stage the release commit/tag locally and skip npm publish.
+ *   --no-push             Stage the release commit/tag locally and skip runtime,
+ *                         GitHub artifact, and npm publishing.
  *
  * Usage:
  *   node scripts/publish.mjs 0.4.0
@@ -54,11 +57,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  RUNTIME_IMAGE_REPOSITORY,
-  RUNTIME_IMAGE_TAG_SUFFIX,
   assertRuntimeReleaseReady,
   buildReleaseManifest,
 } from './release-manifest.mjs'
+import {
+  resolveRuntimeImageDigestFromRegistry,
+  runtimeImageRef,
+} from './resolve-runtime-image-digest.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST = join(ROOT, 'package.json')
@@ -143,12 +148,13 @@ if (manifest.version !== nextVersion) {
   log(`package.json already at ${nextVersion}; continuing without a manifest bump.`)
 }
 
+const runtimeImageDigest = await resolveRuntimeImageDigest(nextVersion, releaseBranch)
 const releaseManifest = buildReleaseManifest({
   guildhallVersion: nextVersion,
-  runtimeImageDigest: flags.dryRun ? null : resolveRuntimeImageDigest(nextVersion),
+  runtimeImageDigest,
 })
 try {
-  assertRuntimeReleaseReady(releaseManifest, { dryRun: flags.dryRun })
+  assertRuntimeReleaseReady(releaseManifest, { dryRun: flags.dryRun || !flags.pushRemote })
 } catch (error) {
   die(error instanceof Error ? error.message : String(error))
 }
@@ -305,7 +311,8 @@ Flags:
   --next-version <v> Version to restore into package.json after a real release
                      (default: next patch after the published release).
   --remote <name>    Git remote to push release refs (default: origin).
-  --no-push          Stage the release commit/tag locally and skip npm publish.
+  --no-push          Stage the release commit/tag locally and skip runtime,
+                     GitHub artifact, and npm publishing.
   -h, --help         Show this help.
 `)
 }
@@ -455,28 +462,43 @@ function runCaptureOptional(cmd, argv) {
   return result
 }
 
-function resolveRuntimeImageDigest(version) {
+async function resolveRuntimeImageDigest(version, branch) {
   if (!runtimeDigestRequired(version)) return null
+  if (flags.dryRun) {
+    warn(`Dry-run: skipping runtime image publish for ${runtimeImageRef(version)}.`)
+    return null
+  }
+  if (!flags.pushRemote) {
+    warn(`--no-push: skipping runtime image publish for ${runtimeImageRef(version)}.`)
+    return null
+  }
   if (process.env.GUILDHALL_RUNTIME_IMAGE_DIGEST) {
+    log(`Using runtime image digest from GUILDHALL_RUNTIME_IMAGE_DIGEST for ${runtimeImageRef(version)}.`)
     return process.env.GUILDHALL_RUNTIME_IMAGE_DIGEST
   }
 
-  const image = `${RUNTIME_IMAGE_REPOSITORY}:${version}-${RUNTIME_IMAGE_TAG_SUFFIX}`
-  const result = spawnSync('docker', [
-    'buildx',
-    'imagetools',
-    'inspect',
-    image,
-    '--format',
-    '{{json .Manifest.Digest}}',
-  ], {
-    cwd: ROOT,
-    encoding: 'utf-8',
-    stdio: ['ignore', 'pipe', 'pipe'],
+  let digest = await resolveRuntimeImageDigestFromRegistry({
+    version,
+    log: message => warn(message),
   })
-  if (result.status !== 0) return null
-  const digest = `${result.stdout ?? ''}`.trim().replace(/^"|"$/g, '')
-  return digest.startsWith('sha256:') ? digest : null
+  if (digest) {
+    log(`Found runtime image digest for ${runtimeImageRef(version)}: ${digest}`)
+    process.env.GUILDHALL_RUNTIME_IMAGE_DIGEST = digest
+    return digest
+  }
+
+  publishRuntimeImage(version, branch)
+  digest = await resolveRuntimeImageDigestFromRegistry({
+    version,
+    wait: true,
+    log: message => warn(message),
+  })
+  if (!digest) {
+    die(`Runtime image workflow completed, but ${runtimeImageRef(version)} was not readable from GHCR.`)
+  }
+  log(`Verified runtime image digest for ${runtimeImageRef(version)}: ${digest}`)
+  process.env.GUILDHALL_RUNTIME_IMAGE_DIGEST = digest
+  return digest
 }
 
 function runtimeDigestRequired(version) {
@@ -485,6 +507,42 @@ function runtimeDigestRequired(version) {
   const major = Number(match[1])
   const minor = Number(match[2])
   return major > 0 || minor >= 9
+}
+
+function publishRuntimeImage(version, branch) {
+  log(`Publishing runtime image ${runtimeImageRef(version)} via GitHub Actions...`)
+  const startedAt = Date.now()
+  run('gh', ['workflow', 'run', 'runtime-image.yml', '--ref', branch, '-f', `version=${version}`])
+  const runId = waitForRuntimeImageRun(version, branch, startedAt)
+  log(`Waiting for runtime image workflow run ${runId}...`)
+  run('gh', ['run', 'watch', runId, '--exit-status'])
+}
+
+function waitForRuntimeImageRun(version, branch, startedAt) {
+  const deadline = Date.now() + Number(process.env.GUILDHALL_RUNTIME_WORKFLOW_DISCOVERY_TIMEOUT_MS ?? 2 * 60 * 1000)
+  while (Date.now() <= deadline) {
+    const runs = JSON.parse(runCapture('gh', [
+      'run',
+      'list',
+      '--workflow',
+      'runtime-image.yml',
+      '--branch',
+      branch,
+      '--event',
+      'workflow_dispatch',
+      '--json',
+      'databaseId,createdAt,displayTitle,url',
+      '--limit',
+      '20',
+    ]))
+    const candidate = runs
+      .filter(run => Date.parse(run.createdAt) >= startedAt - 10_000)
+      .find(run => typeof run.displayTitle === 'string' && run.displayTitle.includes(version))
+      ?? runs.find(run => Date.parse(run.createdAt) >= startedAt - 10_000)
+    if (candidate?.databaseId) return String(candidate.databaseId)
+    sleep(5_000)
+  }
+  die(`Could not find the runtime image workflow run for ${version} on ${branch}.`)
 }
 
 function hasStagedDiff(paths) {
