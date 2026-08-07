@@ -54439,17 +54439,19 @@ Repair:
 ### Contract Touch Decision
 
 - Work id: `0.13.0/ci-dependency-boundary-repair`.
-- Touched contracts: task queue update tool import boundary and shared current
-      proof helper ownership. Considered but not touched: task queue mutation
-      payload shape, acceptance criteria schema, release readiness semantics,
-      proof path schema, and gate result evidence matching.
+- Touched contracts: task queue update tool import boundary, shared current
+      proof helper ownership, project-summary read compatibility, and accepted
+      plan release-membership repair. Considered but not touched: task queue
+      mutation payload shape, acceptance criteria schema, persisted release
+      membership row schema, release readiness semantics, proof path schema,
+      and gate result evidence matching.
 - Required follow-up: none for runtime behavior; keep any future tool-facing
       runtime helper on an explicit `@guildhall/runtime/*` subpath or move
       reusable proof predicates into `@guildhall/shared`.
 - Proof required/provided: `pnpm lint:deps` has zero errors after replacing the
       cross-module relative import and breaking the persistence/session barrel
-      cycle; `pnpm typecheck`, targeted proof-health and persistence tests, and
-      `pnpm build` pass locally.
+      cycle; `pnpm typecheck`, targeted proof-health and persistence tests,
+      the full migration suite, and `pnpm build` pass locally.
 - Waivers: dependency-cruiser orphan warnings are existing advisory warnings;
       no rule was weakened or suppressed.
 - Owner-review items: confirm CI reruns the same Verify workflow on the pushed
@@ -54462,15 +54464,21 @@ Repair:
 
 - Persisted schema touched: none.
 - Scope: TypeScript path aliases, Vitest aliases, proof predicate ownership,
-      and import paths only.
+      import paths, legacy summary read tolerance, and accepted-plan
+      membership materialization logic only.
 - Change class: no-op for stored project, task, release, evidence, session,
       or persistence records.
-- Existing data impact: none; readers and writers keep the same serialized
-      payloads and proof decisions.
+- Existing data impact: existing project summaries that lack `releaseSummary`
+      no longer crash the promoted read boundary during migration inspection.
+      Existing partially materialized accepted plans may fill missing same-plan
+      release membership, while contradictory canonical membership remains
+      unchanged.
 - Migration id: not required.
 - Compatibility reader: unchanged.
 - Fixtures/tests: proof-health and file-backed persistence tests cover the
-      moved predicate and leaf import resolution; build verifies bundled
-      runtime resolution.
+      moved predicate and leaf import resolution; the migration suite covers
+      missing legacy `releaseSummary` rows, partial accepted-plan membership,
+      and contradictory canonical membership; build verifies bundled runtime
+      resolution.
 - Rollback/revert: remove the new aliases and restore prior imports; no data
       migration or cleanup is needed.

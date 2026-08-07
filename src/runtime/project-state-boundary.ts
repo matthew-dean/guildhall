@@ -101,7 +101,14 @@ function normalizeSelectedReleaseRuntimeSummary(
   scope?: ProjectScope | null,
 ): ProjectSummaryProjection {
   const runtimeSummary = summary as ProjectSummaryProjection & { startReadiness?: Record<string, unknown> | null }
-  const releaseId = summary.releaseSummary.release?.id
+  const releaseSummary = summary.releaseSummary && typeof summary.releaseSummary === 'object' && !Array.isArray(summary.releaseSummary)
+    ? summary.releaseSummary
+    : null
+  const releaseCounts = releaseSummary?.counts && typeof releaseSummary.counts === 'object' && !Array.isArray(releaseSummary.counts)
+    ? releaseSummary.counts
+    : null
+  if (!releaseSummary || !releaseCounts) return summary
+  const releaseId = releaseSummary.release?.id
   let scopeDeferredNodeIds: readonly string[] | null = null
   if (scope && releaseId && scope.id === releaseId) {
     const deferredNodeIds = (scope as unknown as Record<string, unknown>).deferredNodeIds
@@ -124,12 +131,12 @@ function normalizeSelectedReleaseRuntimeSummary(
   if (!releaseId) return summary
   if (!deferredNodeIds) return summary
   const deferred = deferredNodeIds.length
-  const releaseSummary = summary.releaseSummary.counts.deferred === deferred
-    ? summary.releaseSummary
+  const normalizedReleaseSummary = releaseCounts.deferred === deferred
+    ? releaseSummary
     : {
-        ...summary.releaseSummary,
+        ...releaseSummary,
         counts: {
-          ...summary.releaseSummary.counts,
+          ...releaseCounts,
           deferred,
         },
       }
@@ -152,7 +159,7 @@ function normalizeSelectedReleaseRuntimeSummary(
     ? normalizeSelectedReleaseSpineCounters(spineRecord, releaseId, deferred, deferredNodeIds)
     : summary.orientationSpine
   if (
-    releaseSummary === summary.releaseSummary &&
+    normalizedReleaseSummary === summary.releaseSummary &&
     normalizedScope === summary.scope &&
     startReadiness === runtimeSummary.startReadiness &&
     orientationSpine === summary.orientationSpine
@@ -161,7 +168,7 @@ function normalizeSelectedReleaseRuntimeSummary(
   }
   return {
     ...summary,
-    releaseSummary,
+    releaseSummary: normalizedReleaseSummary,
     scope: normalizedScope,
     ...(startReadiness ? { startReadiness } : {}),
     orientationSpine: orientationSpine as unknown as ProjectSummaryProjection['orientationSpine'],
