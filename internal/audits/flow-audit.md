@@ -54441,17 +54441,20 @@ Repair:
 - Work id: `0.13.0/ci-dependency-boundary-repair`.
 - Touched contracts: task queue update tool import boundary, shared current
       proof helper ownership, project-summary read compatibility, and accepted
-      plan release-membership repair. Considered but not touched: task queue
-      mutation payload shape, acceptance criteria schema, persisted release
-      membership row schema, release readiness semantics, proof path schema,
-      and gate result evidence matching.
+      plan release-membership repair. The follow-up UI sanity repair also
+      touched compact Overview response summary ownership and non-repository
+      Git-story handling. Considered but not touched: task queue mutation
+      payload shape, acceptance criteria schema, persisted release membership
+      row schema, release readiness semantics, proof path schema, and gate
+      result evidence matching.
 - Required follow-up: none for runtime behavior; keep any future tool-facing
       runtime helper on an explicit `@guildhall/runtime/*` subpath or move
       reusable proof predicates into `@guildhall/shared`.
 - Proof required/provided: `pnpm lint:deps` has zero errors after replacing the
       cross-module relative import and breaking the persistence/session barrel
       cycle; `pnpm typecheck`, targeted proof-health and persistence tests,
-      the full migration suite, and `pnpm build` pass locally.
+      the full migration suite, `pnpm build`, and full rendered UI
+      (`pnpm test:ui`, 46/46) pass locally.
 - Waivers: dependency-cruiser orphan warnings are existing advisory warnings;
       no rule was weakened or suppressed.
 - Owner-review items: confirm CI reruns the same Verify workflow on the pushed
@@ -54472,13 +54475,16 @@ Repair:
       no longer crash the promoted read boundary during migration inspection.
       Existing partially materialized accepted plans may fill missing same-plan
       release membership, while contradictory canonical membership remains
-      unchanged.
+      unchanged. Standalone registered fixture/projects without their own
+      `.git` marker no longer inherit a parent repository's dirty state as a
+      release blocker.
 - Migration id: not required.
 - Compatibility reader: unchanged.
 - Fixtures/tests: proof-health and file-backed persistence tests cover the
       moved predicate and leaf import resolution; the migration suite covers
       missing legacy `releaseSummary` rows, partial accepted-plan membership,
-      and contradictory canonical membership; build verifies bundled runtime
-      resolution.
+      and contradictory canonical membership; rendered UI covers Overview,
+      Map, Release, Work, Thread, and compact route agreement; build verifies
+      bundled runtime resolution.
 - Rollback/revert: remove the new aliases and restore prior imports; no data
       migration or cleanup is needed.

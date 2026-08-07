@@ -4485,6 +4485,7 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
   const workspaceProjects = workspaceConfig.kind === 'workspace'
     ? resolveWorkspaceProjectPathsOrDiscover(projectPath, workspaceConfig)
     : discoverChildGitProjects(projectPath)
+  const projectGitMarker = join(projectPath, '.git')
   const rootSnapshots = workspaceProjects.length > 0
     ? await Promise.all(workspaceProjects.map(child =>
         inspectGitStory(driver, {
@@ -4495,6 +4496,17 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
           inspectPr: false,
         }),
       ))
+    : !existsSync(projectGitMarker)
+      ? [
+          GitStorySnapshot.parse({
+            state: 'no_repository',
+            repoRoot: projectPath,
+            inspectedPath: projectPath,
+            reason: 'This workspace scope is not itself a Git repository; child repositories are inspected separately.',
+            nextAction: 'No repository follow-up applies to this workspace scope.',
+            inspectedAt: new Date().toISOString(),
+          }),
+        ]
     : [
         await inspectGitStory(driver, {
           repoRoot: projectPath,
@@ -7619,7 +7631,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       : input.surface === 'work'
         ? compactOrientationSpineForWorkSurface(baseOrientationSpine as Record<string, unknown>)
         : compactOrientationSpineForMapSurface(baseOrientationSpine as Record<string, unknown>)
-    const orientationSpine = storedSpine && input.surface !== 'map'
+    let orientationSpine = storedSpine && input.surface !== 'map'
       ? {
           ...surfaceOrientationSpine,
           scope: surfaceOrientationSpine.selectedTaskScope,
@@ -7669,6 +7681,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
           availability: overviewState?.availability ?? surfaceState?.availability ?? undefined,
         })
       : summary.actionModel
+    if (
+      input.surface === 'overview' &&
+      responseStartReadiness?.canStart === false &&
+      typeof responseStartReadiness.message === 'string' &&
+      responseStartReadiness.message.trim().length > 0
+    ) {
+      const orientationSummary = (orientationSpine as { summary?: unknown }).summary
+      orientationSpine = {
+        ...orientationSpine,
+        summary: {
+          ...(orientationSummary && typeof orientationSummary === 'object' && !Array.isArray(orientationSummary)
+            ? orientationSummary as Record<string, unknown>
+            : {}),
+          nextAction: responseStartReadiness.message,
+        },
+      }
+    }
     const totalEffectiveCount = responseInventory?.total ?? scopedResponseTasks.length
     const hasMore = responseInventory?.hasMore ?? (responseInventoryLimit !== null && inventoryEnd < totalEffectiveCount)
     return {
@@ -8008,7 +8037,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         sourceSpine: reconciledOrientationSpine,
       })
       const orientationSpine = overviewSurface
-        ? compactOrientationSpineForOverviewSurface(reconciledOrientationSpine as unknown as Record<string, unknown>)
+        ? {
+            ...compactOrientationSpineForOverviewSurface(reconciledOrientationSpine as unknown as Record<string, unknown>),
+            summary: currentOrientationPreview.summary,
+          }
         : {
             ...reconciledOrientationSpine,
             summary: currentOrientationPreview.summary,
@@ -8050,7 +8082,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 })
               : projectedSummary?.actionModel ?? currentState.summary?.actionModel ?? null
         : (() => {
-            const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null
+            const orientationSpineRecord = orientationSpine as unknown as { selectedTaskScope?: unknown; scope?: unknown }
+            const actionScope = orientationSpineRecord.selectedTaskScope ?? orientationSpineRecord.scope ?? null
             const actionTasksById = new Map((orientationTasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
             const scopedActionTaskIds = actionScope
               ? new Set(
