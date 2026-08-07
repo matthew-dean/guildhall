@@ -12,6 +12,13 @@ async function runGit(cwd: string, args: string[]): Promise<void> {
   await execFileP('git', args, { cwd })
 }
 
+async function addBareOrigin(cwd: string): Promise<string> {
+  const remote = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-origin-'))
+  await runGit(remote, ['init', '--bare'])
+  await runGit(cwd, ['remote', 'add', 'origin', remote])
+  return remote
+}
+
 async function writeExecutable(file: string, source: string): Promise<void> {
   await fs.writeFile(file, source)
   await fs.chmod(file, 0o755)
@@ -82,7 +89,7 @@ describe('release publish script', () => {
       await runGit(tmp, ['add', '.'])
       await runGit(tmp, ['commit', '--no-verify', '-m', 'init'])
 
-      const result = await execFileP('node', ['scripts/publish.mjs', '0.5.1'], {
+      const result = await execFileP('node', ['scripts/publish.mjs', '0.5.1', '--no-push'], {
         cwd: tmp,
         env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}` },
       }).then(
@@ -203,8 +210,9 @@ describe('release publish script', () => {
       await runGit(tmp, ['config', 'user.email', 'guildhall-test@example.com'])
       await runGit(tmp, ['add', '.'])
       await runGit(tmp, ['commit', '--no-verify', '-m', 'init'])
+      const remote = await addBareOrigin(tmp)
 
-      const result = await execFileP('node', ['scripts/publish.mjs', '0.5.0', '--skip-tests'], {
+      const result = await execFileP('node', ['scripts/publish.mjs', '--remote', 'origin', '0.5.0', '--skip-tests'], {
         cwd: tmp,
         env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}` },
       }).then(
@@ -217,14 +225,19 @@ describe('release publish script', () => {
 
       const nextManifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'))
       const releaseTag = await execFileP('git', ['tag', '--list', 'v0.5.0'], { cwd: tmp })
+      const remoteTag = await execFileP('git', ['ls-remote', '--tags', 'origin', 'refs/tags/v0.5.0'], { cwd: tmp })
+      const remoteHead = await execFileP('git', ['rev-parse', 'refs/heads/main'], { cwd: remote })
       const headMessage = await gitHeadMessage(tmp)
 
       expect(result.status).toBe(0)
       expect(result.output).toContain('Published version: 0.4.0')
       expect(result.output).toContain('Target version:    0.5.0')
       expect(result.output).toContain('Next dev version: 0.5.1')
+      expect(result.output).toContain('Pushed main and v0.5.0 to origin.')
       expect(nextManifest.version).toBe('0.5.1')
       expect(releaseTag.stdout.trim()).toBe('v0.5.0')
+      expect(remoteTag.stdout.trim()).toMatch(/refs\/tags\/v0\.5\.0$/)
+      expect(remoteHead.stdout.trim()).toBeTruthy()
       expect(headMessage).toBe('chore: start 0.5.1')
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
@@ -320,6 +333,7 @@ describe('release publish script', () => {
       await runGit(tmp, ['config', 'user.email', 'guildhall-test@example.com'])
       await runGit(tmp, ['add', '.'])
       await runGit(tmp, ['commit', '--no-verify', '-m', 'init'])
+      await addBareOrigin(tmp)
 
       const result = await execFileP('node', ['scripts/publish.mjs', '0.9.0', '--skip-tests'], {
         cwd: tmp,
@@ -335,6 +349,7 @@ describe('release publish script', () => {
       expect(result.status).toBe(0)
       expect(result.output).toContain('Guildhall 0.9.0 requires a verified default runtime image digest before release.')
       expect(result.output).toContain('Continuing with the immutable runtime image tag only')
+      expect(result.output).toContain('Pushed main and v0.9.0 to origin.')
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
     }

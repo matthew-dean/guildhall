@@ -24,6 +24,7 @@
  *   9. `npm publish` with `--access=public`.
  *   10. Commit the release snapshot and tag `v<version>`.
  *   11. Move `package.json` to the next development version and commit that bump.
+ *   12. Push the branch and tag so the GitHub release artifact workflow runs.
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
@@ -37,6 +38,8 @@
  *   --next-version <v>    Version to write back into package.json after a real
  *                         release commit/tag. Defaults to the next patch after
  *                         the published release version.
+ *   --remote <name>       Git remote to push after publish (defaults to origin).
+ *   --no-push             Leave the release commit and tag local.
  *
  * Usage:
  *   node scripts/publish.mjs 0.4.0
@@ -67,6 +70,7 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
   process.exit(args.includes('--help') || args.includes('-h') ? 0 : 1)
 }
 
+const positionalArgs = collectPositionalArgs(args)
 const flags = {
   dryRun: args.includes('--dry-run'),
   skipTests: args.includes('--skip-tests'),
@@ -74,6 +78,8 @@ const flags = {
   allowBranch: args.includes('--allow-branch'),
   tag: takeFlagValue('--tag') ?? 'latest',
   nextVersion: takeFlagValue('--next-version') ?? null,
+  remote: takeFlagValue('--remote') ?? 'origin',
+  pushRemote: !args.includes('--no-push'),
 }
 const originalManifestText = readFileSync(MANIFEST, 'utf-8')
 let restoreManifestOnExit = false
@@ -88,8 +94,9 @@ process.on('exit', () => {
   if (restoreManifestOnExit) writeFileSync(MANIFEST, originalManifestText)
   if (releaseArtifactRollback.active) restoreReleaseArtifacts()
 })
-const versionArg = args.find((a) => !a.startsWith('--'))
+const versionArg = positionalArgs[0]
 if (!versionArg) die('Missing version argument. Pass a semver or `patch`/`minor`/`major`.')
+if (positionalArgs.length > 1) die(`Unexpected positional arguments: ${positionalArgs.slice(1).join(' ')}`)
 
 // ---------------------------------------------------------------------------
 // 1. Resolve target version
@@ -114,7 +121,7 @@ if (publishedVersion === nextVersion && !flags.dryRun) {
 // 2. Git preflight
 // ---------------------------------------------------------------------------
 
-preflightGit()
+const releaseBranch = preflightGit()
 
 // ---------------------------------------------------------------------------
 // 3. Bump the manifest
@@ -255,7 +262,12 @@ if (postReleaseVersion) {
     warn(`package.json already at ${postReleaseVersion}; skipping post-release bump commit.`)
   }
 }
-log(`  Push when ready:  git push origin main --follow-tags`)
+if (flags.pushRemote) {
+  pushReleaseRefs(releaseBranch, nextVersion)
+} else {
+  warn(`--no-push: release commit and v${nextVersion} tag are local only.`)
+  log(`  Push when ready: git push ${flags.remote} HEAD:${releaseBranch} refs/tags/v${nextVersion}`)
+}
 log(`  Pushing v${nextVersion} triggers the GitHub release workflow for guildhall-macos.tar.gz.`)
 
 // ---------------------------------------------------------------------------
@@ -277,6 +289,8 @@ Flags:
   --tag <dist-tag>   npm dist-tag (default: latest; use 'next' for pre-releases).
   --next-version <v> Version to restore into package.json after a real release
                      (default: next patch after the published release).
+  --remote <name>    Git remote to push after publish (default: origin).
+  --no-push          Leave the release commit and tag local.
   -h, --help         Show this help.
 `)
 }
@@ -287,6 +301,21 @@ function takeFlagValue(flag) {
   const v = args[i + 1]
   if (!v || v.startsWith('--')) die(`Flag ${flag} requires a value.`)
   return v
+}
+
+function collectPositionalArgs(argv) {
+  const valueFlags = new Set(['--tag', '--next-version', '--remote'])
+  const positional = []
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]
+    if (valueFlags.has(arg)) {
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--')) continue
+    positional.push(arg)
+  }
+  return positional
 }
 
 function log(msg) {
@@ -551,4 +580,49 @@ function preflightGit() {
   if (status && !flags.allowDirty) {
     die('Working tree is dirty. Commit or stash first, or pass --allow-dirty.')
   }
+
+  if (!flags.dryRun && flags.pushRemote) {
+    assertPushRemoteReady(branch, nextVersion)
+  }
+
+  return branch
+}
+
+function assertPushRemoteReady(branch, version) {
+  const remoteUrl = runCaptureOptional('git', ['remote', 'get-url', flags.remote])
+  if (remoteUrl.status !== 0 || !`${remoteUrl.stdout ?? ''}`.trim()) {
+    die(`Remote "${flags.remote}" is not configured. Add it, pass --remote <name>, or use --no-push for a staged release.`)
+  }
+  if (remoteRefExists(flags.remote, `refs/tags/v${version}`)) {
+    die(`Remote tag v${version} already exists on ${flags.remote}; refusing to publish a release that cannot create a fresh GitHub artifact.`)
+  }
+  const remoteBranch = remoteRefExists(flags.remote, `refs/heads/${branch}`)
+  if (!remoteBranch) {
+    warn(`Remote branch ${flags.remote}/${branch} does not exist yet; the release push will create it.`)
+  }
+}
+
+function remoteRefExists(remote, ref) {
+  const result = spawnSync('git', ['ls-remote', '--exit-code', remote, ref], {
+    cwd: ROOT,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (result.status === 0) return true
+  if (result.status === 2) return false
+  die(`Command failed: git ls-remote --exit-code ${remote} ${ref}\n${result.stderr ?? ''}`.trim())
+}
+
+function pushReleaseRefs(branch, version) {
+  const tagRef = `refs/tags/v${version}`
+  log(`Pushing ${branch} and v${version} to ${flags.remote}...`)
+  run('git', ['push', flags.remote, `HEAD:${branch}`, tagRef])
+
+  const localTag = runCapture('git', ['rev-parse', tagRef]).trim()
+  const remoteTagLine = runCapture('git', ['ls-remote', '--tags', flags.remote, tagRef]).trim()
+  const remoteTag = remoteTagLine.split(/\s+/)[0]
+  if (remoteTag !== localTag) {
+    die(`Remote tag verification failed for v${version}: expected ${localTag}, got ${remoteTag || '(missing)'}.`)
+  }
+  log(`Pushed ${branch} and v${version} to ${flags.remote}.`)
 }

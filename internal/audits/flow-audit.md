@@ -5,6 +5,30 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+## 2026-08-07 Release Artifact Automation and 0.13 Path
+
+- Work id: `0.13-release-artifact-automation`.
+- User job: after a release is accepted and published, a user installing from
+  the documented macOS path gets the matching GitHub Release artifact and
+  checksum without relying on a forgotten manual tag push.
+- Finding: the 0.12.0 npm package and docs shipped, but the remote tag/GitHub
+  Release artifact path did not line up with the local release tag. The
+  existing publisher stopped after local commit/tag creation and printed a
+  manual push reminder, which made the release artifact an easy human-memory
+  step to miss.
+- Correction: `scripts/publish.mjs` now pushes the release branch and
+  `v<version>` tag to the configured remote by default after the release and
+  post-release commits, then verifies the remote tag. `--no-push` remains for
+  intentionally staged releases.
+- [x] Publisher tests cover the default remote branch/tag push and the
+  rollback/dry-run paths that intentionally avoid remote publishing.
+- [x] The 0.13 acceptance-gap audit and active shipping-proof plan name the
+  remaining 0.13 path: repair the selected-release contradiction, rerun the
+  installed acceptance sequence, attach fresh route/API/CLI proof, then publish
+  through the automated artifact path.
+- [ ] Backfill the existing 0.12.0 remote tag/GitHub Release artifact after
+  confirming the local `v0.12.0` tag is the accepted release commit.
+
 ## 2026-07-23 Explicit Review-Gate and Agent-Disagreement Boundary
 
 ### Release Snapshot Finding
