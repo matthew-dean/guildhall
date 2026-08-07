@@ -2470,6 +2470,53 @@ describe('applyProjectMigrations', () => {
       projectRoot,
       only: ['0.13.76/selected-release-node-membership-summary'],
     })).applied).toEqual([])
+
+    const readBoundaryDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const readBoundaryRow = readBoundaryDatabase.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as { payload_json: string }
+    const readBoundary = JSON.parse(readBoundaryRow.payload_json) as Record<string, any>
+    readBoundary.releaseSummary = {
+      ...readBoundary.releaseSummary,
+      counts: {
+        ...readBoundary.releaseSummary.counts,
+        total: 3,
+        done: 2,
+        unfinished: 1,
+      },
+    }
+    readBoundary.scope = {
+      ...readBoundary.scope,
+      included: 3,
+    }
+    readBoundaryDatabase.prepare('UPDATE project_summary SET payload_json = ? WHERE id = 1').run(JSON.stringify(readBoundary))
+    readBoundaryDatabase.close()
+
+    const readBoundaryResult = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.99/release-membership-read-boundary'],
+    })
+    expect(readBoundaryResult.failed).toEqual([])
+    expect(readBoundaryResult.applied.map(item => item.id)).toEqual(['0.13.99/release-membership-read-boundary'])
+    expect(readProjectStateDatabaseSummary<Record<string, any>>(tasksPath)).toMatchObject({
+      freshness: 'current',
+      payload: {
+        releaseSummary: {
+          counts: {
+            total: 2,
+            done: 2,
+            unfinished: 0,
+            deferred: 1,
+          },
+        },
+        scope: {
+          included: 2,
+          deferred: 1,
+        },
+      },
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.99/release-membership-read-boundary'],
+    })).applied).toEqual([])
   })
 
   it('aligns named release counts to selected membership when child execution rows are present', async () => {

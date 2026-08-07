@@ -248,6 +248,7 @@ const NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID = '0.13.73/named-release-member-co
 const INCLUDED_RELEASE_DISPOSITION_COUNT_MIGRATION_ID = '0.13.74/included-release-disposition-counts'
 const CANONICAL_RELEASE_MEMBERSHIP_SUMMARY_MIGRATION_ID = '0.13.75/canonical-release-membership-summary'
 const SELECTED_RELEASE_NODE_MEMBERSHIP_SUMMARY_MIGRATION_ID = '0.13.76/selected-release-node-membership-summary'
+const RELEASE_MEMBERSHIP_READ_BOUNDARY_MIGRATION_ID = '0.13.99/release-membership-read-boundary'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
 const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
@@ -5356,6 +5357,41 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
         summary: before.needed
           ? 'Rebuilt the release summary from selected release membership nodes and refreshed the shared decision packet.'
           : 'Release summary already matched selected release membership nodes.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: RELEASE_MEMBERSHIP_READ_BOUNDARY_MIGRATION_ID,
+    title: 'Rebuild release membership read boundary',
+    introducedIn: '0.13.99',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds compact release scope and readiness after the selected release read boundary stopped treating execution/proof rows as release membership.',
+    async detect(projectRoot) {
+      const inspection = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      return {
+        needed: inspection.needed,
+        affectedPaths: inspection.needed
+          ? [projectStateDatabasePath(projectRoot), 'selected release membership read model and shared decision packet']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const before = inspectIndexedReleaseSummaryReprojection(projectRoot)
+      if (before.needed) markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The release membership read boundary could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: before.needed
+          ? 'Rebuilt selected release membership and readiness from canonical membership instead of execution rows.'
+          : 'Selected release membership read boundary already matched canonical membership.',
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },

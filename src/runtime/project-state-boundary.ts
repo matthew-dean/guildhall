@@ -87,11 +87,146 @@ function projectSummaryAtRuntimeVersion(
   summary: ProjectStateDatabaseSummary<ProjectSummaryProjection> | ProjectSummaryProjection,
 ): ProjectSummaryProjection {
   const payload = synchronizeProjectSummaryDecision('payload' in summary ? summary.payload : summary)
+  const normalized = normalizeSelectedReleaseRuntimeSummary(payload)
   return {
-    ...payload,
-    freshness: projectSummaryProjectionIsCurrent(payload as ProjectSummaryProjection)
+    ...normalized,
+    freshness: projectSummaryProjectionIsCurrent(normalized as ProjectSummaryProjection)
       ? summary.freshness
       : 'stale',
+  }
+}
+
+function normalizeSelectedReleaseRuntimeSummary(
+  summary: ProjectSummaryProjection,
+  scope?: ProjectScope | null,
+): ProjectSummaryProjection {
+  const runtimeSummary = summary as ProjectSummaryProjection & { startReadiness?: Record<string, unknown> | null }
+  const releaseId = summary.releaseSummary.release?.id
+  let scopeDeferredNodeIds: readonly string[] | null = null
+  if (scope && releaseId && scope.id === releaseId) {
+    const deferredNodeIds = (scope as unknown as Record<string, unknown>).deferredNodeIds
+    if (Array.isArray(deferredNodeIds)) {
+      scopeDeferredNodeIds = deferredNodeIds.filter((value): value is string => typeof value === 'string')
+    }
+  }
+  const spine = summary.orientationSpine as unknown
+  const spineRecord = spine && typeof spine === 'object' && !Array.isArray(spine)
+    ? spine as Record<string, unknown>
+    : null
+  const selectedRelease = spineRecord?.selectedRelease
+  const selectedReleaseRecord = selectedRelease && typeof selectedRelease === 'object' && !Array.isArray(selectedRelease)
+    ? selectedRelease as Record<string, unknown>
+    : null
+  const spineDeferredNodeIds = selectedReleaseRecord && selectedReleaseRecord.id === releaseId && Array.isArray(selectedReleaseRecord.deferredNodeIds)
+    ? selectedReleaseRecord.deferredNodeIds.filter((value): value is string => typeof value === 'string')
+    : null
+  const deferredNodeIds = scopeDeferredNodeIds ?? spineDeferredNodeIds
+  if (!releaseId) return summary
+  if (!deferredNodeIds) return summary
+  const deferred = deferredNodeIds.length
+  const releaseSummary = summary.releaseSummary.counts.deferred === deferred
+    ? summary.releaseSummary
+    : {
+        ...summary.releaseSummary,
+        counts: {
+          ...summary.releaseSummary.counts,
+          deferred,
+        },
+      }
+  const normalizedScope = summary.scope?.id === releaseId && summary.scope.deferred !== deferred
+    ? { ...summary.scope, deferred }
+    : summary.scope
+  const executionScope = runtimeSummary.startReadiness?.executionScope
+  const startReadiness = executionScope && typeof executionScope === 'object' && !Array.isArray(executionScope) &&
+    (executionScope as Record<string, unknown>).id === releaseId &&
+    (executionScope as Record<string, unknown>).deferredTaskCount !== deferred
+    ? {
+        ...runtimeSummary.startReadiness,
+        executionScope: {
+          ...(executionScope as Record<string, unknown>),
+          deferredTaskCount: deferred,
+        },
+      }
+    : runtimeSummary.startReadiness
+  const orientationSpine = spineRecord
+    ? normalizeSelectedReleaseSpineCounters(spineRecord, releaseId, deferred, deferredNodeIds)
+    : summary.orientationSpine
+  if (
+    releaseSummary === summary.releaseSummary &&
+    normalizedScope === summary.scope &&
+    startReadiness === runtimeSummary.startReadiness &&
+    orientationSpine === summary.orientationSpine
+  ) {
+    return summary
+  }
+  return {
+    ...summary,
+    releaseSummary,
+    scope: normalizedScope,
+    ...(startReadiness ? { startReadiness } : {}),
+    orientationSpine: orientationSpine as unknown as ProjectSummaryProjection['orientationSpine'],
+  }
+}
+
+function normalizeSelectedReleaseSpineCounters(
+  spine: Record<string, unknown>,
+  releaseId: string,
+  deferred: number,
+  deferredNodeIds: readonly string[],
+): Record<string, unknown> {
+  const normalizeScope = (value: unknown): unknown => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+    const record = value as Record<string, unknown>
+    if (record.id !== releaseId) return value
+    const existingDeferred = Array.isArray(record.deferredNodeIds)
+      ? record.deferredNodeIds.filter((item): item is string => typeof item === 'string')
+      : []
+    if (JSON.stringify(existingDeferred) === JSON.stringify(deferredNodeIds)) return value
+    return { ...record, deferredNodeIds: [...deferredNodeIds] }
+  }
+  const selectedRelease = normalizeScope(spine.selectedRelease)
+  const selectedTaskScope = normalizeScope(spine.selectedTaskScope)
+  const scope = normalizeScope(spine.scope)
+  const releases = Array.isArray(spine.releases)
+    ? spine.releases.map(release => normalizeScope(release))
+    : spine.releases
+  const summary = spine.summary && typeof spine.summary === 'object' && !Array.isArray(spine.summary)
+    ? (() => {
+        const record = spine.summary as Record<string, unknown>
+        const progress = record.progress && typeof record.progress === 'object' && !Array.isArray(record.progress)
+          ? { ...(record.progress as Record<string, unknown>), deferred }
+          : record.progress
+        if (
+          record.deferredCount === deferred &&
+          record.deferredWorkCount === deferred &&
+          progress === record.progress
+        ) {
+          return record
+        }
+        return {
+          ...record,
+          deferredCount: deferred,
+          deferredWorkCount: deferred,
+          ...(progress ? { progress } : {}),
+        }
+      })()
+    : spine.summary
+  if (
+    selectedRelease === spine.selectedRelease &&
+    selectedTaskScope === spine.selectedTaskScope &&
+    scope === spine.scope &&
+    releases === spine.releases &&
+    summary === spine.summary
+  ) {
+    return spine
+  }
+  return {
+    ...spine,
+    selectedRelease,
+    selectedTaskScope,
+    scope,
+    releases,
+    summary,
   }
 }
 
@@ -560,44 +695,16 @@ function projectScopeFromSavedState(input: {
   if (!id) return null
 
   if (selectedRelease) {
-    const currentSavedScope = input.summary?.freshness === 'current' &&
-      savedScope?.id === selectedRelease.id
-      ? savedScope
-      : null
-    const currentExecutionRows = input.summary?.freshness === 'current'
-      ? executionScopeRows(input.scopeRows)
-      : []
-    const currentIncludedNodeIds = currentExecutionRows
-      .filter(row => row.scope === 'included')
-      .map(row => taskScopeNodeId(row.taskId))
-    const currentDeferredNodeIds = currentExecutionRows
-      .filter(row => row.scope === 'deferred')
-      .map(row => taskScopeNodeId(row.taskId))
-    const currentSavedScopeRecord = currentSavedScope as unknown as Record<string, unknown> | null
-    const currentSavedNodeIds = Array.isArray(currentSavedScopeRecord?.nodeIds)
-      ? currentSavedScopeRecord.nodeIds.filter((value): value is string => typeof value === 'string')
-      : []
-    const currentSavedDeferredNodeIds = Array.isArray(currentSavedScopeRecord?.deferredNodeIds)
-      ? currentSavedScopeRecord.deferredNodeIds.filter((value): value is string => typeof value === 'string')
-      : []
-    // The current saved scope is the hierarchy-normalized selected release
-    // read model. Fall back to the raw release envelope only when that compact
-    // projection is unavailable or stale.
+    // Release membership is a durable queue relation. Execution scope rows may
+    // expand parent work into runnable child/proof rows, but they must not
+    // rewrite the selected release identity or membership read model.
     return {
       id,
       label: selectedRelease.label,
       kind: selectedRelease.kind as ProjectScope['kind'],
       source: (selectedRelease.source ?? 'inferred') as ProjectScope['source'],
-      nodeIds: currentIncludedNodeIds.length > 0
-        ? currentIncludedNodeIds
-        : currentSavedNodeIds.length > 0
-          ? currentSavedNodeIds
-          : [...(selectedRelease.nodeIds ?? [])],
-      deferredNodeIds: currentDeferredNodeIds.length > 0 || currentIncludedNodeIds.length > 0
-        ? currentDeferredNodeIds
-        : currentSavedDeferredNodeIds.length > 0
-          ? currentSavedDeferredNodeIds
-          : [...(selectedRelease.deferredNodeIds ?? [])],
+      nodeIds: [...(selectedRelease.nodeIds ?? [])],
+      deferredNodeIds: [...(selectedRelease.deferredNodeIds ?? [])],
       ...(selectedRelease.proofStyle ? { proofStyle: selectedRelease.proofStyle } : {}),
     }
   }
@@ -763,13 +870,14 @@ export function readProjectSavedReleaseState(projectRoot: string): ProjectSavedR
   const releases = Array.isArray(queue.releases)
     ? queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
     : []
-  const summary = current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null
+  const rawSummary = current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null
   const scope = projectScopeFromSavedState({
     releases,
     selectedReleaseId: typeof queue.selectedReleaseId === 'string' ? queue.selectedReleaseId : undefined,
-    summary,
+    summary: rawSummary,
     scopeRows: current.scopeRows,
   })
+  const summary = rawSummary ? normalizeSelectedReleaseRuntimeSummary(rawSummary, scope) : null
   return {
     rawQueue: {
       releases,
@@ -891,18 +999,20 @@ export interface ProjectCompactStateReadModel {
 function compactStateFromDatabaseProjection(
   current: NonNullable<ReturnType<typeof readProjectStateDatabaseProjectionState<ProjectSummaryProjection>>>,
 ): ProjectCompactStateReadModel {
-  const summary = current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null
+  const rawSummary = current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null
+  const scope = projectScopeFromSavedState({
+    releases: Array.isArray(current.queue.releases)
+      ? current.queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
+      : [],
+    selectedReleaseId: typeof current.queue.selectedReleaseId === 'string' ? current.queue.selectedReleaseId : undefined,
+    summary: rawSummary,
+    scopeRows: current.scopeRows,
+  })
+  const summary = rawSummary ? normalizeSelectedReleaseRuntimeSummary(rawSummary, scope) : null
   return {
     queue: current.queue as ProjectStateDatabaseQueue,
     inventory: current.inventory,
-    scope: projectScopeFromSavedState({
-      releases: Array.isArray(current.queue.releases)
-        ? current.queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
-        : [],
-      selectedReleaseId: typeof current.queue.selectedReleaseId === 'string' ? current.queue.selectedReleaseId : undefined,
-      summary,
-      scopeRows: current.scopeRows,
-    }),
+    scope,
     repositories: current.repositories,
     selectedTask: current.selectedTask,
     diagnostics: current.diagnostics,
@@ -1038,7 +1148,7 @@ export function readProjectOverviewStateAtBoundary(
   )
   if (!current) return null
   if (!current.queue) return null
-  const summary = current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null
+  const rawSummary = current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null
   // Release selection and membership are normalized queue facts. The saved
   // orientation is a presentation projection and may lag a queue mutation;
   // it must never choose a competing selected scope for Overview.
@@ -1048,15 +1158,17 @@ export function readProjectOverviewStateAtBoundary(
   const selectedReleaseId = typeof current.queue.selectedReleaseId === 'string'
     ? current.queue.selectedReleaseId
     : undefined
+  const scope = projectScopeFromSavedState({
+    releases,
+    ...(selectedReleaseId ? { selectedReleaseId } : {}),
+    summary: rawSummary,
+    scopeRows: current.scopeRows,
+  })
+  const summary = rawSummary ? normalizeSelectedReleaseRuntimeSummary(rawSummary, scope) : null
   return {
     authority: current.authority,
     summary,
-    scope: projectScopeFromSavedState({
-      releases,
-      ...(selectedReleaseId ? { selectedReleaseId } : {}),
-      summary,
-      scopeRows: current.scopeRows,
-    }),
+    scope,
     diagnostics: current.diagnostics,
     availability: current.availability,
     memoryHealth: current.memoryHealth,

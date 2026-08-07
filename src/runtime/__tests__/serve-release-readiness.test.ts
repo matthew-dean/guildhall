@@ -3492,6 +3492,7 @@ describe('GET /api/project/release-readiness', () => {
     const body = await res.json() as any
 
     expect(body.scope.nodeIds).toEqual([
+      'work:task-runner',
       'work:task-runner-split-load-fixture-inputs',
     ])
     expect(body.release.nodeIds).toEqual(body.scope.nodeIds)
@@ -3635,11 +3636,11 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.totals.tasks).toBe(3)
     expect(body.totals.unfinishedCount).toBe(3)
     expect([...body.scope.nodeIds].sort()).toEqual([
+      'work:task-contracts',
       'work:task-contracts-split-model',
       'work:task-contracts-split-world',
       'work:task-contracts-split-space',
     ].sort())
-    expect(body.scope.nodeIds).not.toContain('work:task-contracts')
     expect(body.release.nodeIds).toEqual(body.scope.nodeIds)
     expect(body.diagnostics.blockedByAgent).toEqual([])
     expect(body.releaseBlockers ?? []).toEqual([])
