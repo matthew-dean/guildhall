@@ -54,16 +54,38 @@ help_summary: |
   dropping typed state. Installed `/api/service/projects` now reports all
   initialized projects as `summaryFreshness:current`; only setup-incomplete
   `jess` keeps its expected setup error.
+- [x] Repair the mobile project ticker overflow that failed Overview, Map,
+  Work, and Release browser proof: the selected release label now wraps inside
+  the shared ticker at `390x844`. Installed geometry proof for all four mobile
+  routes reports `clientWidth:390`, `scrollWidth:390`, and
+  `overflowingCount:0`; the acceptance audit now fails `19` of `72` checks.
 - [ ] Resolve the installed acceptance failures before calling 0.13.0 ready:
   the active selected-release lifecycle, unfinished member
   `task-synopsis-expansion-into-story-records`, ten owner-review proof-spec
-  blockers, Narrative Harness package/proof-contract checks, and mobile
-  overflow on Overview, Map, Work, and Release.
+  blockers, and Narrative Harness package/proof-contract checks.
 - [ ] Decide whether `audit:release-acceptance` should keep targeting the
   active `r1` release or be rebaselined to a later accepted release after the
   proof-spec owner review is settled.
 - [ ] Backfill the existing 0.12.0 remote tag/GitHub Release artifact after
   confirming the local `v0.12.0` tag is the accepted release commit.
+
+### Flow Audit Finding
+
+- Work id: `0.13-release-mobile-project-ticker-overflow`.
+- User job: on mobile Overview, Map, Work, and Release, the user can read the
+  selected-release ticker and still tell what is happening now, what is queued,
+  what is blocked, what they can do next, and whether the system is working.
+- Finding: the shared project ticker rendered the selected release label as a
+  non-shrinking actor span. On Narrative Harness mobile routes the label
+  measured `447px` inside a `390px` viewport and protruded past the right edge.
+- Correction: the ticker main row now flexes, the actor can shrink and wrap,
+  and narrow viewports give the actor its own wrapped row.
+- Proof provided: installed geometry proof at `390x844` for Overview, Map,
+  Work, and Release reported `clientWidth:390`, `scrollWidth:390`, and
+  `overflowingCount:0`; `node scripts/release-acceptance-audit.mjs` now fails
+  `19` of `72` checks, with the four mobile browser failures removed.
+- Calibration: `hidden-horizontal-overflow.yaml` records the ticker miss as a
+  concrete production example.
 
 ### Contract Touch Decision
 
@@ -86,11 +108,11 @@ help_summary: |
   `stale:false` with startup `errorCount:0`, installed
   `/api/service/projects` with all initialized projects current and only
   setup-incomplete `jess` carrying `projectStatusError`, and
-  `node scripts/release-acceptance-audit.mjs` (`23` of `72` checks still
-  failing).
+  `node scripts/release-acceptance-audit.mjs` (`19` of `72` checks still
+  failing after the mobile ticker repair).
 - Waivers: none for fleet current-card status. Final 0.13.0 release
   acceptance remains blocked by release lifecycle, Narrative Harness proof, and
-  mobile geometry failures.
+  selected release completion.
 - Apply/revert: source-only read/projection compaction. Reverting can make a
   current fleet card inherit stale error text or disappear behind an oversized
   payload; forward repairs must keep the fleet card bounded and derive status
@@ -112,7 +134,7 @@ help_summary: |
 - Proof provided: focused regressions, installed `stale:false` readback,
   `/api/project`/rich-spine/release-readiness/CLI agreement on `15` selected
   items and `1` deferred item, and the latest acceptance audit that still
-  fails `23` of `72` checks for the remaining blockers.
+  fails `19` of `72` checks for the remaining blockers.
 - Apply/revert: source-only read normalization plus summary reprojection
   migrations. Revert requires a forward migration; views must not fall back to
   execution-scope child rows as selected release membership.
@@ -138,10 +160,10 @@ help_summary: |
   `project-summary-projection.test.ts` (46 passed), focused migration slice
   (11 passed), `serve-release-readiness.test.ts` (83 passed),
   `scripts/data-layer-guardrails.test.ts` (21 passed), `pnpm typecheck`,
-  installed `/api/stale-server` `stale:false`, and the 2026-08-07
-  `audit:release-acceptance` run with `25` real failures preserved.
-- Waivers: none for the selected-membership repair; mobile overflow and
-  release readiness remain open blockers.
+  installed `/api/stale-server` `stale:false`, and the latest 2026-08-07
+  `audit:release-acceptance` run with `19` real failures preserved.
+- Waivers: none for the selected-membership repair; mobile overflow is
+  repaired, while release readiness remains an open blocker.
 - Apply/revert: source-only read/projection repair. Reverting can reintroduce
   stale accepted-plan membership expansion and compact Overview/release
   next-action disagreement; forward repairs must preserve canonical release
@@ -159,9 +181,9 @@ help_summary: |
   artifact naming, and GitHub Release workflow behavior.
 - Required follow-up: finish the actual selected release by resolving the ten
   owner-review proof-spec blockers, the unfinished
-  `task-synopsis-expansion-into-story-records` member, Narrative Harness
-  proof/package gaps, and mobile overflow. Startup/fleet-card refresh is
-  repaired in the installed 2026-08-07 run.
+  `task-synopsis-expansion-into-story-records` member, and Narrative Harness
+  proof/package gaps. Startup/fleet-card refresh and mobile ticker overflow
+  are repaired in the installed 2026-08-07 run.
 - Proof required: focused projection/migration regressions, full
   release-readiness route suite, typecheck, installed build/install/restart,
   API/CLI/rich-spine readback, and installed acceptance audit.
@@ -171,8 +193,8 @@ help_summary: |
   `serve-release-readiness.test.ts` (83 passed), `pnpm typecheck`,
   `pnpm build`, `pnpm dev:install`, `guildhall stop && guildhall start`,
   installed `/api/project` Overview/rich-spine/release-readiness/CLI readback,
-  and `node scripts/release-acceptance-audit.mjs` (`23` of `72` checks still
-  failing after the fleet-card repair).
+  and `node scripts/release-acceptance-audit.mjs` (`19` of `72` checks still
+  failing after the mobile ticker repair).
 - Waivers: final 0.13.0 release acceptance is not waived; this repair only
   removes the selected-release membership contradiction.
 - Apply/revert: forward migration `0.13.99/release-membership-read-boundary`

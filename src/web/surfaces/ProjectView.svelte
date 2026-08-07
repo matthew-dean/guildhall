@@ -2359,6 +2359,7 @@
     background: color-mix(in srgb, var(--bg-raised) 94%, black 6%);
   }
   .project-ticker-main {
+    flex: 1 1 auto;
     min-width: 0;
     display: flex;
     align-items: center;
@@ -2382,12 +2383,14 @@
     text-decoration: underline;
   }
   .project-ticker-actor {
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     color: var(--text);
     font-size: var(--gh-type-size-caption);
     font-weight: var(--gh-type-weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.04em;
+    overflow-wrap: anywhere;
   }
   .project-ticker-message {
     min-width: 0;
@@ -2472,6 +2475,14 @@
     }
     .project-ticker {
       padding: var(--s-2) var(--s-4);
+    }
+    .project-ticker-main {
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .project-ticker-actor {
+      flex-basis: 100%;
+      line-height: var(--gh-type-line-height-caption);
     }
     .project-ticker-side {
       display: none;
