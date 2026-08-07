@@ -613,7 +613,7 @@ describe('applyProjectMigrations', () => {
           kind: 'release',
           state: 'active',
           source: 'release_plan',
-          nodeIds: ['work:task-current'],
+          nodeIds: [],
           deferredNodeIds: [],
         }],
         tasks: [
@@ -624,7 +624,6 @@ describe('applyProjectMigrations', () => {
             domain: 'runtime',
             projectPath: projectRoot,
             status: 'ready',
-            releaseIds: ['release-first'],
             acceptanceCriteria: [],
             notes: [],
             createdAt: now,
@@ -692,6 +691,97 @@ describe('applyProjectMigrations', () => {
       projectRoot,
       only: ['0.13.66/release-membership-snapshot'],
     })).applied).toEqual([])
+  })
+
+  it('does not widen partial canonical release membership from an accepted plan', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-07-23T12:30:00.000Z'
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        selectedReleaseId: 'release-first',
+        releases: [{
+          id: 'release-first',
+          label: 'First release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-current'],
+          deferredNodeIds: [],
+        }],
+        tasks: [
+          {
+            id: 'task-current',
+            title: 'Current',
+            description: 'Current release work.',
+            domain: 'runtime',
+            projectPath: projectRoot,
+            status: 'ready',
+            releaseIds: ['release-first'],
+            acceptanceCriteria: [],
+            notes: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-later',
+            title: 'Later',
+            description: 'Deferred work from a stale plan.',
+            domain: 'runtime',
+            projectPath: projectRoot,
+            status: 'shelved',
+            acceptanceCriteria: [],
+            notes: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      },
+      summary: {
+        projectId: 'migration-test',
+        generatedAt: now,
+        freshness: 'current',
+        approvedPlan: {
+          source: 'workspace_import',
+          recordedAt: now,
+          goalCount: 1,
+          taskCount: 2,
+          milestoneCount: 1,
+          currentTaskCount: 1,
+          laterTaskCount: 1,
+          currentTaskIds: ['task-current'],
+          laterTaskIds: ['task-later'],
+          currentReleaseId: 'release-first',
+          releases: [{
+            id: 'release-first',
+            label: 'First release',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            currentTaskIds: ['task-current'],
+            laterTaskIds: ['task-later'],
+          }],
+        },
+      },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.66/release-membership-snapshot'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied).toEqual([])
+    expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
+      selectedReleaseId: 'release-first',
+      releases: [{
+        id: 'release-first',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+      }],
+    })
   })
 
   it('keeps canonical release membership when an accepted plan contradicts it', async () => {

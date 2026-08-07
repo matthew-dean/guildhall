@@ -663,7 +663,7 @@ function remoteRefExists(remote, ref) {
 function pushReleaseRefs(branch, version) {
   const tagRef = `refs/tags/v${version}`
   log(`Pushing ${branch} and v${version} to ${flags.remote}...`)
-  run('git', ['push', flags.remote, `HEAD:${branch}`, tagRef])
+  run('git', ['push', '--atomic', flags.remote, `HEAD:${branch}`, tagRef])
 
   const localTag = runCapture('git', ['rev-parse', tagRef]).trim()
   const remoteTagLine = runCapture('git', ['ls-remote', '--tags', flags.remote, tagRef]).trim()

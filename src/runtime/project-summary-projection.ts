@@ -583,12 +583,6 @@ export function materializeApprovedPlanReleaseMembership(
     const included = new Set(existing?.nodeIds ?? [])
     const deferred = new Set(existing?.deferredNodeIds ?? [])
     const existingHasMaterializedMembership = included.size > 0 || deferred.size > 0
-    const approvedNodeIds = new Set([
-      ...release.currentTaskIds.map(taskId => `work:${taskId}`),
-      ...release.laterTaskIds.map(taskId => `work:${taskId}`),
-    ])
-    const existingMembershipBelongsToApprovedPlan = [...included, ...deferred]
-      .every(nodeId => approvedNodeIds.has(nodeId))
     const add = (taskId: string, disposition: 'included' | 'deferred') => {
       if (!taskIds.has(taskId)) return
       // An accepted-plan snapshot may outlive the release it originally
@@ -608,7 +602,7 @@ export function materializeApprovedPlanReleaseMembership(
           existing: disposition === 'included' ? 'deferred' : 'included',
           proposed: disposition,
         })
-      } else if (!target.has(nodeId) && (!existingHasMaterializedMembership || existingMembershipBelongsToApprovedPlan)) {
+      } else if (!target.has(nodeId) && !existingHasMaterializedMembership) {
         target.add(nodeId)
         changed = true
       }

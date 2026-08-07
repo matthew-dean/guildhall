@@ -28,6 +28,11 @@ help_summary: |
   buildx image inspection, then fails closed when no verified digest is
   available for 0.9+ releases. The runtime-image workflow and local runtime
   image scripts now cover the 0.13 line instead of the stale 0.11-only tags.
+- Review repair: Greptile flagged two P1 release-readiness defects. Release
+  branch/tag publication now uses an atomic ref push before artifact polling.
+  Accepted-plan release membership backfill is restricted to releases with no
+  materialized canonical membership; partial canonical membership is treated as
+  authoritative and cannot be widened from an older accepted-plan snapshot.
 - [x] Publisher tests cover the default remote branch/tag push and the
   rollback/dry-run paths that intentionally avoid remote publishing.
 - [x] The 0.13 acceptance-gap audit and active shipping-proof plan name the
