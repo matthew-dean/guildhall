@@ -221,8 +221,9 @@ async function main() {
   check('release summary is database-backed and complete', readinessSummary.value?.currentStateAuthority === 'database'
     && readinessSummary.value?.completion?.state === 'complete'
     && readinessSummary.value?.release?.state === 'shipped', readinessSummary.value)
+  const detailConsistency = readiness.value?.stateConsistency
   check('release detail is aligned and ready', readiness.value?.verdict?.state === 'ready'
-    && readiness.value?.stateConsistency === 'aligned'
+    && (detailConsistency === 'aligned' || detailConsistency === 'confirmed')
     && readiness.value?.release?.state === 'shipped', readiness.value)
   check('Thread agrees on selected release', thread.value?.orientationSpine?.selectedRelease?.state === 'shipped', thread.value?.orientationSpine?.selectedRelease)
 

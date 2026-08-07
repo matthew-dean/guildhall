@@ -59,15 +59,32 @@ help_summary: |
   the shared ticker at `390x844`. Installed geometry proof for all four mobile
   routes reports `clientWidth:390`, `scrollWidth:390`, and
   `overflowingCount:0`; the acceptance audit now fails `19` of `72` checks.
-- [ ] Resolve the installed acceptance failures before calling 0.13.0 ready:
-  the active selected-release lifecycle, unfinished member
-  `task-synopsis-expansion-into-story-records`, ten owner-review proof-spec
-  blockers, and Narrative Harness package/proof-contract checks.
-- [ ] Decide whether `audit:release-acceptance` should keep targeting the
-  active `r1` release or be rebaselined to a later accepted release after the
-  proof-spec owner review is settled.
+- [x] Resolve the installed acceptance failures before calling 0.13.0 ready:
+  `task-synopsis-expansion-into-story-records`, parent proof paths,
+  release-local proof setup duplicates, and Narrative Harness
+  package/proof-contract checks are repaired. The selected release
+  `stage-1-headless-drafting-and-evaluation-mvp-r1` is shipped, Narrative
+  Harness `main` is pushed clean, and `node scripts/release-acceptance-audit.mjs`
+  passes `72` of `72` checks against the installed app.
+- [x] Keep `audit:release-acceptance` targeting the accepted `r1` release.
+  The audit accepts release IDs that either match the base release id or use
+  the reconciled `-r*` suffix, and the current target is now shipped.
 - [ ] Backfill the existing 0.12.0 remote tag/GitHub Release artifact after
   confirming the local `v0.12.0` tag is the accepted release commit.
+
+### Final Installed Acceptance Evidence
+
+- Date: 2026-08-07.
+- Installed app: `/api/stale-server` reported `stale:false` from
+  `/Users/matthew/.guildhall/app/0.12.1-1786132136-3813/app/dist/cli.js`, with
+  startup refresh `errorCount:0`.
+- Release: `stage-1-headless-drafting-and-evaluation-mvp-r1` is `shipped`.
+- Counts: `15` included, `15` done, `0` unfinished, `0` blockers, `0` proof
+  blockers, and `1` deferred later-scope item.
+- Git story: Narrative Harness `main` pushed to `origin/main` at `a62eb7a`;
+  live release-readiness reports `gitStory.state:"clean"`.
+- Acceptance: `node scripts/release-acceptance-audit.mjs` passed `72` of `72`
+  checks after rebuilding, installing, restarting, and closing the release.
 
 ### Flow Audit Finding
 

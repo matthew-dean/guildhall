@@ -498,6 +498,54 @@ describe('proof health', () => {
     expect(taskDoneButProofMissing(normalizeAcceptanceCriteriaForCurrentProof(task))).toBe(false)
   })
 
+  it('ignores older failed legacy gate ids after a newer documented command proof passes', () => {
+    const task = {
+      id: 'task-current-command-proof-pass',
+      status: 'done',
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        description: 'Run the current release proof command.',
+        verifiedBy: 'automated',
+        command: 'pnpm proof:broad-genre-drafting-model',
+        met: false,
+      }],
+      proofPaths: [{
+        id: 'task-current-command-proof-pass-ac-1-command-proof',
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm proof:broad-genre-drafting-model',
+        expectedEvidence: [{ id: 'ac-1', required: true }],
+        verificationRecords: [{
+          evidenceId: 'ac-1',
+          command: 'pnpm proof:broad-genre-drafting-model',
+          status: 'passed',
+          recordedAt: '2026-08-07T19:45:58.980Z',
+        }],
+      }],
+      gateResults: [
+        {
+          type: 'hard',
+          gateId: 'ac-3',
+          passed: false,
+          output: 'The previous broad-genre proof command failed.',
+          checkedAt: '2026-07-18T16:10:33.292Z',
+        },
+        {
+          type: 'hard',
+          gateId: 'broad-genre-drafting-model-proof',
+          command: 'pnpm proof:broad-genre-drafting-model',
+          passed: true,
+          checkedAt: '2026-08-07T19:45:58.980Z',
+        },
+      ],
+    }
+
+    const normalized = normalizeAcceptanceCriteriaForCurrentProof(task)
+    expect(normalized.acceptanceCriteria).toMatchObject([{ met: true, verificationState: 'verified' }])
+    expect(completionProofCanSettleUnmetAcceptanceCriteria(task)).toBe(true)
+    expect(taskDoneButProofMissing(normalized)).toBe(false)
+  })
+
   it('clears stale criterion state when the current gate pass is authoritative', () => {
     const normalized = normalizeAcceptanceCriteriaForCurrentProof({
       id: 'task-clears-stale-proof',
