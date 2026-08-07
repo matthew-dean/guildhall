@@ -480,6 +480,7 @@ describe('release publish script', () => {
           ...process.env,
           PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
           PUBLISH_TEST_LOG: operationLog,
+          GUILDHALL_RUNTIME_IMAGE_DIGEST: '',
           GUILDHALL_RUNTIME_IMAGE_DIGEST_FIXTURE_FILE: digestFixture,
         },
         timeout: 10_000,
