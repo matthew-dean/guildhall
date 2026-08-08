@@ -1451,6 +1451,8 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const decisionStart = projectDecisionStartReadiness(initialDecision)
   nextAction = {
     ...nextAction,
+    ...(decisionStart.code ? { code: decisionStart.code } : {}),
+    message: decisionStart.message ?? nextAction.message,
     ...(decisionStart.focusTaskId ? { focusTaskId: decisionStart.focusTaskId } : {}),
     ...(decisionStart.focusTaskTitle ? { focusTaskTitle: decisionStart.focusTaskTitle } : {}),
     ...(decisionStart.focusKind ? { focusKind: decisionStart.focusKind } : {}),

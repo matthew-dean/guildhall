@@ -94,7 +94,8 @@ help_summary: |
 - Indexed summary refresh now rebuilds dependency rows from current task
   points, and owner-review projection excludes dependency-blocked specs. The
   live Stage 2 summary can no longer name the adapter review as next while its
-  Tauri architecture prerequisite is still being shaped.
+  Tauri architecture prerequisite is still being shaped. Indexed orientation
+  copy is synchronized from the same refreshed start decision.
 
 ### Active Release Projection Contract Touch Decision
 
