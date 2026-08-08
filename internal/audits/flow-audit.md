@@ -5,6 +5,69 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+## 2026-08-07 Cross-View Density Audit
+
+- Work id: `0.13.1-cross-view-density-audit`.
+- User job: on every project route, the user can immediately tell what is
+  happening, what needs them, and where to go without reading several versions
+  of the same status.
+- Governing rule: each route answers one question, shows one primary state,
+  and offers at most one primary action.
+- Release-blocking correction in this patch: the shell and Overview now render
+  the shared action model; shipped state suppresses stale setup, provider,
+  approval, pause, and repository urgency; completed Work is disclosed on
+  demand; Timeline is newest first; task references are compact; refresh
+  failures preserve the last known state.
+- [x] Remove local Overview next-action ranking and same-route action loops.
+- [x] Make shipped state terminal across the shell, ticker, Overview, Release,
+  and Work even when stale mutable signals disagree.
+- [x] Add deterministic checks for one-line alert bands, action agreement,
+  clipping, shipped-state contradictions, refresh recovery, task keys, and
+  persistent Work filters.
+- [ ] Follow-up redesign: reduce Overview to Now, Next, Scope, and three route
+  links; move repository detail to Release, inventory to Work, health to
+  Settings, and activity to Timeline.
+- [x] Make Release one verdict plus one sentence and one secondary disclosure;
+  shipped releases hide diagnostic counts until the user opens release checks.
+- [ ] Follow-up redesign: split Thread into Needs your response, Guildhall is
+  working, Queued, and collapsed History; only the active item gets controls.
+- [ ] Follow-up redesign: reduce task approval to why, summary, acceptance
+  criteria, changes, and the decision; disclose the full spec and provenance.
+- [ ] Add global density assertions: at most one primary CTA and one alert band
+  per viewport, no duplicate actions, narrative text capped at two lines outside
+  disclosures, and no empty informational cards.
+
+### Installed Flow Proof
+
+- Installed artifact:
+  `/Users/matthew/.guildhall/app/0.13.1-1786159975-93727/app/dist/cli.js`.
+- Runtime proof: `/api/stale-server` reported `stale:false`; startup refresh
+  completed with `7` projects, `2` refreshed projects, and `errorCount:0`.
+- Overview: shows one shipped receipt and no required next action, release loop,
+  pause/resume action, setup action, or repository urgency.
+- Release: shows one `Release shipped` heading, one `Shipped` status, the
+  `15/15` completion sentence, and one secondary `View release checks` action.
+- Work: defaults to `Release work is complete`; `Show completed work` reveals
+  the record without losing the selected scope filter.
+- Timeline: newest event is first; `Load older activity` increased the visible
+  installed event count from `35` to `43`.
+- Thread: stale draft state cannot expose `Approve spec`; the modal explains
+  that approval becomes available at spec review, and task references use
+  compact `NAR-*` keys in visible copy.
+- Collapsed rail: exact installed clicks land on `/thread`, `/work`,
+  `/timeline`, and `/release`; active subnavigation no longer expands under the
+  pointer and moves the primary click target.
+- Fresh installed screenshots: `project-overview.webp`,
+  `release-shipped.webp`, and `work-complete.webp` in the 0.13 UI audit assets.
+- Verification: release gate `287/287`; rendered project-flow matrix `37/37`;
+  shipped action-model regression `31/31`; Release and shell component suites
+  `86/86`; model-independence `125/125`; typecheck, docs build/public-copy,
+  contract detector, and `git diff --check` passed.
+- Advisory residue: `pnpm lint:design` still fails against the repository's
+  stale design-token baseline across committed legacy surfaces. This patch does
+  not update the baseline to suppress those findings; the cross-view density
+  follow-up includes reducing that existing style sprawl.
+
 ## 2026-08-07 Release Artifact Automation and 0.13 Path
 
 - Work id: `0.13-release-artifact-automation`.
@@ -54543,12 +54606,12 @@ Repair:
       spec` with buttons `Cancel`, `Open details`, and `Request changes`; no
       `Approve spec` button was present and no browser warning/error logs were
       captured.
-- [ ] Follow-up: run a full zero-context Narrative Harness flow audit across
+- [x] Follow-up: run a full zero-context Narrative Harness flow audit across
       Overview, Thread, Work, task drawer, Release, and error recovery. Treat
       orientation density and transient 503 recovery as release blockers until
       the user can tell what is happening, what is next, and what failed
       without refreshing.
-- [ ] Follow-up: replace owner-facing long task identifiers with Jira/Linear-
+- [x] Follow-up: replace owner-facing long task identifiers with Jira/Linear-
       style project-local display keys. Durable IDs can remain internal, but
       visible errors, cards, modals, and thread copy should prefer the task
       title plus a short key such as `GH-142`/`NAR-27` when disambiguation is
@@ -54575,3 +54638,147 @@ Repair:
 - Apply/revert behavior: reverting removes the status field from Thread turns
       and restores the invalid approval affordance for exploring draft specs;
       backend task state remains unchanged.
+
+## 2026-08-07 - Narrative Harness Shell Density And Control Audit
+
+- Work id: `0.13.0/narrative-harness-shell-density-and-controls`.
+- User job: while moving through Narrative Harness, the owner can scan the
+      project shell without reading a paragraph, pause Guildhall independently
+      of the current release blocker, and read retained activity newest-first.
+- Failing finding 1: the compact release-blocker band rendered a full release
+      name, state explanation, repository reason, and instruction before its
+      action. At the owner's desktop width it wrapped to two lines and competed
+      with the page instead of acting as compact chrome.
+- [x] Repair 1: make compact release-blocker chrome strictly single-line and
+      reduce the shared owner-facing message to the blocker itself. Keep the
+      explanation and remediation in Release behind `Open release`.
+- Failing finding 2: the top run control replaced the project command with
+      `Repo follow-up` when readiness was blocked, even though the project
+      remained available for processing and the existing stop endpoint can
+      persistently pause it.
+- [x] Repair 2: preserve a real `Pause` command whenever project processing is
+      still enabled but the current readiness state cannot advance. Repository
+      follow-up remains a separate navigation action, not a run-control label.
+- Failing finding 3: Coordinator Timeline exposed `Load older activity` in the
+      middle of the newest activity and the owner's click produced no visible
+      change. The feed contract must be newest-first and pagination must append
+      strictly older rows with an observable loading/result state.
+- [x] Repair 3: normalize both recent and retained events to reverse
+      chronological order, place pagination after the visible feed, and prove
+      that requesting an older page adds older rows or removes the control when
+      no page remains.
+- Proof required: focused runtime/component regressions; built and installed
+      app; `/api/stale-server` reports `stale:false`; Browser proof at the
+      reported wide desktop width plus a narrower desktop and mobile viewport;
+      no compact banner wraps or clips; Pause calls the project stop endpoint;
+      Timeline starts newest-first and older pagination changes visible state.
+
+### Contract Touch Decision
+
+- Work id: `0.13.0/narrative-harness-shell-density-and-controls`.
+- Touched contracts: shared project start-readiness presentation, project
+      action/run-control presentation, shared compact alert-band layout, and
+      retained activity ordering/pagination presentation. Considered but not
+      touched: persisted task/release schema, repository-follow-up detection,
+      project availability storage, stop endpoint semantics, and event storage.
+- Required follow-up: complete the three repairs and installed-app evidence in
+      order, then update these checklist items with exact proof.
+- Apply/revert behavior: reverting restores verbose wrapping shell chrome, the
+      blocker-shaped run control, and ambiguous activity pagination. No stored
+      data migration or cleanup is required.
+
+## 2026-08-07 - Release-Blocking Zero-Context Product Flow Goal
+
+- Goal: make the installed Narrative Harness journey usable from a cold start,
+      not merely make isolated components render. Begin on Overview, follow
+      every Guildhall recommendation, and require each destination to explain
+      why the owner was sent there and expose a real next action.
+- Screenshot sequence: Overview rendered `Do this next` with a long
+      `Repository follow-up required` card and `Open release`; Release rendered
+      another `Do this next` card with the same `Open release` link back to the
+      page already open; Release readiness then showed `Blocked`, `15/15 done`,
+      and `Shipped` simultaneously above a large low-contrast explanatory card
+      with no visible action.
+- Release-blocking flow finding: the shared next-action model named a route but
+      not the owner action available at that route. Route-only recommendations
+      were rendered even when already at their destination, creating a dead
+      self-link. Release mixed diagnostic Git state, saved lifecycle state, and
+      completion counts without a single prioritized answer or command.
+- [x] Reproduce the full sequence against `/api/project`,
+      `/api/project/release-readiness`, and Browser before changing the shared
+      model.
+- [x] Remove same-route recommendations. A destination page must consume the
+      recommendation by rendering the concrete owner action or a truthful
+      terminal explanation; it must not recommend opening itself.
+- [x] Reconcile `Blocked`, `15/15 done`, and `Shipped` into one clear release
+      answer with subordinate evidence. A release cannot present `Shipped` as
+      a peer status while current repository diagnostics say it is blocked.
+- [x] Reduce Overview and Release density until the primary state, reason, and
+      next action are visible in the first viewport without reading a wall of
+      cards or prose.
+- [x] Shipped-state density repair: Overview now collapses the completed scope
+      to one checkmarked release receipt and omits pre-ship work mix, map,
+      empty-work, next-run, and signals machinery. The shared shell ticker and
+      compact status band say `Release shipped` and the completed count instead
+      of treating `all_terminal` as stalled work.
+- [x] Keep completed Work history behind progressive disclosure after a
+      release ships. The default shipped view now shows a compact completion
+      state and `Show completed work` instead of rendering all 40 completed
+      Narrative Harness rows immediately.
+- [x] Preserve all previously reported defects in this goal: compact banner
+      wrapping/density, real project Pause, Timeline ordering/pagination,
+      Draft-task-brief 503 recovery, invalid spec approval, and Jira/Linear-
+      style short task display keys. Focused regressions cover each repair;
+      installed Browser proof confirms the draft-spec modal has no invalid
+      approval and replaces raw `task-import-...` references with stable
+      `T-......` keys. Timeline is newest-first and loading older activity
+      visibly appended older rows with `Loaded 8 older events.`
+- [x] Incorporate the delegated public-docs and cross-view density audit. The
+      audit must say whether the 0.13 release lifecycle is actually explained,
+      then rank concrete progressive-disclosure and visual-hierarchy changes
+      across Overview, Release, Work, Thread, Timeline, and task detail.
+- [x] Delegated audit completed read-only. Result: public docs describe release
+      concepts but do not teach the complete `select -> run -> checks ->
+      repository follow-up -> ship -> select next` journey. P0 documentation
+      gaps include no `docs/releases/0.13.0.md`, a 0.13 release-index link that
+      points to 0.12, a pinned 0.13 Quick Start that still names/pins 0.12,
+      stale task-drawer tab names, and no 0.13 lifecycle screenshots. The
+      ranked product audit puts Release, Overview, and task detail at P0;
+      Thread and Work at P1; Timeline/raw diagnostics and shared semantic
+      design primitives at P2.
+- [x] Public-docs repair completed for both current docs and the pinned 0.13
+      snapshot. The docs now teach the complete release journey, include real
+      0.13 release notes, correct stale 0.12 links/version pins, recommend
+      Colima plus Docker for an isolated macOS runtime, describe the current
+      task drawer, and use fresh 0.13 screenshots. The screenshot set must be
+      recaptured after final install because the first capture still displayed
+      the shell's transient `CONNECTING` indicator.
+- [ ] Installed-app startup false negative: `guildhall start` reported that the
+      service did not become ready, while `/api/stale-server` immediately
+      reported PID 21697, `stale:false`, seven projects loaded, and zero refresh
+      errors. The command must trust the same readiness fact the service API
+      exposes.
+- [x] Startup false-negative source repair: readiness polling now discovers the
+      live service on the intended port instead of trusting only the PID from
+      an obsolete state file. A focused CLI regression simulates a replacement
+      service taking over while the recorded process dies. Final installed
+      stop/start and stale-server proof remain required after rebuilding.
+- [x] Live Timeline follow-up: one retained page could be entirely duplicated
+      by the recent stream, so the new result message still left the owner with
+      a button that appeared ineffective. One click now advances through
+      duplicate-only pages until visible older activity is added or retention
+      ends; a focused regression covers the overlap.
+- [x] Cross-surface action ownership follow-up: the deterministic mobile audit
+      exposed a paused project whose saved readiness said `Resume`, whose shell
+      disabled the control for bootstrap, and whose `Do this next` card ranked
+      raw Inbox items independently. The runtime action model now consumes the
+      current inbox, treats hard setup items as shared start blockers, and
+      suppresses setup urgency for shipped terminal releases. `DoThisNext`
+      renders only that model, and the shell no longer reinterprets bootstrap
+      state into a competing run decision. The repaired rendered audit passes
+      shared-state and geometry checks at `1114x692`, `900x692`, and `390x844`.
+- Completion proof: an installed-app, zero-context click-through across
+      Overview, Release, Thread, Work, task detail, and Timeline at wide desktop,
+      narrow desktop, and mobile; no dead/self actions, contradictory shared
+      status, clipped chrome, blank-screen recovery, or raw long task IDs in
+      ordinary owner-facing flow; focused and release-relevant gates pass.

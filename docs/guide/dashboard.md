@@ -15,7 +15,7 @@ hold the whole run in your head.
   <img src="../assets/ui-audit/0-10-0/projects.webp" alt="Guildhall 0.10.0 projects home showing several local projects with status, activity, and start controls." />
 </picture>
 
-![Guildhall 0.10.0 work view with active tasks, hierarchy, and reviewer signals.](../assets/ui-audit/0-10-0/work.webp)
+![Guildhall 0.13.x Work view showing the compact shipped-release completion state.](../assets/ui-audit/0-13-0/work-complete.webp)
 
 ## What stays visible
 
@@ -51,7 +51,7 @@ somewhere else:
 - **Timeline** is the activity history.
 - **Release** shows the selected release, readiness checks, proof, and what is
   included versus deferred. A project stays open; only a bounded release can
-  ship.
+  ship. Follow [Ship a release](./ship-a-release) for the complete workflow.
 - **Settings** is readiness, providers, identity, profiles, and configuration.
 
 That split keeps the UI from turning every useful signal into another task

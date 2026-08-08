@@ -8,6 +8,7 @@ title: Reference
 
 - [Guildhall app](../web-ui/) — app pages and product workflows.
 - [Projects home](../web-ui/dashboard), [setup wizard](../web-ui/setup), [project shell](../web-ui/project-view), [task drawer](../web-ui/task-drawer), and [providers](../web-ui/providers).
+- [Release workflow](../guide/ship-a-release) — the operator path from release selection through shipping.
 
 ## Command line
 
