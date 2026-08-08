@@ -719,11 +719,25 @@ function preflightGit() {
     die('Working tree is dirty. Commit or stash first, or pass --allow-dirty.')
   }
 
+  if (!flags.dryRun) {
+    assertExistingReleaseTagMatchesHead(nextVersion)
+  }
+
   if (!flags.dryRun && flags.pushRemote) {
     assertPushRemoteReady(branch, nextVersion)
   }
 
   return branch
+}
+
+function assertExistingReleaseTagMatchesHead(version) {
+  const tagRef = `refs/tags/v${version}`
+  const localTag = localRefHash(tagRef)
+  if (!localTag) return
+  const head = runCapture('git', ['rev-parse', 'HEAD']).trim()
+  if (head !== localTag) {
+    die(`Tag v${version} points at ${localTag}, but HEAD is ${head}. Check out the tagged release commit before resuming so npm and GitHub artifacts are built from the same tree.`)
+  }
 }
 
 function assertPushRemoteReady(branch, version) {
