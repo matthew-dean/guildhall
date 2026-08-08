@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyRunStatusToStartReadiness, buildProjectActionModel, resolveProjectActionModel } from '../project-action-model.js'
+import { applyRunStatusToStartReadiness, buildProjectActionModel, projectTaskActionHref, resolveProjectActionModel } from '../project-action-model.js'
 
 describe('applyRunStatusToStartReadiness', () => {
   it('does not leave a saved paused action visible while a run is active', () => {
@@ -68,6 +68,31 @@ describe('buildProjectActionModel', () => {
     })
     expect(model.ownerInput).toMatchObject({ active: true, label: 'Prove packaged Tauri sidecar' })
     expect(model.runControl).toMatchObject({ label: 'Waiting on answer', startEnabled: false })
+    expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
+  })
+
+  it('keeps focused review routes in Thread across project-scoped summary reads', () => {
+    expect(projectTaskActionHref({
+      code: 'owner_input_required',
+      focusKind: 'brief_cleanup',
+      focusTaskId: 'task-086',
+    }, 'narrative-harness')).toBe(
+      '/projects/narrative-harness/thread?thread=task%3Atask-086',
+    )
+    expect(projectTaskActionHref({
+      code: 'no_unattended_progress',
+      focusKind: 'spec_review',
+      focusTaskId: 'task-087',
+    }, 'narrative-harness')).toBe(
+      '/projects/narrative-harness/thread?thread=task%3Atask-087',
+    )
+    expect(projectTaskActionHref({
+      code: 'ready_work',
+      focusKind: 'ready_work',
+      focusTaskId: 'task-088',
+    }, 'narrative-harness')).toBe(
+      '/projects/narrative-harness/work?task=task-088',
+    )
   })
 
   it('makes a hard setup inbox item the shared action and start blocker', () => {

@@ -55029,6 +55029,23 @@ Repair:
       its focused replay now reaches only the same migration precondition.
 - [ ] Re-run the installed Overview, Work, and Thread click-through before
       approving task 086.
+- Failing installed finding: after dependency-aware review repair, the saved
+      summary adapter preserved task 086's `owner_input_required` decision but
+      discarded its review target. `/api/project` therefore labeled the shell
+      `Start`, routed `Review brief` to Work, and called the run control
+      `Waiting on setup` even though this is an ordinary task review in Thread.
+- [x] Preserve review action semantics through the saved-summary boundary:
+      brief/spec review opens the focused task Thread, ordinary task review is
+      not project setup, and the shell says it is waiting on the owner's answer.
+- Failing deterministic finding: Work and Overview opened the same joined
+      transaction and returned the same start decision at the same revision,
+      but Overview alone rewrote the shared orientation headline to `ready to
+      continue`; Work retained `in progress`. The Work adapter also preferred
+      the compact projection's nested summary over the transaction's explicit
+      shared summary.
+- [x] Make every ordinary surface select the joined transaction summary first
+      and apply the same typed readiness overlay to its headline/next action;
+      inventory remains surface-specific, but decision copy does not.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
@@ -55046,15 +55063,23 @@ Repair:
       progress blocked/active semantics; same-task project-action
       deduplication; active-release Overview progressive disclosure; complete
       unapproved product-brief handoff semantics; and dependency-aware Thread
-      review visibility.
+      review visibility; saved-summary action target/label preservation; and
+      the distinction between task review and project setup in run control;
+      plus the joined surface transaction's shared-summary selection order.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive
       task 086 through shaping, review, implementation, and proof before
       unblocking its dependents.
 - Proof required/provided: focused scope, action-model, Thread, and API
-      regressions plus typecheck are provided; installed Browser proof remains
-      open above.
+      regressions plus typecheck are provided. The saved Activity regression
+      proves decision, top action, action model, run control, setup state, and
+      task-specific Thread route agree; the cross-surface API regression proves
+      Overview and Work share headline, next action, progress, and release at
+      one revision. Installed Browser proof remains open above. The broader
+      task-endpoint file still has the pre-existing migration claim-replay
+      precondition and two stale-fixture assertions downstream of it; each is
+      outside this route/control change.
 - Waivers: none. The configured Guildhall MCP bridge returned `Transport
       closed`, and this checkout has no root `.guildhall/artifacts.yaml`, so the
       canonical local artifact was updated directly.

@@ -411,7 +411,7 @@ import {
   runRuntimeBackendSetupAction,
   type RuntimeBackendSetupDetector,
 } from './runtime-backend-setup.js'
-import { applyRunStatusToStartReadiness, buildProjectActionModel, resolveProjectActionModel, type ProjectActionModel } from './project-action-model.js'
+import { applyRunStatusToStartReadiness, buildProjectActionModel, projectTaskActionHref, resolveProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { NodeGitDriver } from './git-driver.js'
 import {
   GitStoryClosureState,
@@ -2665,11 +2665,14 @@ function summarizeProjectFromProjection(
         deferredTaskCount: projection.scope.deferred,
       }
     : undefined
-  const savedStartReadiness = projection.decision
+  const decisionStartReadiness = projection.decision
+    ? projectDecisionStartReadiness(projection.decision)
+    : null
+  const savedStartReadiness = decisionStartReadiness
     ? {
-        ...projectDecisionStartReadiness(projection.decision),
+        ...decisionStartReadiness,
         label: projection.decision.execution.state === 'paused' ? 'Resume' as const : 'Start' as const,
-        actionHref: projection.scope ? `/projects/${encodeURIComponent(project.id)}/work${projection.decision.execution.focusTaskId ? `?task=${encodeURIComponent(projection.decision.execution.focusTaskId)}` : ''}` : '/work',
+        actionHref: projectTaskActionHref(decisionStartReadiness, project.id),
         executionScope: actionScope,
       }
     : applyOwnerInputToStartReadiness({
@@ -2678,7 +2681,7 @@ function summarizeProjectFromProjection(
       ...(projection.nextAction.code ? { code: projection.nextAction.code } : {}),
       message: projection.nextAction.message,
       ...(typeof projection.nextAction.count === 'number' ? { count: projection.nextAction.count } : {}),
-      actionHref: projection.scope ? `/projects/${encodeURIComponent(project.id)}/work${projection.nextAction.focusTaskId ? `?task=${encodeURIComponent(projection.nextAction.focusTaskId)}` : ''}` : '/work',
+      actionHref: projectTaskActionHref(projection.nextAction, project.id),
       ...(projection.nextAction.focusTaskId ? { focusTaskId: projection.nextAction.focusTaskId } : {}),
       ...(projection.nextAction.focusTaskTitle ? { focusTaskTitle: projection.nextAction.focusTaskTitle } : {}),
       ...(projection.nextAction.focusKind ? { focusKind: projection.nextAction.focusKind as ProjectScopeProjection['start']['focusKind'] } : {}),
@@ -2798,6 +2801,23 @@ function activityActionFromDecision(
   const href = taskId
     ? `/projects/${encodeURIComponent(projectId)}/work?task=${encodeURIComponent(taskId)}`
     : `/projects/${encodeURIComponent(projectId)}/work`
+  const briefReview = decision.primaryAction.kind === 'answer_owner_input' &&
+    execution.focusKind === 'brief_cleanup'
+  if (briefReview || decision.primaryAction.kind === 'review_spec') {
+    return {
+      source: 'owner_input',
+      label: execution.focusTaskTitle ?? (briefReview ? 'Review task brief' : 'Review spec'),
+      ...(execution.message ? { detail: execution.message } : {}),
+      buttonLabel: briefReview ? 'Review brief' : 'Review spec',
+      href: projectTaskActionHref({
+        code: briefReview ? 'owner_input_required' : execution.code,
+        focusKind: execution.focusKind,
+        focusTaskId: taskId,
+      }, projectId),
+      tone: 'warn',
+      ...(taskId ? { taskId } : {}),
+    }
+  }
   if (decision.primaryAction.kind === 'answer_owner_input') {
     return {
       source: 'owner_input',
@@ -7313,7 +7333,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }))
     const promotedState = (overviewState?.authority ?? surfaceState?.authority) === 'database'
     const compactState: ProjectCompactStateReadModel | null = surfaceState?.compact ?? null
-    const savedProjection = overviewState?.summary ?? compactState?.summary ?? (promotedState ? null : readProjectSummaryForProjectAtBoundary(project.path))
+    const savedProjection = overviewState?.summary ?? surfaceState?.summary ?? compactState?.summary ??
+      (promotedState ? null : readProjectSummaryForProjectAtBoundary(project.path))
     const stateQueueRevision = overviewState?.queueRevision ?? compactState?.queueRevision ?? null
     const stateProjectRevision = overviewState?.projectRevision ?? compactState?.projectRevision ?? null
     const compactProjection = savedProjection
@@ -7691,11 +7712,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       : summary.actionModel
     const responseStartMessage = responseStartReadiness?.message
-    if (
-      input.surface === 'overview' &&
-      typeof responseStartMessage === 'string' &&
-      responseStartMessage.trim().length > 0
-    ) {
+    if (typeof responseStartMessage === 'string' && responseStartMessage.trim().length > 0) {
       const orientationSummary = (orientationSpine as { summary?: unknown }).summary
       const orientationSummaryRecord = orientationSummary && typeof orientationSummary === 'object' && !Array.isArray(orientationSummary)
         ? orientationSummary as Record<string, unknown>
@@ -17019,7 +17036,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               stored: compactSummary?.actionModel ?? projection?.actionModel,
               startReadiness: {
                 ...readiness,
-                actionHref: `/projects/${encodeURIComponent(project.id)}/work${readiness.focusTaskId ? `?task=${encodeURIComponent(readiness.focusTaskId)}` : ''}`,
+                actionHref: projectTaskActionHref(readiness, project.id),
               },
               ownerInput: projection?.ownerInput && projection.ownerInput.openCount > 0
                 ? {

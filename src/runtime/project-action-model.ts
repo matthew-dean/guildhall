@@ -19,6 +19,24 @@ export interface ProjectActionStartReadiness {
   }
 }
 
+export function projectTaskActionHref(
+  readiness: Pick<ProjectActionStartReadiness, 'code' | 'focusKind' | 'focusTaskId'>,
+  projectId?: string,
+): string {
+  const projectRoot = projectId ? `/projects/${encodeURIComponent(projectId)}` : ''
+  const taskId = readiness.focusTaskId?.trim()
+  const reviewInThread = readiness.focusKind === 'spec_review' ||
+    (readiness.code === 'owner_input_required' && readiness.focusKind === 'brief_cleanup')
+  if (reviewInThread) {
+    return taskId
+      ? `${projectRoot}/thread?thread=${encodeURIComponent(`task:${taskId}`)}`
+      : `${projectRoot}/thread`
+  }
+  return taskId
+    ? `${projectRoot}/work?task=${encodeURIComponent(taskId)}`
+    : `${projectRoot}/work`
+}
+
 /**
  * A saved next-action can still describe the last paused task after a run
  * starts. Keep the user-facing readiness contract aligned with the live
@@ -541,6 +559,9 @@ function setupModel(
     }
   }
   if (!readiness?.canStart && readiness?.code === 'owner_input_required') {
+    if (readiness.focusTaskId && readiness.focusKind !== 'setup') {
+      return { state: 'ready', freshIntakeNeeded: false }
+    }
     return {
       state: 'blocked',
       freshIntakeNeeded: false,

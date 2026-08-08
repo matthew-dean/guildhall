@@ -6156,6 +6156,65 @@ describe('GET /api/project/activity', () => {
     })
   })
 
+  it('keeps a drafted brief review task-scoped in Thread across saved Activity state', async () => {
+    const now = new Date().toISOString()
+    await seedCanonicalQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'desktop-mvp',
+      releases: [{
+        id: 'desktop-mvp',
+        label: 'Desktop MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-086'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        id: 'task-086',
+        title: 'Prove packaged Tauri sidecar',
+        description: '',
+        domain: 'desktop',
+        projectPath: tmpDir,
+        status: 'exploring',
+        priority: 'normal',
+        revisionCount: 0,
+        remediationAttempts: 0,
+        origination: 'human',
+        productBrief: {
+          userJob: 'Prove the packaged sidecar before desktop work begins.',
+          whyItMattersNow: 'The desktop release depends on this architecture gate.',
+          successMetric: 'The packaged app completes one offline fixture run.',
+          nonGoals: ['Do not build the full interface yet.'],
+        },
+        createdAt: now,
+        updatedAt: now,
+      }],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    const reviewHref = `/projects/${projectId}/thread?thread=task%3Atask-086`
+    expect(body.decision).toMatchObject({
+      execution: { focusKind: 'brief_cleanup', focusTaskId: 'task-086' },
+      primaryAction: { kind: 'answer_owner_input', targetId: 'task-086' },
+    })
+    expect(body.topAction).toMatchObject({
+      label: 'Prove packaged Tauri sidecar',
+      buttonLabel: 'Review brief',
+      href: reviewHref,
+      taskId: 'task-086',
+    })
+    expect(body.actionModel).toMatchObject({
+      primaryAction: { buttonLabel: 'Review brief', href: reviewHref, taskId: 'task-086' },
+      runControl: { label: 'Waiting on answer', startEnabled: false },
+      setup: { state: 'ready', freshIntakeNeeded: false },
+    })
+  })
+
   it('keeps live Activity and fleet on the same project decision packet', async () => {
     const now = new Date().toISOString()
     await seedCanonicalQueue({
