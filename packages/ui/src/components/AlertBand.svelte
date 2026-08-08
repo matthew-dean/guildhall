@@ -8,6 +8,7 @@
   let {
     tone = 'neutral',
     density = 'regular',
+    singleLine = false,
     icon,
     role = 'status',
     ariaLabel,
@@ -37,7 +38,7 @@
 
 <div
   {...restProps}
-  class={['gh-alert-band', `tone-${tone}`, `density-${density}`, className].filter(Boolean).join(' ')}
+  class={['gh-alert-band', `tone-${tone}`, `density-${density}`, singleLine ? 'single-line' : '', className].filter(Boolean).join(' ')}
   role={role}
   aria-label={ariaLabel}
 >
@@ -90,6 +91,11 @@
     gap: var(--gh-space-2);
   }
 
+  .gh-alert-band.single-line .gh-alert-band-copy {
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+
   .gh-alert-band-icon {
     flex: none;
     display: inline-flex;
@@ -105,6 +111,23 @@
     flex-wrap: wrap;
     font-size: var(--gh-type-size-2);
     line-height: var(--gh-type-line-height-control);
+  }
+
+  .gh-alert-band.single-line,
+  .gh-alert-band.single-line .gh-alert-band-body {
+    flex-wrap: nowrap;
+  }
+
+  .gh-alert-band.single-line .gh-alert-band-body {
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .gh-alert-band.single-line .gh-alert-band-body :global(strong),
+  .gh-alert-band.single-line .gh-alert-band-body :global(span) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .gh-alert-band-body :global(strong) {
@@ -250,6 +273,10 @@
       width: auto;
       justify-content: flex-end;
       margin-left: auto;
+    }
+
+    .gh-alert-band.single-line {
+      flex-wrap: nowrap;
     }
   }
 </style>

@@ -1,0 +1,42 @@
+id: shipped-release-false-urgency
+title: Shipped release invents a required next action
+domain: ux
+productType: project-management
+surfaceType: web-app
+userGoal: Confirm that a completed release is finished and understand whether starting another release is optional.
+scenario: A release is recorded as shipped with every scoped item complete, but Overview presents a warning-colored Do this next card that sends the user back to Release for repository follow-up.
+artifacts:
+  - id: shipped-overview-copy
+    kind: copy_snippet
+    description: Visible Overview and Release text for the same shipped release.
+    content: "Do this next: Repository follow-up required. Open release. Release shipped. 15/15 done."
+reviewLanes:
+  - ux_comprehension
+  - copy_clarity
+knownFindings:
+  - id: false-post-release-urgency
+    lane: ux_comprehension
+    severity: critical
+    summary: Guildhall presents later repository housekeeping as required work for an already shipped release.
+    impact: The user follows a prominent action that has no release action at its destination and cannot tell whether shipping succeeded.
+    minimumUsefulFix: Present one calm shipped state with no required action; offer starting a new release only when that workflow actually exists.
+    matchHints:
+      - shipped release
+      - false urgency
+      - dead destination
+      - optional next release
+falsePositiveTraps:
+  - id: post-release-option
+    summary: Do not fail an optional Start next release action when it is visibly optional and opens a real workflow.
+source:
+  kind: production_miss
+  citation: Narrative Harness installed-app flow audit, 2026-08-07.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-08-07T19:00:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2027-02-07
+  reason: Release lifecycle and next-release interactions may change.

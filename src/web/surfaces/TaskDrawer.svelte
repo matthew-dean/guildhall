@@ -36,7 +36,6 @@
   import { escalationPrimaryAction, escalationUserGuidance } from '../lib/escalation-labels.js'
   import { taskDisplayKey } from '../lib/identifier-labels.js'
   import { humanizeProjectName } from '../lib/project-name.js'
-  import { readableTaskDescription } from '../lib/task-display.js'
   import { unresolvedCompletionEscalations } from '../lib/task-drawer-integrity.js'
   import { deliveryProgressBadge } from '../lib/work-progress-display.js'
 
@@ -834,12 +833,6 @@
     const id = scopedProjectId()
     return humanizeProjectName(id)
   })
-  const displayTaskDescription = $derived.by(() => {
-    if (!task || typeof task.description !== 'string') return ''
-    const description = readableTaskDescription(task.description, displayTaskTitle)
-    if (!description || description === displayTaskTitle) return ''
-    return description
-  })
   const stageRerun = $derived.by(() => {
     if (!task) return null
     if (task.id === 'task-meta-intake' || task.id === 'task-workspace-import') return null
@@ -1042,21 +1035,18 @@
                 navigateToRelatedTask(crumb.id)
               }}
             >
-              {taskDisplayKey(crumb, allTaskContext)}
+              {taskDisplayKey(crumb, allTaskContext, scopedProjectId())}
             </a>
           {:else}
-            <span>{taskDisplayKey(crumb, allTaskContext)}</span>
+            <span>{taskDisplayKey(crumb, allTaskContext, scopedProjectId())}</span>
           {/if}
         {/each}
         {#if breadcrumbTasks.length === 0}
           <span aria-hidden="true">/</span>
-          <span>{taskDisplayKey(taskId, allTaskContext)}</span>
+          <span>{taskDisplayKey(taskId, allTaskContext, scopedProjectId())}</span>
         {/if}
       </nav>
       <h3>{displayTaskTitle}</h3>
-      {#if displayTaskDescription}
-        <p>{displayTaskDescription}</p>
-      {/if}
       {#if currentDeliveryBadge}
         <div class="drawer-progress-line">
           <Chip

@@ -14,7 +14,7 @@ Once you open a project, Guildhall shifts from "service over projects" into
 "show me what is happening." Setup, active work, reviewer feedback, and your next
 decision live in one place.
 
-![Guildhall 0.10.0 project shell showing project health, current work, and navigation.](../assets/ui-audit/0-10-0/project-overview.webp)
+![Guildhall 0.13.x project shell showing a completed release without invented urgency.](../assets/ui-audit/0-13-0/project-overview.webp)
 
 ## The project rail
 
@@ -24,9 +24,9 @@ to a different section, that previous child list gets out of the way.
 
 **Project** keeps project understanding together:
 
-- **Overview**: the first stop. It pulls together the next action, work mix,
-  attention items, health, blocked work, recent activity, and Git Story signals
-  without making you inspect every view first.
+- **Overview**: the first stop. It gives the current release and the one
+  decision that matters now. Detailed scope, checks, facts, and activity stay
+  in their own views.
 - **Map**: the 1,000-foot view. It shows the project skeleton, selected release
   or bounded scope, work distribution, progress, and later work.
 - **Needs you**: the alert view. If Guildhall needs an answer, approval, or
@@ -55,7 +55,7 @@ controls.
   waiting on a PR, or blocked by a conflict
 - Let you drill into transcripts and provenance without leaving the shell
 
-![Guildhall 0.10.0 Work view showing task hierarchy, blocked work, and queue health.](../assets/ui-audit/0-10-0/work.webp)
+![Guildhall 0.13.x Work view showing completed history behind progressive disclosure.](../assets/ui-audit/0-13-0/work-complete.webp)
 
 ![Guildhall Thread view showing task cleanup, project questions, and bounded owner-input conversations.](../assets/ui-audit/0-10-0/thread.webp)
 
@@ -134,3 +134,7 @@ The project remains open after a release ships. Selecting later work changes
 the active scope without reopening or rewriting the shipped release. Git Story
 Closure remains the lower-level name for repository landing state, not a
 project navigation concept.
+
+See [Ship a release](../guide/ship-a-release) for the complete path from
+selection and scope through readiness, repository follow-up, shipping, and an
+optional next release.

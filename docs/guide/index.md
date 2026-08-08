@@ -30,6 +30,7 @@ Setting up your first project? Start with [Start here](./quick-start).
 ## Projects
 
 - [Projects and work](./dashboard) — service home, project cards, and the project shell.
+- [Ship a release](./ship-a-release) — select scope, clear readiness checks, ship, and begin another release when you choose.
 - [Project files and workspace state](./workspaces) — what lives on disk.
 - [Running Guildhall](./running) — browser controls first, CLI commands when you need them.
 - [Guildhall app reference](../web-ui/) — screen-by-screen details when you need a specific app page.

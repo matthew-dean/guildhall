@@ -271,6 +271,21 @@ function ownerInputTickerMessage(code: string | undefined, focusKind: string | u
 
 function readinessTicker(detail: ProjectDetail | null | undefined): ProjectActivityLine | null {
   const readiness = detail?.startReadiness
+  const shippedRelease = detail?.releaseReadiness?.release?.state === 'shipped'
+  if (shippedRelease) {
+    const releaseLabel = detail?.releaseReadiness?.release?.label?.trim() || 'Release'
+    const done = detail?.releaseReadiness?.totals?.done
+    const total = detail?.releaseReadiness?.totals?.tasks
+    return {
+      tone: 'ok',
+      pulse: false,
+      actorLabel: 'Complete',
+      label: 'Complete',
+      message: `${releaseLabel} shipped`,
+      detail: typeof done === 'number' && typeof total === 'number' ? `${done}/${total} complete` : undefined,
+      timeLabel: null,
+    }
+  }
   if (!readiness || readiness.canStart) return null
   if (readiness.code === 'all_terminal') {
     const summary = detail?.orientationSpine?.summary

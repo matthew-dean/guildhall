@@ -747,6 +747,7 @@ function compactFleetDecision(decision: ProjectDecisionProjection): ProjectDecis
     execution: compactExecution(decision.execution),
     release: {
       state: decision.release.state,
+      ...(decision.release.lifecycleState ? { lifecycleState: decision.release.lifecycleState } : {}),
       ...(decision.release.releaseId ? { releaseId: decision.release.releaseId } : {}),
       blockerTaskIds: [...decision.release.blockerTaskIds],
       proofBlockerTaskIds: [...decision.release.proofBlockerTaskIds],
@@ -2703,6 +2704,7 @@ function summarizeProjectFromProjection(
         : null,
       runStatus: run.status,
       runMode: run.mode,
+      releaseLifecycleState: projection.releaseSummary.release?.state,
     })
     : run
     ? buildProjectActionModel({
@@ -2749,6 +2751,7 @@ function summarizeProjectFromProjection(
         : null,
       runStatus: projection.execution?.status ?? 'stopped',
       runMode: projection.execution?.mode,
+      releaseLifecycleState: projection.releaseSummary.release?.state,
     })
   return {
     ...shell,
@@ -5565,6 +5568,8 @@ function repositoryFollowupStartReadinessFromReleaseReadiness(
   count: number
 } | null {
   if (!isRecord(releaseReadiness)) return null
+  const release = isRecord(releaseReadiness.release) ? releaseReadiness.release : null
+  if (release?.state === 'shipped') return null
   const diagnostics = isRecord(releaseReadiness.diagnostics) ? releaseReadiness.diagnostics : null
   const totals = isRecord(diagnostics?.totals) ? diagnostics.totals : isRecord(releaseReadiness.totals) ? releaseReadiness.totals : null
   const gitStoryBlockingCount = typeof totals?.gitStoryBlockingCount === 'number' ? totals.gitStoryBlockingCount : 0
@@ -5596,14 +5601,6 @@ function repositoryFollowupStartReadinessFromReleaseReadiness(
   ) {
     return null
   }
-  const reason = typeof first?.reason === 'string' && first.reason.trim()
-    ? first.reason.trim()
-    : typeof first?.label === 'string' && first.label.trim()
-      ? first.label.trim()
-      : 'repository follow-up is still needed.'
-  const nextAction = typeof first?.nextAction === 'string' && first.nextAction.trim()
-    ? first.nextAction.trim()
-    : ''
   const taskId = blockerTaskId ?? fallbackStartReadiness?.focusTaskId
   const focusTask = taskId
     ? tasks.find(task => task.id === taskId)
@@ -5613,17 +5610,7 @@ function repositoryFollowupStartReadinessFromReleaseReadiness(
     : typeof fallbackStartReadiness?.focusTaskTitle === 'string' && fallbackStartReadiness.focusTaskTitle.trim()
       ? fallbackStartReadiness.focusTaskTitle.trim()
       : undefined
-  const release = isRecord(releaseReadiness.release) ? releaseReadiness.release : null
-  const scope = isRecord(releaseReadiness.scope) ? releaseReadiness.scope : null
-  const scopeLabel = typeof scope?.label === 'string' && scope.label.trim()
-    ? scope.label.trim()
-    : typeof release?.label === 'string' && release.label.trim()
-      ? release.label.trim()
-      : 'The selected release'
-  const next = nextAction && !focusTaskTitle ? ` ${nextAction}` : ''
-  const message = focusTaskTitle
-    ? `"${focusTaskTitle}" cannot resume until repository follow-up is finished: ${reason}${next}`
-    : `${scopeLabel} cannot ship until repository follow-up is finished: ${reason}${next}`
+  const message = repositoryFollowupShellMessage(blockerState, gitStoryBlockingCount)
   return {
     canStart: false,
     code: 'repository_followup_required',
@@ -5633,6 +5620,18 @@ function repositoryFollowupStartReadinessFromReleaseReadiness(
     ...(focusTaskTitle ? { focusTaskTitle } : {}),
     focusKind: 'repository_followup',
     count: gitStoryBlockingCount,
+  }
+}
+
+function repositoryFollowupShellMessage(state: string | undefined, count: number): string {
+  if (count > 1) return `Release blocked by ${count} repository issues.`
+  switch (state) {
+    case 'dirty_uncommitted': return 'Release blocked by uncommitted changes.'
+    case 'committed_local': return 'Release blocked by unpushed commits.'
+    case 'no_upstream': return 'Release blocked: the branch has no upstream.'
+    case 'pr_open': return 'Release blocked by an open pull request.'
+    case 'conflict': return 'Release blocked by a repository conflict.'
+    default: return 'Release blocked by repository follow-up.'
   }
 }
 
@@ -8063,24 +8062,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
           )
       endSpine()
       const actionModel = !diagnosticRequested
-          ? run
-            ? buildProjectActionModel({
-                startReadiness: responseStartReadiness,
-                tasks: tasks as never,
-                runStatus: run.status,
-                runMode: run.mode,
-                availability,
-              })
-            : responseStartReadiness !== startReadiness
-              ? buildProjectActionModel({
-                  startReadiness: responseStartReadiness,
-                  inbox,
-                  tasks: tasks as never,
-                  thread: thread as never,
-                  runStatus: 'stopped',
-                  availability,
-                })
-              : projectedSummary?.actionModel ?? currentState.summary?.actionModel ?? null
+          ? buildProjectActionModel({
+              startReadiness: responseStartReadiness,
+              inbox,
+              tasks: tasks as never,
+              thread: thread as never,
+              runStatus: run?.status ?? 'stopped',
+              runMode: run?.mode,
+              availability,
+              releaseLifecycleState: currentState.summary?.releaseSummary?.release?.state,
+            })
         : (() => {
             const orientationSpineRecord = orientationSpine as unknown as { selectedTaskScope?: unknown; scope?: unknown }
             const actionScope = orientationSpineRecord.selectedTaskScope ?? orientationSpineRecord.scope ?? null
@@ -8105,6 +8096,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               runStatus: run?.status ?? 'stopped',
               runMode: run?.mode,
               availability,
+              releaseLifecycleState: currentState.summary?.releaseSummary?.release?.state,
             })
           })()
       const endResponse = startTiming('response')
@@ -10211,6 +10203,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? authoritativeScope
         : (orientationScopeMatchesMaterializedWork ? orientationScope : queueSelectedReleaseScope)
       : null
+    const selectedReleaseShipped = Boolean(
+      selectedReleaseScope &&
+      rawReleases?.find(release => release.id === selectedReleaseScope.id)?.state === 'shipped',
+    )
 	    const tasksById = new Map(effectiveTasks.map(task => [task.id, task] as const))
 	    const scopedTasks = selectedReleaseScope
       ? tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
@@ -10286,7 +10282,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const parent = parentId ? tasksById.get(parentId) ?? null : null
         return !taskRecord || deriveTaskWorkVisibility(taskRecord, parent).countInProjectTotals
       })
-    if (terminalProofMissingDoneTasks.length > 0) {
+    if (!selectedReleaseShipped && terminalProofMissingDoneTasks.length > 0) {
       const first = terminalProofMissingDoneTasks[0]!
       const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
       const message = terminalProofMissingDoneTasks.length === 1
@@ -10320,9 +10316,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
       }
     }
-    const sourceConflict = scopedOrientation?.orientationSpine.gaps.find(gap =>
-      sourceConflictCompetesWithSelectedScope(gap, effectiveTasks, selectedReleaseScope),
-    )
+    const sourceConflict = selectedReleaseShipped
+      ? undefined
+      : scopedOrientation?.orientationSpine.gaps.find(gap =>
+          sourceConflictCompetesWithSelectedScope(gap, effectiveTasks, selectedReleaseScope),
+        )
     if (sourceConflict) {
       const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
       return {
@@ -10353,16 +10351,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       projectPath,
       (scopedReleaseSummary?.gitStoryTasks ?? scopedTasks) as Array<Record<string, unknown>>,
     )
-    const startBlockingGitStoryBlockers = queueSelectedReleaseScope && (selectedReleaseScope?.kind === 'release' || selectedReleaseScope?.kind === 'milestone')
+    const startBlockingGitStoryBlockers = !selectedReleaseShipped && queueSelectedReleaseScope && (selectedReleaseScope?.kind === 'release' || selectedReleaseScope?.kind === 'milestone')
       ? gitStory.blockers.filter(gitStoryBlocksUnattendedStart)
       : []
     if (startBlockingGitStoryBlockers.length > 0) {
-      const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
       const first = startBlockingGitStoryBlockers[0]!
-      const next = first.nextAction ? ` Next: ${first.nextAction}` : ''
-      const message = startBlockingGitStoryBlockers.length === 1
-        ? `${scopeLabel} has no runnable task work left, but repository follow-up is still needed: ${first.reason}${next}`
-        : `${scopeLabel} has no runnable task work left, but ${startBlockingGitStoryBlockers.length} repository follow-ups are still needed, starting with: ${first.reason}${next}`
+      const message = repositoryFollowupShellMessage(first.state, startBlockingGitStoryBlockers.length)
       return {
         canStart: false,
         code: 'repository_followup_required',
@@ -16914,6 +16908,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 ? decision.execution.code === 'stopping' ? 'stopping' : 'running'
                 : undefined,
               runMode: run?.mode ?? projection?.execution?.mode,
+              releaseLifecycleState: (compactSummary?.releaseSummary ?? projection?.releaseSummary)?.release?.state,
             })
           })()
         : compactSummary?.actionModel ?? projection?.actionModel ?? null

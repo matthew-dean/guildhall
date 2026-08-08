@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyProjectActionModelPrimaryAction,
   applyRuntimeExecutionToProjectDecision,
   buildProjectDecisionProjection,
   projectDecisionInFlight,
@@ -11,6 +12,79 @@ import {
 } from '../project-decision-projection.js'
 
 describe('project decision projection', () => {
+  it('does not invent a release-review action after the selected release shipped', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-08T01:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'The selected release has no runnable work remaining.',
+      },
+      release: {
+        scopeMode: 'named_release',
+        release: { id: 'release-shipped' },
+        state: 'ready',
+        lifecycleState: 'shipped',
+        blockers: [],
+      },
+    })
+
+    expect(decision.release).toMatchObject({
+      state: 'ready',
+      lifecycleState: 'shipped',
+    })
+    expect(decision.primaryAction).toEqual({
+      kind: 'none',
+      reasonCode: 'release_shipped',
+    })
+  })
+
+  it('keeps shipped lifecycle terminal ahead of stale owner review and input', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-08T01:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'An old question is still open.',
+      },
+      ownerInput: { openCount: 1, next: { id: 'question-old' } },
+      ownerReview: { openCount: 1, next: { taskId: 'task-old-review' }, taskIds: ['task-old-review'] },
+      release: {
+        scopeMode: 'named_release',
+        release: { id: 'release-shipped' },
+        state: 'ready',
+        lifecycleState: 'shipped',
+        blockers: [],
+      },
+    })
+
+    expect(decision.primaryAction).toEqual({ kind: 'none', reasonCode: 'release_shipped' })
+  })
+
+  it('keeps a shipped release terminal when a stale task action is present', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-08T01:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Review completed scope.',
+      },
+      release: {
+        scopeMode: 'named_release',
+        release: { id: 'release-shipped' },
+        state: 'ready',
+        lifecycleState: 'shipped',
+        blockers: [],
+      },
+    })
+
+    expect(applyProjectActionModelPrimaryAction(decision, {
+      source: 'task',
+      taskId: 'task-stale',
+      code: 'ready_work',
+    }).primaryAction).toEqual({ kind: 'none', reasonCode: 'release_shipped' })
+  })
+
   it('attaches a focus title only from the canonical task in the captured snapshot', () => {
     const decision = buildProjectDecisionProjection({
       projectRevision: 43,

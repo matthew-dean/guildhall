@@ -385,7 +385,7 @@ describe('release publish script', () => {
     }
   })
 
-  it('resumes when release refs already exist and match the local release tag', async () => {
+  it('resumes when release refs already exist and an annotated local release tag matches HEAD', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-script-'))
     try {
       await createMinimalReleaseFixture(tmp)
@@ -457,7 +457,7 @@ describe('release publish script', () => {
       await runGit(tmp, ['config', 'user.email', 'guildhall-test@example.com'])
       await runGit(tmp, ['add', '.'])
       await runGit(tmp, ['commit', '--no-verify', '-m', 'chore(release): guildhall@0.5.0'])
-      await runGit(tmp, ['tag', 'v0.5.0'])
+      await runGit(tmp, ['tag', '-a', 'v0.5.0', '-m', 'Guildhall 0.5.0'])
       await addBareOrigin(tmp)
       await runGit(tmp, ['push', 'origin', 'HEAD:main', 'refs/tags/v0.5.0'])
 
@@ -485,6 +485,64 @@ describe('release publish script', () => {
       expect(result.output).not.toContain('refusing to publish a release that cannot create a fresh GitHub artifact')
       expect(nextManifest.version).toBe('0.5.1')
       expect(headMessage).toBe('chore: start 0.5.1')
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses to resume from a checkout newer than the existing release tag', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-script-'))
+    try {
+      await createMinimalReleaseFixture(tmp)
+      const manifestPath = path.join(tmp, 'package.json')
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'))
+      manifest.name = 'guildhall'
+      manifest.version = '0.5.0'
+      await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
+
+      const fakeBin = path.join(tmp, 'fake-bin')
+      const operationLog = path.join(tmp, 'release-order.log')
+      await fs.mkdir(fakeBin)
+      await writeExecutable(
+        path.join(fakeBin, 'npm'),
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "view" ]; then echo "0.4.0"; exit 0; fi',
+          'if [ "$1" = "whoami" ]; then echo "guildhall-test"; exit 0; fi',
+          'printf "npm %s\\n" "$*" >> "$PUBLISH_TEST_LOG"',
+          'exit 0',
+          '',
+        ].join('\n'),
+      )
+
+      await runGit(tmp, ['init', '-b', 'main'])
+      await runGit(tmp, ['config', 'user.name', 'Guildhall Test'])
+      await runGit(tmp, ['config', 'user.email', 'guildhall-test@example.com'])
+      await runGit(tmp, ['add', '.'])
+      await runGit(tmp, ['commit', '--no-verify', '-m', 'chore(release): guildhall@0.5.0'])
+      await runGit(tmp, ['tag', 'v0.5.0'])
+      await fs.writeFile(path.join(tmp, 'post-tag-fix.txt'), 'not part of v0.5.0\n')
+      await runGit(tmp, ['add', 'post-tag-fix.txt'])
+      await runGit(tmp, ['commit', '--no-verify', '-m', 'fix: post-tag change'])
+
+      const result = await execFileP('node', ['scripts/publish.mjs', '0.5.0', '--skip-tests'], {
+        cwd: tmp,
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
+          PUBLISH_TEST_LOG: operationLog,
+        },
+      }).then(
+        ({ stdout, stderr }) => ({ status: 0, output: stdout + stderr }),
+        (error: { code?: number; stdout?: string; stderr?: string }) => ({
+          status: error.code ?? 1,
+          output: `${error.stdout ?? ''}${error.stderr ?? ''}`,
+        }),
+      )
+
+      expect(result.status).not.toBe(0)
+      expect(result.output).toContain('Check out the tagged release commit before resuming')
+      await expect(fs.stat(operationLog)).rejects.toThrow()
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
     }

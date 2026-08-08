@@ -131,6 +131,7 @@
   const projectRunning = $derived(detail.run?.status === 'running')
   const projectRunActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
   const deliveryReadyCount = $derived(deliveryQueue?.runnable?.length ?? 0)
+  const selectedReleaseShipped = $derived(detail.releaseSummary?.release?.state === 'shipped')
   const scopeSourceSummary = $derived.by(() => {
     const rows = detail.orientationSpine?.scopeRows ?? []
     const refs = rows
@@ -564,6 +565,7 @@
   }
 
   function emptyFilterTitle(): string {
+    if (selectedReleaseShipped && workFilter === 'open') return 'Release work is complete.'
     if (workFilter === 'queued') return 'No work is ready to run yet.'
     if (workFilter === 'scope') return 'No current-scope work is visible yet.'
     if (workFilter === 'planning') return 'No planning work.'
@@ -575,6 +577,7 @@
   }
 
   function emptyFilterDetail(): string {
+    if (selectedReleaseShipped && workFilter === 'open') return 'This release has shipped. Completed work stays available when you need the record.'
     if (workFilter === 'queued') return 'Planning and review work is still waiting. Use Planning to inspect intake and spec work.'
     if (workFilter === 'scope') return 'Current and deferred scope rows will appear here once Guildhall maps them to work records.'
     if (workFilter === 'planning') return 'Planning, intake, and spec items will appear here while they are being shaped.'
@@ -586,6 +589,7 @@
   }
 
   function emptyFilterAction(): { label: string; filter: WorkFilter } | null {
+    if (selectedReleaseShipped && workFilter === 'open') return { label: 'Show completed work', filter: 'scope' }
     if (workFilter === 'queued' && allWorkItems.some(isPlanningTask)) return { label: 'Show planning', filter: 'planning' }
     if (workFilter !== 'queued') return { label: 'Show queued work', filter: 'queued' }
     return null
@@ -606,6 +610,7 @@
   }
 
   function defaultWorkFilterForTasks(): WorkFilter {
+    if (selectedReleaseShipped) return 'open'
     if (scopeTaskIds.size > 0) return 'scope'
     if (tasks.some(isQueuedWorkTask)) return 'queued'
     if (tasks.some(isPlanningTask)) return 'planning'
@@ -977,7 +982,7 @@
             </div>
             {@const action = emptyFilterAction()}
             {#if action}
-              <Button variant="secondary" size="sm" onclick={() => { workFilter = action.filter }}>
+              <Button variant="secondary" size="sm" onclick={() => onWorkFilterSelect(action.filter)}>
                 {action.label}
               </Button>
             {/if}
@@ -1225,7 +1230,7 @@
     min-inline-size: 0;
     overflow-x: auto;
     overflow-y: hidden;
-    padding-block: 2px var(--gh-space-2);
+    padding-block: var(--gh-space-1) var(--gh-space-2);
     scrollbar-gutter: stable;
   }
   .work-list-scroll:focus-visible {

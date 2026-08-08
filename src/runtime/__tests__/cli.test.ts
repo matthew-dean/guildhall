@@ -27,6 +27,7 @@ import {
   resolveServiceLifecycleIntent,
   serviceStatePath,
   serviceUrlForPort,
+  waitForServiceReady,
   SHIPPED_CLI_COMMANDS,
   draftEscapedMissCalibrationCase,
   recordEscapedReviewMiss,
@@ -180,6 +181,53 @@ describe('CLI service lifecycle helpers', () => {
     })
     expect(readServiceRuntimeState(home)?.pid).toBe(process.pid)
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:7788/api/service')
+  })
+
+  it('rejects a live recorded pid when the service endpoint reports another process', async () => {
+    const home = tmpHome()
+    const replacementPid = process.pid + 1
+    persistServiceRuntimeState({
+      pid: process.pid,
+      port: 7788,
+      url: serviceUrlForPort(7788),
+      startedAt: '2026-05-19T16:00:00.000Z',
+    }, home)
+    vi.spyOn(process, 'kill').mockImplementation((pid) => {
+      if (pid === process.pid || pid === replacementPid) return true
+      throw new Error('not running')
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      pid: replacementPid,
+      startedAt: '2026-05-19T16:00:01.000Z',
+    }), { status: 200, headers: { 'content-type': 'application/json' } })))
+
+    await expect(discoverServiceRuntimeState(7788, home)).resolves.toMatchObject({
+      pid: replacementPid,
+      port: 7788,
+    })
+    expect(readServiceRuntimeState(home)?.pid).toBe(replacementPid)
+  })
+
+  it('recovers when a replacement service takes over after the recorded pid dies', async () => {
+    const home = tmpHome()
+    persistServiceRuntimeState({
+      pid: process.pid + 100_000,
+      port: 7777,
+      url: serviceUrlForPort(7777),
+      startedAt: '2026-05-19T16:00:00.000Z',
+    }, home)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      pid: process.pid,
+      startedAt: '2026-05-19T16:00:01.000Z',
+    }), { status: 200, headers: { 'content-type': 'application/json' } })))
+
+    await expect(waitForServiceReady(7777, home, 1)).resolves.toEqual({
+      pid: process.pid,
+      port: 7777,
+      url: serviceUrlForPort(7777),
+      startedAt: '2026-05-19T16:00:01.000Z',
+    })
+    expect(readServiceRuntimeState(home)?.pid).toBe(process.pid)
   })
 
   it('handles failed probes and exposes pid liveness checks', async () => {
@@ -501,7 +549,10 @@ describe('Guildhall CLI surface', () => {
       '- Define fixture, expected-record, prototype-run, and evaluation schemas.',
       '',
       'Contracts: PrototypeRun, RunEvaluation, SchemaFieldUsage, PacketQualityScore.',
-      'Verification: the fixture directory shape includes at least one small story fixture and expected records.',
+      '',
+      '## Verification',
+      '',
+      '- The fixture directory shape includes at least one small story fixture and expected records.',
       '',
       '## Current Next Milestone',
       '',

@@ -132,6 +132,7 @@ export interface ProjectAction {
 export interface ProjectRunControlModel {
   label: string
   startEnabled: boolean
+  pauseEnabled?: boolean
   disabledReason?: string
   href?: string
 }
@@ -172,6 +173,7 @@ export interface BuildProjectActionModelInput {
   runStatus?: string | null
   runMode?: string | null
   availability?: ProjectAvailabilityModel | null
+  releaseLifecycleState?: string | null
 }
 
 function hasApprovedProductBrief(task: ProjectActionTask): boolean {
@@ -512,7 +514,27 @@ function threadAction(turn: ProjectActionThreadTurn): ProjectAction {
   }
 }
 
-function setupModel(readiness: ProjectActionStartReadiness | null | undefined, tasks: ProjectActionTask[], turn: ProjectActionThreadTurn | null): ProjectSetupModel {
+function setupBlockingInboxItem(items: ProjectActionInboxItem[]): ProjectActionInboxItem | null {
+  return items.find(item =>
+    item.severity === 'high' &&
+    ['bootstrap_missing', 'required_migration', 'setup_pending'].includes(item.kind ?? ''),
+  ) ?? null
+}
+
+function setupModel(
+  readiness: ProjectActionStartReadiness | null | undefined,
+  tasks: ProjectActionTask[],
+  turn: ProjectActionThreadTurn | null,
+  blockingInboxItem: ProjectActionInboxItem | null,
+): ProjectSetupModel {
+  if (blockingInboxItem) {
+    return {
+      state: 'blocked',
+      freshIntakeNeeded: false,
+      href: blockingInboxItem.actionHref ?? '/overview/inbox',
+      detail: blockingInboxItem.detail ?? blockingInboxItem.title,
+    }
+  }
   if (!readiness?.canStart && readiness?.code === 'owner_input_required') {
     return {
       state: 'blocked',
@@ -541,10 +563,30 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const activeTurn = activeThreadTurn(input.thread)
   const scopeOwnerInput = scopeAuthorityOwnerInput(input.scopeAuthorityRequests ?? [])
   const ownerInput = scopeOwnerInput ?? input.ownerInput ?? ownerInputFrom(startReadiness, activeTurn)
-  const setup = setupModel(startReadiness, tasks, activeTurn)
-  const setupBlocksStart = setup.state === 'blocked' && tasks.length === 0
-  const inboxActions = (input.inbox?.items ?? [])
+  const inboxItems = input.inbox?.items ?? []
+  const shippedTerminal = input.releaseLifecycleState === 'shipped'
+  const blockingInboxItem = setupBlockingInboxItem(inboxItems)
+  const setup = setupModel(startReadiness, tasks, activeTurn, blockingInboxItem)
+  if (shippedTerminal) {
+    return {
+      primaryAction: null,
+      secondaryActions: [],
+      runControl: {
+        label: 'Release shipped',
+        startEnabled: false,
+        pauseEnabled: false,
+        disabledReason: 'This release is complete and recorded as shipped.',
+        href: '/release',
+      },
+      ownerInput: { active: false },
+      setup: blockingInboxItem ? setup : { state: 'ready', freshIntakeNeeded: false },
+    }
+  }
+  const setupBlocksStart = setup.state === 'blocked' && (tasks.length === 0 || blockingInboxItem !== null)
+  const setupInboxAction = blockingInboxItem ? inboxAction(blockingInboxItem) : null
+  const inboxActions = (shippedTerminal ? [] : inboxItems)
     .filter(item => item.severity !== 'low')
+    .filter(item => item !== blockingInboxItem)
     .map(inboxAction)
   const scopeAction = scopeAuthorityAction(input.scopeAuthorityRequests ?? [])
   const focusedRunTaskId = input.runMode === 'one_task' ? startReadiness?.focusTaskId : undefined
@@ -555,6 +597,17 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
       : bestTaskAction(tasks, running)
   const candidates: ProjectAction[] = []
 
+  if (startReadiness?.code === 'all_terminal') {
+    candidates.push({
+      source: 'start_readiness',
+      label: 'Release is ready',
+      detail: startReadiness.message ?? 'All scoped work is complete. Review the release evidence before shipping.',
+      buttonLabel: 'Open Release',
+      href: '/release',
+      tone: 'accent',
+      code: 'release_ready',
+    })
+  }
   if (startReadiness && !startReadiness.canStart && startReadiness.code !== 'all_terminal') {
     candidates.push(
       startReadiness.code === 'owner_input_required' && ownerInput.href
@@ -567,13 +620,14 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
         : startReadinessAction(startReadiness),
     )
   }
+  if (setupInboxAction && !running) candidates.push(setupInboxAction)
   // Start readiness owns whether work is runnable. Compact summaries omit
   // brief/spec detail, so task ranking must never reinterpret a ready item as
   // blocked or incomplete merely because that detail is intentionally absent.
   if (startReadiness?.canStart && startReadiness.code === 'ready_work') {
     candidates.push(startReadinessAction(startReadiness))
   }
-  if (running && startReadiness?.focusTaskId) {
+  if (running && startReadiness?.focusTaskId && !taskAction) {
     candidates.push({
       source: 'start_readiness',
       label: startReadiness.focusTaskTitle?.trim() || 'Current work',
@@ -634,10 +688,13 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     runControl: {
       label: setupBlocksStart && !running && !stopping
         ? 'Waiting on setup'
+        : availabilityPaused && !running && !stopping
+          ? 'Resume'
         : ownerInput.active && !running && !stopping
           ? 'Waiting on answer'
           : runControlLabel(startReadiness, running, stopping),
-      startEnabled: running || (!stopping && (startReadiness?.canStart !== false || blockedButRunnable) && !setupBlocksStart),
+      startEnabled: availabilityPaused || running || (!stopping && (startReadiness?.canStart !== false || blockedButRunnable) && !setupBlocksStart),
+      pauseEnabled: !availabilityPaused && !stopping && !setupBlocksStart,
       disabledReason,
       href: startReadiness?.actionHref ?? setup.href,
     },
@@ -658,8 +715,23 @@ export function resolveProjectActionModel(input: {
   ownerInput?: ProjectOwnerInputModel | null
   runStatus?: string | null
   runMode?: string | null
+  releaseLifecycleState?: string | null
 }): ProjectActionModel {
   const readiness = input.startReadiness ?? null
+  if (input.releaseLifecycleState === 'shipped') {
+    const resolved = buildProjectActionModel({
+      startReadiness: readiness,
+      ownerInput: input.ownerInput,
+      runStatus: input.runStatus,
+      runMode: input.runMode,
+      tasks: [],
+      releaseLifecycleState: input.releaseLifecycleState,
+    })
+    return {
+      ...resolved,
+      setup: input.stored?.setup ?? resolved.setup,
+    }
+  }
   const hasResolvedReadiness = Boolean(
     readiness?.code &&
     (readiness.canStart || readiness.code !== 'all_terminal'),
@@ -679,6 +751,7 @@ export function resolveProjectActionModel(input: {
     runStatus: input.runStatus,
     runMode: input.runMode,
     tasks: [],
+    releaseLifecycleState: input.releaseLifecycleState,
   })
   return {
     ...(input.stored ?? resolved),

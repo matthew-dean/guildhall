@@ -13,7 +13,7 @@ You do not need the whole machine model before your first run. The job here is
 smaller: install Guildhall, open one repo, and try one modest task where you can
 see the loop.
 
-![Guildhall 0.10.0 project settings showing readiness checks and local runtime setup state.](../assets/ui-audit/0-10-0/settings-ready.webp)
+![Guildhall 0.13.x project overview showing a completed release without a false next action.](../assets/ui-audit/0-13-0/project-overview.webp)
 
 ## The first mental model
 
@@ -48,34 +48,42 @@ That is the little heartbeat you want before asking for more ambitious work.
 
 ## Install
 
-Guildhall 0.12's local app is release-supported on macOS. Your project can be
+Guildhall 0.13's local app is release-supported on macOS. Your project can be
 anything Guildhall can work on; this compatibility note is about the machine
 running Guildhall itself.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.13.0 sh
 ```
 
 If you prefer npm and already have Node.js 22 or newer:
 
 ```bash
-npm install -g guildhall
+npm install -g guildhall@0.13.0
 ```
 
-The installer downloads the latest macOS package from GitHub Releases and
-checks `guildhall-macos.tar.gz.sha256` before installing. To pin a release:
+The installer downloads the 0.13.0 macOS package from GitHub Releases and
+checks `guildhall-macos.tar.gz.sha256` before installing. The equivalent
+explicitly pinned command is:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.12.0 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.13.0 sh
 ```
 
-The package installer does not install Podman, create a VM, pull the runtime
-image, or start a container. That work happens later from Guildhall's guided
-runtime setup, after you approve it in the app. If Podman is missing, Guildhall
-shows the official macOS installer path and, when Homebrew is already present,
-the matching Homebrew install option. If Podman is installed but its local
-runtime service has not been created or started, Guildhall can finish that step
-for you from Settings.
+The package installer does not install a container runtime, create a VM, pull
+the runtime image, or start a container. For an isolated macOS setup, Docker
+through Colima is the recommended path:
+
+```bash
+brew install colima docker
+colima start
+docker info
+```
+
+Guildhall also supports Docker Desktop and Podman. Open **Settings -> Ready**
+after starting your chosen runtime; Guildhall detects a healthy Docker or
+Podman service and lets you select it. Host-run compatibility mode remains
+available when you deliberately do not want an isolated container runtime.
 
 ## Open one project
 
@@ -89,13 +97,13 @@ opened, the setup wizard asks for the basics: the project name, a stable URL
 slug, and which model provider to use. That is the first site survey: where is
 the project, what is it called, and can Guildhall work safely?
 
-After the project opens, check **Settings → Ready**. The Local runtime card
-shows whether the Podman-backed Debian runtime is ready, needs setup, or should
-stay in **Host-run compatibility mode** for now.
+After the project opens, check **Settings -> Ready**. The Local runtime card
+shows whether Docker or Podman is ready, needs setup, or should stay in
+**Host-run compatibility mode** for now.
 
-![Guildhall 0.10.0 Settings Ready view showing the local runtime setup card.](../assets/ui-audit/0-10-0/settings-ready.webp)
+![Guildhall 0.13.x Work view keeping completed release history behind an explicit action.](../assets/ui-audit/0-13-0/work-complete.webp)
 
-![Guildhall 0.10.0 project overview showing attention work, task health, and project navigation.](../assets/ui-audit/0-10-0/project-overview.webp)
+![Guildhall 0.13.x Release view showing a shipped release receipt.](../assets/ui-audit/0-13-0/release-shipped.webp)
 
 ## What Guildhall may ask
 

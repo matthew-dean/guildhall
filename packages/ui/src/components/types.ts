@@ -51,6 +51,7 @@ export type AlertBandIcon = 'alert-triangle' | 'check-circle-2' | 'sparkles'
 export interface AlertBandProps extends HTMLAttributes<HTMLDivElement> {
   tone?: AlertBandTone
   density?: AlertBandDensity
+  singleLine?: boolean
   icon?: AlertBandIcon | false
   role?: 'status' | 'alert'
   ariaLabel?: string

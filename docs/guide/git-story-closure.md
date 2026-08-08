@@ -93,3 +93,13 @@ Marking work **local-only** or **deferred** records that decision with a reason
 and removes it from the accidental-residue pile. The Release view can then
 distinguish "we meant to leave this here" from "nobody noticed the branch was
 still dangling."
+
+## From repository follow-up to shipping
+
+When repository state blocks a selected release, open **Release -> Checks** and
+use the action attached to the finding. Once the checkout, branch, pull request,
+or explicit local-only/deferred decision is settled, return to the Release
+summary. **Ship release** appears only when the selected scope and its live
+checks are ready.
+
+Follow [Ship a release](./ship-a-release) for the complete release workflow.

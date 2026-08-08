@@ -94,7 +94,11 @@ export function friendlyTaskId(taskId: string | undefined): string {
   return suffix ? `Task ${Number.parseInt(suffix, 10)}` : titleize(raw)
 }
 
-export function taskDisplayKey(task: TaskDisplayKeyInput | string | undefined, tasks: TaskDisplayKeyInput[] = []): string {
+export function taskDisplayKey(
+  task: TaskDisplayKeyInput | string | undefined,
+  tasks: TaskDisplayKeyInput[] = [],
+  projectId?: string | null,
+): string {
   const taskId = typeof task === 'string' ? task : task?.id
   const explicit = typeof task === 'object' ? task?.displayKey?.trim() : undefined
   if (explicit) return explicit
@@ -103,14 +107,22 @@ export function taskDisplayKey(task: TaskDisplayKeyInput | string | undefined, t
   const existing = tasks.find(candidate => candidate.id === normalizedId)
   const existingExplicit = existing?.displayKey?.trim()
   if (existingExplicit) return existingExplicit
-  const index = tasks.findIndex(candidate => candidate.id === normalizedId)
-  if (index >= 0) return `T-${String(index + 1).padStart(3, '0')}`
-  const suffix = normalizedId.match(/(?:^|[-_])(?:task|t)[-_]?(\d+)$/i)?.[1] ?? normalizedId.match(/(\d+)$/)?.[1]
-  return suffix ? `T-${String(Number.parseInt(suffix, 10)).padStart(3, '0')}` : friendlyTaskId(normalizedId)
+  const suffix = normalizedId.match(/(?:^|[-_])(?:task|t)[-_]?(\d+)$/i)?.[1]
+  const numericKey = suffix ? String(Number.parseInt(suffix, 10)).padStart(3, '0') : null
+  const numericCollision = numericKey !== null && tasks.some(candidate => {
+    const candidateId = candidate.id?.trim()
+    if (!candidateId || candidateId === normalizedId) return false
+    const candidateSuffix = candidateId.match(/(?:^|[-_])(?:task|t)[-_]?(\d+)$/i)?.[1]
+    return candidateSuffix !== undefined && String(Number.parseInt(candidateSuffix, 10)).padStart(3, '0') === numericKey
+  })
+  const keySuffix = numericKey && !numericCollision
+    ? numericKey
+    : collisionSafeTaskKeySuffix(normalizedId, tasks)
+  return `${projectTaskKeyPrefix(projectId)}-${keySuffix}`
 }
 
-export function taskDisplayLabel(task: TaskDisplayKeyInput | string | undefined, tasks: TaskDisplayKeyInput[] = []): string {
-  return taskDisplayKey(task, tasks)
+export function taskDisplayLabel(task: TaskDisplayKeyInput | string | undefined, tasks: TaskDisplayKeyInput[] = [], projectId?: string | null): string {
+  return taskDisplayKey(task, tasks, projectId)
 }
 
 export function taskTitleMap(tasks: Task[]): Record<string, string> {
@@ -119,12 +131,12 @@ export function taskTitleMap(tasks: Task[]): Record<string, string> {
   return out
 }
 
-export function friendlyTaskLabel(taskId: string | undefined, titles: Record<string, string>): string {
+export function friendlyTaskLabel(taskId: string | undefined, titles: Record<string, string>, projectId?: string | null): string {
   const raw = (taskId ?? '').trim()
-  return raw ? titles[raw] ?? friendlyTaskId(raw) : 'Task'
+  return raw ? titles[raw] ?? taskDisplayKey(raw, [], projectId) : 'Task'
 }
 
-export function humanizeRuntimeText(text: string, taskTitles: Record<string, string> = {}): string {
+export function humanizeRuntimeText(text: string, taskTitles: Record<string, string> = {}, projectId?: string | null): string {
   return text
     .replace(/\s+—\s+Command failed:[\s\S]*$/i, '.')
     .replace(/\s+at\s+\/Users\/[^\s]+/g, ' in the project checkout')
@@ -138,11 +150,37 @@ export function humanizeRuntimeText(text: string, taskTitles: Record<string, str
       return `moved the task to ${labelForIdentifier('status', status).label.toLowerCase()}`
     })
     .replace(/\bTask (task-[A-Za-z0-9_-]+) complete\b/g, (_match, taskId: string) => {
-      return `${friendlyTaskLabel(taskId, taskTitles)} complete`
+      return `${friendlyTaskLabel(taskId, taskTitles, projectId)} complete`
     })
     .replace(/(?<![/-])\b(task-[A-Za-z0-9_-]+)\b/g, (_match, taskId: string) => {
-      return friendlyTaskLabel(taskId, taskTitles)
+      return friendlyTaskLabel(taskId, taskTitles, projectId)
     })
+}
+
+export function projectTaskKeyPrefix(projectId?: string | null): string {
+  const normalized = (projectId ?? '').replace(/[^A-Za-z0-9]+/g, '').toUpperCase()
+  return normalized.slice(0, 3) || 'T'
+}
+
+function stableTaskKeySuffix(taskId: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < taskId.length; index += 1) {
+    hash ^= taskId.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(36).toUpperCase().padStart(6, '0').slice(-6)
+}
+
+function collisionSafeTaskKeySuffix(taskId: string, tasks: TaskDisplayKeyInput[]): string {
+  const base = stableTaskKeySuffix(taskId)
+  const collidingIds = [...new Set(tasks
+    .map(candidate => candidate.id?.trim())
+    .filter((candidateId): candidateId is string => Boolean(candidateId))
+    .filter(candidateId => stableTaskKeySuffix(candidateId) === base))]
+    .sort()
+  if (collidingIds.length <= 1) return base
+  const index = collidingIds.indexOf(taskId)
+  return index < 0 ? base : `${base}-${index + 1}`
 }
 
 function titleize(value: string): string {

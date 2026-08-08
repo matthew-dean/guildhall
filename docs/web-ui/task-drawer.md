@@ -2,8 +2,8 @@
 title: Task drawer
 help_topic: web.task_drawer
 help_summary: |
-  Slides open from the right when you click a task card. Tabs: Now when live
-  context exists, then Spec, Transcript, Experts, History, and Provenance.
+  Slides open from the right when you click a task card. Tabs: Overview,
+  Action when needed, Spec, Journey, Transcript, Experts, History, and Origin.
   Shows the task evidence and audit trail.
 ---
 
@@ -14,20 +14,21 @@ spec, transcript, reviews, history, and provenance for one task in the same
 place so you do not have to reconstruct what happened from scattered logs.
 
 The header starts with a compact project breadcrumb. The project name is the
-prefix when Guildhall knows it; the project id is the fallback. The task id stays
-visible beside the title because split tasks can have similar names.
+prefix when Guildhall knows it; the project id is the fallback. A short task key
+stays visible beside the title because split tasks can have similar names.
 
 ## Tabs
 
 | Tab | What it answers |
 |---|---|
-| **Now** | What is happening right now? Shows active handoffs, questions, live work, or resume actions when current context exists. |
+| **Overview** | What is this work, where is it now, and what matters next? |
+| **Action** | What can I do right now? Appears when the task has an active handoff, question, approval, recovery, or resume action. |
 | **Spec** | What is the task supposed to accomplish? Shows intent, acceptance criteria, and hard or soft gates. Editable when the task status allows it. |
 | **Journey** | What happened from start to finish? Shows task size, split recommendations, planned review, worker pass, changed files, reviewer pass, verification, done summary, and outcome as a readable story. |
 | **Transcript** | What did the agent actually say? Shows the source conversation and durable task notes. Once a task is done, Journey becomes the friendly default and Transcript becomes backup evidence. |
 | **Experts** | Who reviewed this and what did they think? Shows applicable guilds, review status, and reviewer feedback. |
 | **History** | What does the lower-level log say? Shows revisions, gate output, and escalations. |
-| **Provenance** | Which project policies shaped this task? Shows lever positions, who set them, and when. |
+| **Origin** | Where did this work come from and which project policies shaped it? Shows source context, lever positions, who set them, and when. |
 
 ## Review plan
 

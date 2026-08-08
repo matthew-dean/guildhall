@@ -57,6 +57,7 @@
   } from '../../lib/task-state.js'
   import { taskStagePresentation } from '../../lib/task-presentation.js'
   import { project } from '../../lib/project.svelte.js'
+  import { humanizeRuntimeText } from '../../lib/identifier-labels.js'
   import type { Escalation, GitStorySnapshot, ProjectDetail, ProjectRuntimeSummary, TaskRoutingContext } from '../../lib/types.js'
   import { toast } from '../../lib/toast.svelte.js'
 
@@ -507,8 +508,18 @@
         : specTurnCanApprove(turn)
           ? 'Approve spec'
           : 'Review draft spec',
-      content: turn.spec.trim() || '_No spec saved yet._',
+      content: humanizeRuntimeText(turn.spec.trim(), taskTitlesForRuntimeText(), explicitProjectId) || '_No spec saved yet._',
     }
+  }
+
+  function taskTitlesForRuntimeText(): Record<string, string> {
+    return Object.fromEntries(
+      turns.flatMap(turn => (
+        'taskId' in turn && 'taskTitle' in turn && turn.taskTitle.trim()
+          ? [[turn.taskId, turn.taskTitle.trim()]]
+          : []
+      )),
+    )
   }
 
   function documentPreviewTurn(): BriefTurn | SpecReviewTurn | null {
@@ -704,14 +715,16 @@
         loadCapabilityRequests(),
       ])
     } catch (err) {
+      if (requestId !== threadLoadRequestId) return
       loadError = err instanceof Error ? err.message : String(err)
-      turns = []
-      orientationSpine = null
-      devServers = []
-      threadRuntime = null
-      capabilityRequests = []
-      activeTurnId = null
-      caughtUp = false
+      if (!loaded && turns.length === 0) {
+        orientationSpine = null
+        devServers = []
+        threadRuntime = null
+        capabilityRequests = []
+        activeTurnId = null
+        caughtUp = false
+      }
       loaded = true
     }
   }
@@ -1508,13 +1521,11 @@
       const param = threadRouteParamFromHref(readinessHref)
       if (param && chains.some(chain => chain.id === param)) return param
     }
-    const primaryTaskId = project.detail?.actionModel?.primaryAction?.taskId
+    const primaryTaskId = project.detail?.decision?.execution?.focusTaskId
+      ?? project.detail?.actionModel?.primaryAction?.taskId
     if (startReadiness?.canStart !== false && primaryTaskId) {
       const primaryTaskChain = chains.find(chain => chain.turns.some(turn => 'taskId' in turn && turn.taskId === primaryTaskId))
-      const activeChain = activeTurnId
-        ? chains.find(chain => chain.turns.some(turn => turn.id === activeTurnId)) ?? null
-        : null
-      if (primaryTaskChain && (!activeChain || activeChain.id === 'setup')) return primaryTaskChain.id
+      if (primaryTaskChain) return primaryTaskChain.id
     }
     if (activeTurnId) {
       return chains.find(chain => chain.turns.some(turn => turn.id === activeTurnId))?.id ?? chains[0]?.id ?? null
@@ -3555,14 +3566,25 @@
 
   {#if !loaded}
     <p class="muted">Loading...</p>
-  {:else if loadError}
+  {:else if loadError && turns.length === 0}
     <Card title="Thread unavailable">
       <p class="muted">Could not load the current thread: {loadError}</p>
       <Row justify="end">
         <Button variant="primary" onclick={() => void load()}>Retry</Button>
       </Row>
     </Card>
-  {:else if turns.length === 0}
+  {:else}
+    {#if loadError}
+      <UtilityPanel className="thread-refresh-warning" tone="warn" role="status">
+        <Icon name="alert-triangle" size={16} />
+        <div>
+          <strong>Couldn’t refresh Thread.</strong>
+          <span>Showing the last known conversation.</span>
+        </div>
+        <Button variant="secondary" size="sm" onclick={() => void load()}>Try again</Button>
+      </UtilityPanel>
+    {/if}
+  {#if turns.length === 0}
     <Stack gap="3">
       <Card title="Nothing here yet">
         <p class="muted">
@@ -5862,6 +5884,7 @@
         </div>
       {/if}
     </div>
+  {/if}
   {/if}
 
 </div>

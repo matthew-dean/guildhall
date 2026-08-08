@@ -25,31 +25,39 @@ drawers, and release state without leaving the UI.
 
 ## Local runtime setup
 
-Guildhall 0.10 is supported as a local macOS app. Runtime-backed project work
-uses Podman, but Guildhall does not make Podman a surprise installer side
-effect. The package install leaves your host alone: no Podman install, no
-machine creation, no image pull, and no container startup.
+Guildhall 0.13 is supported as a local macOS app. Runtime-backed project work
+supports Docker and Podman, but Guildhall does not install either as a surprise
+side effect. The package install leaves your host alone: no runtime install, VM
+creation, image pull, or container startup.
 
-Open **Settings → Ready** and look at **Local runtime**:
+For a lightweight isolated macOS setup, use Docker through Colima:
 
-- **Ready** means Podman is installed and its local runtime service is running.
+```bash
+brew install colima docker
+colima start
+docker info
+```
+
+Docker Desktop and Podman are supported alternatives.
+
+Open **Settings -> Ready** and look at **Local runtime**:
+
+- **Ready** means Docker or Podman is installed and its service is running.
   Guildhall still starts project containers only when work needs them.
-- **Needs Podman** means Podman is missing. Guildhall shows the official macOS
-  installer path, and also shows the Homebrew option when Homebrew is already
-  available on the Mac.
-- **Setup needed** means Podman is installed, but the local runtime service has
-  not been created yet. Press **Set up local runtime** and Guildhall runs the
-  approved setup for you.
-- **Stopped** means the service exists but is not running. Press **Start local
-  runtime** and Guildhall starts it, then checks again.
+- **Runtime unavailable** means Guildhall cannot find Docker or Podman. Install
+  Docker with Colima, Docker Desktop, or Podman, then check again.
+- **Setup needed** means Podman is installed but its machine has not been
+  created. Run the approved Podman setup from the app.
+- **Stopped** means Guildhall found a runtime, but its service is not running.
+  Start Colima, Docker Desktop, or the Podman machine, then check again.
 - **Host-run compatibility mode** remains available when setup is skipped,
-  fails, or the host is not supported by the 0.10 local runtime setup flow.
+  fails, or you deliberately want work to run on the host.
 
 Setup choices and results are saved in host-owned Guildhall runtime state, not
 inside the project checkout. Project containers also stay off by default; they
 start on demand when an AI run needs the runtime.
 
-The 0.10 runtime image is part of the release. The release manifest records the
+The 0.13 runtime image is part of the release. The release manifest records the
 expected Debian, Node, Python, runtime API, image tags, and final digest before
 the package is shipped. Guildhall pulls or checks the release image only during
 approved runtime setup or first runtime use.

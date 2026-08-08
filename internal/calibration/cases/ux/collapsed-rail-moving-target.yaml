@@ -1,0 +1,42 @@
+id: collapsed-rail-moving-target
+title: Collapsed navigation moves the target during a click
+domain: ux
+productType: project-management
+surfaceType: web-app
+userGoal: Open the project route named by the navigation item I click.
+scenario: A collapsed project rail expands its active subnavigation on pointer focus, shifting the primary route buttons after pointer-down and before click.
+artifacts:
+  - id: collapsed-project-rail
+    kind: interaction_trace
+    description: Installed collapsed-rail clicks and resulting routes.
+    content: "Threads opened Overview; Work opened Inbox; Timeline opened Map; Release opened Facts."
+reviewLanes:
+  - ux_comprehension
+  - accessibility
+knownFindings:
+  - id: click-target-shift
+    lane: ux_comprehension
+    severity: critical
+    summary: The navigation target moves between pointer-down and click.
+    impact: Every visible primary route can open a different destination than the label the user chose.
+    minimumUsefulFix: Keep collapsed primary targets geometrically stable through pointer focus and render nested navigation only after the rail is explicitly pinned or opened.
+    matchHints:
+      - moving click target
+      - collapsed navigation
+      - pointer focus
+      - wrong destination
+falsePositiveTraps:
+  - id: explicit-expansion
+    summary: Do not fail navigation that expands only after a separate, explicit pin or open action.
+source:
+  kind: production_miss
+  citation: Narrative Harness installed-app flow audit, 2026-08-07.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-08-07T20:30:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2027-02-07
+  reason: Project navigation behavior may change.

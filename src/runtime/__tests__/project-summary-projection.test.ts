@@ -18,6 +18,7 @@ import {
   readProjectSummaryProjection,
   readProjectSummaryProjectionForMigration,
   readProjectSummaryShellProjection,
+  synchronizeProjectSummaryDecision,
   updateProjectSummaryProjection,
   writeProjectSummaryProjectionFromIndexedState,
   writeProjectSummaryProjectionFromUnknownQueue,
@@ -95,6 +96,83 @@ describe('project-summary-projection', () => {
     expect(projectSummaryProjectionIsCurrent(legacy)).toBe(false)
     expect(projectSummaryProjectionIsCurrent({ ...projection, version: 26 })).toBe(false)
     expect(projectSummaryProjectionIsCurrent({ ...projection, version: 27 })).toBe(false)
+  })
+
+  it('hydrates a legacy decision from the selected release lifecycle before action reconciliation', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([task('done-task', 'done')], {
+        selectedReleaseId: 'release-shipped',
+        releases: [{
+          id: 'release-shipped',
+          label: 'Shipped release',
+          kind: 'release',
+          state: 'shipped',
+          source: 'release_plan',
+          proofStyle: 'unspecified',
+          nodeIds: ['work:done-task'],
+          deferredNodeIds: [],
+        }],
+      }),
+      generatedAt: now,
+    })
+    const { lifecycleState: _omitted, ...legacyRelease } = projection.decision.release
+    const legacy = {
+      ...projection,
+      decision: {
+        ...projection.decision,
+        release: legacyRelease,
+        primaryAction: { kind: 'open_work' as const, targetId: 'done-task', reasonCode: 'ready_work' },
+      },
+      actionModel: {
+        ...projection.actionModel,
+        primaryAction: {
+          source: 'task' as const,
+          label: 'Done task',
+          buttonLabel: 'Open Work',
+          href: '/work?task=done-task',
+          tone: 'accent' as const,
+          taskId: 'done-task',
+        },
+      },
+    }
+
+    expect(synchronizeProjectSummaryDecision(legacy as typeof projection).decision).toMatchObject({
+      release: { lifecycleState: 'shipped' },
+      primaryAction: { kind: 'none', reasonCode: 'release_shipped' },
+    })
+  })
+
+  it('clears a stale task action when the decision lifecycle is already shipped', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([task('done-task', 'done')], {
+        selectedReleaseId: 'release-shipped',
+        releases: [{
+          id: 'release-shipped',
+          label: 'Shipped release',
+          kind: 'release',
+          state: 'shipped',
+          source: 'release_plan',
+          proofStyle: 'unspecified',
+          nodeIds: ['work:done-task'],
+          deferredNodeIds: [],
+        }],
+      }),
+      generatedAt: now,
+    })
+    const stale = {
+      ...projection,
+      decision: {
+        ...projection.decision,
+        primaryAction: { kind: 'open_work' as const, targetId: 'done-task', reasonCode: 'ready_work' },
+      },
+    }
+
+    expect(synchronizeProjectSummaryDecision(stale).decision.primaryAction).toEqual({
+      kind: 'none',
+      reasonCode: 'release_shipped',
+    })
   })
 
   it('projects an owner spec review separately from owner input', () => {

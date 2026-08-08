@@ -455,6 +455,7 @@ function installFetchFakes(
     runtime?: unknown
     projectRunStatus?: string
     startReadiness?: unknown
+    decision?: unknown
     projectAvailability?: { status: string; pausedAt?: string | null; resumedAt?: string | null }
     caughtUp?: boolean
     orientationSpine?: unknown
@@ -551,6 +552,7 @@ function installFetchFakes(
         run: { status: options.projectRunStatus ?? 'running', mode: 'continuous' },
         availability: options.projectAvailability ?? { status: 'active', pausedAt: null, resumedAt: null },
         startReadiness: options.startReadiness ?? { canStart: true },
+        ...(options.decision ? { decision: options.decision } : {}),
         ...(options.runtime ? { runtime: options.runtime } : {}),
         ...(project.detail?.taskRoutingContexts ? { taskRoutingContexts: project.detail.taskRoutingContexts } : {}),
         ...(project.detail?.deliverySpine ? { deliverySpine: project.detail.deliverySpine } : {}),
@@ -1218,6 +1220,57 @@ describe('ThreadTab', () => {
     expect(setupRow.textContent).not.toContain('NOW')
     expect(selectedThread().getByText('Brief cleanup')).toBeTruthy()
     expect(selectedThread().queryByRole('button', { name: /open import review/i })).toBeNull()
+  })
+
+  it('defaults to the shared runnable focus instead of an unrelated active question', async () => {
+    project.detail = {
+      id: 'looma-knit',
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-old-question',
+        focusTaskTitle: 'Check that this project can run',
+      },
+      decision: {
+        execution: {
+          focusTaskId: 'task-fixture',
+          focusTaskTitle: 'Shape fixture ground truth',
+        },
+        release: { lifecycleState: 'active' },
+      },
+      actionModel: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as any
+    const oldQuestion = {
+      ...questionTurn('question-old', 'old', 'Check that this project can run?', ['Yes', 'No']),
+      taskId: 'task-old-question',
+      taskTitle: 'Check that this project can run',
+    }
+    installFetchFakes([
+      oldQuestion,
+      importedDraftTurn({
+        id: 'task-fixture-thread',
+        taskId: 'task-fixture',
+        taskTitle: 'Shape fixture ground truth',
+        importedDraft: false,
+        taskStatus: 'ready',
+        status: 'pending',
+      }),
+    ], 'question-old', {
+      startReadiness: project.detail.startReadiness,
+      decision: project.detail.decision,
+    })
+
+    render(ThreadTab)
+
+    const focusRow = await screen.findByRole('button', { name: /Shape fixture ground truth/i })
+    await waitFor(() => expect(focusRow.getAttribute('aria-current')).toBe('true'))
+    expect(screen.getByRole('button', { name: /Check that this project can run/i }).getAttribute('aria-current')).toBeNull()
   })
 
   it('keeps the composer bottom-anchored when a single active card has a footer composer', async () => {
@@ -3117,6 +3170,22 @@ describe('ThreadTab', () => {
     expect(within(dialog).getByRole('button', { name: /approve spec/i }).classList.contains('v-primary')).toBe(true)
     expect(within(dialog).getByRole('button', { name: /request changes/i })).toBeTruthy()
     expect(path.value).toContain('/thread')
+  })
+
+  it('replaces raw task ids in the spec preview with owner-facing references', async () => {
+    const referencedTaskId = 'task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth'
+    installFetchFakes([
+      specReviewTurn('task-link-controls', {
+        spec: `## Context\nThe contracts task (${referencedTaskId}) is already complete.`,
+      }),
+    ], 'spec-task-link-controls')
+
+    render(ThreadTab, { projectId: 'narrative-harness' })
+
+    await userEvent.click(await screen.findByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    expect(within(dialog).queryByText(new RegExp(referencedTaskId))).toBeNull()
+    expect(within(dialog).getByText(/The contracts task \(NAR-[A-Z0-9]{6}\) is already complete\./)).toBeTruthy()
   })
 
   it('renders normal spec_review component work as owner approval', async () => {
