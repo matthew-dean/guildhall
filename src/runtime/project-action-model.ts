@@ -565,7 +565,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const ownerInput = scopeOwnerInput ?? input.ownerInput ?? ownerInputFrom(startReadiness, activeTurn)
   const inboxItems = input.inbox?.items ?? []
   const shippedTerminal = input.releaseLifecycleState === 'shipped'
-  const blockingInboxItem = shippedTerminal ? null : setupBlockingInboxItem(inboxItems)
+  const blockingInboxItem = setupBlockingInboxItem(inboxItems)
   const setup = setupModel(startReadiness, tasks, activeTurn, blockingInboxItem)
   if (shippedTerminal) {
     return {
@@ -579,7 +579,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
         href: '/release',
       },
       ownerInput: { active: false },
-      setup: { state: 'ready', freshIntakeNeeded: false },
+      setup: blockingInboxItem ? setup : { state: 'ready', freshIntakeNeeded: false },
     }
   }
   const setupBlocksStart = setup.state === 'blocked' && (tasks.length === 0 || blockingInboxItem !== null)
@@ -719,7 +719,7 @@ export function resolveProjectActionModel(input: {
 }): ProjectActionModel {
   const readiness = input.startReadiness ?? null
   if (input.releaseLifecycleState === 'shipped') {
-    return buildProjectActionModel({
+    const resolved = buildProjectActionModel({
       startReadiness: readiness,
       ownerInput: input.ownerInput,
       runStatus: input.runStatus,
@@ -727,6 +727,10 @@ export function resolveProjectActionModel(input: {
       tasks: [],
       releaseLifecycleState: input.releaseLifecycleState,
     })
+    return {
+      ...resolved,
+      setup: input.stored?.setup ?? resolved.setup,
+    }
   }
   const hasResolvedReadiness = Boolean(
     readiness?.code &&

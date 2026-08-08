@@ -79,7 +79,7 @@ describe('buildProjectActionModel', () => {
     })
   })
 
-  it('does not reopen setup urgency after a release shipped', () => {
+  it('retains setup state without reopening setup urgency after a release shipped', () => {
     const model = buildProjectActionModel({
       startReadiness: {
         canStart: false,
@@ -99,7 +99,11 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toBeNull()
     expect(model.secondaryActions).toEqual([])
-    expect(model.setup.state).toBe('ready')
+    expect(model.setup).toMatchObject({
+      state: 'blocked',
+      href: '/settings/ready',
+      detail: 'Bootstrap incomplete',
+    })
     expect(model.ownerInput.active).toBe(false)
     expect(model.runControl).toMatchObject({
       label: 'Release shipped',
@@ -135,7 +139,11 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction).toBeNull()
     expect(model.secondaryActions).toEqual([])
     expect(model.ownerInput).toEqual({ active: false })
-    expect(model.setup).toEqual({ state: 'ready', freshIntakeNeeded: false })
+    expect(model.setup).toMatchObject({
+      state: 'blocked',
+      href: '/migrations',
+      detail: 'Migrate project',
+    })
     expect(model.runControl.label).toBe('Release shipped')
   })
 
@@ -220,7 +228,11 @@ describe('buildProjectActionModel', () => {
       label: 'Release shipped',
       startEnabled: false,
     })
-    expect(model.setup).toEqual({ state: 'ready', freshIntakeNeeded: false })
+    expect(model.setup).toMatchObject({
+      state: 'blocked',
+      href: '/settings/ready',
+      detail: 'Stale setup failure.',
+    })
   })
 
   it('does not let a contradictory ready-work hint override the shared readiness authority', () => {
