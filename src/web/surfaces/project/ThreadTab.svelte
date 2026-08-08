@@ -1521,13 +1521,11 @@
       const param = threadRouteParamFromHref(readinessHref)
       if (param && chains.some(chain => chain.id === param)) return param
     }
-    const primaryTaskId = project.detail?.actionModel?.primaryAction?.taskId
+    const primaryTaskId = project.detail?.decision?.execution?.focusTaskId
+      ?? project.detail?.actionModel?.primaryAction?.taskId
     if (startReadiness?.canStart !== false && primaryTaskId) {
       const primaryTaskChain = chains.find(chain => chain.turns.some(turn => 'taskId' in turn && turn.taskId === primaryTaskId))
-      const activeChain = activeTurnId
-        ? chains.find(chain => chain.turns.some(turn => turn.id === activeTurnId)) ?? null
-        : null
-      if (primaryTaskChain && (!activeChain || activeChain.id === 'setup')) return primaryTaskChain.id
+      if (primaryTaskChain) return primaryTaskChain.id
     }
     if (activeTurnId) {
       return chains.find(chain => chain.turns.some(turn => turn.id === activeTurnId))?.id ?? chains[0]?.id ?? null

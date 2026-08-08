@@ -947,10 +947,10 @@ export function applyProjectActionModelPrimaryAction(
   } | null | undefined,
 ): ProjectDecisionProjection {
   if (!action || decision.conflicts.length > 0 || decision.ownerInput.state === 'required' || decision.ownerReview.state === 'required') return decision
+  if (decision.release.lifecycleState === 'shipped') return decision
   if (
     decision.execution.state === 'complete' &&
-    decision.release.state === 'ready' &&
-    decision.release.lifecycleState !== 'shipped'
+    decision.release.state === 'ready'
   ) return decision
   const taskId = action.taskId?.trim()
   if (!taskId) return decision

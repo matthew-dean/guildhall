@@ -719,7 +719,7 @@
   const startReadiness = $derived(detail?.startReadiness ?? null)
   const primaryAction = $derived(detail?.actionModel?.primaryAction ?? null)
   const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
-  const selectedReleaseShipped = $derived(detail?.releaseReadiness?.release?.state === 'shipped')
+  const selectedReleaseShipped = $derived(detail?.decision?.release?.lifecycleState === 'shipped')
   const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
   const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
   const providerDecisionText = $derived(

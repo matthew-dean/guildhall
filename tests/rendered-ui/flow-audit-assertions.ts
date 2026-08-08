@@ -25,6 +25,7 @@ export interface ProjectFlowState {
   waitingOnDependenciesCount: number
   firstRunnableId: string | null
   focusTaskId: string | null
+  focusTaskTitle: string | null
   hasDeliveryQueue: boolean
 }
 
@@ -59,6 +60,16 @@ export async function readProjectFlowState(page: Page, projectId: string): Promi
   const queue = detail.deliverySpine?.queue ?? {}
   const hasDeliveryQueue = Boolean(detail.deliverySpine?.queue)
   const counts = detail.workProgress?.counts ?? {}
+  const focusTaskId = typeof detail.decision?.execution?.focusTaskId === 'string'
+    ? detail.decision.execution.focusTaskId
+    : typeof detail.startReadiness?.focusTaskId === 'string'
+      ? detail.startReadiness.focusTaskId
+      : typeof queue.firstRunnable?.task?.id === 'string'
+        ? queue.firstRunnable.task.id
+        : null
+  const focusTask = Array.isArray(detail.tasks)
+    ? detail.tasks.find((task: { id?: string }) => task.id === focusTaskId)
+    : null
 
   return {
     startCanStart: detail.actionModel?.runControl?.startEnabled === true,
@@ -82,9 +93,14 @@ export async function readProjectFlowState(page: Page, projectId: string): Promi
     runnableCount: queue.runnable?.length ?? 0,
     waitingOnDependenciesCount: queue.blocked?.length ?? 0,
     firstRunnableId: queue.firstRunnable?.task?.id ?? null,
-    focusTaskId: typeof detail.startReadiness?.focusTaskId === 'string'
-      ? detail.startReadiness.focusTaskId
-      : null,
+    focusTaskId,
+    focusTaskTitle: typeof detail.decision?.execution?.focusTaskTitle === 'string'
+      ? detail.decision.execution.focusTaskTitle
+      : typeof detail.startReadiness?.focusTaskTitle === 'string'
+        ? detail.startReadiness.focusTaskTitle
+        : typeof focusTask?.title === 'string'
+          ? focusTask.title
+          : null,
     hasDeliveryQueue,
   }
 }
@@ -135,13 +151,16 @@ export async function expectProjectFlowStateAgreement(page: Page, projectId: str
   await expect(page.getByText(`${state.visibleTotal} total`)).toBeVisible()
 
   if (state.startReadinessCode !== 'all_terminal') {
-    const accessibleRunControlName = state.startCanStart
-      ? state.runControlLabel
-      : state.runControlDisabledReason ?? state.runControlLabel
+    const accessibleRunControlName = state.runControlLabel ?? state.runControlDisabledReason
     expect(accessibleRunControlName).toBeTruthy()
     const runControl = page.getByRole('button', { name: accessibleRunControlName!, exact: true })
     await expect(runControl).toBeVisible()
-    if (!state.startCanStart) await expect(runControl).toBeDisabled()
+    if (!state.startCanStart) {
+      await expect(runControl).toBeDisabled()
+      if (state.runControlDisabledReason) {
+        await expect(runControl).toHaveAttribute('title', state.runControlDisabledReason)
+      }
+    }
   }
 
   if (state.startCanStart) {
@@ -170,7 +189,11 @@ export async function expectProjectFlowStateAgreement(page: Page, projectId: str
   await expect(page.getByRole('complementary', { name: 'Thread list' })).toBeVisible()
 
   if (state.startCanStart) {
-    expect(state.focusTaskId ?? state.firstRunnableId).not.toBeNull()
+    expect(state.focusTaskId).not.toBeNull()
+    expect(state.focusTaskTitle).toBeTruthy()
+    const selectedThread = page.locator('.thread-index-row[aria-current="true"]')
+    await expect(selectedThread).toBeVisible()
+    await expect(selectedThread).toContainText(state.focusTaskTitle!)
   }
   return state
 }

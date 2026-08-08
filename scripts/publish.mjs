@@ -732,7 +732,7 @@ function preflightGit() {
 
 function assertExistingReleaseTagMatchesHead(version) {
   const tagRef = `refs/tags/v${version}`
-  const localTag = localRefHash(tagRef)
+  const localTag = localRefHash(`${tagRef}^{}`)
   if (!localTag) return
   const head = runCapture('git', ['rev-parse', 'HEAD']).trim()
   if (head !== localTag) {

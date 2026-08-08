@@ -1660,6 +1660,15 @@ export interface ProjectDetail {
   gitStory?: GitStorySummary | null
   releaseReadiness?: ProjectReleaseReadiness | null
   startReadiness?: StartReadiness | null
+  decision?: {
+    execution?: {
+      focusTaskId?: string
+      focusTaskTitle?: string
+    }
+    release?: {
+      lifecycleState?: string
+    }
+  } | null
   actionModel?: ProjectActionModel | null
   deliverySpine?: DeliverySpine | null
   orientationSpine?: ProjectOrientationSpine | null

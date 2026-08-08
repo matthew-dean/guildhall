@@ -450,7 +450,7 @@ describe('ProjectOverviewTab', () => {
         startReadiness: {
           canStart: false,
           code: 'all_terminal',
-          message: 'The selected release has no runnable work remaining.',
+          message: 'Review completed scope.',
         },
         tasks: [],
         releaseReadiness: {
@@ -483,7 +483,7 @@ describe('ProjectOverviewTab', () => {
       projectTicker: {
         label: 'Complete',
         actorLabel: 'Guildhall',
-        message: 'The selected release has no runnable work remaining.',
+        message: 'Review completed scope.',
         tone: 'idle',
         pulse: false,
       },
@@ -498,6 +498,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByRole('heading', { name: 'Project map' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Signals' })).not.toBeInTheDocument()
     expect(screen.queryByText('2 changed files are not committed.')).not.toBeInTheDocument()
+    expect(screen.queryByText('The selected release has no runnable work remaining.')).not.toBeInTheDocument()
   })
 
   it('keeps Overview signals scoped to release git state when project-wide git work is unrelated', () => {
@@ -762,12 +763,12 @@ describe('ProjectOverviewTab', () => {
         startReadiness: {
           canStart: false,
           code: 'all_terminal',
-          message: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.',
+          message: 'Review completed scope.',
         },
         actionModel: actionModel({
           source: 'start_readiness',
           label: 'Release is ready',
-          detail: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.',
+          detail: 'Review completed scope.',
           buttonLabel: 'Open Release',
           href: '/release',
           tone: 'accent',
@@ -833,7 +834,7 @@ describe('ProjectOverviewTab', () => {
       projectTicker: {
         label: 'Run finished',
         actorLabel: 'Guildhall',
-        message: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.',
+        message: 'Review completed scope.',
         tone: 'idle',
         pulse: false,
       },
@@ -845,6 +846,8 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByRole('heading', { name: 'Do this next' })).not.toBeInTheDocument()
     expect(screen.queryByText('Needs attention')).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Release is ready' })).toBeInTheDocument()
+    expect(screen.getAllByText('Review completed scope.').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/No actionable tasks remain/)).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'No runnable work' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
     expect(screen.getByText(/3 deferred/)).toBeInTheDocument()

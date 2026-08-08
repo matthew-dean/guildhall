@@ -5,6 +5,8 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+<!-- markdownlint-disable MD003 -->
+
 ## 2026-08-07 Cross-View Density Audit
 
 - Work id: `0.13.1-cross-view-density-audit`.
@@ -40,7 +42,7 @@ help_summary: |
 ### Installed Flow Proof
 
 - Installed artifact:
-  `/Users/matthew/.guildhall/app/0.13.1-1786159975-93727/app/dist/cli.js`.
+  `~/.guildhall/app/0.13.1-1786159975-93727/app/dist/cli.js`.
 - Runtime proof: `/api/stale-server` reported `stale:false`; startup refresh
   completed with `7` projects, `2` refreshed projects, and `errorCount:0`.
 - Overview: shows one shipped receipt and no required next action, release loop,
@@ -54683,6 +54685,12 @@ Repair:
       project availability storage, stop endpoint semantics, and event storage.
 - Required follow-up: complete the three repairs and installed-app evidence in
       order, then update these checklist items with exact proof.
+- Proof: `pnpm lint:contracts` completed successfully with
+      `Contract touch detector advisory: all touched contract paths have decision evidence.`
+      Focused runtime and component proof is recorded in the checklist above;
+      final build, installed-app, and Browser proof remains required before merge.
+- Waivers: none.
+- Owner review: pending review of this PR's final installed flow evidence.
 - Apply/revert behavior: reverting restores verbose wrapping shell chrome, the
       blocker-shaped run control, and ambiguous activity pagination. No stored
       data migration or cleanup is required.
@@ -54753,11 +54761,14 @@ Repair:
       task drawer, and use fresh 0.13 screenshots. The screenshot set must be
       recaptured after final install because the first capture still displayed
       the shell's transient `CONNECTING` indicator.
-- [ ] Installed-app startup false negative: `guildhall start` reported that the
+- [x] Installed-app startup false negative: `guildhall start` reported that the
       service did not become ready, while `/api/stale-server` immediately
       reported PID 21697, `stale:false`, seven projects loaded, and zero refresh
-      errors. The command must trust the same readiness fact the service API
-      exposes.
+      errors. The command now trusts the same readiness fact the service API
+      exposes; final installed proof used
+      `~/.guildhall/app/0.13.1-1786209220-22771/app/dist/cli.js`, restarted the
+      service successfully, and reported `stale:false`, seven projects loaded,
+      two refreshed projects, and zero refresh errors.
 - [x] Startup false-negative source repair: readiness polling now discovers the
       live service on the intended port instead of trusting only the PID from
       an obsolete state file. A focused CLI regression simulates a replacement
@@ -54777,6 +54788,12 @@ Repair:
       renders only that model, and the shell no longer reinterprets bootstrap
       state into a competing run decision. The repaired rendered audit passes
       shared-state and geometry checks at `1114x692`, `900x692`, and `390x844`.
+- [x] Final installed Browser replay: Narrative Harness Overview, Release, and
+      Work agree on `Release shipped`; Timeline starts newest-first and one
+      `Load older activity` click added visible rows with `Loaded 8 older
+      events.`; the runnable `t-minus-t` Thread selected the shared decision's
+      focus task instead of an unrelated active question; Browser logged no
+      errors during the replay.
 - Completion proof: an installed-app, zero-context click-through across
       Overview, Release, Thread, Work, task detail, and Timeline at wide desktop,
       narrow desktop, and mobile; no dead/self actions, contradictory shared

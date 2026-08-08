@@ -44,11 +44,12 @@ Open **Settings -> Ready** and look at **Local runtime**:
 
 - **Ready** means Docker or Podman is installed and its service is running.
   Guildhall still starts project containers only when work needs them.
-- **Runtime unavailable** means neither Docker nor Podman is healthy. Start
-  Colima, Docker Desktop, or the Podman machine, then check again.
+- **Runtime unavailable** means Guildhall cannot find Docker or Podman. Install
+  Docker with Colima, Docker Desktop, or Podman, then check again.
 - **Setup needed** means Podman is installed but its machine has not been
-  created. Guildhall can run the approved Podman setup from the app.
-- **Stopped** means a detected runtime service exists but is not running.
+  created. Run the approved Podman setup from the app.
+- **Stopped** means Guildhall found a runtime, but its service is not running.
+  Start Colima, Docker Desktop, or the Podman machine, then check again.
 - **Host-run compatibility mode** remains available when setup is skipped,
   fails, or you deliberately want work to run on the host.
 

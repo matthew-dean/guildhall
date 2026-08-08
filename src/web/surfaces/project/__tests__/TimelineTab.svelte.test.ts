@@ -186,6 +186,7 @@ describe('TimelineTab', () => {
     await user.click(screen.getByRole('button', { name: 'Load older activity' }))
 
     expect((await screen.findByRole('status')).textContent).toContain('Loaded 1 older event.')
+    expect(screen.getAllByText('ERROR: newest')).toHaveLength(1)
     expect(screen.getByText('ERROR: older')).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledTimes(3)
     expect(screen.queryByRole('button', { name: 'Load older activity' })).toBeNull()

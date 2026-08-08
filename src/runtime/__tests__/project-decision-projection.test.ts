@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyProjectActionModelPrimaryAction,
   applyRuntimeExecutionToProjectDecision,
   buildProjectDecisionProjection,
   projectDecisionInFlight,
@@ -58,6 +59,30 @@ describe('project decision projection', () => {
     })
 
     expect(decision.primaryAction).toEqual({ kind: 'none', reasonCode: 'release_shipped' })
+  })
+
+  it('keeps a shipped release terminal when a stale task action is present', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-08T01:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Review completed scope.',
+      },
+      release: {
+        scopeMode: 'named_release',
+        release: { id: 'release-shipped' },
+        state: 'ready',
+        lifecycleState: 'shipped',
+        blockers: [],
+      },
+    })
+
+    expect(applyProjectActionModelPrimaryAction(decision, {
+      source: 'task',
+      taskId: 'task-stale',
+      code: 'ready_work',
+    }).primaryAction).toEqual({ kind: 'none', reasonCode: 'release_shipped' })
   })
 
   it('attaches a focus title only from the canonical task in the captured snapshot', () => {

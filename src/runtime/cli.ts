@@ -208,7 +208,10 @@ export async function discoverServiceRuntimeState(
   home = homedir(),
 ): Promise<ServiceRuntimeState | null> {
   const recorded = readServiceRuntimeState(home)
-  if (recorded && recorded.port === port && isPidAlive(recorded.pid)) return recorded
+  if (recorded && recorded.port === port && isPidAlive(recorded.pid)) {
+    const live = await probeLiveService(port)
+    if (live?.pid === recorded.pid) return recorded
+  }
   if (recorded) clearServiceRuntimeState(home)
 
   const live = await probeLiveService(port)

@@ -1220,6 +1220,54 @@ describe('ThreadTab', () => {
     expect(selectedThread().queryByRole('button', { name: /open import review/i })).toBeNull()
   })
 
+  it('defaults to the shared runnable focus instead of an unrelated active question', async () => {
+    project.detail = {
+      id: 'looma-knit',
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-fixture',
+        focusTaskTitle: 'Shape fixture ground truth',
+      },
+      decision: {
+        execution: {
+          focusTaskId: 'task-fixture',
+          focusTaskTitle: 'Shape fixture ground truth',
+        },
+        release: { lifecycleState: 'active' },
+      },
+      actionModel: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as any
+    const oldQuestion = {
+      ...questionTurn('question-old', 'old', 'Check that this project can run?', ['Yes', 'No']),
+      taskId: 'task-old-question',
+      taskTitle: 'Check that this project can run',
+    }
+    installFetchFakes([
+      oldQuestion,
+      importedDraftTurn({
+        id: 'task-fixture-thread',
+        taskId: 'task-fixture',
+        taskTitle: 'Shape fixture ground truth',
+        importedDraft: false,
+        taskStatus: 'ready',
+        status: 'pending',
+      }),
+    ], 'question-old')
+
+    render(ThreadTab)
+
+    const focusRow = await screen.findByRole('button', { name: /Shape fixture ground truth/i })
+    await waitFor(() => expect(focusRow.getAttribute('aria-current')).toBe('true'))
+    expect(screen.getByRole('button', { name: /Check that this project can run/i }).getAttribute('aria-current')).toBeNull()
+  })
+
   it('keeps the composer bottom-anchored when a single active card has a footer composer', async () => {
     installFetchFakes([
       importedDraftTurn({

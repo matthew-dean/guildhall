@@ -183,6 +183,31 @@ describe('CLI service lifecycle helpers', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:7788/api/service')
   })
 
+  it('rejects a live recorded pid when the service endpoint reports another process', async () => {
+    const home = tmpHome()
+    const replacementPid = process.pid + 1
+    persistServiceRuntimeState({
+      pid: process.pid,
+      port: 7788,
+      url: serviceUrlForPort(7788),
+      startedAt: '2026-05-19T16:00:00.000Z',
+    }, home)
+    vi.spyOn(process, 'kill').mockImplementation((pid) => {
+      if (pid === process.pid || pid === replacementPid) return true
+      throw new Error('not running')
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      pid: replacementPid,
+      startedAt: '2026-05-19T16:00:01.000Z',
+    }), { status: 200, headers: { 'content-type': 'application/json' } })))
+
+    await expect(discoverServiceRuntimeState(7788, home)).resolves.toMatchObject({
+      pid: replacementPid,
+      port: 7788,
+    })
+    expect(readServiceRuntimeState(home)?.pid).toBe(replacementPid)
+  })
+
   it('recovers when a replacement service takes over after the recorded pid dies', async () => {
     const home = tmpHome()
     persistServiceRuntimeState({

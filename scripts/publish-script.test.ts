@@ -385,7 +385,7 @@ describe('release publish script', () => {
     }
   })
 
-  it('resumes when release refs already exist and match the local release tag', async () => {
+  it('resumes when release refs already exist and an annotated local release tag matches HEAD', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-script-'))
     try {
       await createMinimalReleaseFixture(tmp)
@@ -457,7 +457,7 @@ describe('release publish script', () => {
       await runGit(tmp, ['config', 'user.email', 'guildhall-test@example.com'])
       await runGit(tmp, ['add', '.'])
       await runGit(tmp, ['commit', '--no-verify', '-m', 'chore(release): guildhall@0.5.0'])
-      await runGit(tmp, ['tag', 'v0.5.0'])
+      await runGit(tmp, ['tag', '-a', 'v0.5.0', '-m', 'Guildhall 0.5.0'])
       await addBareOrigin(tmp)
       await runGit(tmp, ['push', 'origin', 'HEAD:main', 'refs/tags/v0.5.0'])
 
