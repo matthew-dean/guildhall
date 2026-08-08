@@ -7,6 +7,100 @@ help_summary: |
 
 <!-- markdownlint-disable MD003 -->
 
+## 2026-08-08 Completed Release Intake Handoff
+
+- Work id: `completed-release-intake-handoff`.
+- User job: after a shipped release, the owner can describe the next release,
+  answer the intake questions, and immediately see the resulting work being
+  shaped without guessing whether the request was saved, queued, or lost.
+- Cross-surface failure: Narrative Harness Overview correctly said Stage 1 was
+  shipped, but offered no next-release action. New Thread accepted a supplied
+  `Stage 2: Local Desktop Harness MVP` title, replaced it with a sentence
+  fragment, asked sixteen pressure-test questions, marked the intake complete,
+  created no task or release, and selected an unrelated stale Stage 1 spec.
+  The API confirmed `status:complete`, no task split, no task id, and no
+  completion handoff while delivery state still exposed the stale tasks.
+- User-visible correction: the final pressure-test answer materializes one
+  exploring task, returns its id, merges the intake request into that task's
+  Thread chain, and focuses it. The owner-supplied title remains authoritative.
+- Recovery correction: materialization uses a stable request id and reuses an
+  existing linked task, so a retry after a partial server failure cannot create
+  duplicate work.
+- [x] Shelve the two orphaned Stage 1 tasks before starting Stage 2 work.
+- [x] Preserve an explicit release-intake title.
+- [x] Add a typed completed-intake-to-task handoff and retry recovery.
+- [x] Keep the intake history attached to the materialized task in Thread.
+- [x] Add an idempotent owner-approved release-creation boundary with explicit
+  task membership, then select the created release.
+- [ ] Make shipped Overview offer a calm `Start next release` action.
+- [ ] Make project summary state distinguish a shipped historical release from
+  newly active unscoped shaping work.
+- [ ] Replace the repetitive two-question-per-domain closeout with progressive
+  review of already supplied constraints.
+- [ ] Keep a failed spec-approval mutation visible in the approval modal. The
+  installed Narrative Harness flow dismissed the modal while the API rejected
+  approval for required migration
+  `0.13.27/acceptance-command-proof-path-reconciliation`; Thread continued to
+  say the spec needed review without explaining the failed action.
+- [ ] Make the active-release projection use canonical dependency and runtime
+  state. Installed Stage 2 showed dependency-blocked future work as `Paused`,
+  ordered the likely run list from the last documentation task backward, called
+  four tasks `Queued` while only `task-086` was active, and claimed there were
+  no blocked tasks while the API reported eight dependency blockers.
+- [ ] Make the activity count describe actual active agents or tasks, not every
+  nonterminal historical in-flight record; the installed ticker reported
+  `Working on 19 tasks` for a release with one active architecture gate.
+
+### Installed Stage 2 Proof
+
+- Built and installed the current branch, restarted the local service, and
+  confirmed `/api/stale-server` reported `stale:false` at runtime `0.13.2`.
+- Completed intake produced one stable task id and the explicit nine-task Stage
+  2 release was created and selected through the installed API without changing
+  the shipped Stage 1 release.
+- Canonical release state agreed on nine included tasks, zero complete, and
+  `task-086` as the only dependency-runnable architecture gate before shaping.
+- The first approval attempt exposed a required migration. Applying that named
+  automatic migration and retrying the same delegated approval succeeded;
+  execution resumed with the approval note preserved in task evidence.
+
+### Contract Touch Decision
+
+- Work id: `completed-release-intake-handoff`.
+- Touched contracts: pressure-test intake completion metadata,
+  `/api/project/pressure-test/:id/answer` success payload, routed-request title
+  precedence, Thread request-to-task grouping, and
+  `POST /api/project/release/create` owner-approved release membership.
+- Considered but not touched: task-level legacy `releaseIds`, shipped release
+  membership, release closure lifecycle,
+  project decision schema, task status transitions, and provider prose.
+- Required follow-up: a separate shared-summary repair must make newly active
+  work visible beside a shipped historical release; this handoff does not
+  manufacture a new release envelope before its task plan is reviewed.
+- Proof required: route regression from release request through all intake
+  domains, duplicate-retry regression, Thread focus regression, typecheck,
+  model-independence, build/install/restart, and installed browser proof.
+- Waivers: none.
+- Apply/revert: applying creates one linked exploring task after completion;
+  reverting leaves already-created tasks intact and only removes automatic
+  handoff for future intakes.
+
+### Schema Migration Decision
+
+- Persisted schema touched: pressure-test intake JSON gains optional `handoff`
+  metadata with materialized task id and timestamp.
+- Scope and class: additive, backward-compatible project-local state change.
+- Existing data impact: none; legacy and completed intakes without `handoff`
+  continue to parse, and retry reconciliation can link an already-created task
+  by stable request id.
+- Migration id: none required for an optional JSON field.
+- Safety and compatibility reader: Zod accepts missing metadata; project
+  check-in intakes never materialize tasks through this path.
+- Fixtures and tests: serve-intake completion/retry regression and Thread
+  materialized-task focus regression.
+- Owner-facing plan and rollback: no pre-run migration or owner action; rollback
+  preserves task state and ignores the additive intake field.
+
 ## 2026-08-07 Cross-View Density Audit
 
 - Work id: `0.13.1-cross-view-density-audit`.

@@ -103,6 +103,11 @@ export const PressureTestIntake = z.object({
     taskSplitCandidates: z.array(z.string()).default([]),
     projectQuestionPlanner: ProjectQuestionPlannerMemory.optional(),
   }),
+  handoff: z.object({
+    status: z.literal('materialized'),
+    taskId: z.string(),
+    materializedAt: z.string(),
+  }).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 })

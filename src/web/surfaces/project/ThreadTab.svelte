@@ -2714,7 +2714,7 @@
           answer,
         }),
       })
-      const body = await r.json().catch(() => ({})) as { error?: string }
+      const body = await r.json().catch(() => ({})) as { error?: string; taskId?: string }
       if (!r.ok || body.error) {
         pressureTestErrors = { ...pressureTestErrors, [turn.id]: body.error ?? `HTTP ${r.status}` }
         return
@@ -2730,6 +2730,9 @@
       pressureTestErrors = nextErrors
       await load()
       await refreshProject()
+      if (body.taskId) {
+        focusTurn(`task:${body.taskId}`)
+      }
     } finally {
       busyTurnId = null
     }

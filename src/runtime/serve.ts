@@ -135,7 +135,7 @@ import {
   prepareReleaseProofRecovery,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { DesignSystem, explicitTaskStructuralIdentity, summarizeDesignSystem, Task as TaskSchema, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
+import { DesignSystem, explicitTaskStructuralIdentity, ProjectRelease as ProjectReleaseSchema, summarizeDesignSystem, Task as TaskSchema, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -186,6 +186,7 @@ import {
   rerunTaskStage,
   shapeImportDraft,
   createBugReportTask,
+  materializeCompletedPressureTestIntake,
   parseStackTraceTopFile,
 } from './intake.js'
 import {
@@ -8402,6 +8403,77 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.post('/api/project/release/create', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      const body = await c.req.json().catch(() => ({})) as {
+        releaseId?: unknown
+        label?: unknown
+        description?: unknown
+        taskIds?: unknown
+        proofStyle?: unknown
+      }
+      const releaseId = typeof body.releaseId === 'string' ? body.releaseId.trim() : ''
+      const label = typeof body.label === 'string' ? body.label.trim() : ''
+      const taskIds = Array.isArray(body.taskIds)
+        ? [...new Set(body.taskIds.filter((value): value is string => typeof value === 'string').map(value => value.trim()).filter(Boolean))]
+        : []
+      if (!releaseId || !label || taskIds.length === 0) {
+        return c.json({ error: 'releaseId, label, and at least one taskId are required.' }, 400)
+      }
+
+      const state = await readProjectCanonicalCurrentState(project.path)
+      const knownTaskIds = new Set(state.rawQueue.tasks.map(task => task.id))
+      const unknownTaskIds = taskIds.filter(taskId => !knownTaskIds.has(taskId))
+      if (unknownTaskIds.length > 0) {
+        return c.json({ error: `Unknown task id(s): ${unknownTaskIds.join(', ')}` }, 400)
+      }
+      const nodeIds = taskIds.map(taskScopeNodeId)
+      const existing = state.rawQueue.releases.find(release => release.id === releaseId)
+      if (existing?.state === 'shipped') {
+        return c.json({ error: 'A shipped release is immutable. Choose a new release id.' }, 409)
+      }
+      if (existing && (
+        existing.label !== label ||
+        existing.nodeIds.length !== nodeIds.length ||
+        existing.nodeIds.some(nodeId => !nodeIds.includes(nodeId))
+      )) {
+        return c.json({ error: 'That release id already exists with different membership or labeling.' }, 409)
+      }
+
+      const now = new Date().toISOString()
+      const release = existing ?? ProjectReleaseSchema.parse({
+        id: releaseId,
+        label,
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        ...(typeof body.description === 'string' && body.description.trim()
+          ? { description: body.description.trim() }
+          : {}),
+        nodeIds,
+        deferredNodeIds: [],
+        proofStyle: body.proofStyle === 'script_only' || body.proofStyle === 'manual' || body.proofStyle === 'mixed'
+          ? body.proofStyle
+          : 'mixed',
+        createdAt: now,
+        updatedAt: now,
+      })
+      const releases = existing
+        ? state.rawQueue.releases
+        : [...state.rawQueue.releases, release]
+      const result = await writeProjectReleaseEnvelope(
+        projectTasksPath(project.path),
+        releaseId,
+        releases,
+        { preserveExistingLifecycleState: true },
+      )
+      return c.json({ ok: true, created: !existing, ...result })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   app.post('/api/project/release/select', async c => {
     try {
       const body = await c.req.json().catch(() => ({})) as {
@@ -12116,8 +12188,39 @@ export function buildServeApp(opts: ServeOptions = {}): {
         questionId,
         answer,
       })
-      return c.json({ intake })
+      const coordinators = project.config?.coordinators ?? []
+      const defaultCoordinator = coordinators[0]
+      if (intake.status === 'complete' && intake.target.type !== 'project' && !defaultCoordinator) {
+        throw new Error('Completed intake cannot create work until the project has a coordinator domain.')
+      }
+      const materialized = defaultCoordinator
+        ? await materializeCompletedPressureTestIntake({
+            memoryDir: getProjectStateDir(project.path),
+            intake,
+            domain: defaultCoordinator.domain,
+            projectPath: resolveTaskPathForDomain(project, defaultCoordinator.domain),
+          })
+        : null
+      return c.json({ intake, ...(materialized ? { taskId: materialized.taskId } : {}) })
     } catch (err) {
+      try {
+        const intake = await loadPressureTestIntake({
+          memoryDir: getProjectStateDir(project.path),
+          intakeId: c.req.param('id'),
+        })
+        const defaultCoordinator = project.config?.coordinators?.[0]
+        if (intake.status === 'complete' && intake.target.type !== 'project' && defaultCoordinator) {
+          const materialized = await materializeCompletedPressureTestIntake({
+            memoryDir: getProjectStateDir(project.path),
+            intake,
+            domain: defaultCoordinator.domain,
+            projectPath: resolveTaskPathForDomain(project, defaultCoordinator.domain),
+          })
+          if (materialized) return c.json({ intake, taskId: materialized.taskId })
+        }
+      } catch {
+        // Preserve the original answer error when recovery cannot complete.
+      }
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })

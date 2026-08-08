@@ -462,6 +462,7 @@ function installFetchFakes(
     threadState?: () => { turns: unknown[]; activeTurnId: string | null; caughtUp?: boolean }
     onSetupSubmit?: (url: string, body: Record<string, unknown> | undefined) => void
     boundedChatAnswerResponse?: Response | (() => Response | Promise<Response>)
+    pressureTestAnswerResponse?: Response
   } = {},
 ) {
   const calls: Array<{ url: string; init?: RequestInit; body?: Record<string, unknown> }> = []
@@ -529,6 +530,7 @@ function installFetchFakes(
       return json({ ok: true })
     }
     if (url.startsWith('/api/project/pressure-test/') && url.includes('/answer')) {
+      if (options.pressureTestAnswerResponse) return options.pressureTestAnswerResponse
       return json({ intake: { id: 'pti-guildhall-0-8-0', pendingQuestion: null } })
     }
     if (url.startsWith('/api/project/bounded-chat/') && url.includes('/answer')) {
@@ -1340,6 +1342,25 @@ describe('ThreadTab', () => {
       call.url.startsWith('/api/project?') && call.url.includes('projectId=looma-knit')
     ))).toBe(true)
     await waitFor(() => expect((answer as HTMLTextAreaElement).value).toBe(''))
+  })
+
+  it('focuses the materialized task after the final pressure-test answer', async () => {
+    installFetchFakes([
+      requestTurn(),
+      pressureTestQuestionTurn(),
+    ], 'pressure-test:pti-guildhall-0-8-0:product-goals-q-1', {
+      pressureTestAnswerResponse: json({
+        intake: { id: 'pti-guildhall-0-8-0', status: 'complete', pendingQuestion: null },
+        taskId: 'task-086',
+      }),
+    })
+
+    render(ThreadTab)
+    const answer = await threadComposer().findByPlaceholderText('Answer with a sentence or short paragraph. Include constraints or success measures if they matter.')
+    await userEvent.type(answer, 'Ship one packaged flow.')
+    await userEvent.click(threadComposer().getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(path.href).toContain('thread=task%3Atask-086'))
   })
 
   it('routes free-form agent questions through the shared thread composer', async () => {

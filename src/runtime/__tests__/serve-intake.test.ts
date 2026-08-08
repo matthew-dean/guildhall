@@ -10,6 +10,8 @@ import {
   writeProjectStateTextAsync,
 } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
+import { materializeCompletedPressureTestIntake } from '../intake.js'
+import { loadPressureTestIntake } from '../pressure-test-intake.js'
 
 let tmpDir: string
 let dataDir: string
@@ -164,7 +166,10 @@ describe('POST /api/project/request', () => {
     const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ask: 'For 0.8.0, pressure-test intake is my top priority.' }),
+      body: JSON.stringify({
+        ask: 'For 0.8.0, pressure-test intake is my top priority.',
+        title: 'Guildhall 0.8.0',
+      }),
     }))
 
     expect(res.status).toBe(200)
@@ -183,12 +188,80 @@ describe('POST /api/project/request', () => {
     expect(body.pressureTestIntake).toMatchObject({
       status: 'active',
       activeDomainId: 'product-goals',
+      target: { title: 'Guildhall 0.8.0' },
     })
     expect(body.pressureTestIntake?.pendingQuestion?.evidence?.some(evidence =>
       evidence.includes('README.md:') &&
       evidence.includes('rough owner intent') &&
       evidence.includes('verifiable work'),
     )).toBe(true)
+  })
+
+  it('materializes a completed release intake once and hands Thread the new task', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const request = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ask: 'Create the next release as a packaged desktop UI over the shipped CLI.',
+        title: 'Stage 2: Desktop UI',
+      }),
+    }))
+    expect(request.status).toBe(200)
+    let intake = (await request.json() as {
+      pressureTestIntake: {
+        id: string
+        status: string
+        pendingQuestion: { id: string } | null
+        handoff?: { taskId: string }
+      }
+    }).pressureTestIntake
+    let taskId: string | undefined
+
+    for (let step = 0; intake.status !== 'complete' && step < 32; step += 1) {
+      expect(intake.pendingQuestion).not.toBeNull()
+      const questionId = intake.pendingQuestion!.id
+      const response = await app.fetch(new Request(projectUrl(`/api/project/pressure-test/${intake.id}/answer`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          questionId,
+          answer: questionId.endsWith('-closeout')
+            ? 'No.'
+            : 'Authors complete one packaged fixture run with typed artifact parity and visible recovery.',
+        }),
+      }))
+      expect(response.status).toBe(200)
+      const body = await response.json() as { intake: typeof intake; taskId?: string }
+      intake = body.intake
+      taskId = body.taskId ?? taskId
+    }
+
+    expect(intake.status).toBe('complete')
+    expect(taskId).toBeTruthy()
+    expect(intake.handoff).toEqual({ taskId, status: 'materialized', materializedAt: expect.any(String) })
+    const queue = await readQueue()
+    expect(queue.tasks).toHaveLength(1)
+    expect(queue.tasks[0]).toMatchObject({
+      id: taskId,
+      title: 'Stage 2: Desktop UI',
+      status: 'exploring',
+      request: {
+        id: expect.stringContaining(intake.id),
+        routingSummary: 'Completed pressure-test intake',
+      },
+    })
+    expect(queue.tasks[0]?.description).toContain('## Domain Coverage')
+
+    const persistedIntake = await loadPressureTestIntake({ memoryDir: tmpDir, intakeId: intake.id })
+    const retry = await materializeCompletedPressureTestIntake({
+      memoryDir: tmpDir,
+      intake: persistedIntake,
+      domain: 'knit',
+      projectPath: path.join(tmpDir, 'knit'),
+    })
+    expect(retry).toMatchObject({ taskId })
+    expect((await readQueue()).tasks).toHaveLength(1)
   })
 
   it('starts bounded chat for ordinary task intake instead of creating work immediately', async () => {

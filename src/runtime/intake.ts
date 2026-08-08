@@ -32,6 +32,8 @@ import {
 import {
   createPressureTestIntake,
   inspectPressureTestEvidence,
+  renderPressureTestSpec,
+  savePressureTestIntake,
   type PressureTestIntake,
 } from './pressure-test-intake.js'
 import { analyzeRequestIntake, type RequestIntakeOwnerInput } from './request-intake.js'
@@ -292,6 +294,65 @@ export interface RoutedRequestResult {
   pressureTestIntake?: PressureTestIntake
 }
 
+export interface MaterializedPressureTestIntake {
+  taskId: string
+  transcriptPath?: string
+}
+
+export async function materializeCompletedPressureTestIntake(input: {
+  memoryDir: string
+  intake: PressureTestIntake
+  domain: string
+  projectPath: string
+}): Promise<MaterializedPressureTestIntake | null> {
+  const { intake } = input
+  if (intake.status !== 'complete' || intake.target.type === 'project') return null
+
+  const queue = await readQueue(input.memoryDir)
+  const requestId = `request-${intake.id}`
+  const linkedTask = queue.tasks.find(task =>
+    task.id === intake.handoff?.taskId || task.request?.id === requestId,
+  )
+  if (linkedTask) {
+    if (intake.handoff?.taskId !== linkedTask.id) {
+      intake.handoff = {
+        status: 'materialized',
+        taskId: linkedTask.id,
+        materializedAt: new Date().toISOString(),
+      }
+      intake.updatedAt = intake.handoff.materializedAt
+      await savePressureTestIntake(input.memoryDir, intake)
+    }
+    return { taskId: linkedTask.id }
+  }
+
+  const now = new Date().toISOString()
+  const task = await createExploringTask({
+    memoryDir: input.memoryDir,
+    ask: [intake.rawRequest, '', renderPressureTestSpec(intake)].join('\n'),
+    domain: input.domain,
+    projectPath: input.projectPath,
+    title: intake.target.title,
+    request: {
+      id: requestId,
+      raw: intake.rawRequest,
+      kind: 'task_spec',
+      title: intake.target.title,
+      routingSummary: 'Completed pressure-test intake',
+      pressureTestRequired: true,
+      createdAt: intake.createdAt,
+    },
+  })
+  intake.handoff = {
+    status: 'materialized',
+    taskId: task.taskId,
+    materializedAt: now,
+  }
+  intake.updatedAt = now
+  await savePressureTestIntake(input.memoryDir, intake)
+  return task
+}
+
 export async function createRoutedRequest(input: IntakeInput): Promise<RoutedRequestResult> {
   const routed = routeRequest({
     raw: input.ask,
@@ -300,12 +361,13 @@ export async function createRoutedRequest(input: IntakeInput): Promise<RoutedReq
   })
   const action = routed.actions[0]
   if (action?.kind === 'pressure_test_intake') {
+    const targetTitle = input.title?.trim() || action.intakeTarget.title
     const pressureTestIntake = await createPressureTestIntake({
       memoryDir: input.memoryDir,
       target: {
         type: action.intakeTarget.type === 'release' ? 'release' : 'feature',
-        id: slugId(action.intakeTarget.title),
-        title: action.intakeTarget.title,
+        id: slugId(targetTitle),
+        title: targetTitle,
       },
       rawRequest: input.ask,
     })

@@ -1103,6 +1103,7 @@ function pressureTestTurns(projectPath: string, intakes: PressureTestIntake[]): 
       kind: 'request',
       id: `request:${intake.id}`,
       requestId: intake.id,
+      ...(intake.handoff?.taskId ? { taskId: intake.handoff.taskId } : {}),
       rawRequest: intake.rawRequest,
       title: intake.target.title,
       requestStage: 'new_request',
