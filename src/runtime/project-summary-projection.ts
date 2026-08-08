@@ -1279,11 +1279,18 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const taskOverrides = new Map((input.taskOverrides ?? []).map(task => [task.id, task]))
   const tasks = inventory.tasks.map(task => taskOverrides.get(task.id) ?? task)
   const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const rebuiltScopeRows = rebuildScopeRowsFromIndexedState({
+    releases,
+    selectedReleaseId,
+  }, base.approvedPlan, tasks, current.scopeRows)
+  const rebuiltScopeRowsByTaskId = new Map(rebuiltScopeRows.map(row => [row.taskId, row]))
   const scopeRowOverrides = new Map(
     (input.scopeRowOverrides ?? []).map(row => [row?.taskId ?? '', row]),
   )
   const rawIndexedRows: IndexedSummaryScopeRow[] = tasks.flatMap<IndexedSummaryScopeRow>(task => {
-    const row = scopeRowOverrides.has(task.id) ? scopeRowOverrides.get(task.id) ?? null : task.scopeRow
+    const row = scopeRowOverrides.has(task.id)
+      ? scopeRowOverrides.get(task.id) ?? null
+      : rebuiltScopeRowsByTaskId.get(task.id) ?? task.scopeRow
     return row
       ? [{
           ...row,

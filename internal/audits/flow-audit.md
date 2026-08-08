@@ -91,9 +91,10 @@ help_summary: |
   installed state that contains 19 nonterminal historical rows and one live
   architecture gate therefore names that gate instead of claiming 19 tasks are
   actively moving.
-- Owner-review projection now excludes dependency-blocked specs. The live
-  Stage 2 summary can no longer name the adapter review as next while its Tauri
-  architecture prerequisite is still being shaped.
+- Indexed summary refresh now rebuilds dependency rows from current task
+  points, and owner-review projection excludes dependency-blocked specs. The
+  live Stage 2 summary can no longer name the adapter review as next while its
+  Tauri architecture prerequisite is still being shaped.
 
 ### Active Release Projection Contract Touch Decision
 
