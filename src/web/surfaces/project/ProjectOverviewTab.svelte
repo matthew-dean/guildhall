@@ -88,6 +88,7 @@
   const allTerminalStart = $derived(detail.startReadiness?.code === 'all_terminal')
   const startBlocked = $derived(detail.startReadiness?.canStart === false)
   const actionableInbox = $derived.by(() => {
+    if (detail.actionModel?.ownerInput?.active !== true) return []
     const visible = inboxItems.filter(item => {
       if (item.severity === 'low') return false
       if (requiredMigrationBlocked) return item.kind === 'required_migration'
@@ -117,10 +118,19 @@
   )
   const releaseReadinessActionLabel = $derived(releaseReadinessTitle === 'Current release' ? 'Open release' : 'Open scope')
   const releaseCompletion = $derived(releaseCompletionSummary(releaseReadiness))
+  const releaseWorkComplete = $derived(Boolean(
+    releaseReadiness?.totals &&
+    (releaseReadiness.totals.tasks ?? 0) > 0 &&
+    (releaseReadiness.totals.unfinishedCount ?? 0) === 0,
+  ))
   const releaseReadinessProgress = $derived(releaseCompletion?.detail ?? releaseReadiness?.notReadyReason ?? 'Open Release for the current scope check.')
   const releaseReadinessChipLabel = $derived(releaseCompletion?.label ?? 'Not complete')
   const releaseReadinessChipTone = $derived<Tone>(releaseCompletion?.tone === 'ok' ? 'ok' : releaseCompletion?.tone === 'warn' ? 'warn' : 'neutral')
-  const releaseGitBlockers = $derived((releaseReadiness?.gitStory?.blockers ?? []).slice(0, 2))
+  const releaseGitBlockers = $derived(
+    allTerminalStart || releaseShipped || releaseWorkComplete
+      ? (releaseReadiness?.gitStory?.blockers ?? []).slice(0, 2)
+      : [],
+  )
   const currentScopeTaskIds = $derived.by(() => {
     const nodeIds = [
       ...(releaseReadiness?.scope?.nodeIds ?? []),
@@ -141,6 +151,7 @@
       const id = blocker.id?.trim() || blocker.title?.trim() || blocker.label?.trim()
       if (!id || seen.has(id)) continue
       const task = blocker.id ? tasksById.get(blocker.id) : null
+      if (task && !taskHasActionableBlocker(task)) continue
       const title = task ? taskLabel(task) : blocker.title ?? blocker.label ?? id
       rows.push({
         id,
@@ -531,6 +542,25 @@
       .slice(0, 4)
       .sort((left, right) => Number(right.layout === 'wide') - Number(left.layout === 'wide'))
   })
+  const visibleHealthItems = $derived(healthItems.filter(item =>
+    item.tone === 'danger' ||
+    (item.tone === 'warn' && (item.label !== 'Repository follow-up' || releaseWorkComplete || scopedWorkComplete)) ||
+    (item.label === 'Repository clear' && releaseWorkComplete),
+  ))
+  const structuralMapNeedsAttention = $derived(Boolean(
+    structuralMapReview &&
+    ((structuralMapReview.conflicts?.length ?? 0) > 0 || (structuralMapReview.questions?.length ?? 0) > 0),
+  ))
+  const showVerificationSignal = $derived(releaseWorkComplete || scopedWorkComplete || orientationProofCounts.proven > 0)
+  const showSignals = $derived(Boolean(
+    inboxError ||
+    !inboxLoaded ||
+    actionableInbox.length > 0 ||
+    visibleHealthItems.length > 0 ||
+    structuralMapNeedsAttention ||
+    showVerificationSignal ||
+    recentEvents.length > 0,
+  ))
 
   const knowledgeCards = $derived.by(() => {
     const scopedProgress = orientationSpine?.summary?.progress
@@ -616,6 +646,22 @@
         action: shared.code === 'required_migration_pending' ? 'migration' as NextActionKind : 'navigate' as NextActionKind,
       }
     }
+    const readiness = detail.startReadiness
+    if (readiness) {
+      return {
+        label: readiness.focusTaskTitle ?? startReadinessLabel(readiness.code),
+        detail: readiness.message ?? '',
+        content: undefined,
+        button: readiness.code === 'required_migration_pending' ? 'Migrate project' : 'Open Work',
+        href: readiness.actionHref ?? currentProjectHref('/work', activeProjectId),
+        tone: readiness.code === 'required_migration_pending'
+          ? 'danger' as Tone
+          : readiness.canStart
+            ? 'accent' as Tone
+            : 'warn' as Tone,
+        action: readiness.code === 'required_migration_pending' ? 'migration' as NextActionKind : 'navigate' as NextActionKind,
+      }
+    }
     return {
       label: 'No action required',
       detail: 'Guildhall does not have a current next action for this project.',
@@ -663,22 +709,8 @@
 
   const blockedRows = $derived.by(() => {
     const rows: BlockedRow[] = []
-    const seen = new Set<string>()
-    for (const blocker of releaseReadiness?.releaseBlockers ?? []) {
-      const id = blocker.id?.trim()
-      if (!id || seen.has(id)) continue
-      const task = tasksById.get(id)
-      if (!task) continue
-      rows.push({
-        task,
-        reason: friendlyBlockerText(blocker.label ?? blocker.title ?? blocker.id ?? 'This work is blocking the current scope.'),
-        category: inferBlockerCategory(task),
-        href: currentTaskHref(task.id, activeProjectId),
-      })
-      seen.add(id)
-    }
     const scopedBlockedRows = currentScopeTasks
-      .filter(task => task.status === 'blocked' || activeEscalations(task).length > 0 || (Boolean(task.blockReason) && !isRunnableStatus(task.status)))
+      .filter(taskHasActionableBlocker)
       .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
       .map(task => ({
         task,
@@ -687,12 +719,14 @@
         href: currentTaskHref(task.id, activeProjectId),
       }))
     for (const row of scopedBlockedRows) {
-      if (seen.has(row.task.id)) continue
       rows.push(row)
-      seen.add(row.task.id)
     }
     return rows.slice(0, 4)
   })
+
+  function taskHasActionableBlocker(task: Task): boolean {
+    return task.status === 'blocked' || activeEscalations(task).length > 0 || (Boolean(task.blockReason) && !isRunnableStatus(task.status))
+  }
 
   function isRunnableStatus(status: string | undefined): boolean {
     return status === 'ready' || status === 'in_progress' || status === 'review' || status === 'gate_check'
@@ -1125,6 +1159,7 @@
         </Card>
       {/if}
 
+      {#if !detail.startReadiness}
       <Card title="Project map" titleTag="h2" padding="compact" density="dense" className="overview-card orientation-map-preview-card">
         <CardList className="orientation-map-preview-list">
           <CardListItem
@@ -1144,8 +1179,10 @@
           </CardListItem>
         </CardList>
       </Card>
+      {/if}
     </div>
 
+    {#if !detail.startReadiness}
     <Card title="At a glance" titleTag="h2" padding="compact" density="dense" className="overview-card orientation-map-card">
       <CardList className="orientation-summary-list">
         {#each knowledgeCards as card (card.label)}
@@ -1167,6 +1204,7 @@
         {/each}
       </CardList>
     </Card>
+    {/if}
 
   </section>
 
@@ -1193,27 +1231,25 @@
     </section>
     {/if}
 
+    {#if blockedRows.length > 0 || !detail.startReadiness}
     <section class="overview-grid overview-planning-grid">
-      {#if blockedRows.length > 0 || !detail.startReadiness}
+      {#if blockedRows.length > 0}
       <Card title="Blocked work" titleTag="h2" padding="compact" density="dense" className="overview-card">
-        {#if blockedRows.length === 0}
-          <p class="muted">No blocked tasks are visible right now.</p>
-        {:else}
-          <div class="blocked-work-list">
-            {#each blockedRows as row (row.task.id)}
-              <OverviewTaskRow
-                title={taskLabel(row.task)}
-                detail={row.reason}
-                chipLabel={row.category}
-                chipTone={row.category === 'Needs triage' ? 'danger' : 'warn'}
-                onclick={() => go(row.href)}
-              />
-            {/each}
-          </div>
-        {/if}
+        <div class="blocked-work-list">
+          {#each blockedRows as row (row.task.id)}
+            <OverviewTaskRow
+              title={taskLabel(row.task)}
+              detail={row.reason}
+              chipLabel={row.category}
+              chipTone={row.category === 'Needs triage' ? 'danger' : 'warn'}
+              onclick={() => go(row.href)}
+            />
+          {/each}
+        </div>
       </Card>
       {/if}
 
+      {#if !detail.startReadiness}
       <Card title="Next run" titleTag="h2" padding="compact" density="dense" className="overview-card">
         {#if runBlocker}
           <UtilityPanel
@@ -1263,8 +1299,11 @@
           </div>
         {/if}
       </Card>
+      {/if}
     </section>
+    {/if}
 
+    {#if showSignals}
     <section>
       <Card title="Signals" titleTag="h2" padding="compact" density="dense" className="overview-card overview-signals-card">
         <div class="signals-grid">
@@ -1297,7 +1336,7 @@
           {/each}
         {/if}
 
-        {#each healthItems as item (`${item.label}:${item.detail}`)}
+        {#each visibleHealthItems as item (`${item.label}:${item.detail}`)}
           <UtilityPanel
             as="button"
             interactive
@@ -1314,7 +1353,7 @@
           </UtilityPanel>
         {/each}
 
-        {#if structuralMapReview}
+        {#if structuralMapNeedsAttention && structuralMapReview}
           <UtilityPanel as="button" interactive dense className="signal-row" tone={(structuralMapReview.conflicts ?? []).length > 0 || (structuralMapReview.questions ?? []).length > 0 ? 'warn' : structuralMapReview.state === 'accepted' ? 'ok' : 'neutral'} onclick={() => go(currentProjectHref('/structure', activeProjectId))}>
             <Icon name="package" size={16} />
             <div>
@@ -1329,6 +1368,7 @@
           </UtilityPanel>
         {/if}
 
+        {#if showVerificationSignal}
         <UtilityPanel as="button" interactive dense className="signal-row" tone={verificationSignal.tone} onclick={() => go(currentProjectHref('/work', activeProjectId))}>
           <Icon name="check-circle-2" size={16} />
           <div>
@@ -1338,7 +1378,9 @@
             {/each}
           </div>
         </UtilityPanel>
+        {/if}
 
+        {#if recentEvents.length > 0}
         <UtilityPanel as="button" interactive dense className="signal-row" tone="neutral" onclick={() => go(currentProjectHref('/timeline', activeProjectId))}>
           <Icon name="clock" size={16} />
           <div>
@@ -1346,9 +1388,11 @@
             <span>{recentEvents[0]?.label ?? 'No meaningful recent activity yet.'}</span>
           </div>
         </UtilityPanel>
+        {/if}
         </div>
       </Card>
     </section>
+    {/if}
   {/if}
   {/if}
 </div>

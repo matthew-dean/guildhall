@@ -41,7 +41,7 @@ describe('buildProjectActionModel', () => {
       href: '/work?task=task-synopsis',
       tone: 'accent',
     })
-    expect(model.primaryAction?.detail).toBeUndefined()
+    expect(model.primaryAction?.detail).toBe('"Build synopsis expansion" is ready to run.')
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
@@ -182,7 +182,7 @@ describe('buildProjectActionModel', () => {
       tone: 'accent',
       taskId: 'task-synopsis',
     })
-    expect(model.primaryAction?.detail).toBeUndefined()
+    expect(model.primaryAction?.detail).toBe('"Build synopsis expansion" is ready to run.')
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
@@ -447,12 +447,7 @@ describe('buildProjectActionModel', () => {
       href: '/work?task=task-brief',
       tone: 'warn',
     })
-    expect(briefCleanup.secondaryActions[0]).toMatchObject({
-      source: 'task',
-      label: 'Clean up the brief',
-      buttonLabel: 'Open Work',
-      href: '/work?task=task-brief',
-    })
+    expect(briefCleanup.secondaryActions).toEqual([])
 
     const specReview = buildProjectActionModel({
       startReadiness: {

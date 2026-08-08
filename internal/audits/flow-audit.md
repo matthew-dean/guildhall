@@ -54983,6 +54983,29 @@ Repair:
 - [x] Deterministic proof: the selected-release exploring-task regression now
       requires a runnable Overview decision and visible next action to match
       exactly. The focused test and `pnpm typecheck` pass.
+- Failing installed finding: after that repair, the same Overview still called
+      all nine unfinished Stage 2 items blocked, rendered the runnable focus as
+      `Needs triage`, repeated it under `Blocked work` and `Next run`, surfaced
+      a stale `Shape the first spec` Inbox item as `Needs you` despite shared
+      owner-input count zero, and showed repository/proof/map diagnostics that
+      are not actionable before implementation finishes.
+- [x] Shared-state repair: selected work progress now counts only actual
+      `blocked` task state or open escalations as blocked. Shaping, review, and
+      dependency-waiting work remain unfinished/active instead of becoming a
+      red status merely because they prevent release completion.
+- [x] Action repair: ready-work actions retain the shared readiness explanation
+      and deduplicate secondary task/Inbox actions that point to the same task
+      or route as the primary action.
+- [x] Progressive-disclosure repair: active-release Overview now keeps the
+      current decision, work mix, release progress, and genuine exceptions.
+      It omits premature repository follow-up, routine healthy runtime/memory
+      telemetry, empty blocked sections, duplicate next-run instructions, and
+      raw Inbox urgency when the shared owner-input model says no owner action
+      is active. Completed scope still exposes repository and proof evidence.
+- [x] Expanded deterministic proof: all 31 project-action-model tests and all
+      35 Overview component tests pass; focused release-readiness tests prove
+      unshaped release blockers remain distinct from visible blocked work and
+      proof-wait copy stays aligned; `pnpm typecheck` passes.
 - [ ] Installed proof: rebuild and install Guildhall, refresh Narrative Harness
       Stage 2 state, then confirm the Overview/API top action, work rows, Thread,
       and status chrome agree that task 086 is being shaped and tasks 087-094
@@ -55000,7 +55023,9 @@ Repair:
 ### Contract Touch Decision
 
 - Touched contracts: owner-facing orientation-summary `nextAction` semantics
-      and its agreement with shared project start readiness.
+      and its agreement with shared project start readiness; selected work
+      progress blocked/active semantics; same-task project-action
+      deduplication; and active-release Overview progressive disclosure.
 - Contracts considered but not touched: task/release lifecycle enums, task
       dependency rules, action-model schema, provider prompts, and persisted
       project state.

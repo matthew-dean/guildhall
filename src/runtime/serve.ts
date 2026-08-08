@@ -3058,15 +3058,18 @@ function workProgressFromProjectSummaryProjection(
     deliveryBlocked: 0,
   }
   const selected = projection.releaseSummary.counts
+  const selectedBlocked = projection.releaseSummary.taskStatusCounts.blocked ?? 0
+  const selectedShelved = projection.releaseSummary.taskStatusCounts.shelved ?? 0
+  const selectedActive = Math.max(0, selected.total - selected.done - selectedBlocked - selectedShelved)
   return {
     counts,
     ...(projection.releaseSummary.scopeMode !== 'unavailable' ? {
       selectedCounts: {
         visibleTotal: selected.total,
-        visibleActive: selected.active,
-        visibleBlocked: selected.blocked,
+        visibleActive: selectedActive,
+        visibleBlocked: selectedBlocked,
         visibleDone: selected.done,
-        visibleShelved: 0,
+        visibleShelved: selectedShelved,
         deliveryTotal: 0,
         deliveryRequired: 0,
         deliveryDone: 0,
@@ -5744,10 +5747,10 @@ function buildOverviewOrientationPreviewSpine(input: {
     specced: sourceProgress?.specced ?? scopeRows.filter(row => row.scope === 'included' && (row.status === 'spec_review' || row.status === 'ready')).length,
     sliced: sourceProgress?.sliced ?? 0,
     ready: projection.counts.ready,
-    active: projection.counts.active,
+    active: scopeRows.filter(row => row.scope === 'included' && !['done', 'pending_pr', 'archived', 'cancelled', 'shelved', 'blocked'].includes(row.status ?? '')).length,
     proven: Math.max(0, projection.counts.done - projection.counts.proofBlocked),
     done: projection.counts.done,
-    blocked: projection.counts.ownerBlocked,
+    blocked: scopeRows.filter(row => row.scope === 'included' && row.status === 'blocked').length,
     deferred: projection.counts.deferred,
   }
   const hasExplicitRelease = selectedRelease !== null
@@ -6293,9 +6296,13 @@ function releaseBlockerTaskIdsForProgress(
   if (!Array.isArray(releaseBlockers)) return []
   return releaseBlockers
     .map(blocker => blocker && typeof blocker === 'object'
-      ? String((blocker as { id?: unknown }).id ?? '').trim()
-      : '')
-    .filter(id => id && taskIds.has(id))
+      ? {
+          id: String((blocker as { id?: unknown }).id ?? '').trim(),
+          code: String((blocker as { code?: unknown }).code ?? '').trim(),
+        }
+      : { id: '', code: '' })
+    .filter(blocker => ['blocked', 'escalation'].includes(blocker.code) && blocker.id && taskIds.has(blocker.id))
+    .map(blocker => blocker.id)
 }
 
 function compactOrientationScope(scope: unknown): unknown {
@@ -7690,12 +7697,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       responseStartMessage.trim().length > 0
     ) {
       const orientationSummary = (orientationSpine as { summary?: unknown }).summary
+      const orientationSummaryRecord = orientationSummary && typeof orientationSummary === 'object' && !Array.isArray(orientationSummary)
+        ? orientationSummary as Record<string, unknown>
+        : {}
+      const selectedScopeLabel = typeof orientationSummaryRecord.selectedScopeLabel === 'string'
+        ? orientationSummaryRecord.selectedScopeLabel
+        : 'Current scope'
       orientationSpine = {
         ...orientationSpine,
         summary: {
-          ...(orientationSummary && typeof orientationSummary === 'object' && !Array.isArray(orientationSummary)
-            ? orientationSummary as Record<string, unknown>
-            : {}),
+          ...orientationSummaryRecord,
+          ...(responseStartReadiness?.canStart ? {
+            headline: `${selectedScopeLabel} is ready to continue.`,
+            topBlocker: null,
+          } : {}),
           nextAction: responseStartMessage,
         },
       }

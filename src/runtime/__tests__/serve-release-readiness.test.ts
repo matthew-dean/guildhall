@@ -538,8 +538,8 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.releaseSummary.scopeMode).toBe('named_release')
     expect(body.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 1,
-      visibleActive: 0,
-      visibleBlocked: 1,
+      visibleActive: 1,
+      visibleBlocked: 0,
     })
   })
 
@@ -3356,7 +3356,7 @@ describe('GET /api/project/release-readiness', () => {
     })
     expect(project.orientationSpine?.summary).toMatchObject({
       headline: 'Headless MVP is waiting on proof.',
-      nextAction: expect.stringContaining('completion proof is missing or stale'),
+      nextAction: expect.stringContaining('waiting on proof evidence'),
     })
   })
 
@@ -3909,7 +3909,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.diagnostics.ready).toBe(false)
   })
 
-  it('returns projection release blockers for every unshaped current execution row', async () => {
+  it('keeps projection release blockers distinct from visible blocked-work counts', async () => {
     await seedQueue({
       version: 1,
       lastUpdated: new Date().toISOString(),
@@ -3973,24 +3973,24 @@ describe('GET /api/project/release-readiness', () => {
     const overview = await overviewRes.json() as any
     expect(overview.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
-      visibleBlocked: 3,
-      visibleActive: 0,
+      visibleBlocked: 0,
+      visibleActive: 3,
     })
 
     const workRes = await app.fetch(new Request(projectUrl('/api/project?surface=work')))
     const work = await workRes.json() as any
     expect(work.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
-      visibleBlocked: 3,
-      visibleActive: 0,
+      visibleBlocked: 0,
+      visibleActive: 3,
     })
 
     const mapRes = await app.fetch(new Request(projectUrl('/api/project?surface=map')))
     const map = await mapRes.json() as any
     expect(map.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
-      visibleBlocked: 3,
-      visibleActive: 0,
+      visibleBlocked: 0,
+      visibleActive: 3,
     })
 
     registerWorkspace({ id: projectId, name: 'Release Test', path: tmpDir, tags: [] })
@@ -3999,16 +3999,16 @@ describe('GET /api/project/release-readiness', () => {
     const project = service.projects.find((candidate: any) => candidate.path === tmpDir)
     expect(project.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
-      visibleBlocked: 3,
-      visibleActive: 0,
+      visibleBlocked: 0,
+      visibleActive: 3,
     })
 
     const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-imported')))
     const detail = await detailRes.json() as any
     expect(detail.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
-      visibleBlocked: 3,
-      visibleActive: 0,
+      visibleBlocked: 0,
+      visibleActive: 3,
     })
   }, 45000)
 

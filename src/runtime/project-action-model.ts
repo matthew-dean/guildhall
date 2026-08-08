@@ -486,9 +486,7 @@ function threadHrefForTask(taskId: string | undefined): string {
 
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
   const label = readiness.code === 'owner_input_required' ? 'Answer in Thread' : startReadinessActionLabel(readiness)
-  const detail = readiness.code === 'ready_work'
-    ? undefined
-    : readiness.message && readiness.message !== label
+  const detail = readiness.message && readiness.message !== label
       ? readiness.message
       : undefined
   return {
@@ -673,7 +671,14 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   }
 
   const primaryAction = candidates[0] ?? null
-  const secondaryActions = candidates.slice(1, 4)
+  const secondaryActions = candidates
+    .slice(1)
+    .filter(action => {
+      if (!primaryAction) return true
+      if (primaryAction.taskId && action.taskId === primaryAction.taskId) return false
+      return action.href !== primaryAction.href
+    })
+    .slice(0, 3)
   const blockedButRunnable = startReadiness?.code === 'proof_evidence_missing'
   const disabledReason = !running && startReadiness?.canStart === false && !blockedButRunnable
     ? startReadiness.message

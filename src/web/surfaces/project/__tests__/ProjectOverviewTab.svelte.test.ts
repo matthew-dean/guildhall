@@ -382,8 +382,8 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText('Stage 1: V1 Release Hardening')).toBeInTheDocument()
     expect(screen.getByText(/0 \/ 9 done/)).toBeInTheDocument()
     expect(screen.getByText(/9 unfinished/)).toBeInTheDocument()
-    expect(screen.getByText(/Looma: codex\/component-audit-roadmap/)).toBeInTheDocument()
-    expect(screen.getByText(/Knit: main/)).toBeInTheDocument()
+    expect(screen.queryByText(/Looma: codex\/component-audit-roadmap/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Knit: main/)).not.toBeInTheDocument()
   })
 
   it('separates completed release work from repository follow-up blockers', () => {
@@ -659,8 +659,8 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'looma-knit',
     })
 
-    expect(screen.getAllByText('Unit tests: use-collections, use-presence, subdomain utils').length).toBeGreaterThan(0)
-    expect(screen.getAllByRole('button', { name: /Needs shaping Unit tests: use-collections, use-presence, subdomain utils.*clearer brief/i }).length).toBeGreaterThan(0)
+    expect(screen.getByRole('heading', { name: 'Imported scope needs shaping' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Blocked work' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Floating toolbar/i })).not.toBeInTheDocument()
     expect(screen.queryByText('Old unrelated blocked work.')).not.toBeInTheDocument()
   })
@@ -850,13 +850,12 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByText(/No actionable tasks remain/)).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'No runnable work' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
-    expect(screen.getByText(/3 deferred/)).toBeInTheDocument()
+    expect(screen.getByText('3 Deferred')).toBeInTheDocument()
     expect(screen.getAllByText(/0 missing verification/).length).toBeGreaterThan(0)
-    expect(screen.getByText(/Proof: 11 proven items · 0 missing proof/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Verification 11 verified items · 0 missing verification/i })).toBeInTheDocument()
     expect(screen.queryByText('No verification checks linked yet.')).not.toBeInTheDocument()
-    expect(screen.getByText(/Sources: Release Plan · implementation-roadmap.md, deepinfra-drafting-model-selection.md/)).toBeInTheDocument()
-    expect(screen.getByText('The selected scope is complete. Choose another release or open Work to inspect completed and deferred items.')).toBeInTheDocument()
+    expect(screen.queryByText(/Sources: Release Plan/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Next run' })).not.toBeInTheDocument()
     expect(screen.queryByText('The next run is blocked until the project blocker is resolved.')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Blocked/ })).not.toBeInTheDocument()
   })
@@ -933,6 +932,10 @@ describe('ProjectOverviewTab', () => {
         name: 'Fair Labor License',
         path: '/Users/matthew/git/oss/fair-labor-license',
         tasks: [],
+        actionModel: {
+          ...actionModel(null),
+          ownerInput: { active: true },
+        },
       },
       inboxLoaded: true,
       inboxItems: [
@@ -974,6 +977,10 @@ describe('ProjectOverviewTab', () => {
         name: 'Fair Labor License',
         path: '/Users/matthew/git/oss/fair-labor-license',
         tasks: [],
+        actionModel: {
+          ...actionModel(null),
+          ownerInput: { active: true },
+        },
       },
       inboxLoaded: true,
       inboxItems: [
@@ -1213,8 +1220,6 @@ describe('ProjectOverviewTab', () => {
     })
 
     expect(screen.getByRole('heading', { name: 'Required migration' })).toBeInTheDocument()
-    expect(screen.getByText(/48 work items in view/)).toBeInTheDocument()
-    expect(screen.getByText(/25 deferred/)).toBeInTheDocument()
     expect(screen.getByText('48 Current scope')).toBeInTheDocument()
     expect(screen.getByText('25 Deferred')).toBeInTheDocument()
     expect(screen.queryByText(/250 imported drafts need task briefs/)).not.toBeInTheDocument()
@@ -1310,7 +1315,7 @@ describe('ProjectOverviewTab', () => {
     })
 
     expect(screen.getByText('Run the required migration before creating or running work.')).toBeInTheDocument()
-    expect(screen.getByText('The next run is blocked until the required migration is applied.')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Next run' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Migrate project' }).querySelector('svg')).toBeInTheDocument()
     expect(screen.queryByText('No tasks yet. Create a request when you are ready.')).not.toBeInTheDocument()
   })
@@ -1512,7 +1517,7 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'fair-labor-license',
     })
 
-    expect(screen.getByText('No blocked tasks are visible right now.')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Blocked work' })).not.toBeInTheDocument()
     expect(screen.queryByText("Verification commands don't work in this environment but implementation is complete")).not.toBeInTheDocument()
     expect(screen.queryByText('Needs triage')).not.toBeInTheDocument()
   })
@@ -1544,7 +1549,7 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'fair-labor-license',
     })
 
-    expect(screen.getByText('No blocked tasks are visible right now.')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Blocked work' })).not.toBeInTheDocument()
     expect(screen.queryByText('Needs triage')).not.toBeInTheDocument()
   })
 
@@ -1591,7 +1596,7 @@ describe('ProjectOverviewTab', () => {
     expect(workSection?.querySelector('.motion-list')).toBeTruthy()
   })
 
-  it('surfaces runtime health, memory health, and primary proof paths', async () => {
+  it('keeps routine runtime, memory, and planned proof diagnostics off Overview', async () => {
     const source = readFileSync('src/web/surfaces/project/ProjectOverviewTab.svelte', 'utf-8')
     expect(source).not.toMatch(/semantic (?:on|off)|compaction (?:on|off|ready|pending)|Mastra substrate/)
 
@@ -1673,19 +1678,11 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'guildhall',
     })
 
-    expect(screen.getAllByText('Runtime stopped').length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Compatibility mode/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Memory health').length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Memory protected/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/auto-compacted/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/semantically valid/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/source-backed/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/project repo protected/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
-    expect(screen.queryByText(/active memories/)).not.toBeInTheDocument()
-    expect(screen.getByText('Signals')).toBeInTheDocument()
-    expect(screen.getByText('Verification')).toBeInTheDocument()
-    expect(screen.getAllByText('Verify runtime card').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Runtime stopped')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Compatibility mode/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Memory health')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Signals' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Verify runtime card')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Project graph/i })).not.toBeInTheDocument()
   })
 
@@ -1738,10 +1735,10 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByRole('button', { name: /History No recent changes/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Runtime Runtime healthy/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Checks No verification/i })).not.toBeInTheDocument()
-    expect(screen.getAllByText('Compatibility mode').length).toBeGreaterThan(0)
-    expect(screen.getByText('Memory status unavailable · 4 active, 1 proposed.')).toBeInTheDocument()
+    expect(screen.queryByText('Compatibility mode')).not.toBeInTheDocument()
+    expect(screen.queryByText('Memory status unavailable · 4 active, 1 proposed.')).not.toBeInTheDocument()
     expect(screen.queryByText(/active memories/)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Structure Accepted/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Structure Accepted/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Project graph/i })).not.toBeInTheDocument()
   })
 
