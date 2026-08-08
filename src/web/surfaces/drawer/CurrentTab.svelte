@@ -142,7 +142,7 @@
       turn.liveAgent?.lastEventKind === 'provider_wait' &&
       (turn.liveAgent.silentMs ?? 0) >= 60_000
     ) {
-      return 'Local model is still loading or generating.'
+      return 'The model is still loading or generating.'
     }
     if (turn.liveAgent?.name === 'spec-agent') {
       if (turn.importedDraft) return 'The task brief for this imported note is being drafted now.'

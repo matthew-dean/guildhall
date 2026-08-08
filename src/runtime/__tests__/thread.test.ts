@@ -3184,6 +3184,51 @@ describe('buildThread', () => {
     }
   })
 
+  it('projects an approved brief without a spec as spec drafting instead of incomplete brief work', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      const now = new Date().toISOString()
+      const tasks = [taskRecord({
+        id: 'task-086',
+        title: 'Prove packaged Tauri sidecar',
+        status: 'exploring',
+        productBrief: {
+          userJob: 'Prove the packaged sidecar.',
+          whyItMattersNow: 'The desktop release depends on the architecture gate.',
+          successMetric: 'The packaged app completes one offline fixture run.',
+          nonGoals: ['Do not build the full interface.'],
+          approvedAt: now,
+        },
+      })]
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: now },
+          coordinators: [],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildCurrentThread({ projectPath, snapshot, tasks, recentEvents: [] })
+      expect(thread.turns.find(turn => turn.id === 'inflight:task-086')).toMatchObject({
+        phase: 'spec',
+        briefApproved: true,
+        specDraftPresent: false,
+        summary: 'The brief is approved. Guildhall is shaping the spec now.',
+        checklist: undefined,
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('ignores obsolete meta-intake routing questions when a valid routing draft already exists', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

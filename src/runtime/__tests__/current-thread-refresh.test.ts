@@ -14,6 +14,7 @@ import {
   recordProjectStateDatabaseProjectionObligations,
   readProjectStateDatabaseCurrentThread,
   readProjectStateDatabaseThreadHistoryPage,
+  upsertProjectStateDatabaseTaskProof,
   upsertProjectStateDatabaseTaskRuntime,
 } from '@guildhall/sessions'
 
@@ -163,6 +164,49 @@ describe('current Thread projection refresh', () => {
     expect(historyResponse.status).toBe(200)
     expect(historyBody.historyFreshness).toBe('current')
     expect(historyBody.turns).toEqual(history?.turns)
+  })
+
+  it('hydrates current correction evidence into a brief review turn', async () => {
+    const queue: TaskQueue = {
+      version: 1,
+      lastUpdated: '2026-08-08T00:00:00.000Z',
+      tasks: [task(projectRoot, {
+        status: 'exploring',
+        productBrief: {
+          userJob: 'Build the spike with Vue.',
+          whyItMattersNow: 'Prove packaging first.',
+          successMetric: 'A packaged app launches.',
+          nonGoals: [],
+          antiPatterns: ['Do not choose a UI framework.'],
+          authoredBy: 'spec-agent',
+          authoredAt: '2026-08-08T00:00:00.000Z',
+        },
+      })],
+    }
+    writeProjectTaskQueueWithSummary(getProjectSystemStatePath(projectRoot, 'TASKS.json'), queue, {
+      projectId: 'current-thread-test',
+      projectRoot,
+    })
+    upsertProjectStateDatabaseTaskProof(projectRoot, {
+      taskId: 'task-current-thread',
+      kind: 'note',
+      recordedAt: '2026-08-08T00:01:00.000Z',
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: 'Keep the spike framework-neutral.',
+        timestamp: '2026-08-08T00:01:00.000Z',
+      },
+    })
+
+    const projection = await refreshCurrentThreadProjection(projectRoot, {
+      runStatus: 'stopped',
+      recentEvents: [],
+    })
+
+    expect(projection?.turns.find(turn => turn.kind === 'brief_approval')).toMatchObject({
+      latestUserCorrection: 'Keep the spike framework-neutral.',
+    })
   })
 
   it('completes a claimed thread projection job after a thread-only refresh', async () => {

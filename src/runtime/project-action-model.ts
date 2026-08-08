@@ -488,6 +488,9 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
     !hasSpecDraft(task)
   const blockedReason = taskBlockedReason(task)
   const blocked = task.status === 'blocked' || blockedReason !== null
+  const currentBriefIntent = hasCompleteProductBrief(task)
+    ? task.productBrief?.userJob?.trim()
+    : ''
   return {
     source: 'task',
     label: taskLabel(task),
@@ -497,7 +500,9 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
       ? 'Guildhall is shaping a source-backed spec from the approved brief.'
       : cleanup
       ? 'Needs brief: finish the handoff before a worker can start.'
-      : task.description,
+      : currentBriefIntent
+        ? `Current brief: ${currentBriefIntent}`
+        : task.description,
     buttonLabel: task.status === 'spec_review' ? 'Review in Thread' : 'Open Work',
     href: task.status === 'spec_review' ? threadHrefForTask(task.id) : workHrefForTask(task.id),
     tone: cleanup || blocked || task.status === 'spec_review' ? 'warn' : running ? 'running' : 'accent',

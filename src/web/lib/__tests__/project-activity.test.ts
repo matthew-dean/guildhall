@@ -408,7 +408,7 @@ describe('buildProjectTicker', () => {
           run: { status: 'running', mode: 'continuous' },
           decision: {
             execution: {
-              count: 1,
+              count: 19,
               focusTaskId: 'task-1',
               focusTaskTitle: 'Prove packaged sidecar',
             },

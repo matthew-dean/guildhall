@@ -237,6 +237,8 @@ export interface InFlightTurn extends TurnBase {
   taskDescription?: string | undefined
   sourceNote?: TaskSourceNote | undefined
   taskStatus?: string | undefined
+  briefApproved?: boolean | undefined
+  specDraftPresent?: boolean | undefined
   summary: string
   importedDraft?: boolean | undefined
   shapingBlockers?: TaskShapingBlocker[] | undefined
@@ -512,7 +514,7 @@ function taskNeedsSpecFill(task: Pick<Task, 'spec' | 'acceptanceCriteria' | 'pro
 function isQueuedSpecRevision(task: Task): boolean {
   if (taskShapingBlockers(task).length > 0) return false
   return (
-    (task.status === 'exploring' || task.status === 'spec_review') &&
+    task.status === 'exploring' &&
     hasSpecDraftContent(task)
   )
 }
@@ -1956,6 +1958,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
     const liveAgent = liveAgents.get(taskId)
     const hasSpecDraft = hasSpecDraftContent(t)
+    const briefApproved = hasApprovedProductBrief(t)
+    const approvedBriefNeedsSpec = briefApproved && !hasSpecDraft
     const briefRequiresOwnerApproval = !approvedAt &&
       brief?.authoredBy !== 'coordinator-recovery' &&
       t.taskReadiness?.recommendation !== 'needs_research_spike' &&
@@ -2150,14 +2154,14 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       if (status === 'active') activeAssigned = true
       const effectiveLiveAgent = runIsActive ? liveAgent : undefined
       const livePersona = personaForAgent(effectiveLiveAgent?.name)
-      const persona = livePersona ?? (taskStatus === 'exploring' || taskStatus === 'import_draft' ? 'spec' : 'worker')
+      const persona = livePersona ?? (taskStatus === 'exploring' || taskStatus === 'import_draft' || taskStatus === 'spec_review' ? 'spec' : 'worker')
       const queuedSpecRevision = isQueuedSpecRevision(t)
       const needsSpecFill = taskStatus === 'ready' && taskNeedsSpecFill(t)
       const phase = taskStatus === 'ready'
         ? 'ready'
         : taskId === META_INTAKE_TASK_ID && setupStillBlockingMetaIntake && !liveAgent
           ? 'setup'
-        : queuedSpecRevision
+        : queuedSpecRevision || approvedBriefNeedsSpec
           ? 'spec'
         : taskStatus === 'exploring' || taskStatus === 'import_draft' || livePersona === 'spec'
           ? 'intake'
@@ -2192,6 +2196,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
                 ? 'This can be answered from project context without turning it into implementation work.'
               : queuedSpecRevision
                 ? 'Your answers and a spec draft are saved. Coordinator review is next.'
+              : approvedBriefNeedsSpec
+                ? 'The brief is approved. Guildhall is shaping the spec now.'
               : 'The spec author is shaping this task.'
             : queuedSpecRevision
               ? 'Your answers and a spec draft are saved. Coordinator review is next.'
@@ -2203,6 +2209,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
                 ? 'Gate checks are next.'
                 : taskStatus === 'review'
                   ? 'Review is next.'
+                  : taskStatus === 'spec_review'
+                    ? 'The spec is ready for your review.'
                   : 'Waiting for worker activity.'
       turns.push({
         kind: 'inflight',
@@ -2220,6 +2228,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskDescription,
         sourceNote,
         taskStatus,
+        briefApproved,
+        specDraftPresent: hasSpecDraft,
         summary,
         importedDraft,
         shapingBlockers: shapingBlockers.length > 0 ? shapingBlockers : undefined,
@@ -2228,6 +2238,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         activity: liveActivity.get(taskId),
         checklist:
           (taskStatus === 'exploring' || needsSpecFill) &&
+          !approvedBriefNeedsSpec &&
           !queuedSpecRevision &&
           requestKind !== 'project_question' &&
           taskId !== META_INTAKE_TASK_ID &&

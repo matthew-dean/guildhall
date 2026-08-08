@@ -14,6 +14,7 @@ import {
   getProjectSystemStatePath,
   getProjectTranscriptPath,
   projectStateDatabasePath,
+  readProjectStateDatabaseCurrentThread,
   readProjectStateDatabaseQueueDefinition,
   readProjectStateDatabaseTaskPointWithRevision,
   readTaskEvidence,
@@ -3809,6 +3810,86 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(body.ok).toBe(true)
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/respect DOM ordering/)
+  })
+
+  it('reopens a rejected brief for revision instead of returning to the same approval gate', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      productBrief: {
+        userJob: 'Build the desktop spike with Vue.',
+        whyItMattersNow: 'Prove packaging first.',
+        successMetric: 'A packaged app launches.',
+        nonGoals: [],
+        antiPatterns: ['Do not widen the architecture spike.'],
+        authoredBy: 'spec-agent',
+        authoredAt: '2026-08-08T00:00:00.000Z',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resume'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Keep the spike framework-neutral.',
+          revisionTarget: 'brief',
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const queue = await readTaskQueue() as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]!.status).toBe('exploring')
+    expect(queue.tasks[0]!.productBrief).toBeUndefined()
+    const thread = readProjectStateDatabaseCurrentThread(tmpDir) as {
+      payload: { turns: unknown[] }
+    } | null
+    expect(thread?.payload.turns).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'brief_approval', taskId: 'task-1' }),
+    ]))
+  })
+
+  it('reopens a rejected spec without leaving its approval turn authoritative', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      productBrief: {
+        userJob: 'Prove a framework-neutral desktop sidecar.',
+        whyItMattersNow: 'The architecture must be proven before UI work.',
+        successMetric: 'A packaged app runs one offline fixture.',
+        nonGoals: ['Do not build the full UI.'],
+        antiPatterns: [],
+        authoredBy: 'spec-agent',
+        authoredAt: '2026-08-08T00:00:00.000Z',
+      },
+      spec: '## What this is\nAn incomplete spike.\n\n## Completion Boundary\n- Product outcome: prove packaging.',
+      acceptanceCriteria: [{ id: 'ac-old', description: 'Old proof', verifiedBy: 'review', met: false }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resume'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Add exact packaged-app proof before approval.',
+          revisionTarget: 'spec',
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const queue = await readTaskQueue() as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]).toMatchObject({
+      status: 'exploring',
+      productBrief: { userJob: 'Prove a framework-neutral desktop sidecar.' },
+      acceptanceCriteria: [],
+    })
+    expect(queue.tasks[0]!.spec).toBeUndefined()
+    const thread = readProjectStateDatabaseCurrentThread(tmpDir) as {
+      payload: { turns: unknown[] }
+    } | null
+    expect(thread?.payload.turns).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'spec_review', taskId: 'task-1' }),
+    ]))
   })
 
   it('preserves an in-flight task status when Thread sends a steering note', async () => {

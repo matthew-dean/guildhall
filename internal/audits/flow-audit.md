@@ -55079,6 +55079,89 @@ Repair:
       eight waiting rows. The focused 91-test presentation suite, typecheck,
       production build, and rendered 1114px/900px/390px clipping-and-state
       protocol all pass.
+- Failing real-flow finding: sending `No, change it` on task 086 durably saved
+      the framework-neutral correction, but the complete rejected brief stayed
+      authoritative. Every refreshed surface therefore returned to the same
+      Vue-based approval gate, and Thread omitted the saved correction because
+      its compact task projection did not hydrate current note evidence.
+- [x] Make document revision requests typed, invalidate only the rejected
+      active brief, hydrate revision-matched note evidence into current Thread,
+      and refresh Thread before the reply returns.
+- Failing installed follow-up: the corrected task left the rejected approval
+      gate, but the Thread kept the shell's old review alert, called the
+      ordinary package-backed task an `imported note`, and labeled available
+      shaping work `Paused`. The API already reported typed `ready_work` and
+      `Resume`; only the client refresh and presentation disagreed.
+- [x] Refresh project chrome after a correction, require explicit workspace
+      import provenance, and present available focused shaping as `Ready`.
+- Failing live-run finding: execution remained correctly focused on task 086
+      inside the nine-task release, but the ticker rendered the decision's
+      broad active count as `Working on 19 tasks` instead of naming the typed
+      live focus.
+- [x] Prefer the shared live focus title in running ticker copy so global
+      inventory counts cannot imply that work escaped the selected release.
+- Failing live-run finding: the remote DeepInfra spec lane says `Waiting for
+      the local model to respond`, and its one automatic timeout recovery
+      restarts with no visible attempt boundary. Provider location and retry
+      state are known typed runtime facts; the status copy should not invent a
+      local model or make a bounded retry look like unexplained repetition.
+- [ ] Make model-wait copy provider-neutral (or derive it from the typed
+      provider label), and identify the bounded shaping retry as attempt 2 of 2
+      in Thread/status chrome.
+      Provider-neutral copy is implemented and passed installed proof; the
+      truthful bounded retry count remains open.
+- Failing installed review finding: task 086's current brief and spec correctly
+      removed Vue, but the shared action detail still quoted the superseded
+      Vue-based task description. The selected Thread simultaneously rendered
+      `Ready`, `Paused`, `Coordinator review is next`, a `Needs you` spec-review
+      dock, and `Resume spec work` for the same task.
+- Failing installed correction finding: after `Request changes` and a concrete
+      spec correction, task 086 moved to `exploring` but retained its rejected
+      spec as current detail. During refresh the global alert jumped to
+      dependency-blocked task 087 as needing review while task 086's dock still
+      asked for approval of the rejected draft.
+- [ ] Supersede rejected spec/planning output at the typed revision boundary,
+      keep the valid brief, and make the shared decision, alert, Thread card,
+      dock, and run control agree that task 086 is ready for one spec-revision
+      pass while task 087 remains dependency-waiting.
+- [ ] Prefer current approved/candidate brief intent over a superseded original
+      description in next-action detail, and remove local card copy/actions that
+      reinterpret a shared owner-review or ready-work decision.
+- Failing installed approval-handoff finding: after task 086's corrected brief
+      was approved, its persisted task detail carried `approvedAt`, but Thread
+      called it `Continue shaping brief`, rendered an incomplete `Brief
+      checklist`, and said one item was missing. The task was actually ready
+      for the spec lane. The first refresh also temporarily promoted
+      dependency-blocked task 087 as the global review target.
+- [x] Project approved-brief/spec-draft state explicitly into current Thread,
+      omit the brief checklist after approval, call the next step spec
+      drafting, and make dependency-root review selection keep task 086 ahead
+      of task 087. Focused runtime, scope, Thread, and typecheck proof passes;
+      a fresh installed Browser tab shows `Continue drafting spec`, no brief
+      checklist, task 086 as the only Ready item, and typed prerequisite copy
+      on all eight downstream rows.
+- Failing gate-quality finding: the corrected spec initially named the desired
+      evidence but omitted pinned toolchain versions, exact contract/package
+      commands, a concrete capability allowlist, and explicit packaged launch,
+      typed result, failure, timing, size, and go/no-go proof. A second owner
+      correction improved the spec, but exact package/contract commands and
+      concrete version/allowlist values are still absent.
+- [ ] Keep task 086 in spec review until its architecture gate is executable
+      and falsifiable; do not let broad review prose substitute for exact
+      commands and saved packaged-app evidence.
+- Failing proof-freshness finding: as soon as the second spec introduced
+      `pnpm typecheck` and `pnpm build`, both acceptance criteria were marked
+      met from earlier project commands even though task 086 implementation had
+      not started. Guildhall then surfaced required migration
+      `0.13.27/acceptance-command-proof-path-reconciliation`.
+- [x] Run the required reconciliation through the user-visible migration flow
+      and prove the task's new command criteria do not inherit stale success
+      from work that predates the current spec revision.
+      Migration `0.13.27/acceptance-command-proof-path-reconciliation` applied
+      successfully. The shared command-proof matcher now rejects gates older
+      than the current path boundary; task 086's `pnpm typecheck` and `pnpm
+      build` criteria returned to unmet with planned paths and zero current
+      verification records. Focused proof/migration tests pass 122/122.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
@@ -55102,6 +55185,15 @@ Repair:
       transaction's shared-summary selection order; dependency-aware Thread
       rail status; setup-ready attention reconciliation; and shared typed task
       presentation for dependency waiting and focused brief/spec review.
+      The task intake contract now also accepts an explicit document revision
+      target, clears a rejected active brief, preserves the correction as typed
+      task evidence, and refreshes current Thread from a revision-matched read.
+      A rejected spec now clears the current executable plan, acceptance,
+      sizing, readiness, and proof projections while preserving its current
+      product brief and historical evidence ledger. Current Thread now carries
+      typed approved-brief/spec-draft facts for the approval handoff, and
+      current command proof requires a gate or record observed at or after the
+      current proof-path boundary.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive
@@ -55125,8 +55217,16 @@ Repair:
 ### Schema Migration Decision
 
 - Persisted schema touched: none.
-- Scope and change class: request-time presentation reconciliation only.
-- Existing data impact: none; saved decisions and task records are unchanged.
+- Scope and change class: request-time presentation reconciliation plus an
+      existing-field task mutation for an explicit brief revision request.
+- Existing data impact: the rejected `productBrief` is removed from current
+      task detail for a brief revision. A rejected spec clears current plan
+      fields while preserving its brief; old notes/review/gate records remain
+      historical evidence and are excluded by the new revision/proof boundary. The
+      owner correction remains in existing task evidence and the exploring
+      transcript. No new persisted field or enum is added.
 - Migration id, compatibility reader, fixtures, and rollback: no migration or
-      reader change is required; the API regression covers behavior, and a
-      revert restores the prior presentation logic.
+      compatibility migration is required. Revision target is request-only;
+      both legacy and database-authoritative mutation paths are covered. A
+      revert restores the prior approval-loop behavior but does not lose saved
+      correction evidence.

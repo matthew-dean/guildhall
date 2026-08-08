@@ -1884,6 +1884,95 @@ describe('resumeExploring', () => {
     expect(queue.tasks[0]!.status).toBe('exploring')
   })
 
+  it('invalidates a rejected brief through a typed revision request', async () => {
+    let queue = await readQueue()
+    queue.tasks[0]!.productBrief = {
+      userJob: 'Build the desktop spike with Vue.',
+      whyItMattersNow: 'Prove packaging first.',
+      successMetric: 'A packaged app launches.',
+      nonGoals: [],
+      antiPatterns: [],
+      authoredBy: 'spec-agent',
+      authoredAt: '2026-08-08T00:00:00.000Z',
+    }
+    await writeQueue(queue)
+
+    const result = await resumeExploring({
+      memoryDir,
+      taskId: 'task-001',
+      message: 'Keep the spike framework-neutral.',
+      revisionTarget: 'brief',
+    })
+    expect(result.success).toBe(true)
+
+    queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('exploring')
+    expect(queue.tasks[0]!.productBrief).toBeUndefined()
+    expect(queue.tasks[0]!.notes.at(-1)).toMatchObject({
+      content: 'Keep the spike framework-neutral.',
+      structured: { event: 'document_revision_requested', target: 'brief' },
+    })
+  })
+
+  it('retires a rejected spec and its derived plan while preserving the current brief', async () => {
+    let queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.status = 'spec_review'
+    task.productBrief = {
+      userJob: 'Prove a framework-neutral desktop sidecar.',
+      whyItMattersNow: 'The architecture must be proven before UI work.',
+      successMetric: 'A packaged app runs one offline fixture.',
+      nonGoals: ['Do not build the full UI.'],
+      antiPatterns: [],
+      authoredBy: 'spec-agent',
+      authoredAt: '2026-08-08T00:00:00.000Z',
+    }
+    task.spec = '## What this is\nAn incomplete spike.\n\n## Completion Boundary\n- Product outcome: prove packaging.'
+    task.acceptanceCriteria = [{
+      id: 'ac-old',
+      description: 'Old proof',
+      verifiedBy: 'review',
+      met: false,
+    }]
+    task.sizePlan = {
+      taskId: task.id,
+      score: 1,
+      band: 'tiny',
+      action: 'proceed',
+      factors: [],
+      recommendedChildren: [],
+      reviewBudgetHint: 'lean',
+      reasons: [],
+      createdAt: '2026-08-08T00:00:00.000Z',
+      createdBy: 'task-sizing',
+    }
+    await writeQueue(queue)
+
+    const result = await resumeExploring({
+      memoryDir,
+      taskId: task.id,
+      message: 'Add exact packaged-app proof before approval.',
+      revisionTarget: 'spec',
+    })
+    expect(result.success).toBe(true)
+
+    queue = await readQueue()
+    expect(queue.tasks[0]).toMatchObject({
+      status: 'exploring',
+      productBrief: { userJob: 'Prove a framework-neutral desktop sidecar.' },
+      acceptanceCriteria: [],
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+    })
+    expect(queue.tasks[0]!.spec).toBeUndefined()
+    expect(queue.tasks[0]!.sizePlan).toBeUndefined()
+    expect(queue.tasks[0]!.notes.at(-1)).toMatchObject({
+      content: 'Add exact packaged-app proof before approval.',
+      structured: { event: 'document_revision_requested', target: 'spec' },
+    })
+  })
+
   it('can add a human steering note without reopening spec intake', async () => {
     let queue = await readQueue()
     queue.tasks[0]!.status = 'in_progress'

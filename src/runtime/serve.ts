@@ -15187,6 +15187,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           resolveEscalationId?: string
           resolution?: string
           preserveStatus?: boolean
+          revisionTarget?: 'brief' | 'spec'
         }
         if (!body.message && !body.resolveEscalationId) {
           return c.json({ error: 'Provide a message or an escalation to resolve' }, 400)
@@ -15198,8 +15199,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(body.resolveEscalationId ? { resolveEscalationId: body.resolveEscalationId } : {}),
           ...(body.resolution ? { resolution: body.resolution } : {}),
           ...(body.preserveStatus ? { preserveStatus: true } : {}),
+          ...(body.revisionTarget ? { revisionTarget: body.revisionTarget } : {}),
         })
         if (!result.success) return c.json({ error: result.error ?? 'resume failed' }, 400)
+        await refreshCurrentThreadProjection(project.path, {
+          runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+        })
         return c.json({ ok: true })
       }
 

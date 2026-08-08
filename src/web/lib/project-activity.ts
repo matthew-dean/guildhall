@@ -471,7 +471,7 @@ export function buildProjectTicker(
       message:
         oneTaskRun
           ? 'Advancing one task'
-          : live.count === 1 && live.focusTaskTitle
+          : live.focusTaskTitle
           ? `Working on: ${live.focusTaskTitle}`
           : live.count > 0
           ? `Working on ${live.count} ${pluralize(live.count, 'task')}`
@@ -576,7 +576,7 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
       message:
         oneTaskRun
           ? oneTaskMessage
-          : liveCount === 1 && liveFocusTitle
+          : liveFocusTitle
           ? `Working on: ${liveFocusTitle}`
           : liveCount > 0
           ? `Working on ${liveCount} ${pluralize(liveCount, 'task')}`

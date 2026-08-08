@@ -390,6 +390,40 @@ describe('proof health', () => {
     expect(taskDoneButProofMissing(normalized)).toBe(false)
   })
 
+  it('keeps a new command criterion unmet when the matching command gate predates its proof path', () => {
+    const task = {
+      id: 'task-command-proof',
+      status: 'spec_review',
+      acceptanceCriteria: [{
+        id: 'ac-4',
+        description: 'The current typecheck passes.',
+        verifiedBy: 'automated',
+        command: 'pnpm typecheck',
+        met: false,
+      }],
+      proofPaths: [{
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm typecheck',
+        createdAt: '2026-08-08T21:06:42.486Z',
+        updatedAt: '2026-08-08T21:06:42.486Z',
+        expectedEvidence: [{ id: 'ac-4', required: true }],
+        verificationRecords: [],
+      }],
+      gateResults: [{
+        type: 'hard',
+        gateId: 'ac-5',
+        command: 'pnpm typecheck',
+        passed: true,
+        checkedAt: '2026-08-08T18:38:56.714Z',
+      }],
+    }
+
+    const normalized = normalizeAcceptanceCriteriaForCurrentProof(task)
+    expect(normalized.acceptanceCriteria).toMatchObject([{ met: false }])
+    expect(normalized.acceptanceCriteriaProofState).toMatchObject({ state: 'blocked' })
+  })
+
   it('does not treat gate names or output prose as command proof', () => {
     const task = {
       id: 'task-prose-proof-trap',

@@ -1082,6 +1082,22 @@ export function summarizeProjectScopeStart(
   }
   const blocked = included.find(row => row.handoffState === 'blocked' || row.dependencyBlocked)
   if (blocked) {
+    const dependencyReview = blocked.dependencyTaskIds
+      ?.map(taskId => included.find(row => row.taskId === taskId))
+      .find(row => row && !row.dependencyBlocked && row.handoffState === 'spec_review' && row.humanBlocking)
+    if (dependencyReview) {
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        label: 'Review',
+        focusTaskId: dependencyReview.taskId,
+        focusTaskTitle: dependencyReview.title,
+        focusKind: 'spec_review',
+        count: 1,
+        message: `"${dependencyReview.title}" is waiting for review before work can start.`,
+        actionHref: `/thread?thread=${encodeURIComponent(`task:${dependencyReview.taskId}`)}`,
+      }
+    }
     const count = included.filter(row => row.handoffState === 'blocked' || row.dependencyBlocked).length
     const dependencyTitle = blocked.dependencyTaskIds?.[0]
       ? included.find(row => row.taskId === blocked.dependencyTaskIds?.[0])?.title ?? blocked.dependencyTaskIds[0]
@@ -1135,9 +1151,9 @@ export function summarizeProjectScopeStart(
       actionHref: `/work?task=${encodeURIComponent(briefCleanup.taskId)}`,
     }
   }
-  const specReview = included.find(row => row.handoffState === 'spec_review' && row.humanBlocking)
+  const specReview = included.find(row => !row.dependencyBlocked && row.handoffState === 'spec_review' && row.humanBlocking)
   if (specReview) {
-    const count = included.filter(row => row.handoffState === 'spec_review' && row.humanBlocking).length
+    const count = included.filter(row => !row.dependencyBlocked && row.handoffState === 'spec_review' && row.humanBlocking).length
     return {
       canStart: false,
       code: 'no_unattended_progress',

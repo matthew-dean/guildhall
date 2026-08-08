@@ -10,6 +10,41 @@ export function hasUsableBlueprint(task: Task): boolean {
   return validateSpecCompletionBoundary(task).ok
 }
 
+function clearCurrentPlan(task: Task, preserveProductBrief: boolean, clearEvidence: boolean): void {
+  task.proofPaths = undefined
+  task.recoveryCode = undefined
+  task.acceptanceCriteria = []
+  if (!preserveProductBrief) task.productBrief = undefined
+  task.spec = undefined
+  task.structuredSpec = undefined
+  task.contractSurfaceReviewPackets = undefined
+  task.acceptanceCriteriaProofState = undefined
+  task.taskReadiness = undefined
+  task.reviewRisk = undefined
+  task.definitionOfDone = undefined
+  task.blockerPlans = undefined
+  task.contextBudget = undefined
+  task.decomposition = undefined
+  task.coordinatorReflections = undefined
+  task.workUnitAnalysis = undefined
+  task.sizePlan = undefined
+  task.taskKind = undefined
+  task.openQuestions = []
+  if (clearEvidence) {
+    task.gateResults = []
+    task.reviewVerdicts = []
+    task.adjudications = []
+  }
+}
+
+/** Retire a rejected spec and its derived plan while preserving the accepted brief. */
+export function resetCurrentPlanForRevision(
+  task: Task,
+  options: { clearEvidence?: boolean } = {},
+): void {
+  clearCurrentPlan(task, true, options.clearEvidence !== false)
+}
+
 /**
  * Clear only the current planning contract when Guildhall discovers that its
  * saved plan cannot be executed. Historical evidence stays in the evidence
@@ -36,28 +71,7 @@ export function resetCurrentPlanForProofRecovery(
     })
     return
   }
-  task.proofPaths = undefined
-  task.recoveryCode = undefined
-  task.acceptanceCriteria = []
-  if (!input.preserveProductBrief) task.productBrief = undefined
-  task.spec = undefined
-  task.structuredSpec = undefined
-  task.contractSurfaceReviewPackets = undefined
-  task.acceptanceCriteriaProofState = undefined
-  task.taskReadiness = undefined
-  task.reviewRisk = undefined
-  task.definitionOfDone = undefined
-  task.blockerPlans = undefined
-  task.contextBudget = undefined
-  task.decomposition = undefined
-  task.coordinatorReflections = undefined
-  task.workUnitAnalysis = undefined
-  task.sizePlan = undefined
-  task.taskKind = undefined
-  task.openQuestions = []
-  task.gateResults = []
-  task.reviewVerdicts = []
-  task.adjudications = []
+  clearCurrentPlan(task, input.preserveProductBrief === true, true)
   task.notes.push({
     agentId: input.agentId ?? 'system',
     role: input.role ?? 'proof-recovery',

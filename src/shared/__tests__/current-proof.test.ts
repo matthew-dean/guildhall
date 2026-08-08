@@ -72,6 +72,29 @@ describe('summarizeCurrentProof', () => {
     })
   })
 
+  it('does not reuse a matching command gate from before the current proof contract', () => {
+    expect(summarizeCurrentProof({
+      status: 'spec_review',
+      proofPaths: [{
+        kind: 'command',
+        command: 'pnpm typecheck',
+        createdAt: '2026-08-08T21:06:42.486Z',
+        updatedAt: '2026-08-08T21:06:42.486Z',
+        expectedEvidence: [{ id: 'ac-4', required: true }],
+        verificationRecords: [],
+      }],
+      gateResults: [{
+        gateId: 'ac-5',
+        command: 'pnpm typecheck',
+        passed: true,
+        checkedAt: '2026-08-08T18:38:56.714Z',
+      }],
+    })).toMatchObject({
+      state: 'needed',
+      missing: ['Required proof evidence is missing for pnpm typecheck.'],
+    })
+  })
+
   it('uses current evidence records when the task index has not copied them to top-level fields', () => {
     expect(summarizeCurrentProof({
       status: 'done',

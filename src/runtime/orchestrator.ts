@@ -4173,7 +4173,7 @@ export class Orchestrator {
       type: 'line_complete',
       task_id: task.id,
       agent_name: agent.name,
-      message: 'Waiting for the local model to respond.',
+      message: 'Waiting for the model to respond.',
     })
 
     let generatedText = ''

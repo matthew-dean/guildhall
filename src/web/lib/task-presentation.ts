@@ -128,6 +128,7 @@ export function taskStagePresentation(
   if (taskId(input) === options.focusTaskId) {
     if (options.focusKind === 'brief_cleanup') return { key: 'brief_review', label: 'Review brief', tone: 'warn' }
     if (options.focusKind === 'spec_review') return { key: 'spec_review', label: 'Review spec', tone: 'warn' }
+    if (options.focusKind === 'ready_work') return { key: 'ready', label: 'Ready', tone: 'ok' }
   }
 
   switch (status) {
@@ -151,12 +152,7 @@ export function taskStagePresentation(
         ? { key: 'queued', label: 'Queued', tone: 'running' }
         : { key: 'paused', label: 'Paused', tone: 'neutral' }
     case 'spec_review':
-      if (specRevisionQueued(input)) {
-        return runIsActive(options)
-          ? { key: 'queued', label: 'Queued', tone: 'running' }
-          : { key: 'paused', label: 'Paused', tone: 'neutral' }
-      }
-      return { key: 'spec_review', label: friendlyStatus(status), tone: 'warn' }
+      return { key: 'spec_review', label: 'Review spec', tone: 'warn' }
     case 'ready':
       if (needsWorkerHandoffSpecCleanup({ ...input, taskStatus: status })) {
         return { key: 'needs_brief', label: 'Needs brief', tone: 'warn' }

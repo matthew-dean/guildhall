@@ -35,7 +35,7 @@ describe('taskStagePresentation', () => {
     expect(stage.key).toBe('queued')
   })
 
-  it('recognizes spec_review component turns as queued spec work', () => {
+  it('presents spec_review component turns as owner review', () => {
     const stage = taskStagePresentation({
       kind: 'inflight',
       taskId: 'task-import-combobox',
@@ -47,11 +47,11 @@ describe('taskStagePresentation', () => {
       checklist: undefined,
     }, { runStatus: 'running' })
 
-    expect(stage.label).toBe('Queued')
-    expect(stage.key).toBe('queued')
+    expect(stage.label).toBe('Review spec')
+    expect(stage.key).toBe('spec_review')
   })
 
-  it('recognizes raw spec_review component tasks as queued spec work', () => {
+  it('presents raw spec_review tasks as owner review', () => {
     const stage = taskStagePresentation({
       id: 'task-import-combobox',
       title: 'Combobox',
@@ -61,8 +61,8 @@ describe('taskStagePresentation', () => {
       openQuestions: [],
     }, { runStatus: 'stopped' })
 
-    expect(stage.label).toBe('Paused')
-    expect(stage.key).toBe('paused')
+    expect(stage.label).toBe('Review spec')
+    expect(stage.key).toBe('spec_review')
   })
 
   it('presents Guildhall-owned queued work with the agent/running tone', () => {

@@ -230,6 +230,8 @@
     kind: 'inflight'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; taskStatus?: string; summary: string
+    briefApproved?: boolean | undefined
+    specDraftPresent?: boolean | undefined
     constructionMode?: ConstructionMode | undefined
     gitStory?: GitStorySnapshot | undefined
     requestKind?: 'task_spec' | 'project_question' | 'settings_proposal' | 'persona_practice_proposal' | 'repair_triage' | 'clarification' | undefined
@@ -1188,7 +1190,13 @@
     if (turnLiveAgent(t)) return 'Working'
     if (needsRecovery(t)) return 'Needs recovery'
     if (t.kind === 'inflight' && (t.dependencyBlockers?.length ?? 0) > 0) return 'Waiting'
-    if (guildhallShaping(t)) return runStatus === 'running' || runStatus === 'stopping' ? 'Queued' : 'Paused'
+    if (guildhallShaping(t)) {
+      return runStatus === 'running' || runStatus === 'stopping'
+        ? 'Queued'
+        : availabilityStatus === 'paused'
+          ? 'Paused'
+          : 'Ready'
+    }
     if (t.kind === 'setup_step') return t.status === 'done' || t.skippable ? null : 'Needs you'
     if (t.kind === 'pressure_test_question' || t.kind === 'bounded_chat') return t.status === 'done' ? null : 'Needs you'
     if (t.kind === 'escalation') {
@@ -1209,6 +1217,7 @@
     }
     if (t.kind === 'review_feedback') return t.status === 'done' ? null : 'Needs you'
     if (t.kind === 'inflight') {
+      if (t.taskStatus === 'spec_review') return 'Needs you'
       if (t.importedDraft && t.taskStatus === 'import_draft') {
         return 'Needs you'
       }
@@ -1230,7 +1239,13 @@
       ) {
         return 'Queued'
       }
-      if (canStartTaskTurn(t)) return runStatus === 'running' || runStatus === 'stopping' ? 'Queued' : 'Paused'
+      if (canStartTaskTurn(t)) {
+        return runStatus === 'running' || runStatus === 'stopping'
+          ? 'Queued'
+          : availabilityStatus === 'paused'
+            ? 'Paused'
+            : 'Ready'
+      }
     }
     return null
   }
@@ -1240,6 +1255,7 @@
     const label = ownershipLabel(t)
     if (label === 'Needs you' || label === 'Needs recovery') return 'warn'
     if (label === 'Needs brief') return 'warn'
+    if (label === 'Ready') return 'ok'
     if (label === 'Queued' || label === 'Working') return 'running'
     return 'neutral'
   }
@@ -1261,6 +1277,9 @@
     if (turn.kind === 'inflight' && turn.status !== 'done') {
       if ((turn.dependencyBlockers?.length ?? 0) > 0) {
         return { label: 'Waiting', tone: 'neutral' }
+      }
+      if (ownershipLabel(turn) === 'Ready') {
+        return { label: 'Ready', tone: 'ok' }
       }
       return { label: taskStateLabel(turn), tone: taskStateTone(turn) }
     }
@@ -1830,6 +1849,11 @@
         body: JSON.stringify({
           message,
           ...(turn.kind === 'inflight' || turn.kind === 'escalation' ? { preserveStatus: true } : {}),
+          ...(turn.kind === 'brief_approval'
+            ? { revisionTarget: 'brief' }
+            : turn.kind === 'spec_review'
+              ? { revisionTarget: 'spec' }
+              : {}),
         }),
       })
       const j = await r.json().catch(() => ({})) as { error?: string }
@@ -1842,6 +1866,8 @@
       replyDrafts = next
       replyTurnId = null
       sentReplies = { ...sentReplies, [turn.id]: true }
+      await load()
+      await refreshProject()
       await load()
     } finally {
       busyTurnId = null
@@ -2194,7 +2220,12 @@
   function taskStateLabel(turn: InFlightTurn): string {
     return taskStagePresentation(
       { ...turn, liveAgent: turnLiveAgent(turn) },
-      { runStatus, availabilityStatus },
+      {
+        runStatus,
+        availabilityStatus,
+        focusTaskId: startReadiness?.focusTaskId,
+        focusKind: startReadiness?.focusKind,
+      },
     ).label
   }
 
@@ -2207,7 +2238,7 @@
       live?.lastEventKind === 'provider_wait' &&
       (live.silentMs ?? 0) >= 60_000
     ) {
-      return 'Local model is still loading or generating.'
+      return 'The model is still loading or generating.'
     }
     if (live?.name === 'spec-agent') {
       if (turn.requestKind === 'project_question') {
@@ -2219,9 +2250,13 @@
       if (turn.importedDraft) {
         return 'This imported note is becoming a task brief now.'
       }
+      if (turn.briefApproved) return 'The approved brief is becoming a spec now.'
       return turn.taskId === 'task-workspace-import'
         ? 'Your existing project notes are becoming candidate tasks now.'
         : 'Drafting is in progress now.'
+    }
+    if ((turn.dependencyBlockers?.length ?? 0) > 0) {
+      return `Waiting for ${turn.dependencyBlockers?.map(blocker => blocker.title).join(', ')}.`
     }
     if (turn.taskStatus === 'ready' && !live) {
       if (needsWorkerHandoffSpecCleanup(turn)) {
@@ -2249,11 +2284,19 @@
           ? 'Part of this import review is already drafted. Review it if you want, but answer the current blocker before project notes can keep moving.'
           : 'Part of this import review is already drafted. Review it if you want, or resume to keep turning your project notes into candidate tasks.'
       }
+      if (turn.briefApproved && !turn.specDraftPresent) {
+        return runStatus === 'running'
+          ? 'The brief is approved. The spec is queued for drafting.'
+          : 'The brief is approved. Resume to draft the spec.'
+      }
       return turn.importedDraft
           ? 'The task brief for this imported note is being shaped. You can add context, but you do not need to babysit the draft.'
           : isQueuedSpecRevision(turn)
             ? 'The draft spec and your latest answers are saved. Coordinator review is queued.'
             : 'Task shaping has started, but the brief is not ready yet. The checklist shows what is still missing.'
+    }
+    if (turn.taskStatus === 'spec_review' && !live) {
+      return 'The spec is ready for your review.'
     }
     if (turn.taskStatus === 'in_progress' && !live) {
       return runStatus === 'running'
@@ -2373,7 +2416,6 @@
       turn.taskStatus === 'ready' ||
       turn.taskStatus === 'import_draft' ||
       turn.taskStatus === 'exploring' ||
-      turn.taskStatus === 'spec_review' ||
       turn.taskStatus === 'in_progress' ||
       turn.taskStatus === 'review' ||
       turn.taskStatus === 'gate_check'
@@ -2405,9 +2447,10 @@
       case 'exploring':
         if (turn.taskId === 'task-meta-intake') return 'Keep setting this up'
         if (turn.requestStage === 'task_brief_cleanup') return 'Clean up brief'
+        if (turn.briefApproved && !turn.specDraftPresent) return 'Continue drafting spec'
         if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue shaping brief'
         return isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
-      case 'spec_review': return 'Resume spec work'
+      case 'spec_review': return 'Review spec'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
       case 'in_progress': return 'Resume work'
@@ -3063,6 +3106,9 @@
     }
     if (turn.kind === 'inflight') {
       if (turn.requestStage === 'task_brief_cleanup') return 'Brief cleanup'
+      if (turn.briefApproved && !turn.specDraftPresent) {
+        return turnLiveAgent(turn) ? 'Drafting spec' : 'Continue drafting spec'
+      }
       if (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') {
         return 'Continue shaping brief'
       }

@@ -21,7 +21,10 @@ import {
   buildThreadHistoryProjection,
   type CurrentThreadProjection,
 } from './current-thread-projection.js'
-import { readProjectTaskQueue } from './project-state-boundary.js'
+import {
+  readProjectCurrentTaskEvidenceWithRevisionAtBoundary,
+  readProjectTaskQueue,
+} from './project-state-boundary.js'
 import { TaskQueue, type Task } from '@guildhall/core'
 import { listBoundedChatSessionsAsync } from './bounded-chat.js'
 import { listPressureTestIntakesAsync, summarizeProjectCheckIn } from './pressure-test-intake.js'
@@ -131,6 +134,12 @@ function readThreadTasks(projectRoot: string, tasksPath: string): ThreadTaskRead
       includeDefinitions: true,
     })
     if (!detailedTasks || detailedTasks.length !== detailIds.length) return null
+    const evidenceRead = readProjectCurrentTaskEvidenceWithRevisionAtBoundary(projectRoot, detailIds)
+    if (!evidenceRead) return null
+    if (
+      evidenceRead.queueRevision !== sourceQueueRevision ||
+      evidenceRead.projectRevision !== sourceProjectRevision
+    ) continue
 
     const currentQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
     const currentProjectRevision = readProjectStateDatabaseRevisionFromTasksPath(tasksPath)
@@ -141,7 +150,8 @@ function readThreadTasks(projectRoot: string, tasksPath: string): ThreadTaskRead
     return {
       tasks: compactTasks.map(task => {
         const detailed = detailsById.get(typeof task.id === 'string' ? task.id : '')
-        return threadTaskSummary(task, detailed, projectRoot, fallbackAt)
+        const evidence = evidenceRead.records.get(typeof task.id === 'string' ? task.id : '')
+        return threadTaskSummary(task, detailed, evidence, projectRoot, fallbackAt)
       }),
       sourceQueueRevision,
       sourceProjectRevision,
@@ -229,6 +239,7 @@ function taskTimestamp(task: ThreadTaskRecord): number {
 function threadTaskSummary(
   compactTask: ThreadTaskRecord,
   detailedTask: { definition: ThreadTaskRecord } | undefined,
+  currentEvidence: { byKind?: Record<string, Array<{ payload?: unknown }>> } | undefined,
   projectRoot: string,
   fallbackAt: string,
 ): Task {
@@ -247,6 +258,20 @@ function threadTaskSummary(
   }
   for (const key of THREAD_TASK_FIELDS) {
     if (key in source) task[key] = source[key]
+  }
+  const evidenceNotes = (currentEvidence?.byKind?.note ?? [])
+    .flatMap(entry => entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
+      ? [entry.payload as ThreadTaskRecord]
+      : [])
+  if (evidenceNotes.length > 0) {
+    const sourceNotes = Array.isArray(task.notes) ? task.notes as ThreadTaskRecord[] : []
+    const seen = new Set<string>()
+    task.notes = [...sourceNotes, ...evidenceNotes].filter(note => {
+      const key = JSON.stringify([note.agentId, note.role, note.content, note.timestamp])
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    }) as Task['notes']
   }
   return task as Task
 }

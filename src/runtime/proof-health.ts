@@ -465,13 +465,22 @@ function passedGateResultsForTask(task: unknown): Array<Record<string, unknown>>
   )
 }
 
-function commandProofSatisfiedByTask(proofPath: Record<string, unknown>, task: unknown): boolean {
-  const command = comparableCommand(proofPath.command)
+function commandProofSatisfiedByTask(proofContract: Record<string, unknown>, task: unknown): boolean {
+  const command = comparableCommand(proofContract.command)
   if (!command) return false
+  const taskRecord = recordValue(task)
+  const matchingPaths = Array.isArray(taskRecord?.proofPaths)
+    ? taskRecord.proofPaths
+      .map(recordValue)
+      .filter((path): path is Record<string, unknown> => path?.kind === 'command' && comparableCommand(path.command) === command)
+    : []
+  if (taskRecord && matchingPaths.length > 0) {
+    return matchingPaths.some(path => isCurrentProofPathProven(path, taskRecord))
+  }
   if (passedGateResultsForTask(task).some((gate) => {
-    return gate.gateId === proofPath.id || commandProofGateMatches(proofPath, gate) || comparableCommand(gate.command) === command
+    return gate.gateId === proofContract.id || commandProofGateMatches(proofContract, gate) || comparableCommand(gate.command) === command
   })) return true
-  return (Array.isArray(proofPath.verificationRecords) ? proofPath.verificationRecords : [])
+  return (Array.isArray(proofContract.verificationRecords) ? proofContract.verificationRecords : [])
     .some(record => {
       if (!record || typeof record !== 'object' || Array.isArray(record) || (record as { status?: unknown }).status !== 'passed') return false
       const verification = record as Record<string, unknown>

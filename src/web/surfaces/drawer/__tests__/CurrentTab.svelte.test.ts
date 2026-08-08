@@ -657,7 +657,7 @@ describe('CurrentTab', () => {
         liveAgent: {
           name: 'worker-agent',
           startedAt: now,
-          lastEventLabel: 'Waiting for the local model to respond.',
+          lastEventLabel: 'Waiting for the model to respond.',
           lastEventKind: 'provider_wait',
           providerKind: 'local',
           lastEventAt: now,
@@ -667,7 +667,7 @@ describe('CurrentTab', () => {
     ])
 
     expect(screen.getByText('Working')).toBeTruthy()
-    expect(screen.getByText(/Local model is still loading or generating/i)).toBeTruthy()
+    expect(screen.getByText(/The model is still loading or generating/i)).toBeTruthy()
   })
 
   it('labels queued spec revisions, reviews, and gate checks with the right resume action', async () => {

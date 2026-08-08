@@ -20,6 +20,32 @@ describe('applyRunStatusToStartReadiness', () => {
 })
 
 describe('buildProjectActionModel', () => {
+  it('uses the current brief instead of a superseded original description', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [{
+        id: 'task-086',
+        title: 'Prove packaged Tauri sidecar',
+        status: 'exploring',
+        description: 'Build this with Vue 3.',
+        productBrief: {
+          userJob: 'Prove the sidecar with a framework-neutral vanilla TypeScript view.',
+          whyItMattersNow: 'Packaging must be proven before the desktop shell.',
+          successMetric: 'The packaged app runs one offline fixture.',
+          nonGoals: ['Do not choose the shell framework.'],
+          antiPatterns: [],
+        },
+      }],
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      taskId: 'task-086',
+      detail: 'Current brief: Prove the sidecar with a framework-neutral vanilla TypeScript view.',
+    })
+    expect(model.primaryAction?.detail).not.toContain('Vue')
+  })
+
   it('uses shared ready-work state instead of inferring brief cleanup from a compact task point', () => {
     const model = buildProjectActionModel({
       startReadiness: {

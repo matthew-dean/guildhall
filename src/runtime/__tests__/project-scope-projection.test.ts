@@ -437,6 +437,61 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.start.message).toMatch(/drafted brief ready for review/i)
   })
 
+  it('keeps the current spec review ahead of dependency-blocked downstream reviews', () => {
+    const approvedBrief = {
+      userJob: 'Prove the packaged sidecar.',
+      whyItMattersNow: 'The desktop release depends on the architecture gate.',
+      successMetric: 'The packaged app completes one offline fixture run.',
+      nonGoals: ['Do not build the full interface.'],
+      approvedAt: now,
+    }
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-2',
+      releases: [{
+        id: 'stage-2',
+        label: 'Stage 2',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-086', 'work:task-087'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        task({
+          id: 'task-086',
+          title: 'Prove packaged Tauri sidecar',
+          status: 'spec_review',
+          productBrief: approvedBrief,
+          spec: 'Prove the package.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Package proof exists.', verifiedBy: 'review', met: false }],
+          releaseIds: ['stage-2'],
+        }),
+        task({
+          id: 'task-087',
+          title: 'Define typed desktop harness adapter',
+          status: 'spec_review',
+          dependsOn: ['task-086'],
+          productBrief: approvedBrief,
+          spec: 'Define the adapter.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Typed adapter exists.', verifiedBy: 'review', met: false }],
+          releaseIds: ['stage-2'],
+        }),
+      ],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-087')).toMatchObject({ dependencyBlocked: true })
+    expect(projection.start).toMatchObject({
+      canStart: false,
+      focusTaskId: 'task-086',
+      focusKind: 'spec_review',
+      count: 1,
+      actionHref: '/thread?thread=task%3Atask-086',
+    })
+  })
+
   it('reports later work when a named release is complete', () => {
     const projection = buildProjectScopeProjection({
       version: 1,

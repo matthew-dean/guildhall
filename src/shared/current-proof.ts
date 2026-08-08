@@ -82,6 +82,9 @@ export function commandProofGateMatches(path: RecordValue, gate: RecordValue): b
   const command = stringValue(path.command)
   if (!command) return false
   if (!(gate.passed === true || gate.status === 'pass' || gate.status === 'passed')) return false
+  const proofBoundary = Date.parse(String(path.updatedAt ?? path.createdAt ?? ''))
+  const gateObservedAt = Date.parse(String(gate.checkedAt ?? gate.recordedAt ?? ''))
+  if (Number.isFinite(proofBoundary) && Number.isFinite(gateObservedAt) && gateObservedAt < proofBoundary) return false
   const normalizedCommand = normalizedText(command)
   const recordedCommand = normalizedText(typeof gate.command === 'string' ? gate.command : '')
   if (recordedCommand && recordedCommand === normalizedCommand) return true

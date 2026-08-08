@@ -52,7 +52,7 @@ import { buildSurfaceReviewPacketsForStructuredSpec } from './contract-surfaces.
 import { buildEffectiveTask } from './effective-task.js'
 import { assessTaskReadiness, hasExplicitNoSplitBoundary } from './task-readiness.js'
 import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
-import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
+import { resetCurrentPlanForProofRecovery, resetCurrentPlanForRevision } from './task-plan-recovery.js'
 import {
   sanitizeTaskQueueForProjectWrite,
   readProjectCanonicalCurrentState,
@@ -983,6 +983,8 @@ export interface ResumeExploringInput {
    * current worker/reviewer. It should not reopen spec intake.
    */
   preserveStatus?: boolean | undefined
+  /** Typed document boundary for an explicit owner revision request. */
+  revisionTarget?: 'brief' | 'spec' | undefined
 }
 
 export interface RerunTaskStageInput {
@@ -1103,6 +1105,10 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
       projectRoot,
       mutate: current => {
         if (!input.preserveStatus && current.status !== 'blocked') current.status = 'exploring'
+        if (input.revisionTarget === 'brief') delete current.productBrief
+        if (input.revisionTarget === 'spec') {
+          resetCurrentPlanForRevision(current as unknown as Task, { clearEvidence: false })
+        }
         current.updatedAt = now
         return current
       },
@@ -1117,10 +1123,15 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
         role: 'human',
         content: input.message,
         timestamp: now,
+        ...(input.revisionTarget
+          ? { structured: { event: 'document_revision_requested', target: input.revisionTarget } }
+          : {}),
       },
     })
   } else if (input.message && !input.preserveStatus && task.status !== 'blocked') {
     task.status = 'exploring'
+    if (input.revisionTarget === 'brief') delete task.productBrief
+    if (input.revisionTarget === 'spec') resetCurrentPlanForRevision(task)
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = task.updatedAt
     await writeQueue(input.memoryDir, queue)

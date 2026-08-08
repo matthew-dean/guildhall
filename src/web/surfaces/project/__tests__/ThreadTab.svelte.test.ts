@@ -1692,7 +1692,7 @@ describe('ThreadTab', () => {
       { label: 'Finished a thought', tone: 'ok', at: now },
       { label: 'Started shell', tone: 'running', at: now },
       { label: 'Finished shell', detail: 'Shell command succeeded.', tone: 'ok', at: now },
-      { label: 'Waiting for the local model to respond.', tone: 'warn', at: now },
+      { label: 'Waiting for the model to respond.', tone: 'warn', at: now },
     ]
     installFetchFakes([
       workerTurn({
@@ -2790,7 +2790,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     const blockMenuRow = await screen.findByRole('button', { name: /Block menu \/ block side menu/i })
-    await within(blockMenuRow).findByText('Paused')
+    await within(blockMenuRow).findByText('Ready')
     expect(within(blockMenuRow).queryByText('Queued')).toBeNull()
     expect(screen.queryByText('Intake')).toBeNull()
   })
@@ -2824,7 +2824,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     const floatingRow = await screen.findByRole('button', { name: /Floating toolbar/i })
-    await within(floatingRow).findByText('Paused')
+    await within(floatingRow).findByText('Ready')
     expect(within(floatingRow).queryByText('done', { selector: '.chip' })).toBeNull()
     expect(within(floatingRow).getByText(/brief is not ready yet/i)).toBeTruthy()
   })
@@ -3043,6 +3043,27 @@ describe('ThreadTab', () => {
 
     await waitFor(() => {
       expect(calls.some(call => call.url.includes('/task/task-link-controls/approve-brief'))).toBe(true)
+    })
+  })
+
+  it('sends brief corrections as typed revision requests', async () => {
+    const { calls } = installFetchFakes([briefTurn()], 'brief-link-controls')
+
+    render(ThreadTab)
+    await screen.findByText('Edit links inline.')
+    await userEvent.click(selectedThread().getByRole('button', { name: /view brief/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve brief/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /no, change it/i }))
+    await userEvent.type(threadComposer().getByPlaceholderText(/correct the brief/i), 'Keep the spike framework-neutral.')
+    await userEvent.click(threadComposer().getByRole('button', { name: /^send$/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call =>
+        call.url.includes('/task/task-link-controls/resume') &&
+        call.body?.message === 'Keep the spike framework-neutral.' &&
+        call.body?.revisionTarget === 'brief' &&
+        call.body?.preserveStatus === undefined
+      )).toBe(true)
     })
   })
 
@@ -3400,7 +3421,7 @@ describe('ThreadTab', () => {
           liveAgent: {
             name: 'worker-agent',
             startedAt: '2026-05-19T14:58:00.000Z',
-            lastEventLabel: 'Waiting for the local model to respond.',
+            lastEventLabel: 'Waiting for the model to respond.',
             lastEventKind: 'provider_wait',
             silentMs: 90_000,
           },
