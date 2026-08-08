@@ -1547,7 +1547,7 @@ export async function rerunTaskStage(
       taskId: task.id,
       role: 'system',
       content:
-        'A delegated owner requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
+        'A delegated owner requested a fresh spec pass. Any earlier spec approval in this history is superseded and is historical evidence only. Re-read the task, submit a new current brief/spec from project reality, and ask only the minimum clarifying questions needed.',
     })
     await upsertTaskRuntimeState(projectRoot, task.id, {
       assignedTo: null,

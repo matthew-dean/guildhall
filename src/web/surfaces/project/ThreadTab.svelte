@@ -238,6 +238,7 @@
     taskDescription?: string | undefined
     sourceNote?: { description?: string | undefined; references: string[] } | undefined
     importedDraft?: boolean | undefined
+    dependencyBlockers?: Array<{ taskId: string; title: string }> | undefined
     liveAgent?: LiveAgent | undefined
     activity?: LiveActivity[] | undefined
     checklist?: {
@@ -1186,6 +1187,7 @@
   function ownershipLabel(t: Turn): string | null {
     if (turnLiveAgent(t)) return 'Working'
     if (needsRecovery(t)) return 'Needs recovery'
+    if (t.kind === 'inflight' && (t.dependencyBlockers?.length ?? 0) > 0) return 'Waiting'
     if (guildhallShaping(t)) return runStatus === 'running' || runStatus === 'stopping' ? 'Queued' : 'Paused'
     if (t.kind === 'setup_step') return t.status === 'done' || t.skippable ? null : 'Needs you'
     if (t.kind === 'pressure_test_question' || t.kind === 'bounded_chat') return t.status === 'done' ? null : 'Needs you'
@@ -2363,6 +2365,7 @@
 
   function canStartTaskTurn(turn: InFlightTurn): boolean {
     if (projectRunBlocksTaskStart(turn)) return false
+    if ((turn.dependencyBlockers?.length ?? 0) > 0) return false
     return !turnLiveAgent(turn) && (
       turn.taskStatus === 'ready' ||
       turn.taskStatus === 'import_draft' ||

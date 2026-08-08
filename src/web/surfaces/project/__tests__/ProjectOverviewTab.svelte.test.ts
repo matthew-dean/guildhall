@@ -1270,7 +1270,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText('1 Being shaped')).toBeInTheDocument()
     expect(screen.queryByText('1 Ready')).not.toBeInTheDocument()
     expect(screen.getAllByText('Needs brief').length).toBeGreaterThan(0)
-    expect(screen.getByText('Needs brief: add enough detail before this can start.')).toBeInTheDocument()
+    expect(screen.getByText('"Set FLL overhead charge policy" needs a clearer brief before unattended work can run.')).toBeInTheDocument()
     expect(screen.queryByText(/ready for the next worker slot/i)).not.toBeInTheDocument()
   })
 

@@ -1664,6 +1664,7 @@ export interface ProjectDetail {
     execution?: {
       focusTaskId?: string
       focusTaskTitle?: string
+      count?: number
     }
     release?: {
       lifecycleState?: string

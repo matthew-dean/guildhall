@@ -51,6 +51,51 @@ function queue(tasks: Task[]): TaskQueue {
 }
 
 describe('buildProjectScopeProjection', () => {
+  it('focuses the runnable dependency before blocked downstream shaping', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-2',
+      releases: [{
+        id: 'stage-2',
+        label: 'Stage 2',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-gate', 'work:task-ui'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        task({
+          id: 'task-gate',
+          title: 'Prove architecture gate',
+          status: 'ready',
+          spec: 'One approved gate.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'The gate is proven.', verifiedBy: 'review', met: false }],
+          releaseIds: ['stage-2'],
+        }),
+        task({
+          id: 'task-ui',
+          title: 'Build desktop UI',
+          status: 'exploring',
+          dependsOn: ['task-gate'],
+          releaseIds: ['stage-2'],
+        }),
+      ],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-ui')).toMatchObject({
+      dependencyBlocked: true,
+      dependencyTaskIds: ['task-gate'],
+      blocksStart: true,
+    })
+    expect(projection.start).toMatchObject({
+      code: 'ready_work',
+      focusTaskId: 'task-gate',
+    })
+  })
+
   it('keeps public release membership totals when execution scope is compacted', () => {
     expect(projectScopeMembershipCounts({
       id: 'stage-1',

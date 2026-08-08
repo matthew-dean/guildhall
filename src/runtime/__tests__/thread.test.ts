@@ -4750,4 +4750,53 @@ coordinators:
       await rm(projectPath, { recursive: true, force: true })
     }
   })
+
+  it('labels downstream shaping as waiting on its dependency', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      const now = new Date().toISOString()
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 2,
+        wizardState: emptyWizardsState(),
+      }
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+        tasks: [
+          {
+            id: 'task-gate', title: 'Prove architecture', description: 'Prove it.', domain: 'core', projectPath,
+            status: 'ready', priority: 'normal', dependsOn: [], acceptanceCriteria: [], notes: [], gateResults: [],
+            reviewVerdicts: [], adjudications: [], escalations: [], agentIssues: [], outOfScope: [], revisionCount: 0,
+            remediationAttempts: 0, origination: 'human', createdAt: now, updatedAt: now,
+          },
+          {
+            id: 'task-ui', title: 'Build desktop UI', description: 'Build it.', domain: 'core', projectPath,
+            status: 'exploring', priority: 'normal', dependsOn: ['task-gate'], acceptanceCriteria: [], notes: [], gateResults: [],
+            reviewVerdicts: [], adjudications: [], escalations: [], agentIssues: [], outOfScope: [], revisionCount: 0,
+            remediationAttempts: 0, origination: 'human', createdAt: now, updatedAt: now,
+          },
+        ],
+      })
+
+      const turn = thread.turns.find(candidate => candidate.kind === 'inflight' && candidate.taskId === 'task-ui')
+      expect(turn).toMatchObject({
+        summary: 'Waiting for Prove architecture.',
+        dependencyBlockers: [{ taskId: 'task-gate', title: 'Prove architecture' }],
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
 })

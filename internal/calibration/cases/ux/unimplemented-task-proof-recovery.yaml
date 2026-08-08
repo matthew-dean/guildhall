@@ -1,0 +1,42 @@
+id: unimplemented-task-proof-recovery
+title: Unimplemented task routed to proof-only completion
+domain: ux
+productType: workflow-tool
+surfaceType: task-recovery
+userGoal: Resume approved work and trust that Guildhall performs the implementation before claiming proof or completion.
+scenario: A ready task has planned command proof but no worker pass or implementation output. Retry routes directly to generic repository gates and marks the task done.
+artifacts:
+  - id: lifecycle-state
+    kind: state_snapshot
+    description: Structured task state before and after the retry.
+    content: "Before: status ready, no worker output, planned pnpm typecheck and pnpm test proof. After: worker skipped, generic commands passed against unchanged code, status done."
+reviewLanes:
+  - ux_comprehension
+  - workflow_integrity
+knownFindings:
+  - id: proof-before-implementation
+    lane: workflow_integrity
+    severity: critical
+    summary: Planned proof on nonterminal work was mistaken for missing proof on completed work.
+    impact: Guildhall can claim a release task is complete without producing the requested implementation.
+    minimumUsefulFix: Require authoritative prior completion before activating proof recovery; ready and partial tasks must return to an implementation worker.
+    matchHints:
+      - worker skipped
+      - unchanged code
+      - proof recovery
+      - task marked done
+falsePositiveTraps:
+  - id: commands-really-pass
+    summary: Passing generic repository checks does not prove an implementation exists or justify skipping its worker.
+source:
+  kind: production_miss
+  citation: Generalized from the Narrative Harness task-086 Stage 2 flow audit on 2026-08-08.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-08-08T18:42:00.000Z
+  reviewStatus: seed
+privacyClassification: internal
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-11-08
+  reason: Task recovery and proof routing are active release-critical workflows.

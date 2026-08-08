@@ -3231,6 +3231,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     })
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/fresh spec pass/i)
+    expect(transcript).toMatch(/earlier spec approval.*superseded/i)
   })
 
   it('records explicit proof re-intake guidance and clears the old executable plan', async () => {
@@ -3872,6 +3873,56 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(transcript).toContain('create the main reviewer file')
   })
 
+  it('does not mistake an unimplemented ready task for completed proof recovery', async () => {
+    await seedTask('task-1', {
+      status: 'ready',
+      assignedTo: null,
+      notes: [],
+      spec: '## Completion Boundary\nBuild the bounded desktop spike before running its proof.',
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        description: 'The project typechecks after the desktop spike is implemented.',
+        verifiedBy: 'automated',
+        command: 'pnpm typecheck',
+        met: false,
+      }],
+      proofPaths: [{
+        id: 'task-1-ac-1-command-proof',
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm typecheck',
+        status: 'planned',
+        expectedEvidence: [{
+          id: 'ac-1',
+          kind: 'automated',
+          description: 'The project typechecks after the desktop spike is implemented.',
+          required: true,
+        }],
+        verificationRecords: [],
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instruction: 'Implement the approved desktop spike.' }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+
+    const effective = await readEffectiveTask('task-1')
+    expect(effective.runtime?.proofRecovery).toBeUndefined()
+    const queue = await readTaskQueue()
+    const noteText = queue.tasks[0]?.notes
+      .map((note: Record<string, unknown>) => String(note.content ?? ''))
+      .join('\n') ?? ''
+    expect(noteText).toContain('Retry partial worker pass')
+    expect(noteText).not.toContain('missing release proof')
+  })
+
   it('reopens in-progress work for blueprint shaping instead of resuming a worker', async () => {
     await seedTask('task-1', {
       status: 'in_progress',
@@ -3902,8 +3953,12 @@ describe('POST /api/project/task/:id/resume', () => {
     })
     expect(queue.tasks[0]?.spec).toBeUndefined()
     expect(queue.tasks[0]?.acceptanceCriteria).toEqual([])
-    expect(queue.tasks[0]?.notes.some((note: Record<string, any>) =>
-      String(note.content).includes('source-backed implementation contract'))).toBe(true)
+    const effective = await readEffectiveTask('task-1')
+    expect(effective.doneSummaryBundle?.status).not.toBe('done')
+    expect(effective.runtime?.currentLifecycle).toMatchObject({
+      status: 'exploring',
+      source: 'rerun_spec',
+    })
   })
 
   it('reopens blocked work when retry encounters stale missing escalation runtime state', async () => {
@@ -4214,7 +4269,8 @@ describe('POST /api/project/task/:id/resume', () => {
     })
     expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-1-proof-setup')).toMatchObject({
       status: 'ready',
-      releaseIds: ['release-next'],
+      releaseIds: [],
+      proofForReleaseId: 'release-next',
       hierarchy: { parentId: 'task-1', relation: 'decomposes' },
     })
 
@@ -4225,7 +4281,6 @@ describe('POST /api/project/task/:id/resume', () => {
     database.close()
     expect(memberships).toEqual([
       { release_id: 'release-next', task_id: 'task-1' },
-      { release_id: 'release-next', task_id: 'task-1-proof-setup' },
       { release_id: 'release-shipped', task_id: 'task-1' },
     ])
   })
@@ -4311,7 +4366,8 @@ describe('POST /api/project/task/:id/resume', () => {
     })
     expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-1-proof-setup')).toMatchObject({
       status: 'ready',
-      releaseIds: ['release-1'],
+      releaseIds: [],
+      proofForReleaseId: 'release-1',
       hierarchy: { parentId: 'task-1', relation: 'decomposes' },
     })
   })

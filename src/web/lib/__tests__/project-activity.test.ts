@@ -405,6 +405,33 @@ describe('buildProjectTicker', () => {
     expect(
       buildProjectTicker(
         {
+          run: { status: 'running', mode: 'continuous' },
+          decision: {
+            execution: {
+              count: 1,
+              focusTaskId: 'task-1',
+              focusTaskTitle: 'Prove packaged sidecar',
+            },
+          },
+          tasks: Array.from({ length: 19 }, (_, index) => ({
+            id: `task-${index + 1}`,
+            status: 'ready',
+            title: `Ready task ${index + 1}`,
+          })),
+        },
+        { event: { type: 'unknown_event' } },
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'active',
+      pulse: true,
+      actorLabel: 'Coordinator',
+      message: 'Working on: Prove packaged sidecar',
+    })
+
+    expect(
+      buildProjectTicker(
+        {
           run: { status: 'running', mode: 'one_task' },
           tasks: [
             { id: 'task-1', status: 'ready', title: 'Ready task' },

@@ -240,6 +240,7 @@ export interface InFlightTurn extends TurnBase {
   summary: string
   importedDraft?: boolean | undefined
   shapingBlockers?: TaskShapingBlocker[] | undefined
+  dependencyBlockers?: Array<{ taskId: string; title: string }> | undefined
   liveAgent?: {
     name: string
     startedAt?: string | undefined
@@ -1767,6 +1768,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     return taskStatus === 'import_draft' || shouldUseImportDraftState(task)
   })
   const leadingImportDraftId = typeof importDraftTasks[0]?.id === 'string' ? importDraftTasks[0].id : null
+  const tasksById = new Map(tasks.map(task => [task.id, task] as const))
   for (const t of tasks) {
     const taskId = typeof t.id === 'string' ? t.id : ''
     const taskTitle = displayTaskTitle(t)
@@ -2081,6 +2083,11 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const hasActiveBriefTurn = hasReviewableProductBrief(brief) && !approvedAt && taskStatus === 'exploring' && !hasSpecDraft
     const importedDraft = taskStatus === 'import_draft' || shouldUseImportDraftState(t)
     const shapingBlockers = taskShapingBlockers(t)
+    const dependencyBlockers = (t.dependsOn ?? []).flatMap(dependencyId => {
+      const dependency = tasksById.get(dependencyId)
+      if (dependency?.status === 'done') return []
+      return [{ taskId: dependencyId, title: dependency ? displayTaskTitle(dependency) : dependencyId }]
+    })
     if (importedDraft && taskId !== leadingImportDraftId) {
       continue
     }
@@ -2155,6 +2162,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
             : taskId === META_INTAKE_TASK_ID
               ? 'Guildhall is inspecting the repo and drafting starter tasks now.'
             : `${friendlyAgentName(effectiveLiveAgent.name)} is working on this now.`
+          : dependencyBlockers.length > 0
+            ? `Waiting for ${dependencyBlockers.map(blocker => blocker.title).join(', ')}.`
           : taskId === META_INTAKE_TASK_ID
             ? providerSetupPending
               ? 'Setup is waiting on provider configuration before the repo can be inspected.'
@@ -2207,6 +2216,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         summary,
         importedDraft,
         shapingBlockers: shapingBlockers.length > 0 ? shapingBlockers : undefined,
+        dependencyBlockers: dependencyBlockers.length > 0 ? dependencyBlockers : undefined,
         liveAgent: effectiveLiveAgent,
         activity: liveActivity.get(taskId),
         checklist:

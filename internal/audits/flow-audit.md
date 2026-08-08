@@ -47,9 +47,24 @@ help_summary: |
   ordered the likely run list from the last documentation task backward, called
   four tasks `Queued` while only `task-086` was active, and claimed there were
   no blocked tasks while the API reported eight dependency blockers.
-- [ ] Make the activity count describe actual active agents or tasks, not every
+- [x] Make the activity count describe actual active agents or tasks, not every
   nonterminal historical in-flight record; the installed ticker reported
   `Working on 19 tasks` for a release with one active architecture gate.
+- [x] Do not count acceptance criteria as independent contract surfaces when
+  estimating worker context. Seven checks for one packaged sidecar had produced
+  a contradictory `tiny/proceed` size plan and `requires_child_work` readiness
+  block, leaving the approved task impossible to dispatch.
+- [x] Persist dependency blockers in the shared scope projection, focus the
+  runnable prerequisite before downstream shaping, and render only that shared
+  focus in Overview's Next run card.
+- [x] Suppress empty Blocked work chrome when the current API provides shared
+  readiness, and show downstream Thread work as `Waiting` with its named
+  prerequisite instead of inventing `Paused` or `Queued` state.
+- [x] **Release blocker:** retrying approved task `task-086` before any worker
+  pass routed it directly to generic command gates, skipped implementation,
+  and marked it done from unchanged Stage 1 code. Proof recovery must require
+  authoritative prior completion, and this false completion must be cleared
+  before Narrative Harness execution resumes.
 
 ### Installed Stage 2 Proof
 
@@ -63,6 +78,53 @@ help_summary: |
 - The first approval attempt exposed a required migration. Applying that named
   automatic migration and retrying the same delegated approval succeeded;
   execution resumed with the approval note preserved in task evidence.
+- A later retry incorrectly treated the approved, unimplemented architecture
+  task as proof recovery and marked it done from generic repository checks.
+  The run was stopped, the false lifecycle was superseded through the audited
+  spec-rerun action, and the retry discriminator now requires prior completion
+  for ordinary work. A production-miss calibration case protects the boundary.
+- The first two fresh shaping attempts returned no change because the task
+  transcript still presented the superseded approval as if it were current.
+  Spec rerun now explicitly marks earlier approval history as non-authoritative
+  and requires a newly submitted current contract.
+- The live ticker now consumes the shared execution focus/count. The same
+  installed state that contains 19 nonterminal historical rows and one live
+  architecture gate therefore names that gate instead of claiming 19 tasks are
+  actively moving.
+
+### Active Release Projection Contract Touch Decision
+
+- Work id: `active-release-dependency-projection`.
+- Touched contracts: structured context-budget estimation, project scope row
+  dependency metadata, shared start focus, Thread in-flight dependency metadata,
+  and Overview's presentation of canonical start readiness.
+- Considered but not touched: task dependency authority, orchestrator task
+  status ordering, release membership, task identifiers, and provider prose.
+- Required follow-up: the project ticker still needs to count actual live work
+  instead of retained nonterminal Thread records.
+- Proof required and provided: focused readiness and dependency projection
+  regressions, full Thread runtime/component suites, full Overview suite,
+  typecheck, installed build/restart, stale-server check, and real-project
+  browser/API agreement.
+- Apply/revert: applying adds optional dependency fields to regenerated read
+  rows and Thread turns; reverting leaves authoritative task dependencies and
+  release state unchanged.
+
+### Active Release Projection Schema Migration Decision
+
+- Persisted schema touched: compact scope rows may gain optional
+  `dependencyBlocked` and `dependencyTaskIds`; Thread payloads may gain optional
+  `dependencyBlockers`.
+- Scope and class: additive read-model metadata derived from authoritative task
+  dependencies; no task-definition or release schema changes.
+- Existing data impact: old rows default to no derived dependency flag and are
+  replaced by ordinary projection refresh. No historical evidence is rewritten.
+- Migration id: none; these are regenerated caches with backward-compatible
+  readers.
+- Fixtures and tests: project-scope dependency focus, Thread dependency wait,
+  Overview canonical next-run rendering, and existing full surface suites.
+- Rollback: stop emitting the optional fields; task dependency authority remains
+  intact.
 
 ### Contract Touch Decision
 

@@ -71,6 +71,8 @@ export interface ProjectScopeRow {
   blocksRelease: boolean
   humanBlocking: boolean
   proofBlocked: boolean
+  dependencyBlocked?: boolean
+  dependencyTaskIds?: string[]
   blockerSummary?: string
   sourceRefs: string[]
 }
@@ -103,10 +105,12 @@ export function normalizeProjectScopeRowReadModel(row: ProjectScopeRow): Project
   const humanBlocking = projectScopeRowIsGuildhallShaping(row)
     ? false
     : row.humanBlocking
-  const canStartShaping = row.scope === 'included' && row.status === 'exploring' &&
+  const dependencyBlocked = row.dependencyBlocked === true
+  const canStartShaping = row.scope === 'included' && !dependencyBlocked && row.status === 'exploring' &&
     (row.handoffState === 'not_shaped' || row.handoffState === 'spec_shaping')
   const blocksStart = row.scope === 'included' && (
     row.proofBlocked ||
+    dependencyBlocked ||
     row.handoffState === 'blocked' ||
     row.handoffState === 'brief_cleanup' ||
     (row.handoffState === 'spec_review' && humanBlocking) ||
@@ -119,7 +123,7 @@ export function normalizeProjectScopeRowReadModel(row: ProjectScopeRow): Project
     row.handoffState === 'not_shaped' ||
     (row.handoffState === 'spec_review' && humanBlocking)
   )
-  return { ...row, humanBlocking, blocksStart, blocksRelease }
+  return { ...row, dependencyBlocked, humanBlocking, blocksStart, blocksRelease }
 }
 
 export interface ProjectScopeProjection {
@@ -700,6 +704,11 @@ function buildScopeRow(
     input.selectedScope,
   )
   const humanBlocking = proofBlocked ? false : humanBlockingFor(task, handoffState, scope)
+  const dependencyTaskIds = (task.dependsOn ?? []).filter(dependencyId => {
+    const dependency = input.tasksById.get(dependencyId)
+    return !dependency || (effectiveTaskStatus(dependency) ?? dependency.status) !== 'done'
+  })
+  const dependencyBlocked = scope === 'included' && dependencyTaskIds.length > 0
   return normalizeProjectScopeRowReadModel({
     taskId: task.id,
     title: taskDisplayLabel(task, task.id),
@@ -714,6 +723,8 @@ function buildScopeRow(
     blocksRelease: scope === 'included' && (humanBlocking || handoffState === 'blocked' || proofBlocked),
     humanBlocking,
     proofBlocked,
+    dependencyBlocked,
+    ...(dependencyTaskIds.length > 0 ? { dependencyTaskIds } : {}),
     ...(handoffState === 'blocked'
       ? { blockerSummary: proofBlocked ? 'Completion proof is missing or stale.' : blockerSummaryForTask(task) }
       : {}),
@@ -993,7 +1004,7 @@ export function summarizeProjectScopeStart(
   // An exploring task is already in Guildhall's shaping lane. Let Start run
   // that agent work before unrelated ready work. It is the live continuation
   // of the selected scope, not merely another candidate in a task ranking.
-  const shapingWork = included.find(row => row.status === 'exploring' &&
+  const shapingWork = included.find(row => !row.dependencyBlocked && row.status === 'exploring' &&
     (row.handoffState === 'spec_shaping' || row.handoffState === 'not_shaped'))
   if (shapingWork) {
     return {
@@ -1009,7 +1020,7 @@ export function summarizeProjectScopeStart(
       actionHref: `/work?task=${encodeURIComponent(shapingWork.taskId)}`,
     }
   }
-  const ready = included.find(row => row.handoffState === 'ready')
+  const ready = included.find(row => !row.dependencyBlocked && row.handoffState === 'ready')
   if (ready) {
     return {
       canStart: true,
@@ -1022,7 +1033,7 @@ export function summarizeProjectScopeStart(
       actionHref: `/work?task=${encodeURIComponent(ready.taskId)}`,
     }
   }
-  const specWork = included.find(row => row.handoffState === 'spec_review' && !row.humanBlocking)
+  const specWork = included.find(row => !row.dependencyBlocked && row.handoffState === 'spec_review' && !row.humanBlocking)
   if (specWork) {
     return {
       canStart: true,
@@ -1035,10 +1046,13 @@ export function summarizeProjectScopeStart(
       actionHref: `/work?task=${encodeURIComponent(specWork.taskId)}`,
     }
   }
-  const blocked = included.find(row => row.handoffState === 'blocked')
+  const blocked = included.find(row => row.handoffState === 'blocked' || row.dependencyBlocked)
   if (blocked) {
-    const count = included.filter(row => row.handoffState === 'blocked').length
-    const reason = blocked.blockerSummary?.trim()
+    const count = included.filter(row => row.handoffState === 'blocked' || row.dependencyBlocked).length
+    const dependencyTitle = blocked.dependencyTaskIds?.[0]
+      ? included.find(row => row.taskId === blocked.dependencyTaskIds?.[0])?.title ?? blocked.dependencyTaskIds[0]
+      : null
+    const reason = blocked.blockerSummary?.trim() || (dependencyTitle ? `waiting for "${dependencyTitle}"` : '')
     return {
       canStart: false,
       code: 'no_unattended_progress',

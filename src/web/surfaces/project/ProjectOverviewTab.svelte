@@ -404,7 +404,13 @@
   })
 
   const movingTasks = $derived.by(() => {
-    const wanted = new Set(['in_progress', 'review', 'gate_check', 'ready', 'spec_review', 'exploring'])
+    if (detail.startReadiness?.focusKind === 'brief_cleanup' && detail.startReadiness.focusTaskId) {
+      const focused = tasksById.get(detail.startReadiness.focusTaskId)
+      return focused ? [focused] : []
+    }
+    const wanted = new Set(detail.startReadiness
+      ? ['in_progress', 'review', 'gate_check']
+      : ['in_progress', 'review', 'gate_check', 'ready', 'spec_review', 'exploring'])
     return [...currentScopeTasks]
       .filter(task => wanted.has(task.status ?? ''))
       .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
@@ -721,31 +727,36 @@
 
   const runPlanRows = $derived.by(() => {
     const rows: RunPlanRow[] = []
-    const addTasks = (wanted: string[], tone: Tone | ((task: Task) => Tone), detail: (task: Task) => string, limit: number) => {
+    const addTasks = (wanted: string[], tone: Tone | ((task: Task) => Tone), detailForTask: (task: Task) => string, limit: number) => {
       for (const task of sortedTasks(wanted)) {
         if (rows.length >= limit) return
-        const rowTone = typeof tone === 'function' ? tone(task) : tone
         rows.push({
           task,
           label: taskLabel(task),
-          detail: detail(task),
-          tone: rowTone,
+          detail: detailForTask(task),
+          tone: typeof tone === 'function' ? tone(task) : tone,
           href: currentTaskHref(task.id, activeProjectId),
         })
       }
     }
-
-    addTasks(['in_progress', 'review', 'gate_check'], running ? 'running' : 'accent', task => `${taskPresentation(task).label}: ${statusDetail(task)}`, 4)
-    addTasks(
-      ['ready'],
-      task => needsOverviewBriefCleanup(task) ? 'warn' : 'accent',
-      task => needsOverviewBriefCleanup(task)
-        ? 'Needs brief: add enough detail before this can start.'
-        : `${taskPresentation(task).label}: ready to start.`,
-      4,
-    )
-    addTasks(['spec_review', 'import_draft'], 'warn', task => `${taskPresentation(task).label}: needs review.`, 4)
-    addTasks(['exploring'], 'neutral', task => `${taskPresentation(task).label}: still being shaped.`, 4)
+    if (!runBlocker && detail.startReadiness?.canStart && detail.startReadiness.focusTaskId) {
+      const task = tasksById.get(detail.startReadiness.focusTaskId) ?? null
+      rows.push({
+        task,
+        label: task ? taskLabel(task) : detail.startReadiness.focusTaskTitle ?? 'Next work',
+        detail: detail.startReadiness.message ?? 'This is the next runnable work in the selected scope.',
+        tone: running && task && ['in_progress', 'review', 'gate_check'].includes(task.status ?? '') ? 'running' : 'accent',
+        href: task
+          ? currentTaskHref(task.id, activeProjectId)
+          : detail.startReadiness.actionHref ?? currentProjectHref('/work', activeProjectId),
+      })
+    }
+    if (!detail.startReadiness) {
+      addTasks(['in_progress', 'review', 'gate_check'], running ? 'running' : 'accent', task => `${taskPresentation(task).label}: ${statusDetail(task)}`, 4)
+      addTasks(['ready'], 'accent', task => `${taskPresentation(task).label}: ready to start.`, 4)
+      addTasks(['spec_review', 'import_draft'], 'warn', task => `${taskPresentation(task).label}: needs review.`, 4)
+      addTasks(['exploring'], 'neutral', task => `${taskPresentation(task).label}: still being shaped.`, 4)
+    }
 
     if (!rows.length && blockedRows.length > 0) {
       rows.push({
@@ -757,7 +768,7 @@
       })
     }
 
-    return rows.slice(0, 4)
+    return rows.slice(0, 1)
   })
 
   function isLowSignalEvent(event: EventEnvelope): boolean {
@@ -1160,6 +1171,7 @@
   </section>
 
   {#if !orientationOnly}
+    {#if movingTasks.length > 0 || allTerminalStart || requiredMigrationBlocked}
     <section class="overview-work-section">
       <Card title={runPanelTitle} titleTag="h2" padding="compact" density="dense" className="overview-card">
         {#if movingTasks.length === 0}
@@ -1179,8 +1191,10 @@
         {/if}
       </Card>
     </section>
+    {/if}
 
     <section class="overview-grid overview-planning-grid">
+      {#if blockedRows.length > 0 || !detail.startReadiness}
       <Card title="Blocked work" titleTag="h2" padding="compact" density="dense" className="overview-card">
         {#if blockedRows.length === 0}
           <p class="muted">No blocked tasks are visible right now.</p>
@@ -1198,6 +1212,7 @@
           </div>
         {/if}
       </Card>
+      {/if}
 
       <Card title="Next run" titleTag="h2" padding="compact" density="dense" className="overview-card">
         {#if runBlocker}
@@ -1234,7 +1249,7 @@
             {/if}
           </p>
         {:else}
-          <div class="run-plan-list" aria-label="Likely next run order">
+          <div class="run-plan-list" aria-label="Next runnable work">
             {#each runPlanRows as row, index (`${row.task?.id ?? 'fallback'}:${index}`)}
               <UtilityPanel as="button" interactive className="run-plan-row" tone={row.tone === 'warn' ? 'warn' : row.tone === 'running' ? 'ok' : row.tone === 'accent' ? 'accent' : 'neutral'} onclick={() => go(row.href)}>
                 <span class="run-index">{index + 1}</span>

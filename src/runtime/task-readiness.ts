@@ -131,7 +131,10 @@ export function contextBudgetEstimate(task: Task): ContextBudgetEstimate {
     handoffCount * 80 +
     referenceCount * 60
   const reasons: string[] = []
-  const surfaceCount = contractSurfaceCount + acceptanceCount
+  // Acceptance criteria add proof detail, not product surfaces. Counting each
+  // criterion as another surface made a focused task with a thorough checklist
+  // look broader than a task spanning several actual contracts.
+  const surfaceCount = contractSurfaceCount
   if (estimatedTokens > 3500) reasons.push('The structured task contract is large enough to crowd one worker brief.')
   if (surfaceCount >= 5) reasons.push('The task appears to span many project surfaces.')
   const risk: ContextBudgetEstimate['risk'] =

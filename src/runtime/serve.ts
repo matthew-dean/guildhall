@@ -15332,9 +15332,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         // recovery resumes that task; it must never materialize another proof
         // child beneath itself.
         const isProofSetupRecovery = isProofSetupTask(effectiveTask)
-        const isProofRecovery = taskDoneButProofMissingForScope(effectiveTask, selectedProofStyle)
-        const isReviewRecovery = taskDoneButReviewConflict(effectiveTask)
         const effectiveStatus = typeof effectiveTask.status === 'string' ? effectiveTask.status : String(task.status ?? '')
+        // Missing proof is only recovery after implementation has actually
+        // completed. A ready or partial task naturally has no proof yet; routing
+        // it straight to command gates would skip the worker and fabricate
+        // completion from unrelated repository checks.
+        const isProofRecovery = (isProofSetupRecovery || effectiveStatus === 'done') &&
+          taskDoneButProofMissingForScope(effectiveTask, selectedProofStyle)
+        const isReviewRecovery = effectiveStatus === 'done' && taskDoneButReviewConflict(effectiveTask)
         if ((effectiveStatus === 'done' && !isProofRecovery && !isReviewRecovery) || effectiveStatus === 'shelved' || effectiveStatus === 'pending_pr') {
           return c.json({ error: `task is ${effectiveStatus}` }, 400)
         }

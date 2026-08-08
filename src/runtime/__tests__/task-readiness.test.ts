@@ -251,6 +251,36 @@ describe('assessTaskReadiness', () => {
     expect(assessment.dimensions.find(dimension => dimension.id === 'context_load')?.status).toBe('blocked')
   })
 
+  it('does not mistake a thorough acceptance checklist for many contract surfaces', () => {
+    const assessment = assessTaskReadiness(task({
+      title: 'Prove one packaged sidecar boundary',
+      spec: 'Build and prove one reversible desktop architecture spike.',
+      structuredSpec: importedExecutionBlueprintSpec(),
+      acceptanceCriteria: Array.from({ length: 7 }, (_, index) => ({
+        id: `AC-${index + 1}`,
+        description: `Criterion ${index + 1} proves the same packaged sidecar outcome.`,
+        verifiedBy: 'review' as const,
+        met: false,
+      })),
+      sizePlan: {
+        taskId: 'task-1',
+        score: 1,
+        band: 'tiny',
+        action: 'proceed',
+        factors: [],
+        recommendedChildren: [],
+        reviewBudgetHint: 'lean',
+        reasons: ['One cohesive deliverable.'],
+        createdAt: now,
+        createdBy: 'task-sizing',
+      },
+    }))
+
+    expect(assessment.contextBudget.risk).toBe('low')
+    expect(assessment.contextBudget.fitsInOneWorkerBrief).toBe(true)
+    expect(assessment.recommendation).toBe('ready')
+  })
+
   it('keeps readiness invariant when only the rendered prose changes', () => {
     const structuredSpec = importedExecutionBlueprintSpec()
     const terse = assessTaskReadiness(task({
