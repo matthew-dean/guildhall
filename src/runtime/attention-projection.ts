@@ -49,6 +49,10 @@ export interface AttentionReleaseTruth {
   }
 }
 
+export interface AttentionSetupTruth {
+  state: 'ready' | 'blocked' | 'fresh_intake_needed' | string
+}
+
 function currentScopeIsComplete(truth: AttentionReleaseTruth | null | undefined): boolean {
   return truth?.state === 'ready' &&
     truth.counts.unfinished === 0 &&
@@ -67,9 +71,13 @@ function currentScopeIsComplete(truth: AttentionReleaseTruth | null | undefined)
 export function attentionItemsForReleaseTruth<T extends Pick<InboxItem, 'kind'>>(
   items: readonly T[],
   truth: AttentionReleaseTruth | null | undefined,
+  setupTruth?: AttentionSetupTruth | null,
 ): T[] {
-  if (!currentScopeIsComplete(truth)) return [...items]
-  return items.filter(item => item.kind === 'required_migration' || item.kind === 'bootstrap_missing')
+  const setupCurrentItems = setupTruth?.state === 'ready'
+    ? items.filter(item => item.kind !== 'setup_pending')
+    : [...items]
+  if (!currentScopeIsComplete(truth)) return setupCurrentItems
+  return setupCurrentItems.filter(item => item.kind === 'required_migration' || item.kind === 'bootstrap_missing')
 }
 
 /**
@@ -118,6 +126,7 @@ export function readSavedAttentionSurface(
   projectRoot: string,
   initializationNeeded: boolean,
   releaseTruth?: AttentionReleaseTruth | null,
+  setupTruth?: AttentionSetupTruth | null,
 ): AttentionSurfaceReadModel {
   if (initializationNeeded) {
     return {
@@ -140,6 +149,7 @@ export function readSavedAttentionSurface(
   const items = attentionItemsForReleaseTruth(
     current.openItems.filter(isAttentionOwnedInboxItem),
     releaseTruth,
+    setupTruth,
   )
   return {
     items,
@@ -160,6 +170,7 @@ export function readSavedAttentionSurfaceFromBoundary(input: {
   watermarkSourceRevision: number | null
   projectRevision: number | null
   releaseTruth?: AttentionReleaseTruth | null
+  setupTruth?: AttentionSetupTruth | null
 }): AttentionSurfaceReadModel {
   if (input.initializationNeeded) {
     return {
@@ -189,7 +200,7 @@ export function readSavedAttentionSurfaceFromBoundary(input: {
   const items = history
     .filter(record => record.status === 'open')
     .filter(isAttentionOwnedInboxItem)
-  const currentItems = attentionItemsForReleaseTruth(items, input.releaseTruth)
+  const currentItems = attentionItemsForReleaseTruth(items, input.releaseTruth, input.setupTruth)
   return {
     items: currentItems,
     history: history.filter(isAttentionOwnedInboxItem),

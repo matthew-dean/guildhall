@@ -224,4 +224,30 @@ describe('attention projection', () => {
       expect.objectContaining({ id: 'stale-setup', status: 'open' }),
     ])
   })
+
+  it('keeps completed setup attention in history when shared setup is ready', () => {
+    const surface = readSavedAttentionSurfaceFromBoundary({
+      initializationNeeded: false,
+      records: [{
+        payload: {
+          id: 'completed-setup',
+          status: 'open',
+          kind: 'setup_pending',
+          severity: 'medium',
+          stepId: 'firstTask',
+          title: 'Shape the first spec',
+          detail: 'This setup step is already complete.',
+          actionHref: '/thread',
+        },
+      }],
+      watermarkSourceRevision: 10,
+      projectRevision: 10,
+      setupTruth: { state: 'ready' },
+    })
+
+    expect(surface.items).toEqual([])
+    expect(surface.history).toEqual([
+      expect.objectContaining({ id: 'completed-setup', status: 'open' }),
+    ])
+  })
 })

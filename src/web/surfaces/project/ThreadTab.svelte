@@ -1259,6 +1259,9 @@
       return { label: 'Setup', tone: 'neutral' }
     }
     if (turn.kind === 'inflight' && turn.status !== 'done') {
+      if ((turn.dependencyBlockers?.length ?? 0) > 0) {
+        return { label: 'Waiting', tone: 'neutral' }
+      }
       return { label: taskStateLabel(turn), tone: taskStateTone(turn) }
     }
     const owner = ownershipLabel(turn)

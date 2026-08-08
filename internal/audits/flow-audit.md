@@ -55044,6 +55044,15 @@ Repair:
       review decision.
 - [x] Replace stale saved setup state when readiness names a focused task review
       and remove the legacy transport label from compact start readiness.
+- Failing installed flow finding: task 086's Thread is correctly the only
+      owner action, but every downstream dependency-blocked turn is labeled
+      `Paused` in the rail, and Overview renders the old completed
+      `Shape the first spec` setup record as a second Needs-you signal. The
+      authoritative Thread rows carry dependency blockers and both setup turns
+      are done.
+- [x] Prefer typed dependency state over stopped-run presentation in the Thread
+      rail, and filter saved setup attention whenever the shared action model
+      says setup is ready.
 - Failing deterministic finding: Work and Overview opened the same joined
       transaction and returned the same start decision at the same revision,
       but Overview alone rewrote the shared orientation headline to `ready to
@@ -55073,7 +55082,8 @@ Repair:
       review visibility; saved-summary action target/label preservation; and
       the distinction between task review and project setup in run control;
       stale compact setup-cache reconciliation; plus the joined surface
-      transaction's shared-summary selection order.
+      transaction's shared-summary selection order; dependency-aware Thread
+      rail status; and setup-ready attention reconciliation.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive

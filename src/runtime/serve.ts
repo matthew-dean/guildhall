@@ -2413,10 +2413,12 @@ async function refreshProjectProjections(
       const savedAttention = fleetAttentionItems
         ? fleetAttentionProjection(fleetAttentionItems)
         : (() => {
+            const currentSummary = readProjectSummaryForProjectAtBoundary(resolved.path)
             const attention = readSavedAttentionSurface(
               resolved.path,
               resolved.initializationNeeded,
-              readProjectSummaryForProjectAtBoundary(resolved.path)?.releaseSummary ?? null,
+              currentSummary?.releaseSummary ?? null,
+              currentSummary?.actionModel?.setup ?? null,
             )
             return attention.freshness === 'current'
               ? fleetAttentionProjection(attention.items)
@@ -3042,6 +3044,7 @@ function publishFleetSummaryFromSavedState(
     entry.path,
     resolved.initializationNeeded,
     shell?.releaseSummary ?? null,
+    shell?.actionModel?.setup ?? null,
   )
   const payload = compactFleetSummaryPayload({
     ...basePayload,
@@ -7687,6 +7690,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
           projectRevision: surfaceState?.projectRevision ?? null,
           releaseTruth: projection.releaseSummary,
+          setupTruth: projection.actionModel?.setup ?? null,
         })
       : null
     const detailMemoryHealth = input.includeDetailSections
@@ -8022,6 +8026,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             project.path,
             project.initializationNeeded,
             currentState.summary?.releaseSummary ?? null,
+            currentState.summary?.actionModel?.setup ?? null,
           )
       const thread = mapSurface
         ? null
@@ -13504,6 +13509,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
         projectRevision: surfaceState?.projectRevision ?? null,
         releaseTruth: surfaceState?.summary?.releaseSummary ?? null,
+        setupTruth: surfaceState?.summary?.actionModel?.setup ?? null,
       }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

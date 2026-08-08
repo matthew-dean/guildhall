@@ -2746,6 +2746,29 @@ describe('ThreadTab', () => {
     expect(threadComposer().getByPlaceholderText('Add a note…')).toBeTruthy()
   })
 
+  it('labels dependency-blocked downstream work as waiting instead of paused', async () => {
+    installFetchFakes(
+      [
+        importedDraftTurn({
+          id: 'desktop-shell-waiting',
+          taskId: 'task-088',
+          taskTitle: 'Build quiet desktop shell',
+          status: 'pending',
+          taskStatus: 'exploring',
+          importedDraft: false,
+          dependencyBlockers: [{ taskId: 'task-086', title: 'Prove packaged Tauri sidecar' }],
+        }),
+      ],
+      'desktop-shell-waiting',
+    )
+
+    render(ThreadTab)
+
+    const row = await screen.findByRole('button', { name: /Build quiet desktop shell/i })
+    expect(within(row).getByText('Waiting')).toBeTruthy()
+    expect(within(row).queryByText('Paused')).toBeNull()
+  })
+
   it('uses the shared spec revision stage chip for exploring spec turns', async () => {
     installFetchFakes(
       [
