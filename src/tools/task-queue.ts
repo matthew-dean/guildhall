@@ -790,7 +790,7 @@ async function updateTaskUnlocked(
       task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(derivedAcceptanceCriteria)
     }
     if (task.acceptanceCriteria.some((criterion) =>
-      typeof criterion.command === 'string' && isConcreteProjectProofCommand(criterion.command),
+      typeof criterion.command === 'string' && criterion.command.trim().length > 0,
     )) {
       task.proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(task, new Date().toISOString(), currentAgentId || 'update-task')
     }

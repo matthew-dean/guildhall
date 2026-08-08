@@ -31,6 +31,7 @@ import {
   writeProjectTaskQueueWithSummary,
 } from '../../runtime/project-state-boundary.js'
 import { buildEffectiveTask } from '../../runtime/effective-task.js'
+import { getProjectMigrationStatus } from '../../runtime/migrations.js'
 
 // ---------------------------------------------------------------------------
 // Tests for task queue tools — these are safety-critical (gate logic depends
@@ -199,6 +200,38 @@ describe('updateTask', () => {
       error: expect.stringContaining('Bare workspace test/build commands'),
     })
     expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.acceptanceCriteria).toEqual([])
+  })
+
+  it('creates current proof paths for broad commands in mixed releases without requiring reconciliation', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [{
+        id: 'ac-typecheck',
+        description: 'The desktop spike typechecks.',
+        verifiedBy: 'automated',
+        command: 'pnpm typecheck',
+      }],
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result.success, result.error).toBe(true)
+    const task = readProjectTaskQueueSync(tasksPath).tasks[0]!
+    expect(task.proofPaths).toEqual([
+      expect.objectContaining({
+        kind: 'command',
+        command: 'pnpm typecheck',
+        expectedEvidence: [expect.objectContaining({ id: 'ac-typecheck' })],
+        createdBy: 'spec-agent',
+      }),
+    ])
+
+    const reconciliationId = '0.13.27/acceptance-command-proof-path-reconciliation'
+    const migrations = await getProjectMigrationStatus({
+      projectRoot: tmpDir,
+      only: [reconciliationId],
+    })
+    expect(migrations.pending.some(migration => migration.id === reconciliationId)).toBe(false)
+    expect(migrations.blocked.some(migration => migration.id === reconciliationId)).toBe(false)
   })
 
   it('updates task status', async () => {

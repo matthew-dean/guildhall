@@ -55120,11 +55120,11 @@ Repair:
       spec as current detail. During refresh the global alert jumped to
       dependency-blocked task 087 as needing review while task 086's dock still
       asked for approval of the rejected draft.
-- [ ] Supersede rejected spec/planning output at the typed revision boundary,
+- [x] Supersede rejected spec/planning output at the typed revision boundary,
       keep the valid brief, and make the shared decision, alert, Thread card,
       dock, and run control agree that task 086 is ready for one spec-revision
       pass while task 087 remains dependency-waiting.
-- [ ] Prefer current approved/candidate brief intent over a superseded original
+- [x] Prefer current approved/candidate brief intent over a superseded original
       description in next-action detail, and remove local card copy/actions that
       reinterpret a shared owner-review or ready-work decision.
 - Failing installed approval-handoff finding: after task 086's corrected brief
@@ -55162,6 +55162,21 @@ Repair:
       than the current path boundary; task 086's `pnpm typecheck` and `pnpm
       build` criteria returned to unmet with planned paths and zero current
       verification records. Focused proof/migration tests pass 122/122.
+- Failing write-boundary follow-up: the next task 086 spec revision recreated
+      the same required migration. Normal task updates only materialized
+      generated proof paths for commands classified as task-specific, while
+      migration `0.13.27` correctly expected every persisted acceptance
+      command to have a revision-matched path. Mixed-release checks such as
+      `pnpm typecheck` were therefore born stale after every spec edit.
+- [x] Materialize generated proof paths for every non-empty acceptance command
+      during the authoritative task update, while retaining the stricter
+      task-specific-command rule for script-only releases and proof-setup
+      completion. The spec-agent write regression proves `pnpm typecheck`
+      receives a current path and the `0.13.27` detector remains settled;
+      206 focused task/proof/migration tests and typecheck pass. Installed
+      proof then applied the historical repair once, reported no remaining
+      pending migration, and returned task 086's three command criteria as
+      unmet with planned revision-current paths and no verification records.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
@@ -55193,7 +55208,10 @@ Repair:
       product brief and historical evidence ledger. Current Thread now carries
       typed approved-brief/spec-draft facts for the approval handoff, and
       current command proof requires a gate or record observed at or after the
-      current proof-path boundary.
+      current proof-path boundary. Authoritative task updates now also project
+      every persisted acceptance command into that current proof-path boundary
+      immediately, so migration reconciliation is for historical data rather
+      than ordinary new spec writes.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive
