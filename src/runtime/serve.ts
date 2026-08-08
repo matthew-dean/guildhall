@@ -2671,7 +2671,6 @@ function summarizeProjectFromProjection(
   const savedStartReadiness = decisionStartReadiness
     ? {
         ...decisionStartReadiness,
-        label: projection.decision.execution.state === 'paused' ? 'Resume' as const : 'Start' as const,
         actionHref: projectTaskActionHref(decisionStartReadiness, project.id),
         executionScope: actionScope,
       }

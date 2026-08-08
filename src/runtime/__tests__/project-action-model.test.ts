@@ -251,7 +251,12 @@ describe('buildProjectActionModel', () => {
         }],
         runControl: { label: 'Resume', startEnabled: true },
         ownerInput: { active: false },
-        setup: { state: 'ready', freshIntakeNeeded: false },
+        setup: {
+          state: 'blocked',
+          freshIntakeNeeded: false,
+          href: '/thread',
+          detail: 'Finish setup before starting.',
+        },
       },
       startReadiness: {
         canStart: false,
@@ -265,6 +270,8 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction?.taskId).toBe('task-086')
     expect(model.secondaryActions).toEqual([])
+    expect(model.runControl).toMatchObject({ label: 'Waiting on answer', startEnabled: false })
+    expect(model.setup).toEqual({ state: 'ready', freshIntakeNeeded: false })
   })
 
   it('drops persisted release-review actions after the release shipped', () => {

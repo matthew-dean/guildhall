@@ -786,6 +786,8 @@ export function resolveProjectActionModel(input: {
     tasks: [],
     releaseLifecycleState: input.releaseLifecycleState,
   })
+  const focusedTaskReview = readiness?.code === 'owner_input_required' &&
+    Boolean(readiness.focusTaskId) && readiness.focusKind !== 'setup'
   const candidateSecondaryActions = resolved.secondaryActions.length > 0
     ? resolved.secondaryActions
     : input.stored?.secondaryActions ?? []
@@ -802,7 +804,7 @@ export function resolveProjectActionModel(input: {
     // Setup state depends on the task inventory, which a compact current-state
     // refresh deliberately does not reload. Keep its saved projection instead
     // of deriving a false "fresh intake" state from an empty placeholder list.
-    setup: input.stored?.setup ?? resolved.setup,
+    setup: focusedTaskReview ? resolved.setup : input.stored?.setup ?? resolved.setup,
     secondaryActions,
   }
 }

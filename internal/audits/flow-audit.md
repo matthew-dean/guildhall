@@ -55037,6 +55037,13 @@ Repair:
 - [x] Preserve review action semantics through the saved-summary boundary:
       brief/spec review opens the focused task Thread, ordinary task review is
       not project setup, and the shell says it is waiting on the owner's answer.
+- Failing installed follow-up: the fresh action and run control were correct,
+      but compact resolution retained the previously saved `setup: blocked`
+      cache and the API still carried an accidental `label: Start` field beside
+      `Review brief`. Neither field is allowed to contradict the typed task
+      review decision.
+- [x] Replace stale saved setup state when readiness names a focused task review
+      and remove the legacy transport label from compact start readiness.
 - Failing deterministic finding: Work and Overview opened the same joined
       transaction and returned the same start decision at the same revision,
       but Overview alone rewrote the shared orientation headline to `ready to
@@ -55065,7 +55072,8 @@ Repair:
       unapproved product-brief handoff semantics; and dependency-aware Thread
       review visibility; saved-summary action target/label preservation; and
       the distinction between task review and project setup in run control;
-      plus the joined surface transaction's shared-summary selection order.
+      stale compact setup-cache reconciliation; plus the joined surface
+      transaction's shared-summary selection order.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive
