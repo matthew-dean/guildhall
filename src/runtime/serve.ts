@@ -5836,15 +5836,17 @@ function buildOverviewOrientationPreviewSpine(input: {
     deferredWorkCount: projection.counts.deferred,
     pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],
     topBlocker,
-    nextAction: noReleaseTerminal
+    // Start readiness owns the executable decision. The compact projection is
+    // useful only when no authoritative decision message is available.
+    nextAction: startMessage ?? (noReleaseTerminal
       ? 'Current work has no runnable work remaining.'
       : proofMissing
-        ? firstBlocker?.label ?? startMessage ?? 'Completion proof is missing or stale.'
+        ? firstBlocker?.label ?? 'Completion proof is missing or stale.'
       : projection.release.state === 'ready'
       ? 'Review completed scope.'
       : start?.canStart === false
-        ? startMessage ?? 'Resolve the current start blocker.'
-        : projection.start.message,
+        ? 'Resolve the current start blocker.'
+        : projection.start.message),
     progress,
   }
   const summary = input.sourceSpine?.summary
@@ -7681,11 +7683,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           availability: overviewState?.availability ?? surfaceState?.availability ?? undefined,
         })
       : summary.actionModel
+    const responseStartMessage = responseStartReadiness?.message
     if (
       input.surface === 'overview' &&
-      responseStartReadiness?.canStart === false &&
-      typeof responseStartReadiness.message === 'string' &&
-      responseStartReadiness.message.trim().length > 0
+      typeof responseStartMessage === 'string' &&
+      responseStartMessage.trim().length > 0
     ) {
       const orientationSummary = (orientationSpine as { summary?: unknown }).summary
       orientationSpine = {
@@ -7694,7 +7696,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(orientationSummary && typeof orientationSummary === 'object' && !Array.isArray(orientationSummary)
             ? orientationSummary as Record<string, unknown>
             : {}),
-          nextAction: responseStartReadiness.message,
+          nextAction: responseStartMessage,
         },
       }
     }

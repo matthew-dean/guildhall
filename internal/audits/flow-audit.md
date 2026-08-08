@@ -54963,3 +54963,63 @@ Repair:
       narrow desktop, and mobile; no dead/self actions, contradictory shared
       status, clipped chrome, blank-screen recovery, or raw long task IDs in
       ordinary owner-facing flow; focused and release-relevant gates pass.
+
+## 2026-08-08 - Narrative Harness Stage 2 Decision Agreement
+
+- Work id: `narrative-harness-stage-2-decision-agreement`.
+- User job: after reopening the first task in the desktop release, the owner can
+      tell that Guildhall is shaping that task, which task is next, why later
+      tasks are waiting, and whether pressing Start will perform the action the
+      Overview describes.
+- Failing finding: the authoritative `startReadiness` decision correctly made
+      the reopened Stage 2 sidecar spike runnable and said Guildhall would shape
+      it, while `orientationSpine.summary.nextAction` independently interpreted
+      the same exploring row as a deficient brief. Overview could therefore
+      tell the owner to repair a brief while Start was about to run shaping.
+- [x] Code repair: the Overview orientation preview now consumes the shared
+      start-readiness message whenever one exists. Its scope projection remains
+      a fallback for older or unavailable decision state, not a second decision
+      engine.
+- [x] Deterministic proof: the selected-release exploring-task regression now
+      requires a runnable Overview decision and visible next action to match
+      exactly. The focused test and `pnpm typecheck` pass.
+- [ ] Installed proof: rebuild and install Guildhall, refresh Narrative Harness
+      Stage 2 state, then confirm the Overview/API top action, work rows, Thread,
+      and status chrome agree that task 086 is being shaped and tasks 087-094
+      are waiting on prerequisites before starting the real run.
+
+| Surface | Expected Stage 2 evidence |
+| --- | --- |
+| Authoritative API | `startReadiness` focuses task 086 and names shaping as the next action. |
+| Top action | Overview repeats the same decision and starts that task. |
+| Work list/cards | Task 086 is current; dependent tasks are visibly waiting. |
+| Thread | Task 086 shaping is current; historical approval is not actionable. |
+| Bottom/status chrome | No claim that all Stage 2 tasks are running. |
+| Visible cards | No competing brief-cleanup or owner-urgency recommendation. |
+
+### Contract Touch Decision
+
+- Touched contracts: owner-facing orientation-summary `nextAction` semantics
+      and its agreement with shared project start readiness.
+- Contracts considered but not touched: task/release lifecycle enums, task
+      dependency rules, action-model schema, provider prompts, and persisted
+      project state.
+- Required follow-up: complete the installed state-agreement table, then drive
+      task 086 through shaping, review, implementation, and proof before
+      unblocking its dependents.
+- Proof required/provided: focused API regression and typecheck are provided;
+      installed Browser proof remains open above.
+- Waivers: none. The configured Guildhall MCP bridge returned `Transport
+      closed`, and this checkout has no root `.guildhall/artifacts.yaml`, so the
+      canonical local artifact was updated directly.
+- Apply/revert behavior: reverting restores the competing compact projection
+      message; no stored data needs migration or cleanup.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope and change class: request-time presentation reconciliation only.
+- Existing data impact: none; saved decisions and task records are unchanged.
+- Migration id, compatibility reader, fixtures, and rollback: no migration or
+      reader change is required; the API regression covers behavior, and a
+      revert restores the prior presentation logic.

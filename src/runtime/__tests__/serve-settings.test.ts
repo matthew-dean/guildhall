@@ -2637,6 +2637,15 @@ describe('POST /api/project/start', () => {
     }
     expect(projectBody.startReadiness).toMatchObject({ canStart: true })
 
+    const overviewRes = await app.fetch(new Request(scoped('/api/project?surface=overview')))
+    const overviewBody = (await overviewRes.json()) as {
+      startReadiness?: { canStart?: boolean; message?: string }
+      orientationSpine?: { summary?: { nextAction?: string } }
+    }
+    expect(overviewBody.startReadiness).toMatchObject({ canStart: true })
+    expect(overviewBody.startReadiness?.message).toBeTruthy()
+    expect(overviewBody.orientationSpine?.summary?.nextAction).toBe(overviewBody.startReadiness?.message)
+
     const startRes = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
     )
