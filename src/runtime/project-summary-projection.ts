@@ -458,7 +458,7 @@ function ownerReviewForScope(
 ): NonNullable<ProjectSummaryProjection['ownerReview']> {
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const pending = executionScopeRows(rows)
-    .filter(row => row.scope === 'included')
+    .filter(row => row.scope === 'included' && !row.dependencyBlocked)
     .flatMap(row => {
       const task = tasksById.get(row.taskId)
       return task?.status === 'spec_review' && specReviewRequiresOwnerApproval(task) ? [task] : []

@@ -272,6 +272,45 @@ describe('project-summary-projection', () => {
     })
   })
 
+  it('does not let a dependency-blocked review outrank its runnable prerequisite', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'dependency-bounded-review',
+      queue: queue([
+        task('architecture-gate', 'exploring'),
+        task('desktop-adapter', 'spec_review', {
+          dependsOn: ['architecture-gate'],
+          specReviewGate: {
+            authority: 'owner',
+            requestedAt: now,
+            requestedBy: 'spec-agent',
+            reason: 'spec_handoff',
+          },
+        }),
+      ], {
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          proofStyle: 'unspecified',
+          nodeIds: ['work:architecture-gate', 'work:desktop-adapter'],
+          deferredNodeIds: [],
+        }],
+      }),
+      generatedAt: now,
+    })
+
+    expect(projection.ownerReview).toMatchObject({ openCount: 0, taskIds: [] })
+    expect(projection.nextAction).toMatchObject({
+      code: 'ready_work',
+      focusTaskId: 'architecture-gate',
+      focusKind: 'ready_work',
+    })
+    expect(projection.decision.execution.reviewTaskIds).toBeUndefined()
+  })
+
   it('retains review authority in the compact indexed summary path', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-review-authority-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
