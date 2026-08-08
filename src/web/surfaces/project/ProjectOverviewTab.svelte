@@ -430,6 +430,8 @@
   const runPanelTitle = $derived(
     running
       ? 'Moving now'
+      : detail.startReadiness?.focusKind === 'brief_cleanup' || detail.startReadiness?.focusKind === 'spec_review'
+        ? 'Waiting for review'
       : requiredMigrationBlocked || (startBlocked && !scopedWorkComplete)
         ? 'Execution blocked'
         : scopedWorkComplete
@@ -846,7 +848,12 @@
   }
 
   function taskPresentation(task: Task) {
-    return taskStagePresentation(task, { runStatus: detail.run?.status })
+    return taskStagePresentation(task, {
+      runStatus: detail.run?.status,
+      tasks,
+      focusTaskId: detail.startReadiness?.focusTaskId,
+      focusKind: detail.startReadiness?.focusKind,
+    })
   }
 
   function taskLabel(task: Task): string {
@@ -942,6 +949,7 @@
 
   function toneForTask(task: Task): Tone {
     if (needsOverviewBriefCleanup(task)) return 'warn'
+    if (taskPresentation(task).tone === 'warn') return 'warn'
     switch (task.status) {
       case 'blocked': return 'danger'
       case 'review':

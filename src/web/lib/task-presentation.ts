@@ -48,6 +48,8 @@ export interface TaskPresentationOptions {
   runStatus?: string | null
   availabilityStatus?: string | null
   tasks?: TaskDependencyLite[]
+  focusTaskId?: string | null
+  focusKind?: string | null
 }
 
 function taskId(input: TaskPresentationInput): string | undefined {
@@ -121,6 +123,12 @@ export function taskStagePresentation(
   if (hasOpenQuestion(input)) return { key: 'needs_you', label: 'Needs you', tone: 'warn' }
   if (input.requestKind === 'project_question') return { key: 'needs_you', label: 'Needs you', tone: 'warn' }
   if (taskId(input) === 'task-meta-intake') return { key: 'setup', label: 'Setup', tone: 'warn' }
+  if (status === 'blocked') return { key: 'blocked', label: 'Blocked', tone: 'danger' }
+  if (waitingOnDependency) return { key: 'waiting_dependency', label: 'Waiting', tone: 'warn' }
+  if (taskId(input) === options.focusTaskId) {
+    if (options.focusKind === 'brief_cleanup') return { key: 'brief_review', label: 'Review brief', tone: 'warn' }
+    if (options.focusKind === 'spec_review') return { key: 'spec_review', label: 'Review spec', tone: 'warn' }
+  }
 
   switch (status) {
     case 'import_draft':
@@ -153,7 +161,6 @@ export function taskStagePresentation(
       if (needsWorkerHandoffSpecCleanup({ ...input, taskStatus: status })) {
         return { key: 'needs_brief', label: 'Needs brief', tone: 'warn' }
       }
-      if (waitingOnDependency) return { key: 'waiting_dependency', label: 'Waiting', tone: 'warn' }
       return runIsActive(options)
         ? { key: 'queued', label: 'Queued', tone: 'running' }
         : { key: 'ready', label: 'Ready', tone: 'ok' }
@@ -169,8 +176,6 @@ export function taskStagePresentation(
       return runIsActive(options)
         ? { key: 'gates', label: 'Gates', tone: 'ok' }
         : { key: 'gates', label: 'Gates', tone: 'ok' }
-    case 'blocked':
-      return { key: 'blocked', label: 'Blocked', tone: 'danger' }
     case 'shelved':
       return { key: 'shelved', label: 'Shelved', tone: 'warn' }
     case 'pending_pr':

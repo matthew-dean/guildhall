@@ -55006,10 +55006,14 @@ Repair:
       35 Overview component tests pass; focused release-readiness tests prove
       unshaped release blockers remain distinct from visible blocked work and
       proof-wait copy stays aligned; `pnpm typecheck` passes.
-- [ ] Installed proof: rebuild and install Guildhall, refresh Narrative Harness
+- [x] Installed proof: rebuild and install Guildhall, refresh Narrative Harness
       Stage 2 state, then confirm the Overview/API top action, work rows, Thread,
       and status chrome agree that task 086 needs its drafted brief reviewed and
       tasks 087-094 are waiting on prerequisites before starting the real run.
+      Installed artifact
+      `/Users/matthew/.guildhall/app/0.13.2-1786220107-71246/app/dist/cli.js`
+      reports `stale:false`, zero startup errors, and one 1280x720 document with
+      no horizontal overflow.
 
 - Failing Thread finding from the installed click-through: the shared decision
       called task 086 unattended shaping and reported no owner input, while
@@ -55027,7 +55031,7 @@ Repair:
       migration claim-replay fixtures still fail before their assertions. The
       one new source-recovery expectation exposed by this change was repaired;
       its focused replay now reaches only the same migration precondition.
-- [ ] Re-run the installed Overview, Work, and Thread click-through before
+- [x] Re-run the installed Overview, Work, and Thread click-through before
       approving task 086.
 - Failing installed finding: after dependency-aware review repair, the saved
       summary adapter preserved task 086's `owner_input_required` decision but
@@ -55062,6 +55066,19 @@ Repair:
 - [x] Make every ordinary surface select the joined transaction summary first
       and apply the same typed readiness overlay to its headline/next action;
       inventory remains surface-specific, but decision copy does not.
+- Failing installed finding: Thread correctly labels tasks 087-094 `Waiting`,
+      but Overview calls task 086 `Paused`, Work calls eight of nine tasks
+      `Paused`, and dependency-blocked task 087 still says `Awaiting approval`.
+      The rows carry enough typed focus and dependency data to present the real
+      gate without treating a stopped coordinator as paused task state.
+- [x] Reuse typed focus and dependency state in Overview and Work so task 086
+      says `Review brief`, tasks 087-094 say `Waiting`, and summary counts do
+      not invent paused work or actionable downstream reviews.
+      Installed Overview says `Waiting for review` / `Review brief`; Work says
+      `1 Review` / `8 waiting tasks`; Thread exposes the same one review and
+      eight waiting rows. The focused 91-test presentation suite, typecheck,
+      production build, and rendered 1114px/900px/390px clipping-and-state
+      protocol all pass.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
@@ -55083,7 +55100,8 @@ Repair:
       the distinction between task review and project setup in run control;
       stale compact setup-cache reconciliation; plus the joined surface
       transaction's shared-summary selection order; dependency-aware Thread
-      rail status; and setup-ready attention reconciliation.
+      rail status; setup-ready attention reconciliation; and shared typed task
+      presentation for dependency waiting and focused brief/spec review.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive

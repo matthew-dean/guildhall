@@ -291,13 +291,14 @@
       total: filterableTasks.length,
       agentActive: all.filter(task => running && ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
       paused: stageCounts.paused ?? 0,
+      waiting: stageCounts.waiting_dependency ?? 0,
       reviewWaiting: stageCounts.review_waiting ?? 0,
       gatesWaiting: stageCounts.gates_waiting ?? 0,
       shaping: stageCounts.guildhall_shaping ?? 0,
       specRevisionQueued: stageCounts.spec_revision_queued ?? 0,
       readyForWorker: readyTasks.filter(isCompleteForWorkerHandoff).length,
       needsSpecCleanup: readyTasks.filter(needsWorkerHandoffSpecCleanup).length,
-      awaitingApproval: all.filter(task => task.status === 'spec_review').length,
+      awaitingApproval: (stageCounts.brief_review ?? 0) + (stageCounts.spec_review ?? 0),
       done: all.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
     }
   })
@@ -639,6 +640,8 @@
       runStatus: detail.run?.status,
       availabilityStatus: detail.availability?.status ?? 'active',
       tasks,
+      focusTaskId: detail.startReadiness?.focusTaskId,
+      focusKind: detail.startReadiness?.focusKind,
     })
   }
 
@@ -909,6 +912,9 @@
             {/if}
             {#if taskCounts.paused > 0}
               <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
+            {/if}
+            {#if taskCounts.waiting > 0}
+              <Chip label={countLabel(taskCounts.waiting, 'waiting task')} tone="warn" />
             {/if}
             {#if taskCounts.reviewWaiting > 0}
               <Chip label={countLabel(taskCounts.reviewWaiting, 'Review', 'Review')} tone="warn" />

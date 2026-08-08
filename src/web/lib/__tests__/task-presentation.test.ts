@@ -123,7 +123,7 @@ describe('taskStagePresentation', () => {
     })
   })
 
-  it('keeps planning tasks in their planning state when prerequisites are still being shaped', () => {
+  it('presents planning tasks as waiting while prerequisites are still being shaped', () => {
     const stage = taskStagePresentation({
       id: 'task-runner',
       title: 'Implement a no-UI runner that builds a packet from fixture records.',
@@ -140,9 +140,28 @@ describe('taskStagePresentation', () => {
     })
 
     expect(stage).toEqual({
-      label: 'Paused',
-      tone: 'neutral',
-      key: 'paused',
+      label: 'Waiting',
+      tone: 'warn',
+      key: 'waiting_dependency',
+    })
+  })
+
+  it('presents the shared focused brief review as owner work while the coordinator is stopped', () => {
+    const stage = taskStagePresentation({
+      id: 'task-086',
+      status: 'exploring',
+      spec: '## Product brief\n\nProve the packaged sidecar.',
+      openQuestions: [],
+    }, {
+      runStatus: 'stopped',
+      focusTaskId: 'task-086',
+      focusKind: 'brief_cleanup',
+    })
+
+    expect(stage).toEqual({
+      label: 'Review brief',
+      tone: 'warn',
+      key: 'brief_review',
     })
   })
 
