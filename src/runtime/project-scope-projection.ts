@@ -774,6 +774,9 @@ function handoffStateForTask(
   if (status === 'in_progress') return 'paused'
   if (status === 'review' || status === 'gate_check') return 'review'
   if (status === 'spec_review') return 'spec_review'
+  if (status === 'exploring' && productBriefRequiresOwnerApproval(task) && !hasSpecDraft(task)) {
+    return 'brief_cleanup'
+  }
   if (status === 'exploring' && hasApprovedCompleteBrief(task) && !hasSpecDraft(task)) return 'spec_shaping'
   if (status === 'ready') {
     if (isReadyForWorkerHandoff(task) || hasInScopeMaterializedChildWork(task, input)) return 'ready'
@@ -914,12 +917,25 @@ function hasSpecDraft(task: Task): boolean {
 function hasApprovedCompleteBrief(task: Task): boolean {
   const brief = task.productBrief
   if (!brief?.approvedAt) return false
+  return hasCompleteBrief(task)
+}
+
+function hasCompleteBrief(task: Task): boolean {
+  const brief = task.productBrief
+  if (!brief) return false
   return Boolean(
     brief.userJob?.trim() &&
     brief.whyItMattersNow?.trim() &&
     brief.successMetric?.trim() &&
     ((brief.nonGoals?.length ?? 0) > 0 || (brief.antiPatterns?.length ?? 0) > 0),
   )
+}
+
+function productBriefRequiresOwnerApproval(task: Task): boolean {
+  return hasCompleteBrief(task) &&
+    !task.productBrief?.approvedAt &&
+    task.productBrief?.authoredBy !== 'coordinator-recovery' &&
+    task.taskReadiness?.recommendation !== 'needs_research_spike'
 }
 
 function sourceRefsForTask(task: Task): string[] {
@@ -1018,6 +1034,24 @@ export function summarizeProjectScopeStart(
         ? `Guildhall is shaping a source-backed spec for "${shapingWork.title}".`
         : `Guildhall is shaping "${shapingWork.title}" from the visible project sources.`,
       actionHref: `/work?task=${encodeURIComponent(shapingWork.taskId)}`,
+    }
+  }
+  const briefReview = included.find(row =>
+    !row.dependencyBlocked &&
+    row.status === 'exploring' &&
+    row.handoffState === 'brief_cleanup' &&
+    row.humanBlocking,
+  )
+  if (briefReview) {
+    return {
+      canStart: false,
+      code: 'owner_input_required',
+      label: 'Review',
+      focusTaskId: briefReview.taskId,
+      focusTaskTitle: briefReview.title,
+      focusKind: 'brief_cleanup',
+      message: `"${briefReview.title}" has a drafted brief ready for review. Approve it or request changes before Guildhall continues shaping.`,
+      actionHref: `/thread?thread=${encodeURIComponent(`task:${briefReview.taskId}`)}`,
     }
   }
   const ready = included.find(row => !row.dependencyBlocked && row.handoffState === 'ready')

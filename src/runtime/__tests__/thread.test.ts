@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import type { Task } from '@guildhall/core'
 import { projectStatePath, promoteProjectStateDatabaseAuthority } from '@guildhall/sessions'
 
 import { buildThread as buildCurrentThread, type BuildThreadOptions, type Thread } from '../thread.js'
@@ -27,6 +28,31 @@ function buildThread(options: BuildThreadOptions): Thread {
     promoteProjectStateDatabaseAuthority(options.projectPath)
   }
   return buildCurrentThread(options)
+}
+
+function taskRecord(overrides: Partial<Task> & Pick<Task, 'id' | 'title' | 'status'>): Task {
+  const now = '2026-08-08T18:00:00.000Z'
+  return {
+    description: overrides.title,
+    domain: 'product',
+    projectPath: '/tmp/narrative-harness',
+    priority: 'normal',
+    dependsOn: [],
+    acceptanceCriteria: [],
+    notes: [],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    escalations: [],
+    agentIssues: [],
+    origination: 'human',
+    outOfScope: [],
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  }
 }
 
 describe('buildThread', () => {
@@ -2728,6 +2754,74 @@ describe('buildThread', () => {
       ).toHaveLength(1)
       expect(thread.turns.find((turn) => turn.id === 'brief:task-import-mentions')).toBeUndefined()
       expect(thread.turns.find((turn) => turn.id === 'q:task-import-mentions:q-chip-style')?.kind).toBe('agent_question')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps dependency-blocked briefs and specs waiting behind the one current review', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      const completeBrief = {
+        userJob: 'Prove the packaged sidecar before desktop work begins.',
+        whyItMattersNow: 'The desktop release depends on this architecture gate.',
+        successMetric: 'The packaged app completes one offline fixture run.',
+        nonGoals: ['Do not build the full interface yet.'],
+      }
+      const tasks = [
+        taskRecord({
+          id: 'task-086',
+          title: 'Prove packaged Tauri sidecar',
+          status: 'exploring',
+          productBrief: completeBrief,
+        }),
+        taskRecord({
+          id: 'task-087',
+          title: 'Define typed desktop harness adapter',
+          status: 'spec_review',
+          dependsOn: ['task-086'],
+          productBrief: { ...completeBrief, approvedAt: '2026-08-08T18:10:00.000Z' },
+          spec: '## Summary\nDefine the adapter.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Typed adapter exists.', verifiedBy: 'review', met: false }],
+        }),
+        taskRecord({
+          id: 'task-088',
+          title: 'Build quiet desktop shell',
+          status: 'exploring',
+          dependsOn: ['task-086'],
+          productBrief: completeBrief,
+        }),
+      ]
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: '2026-08-08T18:00:00.000Z' },
+          coordinators: [],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: tasks.length,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildCurrentThread({ projectPath, snapshot, tasks, recentEvents: [] })
+
+      expect(thread.activeTurnId).toBe('brief:task-086')
+      expect(thread.turns.find(turn => turn.id === 'brief:task-086')).toMatchObject({ status: 'active' })
+      expect(thread.turns.find(turn => turn.id === 'brief:task-088')).toBeUndefined()
+      expect(thread.turns.find(turn => turn.id === 'spec:task-087')).toBeUndefined()
+      expect(thread.turns.find(turn => turn.id === 'inflight:task-087')).toMatchObject({
+        status: 'pending',
+        dependencyBlockers: [{ taskId: 'task-086', title: 'Prove packaged Tauri sidecar' }],
+      })
+      expect(thread.turns.find(turn => turn.id === 'inflight:task-088')).toMatchObject({
+        status: 'pending',
+        dependencyBlockers: [{ taskId: 'task-086', title: 'Prove packaged Tauri sidecar' }],
+      })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

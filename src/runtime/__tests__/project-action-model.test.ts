@@ -45,6 +45,31 @@ describe('buildProjectActionModel', () => {
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
+  it('names brief review explicitly when shared readiness requires it', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: '"Prove packaged Tauri sidecar" has a drafted brief ready for review.',
+        focusTaskId: 'task-086',
+        focusTaskTitle: 'Prove packaged Tauri sidecar',
+        focusKind: 'brief_cleanup',
+        actionHref: '/thread?thread=task%3Atask-086',
+      },
+      tasks: [{ id: 'task-086', title: 'Prove packaged Tauri sidecar', status: 'exploring' }],
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'owner_input',
+      label: 'Prove packaged Tauri sidecar',
+      buttonLabel: 'Review brief',
+      href: '/thread?thread=task%3Atask-086',
+      taskId: 'task-086',
+    })
+    expect(model.ownerInput).toMatchObject({ active: true, label: 'Prove packaged Tauri sidecar' })
+    expect(model.runControl).toMatchObject({ label: 'Waiting on answer', startEnabled: false })
+  })
+
   it('makes a hard setup inbox item the shared action and start blocker', () => {
     const model = buildProjectActionModel({
       startReadiness: {
@@ -184,6 +209,37 @@ describe('buildProjectActionModel', () => {
     })
     expect(model.primaryAction?.detail).toBe('"Build synopsis expansion" is ready to run.')
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
+  })
+
+  it('drops a persisted same-task secondary action when current readiness owns the task', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: null,
+        secondaryActions: [{
+          source: 'task',
+          label: 'Prove packaged Tauri sidecar',
+          detail: 'Needs brief.',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-086',
+          tone: 'warn',
+          taskId: 'task-086',
+        }],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        focusTaskId: 'task-086',
+        focusTaskTitle: 'Prove packaged Tauri sidecar',
+        focusKind: 'brief_cleanup',
+        actionHref: '/projects/narrative-harness/thread?thread=task%3Atask-086',
+      },
+    })
+
+    expect(model.primaryAction?.taskId).toBe('task-086')
+    expect(model.secondaryActions).toEqual([])
   })
 
   it('drops persisted release-review actions after the release shipped', () => {

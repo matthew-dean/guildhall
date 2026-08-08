@@ -55008,15 +55008,34 @@ Repair:
       proof-wait copy stays aligned; `pnpm typecheck` passes.
 - [ ] Installed proof: rebuild and install Guildhall, refresh Narrative Harness
       Stage 2 state, then confirm the Overview/API top action, work rows, Thread,
-      and status chrome agree that task 086 is being shaped and tasks 087-094
-      are waiting on prerequisites before starting the real run.
+      and status chrome agree that task 086 needs its drafted brief reviewed and
+      tasks 087-094 are waiting on prerequisites before starting the real run.
+
+- Failing Thread finding from the installed click-through: the shared decision
+      called task 086 unattended shaping and reported no owner input, while
+      Thread resurrected active brief reviews for tasks 086 and 088 plus a spec
+      review for dependency-blocked task 087. The task contract confirms task
+      086 has a complete but unapproved product brief, so Thread exposed the
+      real gate and the shared scope projection was wrong. Task 087 and 088
+      should remain dependency-waiting, not appear as parallel owner work.
+- [x] Repair the shared scope/start decision to classify a complete unapproved
+      brief as review work, suppress owner-review turns behind unfinished
+      dependencies, and remove the stale duplicate same-task secondary action.
+- [x] Re-run deterministic state-agreement tests: 31 scope-projection tests,
+      33 action-model tests, 74 Thread projection tests, and typecheck pass.
+      The full release-readiness file passed 81 behavior cases; its two known
+      migration claim-replay fixtures still fail before their assertions. The
+      one new source-recovery expectation exposed by this change was repaired;
+      its focused replay now reaches only the same migration precondition.
+- [ ] Re-run the installed Overview, Work, and Thread click-through before
+      approving task 086.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
-| Authoritative API | `startReadiness` focuses task 086 and names shaping as the next action. |
-| Top action | Overview repeats the same decision and starts that task. |
-| Work list/cards | Task 086 is current; dependent tasks are visibly waiting. |
-| Thread | Task 086 shaping is current; historical approval is not actionable. |
+| Authoritative API | `startReadiness` focuses task 086 and names brief review as the next action. |
+| Top action | Overview repeats the same decision and opens task 086's Thread. |
+| Work list/cards | Task 086 needs review; dependent tasks are visibly waiting. |
+| Thread | Task 086 is the only current review; dependent reviews are not actionable. |
 | Bottom/status chrome | No claim that all Stage 2 tasks are running. |
 | Visible cards | No competing brief-cleanup or owner-urgency recommendation. |
 
@@ -55025,15 +55044,17 @@ Repair:
 - Touched contracts: owner-facing orientation-summary `nextAction` semantics
       and its agreement with shared project start readiness; selected work
       progress blocked/active semantics; same-task project-action
-      deduplication; and active-release Overview progressive disclosure.
-- Contracts considered but not touched: task/release lifecycle enums, task
-      dependency rules, action-model schema, provider prompts, and persisted
-      project state.
+      deduplication; active-release Overview progressive disclosure; complete
+      unapproved product-brief handoff semantics; and dependency-aware Thread
+      review visibility.
+- Contracts considered but not touched: task/release lifecycle enums,
+      action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive
       task 086 through shaping, review, implementation, and proof before
       unblocking its dependents.
-- Proof required/provided: focused API regression and typecheck are provided;
-      installed Browser proof remains open above.
+- Proof required/provided: focused scope, action-model, Thread, and API
+      regressions plus typecheck are provided; installed Browser proof remains
+      open above.
 - Waivers: none. The configured Guildhall MCP bridge returned `Transport
       closed`, and this checkout has no root `.guildhall/artifacts.yaml`, so the
       canonical local artifact was updated directly.

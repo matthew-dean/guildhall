@@ -371,6 +371,72 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.start).toMatchObject({ canStart: true, focusTaskId: 'task-shaping' })
   })
 
+  it('makes a complete unapproved brief the only owner action ahead of dependency-blocked drafts', () => {
+    const completeBrief = {
+      userJob: 'Prove the packaged sidecar before desktop work begins.',
+      whyItMattersNow: 'The desktop release depends on this architecture gate.',
+      successMetric: 'The packaged app completes one offline fixture run.',
+      nonGoals: ['Do not build the full interface yet.'],
+    }
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-2',
+      releases: [{
+        id: 'stage-2',
+        label: 'Stage 2',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-086', 'work:task-087', 'work:task-088'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        task({
+          id: 'task-086',
+          title: 'Prove packaged Tauri sidecar',
+          status: 'exploring',
+          productBrief: completeBrief,
+          releaseIds: ['stage-2'],
+        }),
+        task({
+          id: 'task-087',
+          title: 'Define typed desktop harness adapter',
+          status: 'spec_review',
+          dependsOn: ['task-086'],
+          spec: 'Define the typed adapter.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Typed adapter exists.', verifiedBy: 'review', met: false }],
+          releaseIds: ['stage-2'],
+        }),
+        task({
+          id: 'task-088',
+          title: 'Build quiet desktop shell',
+          status: 'exploring',
+          dependsOn: ['task-086'],
+          productBrief: completeBrief,
+          releaseIds: ['stage-2'],
+        }),
+      ],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-086')).toMatchObject({
+      handoffState: 'brief_cleanup',
+      humanBlocking: true,
+      dependencyBlocked: false,
+    })
+    expect(projection.rows.find(row => row.taskId === 'task-087')).toMatchObject({ dependencyBlocked: true })
+    expect(projection.rows.find(row => row.taskId === 'task-088')).toMatchObject({ dependencyBlocked: true })
+    expect(projection.start).toMatchObject({
+      canStart: false,
+      code: 'owner_input_required',
+      focusTaskId: 'task-086',
+      focusKind: 'brief_cleanup',
+      actionHref: '/thread?thread=task%3Atask-086',
+    })
+    expect(projection.start.message).toMatch(/drafted brief ready for review/i)
+  })
+
   it('reports later work when a named release is complete', () => {
     const projection = buildProjectScopeProjection({
       version: 1,

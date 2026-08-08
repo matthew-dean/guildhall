@@ -1956,9 +1956,18 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
     const liveAgent = liveAgents.get(taskId)
     const hasSpecDraft = hasSpecDraftContent(t)
-    if (hasReviewableProductBrief(brief) && unansweredQuestions.length === 0) {
-      const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring' && !hasSpecDraft
-      const status: TurnStatus = !briefStillNeedsHuman
+    const briefRequiresOwnerApproval = !approvedAt &&
+      brief?.authoredBy !== 'coordinator-recovery' &&
+      t.taskReadiness?.recommendation !== 'needs_research_spike' &&
+      taskStatus === 'exploring' &&
+      !hasSpecDraft
+    const dependencyBlockers = (t.dependsOn ?? []).flatMap(dependencyId => {
+      const dependency = tasksById.get(dependencyId)
+      if (dependency?.status === 'done') return []
+      return [{ taskId: dependencyId, title: dependency ? displayTaskTitle(dependency) : dependencyId }]
+    })
+    if (hasReviewableProductBrief(brief) && unansweredQuestions.length === 0 && dependencyBlockers.length === 0) {
+      const status: TurnStatus = !briefRequiresOwnerApproval
         ? 'done'
         : !activeAssigned
           ? 'active'
@@ -2080,14 +2089,11 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
 
     const hasUnansweredQuestions = openQs.some(q => !q.answeredAt)
-    const hasActiveBriefTurn = hasReviewableProductBrief(brief) && !approvedAt && taskStatus === 'exploring' && !hasSpecDraft
+    const hasActiveBriefTurn = hasReviewableProductBrief(brief) &&
+      briefRequiresOwnerApproval &&
+      dependencyBlockers.length === 0
     const importedDraft = taskStatus === 'import_draft' || shouldUseImportDraftState(t)
     const shapingBlockers = taskShapingBlockers(t)
-    const dependencyBlockers = (t.dependsOn ?? []).flatMap(dependencyId => {
-      const dependency = tasksById.get(dependencyId)
-      if (dependency?.status === 'done') return []
-      return [{ taskId: dependencyId, title: dependency ? displayTaskTitle(dependency) : dependencyId }]
-    })
     if (importedDraft && taskId !== leadingImportDraftId) {
       continue
     }
@@ -2096,7 +2102,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const shouldSurfaceSpecReview =
       (taskStatus === 'spec_review' || (taskStatus === 'exploring' && hasSpecDraft)) &&
       specReviewRequiresOwnerApproval(t) &&
-      shapingBlockers.length === 0
+      shapingBlockers.length === 0 &&
+      dependencyBlockers.length === 0
     if (shouldSurfaceSpecReview && !hasUnansweredQuestions) {
       const status: TurnStatus = hasUnansweredQuestions
         ? 'pending'
@@ -2344,12 +2351,12 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
   }
   if (setupCanYieldToTaskTurns && hadOnlySetupActive && hasPendingNonSetupTurnBeyondSetup) {
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      const turn = turns[index]
-      if (!turn || turn.kind === 'setup_step' || turn.status !== 'pending') continue
-      turn.status = 'active'
-      break
-    }
+    const pendingRunnableTurn = [...turns].reverse().find(turn =>
+      turn.status === 'pending' &&
+      turn.kind !== 'setup_step' &&
+      !(turn.kind === 'inflight' && (turn.dependencyBlockers?.length ?? 0) > 0),
+    )
+    if (pendingRunnableTurn) pendingRunnableTurn.status = 'active'
   }
 
   const hasHumanOwnedActiveTurn = turns.some(isHumanOwnedActiveTurn)

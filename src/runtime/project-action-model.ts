@@ -230,6 +230,8 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'required_migration_pending') return 'Migrate project'
   if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
   if (readiness.code === 'owner_input_required') {
+    if (readiness.focusKind === 'brief_cleanup') return 'Review brief'
+    if (readiness.focusKind === 'spec_review') return 'Review spec'
     return 'Open Thread'
   }
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
@@ -278,6 +280,11 @@ function isProviderReadinessCode(code: string | undefined): boolean {
 }
 
 function startReadinessActionLabel(readiness: ProjectActionStartReadiness): string {
+  if (readiness.code === 'owner_input_required') {
+    if (readiness.focusKind === 'brief_cleanup') return readiness.focusTaskTitle?.trim() || 'Review task brief'
+    if (readiness.focusKind === 'spec_review') return readiness.focusTaskTitle?.trim() || 'Review spec'
+    return 'Answer in Thread'
+  }
   if (readiness.code === 'ready_work') return readiness.focusTaskTitle?.trim() || readiness.message || 'Ready work'
   if (readiness.code === 'required_migration_pending') return 'Required migration'
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
@@ -325,7 +332,7 @@ function ownerInputFrom(readiness: ProjectActionStartReadiness | null | undefine
   if (readiness?.code === 'owner_input_required') {
     return {
       active: true,
-      label: 'Answer in Thread',
+      label: startReadinessActionLabel(readiness),
       detail: ownerInputDetail(turn?.question?.prompt ?? readiness.message),
       href: readiness.actionHref ?? (turn ? threadHref(turn) : '/thread'),
     }
@@ -485,7 +492,7 @@ function threadHrefForTask(taskId: string | undefined): string {
 }
 
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
-  const label = readiness.code === 'owner_input_required' ? 'Answer in Thread' : startReadinessActionLabel(readiness)
+  const label = startReadinessActionLabel(readiness)
   const detail = readiness.message && readiness.message !== label
       ? readiness.message
       : undefined
@@ -613,7 +620,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
             ...startReadinessAction(startReadiness),
             detail: ownerInputDetail(activeTurn?.question?.prompt ?? startReadiness.message),
             href: ownerInput.href,
-            buttonLabel: 'Open Thread',
+            buttonLabel: startReadinessButtonLabel(startReadiness),
           }
         : startReadinessAction(startReadiness),
     )
@@ -758,6 +765,14 @@ export function resolveProjectActionModel(input: {
     tasks: [],
     releaseLifecycleState: input.releaseLifecycleState,
   })
+  const candidateSecondaryActions = resolved.secondaryActions.length > 0
+    ? resolved.secondaryActions
+    : input.stored?.secondaryActions ?? []
+  const secondaryActions = candidateSecondaryActions.filter(action => {
+    if (!resolved.primaryAction) return true
+    if (resolved.primaryAction.taskId && action.taskId === resolved.primaryAction.taskId) return false
+    return action.href !== resolved.primaryAction.href
+  })
   return {
     ...(input.stored ?? resolved),
     primaryAction: resolved.primaryAction,
@@ -767,8 +782,6 @@ export function resolveProjectActionModel(input: {
     // refresh deliberately does not reload. Keep its saved projection instead
     // of deriving a false "fresh intake" state from an empty placeholder list.
     setup: input.stored?.setup ?? resolved.setup,
-    secondaryActions: resolved.secondaryActions.length > 0
-      ? resolved.secondaryActions
-      : input.stored?.secondaryActions ?? [],
+    secondaryActions,
   }
 }
