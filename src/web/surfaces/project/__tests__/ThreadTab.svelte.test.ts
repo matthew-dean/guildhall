@@ -455,6 +455,7 @@ function installFetchFakes(
     runtime?: unknown
     projectRunStatus?: string
     startReadiness?: unknown
+    decision?: unknown
     projectAvailability?: { status: string; pausedAt?: string | null; resumedAt?: string | null }
     caughtUp?: boolean
     orientationSpine?: unknown
@@ -551,6 +552,7 @@ function installFetchFakes(
         run: { status: options.projectRunStatus ?? 'running', mode: 'continuous' },
         availability: options.projectAvailability ?? { status: 'active', pausedAt: null, resumedAt: null },
         startReadiness: options.startReadiness ?? { canStart: true },
+        ...(options.decision ? { decision: options.decision } : {}),
         ...(options.runtime ? { runtime: options.runtime } : {}),
         ...(project.detail?.taskRoutingContexts ? { taskRoutingContexts: project.detail.taskRoutingContexts } : {}),
         ...(project.detail?.deliverySpine ? { deliverySpine: project.detail.deliverySpine } : {}),
@@ -1226,8 +1228,8 @@ describe('ThreadTab', () => {
       startReadiness: {
         canStart: true,
         code: 'ready_work',
-        focusTaskId: 'task-fixture',
-        focusTaskTitle: 'Shape fixture ground truth',
+        focusTaskId: 'task-old-question',
+        focusTaskTitle: 'Check that this project can run',
       },
       decision: {
         execution: {
@@ -1259,7 +1261,10 @@ describe('ThreadTab', () => {
         taskStatus: 'ready',
         status: 'pending',
       }),
-    ], 'question-old')
+    ], 'question-old', {
+      startReadiness: project.detail.startReadiness,
+      decision: project.detail.decision,
+    })
 
     render(ThreadTab)
 

@@ -143,6 +143,38 @@ describe('project-summary-projection', () => {
     })
   })
 
+  it('clears a stale task action when the decision lifecycle is already shipped', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([task('done-task', 'done')], {
+        selectedReleaseId: 'release-shipped',
+        releases: [{
+          id: 'release-shipped',
+          label: 'Shipped release',
+          kind: 'release',
+          state: 'shipped',
+          source: 'release_plan',
+          proofStyle: 'unspecified',
+          nodeIds: ['work:done-task'],
+          deferredNodeIds: [],
+        }],
+      }),
+      generatedAt: now,
+    })
+    const stale = {
+      ...projection,
+      decision: {
+        ...projection.decision,
+        primaryAction: { kind: 'open_work' as const, targetId: 'done-task', reasonCode: 'ready_work' },
+      },
+    }
+
+    expect(synchronizeProjectSummaryDecision(stale).decision.primaryAction).toEqual({
+      kind: 'none',
+      reasonCode: 'release_shipped',
+    })
+  })
+
   it('projects an owner spec review separately from owner input', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'narrative-harness',

@@ -246,7 +246,13 @@ export function synchronizeProjectSummaryDecision(
 ): ProjectSummaryProjection {
   if (!summary.decision || typeof summary.decision !== 'object') return summary
   const lifecycleState = summary.releaseSummary?.release?.state
-  const decisionWithLifecycle = lifecycleState && summary.decision.release.lifecycleState !== lifecycleState
+  const decisionWithLifecycle = lifecycleState && (
+    summary.decision.release.lifecycleState !== lifecycleState ||
+    (lifecycleState === 'shipped' && (
+      summary.decision.primaryAction.kind !== 'none' ||
+      summary.decision.primaryAction.reasonCode !== 'release_shipped'
+    ))
+  )
     ? {
       ...summary.decision,
       release: { ...summary.decision.release, lifecycleState },

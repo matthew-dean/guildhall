@@ -54786,7 +54786,10 @@ Repair:
       current inbox, treats hard setup items as shared start blockers, and
       suppresses setup urgency for shipped terminal releases. `DoThisNext`
       renders only that model, and the shell no longer reinterprets bootstrap
-      state into a competing run decision. The repaired rendered audit passes
+      state into a competing run decision. Second-pass review proof also covers
+      an already-shipped legacy decision carrying a stale task action and a
+      Thread response where decision focus intentionally disagrees with older
+      start-readiness focus. The repaired rendered audit passes
       shared-state and geometry checks at `1114x692`, `900x692`, and `390x844`.
 - [x] Final installed Browser replay: Narrative Harness Overview, Release, and
       Work agree on `Release shipped`; Timeline starts newest-first and one
