@@ -2418,7 +2418,7 @@ async function refreshProjectProjections(
               resolved.path,
               resolved.initializationNeeded,
               currentSummary?.releaseSummary ?? null,
-              currentSummary?.actionModel?.setup ?? null,
+              fleetSummary.actionModel?.setup ?? null,
             )
             return attention.freshness === 'current'
               ? fleetAttentionProjection(attention.items)
@@ -3044,7 +3044,7 @@ function publishFleetSummaryFromSavedState(
     entry.path,
     resolved.initializationNeeded,
     shell?.releaseSummary ?? null,
-    shell?.actionModel?.setup ?? null,
+    basePayload.actionModel?.setup ?? null,
   )
   const payload = compactFleetSummaryPayload({
     ...basePayload,
@@ -7690,7 +7690,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
           projectRevision: surfaceState?.projectRevision ?? null,
           releaseTruth: projection.releaseSummary,
-          setupTruth: projection.actionModel?.setup ?? null,
+          setupTruth: summary.actionModel?.setup ?? null,
         })
       : null
     const detailMemoryHealth = input.includeDetailSections
@@ -8026,7 +8026,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             project.path,
             project.initializationNeeded,
             currentState.summary?.releaseSummary ?? null,
-            currentState.summary?.actionModel?.setup ?? null,
+            projectedSummary?.actionModel?.setup ?? currentState.summary?.actionModel?.setup ?? null,
           )
       const thread = mapSurface
         ? null
@@ -13503,13 +13503,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
         includeProjection: false,
         includeAttention: true,
       })
+      const savedSummary = surfaceState?.summary ?? null
+      const resolvedSummary = savedSummary
+        ? summarizeProjectFromProjection(
+            { id: project.id, path: project.path },
+            project,
+            supervisor.get(project.id),
+            savedSummary,
+          )
+        : null
       return c.json(readSavedAttentionSurfaceFromBoundary({
         initializationNeeded: project.initializationNeeded,
         records: surfaceState?.attentionRecords ?? null,
         watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
         projectRevision: surfaceState?.projectRevision ?? null,
         releaseTruth: surfaceState?.summary?.releaseSummary ?? null,
-        setupTruth: surfaceState?.summary?.actionModel?.setup ?? null,
+        setupTruth: resolvedSummary?.actionModel?.setup ?? null,
       }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
