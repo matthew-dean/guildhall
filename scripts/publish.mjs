@@ -11,23 +11,24 @@
  * What this script does, in order:
  *   1. Parse the target version (explicit semver or `patch`/`minor`/`major`)
  *      against the latest published npm release, not the local manifest.
- *   2. Refuse to run on a dirty worktree or when not on `main` (override with
+ *   2. Verify npm auth before any irreversible release refs are pushed.
+ *   3. Refuse to run on a dirty worktree or when not on `main` (override with
  *      `--allow-dirty` / `--allow-branch`).
- *   3. Bump the root `package.json` to the new version.
- *   4. For real publishes, publish or verify the default runtime image and
+ *   4. Bump the root `package.json` to the new version.
+ *   5. For real publishes, publish or verify the default runtime image and
  *      record its digest in the release manifest.
- *   5. For real publishes, update public docs pointers and cut the one-time
+ *   6. For real publishes, update public docs pointers and cut the one-time
  *      docs/versions/<version> snapshot from canonical docs. Dry-runs skip this.
- *   6. Typecheck + docs build + model-independence + tests + dep-cruise as
+ *   7. Typecheck + docs build + model-independence + tests + dep-cruise as
  *      the pre-publish gate.
- *   7. Rebuild `dist/` fresh.
- *   8. Build the macOS packaged artifact used by the curl installer.
- *   9. Verify package contents exclude raw docs/ but keep generated help.
- *   10. Commit the release snapshot and tag `v<version>`.
- *   11. Push the branch and tag so the GitHub release artifact workflow runs.
- *   12. Wait for the GitHub Release tarball and checksum.
- *   13. `npm publish` with `--access=public`.
- *   14. Move `package.json` to the next development version and commit/push that bump.
+ *   8. Rebuild `dist/` fresh.
+ *   9. Build the macOS packaged artifact used by the curl installer.
+ *   10. Verify package contents exclude raw docs/ but keep generated help.
+ *   11. Commit the release snapshot and tag `v<version>`.
+ *   12. Push the branch and tag so the GitHub release artifact workflow runs.
+ *   13. Wait for the GitHub Release tarball and checksum.
+ *   14. `npm publish` with `--access=public`.
+ *   15. Move `package.json` to the next development version and commit/push that bump.
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
@@ -127,6 +128,9 @@ if (postReleaseVersion) {
 if (publishedVersion === nextVersion && !flags.dryRun) {
   die(`guildhall@${nextVersion} is already published on npm; choose a newer release version.`)
 }
+if (!flags.dryRun && flags.pushRemote) {
+  ensureNpmPublishAuth(manifestJson.name)
+}
 
 // ---------------------------------------------------------------------------
 // 2. Git preflight
@@ -168,8 +172,13 @@ if (flags.dryRun) {
 } else {
   trackReleaseArtifacts(nextVersion)
   updatePublicDocsVersion(nextVersion)
-  log(`Cutting docs version ${nextVersion} from current docs...`)
-  run('node', ['scripts/version-docs.mjs', nextVersion])
+  const versionDocsDir = join(ROOT, 'docs/versions', nextVersion)
+  if (existsSync(versionDocsDir)) {
+    warn(`docs/versions/${nextVersion} already exists; keeping existing release snapshot for resume.`)
+  } else {
+    log(`Cutting docs version ${nextVersion} from current docs...`)
+    run('node', ['scripts/version-docs.mjs', nextVersion])
+  }
 }
 
 const releaseHelpDocsEnv = flags.dryRun
@@ -663,6 +672,30 @@ function fetchPublishedVersion(packageName, distTag) {
   return null
 }
 
+function ensureNpmPublishAuth(packageName) {
+  const authenticatedUser = npmWhoami()
+  if (authenticatedUser) {
+    log(`npm authenticated as ${authenticatedUser}.`)
+    return
+  }
+
+  warn(`npm is not logged in for ${packageName}; starting npm login before release refs are pushed.`)
+  run('npm', ['login', '--registry', 'https://registry.npmjs.org/'])
+
+  const loggedInUser = npmWhoami()
+  if (!loggedInUser) {
+    die('npm login did not produce an authenticated npm session; aborting before release refs are pushed.')
+  }
+  log(`npm authenticated as ${loggedInUser}.`)
+}
+
+function npmWhoami() {
+  const result = runCaptureOptional('npm', ['whoami', '--registry', 'https://registry.npmjs.org/'])
+  if (result.status !== 0) return null
+  const user = `${result.stdout ?? ''}`.trim()
+  return user || null
+}
+
 function minorLine(version) {
   const match = version.match(/^(\d+)\.(\d+)(?:\.\d+)?(?:-[\w.]+)?$/)
   return match ? `${match[1]}.${match[2]}` : version
@@ -698,37 +731,74 @@ function assertPushRemoteReady(branch, version) {
   if (remoteUrl.status !== 0 || !`${remoteUrl.stdout ?? ''}`.trim()) {
     die(`Remote "${flags.remote}" is not configured. Add it, pass --remote <name>, or use --no-push for a staged release.`)
   }
-  if (remoteRefExists(flags.remote, `refs/tags/v${version}`)) {
-    die(`Remote tag v${version} already exists on ${flags.remote}; refusing to publish a release that cannot create a fresh GitHub artifact.`)
+  const tagRef = `refs/tags/v${version}`
+  const remoteTag = remoteRefHash(flags.remote, tagRef)
+  if (remoteTag) {
+    const localTag = localRefHash(tagRef)
+    if (!localTag) {
+      die(`Remote tag v${version} already exists on ${flags.remote}, but no matching local tag exists. Fetch tags and inspect before resuming.`)
+    }
+    if (remoteTag !== localTag) {
+      die(`Remote tag v${version} already exists on ${flags.remote}, but it points at ${remoteTag} instead of local ${localTag}. Refusing to publish over a different release.`)
+    }
+    log(`Remote tag v${version} already exists on ${flags.remote} and matches the local tag; release publish can resume.`)
   }
-  const remoteBranch = remoteRefExists(flags.remote, `refs/heads/${branch}`)
+  const remoteBranch = remoteRefHash(flags.remote, `refs/heads/${branch}`)
   if (!remoteBranch) {
     warn(`Remote branch ${flags.remote}/${branch} does not exist yet; the release push will create it.`)
   }
 }
 
-function remoteRefExists(remote, ref) {
+function remoteRefHash(remote, ref) {
   const result = spawnSync('git', ['ls-remote', '--exit-code', remote, ref], {
     cwd: ROOT,
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  if (result.status === 0) return true
-  if (result.status === 2) return false
+  if (result.status === 0) {
+    const line = `${result.stdout ?? ''}`.trim().split(/\r?\n/)[0] ?? ''
+    return line.split(/\s+/)[0] || null
+  }
+  if (result.status === 2) return null
   die(`Command failed: git ls-remote --exit-code ${remote} ${ref}\n${result.stderr ?? ''}`.trim())
+}
+
+function localRefHash(ref) {
+  const result = runCaptureOptional('git', ['rev-parse', '--verify', ref])
+  if (result.status !== 0) return null
+  const hash = `${result.stdout ?? ''}`.trim()
+  return hash || null
 }
 
 function pushReleaseRefs(branch, version) {
   const tagRef = `refs/tags/v${version}`
-  log(`Pushing ${branch} and v${version} to ${flags.remote}...`)
-  run('git', ['push', '--atomic', flags.remote, `HEAD:${branch}`, tagRef])
-
   const localTag = runCapture('git', ['rev-parse', tagRef]).trim()
-  const remoteTagLine = runCapture('git', ['ls-remote', '--tags', flags.remote, tagRef]).trim()
-  const remoteTag = remoteTagLine.split(/\s+/)[0]
-  if (remoteTag !== localTag) {
-    die(`Remote tag verification failed for v${version}: expected ${localTag}, got ${remoteTag || '(missing)'}.`)
+  const head = runCapture('git', ['rev-parse', 'HEAD']).trim()
+  const remoteTag = remoteRefHash(flags.remote, tagRef)
+  const remoteBranch = remoteRefHash(flags.remote, `refs/heads/${branch}`)
+
+  if (remoteTag && remoteTag !== localTag) {
+    die(`Remote tag verification failed for v${version}: expected ${localTag}, got ${remoteTag}.`)
   }
+  if (remoteTag === localTag && remoteBranch === head) {
+    log(`Release refs for ${branch} and v${version} are already pushed to ${flags.remote}; resuming.`)
+  } else if (remoteTag === localTag) {
+    log(`Pushing ${branch} to ${flags.remote}; v${version} already exists there and matches the local tag...`)
+    run('git', ['push', flags.remote, `HEAD:${branch}`])
+  } else {
+    log(`Pushing ${branch} and v${version} to ${flags.remote}...`)
+    run('git', ['push', '--atomic', flags.remote, `HEAD:${branch}`, tagRef])
+  }
+
+  const verifiedRemoteTag = remoteRefHash(flags.remote, tagRef)
+  const verifiedRemoteBranch = remoteRefHash(flags.remote, `refs/heads/${branch}`)
+  if (verifiedRemoteTag !== localTag) {
+    die(`Remote tag verification failed for v${version}: expected ${localTag}, got ${verifiedRemoteTag || '(missing)'}.`)
+  }
+  if (verifiedRemoteBranch !== head) {
+    die(`Remote branch verification failed for ${flags.remote}/${branch}: expected ${head}, got ${verifiedRemoteBranch || '(missing)'}.`)
+  }
+  if (remoteTag === localTag && remoteBranch === head) return
   log(`Pushed ${branch} and v${version} to ${flags.remote}.`)
 }
 

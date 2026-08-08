@@ -185,7 +185,7 @@ describe('release publish script', () => {
       const manifest = JSON.parse(await fs.readFile(path.join(tmp, 'package.json'), 'utf8'))
       const docsHome = await fs.readFile(path.join(tmp, 'docs/index.md'), 'utf8')
       await expect(fs.stat(path.join(tmp, 'docs/versions/0.5.0'))).rejects.toThrow()
-      expect(result.status).toBe(0)
+      expect(result.status, result.output).toBe(0)
       expect(result.output).toContain('Dry-run: skipping docs versioning and public docs pointer updates.')
       expect(result.output).not.toContain('version-docs should not run during dry-run')
       expect(manifest.version).toBe('0.4.0')
@@ -224,6 +224,10 @@ describe('release publish script', () => {
           '#!/bin/sh',
           'if [ "$1" = "view" ] && [ "$2" = "guildhall" ] && [ "$3" = "version" ]; then',
           '  echo "0.4.0"',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "whoami" ]; then',
+          '  echo "guildhall-test"',
           '  exit 0',
           'fi',
           'if [ "$1" = "pack" ]; then',
@@ -269,7 +273,7 @@ describe('release publish script', () => {
       const headMessage = await gitHeadMessage(tmp)
       const orderLog = await fs.readFile(operationLog, 'utf8')
 
-      expect(result.status).toBe(0)
+      expect(result.status, result.output).toBe(0)
       expect(result.output).toContain('Published version: 0.4.0')
       expect(result.output).toContain('Target version:    0.5.0')
       expect(result.output).toContain('Next dev version: 0.5.1')
@@ -281,6 +285,206 @@ describe('release publish script', () => {
       expect(remoteHead.stdout.trim()).toBeTruthy()
       expect(headMessage).toBe('chore: start 0.5.1')
       expect(orderLog.indexOf('curl')).toBeLessThan(orderLog.indexOf('npm publish'))
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('prompts npm login before release refs are pushed when npm is not authenticated', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-script-'))
+    try {
+      await createMinimalReleaseFixture(tmp)
+      const manifestPath = path.join(tmp, 'package.json')
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'))
+      manifest.name = 'guildhall'
+      manifest.version = '0.5.0'
+      await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
+
+      const fakeBin = path.join(tmp, 'fake-bin')
+      const operationLogDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-log-'))
+      const operationLog = path.join(operationLogDir, 'release-order.log')
+      const npmAuthStateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-npm-auth-state-'))
+      const npmAuthState = path.join(npmAuthStateDir, 'logged-in')
+      await fs.mkdir(fakeBin)
+      await writeExecutable(path.join(fakeBin, 'pnpm'), '#!/bin/sh\nexit 0\n')
+      await writeExecutable(
+        path.join(fakeBin, 'curl'),
+        [
+          '#!/bin/sh',
+          'printf "curl %s\\n" "$*" >> "$PUBLISH_TEST_LOG"',
+          'exit 0',
+          '',
+        ].join('\n'),
+      )
+      await writeExecutable(
+        path.join(fakeBin, 'npm'),
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "view" ] && [ "$2" = "guildhall" ] && [ "$3" = "version" ]; then',
+          '  echo "0.4.0"',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "whoami" ]; then',
+          '  if [ -f "$PUBLISH_TEST_NPM_AUTH_STATE" ]; then',
+          '    echo "guildhall-test"',
+          '    exit 0',
+          '  fi',
+          '  exit 1',
+          'fi',
+          'if [ "$1" = "login" ]; then',
+          '  printf "npm login\\n" >> "$PUBLISH_TEST_LOG"',
+          '  touch "$PUBLISH_TEST_NPM_AUTH_STATE"',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "pack" ]; then',
+          '  printf \'[{"files":[{"path":"dist/web/index.html"},{"path":"dist/web/_app/immutable/app.js"}]}]\\n\'',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "publish" ]; then',
+          '  printf "npm publish\\n" >> "$PUBLISH_TEST_LOG"',
+          '  exit 0',
+          'fi',
+          'echo "unexpected npm args: $*" >&2',
+          'exit 1',
+          '',
+        ].join('\n'),
+      )
+
+      await runGit(tmp, ['init', '-b', 'main'])
+      await runGit(tmp, ['config', 'user.name', 'Guildhall Test'])
+      await runGit(tmp, ['config', 'user.email', 'guildhall-test@example.com'])
+      await runGit(tmp, ['add', '.'])
+      await runGit(tmp, ['commit', '--no-verify', '-m', 'init'])
+      await addBareOrigin(tmp)
+
+      const result = await execFileP('node', ['scripts/publish.mjs', '0.5.0', '--skip-tests'], {
+        cwd: tmp,
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
+          PUBLISH_TEST_LOG: operationLog,
+          PUBLISH_TEST_NPM_AUTH_STATE: npmAuthState,
+        },
+      }).then(
+        ({ stdout, stderr }) => ({ status: 0, output: stdout + stderr }),
+        (error: { code?: number; stdout?: string; stderr?: string }) => ({
+          status: error.code ?? 1,
+          output: `${error.stdout ?? ''}${error.stderr ?? ''}`,
+        }),
+      )
+
+      const orderLog = await fs.readFile(operationLog, 'utf8')
+      expect(result.status, result.output).toBe(0)
+      expect(result.output).toContain('npm is not logged in for guildhall; starting npm login before release refs are pushed.')
+      expect(result.output).toContain('npm authenticated as guildhall-test.')
+      expect(orderLog).toContain('npm login')
+      expect(orderLog.indexOf('npm login')).toBeLessThan(orderLog.indexOf('curl'))
+      expect(orderLog.indexOf('npm login')).toBeLessThan(orderLog.indexOf('npm publish'))
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('resumes when release refs already exist and match the local release tag', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-script-'))
+    try {
+      await createMinimalReleaseFixture(tmp)
+      const manifestPath = path.join(tmp, 'package.json')
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'))
+      manifest.name = 'guildhall'
+      manifest.version = '0.5.0'
+      await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
+      await fs.writeFile(
+        path.join(tmp, 'docs/index.md'),
+        'Docs default to Guildhall 0.5.0. [Start](/versions/0.5.0/guide/quick-start).\n',
+      )
+      await fs.writeFile(
+        path.join(tmp, 'docs/releases/index.md'),
+        [
+          '# Releases',
+          '',
+          'The published docs root defaults to Guildhall 0.5.0, matching the current npm package.',
+          '',
+        ].join('\n'),
+      )
+      await fs.mkdir(path.join(tmp, 'docs/versions/0.5.0/guide'), { recursive: true })
+      await fs.mkdir(path.join(tmp, 'docs/versions/0.5.0/releases'), { recursive: true })
+      await fs.writeFile(path.join(tmp, 'docs/versions/0.5.0/index.md'), '# Guildhall 0.5.0\n')
+      await fs.writeFile(path.join(tmp, 'docs/versions/0.5.0/releases/index.md'), '# Releases\n')
+      await fs.writeFile(path.join(tmp, 'docs/versions/0.5.0/guide/quick-start.md'), '# Quick start\n')
+
+      const fakeBin = path.join(tmp, 'fake-bin')
+      const operationLog = path.join(tmp, 'release-order.log')
+      await fs.mkdir(fakeBin)
+      await writeExecutable(path.join(fakeBin, 'pnpm'), '#!/bin/sh\nexit 0\n')
+      await writeExecutable(
+        path.join(fakeBin, 'curl'),
+        [
+          '#!/bin/sh',
+          'printf "curl %s\\n" "$*" >> "$PUBLISH_TEST_LOG"',
+          'exit 0',
+          '',
+        ].join('\n'),
+      )
+      await writeExecutable(
+        path.join(fakeBin, 'npm'),
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "view" ] && [ "$2" = "guildhall" ] && [ "$3" = "version" ]; then',
+          '  echo "0.4.0"',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "whoami" ]; then',
+          '  echo "guildhall-test"',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "pack" ]; then',
+          '  printf \'[{"files":[{"path":"dist/web/index.html"},{"path":"dist/web/_app/immutable/app.js"}]}]\\n\'',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "publish" ]; then',
+          '  printf "npm publish\\n" >> "$PUBLISH_TEST_LOG"',
+          '  exit 0',
+          'fi',
+          'echo "unexpected npm args: $*" >&2',
+          'exit 1',
+          '',
+        ].join('\n'),
+      )
+
+      await runGit(tmp, ['init', '-b', 'main'])
+      await runGit(tmp, ['config', 'user.name', 'Guildhall Test'])
+      await runGit(tmp, ['config', 'user.email', 'guildhall-test@example.com'])
+      await runGit(tmp, ['add', '.'])
+      await runGit(tmp, ['commit', '--no-verify', '-m', 'chore(release): guildhall@0.5.0'])
+      await runGit(tmp, ['tag', 'v0.5.0'])
+      await addBareOrigin(tmp)
+      await runGit(tmp, ['push', 'origin', 'HEAD:main', 'refs/tags/v0.5.0'])
+
+      const result = await execFileP('node', ['scripts/publish.mjs', '0.5.0', '--skip-tests'], {
+        cwd: tmp,
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
+          PUBLISH_TEST_LOG: operationLog,
+        },
+      }).then(
+        ({ stdout, stderr }) => ({ status: 0, output: stdout + stderr }),
+        (error: { code?: number; stdout?: string; stderr?: string }) => ({
+          status: error.code ?? 1,
+          output: `${error.stdout ?? ''}${error.stderr ?? ''}`,
+        }),
+      )
+
+      const nextManifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'))
+      const headMessage = await gitHeadMessage(tmp)
+      expect(result.status, result.output).toBe(0)
+      expect(result.output).toContain('Remote tag v0.5.0 already exists on origin and matches the local tag; release publish can resume.')
+      expect(result.output).toContain('Release refs for main and v0.5.0 are already pushed to origin; resuming.')
+      expect(result.output).toContain('Published guildhall@0.5.0')
+      expect(result.output).not.toContain('refusing to publish a release that cannot create a fresh GitHub artifact')
+      expect(nextManifest.version).toBe('0.5.1')
+      expect(headMessage).toBe('chore: start 0.5.1')
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
     }
@@ -451,6 +655,10 @@ describe('release publish script', () => {
           '#!/bin/sh',
           'if [ "$1" = "view" ] && [ "$2" = "guildhall" ] && [ "$3" = "version" ]; then',
           '  echo "0.8.0"',
+          '  exit 0',
+          'fi',
+          'if [ "$1" = "whoami" ]; then',
+          '  echo "guildhall-test"',
           '  exit 0',
           'fi',
           'if [ "$1" = "pack" ]; then',
