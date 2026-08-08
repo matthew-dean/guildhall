@@ -1497,6 +1497,20 @@ export interface ProjectActionModel {
     href?: string
     detail?: string
   }
+  workSummary?: {
+    total: number
+    agentActive: number
+    paused: number
+    waiting: number
+    reviewWaiting: number
+    gatesWaiting: number
+    shaping: number
+    specRevisionQueued: number
+    readyForWorker: number
+    needsSpecCleanup: number
+    awaitingApproval: number
+    done: number
+  }
 }
 
 export interface ProjectMigrationStatusItem {

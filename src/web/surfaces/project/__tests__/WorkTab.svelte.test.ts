@@ -900,6 +900,80 @@ describe('WorkTab', () => {
     expect(queue).not.toHaveTextContent('1 blocked')
   })
 
+  it('keeps dependency-waiting context visible under the queued filter', async () => {
+    const completeBrief = {
+      approvedAt: '2026-05-19T10:00:00.000Z',
+      userJob: 'Run the prepared task.',
+      whyItMattersNow: 'The release depends on it.',
+      successMetric: 'The task passes its proof.',
+      nonGoals: ['Do not expand scope.'],
+      antiPatterns: [],
+    }
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'ready-task',
+            title: 'Ready task',
+            status: 'ready',
+            productBrief: completeBrief,
+            spec: 'Implement the prepared task.',
+            acceptanceCriteria: [{ id: 'ac-1', description: 'The proof passes.' }],
+          }),
+          task({
+            id: 'waiting-task',
+            title: 'Waiting task',
+            status: 'ready',
+            dependsOn: ['unfinished-dependency'],
+            productBrief: completeBrief,
+            spec: 'Implement after the dependency.',
+            acceptanceCriteria: [{ id: 'ac-2', description: 'The dependency is complete first.' }],
+          }),
+          task({ id: 'unfinished-dependency', title: 'Dependency', status: 'in_progress' }),
+        ]),
+      },
+    })
+
+    expect(await screen.findByRole('combobox', { name: /^show$/i })).toHaveValue('queued')
+    expect(screen.getByText('1 waiting task')).toBeInTheDocument()
+    expect(screen.getByText('1 Ready')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /inspect work waiting task/i })).not.toBeInTheDocument()
+  })
+
+  it('renders task summary counts from the shared project action model', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([task({ id: 'visible-task', title: 'Visible task', status: 'ready' })], {
+          actionModel: {
+            primaryAction: null,
+            secondaryActions: [],
+            runControl: { label: 'Resume', startEnabled: true },
+            ownerInput: { active: false },
+            setup: { state: 'ready', freshIntakeNeeded: false },
+            workSummary: {
+              total: 4,
+              agentActive: 0,
+              paused: 0,
+              waiting: 2,
+              reviewWaiting: 0,
+              gatesWaiting: 0,
+              shaping: 0,
+              specRevisionQueued: 0,
+              readyForWorker: 1,
+              needsSpecCleanup: 1,
+              awaitingApproval: 0,
+              done: 0,
+            },
+          },
+        }),
+      },
+    })
+
+    expect(await screen.findByText('2 waiting tasks')).toBeInTheDocument()
+    expect(screen.getByText('1 Ready')).toBeInTheDocument()
+    expect(screen.getByText('1 Needs brief')).toBeInTheDocument()
+  })
+
   it('prefers shaped work units over proof-step badges for planning work and names blockers by task title', async () => {
     render(WorkTab, {
       props: {

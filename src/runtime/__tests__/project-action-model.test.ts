@@ -71,6 +71,78 @@ describe('buildProjectActionModel', () => {
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
+  it('keeps paused work actionable when a compact refresh has no task detail', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        message: 'Resume the paused task.',
+        focusTaskId: 'task-paused',
+        focusTaskTitle: 'Paused task',
+        actionHref: '/work?task=task-paused',
+      },
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Paused task',
+      href: '/work?task=task-paused',
+      taskId: 'task-paused',
+    })
+  })
+
+  it('publishes stable task-summary counts from the full project inventory', () => {
+    const completeBrief = {
+      approvedAt: '2026-05-19T10:00:00.000Z',
+      userJob: 'Run the task.',
+      whyItMattersNow: 'The release needs it.',
+      successMetric: 'The task passes.',
+      nonGoals: ['No extra scope.'],
+      antiPatterns: [],
+    }
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true, code: 'ready_work', focusTaskId: 'ready-task' },
+      tasks: [{ id: 'ready-task', title: 'Ready task', status: 'ready' }],
+      summaryTasks: [
+        {
+          id: 'ready-task',
+          title: 'Ready task',
+          status: 'ready',
+          productBrief: completeBrief,
+          spec: 'Implement it.',
+          acceptanceCriteria: [{}],
+        },
+        { id: 'waiting-task', title: 'Waiting task', status: 'ready', dependsOn: ['dependency'] },
+        { id: 'dependency', title: 'Dependency', status: 'in_progress' },
+        { id: 'done-task', title: 'Done task', status: 'pending_pr' },
+        { id: 'task-meta-intake', title: 'Setup', status: 'done' },
+      ],
+      runStatus: 'stopped',
+    })
+
+    expect(model.workSummary).toEqual({
+      total: 4,
+      agentActive: 0,
+      paused: 1,
+      waiting: 1,
+      reviewWaiting: 0,
+      gatesWaiting: 0,
+      shaping: 0,
+      specRevisionQueued: 0,
+      readyForWorker: 1,
+      needsSpecCleanup: 0,
+      awaitingApproval: 0,
+      done: 1,
+    })
+  })
+
   it('names brief review explicitly when shared readiness requires it', () => {
     const model = buildProjectActionModel({
       startReadiness: {

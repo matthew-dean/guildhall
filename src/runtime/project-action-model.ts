@@ -98,6 +98,21 @@ export interface ProjectActionTask {
   }
 }
 
+export interface ProjectWorkSummaryModel {
+  total: number
+  agentActive: number
+  paused: number
+  waiting: number
+  reviewWaiting: number
+  gatesWaiting: number
+  shaping: number
+  specRevisionQueued: number
+  readyForWorker: number
+  needsSpecCleanup: number
+  awaitingApproval: number
+  done: number
+}
+
 export interface ProjectActionThreadTurn {
   id: string
   kind?: string
@@ -179,6 +194,7 @@ export interface ProjectActionModel {
   runControl: ProjectRunControlModel
   ownerInput: ProjectOwnerInputModel
   setup: ProjectSetupModel
+  workSummary?: ProjectWorkSummaryModel
 }
 
 export interface BuildProjectActionModelInput {
@@ -186,12 +202,40 @@ export interface BuildProjectActionModelInput {
   ownerInput?: ProjectOwnerInputModel | null
   inbox?: { items?: ProjectActionInboxItem[] } | null
   tasks?: ProjectActionTask[]
+  summaryTasks?: ProjectActionTask[]
   thread?: ProjectActionThread | null
   scopeAuthorityRequests?: ProjectActionScopeAuthorityRequest[]
   runStatus?: string | null
   runMode?: string | null
   availability?: ProjectAvailabilityModel | null
   releaseLifecycleState?: string | null
+}
+
+function buildProjectWorkSummary(tasks: ProjectActionTask[], running: boolean): ProjectWorkSummaryModel {
+  const visible = tasks.filter(task =>
+    !['task-meta-intake', 'task-workspace-import'].includes(task.id) &&
+    !['archived', 'cancelled'].includes(task.status ?? ''),
+  )
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const waiting = (task: ProjectActionTask): boolean => {
+    const dependencies = task.dependsOn ?? []
+    return dependencies.length > 0 && dependencies.some(id => tasksById.get(id)?.status !== 'done')
+  }
+  const ready = visible.filter(task => task.status === 'ready' && !waiting(task))
+  return {
+    total: visible.length,
+    agentActive: visible.filter(task => running && ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
+    paused: visible.filter(task => !running && ['exploring', 'in_progress'].includes(task.status ?? '') && !waiting(task)).length,
+    waiting: visible.filter(waiting).length,
+    reviewWaiting: visible.filter(task => task.status === 'review' && !waiting(task)).length,
+    gatesWaiting: visible.filter(task => task.status === 'gate_check' && !waiting(task)).length,
+    shaping: visible.filter(task => running && ['import_draft', 'exploring'].includes(task.status ?? '') && !waiting(task)).length,
+    specRevisionQueued: 0,
+    readyForWorker: ready.filter(task => !needsBriefCleanup(task)).length,
+    needsSpecCleanup: ready.filter(needsBriefCleanup).length,
+    awaitingApproval: visible.filter(task => task.status === 'spec_review' && !waiting(task)).length,
+    done: visible.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
+  }
 }
 
 function hasApprovedProductBrief(task: ProjectActionTask): boolean {
@@ -525,7 +569,11 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     detail,
     buttonLabel: startReadinessButtonLabel(readiness),
     href: readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
-    tone: readiness.code === 'required_migration_pending' ? 'danger' : readiness.code === 'ready_work' ? 'accent' : 'warn',
+    tone: readiness.code === 'required_migration_pending'
+      ? 'danger'
+      : readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
+        ? 'accent'
+        : 'warn',
     code: readiness.code,
     ...(readiness.focusTaskId ? { taskId: readiness.focusTaskId } : {}),
   }
@@ -598,6 +646,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const shippedTerminal = input.releaseLifecycleState === 'shipped'
   const blockingInboxItem = setupBlockingInboxItem(inboxItems)
   const setup = setupModel(startReadiness, tasks, activeTurn, blockingInboxItem)
+  const workSummary = input.summaryTasks ? buildProjectWorkSummary(input.summaryTasks, running) : undefined
   if (shippedTerminal) {
     return {
       primaryAction: null,
@@ -611,6 +660,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
       },
       ownerInput: { active: false },
       setup: blockingInboxItem ? setup : { state: 'ready', freshIntakeNeeded: false },
+      ...(workSummary ? { workSummary } : {}),
     }
   }
   const setupBlocksStart = setup.state === 'blocked' && (tasks.length === 0 || blockingInboxItem !== null)
@@ -655,10 +705,13 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   // Start readiness owns whether work is runnable. Compact summaries omit
   // brief/spec detail, so task ranking must never reinterpret a ready item as
   // blocked or incomplete merely because that detail is intentionally absent.
-  if (startReadiness?.canStart && startReadiness.code === 'ready_work') {
+  if (
+    startReadiness?.canStart &&
+    (startReadiness.code === 'ready_work' || (startReadiness.code === 'paused_live_work' && !taskAction))
+  ) {
     candidates.push(startReadinessAction(startReadiness))
   }
-  if (running && startReadiness?.focusTaskId && !taskAction) {
+  if ((running || stopping) && startReadiness?.focusTaskId && !taskAction) {
     candidates.push({
       source: 'start_readiness',
       label: startReadiness.focusTaskTitle?.trim() || 'Current work',
@@ -738,6 +791,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     },
     ownerInput,
     setup,
+    ...(workSummary ? { workSummary } : {}),
   }
 }
 
@@ -768,6 +822,7 @@ export function resolveProjectActionModel(input: {
     return {
       ...resolved,
       setup: input.stored?.setup ?? resolved.setup,
+      ...(input.stored?.workSummary ? { workSummary: input.stored.workSummary } : {}),
     }
   }
   const hasResolvedReadiness = Boolean(

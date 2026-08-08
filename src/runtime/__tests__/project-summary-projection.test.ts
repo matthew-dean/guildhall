@@ -563,6 +563,36 @@ describe('project-summary-projection', () => {
     expect(projection.decision.primaryAction.targetId).toBe(projection.actionModel?.primaryAction?.taskId)
   })
 
+  it('projects Work summary counts from the full task inventory', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([
+        task('ready-task', 'ready'),
+        task('waiting-task', 'ready', { dependsOn: ['dependency-task'] }),
+        task('dependency-task', 'in_progress'),
+        task('done-task', 'pending_pr'),
+        task('task-meta-intake', 'done'),
+      ]),
+      generatedAt: now,
+      execution: { status: 'stopped', mode: 'continuous', updatedAt: now },
+    })
+
+    expect(projection.actionModel?.workSummary).toEqual({
+      total: 4,
+      agentActive: 0,
+      paused: 1,
+      waiting: 1,
+      reviewWaiting: 0,
+      gatesWaiting: 0,
+      shaping: 0,
+      specRevisionQueued: 0,
+      readyForWorker: 0,
+      needsSpecCleanup: 1,
+      awaitingApproval: 0,
+      done: 1,
+    })
+  })
+
   it('carries only compact structured source authority into the shared summary', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'narrative-harness',

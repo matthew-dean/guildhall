@@ -926,6 +926,7 @@ export function buildProjectSummaryProjection(
         : []),
       ...recentWork.map(task => ({ id: task.taskId, title: task.title, status: task.status })),
     ].filter((task, index, all) => all.findIndex(candidate => candidate.id === task.id) === index),
+    summaryTasks: tasks,
   })
   const decision = applyProjectActionModelPrimaryAction(initialDecision, actionModel.primaryAction)
 
@@ -1501,6 +1502,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
       : null,
     runStatus: base.execution?.status ?? 'stopped',
     tasks: indexedActionTasks(tasks, rowsByTaskId),
+    summaryTasks: indexedActionTasks(tasks, rowsByTaskId),
   })
   const decision = applyProjectActionModelPrimaryAction(initialDecision, actionModel.primaryAction)
   const scope = selectedRelease

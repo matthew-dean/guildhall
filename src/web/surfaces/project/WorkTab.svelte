@@ -278,11 +278,14 @@
     tasks: visibleTasks,
   } as ProjectDetail)
 
-  const taskCounts = $derived.by(() => {
+  const localTaskCounts = $derived.by(() => {
     const all = visibleTasks
+    const contextualTasks = workFilter === 'queued'
+      ? filterableTasks.filter(task => partFilter === 'all' || workAreaForTask(task).id === partFilter)
+      : all
     const running = detail.run?.status === 'running'
     const readyTasks = all.filter(task => task.status === 'ready' && !hasUnmetDependencies(task, tasks))
-    const stageCounts = all.reduce<Record<string, number>>((counts, task) => {
+    const stageCounts = contextualTasks.reduce<Record<string, number>>((counts, task) => {
       const key = taskPresentation(task).key
       counts[key] = (counts[key] ?? 0) + 1
       return counts
@@ -302,6 +305,7 @@
       done: all.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
     }
   })
+  const taskCounts = $derived(detail.actionModel?.workSummary ?? localTaskCounts)
   const scopeVisibleCounts = $derived.by(() => {
     return visibleTasks.reduce(
       (counts, task) => {

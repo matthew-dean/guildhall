@@ -441,6 +441,78 @@ describe('ProjectOverviewTab', () => {
     expect(document.querySelectorAll('.signal-row.is-dense').length).toBe(document.querySelectorAll('.signal-row').length)
   })
 
+  it('does not infer completed release work when unfinishedCount is absent and legacy done is incomplete', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'legacy-project',
+        name: 'Legacy project',
+        path: '/tmp/legacy-project',
+        tasks: [],
+        actionModel: actionModel(null),
+        releaseReadiness: {
+          release: { id: 'release-1', label: 'Release 1', kind: 'release', state: 'active', source: 'release_plan' },
+          scope: { id: 'release-1', label: 'Release 1', kind: 'release', state: 'active', source: 'release_plan' },
+          ready: false,
+          totals: { tasks: 3, done: 2, humanBlockingCount: 0 },
+          gitStory: {
+            ready: false,
+            state: 'ahead_unpushed',
+            blockers: [{
+              id: 'repo:legacy-project',
+              label: 'Repository follow-up',
+              state: 'ahead_unpushed',
+              reason: 'One local commit is not pushed.',
+            }],
+            snapshots: [],
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: { label: 'Not running', actorLabel: 'Guildhall', message: 'Work remains.', tone: 'idle', pulse: false },
+      activeProjectId: 'legacy-project',
+    })
+
+    expect(screen.getByText('Not complete')).toBeInTheDocument()
+    expect(screen.queryByText('One local commit is not pushed.')).not.toBeInTheDocument()
+  })
+
+  it('accepts legacy release totals when done covers every task', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'legacy-project',
+        name: 'Legacy project',
+        path: '/tmp/legacy-project',
+        tasks: [],
+        actionModel: actionModel(null),
+        releaseReadiness: {
+          release: { id: 'release-1', label: 'Release 1', kind: 'release', state: 'active', source: 'release_plan' },
+          scope: { id: 'release-1', label: 'Release 1', kind: 'release', state: 'active', source: 'release_plan' },
+          ready: false,
+          totals: { tasks: 3, done: 3, humanBlockingCount: 0 },
+          gitStory: {
+            ready: false,
+            state: 'ahead_unpushed',
+            blockers: [{
+              id: 'repo:legacy-project',
+              label: 'Repository follow-up',
+              state: 'ahead_unpushed',
+              reason: 'One local commit is not pushed.',
+            }],
+            snapshots: [],
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: { label: 'Not running', actorLabel: 'Guildhall', message: 'Work is complete.', tone: 'idle', pulse: false },
+      activeProjectId: 'legacy-project',
+    })
+
+    expect(screen.getByText('Work complete')).toBeInTheDocument()
+    expect(screen.getAllByText('One local commit is not pushed.').length).toBeGreaterThan(0)
+  })
+
   it('renders a shipped release as one calm receipt without pre-ship dashboard sections', () => {
     render(ProjectOverviewTab, {
       detail: {
@@ -663,6 +735,58 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByRole('heading', { name: 'Blocked work' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Floating toolbar/i })).not.toBeInTheDocument()
     expect(screen.queryByText('Old unrelated blocked work.')).not.toBeInTheDocument()
+  })
+
+  it('ignores stale blocker metadata on terminal work', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'terminal-blockers',
+        name: 'Terminal blockers',
+        path: '/tmp/terminal-blockers',
+        actionModel: actionModel(null),
+        tasks: [
+          { id: 'done-task', title: 'Done task', status: 'done', blockReason: 'Stale done blocker.' },
+          { id: 'pending-task', title: 'Pending PR task', status: 'pending_pr', blockReason: 'Stale pending blocker.' },
+          { id: 'shelved-task', title: 'Shelved task', status: 'shelved', blockReason: 'Stale shelved blocker.' },
+          { id: 'blocked-task', title: 'Current blocker', status: 'blocked', blockReason: 'Still blocked.' },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: { label: 'Not running', actorLabel: 'Guildhall', message: 'Work is blocked.', tone: 'idle', pulse: false },
+      activeProjectId: 'terminal-blockers',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Blocked work' })).toBeInTheDocument()
+    expect(screen.getAllByText('Still blocked.').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Stale done blocker.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Stale pending blocker.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Stale shelved blocker.')).not.toBeInTheDocument()
+  })
+
+  it('does not recreate a stale start-readiness action when the shared model has no primary action', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'shared-action-owner',
+        name: 'Shared action owner',
+        path: '/tmp/shared-action-owner',
+        tasks: [],
+        startReadiness: {
+          canStart: false,
+          code: 'repository_followup_required',
+          message: 'Stale repository follow-up.',
+          actionHref: '/release',
+        },
+        actionModel: actionModel(null),
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: { label: 'Complete', actorLabel: 'Guildhall', message: 'No action remains.', tone: 'idle', pulse: false },
+      activeProjectId: 'shared-action-owner',
+    })
+
+    expect(screen.getByRole('heading', { name: 'No action required' })).toBeInTheDocument()
+    expect(screen.queryByText('Stale repository follow-up.')).not.toBeInTheDocument()
   })
 
   it('does not call a release-less current scope a release in overview actions', () => {

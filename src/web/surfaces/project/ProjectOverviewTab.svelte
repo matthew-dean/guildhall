@@ -118,11 +118,12 @@
   )
   const releaseReadinessActionLabel = $derived(releaseReadinessTitle === 'Current release' ? 'Open release' : 'Open scope')
   const releaseCompletion = $derived(releaseCompletionSummary(releaseReadiness))
-  const releaseWorkComplete = $derived(Boolean(
-    releaseReadiness?.totals &&
-    (releaseReadiness.totals.tasks ?? 0) > 0 &&
-    (releaseReadiness.totals.unfinishedCount ?? 0) === 0,
-  ))
+  const releaseWorkComplete = $derived.by(() => {
+    const totals = releaseReadiness?.totals
+    if (!totals || (totals.tasks ?? 0) <= 0) return false
+    if (typeof totals.unfinishedCount === 'number') return totals.unfinishedCount === 0
+    return typeof totals.done === 'number' && totals.done >= (totals.tasks ?? 0)
+  })
   const releaseReadinessProgress = $derived(releaseCompletion?.detail ?? releaseReadiness?.notReadyReason ?? 'Open Release for the current scope check.')
   const releaseReadinessChipLabel = $derived(releaseCompletion?.label ?? 'Not complete')
   const releaseReadinessChipTone = $derived<Tone>(releaseCompletion?.tone === 'ok' ? 'ok' : releaseCompletion?.tone === 'warn' ? 'warn' : 'neutral')
@@ -648,7 +649,9 @@
         action: shared.code === 'required_migration_pending' ? 'migration' as NextActionKind : 'navigate' as NextActionKind,
       }
     }
-    const readiness = detail.startReadiness
+    // Compatibility only for pre-action-model payloads. Current project reads
+    // must not turn stale transport readiness into a second action authority.
+    const readiness = detail.actionModel ? null : detail.startReadiness
     if (readiness) {
       return {
         label: readiness.focusTaskTitle ?? startReadinessLabel(readiness.code),
@@ -727,6 +730,7 @@
   })
 
   function taskHasActionableBlocker(task: Task): boolean {
+    if (['done', 'pending_pr', 'shelved'].includes(task.status ?? '')) return false
     return task.status === 'blocked' || activeEscalations(task).length > 0 || (Boolean(task.blockReason) && !isRunnableStatus(task.status))
   }
 
