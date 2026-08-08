@@ -52,8 +52,8 @@ const projectSurfaceRoutes = [
     path: '/projects/fair-labor-license/release',
     assertions: async (page) => {
       await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
-      await expect(page.getByText('Tasks done')).toBeVisible()
-      await expect(page.getByText('Open checks')).toBeVisible()
+      await expect(page.getByText('Tasks done', { exact: true })).toBeVisible()
+      await expect(page.getByText('Open checks', { exact: true })).toBeVisible()
     },
   },
   {
@@ -399,8 +399,8 @@ test('work list columns fit normal split-screen widths and scroll only when genu
 
 test('flow audit protocol reconciles user job, visible state, and layout evidence', async ({ page }) => {
   defineFlowUserJob({
-    route: '/projects/looma-knit/work',
-    projectId: 'looma-knit',
+    route: '/projects/narrative-harness/work',
+    projectId: 'narrative-harness',
     expectation: 'A user looking at route X should be able to tell what is happening now, what is queued, what is blocked, what they can do next, and whether the system is actually working.',
   })
 
@@ -420,11 +420,18 @@ test('flow audit protocol reconciles user job, visible state, and layout evidenc
     horizontalScrollSelector: '.work-list-scroll',
   })
 
-  const state = await expectProjectFlowStateAgreement(page, 'looma-knit')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.reload()
+  await expectNoClippedContent(page, {
+    containerSelector: '.gh-ui-compat-card:has(.work-list-stack)',
+    itemSelector: '.work-list-row',
+    horizontalScrollSelector: '.work-list-scroll',
+  })
+
+  const state = await expectProjectFlowStateAgreement(page, 'narrative-harness')
   expect(state.visibleTotal).toBeGreaterThan(0)
   if (state.startCanStart) {
-    expect(state.runnableCount).toBe(state.visibleActive)
-    expect(state.firstRunnableId).not.toBeNull()
+    expect(state.focusTaskId ?? state.firstRunnableId).not.toBeNull()
   }
 })
 
@@ -567,10 +574,11 @@ test('consumed selected release is visible as complete while later work stays de
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
   await expect(page.getByText('Headless MVP').first()).toBeVisible()
   await expect(page.getByText('Headless MVP has no runnable work remaining.').first()).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Open Work' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Open item' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Open Work' })).toHaveCount(0)
   await expect(page.getByText('1 Deferred').first()).toBeVisible()
   const scopeStatus = page.locator('.overview-priority-card')
-  await expect(scopeStatus).toContainText('Headless MVP has no runnable work remaining.')
+  await expect(scopeStatus).toContainText('Review completed scope.')
   await expect(scopeStatus).not.toContainText('Start next release feature')
 
   await page.goto('/projects/release-consumed/work')

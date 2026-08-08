@@ -3119,6 +3119,22 @@ describe('ThreadTab', () => {
     expect(path.value).toContain('/thread')
   })
 
+  it('replaces raw task ids in the spec preview with owner-facing references', async () => {
+    const referencedTaskId = 'task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth'
+    installFetchFakes([
+      specReviewTurn('task-link-controls', {
+        spec: `## Context\nThe contracts task (${referencedTaskId}) is already complete.`,
+      }),
+    ], 'spec-task-link-controls')
+
+    render(ThreadTab, { projectId: 'narrative-harness' })
+
+    await userEvent.click(await screen.findByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    expect(within(dialog).queryByText(new RegExp(referencedTaskId))).toBeNull()
+    expect(within(dialog).getByText(/The contracts task \(NAR-[A-Z0-9]{6}\) is already complete\./)).toBeTruthy()
+  })
+
   it('renders normal spec_review component work as owner approval', async () => {
     const { calls } = installFetchFakes([
       specReviewTurn('task-combobox', { taskTitle: 'Combobox' }),

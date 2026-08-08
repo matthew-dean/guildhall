@@ -7,7 +7,7 @@
   import Row from '../../lib/Row.svelte'
   import Stack from '../../lib/Stack.svelte'
   import { friendlyDomain, friendlyPriority } from '../../lib/display.js'
-  import { labelForIdentifier } from '../../lib/identifier-labels.js'
+  import { humanizeRuntimeText, labelForIdentifier, taskDisplayKey, taskTitleMap } from '../../lib/identifier-labels.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
   import { roleLabel } from '../../lib/escalation-labels.js'
   import { readableTaskDescription } from '../../lib/task-display.js'
@@ -43,7 +43,13 @@
   const requestIntake = $derived(task.requestIntake ?? null)
   const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
   const plannedChildren = $derived(projectDerivedRecommendedChildren(task))
-  const taskDescription = $derived(readableTaskDescription(task.description, task.title) || '(no description)')
+  const taskDescription = $derived(
+    humanizeRuntimeText(
+      readableTaskDescription(task.description, task.title) || '(no description)',
+      taskTitleMap([task, ...tasks]),
+      projectId,
+    ),
+  )
   const createdChildren = $derived(plannedChildren.filter((child) => child.createdTaskId))
   const taskById = $derived(new Map([task, ...tasks].filter((candidate): candidate is Task => Boolean(candidate?.id)).map(candidate => [candidate.id, candidate])))
   const statusPresentation = $derived(taskStagePresentation(task, { tasks: [task, ...tasks] }))
@@ -132,7 +138,7 @@
   }
 
   function taskLabel(taskId: string): string {
-    return taskById.get(taskId)?.title?.trim() || taskId
+    return taskById.get(taskId)?.title?.trim() || taskDisplayKey(taskId, [task, ...tasks], projectId)
   }
 
   function primitiveLabel(primitive: PrimitiveSummary): string {

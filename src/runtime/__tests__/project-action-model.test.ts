@@ -45,6 +45,100 @@ describe('buildProjectActionModel', () => {
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
+  it('makes a hard setup inbox item the shared action and start blocker', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-synopsis',
+        focusTaskTitle: 'Build synopsis expansion',
+      },
+      inbox: {
+        items: [{
+          kind: 'bootstrap_missing',
+          severity: 'high',
+          title: 'Bootstrap incomplete',
+          detail: 'Verify install and gate commands before agents run.',
+          actionHref: '/settings/ready',
+        }],
+      },
+      tasks: [{ id: 'task-synopsis', title: 'Build synopsis expansion', status: 'in_progress' }],
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'inbox',
+      label: 'Verify your bootstrap commands',
+      buttonLabel: 'Open readiness checks',
+      href: '/settings/ready',
+    })
+    expect(model.runControl).toMatchObject({
+      label: 'Waiting on setup',
+      startEnabled: false,
+      pauseEnabled: false,
+      disabledReason: 'Verify install and gate commands before agents run.',
+    })
+  })
+
+  it('does not reopen setup urgency after a release shipped', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'The selected release has no runnable work remaining.',
+      },
+      releaseLifecycleState: 'shipped',
+      inbox: {
+        items: [{
+          kind: 'bootstrap_missing',
+          severity: 'high',
+          title: 'Bootstrap incomplete',
+          actionHref: '/settings/ready',
+        }],
+      },
+    })
+
+    expect(model.primaryAction).toBeNull()
+    expect(model.secondaryActions).toEqual([])
+    expect(model.setup.state).toBe('ready')
+    expect(model.ownerInput.active).toBe(false)
+    expect(model.runControl).toMatchObject({
+      label: 'Release shipped',
+      startEnabled: false,
+      pauseEnabled: false,
+    })
+  })
+
+  it('keeps a shipped release terminal even when stale migration and owner-input state remain', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'A project migration is required.',
+        actionHref: '/migrations',
+      },
+      releaseLifecycleState: 'shipped',
+      ownerInput: {
+        active: true,
+        label: 'Answer in Thread',
+        href: '/thread',
+      },
+      inbox: {
+        items: [{
+          kind: 'required_migration',
+          severity: 'high',
+          title: 'Migrate project',
+          actionHref: '/migrations',
+        }],
+      },
+    })
+
+    expect(model.primaryAction).toBeNull()
+    expect(model.secondaryActions).toEqual([])
+    expect(model.ownerInput).toEqual({ active: false })
+    expect(model.setup).toEqual({ state: 'ready', freshIntakeNeeded: false })
+    expect(model.runControl.label).toBe('Release shipped')
+  })
+
   it('resolves a stale persisted task action from shared ready-work state', () => {
     const model = resolveProjectActionModel({
       stored: {
@@ -82,6 +176,51 @@ describe('buildProjectActionModel', () => {
     })
     expect(model.primaryAction?.detail).toBeUndefined()
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
+  })
+
+  it('drops persisted release-review actions after the release shipped', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Review completed scope.',
+          buttonLabel: 'Open item',
+          href: '/overview',
+          tone: 'warn',
+          code: 'release_ready',
+        },
+        secondaryActions: [{
+          source: 'task',
+          label: 'Out-of-scope follow-up',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-later',
+          tone: 'accent',
+          taskId: 'task-later',
+        }],
+        runControl: { label: 'Start blocked', startEnabled: false },
+        ownerInput: { active: false },
+        setup: {
+          state: 'blocked',
+          freshIntakeNeeded: false,
+          href: '/settings/ready',
+          detail: 'Stale setup failure.',
+        },
+      },
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'The selected release has no runnable work remaining.',
+      },
+      releaseLifecycleState: 'shipped',
+    })
+
+    expect(model.primaryAction).toBeNull()
+    expect(model.secondaryActions).toEqual([])
+    expect(model.runControl).toMatchObject({
+      label: 'Release shipped',
+      startEnabled: false,
+    })
+    expect(model.setup).toEqual({ state: 'ready', freshIntakeNeeded: false })
   })
 
   it('does not let a contradictory ready-work hint override the shared readiness authority', () => {
@@ -238,6 +377,7 @@ describe('buildProjectActionModel', () => {
     expect(repositoryFollowup.runControl).toMatchObject({
       label: 'Repo follow-up',
       startEnabled: false,
+      pauseEnabled: true,
     })
 
     const sourceConflict = buildProjectActionModel({
@@ -347,8 +487,9 @@ describe('buildProjectActionModel', () => {
       availability: { status: 'paused' },
     })
     expect(pausedSpecReview.runControl).toMatchObject({
-      label: 'Review needed',
-      startEnabled: false,
+      label: 'Resume',
+      startEnabled: true,
+      pauseEnabled: false,
     })
 
     const provider = buildProjectActionModel({
@@ -405,7 +546,14 @@ describe('buildProjectActionModel', () => {
       thread: { turns: [], activeTurnId: null },
       runStatus: 'stopped',
     })
-    expect(terminal.primaryAction).toBeNull()
+    expect(terminal.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Release is ready',
+      detail: 'All tasks are already finished.',
+      buttonLabel: 'Open Release',
+      href: '/release',
+      code: 'release_ready',
+    })
     expect(terminal.runControl).toMatchObject({
       label: 'No runnable tasks',
       startEnabled: false,

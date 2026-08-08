@@ -208,8 +208,8 @@ export async function discoverServiceRuntimeState(
   home = homedir(),
 ): Promise<ServiceRuntimeState | null> {
   const recorded = readServiceRuntimeState(home)
-  if (recorded && isPidAlive(recorded.pid)) return recorded
-  if (recorded && !isPidAlive(recorded.pid)) clearServiceRuntimeState(home)
+  if (recorded && recorded.port === port && isPidAlive(recorded.pid)) return recorded
+  if (recorded) clearServiceRuntimeState(home)
 
   const live = await probeLiveService(port)
   if (live) {
@@ -977,10 +977,14 @@ function singleModelAssignment(model: string) {
   }
 }
 
-async function waitForServiceReady(home = homedir(), attempts = 40): Promise<ServiceRuntimeState> {
+export async function waitForServiceReady(
+  port = DEFAULT_DASHBOARD_PORT,
+  home = homedir(),
+  attempts = 40,
+): Promise<ServiceRuntimeState> {
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const state = readServiceRuntimeState(home)
-    if (state && isPidAlive(state.pid)) return state
+    const state = await discoverServiceRuntimeState(port, home)
+    if (state) return state
     await new Promise(resolve => setTimeout(resolve, 150))
   }
   throw new Error('Guildhall service did not become ready in time.')
@@ -1011,7 +1015,7 @@ async function ensureServiceRunning(intent: ServiceLifecycleIntent): Promise<Ser
   })
   child.unref()
 
-  return waitForServiceReady()
+  return waitForServiceReady(intent.port)
 }
 
 async function cmdServe() {

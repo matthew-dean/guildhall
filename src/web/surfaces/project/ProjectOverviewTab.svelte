@@ -102,6 +102,7 @@
   const releaseRoadmap = $derived(orientationSpine?.releases ?? (orientationSpine?.selectedRelease ? [orientationSpine.selectedRelease] : []))
   const laterReleaseCount = $derived(releaseRoadmap.filter(release => release.id !== orientationSpine?.selectedRelease?.id).length)
   const releaseReadiness = $derived(detail.releaseReadiness ?? null)
+  const releaseShipped = $derived(releaseReadiness?.release?.state === 'shipped')
   const releaseReadinessLabel = $derived(
     releaseReadiness?.release?.label ??
     releaseReadiness?.scope?.label ??
@@ -178,14 +179,6 @@
     const blocker = orientationSpine?.summary?.topBlocker
     if (!blocker) return null
     return typeof blocker === 'string' ? { label: blocker } : blocker
-  })
-  const orientationHasSourceConflict = $derived(orientationSpine?.gaps?.some(gap => gap.kind === 'source_conflict') ?? false)
-  const orientationNextAction = $derived.by(() => {
-    const action = orientationSpine?.summary?.nextAction
-    if (!action) return null
-    return typeof action === 'string'
-      ? { label: action, href: currentProjectHref(orientationHasSourceConflict ? '/map' : '/work', activeProjectId) }
-      : action
   })
   const orientationGap = $derived(orientationSpine?.gaps?.find(gap => gap.severity === 'high' || gap.kind === 'missing_charter' || gap.kind === 'source_conflict') ?? orientationSpine?.gaps?.[0] ?? null)
   const orientationScopeLabel = $derived(orientationSpine?.summary?.selectedScopeLabel ?? orientationSpine?.selectedTaskScope?.label ?? orientationSpine?.scope?.label ?? orientationSpine?.summary?.selectedReleaseLabel ?? orientationSpine?.selectedRelease?.label ?? 'Current task scope')
@@ -324,10 +317,6 @@
     return 'ok'
   })
 
-  function orientationActionButtonLabel(href: string | undefined): string {
-    return href?.includes('/map') ? 'Open map' : 'Open Work'
-  }
-
   const orientationMapStatus = $derived.by(() => {
     if (!orientationSpine) return 'No project spine has been generated yet.'
     const roots = orientationSpine.roots?.length ?? 0
@@ -412,18 +401,6 @@
         tooltip: `${orientationDeferredCount} work items are documented for later scope.`,
       },
     ].filter(segment => segment.count > 0)
-  })
-
-  const activeTask = $derived.by(() => {
-    const priority = ['in_progress', 'review', 'gate_check', 'blocked', 'spec_review', 'ready', 'exploring', 'import_draft']
-    return [...currentScopeTasks]
-      .filter(task => priority.includes(task.status ?? ''))
-      .sort((left, right) => {
-        const a = priority.indexOf(left.status ?? '')
-        const b = priority.indexOf(right.status ?? '')
-        if (a !== b) return a - b
-        return (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '')
-      })[0] ?? null
   })
 
   const movingTasks = $derived.by(() => {
@@ -614,16 +591,6 @@
 
   const nextAction = $derived.by(() => {
     const shared = detail.actionModel?.primaryAction
-    if (scopedWorkComplete) {
-      return {
-        label: detail.startReadiness?.message ?? orientationSpine?.summary?.headline ?? 'Selected scope is complete.',
-        detail: 'All scoped work is terminal. Open Work to inspect completed and deferred items.',
-        button: 'Open Work',
-        href: currentProjectHref('/work', activeProjectId),
-        tone: 'neutral' as Tone,
-        action: 'navigate' as NextActionKind,
-      }
-    }
     if (shared) {
       return {
         label: shared.label ?? 'Open Work',
@@ -643,86 +610,9 @@
         action: shared.code === 'required_migration_pending' ? 'migration' as NextActionKind : 'navigate' as NextActionKind,
       }
     }
-    if (detail.startReadiness?.code === 'required_migration_pending') {
-      return {
-        label: 'Required migration',
-        detail: detail.startReadiness.message ?? 'Run the required migration before this project can update.',
-        button: 'Migrate project',
-        href: '/migrations',
-        tone: 'danger' as Tone,
-        action: 'migration' as NextActionKind,
-      }
-    }
-    if (detail.startReadiness?.canStart === false) {
-      const href = detail.startReadiness.actionHref ?? currentProjectHref('/overview', activeProjectId)
-      const matchingInbox = inboxItems.find(item => item.severity !== 'low' && item.actionHref === href)
-      return {
-        label: detail.startReadiness.message ?? matchingInbox?.title ?? startReadinessLabel(detail.startReadiness.code),
-        detail: matchingInbox?.detail ?? 'Resolve this before Start can move work.',
-        content: matchingInbox?.taskDescription,
-        button: matchingInbox ? inboxActionLabel(matchingInbox) : 'Open item',
-        href,
-        tone: matchingInbox?.severity === 'high' ? 'danger' as Tone : 'warn' as Tone,
-        action: 'navigate' as NextActionKind,
-      }
-    }
-    const inbox = actionableInbox[0]
-    if (inbox) {
-      return {
-        label: inbox.title,
-        detail: inbox.detail,
-        content: inbox.taskDescription,
-        button: inboxActionLabel(inbox),
-        href: inbox.actionHref ?? '/thread',
-        tone: inbox.severity === 'high' ? 'danger' as Tone : 'warn' as Tone,
-        action: 'navigate' as NextActionKind,
-      }
-    }
-    if (orientationNextAction) {
-      return {
-        label: orientationNextAction.label,
-        detail: orientationNextAction.reason ?? orientationTopBlocker?.label ?? orientationGap?.label ?? 'Open the work list to review the next task.',
-        button: orientationActionButtonLabel(orientationNextAction.href),
-        href: orientationNextAction.href ?? currentProjectHref('/work', activeProjectId),
-        tone: orientationTopBlocker || orientationGap ? 'warn' as Tone : 'accent' as Tone,
-        action: 'navigate' as NextActionKind,
-      }
-    }
-    if (activeTask?.status === 'blocked') {
-      return {
-        label: taskLabel(activeTask),
-        detail: activeTask.blockReason ? friendlyBlockerText(activeTask.blockReason) : 'This task needs recovery or a decision.',
-        button: 'Open task',
-        href: currentTaskHref(activeTask.id, activeProjectId),
-        tone: 'warn' as Tone,
-        action: 'navigate' as NextActionKind,
-      }
-    }
-    if (activeTask?.status === 'spec_review') {
-      return {
-        label: taskLabel(activeTask),
-        detail: 'A spec is ready for review.',
-        button: 'Review in Thread',
-        href: currentProjectHref('/thread', activeProjectId),
-        tone: 'warn' as Tone,
-        action: 'navigate' as NextActionKind,
-      }
-    }
-    if (activeTask) {
-      const label = taskLabel(activeTask)
-      const detailText = statusDetail(activeTask)
-      return {
-        label,
-        detail: detailText === label ? taskPresentation(activeTask).label : detailText,
-        button: 'Open work',
-        href: currentProjectHref('/work', activeProjectId),
-        tone: running ? 'running' as Tone : 'accent' as Tone,
-        action: 'navigate' as NextActionKind,
-      }
-    }
     return {
-      label: 'Nothing needs your answer',
-      detail: 'Guildhall does not see a blocking owner decision right now.',
+      label: 'No action required',
+      detail: 'Guildhall does not have a current next action for this project.',
       button: 'Open Work',
       href: currentProjectHref('/work', activeProjectId),
       tone: 'neutral' as Tone,
@@ -738,7 +628,7 @@
           ? 'Needs attention'
           : 'Ready',
   )
-  const showHeroStatus = $derived(!orientationOnly && nextAction.tone !== 'warn' && nextAction.tone !== 'danger')
+  const showHeroStatus = $derived(!releaseShipped && !orientationOnly && nextAction.tone !== 'warn' && nextAction.tone !== 'danger')
 
   function inboxActionLabel(item: InboxItem): string {
     switch (item.kind) {
@@ -1127,6 +1017,20 @@
     {/if}
   </section>
 
+  {#if releaseShipped}
+    <section class="shipped-overview" aria-label="Current release">
+      <Card title="Current release" titleTag="h2" tone="ok" variant="callout" railStrength="strong" className="overview-card">
+        <div class="shipped-summary">
+          <Icon name="check-circle-2" size={24} />
+          <div>
+            <strong>{releaseReadinessLabel}</strong>
+            <p>{releaseReadinessProgress}. This release is complete and recorded as shipped.</p>
+          </div>
+          <Chip label="Shipped" tone="ok" />
+        </div>
+      </Card>
+    </section>
+  {:else}
   <section class="overview-orientation" aria-label="Project orientation">
     <div class="orientation-primary-stack">
       <Card title={nextActionCardTitle} titleTag="h2" tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'accent'} variant="callout" railStrength="strong" className="overview-card overview-priority-card">
@@ -1431,6 +1335,7 @@
       </Card>
     </section>
   {/if}
+  {/if}
 </div>
 
 <style>
@@ -1440,6 +1345,19 @@
     gap: var(--s-4);
     padding: var(--s-4) var(--s-4) var(--s-6);
     min-width: 0;
+  }
+  .shipped-overview {
+    min-width: 0;
+  }
+  .shipped-summary {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: var(--gh-space-3);
+    align-items: center;
+  }
+  .shipped-summary p {
+    margin: var(--gh-space-1) 0 0;
+    color: var(--text-muted);
   }
   .hero {
     display: grid;
@@ -1750,6 +1668,13 @@
     }
     h1 {
       font-size: var(--gh-type-size-page-title);
+    }
+    .shipped-summary {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+    .shipped-summary :global(.chip) {
+      grid-column: 2;
+      justify-self: start;
     }
     :global(.live-card) small {
       grid-column: 2;

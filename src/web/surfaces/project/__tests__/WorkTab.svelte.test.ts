@@ -71,6 +71,41 @@ describe('WorkTab', () => {
     cleanup()
   })
 
+  it('does not dump completed scope rows into the default shipped-release view', async () => {
+    const projectDetail = detail([
+      task({ id: 'task-done-a', title: 'Finished A', status: 'done' }),
+      task({ id: 'task-done-b', title: 'Finished B', status: 'done' }),
+    ], {
+      releaseSummary: {
+        release: { id: 'release-1', label: 'Release 1', state: 'shipped' },
+        counts: { total: 2, done: 2, unfinished: 0 },
+      },
+      orientationSpine: {
+        scopeRows: [
+          { taskId: 'task-done-a', scope: 'included' },
+          { taskId: 'task-done-b', scope: 'included' },
+        ],
+      },
+    })
+    const rendered = render(WorkTab, {
+      props: {
+        detail: projectDetail,
+      },
+    })
+
+    expect(await screen.findByText('Release work is complete.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /inspect work finished/i })).toBeNull()
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('open')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show completed work' }))
+    expect(await screen.findByRole('button', { name: /inspect work finished a/i })).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
+
+    await rendered.rerender({ detail: { ...projectDetail, run: { status: 'stopped', mode: 'continuous' } } })
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
+    expect(await screen.findByRole('button', { name: /inspect work finished a/i })).toBeTruthy()
+  })
+
   it('sorts tasks by user-selected columns and opens tasks from mouse and keyboard', async () => {
     render(WorkTab, {
       props: {

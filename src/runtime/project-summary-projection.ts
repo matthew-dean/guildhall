@@ -838,7 +838,10 @@ export function buildProjectSummaryProjection(
   const initialDecision = buildProjectDecisionProjection({
     generatedAt,
     start,
-    release: releaseSummary,
+    release: {
+      ...releaseSummary,
+      ...(releaseSummary.release?.state ? { lifecycleState: releaseSummary.release.state } : {}),
+    },
     ownerInput: input.ownerInput,
     ownerReview,
     runStatus: input.execution?.status ?? 'stopped',
@@ -848,7 +851,10 @@ export function buildProjectSummaryProjection(
   // Start readiness remains an execution fact. The summary action is what a
   // person should do next, so a finished release must not surface the stale
   // "no runnable work" transport message as though more work were expected.
-  const releaseReadyForReview = releaseSummary.state === 'ready' && start.code === 'all_terminal'
+  const releaseReadyForReview =
+    releaseSummary.state === 'ready' &&
+    start.code === 'all_terminal' &&
+    releaseSummary.release?.state !== 'shipped'
   const decisionStart = projectDecisionStartReadiness(initialDecision)
   const nextAction: ProjectSummaryProjection['nextAction'] = releaseReadyForReview
     ? {
@@ -1409,7 +1415,10 @@ export function buildProjectSummaryProjectionFromIndexedState(
     queueRevision: current.queueRevision,
     generatedAt,
     start,
-    release: releaseSummary,
+    release: {
+      ...releaseSummary,
+      ...(releaseSummary.release?.state ? { lifecycleState: releaseSummary.release.state } : {}),
+    },
     ownerInput: base.ownerInput,
     ownerReview,
     runStatus: base.execution?.status ?? 'stopped',
@@ -1425,7 +1434,11 @@ export function buildProjectSummaryProjectionFromIndexedState(
     ...(typeof decisionStart.count === 'number' ? { count: decisionStart.count } : {}),
     ...(ownerReview?.taskIds.length ? { reviewTaskIds: [...ownerReview.taskIds] } : {}),
   }
-  if (releaseSummary.state === 'ready' && start.code === 'all_terminal') {
+  if (
+    releaseSummary.state === 'ready' &&
+    start.code === 'all_terminal' &&
+    releaseSummary.release?.state !== 'shipped'
+  ) {
     nextAction = {
       code: 'release_ready',
       label: 'Review project state',

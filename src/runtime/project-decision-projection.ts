@@ -708,6 +708,7 @@ export interface ProjectDecisionProjection {
   execution: ProjectDecisionExecution
   release: {
     state: 'ready' | 'not_ready' | 'unavailable' | 'conflicted'
+    lifecycleState?: string
     releaseId?: string
     blockerTaskIds: string[]
     proofBlockerTaskIds: string[]
@@ -731,6 +732,7 @@ export interface ProjectDecisionProjectionInput {
     scopeMode: 'named_release' | 'unreleased' | 'unavailable'
     state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
     release: { id: string } | null
+    lifecycleState?: string
     blockers: Array<{ owningTaskId?: string; code?: string }>
   }
   ownerInput?: { openCount: number; next?: { id: string; taskId?: string } | null } | null
@@ -910,7 +912,9 @@ function primaryActionForDecision(input: {
   release: ProjectDecisionProjection['release']
 }): ProjectDecisionProjection['primaryAction'] {
   const { conflicts, ownerInput, ownerReview, execution, release } = input
-  return conflicts.length > 0
+  return release.lifecycleState === 'shipped'
+    ? { kind: 'none' as const, reasonCode: 'release_shipped' }
+    : conflicts.length > 0
     ? { kind: 'resolve_conflict' as const, targetId: conflicts[0]!.id, reasonCode: 'state_conflict' }
     : ownerInput.state === 'required'
       ? { kind: 'answer_owner_input' as const, targetId: ownerInput.requestId, reasonCode: 'owner_input_required' }
@@ -922,7 +926,7 @@ function primaryActionForDecision(input: {
           ? { kind: 'resume' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
           : execution.state === 'running'
             ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
-            : execution.state === 'complete' && release.state === 'ready'
+            : execution.state === 'complete' && release.state === 'ready' && release.lifecycleState !== 'shipped'
               ? { kind: 'review_release' as const, targetId: release.releaseId, reasonCode: 'release_ready' }
               : release.proofBlockerTaskIds.length > 0
                 ? { kind: 'review_proof' as const, targetId: release.proofBlockerTaskIds[0], reasonCode: 'proof_evidence_missing' }
@@ -943,7 +947,11 @@ export function applyProjectActionModelPrimaryAction(
   } | null | undefined,
 ): ProjectDecisionProjection {
   if (!action || decision.conflicts.length > 0 || decision.ownerInput.state === 'required' || decision.ownerReview.state === 'required') return decision
-  if (decision.execution.state === 'complete' && decision.release.state === 'ready') return decision
+  if (
+    decision.execution.state === 'complete' &&
+    decision.release.state === 'ready' &&
+    decision.release.lifecycleState !== 'shipped'
+  ) return decision
   const taskId = action.taskId?.trim()
   if (!taskId) return decision
   const kind = action.source === 'owner_input'
@@ -1052,6 +1060,7 @@ export function buildProjectDecisionProjection(input: ProjectDecisionProjectionI
           ? 'ready' as const
           : 'not_ready' as const,
     ...(input.release.release?.id ? { releaseId: input.release.release.id } : {}),
+    ...(input.release.lifecycleState ? { lifecycleState: input.release.lifecycleState } : {}),
     blockerTaskIds,
     proofBlockerTaskIds,
   }

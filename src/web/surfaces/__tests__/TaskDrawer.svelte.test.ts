@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import { readFileSync } from 'node:fs'
 import TaskDrawer from '../TaskDrawer.svelte'
+import { taskDisplayKey } from '../../lib/identifier-labels.js'
 import { path } from '../../lib/nav.svelte.js'
 import { project } from '../../lib/project.svelte.js'
 import type { DrawerPayload, ProjectDetail } from '../../lib/types.js'
@@ -242,7 +243,7 @@ describe('TaskDrawer', () => {
       'href',
       '/projects/looma-knit/overview',
     )
-    expect(screen.getByText('T-001')).toBeInTheDocument()
+    expect(screen.getByText(taskDisplayKey('task-link-editor', [], 'looma-knit'))).toBeInTheDocument()
     await screen.findByText('Review plan')
     expect(screen.getByText('Balanced review')).toBeInTheDocument()
     expect(screen.getByText('1 reviewer group')).toBeInTheDocument()
@@ -373,7 +374,7 @@ describe('TaskDrawer', () => {
     expect(screen.getByText('fll overhead policy')).toBeInTheDocument()
     expect(screen.getByText('Draft the FLL overhead charge policy')).toBeInTheDocument()
     expect(screen.getByText('Apply the overhead charge policy')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'task-fll-policy-decision' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: taskDisplayKey('task-fll-policy-decision', [], 'looma-knit') })).toHaveAttribute(
       'href',
       '/projects/looma-knit/task/task-fll-policy-decision',
     )
@@ -1074,11 +1075,11 @@ describe('TaskDrawer', () => {
       'href',
       '/projects/looma-knit/overview',
     )
-    expect(screen.getByRole('link', { name: 'T-001' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: taskDisplayKey('task-feature-spec', [], 'looma-knit') })).toHaveAttribute(
       'href',
       '/projects/looma-knit/task/task-feature-spec',
     )
-    expect(screen.getByText('T-002')).toBeInTheDocument()
+    expect(screen.getByText(taskDisplayKey('task-link-editor', [], 'looma-knit'))).toBeInTheDocument()
     expect(screen.queryByText('No parent goal recorded.')).not.toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/parent task/i)
   })
@@ -1467,7 +1468,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Recovery needed')
-    expect(screen.getAllByText(/Card component exists but template syntax mismatch prevents edit/i)).toHaveLength(1)
+    expect(screen.getAllByText(/The worker found src\/components\/Card\.svelte, but the requested dashboard edit does not match the current file shape\./i)).toHaveLength(1)
     expect(screen.queryByLabelText('Needs recovery')).toBeNull()
     expect(screen.queryByText(/Open the task/i)).toBeNull()
   })
@@ -2499,8 +2500,31 @@ describe('TaskDrawer', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getAllByText('We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.').length).toBeGreaterThan(0)
+      expect(screen.getAllByText('We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.')).toHaveLength(1)
     })
+  })
+
+  it('replaces raw task identifiers in the overview description with stable display keys', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    const relatedTaskId = 'task-deterministic-evaluation-and-essential-history-report'
+    payload.task.description = `This verification work supports containing task ${relatedTaskId}.`
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    expect(await screen.findByText(new RegExp(taskDisplayKey(relatedTaskId, [], 'looma-knit')))).toBeInTheDocument()
+    expect(screen.queryByText(new RegExp(relatedTaskId))).not.toBeInTheDocument()
   })
 
   it('uses a reason-aware primary recovery action for open escalations', async () => {

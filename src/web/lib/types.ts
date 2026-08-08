@@ -1481,6 +1481,7 @@ export interface ProjectActionModel {
   runControl?: {
     label?: string
     startEnabled?: boolean
+    pauseEnabled?: boolean
     disabledReason?: string
     href?: string
   }

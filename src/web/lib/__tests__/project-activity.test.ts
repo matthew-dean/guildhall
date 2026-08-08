@@ -136,6 +136,28 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('presents a shipped release as a terminal receipt instead of runnable-work status', () => {
+    expect(buildProjectTicker({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'A stale migration check says this project needs attention.',
+      },
+      releaseReadiness: {
+        release: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'shipped', source: 'release_plan' },
+        scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'shipped', source: 'release_plan' },
+        ready: true,
+        totals: { tasks: 15, done: 15 },
+      },
+    }, null, now)).toMatchObject({
+      label: 'Complete',
+      actorLabel: 'Complete',
+      message: 'Stage 1 shipped',
+      detail: '15/15 complete',
+      tone: 'ok',
+    })
+  })
+
   it('does not call all-terminal scope complete when the orientation spine has gaps', () => {
     const detail: ProjectDetail = {
       startReadiness: {

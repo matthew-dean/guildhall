@@ -13,6 +13,16 @@ function json(data: unknown, init: ResponseInit = {}): Response {
   })
 }
 
+function actionModel(primaryAction: Record<string, unknown> | null) {
+  return {
+    primaryAction,
+    secondaryActions: [],
+    runControl: { label: 'Resume', startEnabled: true },
+    ownerInput: { active: false },
+    setup: { state: 'ready', freshIntakeNeeded: false },
+  }
+}
+
 describe('ProjectOverviewTab', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -188,6 +198,14 @@ describe('ProjectOverviewTab', () => {
         name: 'Narrative Harness',
         path: '/Users/matthew/git/oss/narrative-harness',
         tasks: [],
+        actionModel: actionModel({
+          source: 'inbox',
+          label: 'Review source conflicts on the Project Map.',
+          detail: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+          buttonLabel: 'Open map',
+          href: '/map',
+          tone: 'warn',
+        }),
         orientationSpine: {
           scope: { label: 'Stage 1 Headless Drafting And Evaluation MVP' },
           summary: {
@@ -246,6 +264,15 @@ describe('ProjectOverviewTab', () => {
         name: 'Narrative Harness',
         path: '/Users/matthew/git/oss/narrative-harness',
         tasks: [],
+        actionModel: actionModel({
+          source: 'start_readiness',
+          label: 'Release is ready',
+          detail: 'Stage 1 Headless Drafting And Evaluation MVP is complete.',
+          buttonLabel: 'Open Release',
+          href: '/release',
+          tone: 'accent',
+          code: 'release_ready',
+        }),
         orientationSpine: {
           scope: { label: 'Stage 1 Headless Drafting And Evaluation MVP' },
           release: { state: 'ready', blockers: [] },
@@ -285,7 +312,9 @@ describe('ProjectOverviewTab', () => {
     })
 
     expect(screen.getByRole('heading', { name: 'Scope status' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Release is ready' })).toBeInTheDocument()
     expect(screen.getAllByText('Stage 1 Headless Drafting And Evaluation MVP is complete.').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: 'Open Release' })).toBeInTheDocument()
     expect(screen.getByText('Closed scope')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Do this next' })).not.toBeInTheDocument()
   })
@@ -410,6 +439,65 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText(/main has 6 local commits not pushed to origin\/main/).length).toBeGreaterThan(0)
     expect(document.querySelector('.signal-row--wide')).toBeInTheDocument()
     expect(document.querySelectorAll('.signal-row.is-dense').length).toBe(document.querySelectorAll('.signal-row').length)
+  })
+
+  it('renders a shipped release as one calm receipt without pre-ship dashboard sections', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        startReadiness: {
+          canStart: false,
+          code: 'all_terminal',
+          message: 'The selected release has no runnable work remaining.',
+        },
+        tasks: [],
+        releaseReadiness: {
+          release: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'shipped', source: 'release' },
+          scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'shipped', source: 'release' },
+          ready: true,
+          totals: {
+            tasks: 15,
+            done: 15,
+            unfinishedCount: 0,
+            humanBlockingCount: 0,
+            gitStoryBlockingCount: 1,
+            dirtyCheckoutBlockingCount: 0,
+          },
+          gitStory: {
+            ready: false,
+            state: 'dirty_uncommitted',
+            blockers: [{
+              id: 'repo:narrative-harness',
+              label: 'Repository follow-up',
+              state: 'dirty_uncommitted',
+              reason: '2 changed files are not committed.',
+            }],
+            snapshots: [],
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Complete',
+        actorLabel: 'Guildhall',
+        message: 'The selected release has no runnable work remaining.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Current release' })).toBeInTheDocument()
+    expect(screen.getByText('Stage 1')).toBeInTheDocument()
+    expect(screen.getByText('Shipped')).toBeInTheDocument()
+    expect(screen.getByText(/15 \/ 15 done.*recorded as shipped/i)).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Work mix' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Project map' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Signals' })).not.toBeInTheDocument()
+    expect(screen.queryByText('2 changed files are not committed.')).not.toBeInTheDocument()
   })
 
   it('keeps Overview signals scoped to release git state when project-wide git work is unrelated', () => {
@@ -676,17 +764,15 @@ describe('ProjectOverviewTab', () => {
           code: 'all_terminal',
           message: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.',
         },
-        actionModel: {
-          primaryAction: null,
-          secondaryActions: [],
-          runControl: {
-            label: 'No runnable tasks',
-            startEnabled: false,
-            disabledReason: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.',
-          },
-          ownerInput: { active: false },
-          setup: { state: 'ready', freshIntakeNeeded: false },
-        },
+        actionModel: actionModel({
+          source: 'start_readiness',
+          label: 'Release is ready',
+          detail: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.',
+          buttonLabel: 'Open Release',
+          href: '/release',
+          tone: 'accent',
+          code: 'release_ready',
+        }),
         tasks: [
           { id: 'done-1', title: 'Done one', status: 'done' },
           { id: 'shelved-1', title: 'Shelved duplicate', status: 'shelved' },
@@ -758,7 +844,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByRole('heading', { name: 'Scope status' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Do this next' })).not.toBeInTheDocument()
     expect(screen.queryByText('Needs attention')).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Release is ready' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'No runnable work' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
     expect(screen.getByText(/3 deferred/)).toBeInTheDocument()
@@ -917,6 +1003,14 @@ describe('ProjectOverviewTab', () => {
         name: 'Looma + Knit',
         path: '/Users/matthew/git/oss/looma-knit',
         tasks: [],
+        actionModel: actionModel({
+          source: 'inbox',
+          label: 'Review project discovery update',
+          detail: 'More planning docs and migrations can now be scanned. Review the reconciliation to update or dismiss stale imported work.',
+          buttonLabel: 'Review update',
+          href: '/workspace-import?mode=reconcile',
+          tone: 'warn',
+        }),
       },
       inboxLoaded: true,
       inboxItems: [
@@ -962,6 +1056,14 @@ describe('ProjectOverviewTab', () => {
           message: 'Choose a recovery path for the blocked task',
           actionHref: '/task/task-oauth',
         },
+        actionModel: actionModel({
+          source: 'owner_input',
+          label: 'Choose a recovery path for the blocked task',
+          buttonLabel: 'Open item',
+          href: '/task/task-oauth',
+          tone: 'warn',
+          taskId: 'task-oauth',
+        }),
       },
       inboxLoaded: true,
       inboxItems: [
@@ -1182,6 +1284,15 @@ describe('ProjectOverviewTab', () => {
           message: 'Run required Guildhall migration 0.8.0/project-state-layout before starting this project.',
           actionHref: '/migrations',
         },
+        actionModel: actionModel({
+          source: 'start_readiness',
+          label: 'Required migration',
+          detail: 'Run required Guildhall migration 0.8.0/project-state-layout before starting this project.',
+          buttonLabel: 'Migrate project',
+          href: '/migrations',
+          tone: 'danger',
+          code: 'required_migration_pending',
+        }),
       },
       inboxLoaded: true,
       inboxItems: [],
@@ -1320,7 +1431,7 @@ describe('ProjectOverviewTab', () => {
 
     const chipLabels = Array.from(container.querySelectorAll('.blocked-work-list .chip')).map(chip => chip.textContent?.trim() ?? '')
 
-    expect(chipLabels).toEqual(['Provider settings', 'Provider settings', 'Provider settings'])
+    expect(chipLabels).toEqual(['Dependencies', 'Dependencies', 'Dependencies'])
     expect(chipLabels).not.toContain('Add OAuth providers — Google and Apple sign-in')
     expect(chipLabels).not.toContain('Create Google OAuth provider credentials, Create Apple OAuth provider credentials')
   })

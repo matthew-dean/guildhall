@@ -321,6 +321,24 @@
     if (!railForcedCollapsed && railCollapsed) railPreviewOpen = true
   }
 
+  let railPointerFocusGuard = false
+  let railPointerFocusTimer: ReturnType<typeof setTimeout> | null = null
+
+  function handleRailPointerDown(): void {
+    railPointerFocusGuard = true
+    cancelRailPreviewTimer()
+    if (railPointerFocusTimer) clearTimeout(railPointerFocusTimer)
+    railPointerFocusTimer = setTimeout(() => {
+      railPointerFocusGuard = false
+      railPointerFocusTimer = null
+    }, 0)
+  }
+
+  function handleRailFocusIn(): void {
+    if (railPointerFocusGuard) return
+    openRailPreviewImmediately()
+  }
+
   function scheduleRailPreviewOpen(): void {
     if (railForcedCollapsed || !railCollapsed) return
     cancelRailPreviewTimer()
@@ -376,7 +394,10 @@
   })
 
   $effect(() => {
-    return () => cancelRailPreviewTimer()
+    return () => {
+      cancelRailPreviewTimer()
+      if (railPointerFocusTimer) clearTimeout(railPointerFocusTimer)
+    }
   })
 
   $effect(() => {
@@ -698,6 +719,7 @@
   const startReadiness = $derived(detail?.startReadiness ?? null)
   const primaryAction = $derived(detail?.actionModel?.primaryAction ?? null)
   const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
+  const selectedReleaseShipped = $derived(detail?.releaseReadiness?.release?.state === 'shipped')
   const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
   const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
   const providerDecisionText = $derived(
@@ -707,19 +729,19 @@
     providerStatus?.decisions?.[0]?.severity ?? 'info',
   )
   const providerNoticeText = $derived(
-    providerStatus?.fallback
+    !selectedReleaseShipped && providerStatus?.fallback
       ? providerDecisionText ??
         'Preferred provider is unavailable; this run is using a fallback.'
       : null,
   )
   const providerWarningText = $derived(
-    providerStatus?.warnings?.[0]?.message ?? null,
+    selectedReleaseShipped ? null : providerStatus?.warnings?.[0]?.message ?? null,
   )
   const providerWarningSeverity = $derived(
     providerStatus?.warnings?.[0]?.severity ?? 'info',
   )
   const providerHealthText = $derived(
-    providerStatus?.health?.state === 'degraded'
+    !selectedReleaseShipped && providerStatus?.health?.state === 'degraded'
       ? `${providerHeaderLabel ?? 'Current provider'} has seen ${providerStatus.health.consecutiveFailures} consecutive pooled failures${providerStatus.health.lastError ? ` (${providerStatus.health.lastError})` : ''}.`
       : null,
   )
@@ -776,8 +798,10 @@
     }
   })
   const allTerminalReadinessMessage = $derived(
-    allTerminalStart && !allTerminalReviewNotice
-      ? startReadiness?.message ?? 'All tasks are already finished.'
+    selectedReleaseShipped
+      ? 'Release shipped.'
+      : allTerminalStart && !allTerminalReviewNotice
+        ? startReadiness?.message ?? 'All tasks are already finished.'
       : null,
   )
   const projectTicker = $derived(buildProjectTicker(detail, latestTickerEvent, new Date(tickerNow)))
@@ -921,6 +945,7 @@
     return 'accent'
   }
   const runStopSummaryText = $derived.by(() => {
+    if (selectedReleaseShipped) return null
     if (runStatus === 'running' || runStatus === 'stopping') return null
     if (allTerminalStart) return null
     const summary = runStopSummary
@@ -1001,7 +1026,7 @@
     currentView !== 'overview' && currentView !== 'thread' && currentView !== 'inbox',
   )
   const startReadinessNoticeHref = $derived.by(() => {
-    if (!startReadiness || startReadiness.canStart || allTerminalStart || requiredMigrationBlocked) return null
+    if (selectedReleaseShipped || !startReadiness || startReadiness.canStart || allTerminalStart || requiredMigrationBlocked) return null
     if (primaryAction?.href) return projectActionHref(primaryAction.href, activeProjectId)
     if (startReadiness.actionHref) return projectActionHref(startReadiness.actionHref, activeProjectId)
     if (metaIntakePending) return currentProjectHref('/setup', activeProjectId)
@@ -1017,7 +1042,7 @@
     return startReadinessActionLabel(startReadiness)
   })
   const shellAttentionNotices = $derived.by(() => {
-    if (!detail) return []
+    if (!detail || selectedReleaseShipped) return []
     const notices: ShellAttentionNotice[] = []
     if (startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
       notices.push({
@@ -1053,6 +1078,7 @@
     return dedupeProjectAttention(notices)
   })
   const bootstrapFailureText = $derived.by(() => {
+    if (selectedReleaseShipped) return null
     const step = failedBootstrapStep
     if (!step) return null
     const command = step.command ?? 'Bootstrap'
@@ -1071,6 +1097,10 @@
       ? 'error'
       : runStatus === 'running'
         ? 'running'
+        : selectedReleaseShipped
+          ? 'stable'
+        : availabilityPaused
+          ? 'paused'
         : needsMeta || blockers.bootstrap
           ? 'setting-up'
           : activeCount === 0 && awaitingApprovalCount === 0 && taskList.length > 0
@@ -1129,11 +1159,7 @@
       ? startReadiness?.message ?? 'Finish setup before starting'
       : activeCount === 0 && awaitingApprovalCount === 0 && taskList.length > 0
         ? 'No tasks to start'
-      : blockers.bootstrap && !metaIntakePending
-        ? failedBootstrapStep
-          ? 'Fix the bootstrap failure before starting'
-          : 'Complete bootstrap in Thread before starting'
-        : null,
+      : null,
   )
   const newTaskDisabledReason = $derived(
     requiredMigrationBlocked
@@ -1147,13 +1173,26 @@
         : null,
   )
   const showRunButton = $derived(
-    runStatus === 'running' ||
-      runStatus === 'stopping' ||
-      (!allTerminalStart && (!availabilityPaused || startDisabledReason !== 'No tasks to start')),
+    !selectedReleaseShipped &&
+      (
+        availabilityPaused ||
+        runStatus === 'running' ||
+        runStatus === 'stopping' ||
+        (!allTerminalStart && (!availabilityPaused || startDisabledReason !== 'No tasks to start'))
+      ),
   )
   const runControlPauses = $derived(
     runStatus === 'running' ||
-      runStatus === 'stopping',
+      runStatus === 'stopping' ||
+      (
+        !availabilityPaused &&
+        actionRunControl?.pauseEnabled === true &&
+        actionRunControl?.startEnabled === false &&
+        !requiredMigrationBlocked
+      ),
+  )
+  const pausedBlockedControl = $derived(
+    runControlPauses && runStatus !== 'running' && runStatus !== 'stopping',
   )
   const runButtonIdleLabel = $derived(
     actionRunControl?.label && actionRunControl.startEnabled === false
@@ -1165,7 +1204,7 @@
       : 'Resume',
   )
   const showAdvanceOneTaskAction = $derived(
-    !allTerminalStart,
+    !selectedReleaseShipped && !allTerminalStart,
   )
 
   function startReadinessActionLabel(readiness: StartReadiness | null | undefined): string {
@@ -1176,6 +1215,7 @@
     }
     if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
     if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
+    if (readiness.code === 'repository_followup_required') return 'Open release'
     if (readiness.code === 'no_unattended_progress') {
       if (readiness.focusKind === 'spec_review') return readiness.count && readiness.count > 1 ? 'Review next spec' : 'Review spec'
       if (readiness.focusKind === 'brief_cleanup') return 'Review brief'
@@ -1209,7 +1249,8 @@
       aria-label="Project navigation"
       onmouseenter={scheduleRailPreviewOpen}
       onmouseleave={closeRailPreview}
-      onfocusin={openRailPreviewImmediately}
+      onpointerdown={handleRailPointerDown}
+      onfocusin={handleRailFocusIn}
       onfocusout={closeRailPreview}
     >
       <div class="rail-head" title={projectDisplayPath}>
@@ -1300,7 +1341,7 @@
       </div>
     {/await}
   </ProjectShell>
-{:else if project.error}
+{:else if project.error && !detail}
   <div class="page-centered">
     <p class="muted">Error: {project.error}</p>
   </div>
@@ -1382,7 +1423,7 @@
               <span class="rail-label">{e.label}</span>
             </button>
           </Tooltip>
-          {#if active && e.subs}
+          {#if active && e.subs && (!railCollapsed || railOverlayOpen)}
             <ul class="rail-subs">
               {#each e.subs as s (s.id)}
                 {@const subActive = railSubIsActive(e.id, s.id, s.path)}
@@ -1456,7 +1497,7 @@
           {/if}
           {#if detail && showRunButton}
             <Button
-              variant={runControlPauses ? 'danger' : requiredMigrationBlocked ? 'human' : 'agent'}
+              variant={runControlPauses ? (pausedBlockedControl ? 'secondary' : 'danger') : requiredMigrationBlocked ? 'human' : 'agent'}
               size="sm"
               iconOnly={topbarLabelsCollapsed}
               disabled={busy || migrationApplyBusy || runStatus === 'stopping' || (!runControlPauses && startDisabledReason !== null && !requiredMigrationBlocked)}
@@ -1465,7 +1506,7 @@
                 runStatus === 'stopping'
                   ? 'Pausing'
                   : runControlPauses
-                  ? (runMode === 'one_task' ? 'Pause one-step run' : 'Pause')
+                  ? (pausedBlockedControl ? 'Pause project processing' : runMode === 'one_task' ? 'Pause one-step run' : 'Pause')
                   : requiredMigrationBlocked
                   ? 'Migrate project'
                   : (startDisabledReason ?? runButtonIdleLabel)
@@ -1474,7 +1515,7 @@
                 runStatus === 'stopping'
                   ? 'Pausing the run'
                 : runControlPauses
-                  ? (runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause the run')
+                  ? (pausedBlockedControl ? 'Pause Guildhall on this project' : runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause the run')
                   : requiredMigrationBlocked
                   ? 'Migrate project'
                   : (startDisabledReason ?? runButtonIdleLabel)
@@ -1482,7 +1523,7 @@
             >
               <Icon name={runControlPauses ? 'pause' : requiredMigrationBlocked ? 'refresh-cw' : 'sparkles'} size={16} />
               {#if !topbarLabelsCollapsed}
-                {runStatus === 'stopping' ? 'Pausing...' : runControlPauses ? (runMode === 'one_task' ? 'Pause 1' : 'Pause') : runButtonIdleLabel}
+                {runStatus === 'stopping' ? 'Pausing...' : runControlPauses ? (pausedBlockedControl ? 'Pause' : runMode === 'one_task' ? 'Pause 1' : 'Pause') : runButtonIdleLabel}
               {/if}
             </Button>
           {/if}
@@ -1531,6 +1572,15 @@
       </header>
     {/snippet}
     {#snippet band()}
+        {#if detail && project.error}
+          <AlertBand tone="warn" role="status" density="compact" singleLine ariaLabel="Project refresh warning">
+            <strong>Couldn’t refresh project. Showing the last known state.</strong>
+            {#snippet actions()}
+              <button type="button" class="gh-notice-inline-action" onclick={() => void project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)}>Try again</button>
+              <button type="button" class="gh-notice-inline-dismiss" aria-label="Dismiss" onclick={() => (project.error = null)}>×</button>
+            {/snippet}
+          </AlertBand>
+        {/if}
         {#if detail && runError}
           <AlertBand tone="danger" role="alert" density="compact" ariaLabel="Run error">
             <strong>{runError}</strong>
@@ -1596,8 +1646,9 @@
             {/snippet}
           </AlertBand>
         {/if}
-        {#if detail && allTerminalReadinessMessage}
-          <AlertBand tone="ok" role="status" density="compact" ariaLabel="Ready">
+        {#if detail && allTerminalReadinessMessage && currentView !== 'release'}
+          <AlertBand tone="ok" role="status" density="compact" singleLine ariaLabel={selectedReleaseShipped ? 'Release shipped' : 'Ready'}>
+            {#if selectedReleaseShipped}<Icon name="check-circle-2" size={16} />{/if}
             <strong>{allTerminalReadinessMessage}</strong>
           </AlertBand>
         {/if}
@@ -1614,9 +1665,10 @@
             tone={notice.tone}
             role={notice.role}
             density="compact"
+            singleLine={notice.code === 'repository_followup_required'}
             ariaLabel={notice.ariaLabel}
           >
-            <strong>{notice.message}</strong>
+            <strong title={notice.code === 'repository_followup_required' ? notice.message : undefined}>{notice.message}</strong>
             {#snippet actions()}
               {#if notice.actionHref && notice.actionLabel}
                 <a href={notice.actionHref} onclick={(e) => { e.preventDefault(); nav(notice.actionHref ?? currentProjectHref('/overview', activeProjectId)) }}>

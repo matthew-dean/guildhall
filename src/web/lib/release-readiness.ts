@@ -89,7 +89,9 @@ export function releaseVerdictSummary(
   const unfinishedCount = totals?.unfinishedCount ?? unfinishedCountFromStatusCounts(releaseReadiness.statusCounts)
   const dirtyCheckoutCount = releaseReadiness.dirtyCheckout?.ownedCount ?? totals?.dirtyCheckoutBlockingCount ?? 0
   const designSystemBlockingCount = totals?.designSystemBlockingCount ?? (
-    releaseReadiness.designSystem?.approved === false ? 1 : 0
+    releaseReadiness.checksLoaded === false
+      ? 0
+      : releaseReadiness.designSystem?.approved === false ? 1 : 0
   )
   const blockingCount = totals?.blockingCount ?? 0
   const humanBlockingCount = totals?.humanBlockingCount ?? 0

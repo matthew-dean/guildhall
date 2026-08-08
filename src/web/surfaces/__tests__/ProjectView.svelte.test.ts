@@ -847,6 +847,48 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Setup')).toBeNull()
   })
 
+  it('uses concise shipped release shell chrome without asking for more work', async () => {
+    const projectPayload = pausedDetail({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'A stale migration check says this project needs attention.',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Required migration',
+          buttonLabel: 'Migrate project',
+          href: '/migrations',
+          tone: 'danger',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true, pauseEnabled: false },
+        ownerInput: { active: true, label: 'Answer stale question', href: '/thread' },
+        setup: { state: 'blocked', freshIntakeNeeded: false },
+      },
+      releaseReadiness: {
+        release: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'shipped', source: 'release_plan' },
+        scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'shipped', source: 'release_plan' },
+        ready: true,
+        totals: { tasks: 15, done: 15 },
+      },
+      tasks: [task({ id: 'task-done-a', title: 'Done A', status: 'done' })],
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('overview', null, 'looma-knit', projectPayload)
+
+    expect(screen.getByRole('status', { name: 'Release shipped' })).toHaveTextContent('Release shipped.')
+    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('Stage 1 shipped')
+    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('15/15 complete')
+    expect(screen.getByText('Stable')).toBeTruthy()
+    expect(screen.queryByText('A stale migration check says this project needs attention.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /resume/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /pause/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /migrate/i })).not.toBeInTheDocument()
+  })
+
   it('does not show stale stop-requested chrome when the selected scope is complete', async () => {
     const projectPayload = detail({
       startReadiness: {
@@ -1149,7 +1191,7 @@ describe('ProjectView', () => {
     expect(mapFetch).toHaveBeenCalledWith('/api/project?surface=map&compact=true&inventoryLimit=24&inventoryOffset=0&projectId=looma-knit', { cache: 'no-store' })
     expect(screen.getByRole('heading', { name: 'Release scope' })).toBeInTheDocument()
     expect(screen.getAllByText('Stage 1').length).toBeGreaterThan(0)
-    expect(screen.getByText('1 assigned work item')).toBeInTheDocument()
+    expect(screen.getAllByText(/1 product boundary/).length).toBeGreaterThan(0)
     expect(screen.queryByText('Loading project...')).toBeNull()
   })
 
@@ -1472,6 +1514,76 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'New thread' })).toBeInTheDocument()
   })
 
+  it('keeps the last good project view visible when a refresh returns 503', async () => {
+    const user = userEvent.setup()
+    await renderProjectView('overview')
+
+    project.error = 'HTTP 503'
+
+    const warning = await screen.findByRole('status', { name: 'Project refresh warning' })
+    expect(warning).toHaveTextContent('Couldn’t refresh project. Showing the last known state.')
+    expect(screen.getAllByText('Looma + Knit').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Error: HTTP 503')).not.toBeInTheDocument()
+
+    await user.click(within(warning).getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByRole('status', { name: 'Project refresh warning' })).not.toBeInTheDocument()
+  })
+
+  it('keeps repository follow-up separate from the project Pause command', async () => {
+    const user = userEvent.setup()
+    const blocked = detail({
+      run: { status: 'stopped', mode: 'continuous' },
+      availability: { status: 'active', pausedAt: null, resumedAt: null },
+      providerStatus: null,
+      startReadiness: {
+        canStart: false,
+        code: 'repository_followup_required',
+        message: 'Release blocked by uncommitted changes.',
+        actionHref: '/release',
+        focusKind: 'repository_followup',
+      },
+      actionModel: {
+        runControl: {
+          label: 'Repo follow-up',
+          startEnabled: false,
+          pauseEnabled: true,
+          disabledReason: 'Release blocked by uncommitted changes.',
+          href: '/release',
+        },
+      },
+      recentEvents: [],
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return json(blocked)
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
+      if (url.pathname === '/api/project/stop') {
+        expect(url.searchParams.get('projectId')).toBe('looma-knit')
+        expect(init?.method).toBe('POST')
+        return json({ ok: true, status: 'stopping' })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renderProjectView('overview', null, 'looma-knit', blocked)
+
+    const blockerAlert = screen.getByRole('alert', { name: 'Needs you' })
+    expect(blockerAlert).toHaveClass('single-line')
+    expect(blockerAlert).toHaveTextContent('Release blocked by uncommitted changes.')
+    expect(blockerAlert).toHaveTextContent('Open release')
+    const pauseButton = screen.getByRole('button', { name: 'Pause project processing' })
+    expect(pauseButton).toHaveTextContent('Pause')
+    expect(screen.queryByRole('button', { name: /repo follow-up/i })).not.toBeInTheDocument()
+
+    await user.click(pauseButton)
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/stop'))).toBe(true)
+    })
+  })
+
   it('labels a running one-task pass as Pause 1 and pauses the scoped project run', async () => {
     const user = userEvent.setup()
     const running = detail({
@@ -1616,6 +1728,32 @@ describe('ProjectView', () => {
     const user = userEvent.setup()
     const brokenBootstrap = detail({
       providerStatus: null,
+      actionModel: {
+        primaryAction: {
+          source: 'inbox',
+          label: 'Verify your bootstrap commands',
+          detail: 'Fix the bootstrap failure before starting',
+          buttonLabel: 'Open readiness checks',
+          href: '/settings/ready',
+          tone: 'danger',
+          inboxKind: 'bootstrap_missing',
+        },
+        secondaryActions: [],
+        runControl: {
+          label: 'Waiting on setup',
+          startEnabled: false,
+          pauseEnabled: false,
+          disabledReason: 'Fix the bootstrap failure before starting',
+          href: '/settings/ready',
+        },
+        ownerInput: { active: false },
+        setup: {
+          state: 'blocked',
+          freshIntakeNeeded: false,
+          href: '/settings/ready',
+          detail: 'Fix the bootstrap failure before starting',
+        },
+      },
       bootstrapStatus: {
         success: false,
         verifiedAt: now,
@@ -1704,12 +1842,29 @@ describe('ProjectView', () => {
 
       await vi.advanceTimersByTimeAsync(1)
       expect(shell).toHaveClass('rail-preview-open')
-      expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
-      expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
-      expect(within(rail).getByRole('button', { name: 'Facts' })).toBeInTheDocument()
-      expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
+      expect(within(rail).getByRole('button', { name: 'Project' })).toBeInTheDocument()
+      expect(within(rail).queryByRole('button', { name: 'Facts' })).not.toBeInTheDocument()
 
       shell?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      expect(shell).toHaveClass('rail-preview-open')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not expand and move collapsed rail targets during a pointer click', async () => {
+    vi.useFakeTimers()
+    try {
+      await renderProjectView('overview')
+      const shell = document.querySelector('.app-shell')
+      const rail = screen.getByRole('complementary', { name: 'Project navigation' })
+
+      rail.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+      rail.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      expect(shell).not.toHaveClass('rail-preview-open')
+
+      await vi.advanceTimersByTimeAsync(1)
+      rail.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
       expect(shell).toHaveClass('rail-preview-open')
     } finally {
       vi.useRealTimers()
@@ -1745,8 +1900,8 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Release' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Queue' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Board' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Queue' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Board' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Overview' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Facts' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
@@ -1755,6 +1910,7 @@ describe('ProjectView', () => {
   it('groups project orientation under Project with Structure visible by default', async () => {
     await renderProjectView('overview')
     const rail = screen.getByRole('complementary', { name: 'Project navigation' })
+    await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
 
     expect(within(rail).getByRole('button', { name: 'Project' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
@@ -1772,6 +1928,7 @@ describe('ProjectView', () => {
   it('keeps project children visible for any Project child route', async () => {
     await renderProjectView('facts')
     const rail = screen.getByRole('complementary', { name: 'Project navigation' })
+    await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
 
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
@@ -1783,6 +1940,7 @@ describe('ProjectView', () => {
   it('shows only the active section children for Work and Release routes', async () => {
     await renderProjectView('release', 'criteria')
     let rail = screen.getByRole('complementary', { name: 'Project navigation' })
+    await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
 
     expect(within(rail).getByRole('button', { name: 'Summary' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Checks' })).toHaveClass('active')
@@ -1793,6 +1951,7 @@ describe('ProjectView', () => {
     installFetchFakes()
     await renderProjectView('work')
     rail = screen.getByRole('complementary', { name: 'Project navigation' })
+    await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
 
     expect(within(rail).getByRole('button', { name: 'Queue' })).toHaveClass('active')
     expect(within(rail).getByRole('button', { name: 'Board' })).toBeInTheDocument()
@@ -1805,6 +1964,7 @@ describe('ProjectView', () => {
     path.value = '/projects/looma-knit/work'
     await renderProjectView('work')
     rail = screen.getByRole('complementary', { name: 'Project navigation' })
+    await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
 
     expect(within(rail).getByRole('button', { name: 'Queue' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Board' })).toHaveClass('active')

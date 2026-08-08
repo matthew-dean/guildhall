@@ -1167,9 +1167,7 @@ describe('GET /api/project/release-readiness', () => {
       code: 'repository_followup_required',
       actionHref: '/release',
     })
-    expect(projectBody.startReadiness.message).toContain('repository follow-up')
-    expect(projectBody.startReadiness.message).toContain('Push the branch or open a PR')
-    expect(projectBody.startReadiness.message).not.toContain('is complete')
+    expect(projectBody.startReadiness.message).toBe('Release blocked by unpushed commits.')
 
     const [spineRes, threadRes] = await Promise.all([
       app.fetch(new Request(projectUrl('/api/project/spine'))),
@@ -1190,6 +1188,40 @@ describe('GET /api/project/release-readiness', () => {
     })
     expect(threadBody.detailPayload.omitted).toEqual(expect.arrayContaining(['Git Story', 'repository inspection']))
     expect(threadBody.orientationSpine.release.blockers).toEqual([])
+  })
+
+  it('does not reopen a shipped release when later repository housekeeping appears', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'shipped',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({ id: 'task-current', title: 'Current proof lane', status: 'done', releaseIds: ['headless-mvp'], ...modeledScriptProof() }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await execFileP('git', ['commit', '--allow-empty', '-m', 'post-release local note'], { cwd: tmpDir })
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectBody = await projectRes.json() as any
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'all_terminal',
+    })
+    expect(projectBody.startReadiness.message).not.toContain('repository')
+    expect(projectBody.actionModel?.primaryAction).toBeNull()
   })
 
   it('does not count active agent worktree edits as release repository follow-up', async () => {
@@ -1334,7 +1366,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'repository_followup_required',
-      message: '"Current proof recovery lane" cannot resume until repository follow-up is finished: 1 changed file is not committed.',
+      message: 'Release blocked by uncommitted changes.',
       actionHref: '/release',
       focusTaskId: 'task-current',
       focusTaskTitle: 'Current proof recovery lane',

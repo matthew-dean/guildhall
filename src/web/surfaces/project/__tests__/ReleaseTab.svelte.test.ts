@@ -83,6 +83,32 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('Open release checks')).toBeTruthy()
   })
 
+  it('presents a shipped release as one terminal state without inventing compact blockers', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/project/spine')) return json({ spine: null })
+      return json({
+        release: { id: '1-0', label: '1.0', state: 'shipped' },
+        ready: true,
+        checksLoaded: false,
+        completion: { state: 'complete', label: 'Complete', tone: 'ok', detail: '15 / 15 done' },
+        statusCounts: { done: 15 },
+        totals: { blockingCount: 0, unfinishedCount: 0, tasks: 15, done: 15 },
+      })
+    }))
+
+    render(ReleaseTab, { activeProjectId: 'looma-knit' })
+
+    expect(await screen.findByRole('heading', { name: 'Release shipped' })).toBeTruthy()
+    expect(screen.getByText('15/15 scoped work items complete.')).toBeTruthy()
+    expect(screen.getAllByText('Shipped')).toHaveLength(1)
+    expect(screen.queryByText('Current counts')).toBeNull()
+    expect(screen.queryByText('Blocked')).toBeNull()
+    expect(screen.queryByText('Release readiness')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'View release checks' }))
+    expect(path.value).toBe('/projects/looma-knit/release/criteria')
+  })
+
   it('renders the shared orientation spine blocker before release details', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)

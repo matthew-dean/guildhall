@@ -80,6 +80,117 @@ describe('TimelineTab', () => {
     expect(path.state).toEqual({ backgroundPath: '/projects/looma-knit/timeline' })
   })
 
+  it('appends retained pages in reverse chronological order and reports what loaded', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.searchParams.get('cursor') === '2') {
+        return new Response(JSON.stringify({
+          events: [
+            { at: '2026-05-19T14:58:00.000Z', event: { type: 'error', message: 'oldest' } },
+            { at: '2026-05-19T14:59:00.000Z', event: { type: 'error', message: 'older' } },
+          ],
+          cursor: 2,
+          limit: 100,
+          total: 4,
+          hasMore: false,
+        }), { headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        events: [
+          { at: '2026-05-19T15:00:00.000Z', event: { type: 'error', message: 'newer' } },
+          { at: '2026-05-19T15:01:00.000Z', event: { type: 'error', message: 'newest' } },
+        ],
+        cursor: 0,
+        limit: 100,
+        total: 4,
+        hasMore: true,
+        nextCursor: 2,
+      }), { headers: { 'content-type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TimelineTab, {
+      props: {
+        detail: {
+          id: 'looma-knit',
+          name: 'Looma + Knit',
+          path: '/repo/looma-knit',
+          tasks: [],
+        },
+      },
+    })
+
+    await screen.findByText('ERROR: newest')
+    expect(screen.getAllByText(/15:0/).map(row => row.textContent)).toEqual(['15:01:00', '15:00:00'])
+
+    await user.click(screen.getByRole('button', { name: 'Load older activity' }))
+
+    expect((await screen.findByRole('status')).textContent).toContain('Loaded 2 older events.')
+    expect(screen.getAllByText(/14:5|15:0/).map(row => row.textContent)).toEqual([
+      '15:01:00',
+      '15:00:00',
+      '14:59:00',
+      '14:58:00',
+    ])
+    expect(screen.queryByRole('button', { name: 'Load older activity' })).toBeNull()
+  })
+
+  it('skips duplicate-only retained pages in one load-older action', async () => {
+    const user = userEvent.setup()
+    const newest = { at: '2026-05-19T15:01:00.000Z', event: { type: 'error', message: 'newest' } }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const cursor = new URL(String(input), 'http://localhost').searchParams.get('cursor')
+      if (cursor === '1') {
+        return new Response(JSON.stringify({
+          events: [newest],
+          cursor: 1,
+          limit: 100,
+          total: 3,
+          hasMore: true,
+          nextCursor: 2,
+        }))
+      }
+      if (cursor === '2') {
+        return new Response(JSON.stringify({
+          events: [{ at: '2026-05-19T14:59:00.000Z', event: { type: 'error', message: 'older' } }],
+          cursor: 2,
+          limit: 100,
+          total: 3,
+          hasMore: false,
+        }))
+      }
+      return new Response(JSON.stringify({
+        events: [newest],
+        cursor: 0,
+        limit: 100,
+        total: 3,
+        hasMore: true,
+        nextCursor: 1,
+      }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TimelineTab, {
+      props: {
+        detail: {
+          id: 'looma-knit',
+          name: 'Looma + Knit',
+          path: '/repo/looma-knit',
+          tasks: [],
+        },
+      },
+    })
+
+    await screen.findByText('ERROR: newest')
+    await user.click(screen.getByRole('button', { name: 'Load older activity' }))
+
+    expect((await screen.findByRole('status')).textContent).toContain('Loaded 1 older event.')
+    expect(screen.getByText('ERROR: older')).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(screen.queryByRole('button', { name: 'Load older activity' })).toBeNull()
+  })
+
   it('hides provider health noise from the default timeline', () => {
     render(TimelineTab, {
       props: {

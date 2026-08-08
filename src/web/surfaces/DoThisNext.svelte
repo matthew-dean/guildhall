@@ -1,11 +1,4 @@
-<!--
-  "Do this next" banner. Picks the top inbox item (inbox is already sorted
-  by severity → kind) and renders it as a prescriptive card with ONE primary
-  verb + button. Everything else collapses to "N more in Inbox ›".
-
-  Goal: the user never has to scan chips + tabs to figure out what matters.
-  The product says "do this", and Inbox remains for the full list.
--->
+<!-- Renders the shared runtime action model; ranking belongs to the API. -->
 <script lang="ts">
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
@@ -17,47 +10,14 @@
   import { projectActionHref, projectFetch } from '../lib/project-routes.js'
   import type { ProjectActionModel } from '../lib/types.js'
 
-  interface InboxItem {
-    kind: string
-    severity: 'high' | 'medium' | 'low'
-    title: string
-    detail?: string
-    taskId?: string
-    actionHref?: string
-  }
-  let items = $state<InboxItem[]>([])
-  let threadTurn = $state<ThreadTurn | null>(null)
   let actionModel = $state<ProjectActionModel | null>(null)
   let loaded = $state(false)
-
-  interface StartReadiness {
-    canStart?: boolean
-    code?: string
-    message?: string
-  }
-
-  interface ThreadTurn {
-    id: string
-    kind: string
-    status: 'done' | 'active' | 'pending'
-    actionHref?: string
-    sessionId?: string
-    domainTitle?: string
-    targetTitle?: string
-    question?: {
-      prompt?: string
-      why?: string
-    }
-  }
 
   async function load(): Promise<void> {
     try {
       const current = project.detail
-      let projectJson: {
-        actionModel?: ProjectActionModel | null
-        startReadiness?: StartReadiness | null
-      } | null = current
-        ? { actionModel: current.actionModel ?? null, startReadiness: current.startReadiness ?? null }
+      let projectJson: { actionModel?: ProjectActionModel | null } | null = current
+        ? { actionModel: current.actionModel ?? null }
         : null
       if (!projectJson) {
         const projectRes = await projectFetch('/api/project?surface=overview&compact=true')
@@ -66,35 +26,6 @@
           : null
       }
       actionModel = projectJson?.actionModel ?? null
-      if (actionModel?.primaryAction) {
-        items = []
-        threadTurn = null
-        return
-      }
-      const terminalScope =
-        projectJson?.startReadiness?.canStart === false &&
-        projectJson.startReadiness.code === 'all_terminal' &&
-        actionModel?.runControl?.startEnabled === false &&
-        actionModel.ownerInput?.active !== true
-      if (terminalScope) {
-        items = []
-        threadTurn = null
-        return
-      }
-      const inboxRes = await projectFetch('/api/project/inbox?includeHistory=false')
-      if (inboxRes.ok) {
-        const j = (await inboxRes.json()) as { items?: InboxItem[] }
-        items = j.items ?? []
-      }
-      if (!items.some(item => item.severity !== 'low')) {
-        const threadRes = await projectFetch('/api/project/thread')
-        if (threadRes.ok) {
-          const j = (await threadRes.json()) as { activeTurnId?: string | null; turns?: ThreadTurn[] }
-          threadTurn = (j.turns ?? []).find(turn => turn.id === j.activeTurnId && turn.status === 'active') ?? null
-        }
-      } else {
-        threadTurn = null
-      }
     } catch {
       /* keep prior */
     } finally {
@@ -121,82 +52,6 @@
     return off
   })
 
-  interface Prescription {
-    verb: string
-    why: string
-    button: string
-    href: string
-  }
-
-  function prescribe(item: InboxItem): Prescription {
-    const id = item.taskId ? ` on ${item.title}` : ''
-    switch (item.kind) {
-      case 'bootstrap_missing':
-        return {
-          verb: 'Verify your bootstrap commands',
-          why: 'Agents won’t dispatch until install + gate commands are verified.',
-          button: 'Open readiness checks',
-          href: item.actionHref ?? '/settings/ready',
-        }
-      case 'setup_pending':
-        return {
-          verb: item.title,
-          why: item.detail ?? 'Finish the next setup step before moving on.',
-          button: 'Open setup',
-          href: item.actionHref ?? '/thread',
-        }
-      case 'project_understanding':
-        return {
-          verb: item.title,
-          why: item.detail ?? 'Review the newer project-discovery pass and decide whether to update imported work.',
-          button: 'Review update',
-          href: item.actionHref ?? '/workspace-import?mode=reconcile',
-        }
-      case 'proof_reconciliation':
-        return {
-          verb: item.title,
-          why: item.detail ?? 'Completed work has proof records that need reconciliation.',
-          button: 'Review proof',
-          href: item.actionHref ?? '/overview/inbox',
-        }
-      case 'import_draft_queue':
-        return {
-          verb: 'Shape the imported drafts',
-          why: item.detail ?? 'Imported planning work still needs a quick shaping pass.',
-          button: item.taskId === 'task-workspace-import' ? 'Open import review' : 'Draft task brief',
-          href: item.actionHref ?? '/thread',
-        }
-      case 'workspace_import_pending':
-        return {
-          verb: 'Review existing project work',
-          why: item.detail ?? 'Planning notes and possible tasks were found in this project.',
-          button: 'Open review',
-          href: item.actionHref ?? '/workspace-import',
-        }
-      case 'lever_questions':
-        return {
-          verb: 'Review project policies',
-          why: item.detail ?? 'Defaults are still in effect for some project policies.',
-          button: 'Open advanced',
-          href: item.actionHref ?? '/settings/advanced',
-        }
-      case 'spec_fill_pending':
-        return {
-          verb: `Finish the spec${id}`,
-          why: item.detail ?? 'Shape the task so the reviewer has something to verify.',
-          button: 'Open in Thread',
-          href: '/thread',
-        }
-      default:
-        return {
-          verb: item.title,
-          why: item.detail ?? '',
-          button: 'Open',
-          href: item.actionHref ?? '/overview/inbox',
-        }
-    }
-  }
-
   function routeOnly(href: string): string {
     return href.split('?')[0]?.split('#')[0] ?? href
   }
@@ -213,61 +68,21 @@
 
   const modelPrimary = $derived(actionModel?.primaryAction ?? null)
   const modelSecondaryActions = $derived(actionModel?.secondaryActions ?? [])
-  const modelSource = $derived<TopSource | null>(
-    modelPrimary
-      ? {
-          verb: modelPrimary.label ?? 'Open project action',
-          why: modelPrimary.detail ?? '',
-          button: modelPrimary.buttonLabel ?? 'Open',
-          href: projectActionHref(modelPrimary.href ?? '/overview'),
-          severity: modelPrimary.tone === 'danger' ? 'high' : modelPrimary.tone === 'warn' ? 'medium' : 'low',
-          moreLabel: modelSecondaryActions.length === 1 ? '1 more in Inbox ›' : `${modelSecondaryActions.length} more in Inbox ›`,
-          moreHref: projectActionHref('/overview/inbox'),
-        }
-      : null,
-  )
-  const prescribedItems = $derived.by(() => items.map(item => ({ item, prescription: prescribe(item) })))
-  const visibleItems = $derived.by(() =>
-    prescribedItems.filter(({ prescription }) => routeOnly(projectActionHref(prescription.href)) !== path.value),
-  )
-  const actionableItems = $derived.by(() =>
-    visibleItems.filter(({ item }) => item.severity !== 'low'),
-  )
-  const moreItems = $derived.by(() => visibleItems.slice(1))
-  const moreButtonLabel = $derived.by(() => {
-    if (moreItems.length <= 0) return ''
-    if (moreItems.every(({ item }) => item.severity === 'low')) {
-      return moreItems.length === 1 ? '1 optional cleanup item ›' : `${moreItems.length} optional cleanup items ›`
+  const modelSource = $derived.by<TopSource | null>(() => {
+    if (!modelPrimary) return null
+    const href = projectActionHref(modelPrimary.href ?? '/overview')
+    if (routeOnly(href) === path.value) return null
+    return {
+      verb: modelPrimary.label ?? 'Open project action',
+      why: modelPrimary.detail ?? '',
+      button: modelPrimary.buttonLabel ?? 'Open',
+      href,
+      severity: modelPrimary.tone === 'danger' ? 'high' : modelPrimary.tone === 'warn' ? 'medium' : 'low',
+      moreLabel: modelSecondaryActions.length === 1 ? '1 more in Inbox ›' : `${modelSecondaryActions.length} more in Inbox ›`,
+      moreHref: projectActionHref('/overview/inbox'),
     }
-    return moreItems.length === 1 ? '1 more in Inbox ›' : `${moreItems.length} more in Inbox ›`
   })
-  const fallbackSource = $derived<TopSource | null>(
-    actionableItems[0]
-        ? (() => {
-            const top = actionableItems[0]!
-            return {
-              verb: top.prescription.verb,
-              why: top.prescription.why,
-              button: top.prescription.button,
-              href: projectActionHref(top.prescription.href),
-              severity: top.item.severity,
-              moreLabel: moreButtonLabel,
-              moreHref: projectActionHref('/overview/inbox'),
-            }
-          })()
-        : threadTurn
-          ? {
-              verb: 'Answer in Thread',
-              why: threadTurn.question?.prompt ?? threadTurn.domainTitle ?? 'Thread is waiting for your answer.',
-              button: 'Open Thread',
-              href: projectActionHref(threadTurn.actionHref ?? (threadTurn.sessionId ? `/thread?thread=${threadTurn.sessionId}` : '/thread')),
-              severity: 'medium',
-              moreLabel: moreButtonLabel,
-              moreHref: projectActionHref('/overview/inbox'),
-            }
-          : null,
-  )
-  const source = $derived(modelSource ?? fallbackSource)
+  const source = $derived(modelSource)
   const tone = $derived<'default' | 'warn'>(
     source?.severity === 'high'
       ? 'warn'
@@ -275,7 +90,7 @@
         ? 'warn'
         : 'default',
   )
-  const moreCount = $derived(modelSource ? modelSecondaryActions.length : visibleItems.length - 1)
+  const moreCount = $derived(modelSecondaryActions.length)
 
   function go(href: string) {
     const next = projectActionHref(href)

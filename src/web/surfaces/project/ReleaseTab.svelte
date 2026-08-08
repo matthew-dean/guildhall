@@ -443,11 +443,13 @@
             : 'Expand any row to inspect the tasks, approvals, checkout state, and repository follow-ups for the current project scope.',
         }
       : {
-          title: readinessTitle,
-          description: data?.release?.description ?? data?.scope?.description
-            ?? (hasNamedRelease
-              ? 'A quick read on whether the current release is ready to hand off, ship, or deliberately defer.'
-              : 'A quick read on whether the current project scope is ready to hand off, ship, or deliberately defer.'),
+          title: releaseShipped ? 'Release shipped' : readinessTitle,
+          description: releaseShipped
+            ? `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} scoped work items complete.`
+            : data?.release?.description ?? data?.scope?.description
+              ?? (hasNamedRelease
+                ? 'A quick read on whether the current release is ready to hand off, ship, or deliberately defer.'
+                : 'A quick read on whether the current project scope is ready to hand off, ship, or deliberately defer.'),
           },
   )
   const releaseLabel = $derived(data?.release?.label ?? data?.scope?.label ?? projectSummary?.release?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Unreleased work')
@@ -553,14 +555,16 @@
       density="compact"
     >
       {#snippet meta()}
-        <StatusPill label={verdict.label} tone={verdict.tone} emphasis="default" />
-        <StatusPill label={taskDoneLabel} tone="neutral" />
         {#if releaseShipped}
           <StatusPill label="Shipped" tone="ok" />
-        {:else if canShipRelease}
-          <Button variant="primary" size="sm" disabled={closeBusy} onclick={() => void shipRelease()}>
-            {closeBusy ? 'Shipping…' : 'Ship release'}
-          </Button>
+        {:else}
+          <StatusPill label={verdict.label} tone={verdict.tone} emphasis="default" />
+          <StatusPill label={taskDoneLabel} tone="neutral" />
+          {#if canShipRelease}
+            <Button variant="primary" size="sm" disabled={closeBusy} onclick={() => void shipRelease()}>
+              {closeBusy ? 'Shipping…' : 'Ship release'}
+            </Button>
+          {/if}
         {/if}
       {/snippet}
     </SectionHeader>
@@ -571,7 +575,7 @@
       </NoticeBand>
     {/if}
 
-    {#if spine?.summary?.headline}
+    {#if spine?.summary?.headline && (section === 'criteria' || !releaseShipped)}
       <FrameCard
         tone={spineTopBlockerLabel ? 'warn' : 'neutral'}
         padding="compact"
@@ -599,20 +603,30 @@
     {/if}
 
     {#if section === 'verdict'}
-      <NoticeBand
-        tone={verdict.tone === 'ok' ? 'ok' : 'warn'}
-        role="status"
-        label="Verdict"
-        title={verdict.label}
-      >
-        <p>{verdict.detail}</p>
-      </NoticeBand>
-
-      <FrameCard
-        tone={data.totals.blockingCount === 0 ? 'ok' : 'warn'}
-        padding="compact"
-        class="summary-card"
-      >
+      {#if releaseShipped}
+        <div class="release-receipt-actions">
+          <Button
+            variant="secondary"
+            size="sm"
+            onclick={() => nav(currentProjectHref('/release/criteria', activeProjectId))}
+          >
+            View release checks
+          </Button>
+        </div>
+      {:else}
+        <NoticeBand
+          tone={verdict.tone === 'ok' ? 'ok' : 'warn'}
+          role="status"
+          label="Verdict"
+          title={verdict.label}
+        >
+          <p>{verdict.detail}</p>
+        </NoticeBand>
+        <FrameCard
+          tone={data.totals.blockingCount === 0 ? 'ok' : 'warn'}
+          padding="compact"
+          class="summary-card"
+        >
         {#snippet header()}
           <SectionHeader
             title="Current counts"
@@ -707,7 +721,8 @@
             </ul>
           </div>
         {/if}
-      </FrameCard>
+        </FrameCard>
+      {/if}
     {/if}
 
     {#if section === 'criteria'}
@@ -1001,6 +1016,10 @@
 
   .crit-det {
     width: 100%;
+  }
+
+  .release-receipt-actions {
+    display: flex;
   }
 
   .crit-summary {

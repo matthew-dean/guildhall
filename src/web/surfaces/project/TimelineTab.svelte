@@ -20,10 +20,11 @@
   let historyLoadingMore = $state(false)
   let historyError = $state<string | null>(null)
   let historyPage = $state<ProjectActivityHistoryPage | null>(null)
+  let historyResult = $state<string | null>(null)
 
   $effect(() => {
     if ('recentEvents' in detail) {
-      events = (detail.recentEvents ?? []).slice().reverse()
+      events = newestFirst(detail.recentEvents ?? [])
       historyPage = null
       return
     }
@@ -38,7 +39,7 @@
       .then(page => {
         if (cancelled) return
         historyPage = page
-        events = dedupeEvents([...events, ...page.events])
+        events = mergeEvents(events, page.events)
       })
       .catch(error => {
         if (cancelled) return
@@ -51,19 +52,40 @@
   })
 
   async function loadOlderActivity() {
-    const cursor = historyPage?.nextCursor
+    let cursor = historyPage?.nextCursor
     if (cursor === undefined || historyLoadingMore) return
     historyLoadingMore = true
     historyError = null
+    historyResult = null
     try {
-      const response = await fetch(
-        `/api/project/activity/history?projectId=${encodeURIComponent(detail.id ?? '')}&limit=100&cursor=${cursor}`,
-        { cache: 'no-store' },
-      )
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const page = await response.json() as ProjectActivityHistoryPage
-      events = dedupeEvents([...events, ...page.events])
+      const before = operatorEventCount(events)
+      let page = historyPage
+      let pagesRead = 0
+      const visitedCursors = new Set<number>()
+
+      // Recent SSE history can overlap the first durable page. One owner click
+      // should skip that overlap instead of appearing to do nothing.
+      while (cursor !== undefined && pagesRead < 12 && !visitedCursors.has(cursor)) {
+        visitedCursors.add(cursor)
+        const response = await fetch(
+          `/api/project/activity/history?projectId=${encodeURIComponent(detail.id ?? '')}&limit=100&cursor=${cursor}`,
+          { cache: 'no-store' },
+        )
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        page = await response.json() as ProjectActivityHistoryPage
+        events = mergeEvents(events, page.events)
+        pagesRead += 1
+        if (operatorEventCount(events) > before || !page.hasMore) break
+        cursor = page.nextCursor
+      }
+
       historyPage = page
+      const added = operatorEventCount(events) - before
+      historyResult = added > 0
+        ? `Loaded ${added} older event${added === 1 ? '' : 's'}.`
+        : page?.hasMore
+          ? 'No additional visible activity was found yet.'
+          : 'No older activity remains.'
     } catch (error) {
       historyError = error instanceof Error ? error.message : String(error)
     } finally {
@@ -75,7 +97,7 @@
     const off = onEvent(ev => {
       const text = summarizeEvent(ev)
       if (!text) return
-      events = [ev, ...events]
+      events = mergeEvents(events, [ev])
     })
     return off
   })
@@ -131,6 +153,23 @@
     return out
   }
 
+  function eventTime(ev: EventEnvelope): number {
+    const parsed = Date.parse(ev.at ?? '')
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  function newestFirst(input: EventEnvelope[]): EventEnvelope[] {
+    return [...input].sort((left, right) => eventTime(right) - eventTime(left))
+  }
+
+  function mergeEvents(current: EventEnvelope[], incoming: EventEnvelope[]): EventEnvelope[] {
+    return newestFirst(dedupeEvents([...current, ...incoming]))
+  }
+
+  function operatorEventCount(input: EventEnvelope[]): number {
+    return dedupeEvents(input.filter(ev => !isProviderHealthEvent(ev) && !isRawTraceEvent(ev) && !isEmptyModelEvent(ev))).length
+  }
+
   const emptyModelEvents = $derived(events.filter(isEmptyModelEvent))
   const operatorEvents = $derived(dedupeEvents(events.filter(ev => !isProviderHealthEvent(ev) && !isRawTraceEvent(ev) && !isEmptyModelEvent(ev))))
   const rawTraceEvents = $derived(events.filter(isRawTraceEvent))
@@ -184,11 +223,6 @@
         </div>
       </details>
     {/if}
-    {#if historyPage?.hasMore}
-      <button type="button" class="history-more" onclick={loadOlderActivity} disabled={historyLoadingMore}>
-        {historyLoadingMore ? 'Loading older activity...' : 'Load older activity'}
-      </button>
-    {/if}
     <div class="feed">
       {#each operatorEvents as ev, i (i)}
         {@const text = summarizeEvent(ev)}
@@ -207,6 +241,16 @@
           </div>
         {/if}
       {/each}
+    </div>
+    <div class="history-pagination">
+      {#if historyPage?.hasMore}
+        <button type="button" class="history-more" onclick={loadOlderActivity} disabled={historyLoadingMore}>
+          {historyLoadingMore ? 'Loading older activity...' : 'Load older activity'}
+        </button>
+      {/if}
+      {#if historyResult}
+        <p class="muted compact history-result" role="status" aria-live="polite">{historyResult}</p>
+      {/if}
     </div>
   {/if}
 </Card>
@@ -302,6 +346,14 @@
     color: var(--accent);
     font: inherit;
     cursor: pointer;
+  }
+  .history-pagination {
+    display: grid;
+    justify-items: center;
+    gap: var(--gh-space-2);
+  }
+  .history-result {
+    margin: 0;
   }
   .history-more:hover:not(:disabled) {
     background: color-mix(in oklab, var(--accent) 10%, transparent);
