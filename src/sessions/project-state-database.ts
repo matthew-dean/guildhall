@@ -1850,8 +1850,20 @@ function hasWorkScopeTable(database: DatabaseSync): boolean {
   return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'work_scope'").get())
 }
 
-function workItemsWithScopeSelect(columns: string, includeScope: boolean): string {
+function workScopeHasDependencyColumns(database: DatabaseSync): boolean {
+  if (!hasWorkScopeTable(database)) return false
+  const columns = database.prepare('PRAGMA table_info(work_scope)').all() as JsonRecord[]
+  const names = new Set(columns.map(column => String(column.name ?? '')))
+  return names.has('dependency_blocked') && names.has('dependency_task_ids_json')
+}
+
+function workItemsWithScopeSelect(database: DatabaseSync, columns: string, includeScope: boolean): string {
   if (!includeScope) return `SELECT ${columns} FROM work_items`
+  const dependencyColumns = workScopeHasDependencyColumns(database)
+    ? `work_scope.dependency_blocked AS scope_row_dependency_blocked,
+      work_scope.dependency_task_ids_json AS scope_row_dependency_task_ids_json,`
+    : `0 AS scope_row_dependency_blocked,
+      '[]' AS scope_row_dependency_task_ids_json,`
   return `
     SELECT ${columns}, work_scope.scope AS scope_row_scope,
       work_scope.eligibility_reason AS scope_row_eligibility_reason,
@@ -1862,8 +1874,7 @@ function workItemsWithScopeSelect(columns: string, includeScope: boolean): strin
       work_scope.human_blocking AS scope_row_human_blocking,
       work_scope.count_in_project_totals AS scope_row_count_in_project_totals,
       work_scope.proof_blocked AS scope_row_proof_blocked,
-      work_scope.dependency_blocked AS scope_row_dependency_blocked,
-      work_scope.dependency_task_ids_json AS scope_row_dependency_task_ids_json,
+      ${dependencyColumns}
       work_scope.blocker_summary AS scope_row_blocker_summary,
       work_scope.source_refs_json AS scope_row_source_refs_json
     FROM work_items LEFT JOIN work_scope ON work_scope.task_id = work_items.id
@@ -3234,13 +3245,16 @@ function readDependentTaskIds(database: DatabaseSync, taskId: string): string[] 
 
 function readScopeRowsFromDatabase(database: DatabaseSync): ProjectStateDatabaseScopeRow[] {
   if (!hasWorkScopeTable(database)) return []
+  const dependencyColumns = workScopeHasDependencyColumns(database)
+    ? 'work_scope.dependency_blocked, work_scope.dependency_task_ids_json'
+    : "0 AS dependency_blocked, '[]' AS dependency_task_ids_json"
   const rows = database.prepare(`
     SELECT work_scope.task_id, work_items.parent_id,
       work_scope.scope, work_scope.eligibility_reason, work_scope.hierarchy_role,
       work_scope.handoff_state, work_scope.blocks_start, work_scope.blocks_release,
       work_scope.human_blocking, work_scope.count_in_project_totals,
-      work_scope.proof_blocked, work_scope.dependency_blocked,
-      work_scope.dependency_task_ids_json, work_scope.blocker_summary, work_scope.source_refs_json
+      work_scope.proof_blocked, ${dependencyColumns},
+      work_scope.blocker_summary, work_scope.source_refs_json
     FROM work_scope
     LEFT JOIN work_items ON work_items.id = work_scope.task_id
     ORDER BY work_scope.task_id
@@ -6219,7 +6233,7 @@ function readProjectStateDatabaseTaskDetailStateFromDatabase<T = unknown>(
 ): ProjectStateDatabaseTaskDetailState<T> | null {
   if (!tableExists(database, 'queue_state')) return null
   const includeScope = hasWorkScopeTable(database)
-  const row = database.prepare(`${workItemsWithScopeSelect('work_items.*', includeScope)} WHERE work_items.id = ?`)
+  const row = database.prepare(`${workItemsWithScopeSelect(database, 'work_items.*', includeScope)} WHERE work_items.id = ?`)
     .get(taskId) as JsonRecord | undefined
   if (!row) return null
   applyReleaseMembershipToTaskRows(database, [row])
@@ -6255,7 +6269,7 @@ function readProjectStateDatabaseTaskDetailStateFromDatabase<T = unknown>(
   }
   relatedTaskIds.delete(taskId)
   const relatedRows = options.includeRelatedTasks === true && relatedTaskIds.size > 0
-    ? database.prepare(`${workItemsWithScopeSelect('work_items.*', includeScope)} WHERE work_items.id IN (${[...relatedTaskIds].map(() => '?').join(', ')}) ORDER BY work_items.rowid`)
+    ? database.prepare(`${workItemsWithScopeSelect(database, 'work_items.*', includeScope)} WHERE work_items.id IN (${[...relatedTaskIds].map(() => '?').join(', ')}) ORDER BY work_items.rowid`)
       .all(...relatedTaskIds) as JsonRecord[]
     : []
   applyReleaseMembershipToTaskRows(database, relatedRows)
@@ -9625,7 +9639,7 @@ export function readProjectStateDatabaseTaskPointWithRevision(
   try {
     database.exec('BEGIN')
     inReadTransaction = true
-    const row = database.prepare(`${workItemsWithScopeSelect('work_items.*', hasWorkScopeTable(database))} WHERE work_items.id = ?`)
+    const row = database.prepare(`${workItemsWithScopeSelect(database, 'work_items.*', hasWorkScopeTable(database))} WHERE work_items.id = ?`)
       .get(taskId) as JsonRecord | undefined
     if (!row) return null
     applyReleaseMembershipToTaskRows(database, [row])
@@ -9673,7 +9687,7 @@ export function readProjectStateDatabaseTaskRelationships(
   const database = openDatabase(databasePath, { readOnly: true })
   try {
     const includeScope = hasWorkScopeTable(database)
-    const row = database.prepare(`${workItemsWithScopeSelect('work_items.id, work_items.parent_id, work_items.depends_on_json', includeScope)} WHERE work_items.id = ?`)
+    const row = database.prepare(`${workItemsWithScopeSelect(database, 'work_items.id, work_items.parent_id, work_items.depends_on_json', includeScope)} WHERE work_items.id = ?`)
       .get(taskId) as JsonRecord | undefined
     if (!row) return null
     applyTaskDependenciesToTaskRows(database, [row])
@@ -9723,7 +9737,7 @@ function readInventoryFromDatabase(
   const scopeOrder = scopeTableExists
     ? "CASE work_scope.scope WHEN 'included' THEN 0 WHEN 'deferred' THEN 1 ELSE 2 END, "
     : ''
-  const select = `${workItemsWithScopeSelect(columns, scopeTableExists)} ORDER BY ${scopeOrder}work_items.rowid`
+  const select = `${workItemsWithScopeSelect(database, columns, scopeTableExists)} ORDER BY ${scopeOrder}work_items.rowid`
   const rows = limit === null
     ? database.prepare(`${select} LIMIT -1 OFFSET ?`).all(offset)
     : database.prepare(`${select} LIMIT ? OFFSET ?`).all(limit, offset)
@@ -9749,7 +9763,7 @@ function readTaskFromDatabase(
   taskId: string,
   includeDefinitions: boolean,
 ): ProjectStateDatabaseTask | null {
-  const row = database.prepare(`${workItemsWithScopeSelect(
+  const row = database.prepare(`${workItemsWithScopeSelect(database,
     includeDefinitions ? FULL_WORK_ITEM_SCOPED_COLUMNS : COMPACT_WORK_ITEM_SCOPED_COLUMNS,
     hasWorkScopeTable(database),
   )} WHERE work_items.id = ?`).get(taskId) as JsonRecord | undefined
@@ -9793,7 +9807,7 @@ export function readProjectStateDatabaseTaskPointsWithRevision(
       ? []
       : (() => {
         const columns = options.includeDefinitions === true ? FULL_WORK_ITEM_SCOPED_COLUMNS : COMPACT_WORK_ITEM_SCOPED_COLUMNS
-        const taskRows = database.prepare(`${workItemsWithScopeSelect(columns, hasWorkScopeTable(database))} WHERE work_items.id IN (${ids.map(() => '?').join(', ')})`).all(...ids) as JsonRecord[]
+        const taskRows = database.prepare(`${workItemsWithScopeSelect(database, columns, hasWorkScopeTable(database))} WHERE work_items.id IN (${ids.map(() => '?').join(', ')})`).all(...ids) as JsonRecord[]
         applyReleaseMembershipToTaskRows(database, taskRows)
         applyTaskDependenciesToTaskRows(database, taskRows)
         const rows = taskRows.map(row => taskFromRow(row, false))
@@ -9862,7 +9876,7 @@ export function readProjectStateDatabaseCurrentTasksWithRevision(
     const columns = options.includeDefinitions === true ? FULL_WORK_ITEM_SCOPED_COLUMNS : COMPACT_WORK_ITEM_SCOPED_COLUMNS
     const taskRows = ids.length === 0
       ? []
-      : database.prepare(`${workItemsWithScopeSelect(columns, hasWorkScopeTable(database))} WHERE work_items.id IN (${ids.map(() => '?').join(', ')})`)
+      : database.prepare(`${workItemsWithScopeSelect(database, columns, hasWorkScopeTable(database))} WHERE work_items.id IN (${ids.map(() => '?').join(', ')})`)
         .all(...ids) as JsonRecord[]
     applyReleaseMembershipToTaskRows(database, taskRows)
     applyTaskDependenciesToTaskRows(database, taskRows)

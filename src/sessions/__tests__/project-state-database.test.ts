@@ -495,6 +495,19 @@ describe('project-state database', () => {
     writeProjectStateDatabaseSnapshot(tasksPath, {
       queue: { tasks: [{ id: 'task-legacy-scope', title: 'Legacy scope', status: 'ready' }] },
       summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+      scopeRows: [{
+        taskId: 'task-legacy-scope',
+        scope: 'included',
+        eligibilityReason: 'selected',
+        hierarchyRole: 'leaf',
+        handoffState: 'ready',
+        blocksStart: false,
+        blocksRelease: false,
+        humanBlocking: false,
+        dependencyBlocked: true,
+        dependencyTaskIds: ['task-prerequisite'],
+        sourceRefs: [],
+      }],
     })
 
     const databasePath = projectStateDatabasePath(projectRoot)
@@ -506,6 +519,12 @@ describe('project-state database', () => {
     `)
     legacyDatabase.close()
 
+    expect(readProjectStateDatabaseTaskPoint(tasksPath, 'task-legacy-scope')?.scopeRow).toMatchObject({
+      dependencyBlocked: false,
+    })
+    expect(readProjectStateDatabaseProjectionState(tasksPath)?.scopeRows).toEqual([
+      expect.objectContaining({ taskId: 'task-legacy-scope', dependencyBlocked: false }),
+    ])
     writeProjectStateDatabaseSummarySnapshot(tasksPath, {
       summary: { generatedAt: '2026-07-14T00:01:00.000Z', freshness: 'current' },
     })
