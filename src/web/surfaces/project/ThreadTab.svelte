@@ -40,7 +40,7 @@
   import CardListItem from '../../lib/CardListItem.svelte'
   import Eyebrow from '../../lib/Eyebrow.svelte'
   import ResolveEscalationModal from '../drawer/ResolveEscalationModal.svelte'
-  import { friendlyStewardName } from '../../lib/display.js'
+  import { friendlyStatus, friendlyStewardName } from '../../lib/display.js'
   import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { onEvent } from '../../lib/events.js'
@@ -183,6 +183,7 @@
     kind: 'spec_review'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; spec: string
+    taskStatus?: string
     constructionMode?: ConstructionMode | undefined
     gitStory?: GitStorySnapshot | undefined
     draftCoordinators?: Array<{
@@ -501,7 +502,11 @@
       turnId: turn.id,
       taskId: turn.taskId,
       taskTitle: turn.taskTitle,
-      title: turn.taskId === 'task-meta-intake' ? 'Review work shape' : 'Approve spec',
+      title: turn.taskId === 'task-meta-intake'
+        ? 'Review work shape'
+        : specTurnCanApprove(turn)
+          ? 'Approve spec'
+          : 'Review draft spec',
       content: turn.spec.trim() || '_No spec saved yet._',
     }
   }
@@ -524,10 +529,37 @@
     return turn.taskId === 'task-meta-intake' ? 'Yes, use this split' : 'Approve spec'
   }
 
+  function specTurnCanApprove(turn: SpecReviewTurn): boolean {
+    return specTurnTaskStatus(turn) === 'spec_review'
+  }
+
+  function specTurnTaskStatus(turn: SpecReviewTurn): string | undefined {
+    if (turn.taskStatus) return turn.taskStatus
+    const relatedTurn = turns.find(candidate =>
+      candidate.kind === 'inflight' &&
+      candidate.taskId === turn.taskId &&
+      typeof candidate.taskStatus === 'string' &&
+      candidate.taskStatus.length > 0,
+    )
+    return relatedTurn?.kind === 'inflight' ? relatedTurn.taskStatus : undefined
+  }
+
+  function specTurnApprovalBlockedMessage(turn: SpecReviewTurn): string {
+    const taskStatus = specTurnTaskStatus(turn)
+    if (taskStatus === 'exploring') {
+      return 'Guildhall is still shaping this draft. Request changes or open details; approval becomes available when the task reaches spec review.'
+    }
+    if (taskStatus) {
+      return `This task is ${friendlyStatus(taskStatus).toLowerCase()}, so the spec is not ready for approval yet.`
+    }
+    return 'Guildhall could not confirm this task is ready for spec approval. Open details or refresh before approving.'
+  }
+
   function documentPreviewApproveDisabled(turn: BriefTurn | SpecReviewTurn): boolean {
     if (busyTurnId === turn.id) return true
     const blockedByQuestions = hasOpenQuestionsForTask(turn.taskId)
     if (turn.kind === 'brief_approval') return blockedByQuestions
+    if (!specTurnCanApprove(turn)) return true
     const missingSpec = turn.taskId !== 'task-meta-intake' && turn.spec.trim().length === 0
     return blockedByQuestions || missingSpec
   }
@@ -541,12 +573,23 @@
     queueMicrotask(() => scrollDetailToBottom('smooth'))
   }
 
+  function openDocumentPreviewTaskDetails(): void {
+    const turn = documentPreviewTurn()
+    if (!turn || turn.kind === 'brief_approval') return
+    documentPreview = null
+    openTaskDetails(turn.taskId)
+  }
+
   async function approveDocumentPreview(): Promise<void> {
     const turn = documentPreviewTurn()
     if (!turn) return
     if (turn.kind === 'brief_approval') {
       const ok = await approveBrief(turn)
       if (ok) documentPreview = null
+      return
+    }
+    if (!specTurnCanApprove(turn)) {
+      replyErrors = { ...replyErrors, [turn.id]: specTurnApprovalBlockedMessage(turn) }
       return
     }
     const ok = await approveSpec(turn)
@@ -4488,6 +4531,7 @@
               {:else if t.kind === 'spec_review'}
                 {@const missingSpec = t.taskId !== 'task-meta-intake' && t.spec.trim().length === 0}
                 {@const isMetaIntakeDraft = t.taskId === 'task-meta-intake'}
+                {@const canApproveSpecTurn = specTurnCanApprove(t)}
                 {@const proposedCount = t.draftCoordinators?.length ?? 0}
                 {@const starterRoutingDraft = isStarterRoutingDraft(t.draftCoordinators)}
                 <div class="prompt-row">
@@ -4496,9 +4540,14 @@
                       ? starterRoutingDraft
                         ? `Proposed ${proposedCount || 0} starter ${proposedCount === 1 ? 'lane' : 'lanes'}`
                         : `Inferred ${proposedCount || 0} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`
-                      : 'Spec draft awaiting approval'}
+                      : canApproveSpecTurn
+                        ? 'Spec draft awaiting approval'
+                        : 'Spec draft still being shaped'}
                   </h3>
                 </div>
+                {#if !isMetaIntakeDraft && !canApproveSpecTurn}
+                  <p class="why">{specTurnApprovalBlockedMessage(t)}</p>
+                {/if}
                 {#if isMetaIntakeDraft && t.draftCoordinators?.length}
                   <p class="why decision-question">
                     {starterRoutingDraft
@@ -4597,13 +4646,15 @@
                     <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                       {isMetaIntakeDraft ? 'Change the split' : 'Request changes'}
                     </Button>
-                    <Button
-                      variant="primary"
-                      disabled={busyTurnId === t.id || blockedByQuestions || missingSpec}
-                      onclick={() => approveSpec(t)}
-                    >
-                      {isMetaIntakeDraft ? 'Yes, use this split' : 'Approve spec'}
-                    </Button>
+                    {#if canApproveSpecTurn}
+                      <Button
+                        variant="primary"
+                        disabled={busyTurnId === t.id || blockedByQuestions || missingSpec}
+                        onclick={() => approveSpec(t)}
+                      >
+                        {isMetaIntakeDraft ? 'Yes, use this split' : 'Approve spec'}
+                      </Button>
+                    {/if}
                   </Row>
                   {/if}
                 {/if}
@@ -5876,6 +5927,9 @@
         {#if previewTurn && replyErrors[previewTurn.id]}
           <p class="error">{replyErrors[previewTurn.id]}</p>
         {/if}
+        {#if previewTurn?.kind === 'spec_review' && !specTurnCanApprove(previewTurn)}
+          <p class="error">{specTurnApprovalBlockedMessage(previewTurn)}</p>
+        {/if}
       </div>
     {/if}
   {/snippet}
@@ -5885,16 +5939,23 @@
       <Button variant="ghost" disabled={busyTurnId === previewTurn.id} onclick={() => { documentPreview = null }}>
         Cancel
       </Button>
+      {#if previewTurn.kind === 'spec_review' && !specTurnCanApprove(previewTurn)}
+        <Button variant="secondary" disabled={busyTurnId === previewTurn.id} onclick={openDocumentPreviewTaskDetails}>
+          Open details
+        </Button>
+      {/if}
       <Button variant="secondary" disabled={busyTurnId === previewTurn.id} onclick={requestDocumentPreviewChanges}>
         {documentPreviewChangeLabel(previewTurn)}
       </Button>
-      <Button
-        variant="primary"
-        disabled={documentPreviewApproveDisabled(previewTurn)}
-        onclick={approveDocumentPreview}
-      >
-        {documentPreviewApproveLabel(previewTurn)}
-      </Button>
+      {#if previewTurn.kind !== 'spec_review' || specTurnCanApprove(previewTurn)}
+        <Button
+          variant="primary"
+          disabled={documentPreviewApproveDisabled(previewTurn)}
+          onclick={approveDocumentPreview}
+        >
+          {documentPreviewApproveLabel(previewTurn)}
+        </Button>
+      {/if}
     {/if}
   {/snippet}
 </Modal>

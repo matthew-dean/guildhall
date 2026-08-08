@@ -259,6 +259,7 @@ describe('current Thread projection refresh', () => {
     expect(projection?.turns.find(turn => turn.id === 'spec:task-rich-thread')).toMatchObject({
       kind: 'spec_review',
       spec: '## Summary\n\nThe selected Thread task keeps its rich fields.',
+      taskStatus: 'spec_review',
     })
     const stored = readProjectStateDatabaseCurrentThread(projectRoot)
     expect(stored?.sourceRevision).toEqual(expect.any(String))

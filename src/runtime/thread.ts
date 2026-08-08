@@ -163,6 +163,7 @@ export interface SpecReviewTurn extends TurnBase {
   kind: 'spec_review'
   taskId: string
   taskTitle: string
+  taskStatus?: string | undefined
   constructionMode: ConstructionMode
   gitStory?: GitStorySnapshot | undefined
   spec: string
@@ -2118,6 +2119,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase: status === 'active' ? 'spec' : 'intake',
         taskId,
         taskTitle,
+        taskStatus,
         constructionMode,
         spec,
         draftCoordinators,
@@ -2227,29 +2229,6 @@ export function buildThread(opts: BuildThreadOptions): Thread {
 
     // Open escalations
     const openEscalations = activeEscalations(t)
-    if (openEscalations.length === 0 && taskStatus === 'blocked') {
-      const summary = typeof t.blockReason === 'string' && t.blockReason.trim()
-        ? t.blockReason.trim()
-        : 'This work is blocked and needs a recovery decision.'
-      const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
-      if (status === 'active') activeAssigned = true
-      turns.push({
-        kind: 'escalation',
-        id: `blocked:${taskId}`,
-        at: typeof t.updatedAt === 'string' ? t.updatedAt : createdAt,
-        persona: 'worker',
-        status,
-        phase: 'blocked',
-        taskId,
-        taskTitle,
-        constructionMode,
-        escalationId: `blocked:${taskId}`,
-        escalationHandling: 'owner_required',
-        summary,
-        details: summary,
-        activity: liveActivity.get(taskId),
-      })
-    }
     for (const esc of openEscalations) {
       const escId = typeof esc.id === 'string' ? esc.id : ''
       const at = typeof esc.raisedAt === 'string' ? esc.raisedAt : createdAt

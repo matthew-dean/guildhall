@@ -54510,3 +54510,68 @@ Repair:
       bundled runtime resolution.
 - Rollback/revert: remove the new aliases and restore prior imports; no data
       migration or cleanup is needed.
+
+## 2026-08-07 - Narrative Harness 0.13 Installed-App Flow Audit Reopen
+
+- Work id: `0.13.0/narrative-harness-installed-flow-reopen`.
+- Trigger: after installing `guildhall@0.13.0`, the owner clicked through
+      Narrative Harness and immediately hit ordinary-flow failures: Overview
+      felt dense and disorienting, `Draft task brief` temporarily produced a
+      503/blank-screen recovery path, and `View spec` exposed an `Approve spec`
+      action for a task that the backend correctly reported was still
+      `exploring`, not `spec_review`.
+- User job: from Overview, the owner can understand the next real decision,
+      open the obvious task/spec surface, and see only actions that can
+      actually succeed. If Guildhall is still shaping a draft, the UI must say
+      that plainly and offer change/details actions, not a doomed approval.
+- State-agreement finding: the Thread spec-review turn was allowed to represent
+      both `spec_review` work and `exploring` work with a saved draft spec, but
+      the document modal always rendered the approval contract. The backend
+      `approveSpec` contract was right to reject the task; the owner-facing
+      modal was wrong to offer the button.
+- [x] Immediate repair: include `taskStatus` on spec-review thread turns and
+      gate Thread's spec modal/card approval affordance to an effective
+      same-task status of `spec_review`. Older persisted projections that lack
+      `taskStatus` on the spec turn now resolve the status from a same-task
+      in-flight turn before rendering actions. Exploring draft specs render as
+      "Review draft spec" with request-changes/details actions.
+- [x] Installed-app proof: rebuilt, ran `pnpm dev:install`, restarted Guildhall,
+      and verified `/api/stale-server` on PID `87521` reported `stale:false`
+      for `/Users/matthew/.guildhall/app/0.13.1-1786150881-86944/app/dist/cli.js`.
+      Browser proof on `http://localhost:7777/projects/narrative-harness/thread`
+      reported app version `v0.13.1`; clicking `View spec` opened `Review draft
+      spec` with buttons `Cancel`, `Open details`, and `Request changes`; no
+      `Approve spec` button was present and no browser warning/error logs were
+      captured.
+- [ ] Follow-up: run a full zero-context Narrative Harness flow audit across
+      Overview, Thread, Work, task drawer, Release, and error recovery. Treat
+      orientation density and transient 503 recovery as release blockers until
+      the user can tell what is happening, what is next, and what failed
+      without refreshing.
+- [ ] Follow-up: replace owner-facing long task identifiers with Jira/Linear-
+      style project-local display keys. Durable IDs can remain internal, but
+      visible errors, cards, modals, and thread copy should prefer the task
+      title plus a short key such as `GH-142`/`NAR-27` when disambiguation is
+      needed. The installed-app proof still found raw `task-import-...` text in
+      the spec body, so the display-key repair must cover model-authored spec
+      references as well as system copy.
+
+### Contract Touch Decision
+
+- Work id: `0.13.0/narrative-harness-installed-flow-reopen`.
+- Touched contracts: Thread `spec_review` turn payload and Thread document
+      modal approval affordance. Considered but not touched: backend
+      `approveSpec` transition rules, task lifecycle statuses, task ID storage,
+      Overview orientation model, and project summary projection.
+- Required follow-up: full installed-app flow audit, 503 recovery hardening,
+      and project-local display-key design.
+- Proof required/provided: focused Thread component regression now proves an
+      exploring task with a saved draft spec cannot expose `Approve spec` in
+      the document modal, including the stale projection shape where only the
+      same-task in-flight turn carries `taskStatus`. Runtime projection
+      regression proves freshly rebuilt spec-review turns preserve
+      `taskStatus`. Installed-app Browser proof on Narrative Harness confirms
+      the repaired modal/action set in the live local app.
+- Apply/revert behavior: reverting removes the status field from Thread turns
+      and restores the invalid approval affordance for exploring draft specs;
+      backend task state remains unchanged.

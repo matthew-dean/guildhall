@@ -191,6 +191,7 @@ function specReviewTurn(taskId: string, overrides: Record<string, unknown> = {})
     phase: 'spec',
     taskId,
     taskTitle: taskId === 'task-meta-intake' ? 'Inspect the repo' : 'Knit: add link editor controls',
+    taskStatus: 'spec_review',
     constructionMode: 'blueprint',
     spec: '## Summary\nBuild the focused link editor controls.\n\n## Acceptance Criteria\n- The focused controls exist.',
     ...overrides,
@@ -2566,9 +2567,9 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findAllByText('Needs recovery')
-    expect(screen.getAllByText('Context was found, but the next draft was not saved.').length).toBeGreaterThan(0)
-    expect(screen.getByText(/transcript may contain useful observations/i)).toBeTruthy()
+    await screen.findAllByText('Queued')
+    expect(screen.getAllByText('The spec lane stalled before saving the next useful draft. This is not a project decision you need to solve by hand.').length).toBeGreaterThan(0)
+    expect(screen.getByText(/Use Retry spec to close this blocker/i)).toBeTruthy()
     expect(screen.queryByText('Worker is stuck')).toBeNull()
   })
 
@@ -3050,6 +3051,36 @@ describe('ThreadTab', () => {
       expect(within(stillOpenDialog).getByText('Task is not in spec_review status.')).toBeTruthy()
       expect(screen.getByRole('button', { name: /view spec/i })).toBeTruthy()
     })
+  })
+
+  it('does not offer spec approval while the backing task is still being shaped', async () => {
+    installFetchFakes([
+      specReviewTurn('task-link-controls', {
+        taskStatus: undefined,
+      }),
+      importedDraftTurn({
+        id: 'inflight-task-link-controls',
+        taskId: 'task-link-controls',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'exploring',
+        importedDraft: false,
+        phase: 'spec',
+        summary: 'Your answers and a spec draft are saved. Coordinator review is next.',
+      }),
+    ], 'spec-task-link-controls', {
+      approveSpecResponse: json({ error: 'Approve should not be called for exploring draft specs.' }, { status: 500 }),
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('button', { name: /view spec/i })
+    await userEvent.click(screen.getByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /review draft spec/i })
+
+    expect(within(dialog).getByText(/Guildhall is still shaping this draft/i)).toBeTruthy()
+    expect(within(dialog).queryByRole('button', { name: /^approve spec$/i })).toBeNull()
+    expect(within(dialog).getByRole('button', { name: /request changes/i })).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: /open details/i })).toBeTruthy()
   })
 
   it('uses View brief as the active brief primary action and moves approval into the modal', async () => {
