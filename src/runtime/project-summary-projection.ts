@@ -788,6 +788,10 @@ export function projectSummaryScopeRowsForQueue(
     blocksRelease: row.blocksRelease,
     humanBlocking: row.humanBlocking,
     proofBlocked: row.proofBlocked,
+    dependencyBlocked: row.dependencyBlocked === true,
+    ...(row.dependencyTaskIds?.length
+      ? { dependencyTaskIds: [...row.dependencyTaskIds] }
+      : {}),
     ...(row.blockerSummary ? { blockerSummary: row.blockerSummary } : {}),
     sourceRefs: [...row.sourceRefs],
   }))
@@ -1643,6 +1647,10 @@ function synchronizeIndexedOrientationSpine(
       blocksStart: current.blocksStart,
       blocksRelease: current.blocksRelease,
       humanBlocking: current.humanBlocking,
+      dependencyBlocked: current.dependencyBlocked === true,
+      ...(current.dependencyTaskIds?.length
+        ? { dependencyTaskIds: [...current.dependencyTaskIds] }
+        : {}),
     }
   })
   const counts = input.releaseSummary.counts
@@ -1957,6 +1965,8 @@ export function writeProjectSummaryProjectionFromIndexedState(
     humanBlocking: row.humanBlocking,
     countInProjectTotals: row.countInProjectTotals !== false,
     proofBlocked: row.proofBlocked === true,
+    dependencyBlocked: row.dependencyBlocked === true,
+    dependencyTaskIds: row.dependencyTaskIds ?? [],
     blockerSummary: row.blockerSummary ?? null,
     sourceRefs: row.sourceRefs,
   })

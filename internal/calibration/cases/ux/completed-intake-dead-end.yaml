@@ -12,10 +12,10 @@ artifacts:
     content: "Your answers are saved. Review the older spec draft."
 reviewLanes:
   - ux_comprehension
-  - workflow_integrity
+  - data_integrity
 knownFindings:
   - id: intake-handoff-missing
-    lane: workflow_integrity
+    lane: data_integrity
     severity: critical
     summary: Completion has no typed transition into actionable work.
     impact: The owner cannot tell whether the release request was saved, queued, lost, or replaced.
@@ -28,7 +28,7 @@ falsePositiveTraps:
   - id: deliberate-note-only-intake
     summary: Do not fail a flow explicitly presented as note capture when no work creation was promised.
 source:
-  kind: production
+  kind: production_miss
   citation: Narrative Harness Stage 2 release intake, 2026-08-08.
 labelGovernance:
   labeledBy: product-review

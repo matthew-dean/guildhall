@@ -558,6 +558,44 @@ describe('approveSpec', () => {
     expect(queue.tasks[0]!.status).toBe('ready')
   })
 
+  it('approves an imported spec using the same typed owner command context as spec authoring', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.references = ['docs/source-plan.md']
+    task.structuredSpec = {
+      ...boundedStructuredSpec(),
+      acceptanceCriteria: [{
+        scenario: 'Run the focused desktop sidecar contract suite',
+        expectation: 'The typed sidecar contract passes',
+        verificationMode: 'automated',
+        command: 'pnpm test:desktop-sidecar',
+        expectedExit: 'zero',
+      }],
+      verification: ['Run pnpm test:desktop-sidecar'],
+    }
+    task.acceptanceCriteria = []
+    await writeQueue(queue)
+    await appendTaskEvidence(tmpDir, task.id, {
+      id: 'owner-command-revision',
+      kind: 'note',
+      recordedAt: '2026-07-14T00:01:00.000Z',
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: 'Add and run `pnpm test:desktop-sidecar` as the exact acceptance command.',
+        structured: {
+          event: 'document_revision_requested',
+          target: 'spec',
+          requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+        },
+      },
+    })
+
+    const result = await approveSpec({ memoryDir, taskId: task.id })
+
+    expect(result).toEqual({ success: true, newStatus: 'ready' })
+  })
+
   it('preserves a fresh lifecycle fence while approving its new spec', async () => {
     const reopenedAt = '2026-07-23T04:27:00.000Z'
     await upsertTaskRuntimeState(tmpDir, 'task-001', {
@@ -672,6 +710,8 @@ describe('approveSpec', () => {
       userJob: 'A developer can run the fixture loop and inspect a saved run record.',
       successMetric: 'The fixture loop exits 0 and saves reviewer and writer output.',
       authoredBy: 'system:completion-boundary',
+      approvedBy: 'human',
+      approvedAt: expect.any(String),
     })
   })
 
@@ -1518,6 +1558,31 @@ describe('approveSpec', () => {
       createdAt: '2026-05-28T12:00:00.000Z',
       createdBy: 'task-sizing',
     }
+    task.gateResults = [{
+      gateId: 'old-proof',
+      type: 'hard',
+      passed: true,
+      checkedAt: '2026-08-08T00:00:01.000Z',
+    }]
+    task.reviewVerdicts = [{
+      verdict: 'approve',
+      reviewerPath: 'llm',
+      reason: 'The retired draft passed its old review.',
+      failingSignals: [],
+      recordedAt: '2026-08-08T00:00:02.000Z',
+    }]
+    task.adjudications = [{
+      round: 1,
+      trigger: 'explicit_request',
+      dissenters: [],
+      winningConcerns: [],
+      supersededConcerns: [],
+      summary: 'The old review was accepted.',
+      rationale: 'This belongs to the retired plan history.',
+      scopeInstructions: [],
+      decidedBy: 'human',
+      decidedAt: '2026-08-08T00:00:03.000Z',
+    }]
     await writeQueue(queue)
 
     const approved = await approveSpec({ memoryDir, taskId: task.id })
@@ -1951,7 +2016,7 @@ describe('resumeExploring', () => {
     const result = await resumeExploring({
       memoryDir,
       taskId: task.id,
-      message: 'Add exact packaged-app proof before approval.',
+      message: 'Add exact `pnpm test:desktop-sidecar` and `pnpm package:desktop-spike` proof before approval.',
       revisionTarget: 'spec',
     })
     expect(result.success).toBe(true)
@@ -1961,6 +2026,8 @@ describe('resumeExploring', () => {
       status: 'exploring',
       productBrief: { userJob: 'Prove a framework-neutral desktop sidecar.' },
       acceptanceCriteria: [],
+      // The old records remain in historical evidence, but the effective
+      // current task excludes them behind the new plan revision boundary.
       gateResults: [],
       reviewVerdicts: [],
       adjudications: [],
@@ -1968,9 +2035,41 @@ describe('resumeExploring', () => {
     expect(queue.tasks[0]!.spec).toBeUndefined()
     expect(queue.tasks[0]!.sizePlan).toBeUndefined()
     expect(queue.tasks[0]!.notes.at(-1)).toMatchObject({
-      content: 'Add exact packaged-app proof before approval.',
-      structured: { event: 'document_revision_requested', target: 'spec' },
+      content: 'Add exact `pnpm test:desktop-sidecar` and `pnpm package:desktop-spike` proof before approval.',
+      structured: {
+        event: 'document_revision_requested',
+        target: 'spec',
+        requiredAcceptanceCommands: ['pnpm test:desktop-sidecar', 'pnpm package:desktop-spike'],
+      },
     })
+  })
+
+  it('retires the requested document while preserving task status', async () => {
+    let queue = await readQueue()
+    queue.tasks[0]!.status = 'spec_review'
+    queue.tasks[0]!.spec = buildableSpec()
+    queue.tasks[0]!.structuredSpec = boundedStructuredSpec()
+    queue.tasks[0]!.acceptanceCriteria = [{
+      id: 'old-ac',
+      description: 'The old plan passes.',
+      verifiedBy: 'review',
+      met: false,
+    }]
+    await writeQueue(queue)
+
+    const result = await resumeExploring({
+      memoryDir,
+      taskId: 'task-001',
+      message: 'Retire this plan without changing the current lifecycle status.',
+      preserveStatus: true,
+      revisionTarget: 'spec',
+    })
+
+    expect(result.success).toBe(true)
+    queue = await readQueue()
+    expect(queue.tasks[0]).toMatchObject({ status: 'spec_review', acceptanceCriteria: [] })
+    expect(queue.tasks[0]!.spec).toBeUndefined()
+    expect(queue.tasks[0]!.structuredSpec).toBeUndefined()
   })
 
   it('can add a human steering note without reopening spec intake', async () => {

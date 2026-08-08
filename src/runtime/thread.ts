@@ -243,6 +243,8 @@ export interface InFlightTurn extends TurnBase {
   importedDraft?: boolean | undefined
   shapingBlockers?: TaskShapingBlocker[] | undefined
   dependencyBlockers?: Array<{ taskId: string; title: string }> | undefined
+  dependencyState?: 'waiting' | 'clear' | undefined
+  canStart?: boolean | undefined
   liveAgent?: {
     name: string
     startedAt?: string | undefined
@@ -1957,6 +1959,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       | undefined
     const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
     const liveAgent = liveAgents.get(taskId)
+    const effectiveLiveAgent = runIsActive ? liveAgent : undefined
     const hasSpecDraft = hasSpecDraftContent(t)
     const briefApproved = hasApprovedProductBrief(t)
     const approvedBriefNeedsSpec = briefApproved && !hasSpecDraft
@@ -1970,6 +1973,12 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       if (dependency?.status === 'done') return []
       return [{ taskId: dependencyId, title: dependency ? displayTaskTitle(dependency) : dependencyId }]
     })
+    const taskStatusCanStart = ['ready', 'import_draft', 'exploring', 'in_progress', 'review', 'gate_check']
+      .includes(taskStatus)
+    const runBlocksTaskStart = !effectiveLiveAgent && taskStatus !== 'import_draft' &&
+      (opts.runStatus === 'running' || opts.runStatus === 'stopping') &&
+      ['ready', 'exploring', 'in_progress', 'review', 'gate_check'].includes(taskStatus)
+    const canStart = dependencyBlockers.length === 0 && !effectiveLiveAgent && taskStatusCanStart && !runBlocksTaskStart
     if (hasReviewableProductBrief(brief) && unansweredQuestions.length === 0 && dependencyBlockers.length === 0) {
       const status: TurnStatus = !briefRequiresOwnerApproval
         ? 'done'
@@ -2150,9 +2159,12 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       !hasUnansweredQuestions &&
       !hasActiveBriefTurn
     ) {
-      const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
+      const status: TurnStatus = dependencyBlockers.length > 0
+        ? 'pending'
+        : !activeAssigned
+          ? 'active'
+          : 'pending'
       if (status === 'active') activeAssigned = true
-      const effectiveLiveAgent = runIsActive ? liveAgent : undefined
       const livePersona = personaForAgent(effectiveLiveAgent?.name)
       const persona = livePersona ?? (taskStatus === 'exploring' || taskStatus === 'import_draft' || taskStatus === 'spec_review' ? 'spec' : 'worker')
       const queuedSpecRevision = isQueuedSpecRevision(t)
@@ -2234,6 +2246,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         importedDraft,
         shapingBlockers: shapingBlockers.length > 0 ? shapingBlockers : undefined,
         dependencyBlockers: dependencyBlockers.length > 0 ? dependencyBlockers : undefined,
+        dependencyState: dependencyBlockers.length > 0 ? 'waiting' : 'clear',
+        canStart,
         liveAgent: effectiveLiveAgent,
         activity: liveActivity.get(taskId),
         checklist:
@@ -2365,7 +2379,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const pendingRunnableTurn = [...turns].reverse().find(turn =>
       turn.status === 'pending' &&
       turn.kind !== 'setup_step' &&
-      !(turn.kind === 'inflight' && (turn.dependencyBlockers?.length ?? 0) > 0),
+      !(turn.kind === 'inflight' && turn.dependencyState === 'waiting'),
     )
     if (pendingRunnableTurn) pendingRunnableTurn.status = 'active'
   }

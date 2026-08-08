@@ -83,6 +83,39 @@ help_summary: |
   The run was stopped, the false lifecycle was superseded through the audited
   spec-rerun action, and the retry discriminator now requires prior completion
   for ordinary work. A production-miss calibration case protects the boundary.
+- [ ] Make a timed-out spec retry terminal and legible when the replacement
+  provider call aborts. Installed task `task-086` remained `running` and
+  `exploring` after the second call emitted `Stop requested; canceling the
+  active model call`; the owner had to pause it manually to recover.
+- [ ] Prove installed service lifecycle ownership. The packaged LaunchAgent
+  and `guildhall start` both attempted to own port 7777: the CLI forked a
+  detached process while KeepAlive repeatedly respawned and logged port-in-use
+  failures. Start and stop must control the LaunchAgent when it is installed,
+  with exactly one supervised listener.
+- [x] Enforce owner-required acceptance commands across spec revision. After
+  three explicit corrections, installed task `task-086` reached review with
+  `pnpm test:desktop-sidecar` and `pnpm package:desktop-spike` silently changed
+  into review-only criteria; only generic typecheck/build commands remained.
+  Owner correction commands need typed persistence and save-time enforcement.
+- [x] Keep owner-revision evidence rooted at the registered workspace when a
+  task targets a subdirectory. The first typed-command enforcement build still
+  accepted task `task-086` without either required command because validation
+  read evidence below its `docs/harness/` target while the revision evidence
+  was correctly stored at the Narrative Harness project root.
+- [x] Ignore a stale `rerun_spec` lifecycle marker after its task advances out
+  of `exploring`. Installed task `task-086` was simultaneously projected as
+  `paused_live_work` and as actively running because the durable recovery
+  marker outlived the ready-to-worker transition.
+- [x] Persist typed worker command results into recovery checkpoints and count
+  checkpoint-scoped progress only when a structured passing verification is
+  present. Installed task `task-086` repeatedly failed
+  `pnpm package:desktop-spike`, but the failed result was dropped while display
+  prose called the turn "verified work"; that reset no-progress recovery and
+  produced twelve worker ticks without a handoff or terminal recovery state.
+- [ ] Keep isolated worktree bootstrap from checkpointing unrelated dirty
+  shared-checkout files into a task branch. Task `task-086` inherited the
+  owner's package-lock deletion and an untracked fixture in its bootstrap
+  commit even though neither belongs to the Tauri architecture gate.
 - The first two fresh shaping attempts returned no change because the task
   transcript still presented the superseded approval as if it were current.
   Spec rerun now explicitly marks earlier approval history as non-authoritative
@@ -115,20 +148,111 @@ help_summary: |
   rows and Thread turns; reverting leaves authoritative task dependencies and
   release state unchanged.
 
+### Approval-To-Worker Liveness Contract Touch Decision
+
+- Work id: `approval-to-worker-liveness`.
+- Touched contracts: current lifecycle projection after spec rerun, shared
+  owner-input review routing, worker checkpoint verification, worker
+  no-progress recovery, and command-proof freshness without a materialized
+  proof path.
+- Considered but not touched: task status transition graph, provider prose,
+  acceptance command identity, release membership, retry thresholds, and
+  owner escalation policy.
+- Required follow-up: rebuild/install the packaged app, restart the supervised
+  service, and rerun Narrative Harness task `task-086` through a visible failed
+  package command and recovery handoff.
+- Proof required: focused action/decision, current-lifecycle, proof-health,
+  checkpoint recovery, and intake route regressions; typecheck; contract lint;
+  installed API/browser agreement.
+- Proof provided: focused runtime suites, 126 cross-boundary regressions,
+  `pnpm typecheck`, `git diff --check`, and `pnpm lint:contracts`; installed
+  proof remains open until the new build is running.
+- Owner-review items: the owner explicitly requires the task flow to remain
+  understandable and self-recovering while this release is driven; no owner
+  choice is needed to retry a failed typed package command.
+- Waivers: none.
+- Apply/revert: applying ignores a stale exploring-only lifecycle marker once
+  work advances and requires typed passing verification for checkpoint-only
+  progress; automatic review promotion requires the same typed pass. Reverting
+  restores the contradictory paused/running projection and failed-command retry
+  loop.
+
+### Approval-To-Worker Liveness Schema Migration Decision
+
+- Persisted schema touched: none. Existing checkpoint `resumeContext.verification`
+  records are now populated from existing typed command-result metadata.
+- Scope and class: behavior correction within the current checkpoint schema;
+  no new field, enum value, or reader version.
+- Existing data impact: old checkpoints with an empty verification array remain
+  readable and are no longer treated as verified progress merely because
+  display metadata names touched files.
+- Migration id and pre-run requirement: none.
+- Compatibility, fixtures, and tests: existing optional checkpoint arrays stay
+  valid; focused clean-worktree, failed-verification, lifecycle, and
+  no-progress tests cover both old and corrected records.
+- Owner-facing plan and rollback: no migration prompt; rollback changes only
+  runtime interpretation and leaves checkpoint history intact.
+
+### Approval And Proof Recovery Calibration Contract Touch Decision
+
+- Work id: `approval-and-proof-recovery-calibration`.
+- Touched contracts:
+  `internal/calibration/cases/ux/unimplemented-task-proof-recovery.yaml`,
+  `internal/calibration/cases/ux/vague-approval-state.yaml`,
+  `internal/calibration/cases/ux/completed-intake-dead-end.yaml`, and
+  `internal/calibration/cases/ux/collapsed-rail-moving-target.yaml`.
+- Considered but not touched: calibration evaluator schemas, severity enums,
+  public documentation, provider prompts, and runtime task lifecycle enums.
+- Required follow-up: keep each production miss paired with a deterministic
+  runtime or rendered regression and complete the installed task 086 proof.
+- Proof required and provided: the matching intake, proof-health, shared-action,
+  current-lifecycle, Thread, and rendered-surface regressions pass; `pnpm
+  lint:contracts` reports `all touched contract paths have decision evidence`.
+- Waivers: none.
+- Owner-review items: these cases preserve the owner's reported failure modes;
+  they do not introduce new product policy or require a separate owner choice.
+- Apply/revert: applying updates internal calibration expectations only;
+  reverting does not mutate project state or user data.
+
+### Installed Service Lifecycle Contract Touch Decision
+
+- Work id: `installed-service-lifecycle-ownership`.
+- Touched contracts: packaged macOS `guildhall start`, `guildhall open`, and
+  `guildhall stop` process ownership for the default port.
+- Considered but not touched: foreground `serve`, custom ports, Linux/Windows
+  daemon behavior, LaunchAgent plist shape, and project run pause/resume.
+- Required follow-up: installed proof must show one port listener whose PID is
+  owned by the loaded LaunchAgent, plus clean stop and restart behavior.
+- Proof required: lifecycle target unit tests, CLI/runtime suites, packaged
+  build and install, stale-server check, launchctl/PID inspection, and startup
+  log inspection.
+- Apply/revert: applying routes the packaged default service through launchctl;
+  reverting returns CLI lifecycle commands to detached-process ownership.
+
 ### Active Release Projection Schema Migration Decision
 
-- Persisted schema touched: compact scope rows may gain optional
+- Persisted schema touched: project-state database schema version `37` adds
+  `work_scope.dependency_blocked` and
+  `work_scope.dependency_task_ids_json`; compact scope rows expose optional
   `dependencyBlocked` and `dependencyTaskIds`; Thread payloads may gain optional
-  `dependencyBlockers`.
+  `dependencyBlockers`, `dependencyState`, and `canStart`.
 - Scope and class: additive read-model metadata derived from authoritative task
   dependencies; no task-definition or release schema changes.
-- Existing data impact: old rows default to no derived dependency flag and are
-  replaced by ordinary projection refresh. No historical evidence is rewritten.
-- Migration id: none; these are regenerated caches with backward-compatible
-  readers.
-- Fixtures and tests: project-scope dependency focus, Thread dependency wait,
-  Overview canonical next-run rendering, and existing full surface suites.
-- Rollback: stop emitting the optional fields; task dependency authority remains
+- Existing data impact: opening an older database adds both columns with safe
+  defaults (`0` and `[]`). Ordinary projection refresh then derives them from
+  authoritative task dependencies. Old Thread payloads retain the view's
+  compatibility fallback. No task definition or historical evidence is
+  rewritten.
+- Migration id: project-state database schema version `37`; it applies during
+  normal database open before a run can consume the new projection.
+- Fixtures and tests: database snapshot and point-read round-trip, old-database
+  additive-column compatibility, project-scope dependency field round-trip and
+  focus, dependent-first Thread ordering and startability, Overview compact
+  point-read preservation, canonical next-run rendering, and full surface
+  suites.
+- Owner-facing plan and rollback: no prompt is needed because both columns are
+  derived read-model cache fields. Rollback may stop emitting the optional
+  fields; the added columns remain inert and task dependency authority remains
   intact.
 
 ### Contract Touch Decision
@@ -146,7 +270,17 @@ help_summary: |
   manufacture a new release envelope before its task plan is reviewed.
 - Proof required: route regression from release request through all intake
   domains, duplicate-retry regression, Thread focus regression, typecheck,
-  model-independence, build/install/restart, and installed browser proof.
+  model-independence, contract lint, build/install/restart, and installed
+  browser proof.
+- Proof provided: collision-safe and concurrent materialization regressions,
+  completed-intake route and Thread focus regressions, `pnpm typecheck`, and
+  `pnpm lint:contracts` (`all touched contract paths have decision evidence`).
+  Full model-independence, build/install/restart, and final browser proof remain
+  part of the pre-merge release gate.
+- Owner-review items: the owner explicitly chose and approved the Stage 2
+  release direction, Tauri architecture gate, and installed approval-to-worker
+  flow; final PR review remains open until the complete task run and browser
+  proof are attached.
 - Waivers: none.
 - Apply/revert: applying creates one linked exploring task after completion;
   reverting leaves already-created tasks intact and only removes automatic
@@ -154,8 +288,9 @@ help_summary: |
 
 ### Schema Migration Decision
 
-- Persisted schema touched: pressure-test intake JSON gains optional `handoff`
-  metadata with materialized task id and timestamp.
+- Persisted schema touched: pressure-test intake JSON written by
+  `savePressureTestIntake` and read by `loadPressureTestIntake` gains optional
+  `handoff` metadata with materialized task id and timestamp.
 - Scope and class: additive, backward-compatible project-local state change.
 - Existing data impact: none; legacy and completed intakes without `handoff`
   continue to parse, and retry reconciliation can link an already-created task
@@ -55146,9 +55281,12 @@ Repair:
       typed result, failure, timing, size, and go/no-go proof. A second owner
       correction improved the spec, but exact package/contract commands and
       concrete version/allowlist values are still absent.
-- [ ] Keep task 086 in spec review until its architecture gate is executable
+- [x] Keep task 086 in spec review until its architecture gate is executable
       and falsifiable; do not let broad review prose substitute for exact
-      commands and saved packaged-app evidence.
+      commands and saved packaged-app evidence. The installed approval modal
+      retained `pnpm test`, `pnpm test:desktop-sidecar`, `pnpm
+      package:desktop-spike`, `pnpm typecheck`, and `pnpm build`; the task did
+      not enter implementation until that exact contract was approved.
 - Failing proof-freshness finding: as soon as the second spec introduced
       `pnpm typecheck` and `pnpm build`, both acceptance criteria were marked
       met from earlier project commands even though task 086 implementation had
@@ -55177,6 +55315,91 @@ Repair:
       proof then applied the historical repair once, reported no remaining
       pending migration, and returned task 086's three command criteria as
       unmet with planned revision-current paths and no verification records.
+- Failing installed correction-handoff finding: after requesting one more task
+      086 spec revision, Thread correctly showed `Continue drafting spec` but
+      the global alert temporarily promoted dependency-blocked task 087 as
+      ready for review. The authoritative API already focused runnable task
+      086, and a full page refresh cleared the false alert. Thread refreshed
+      project chrome before its own revised-task read had settled, then left
+      the intermediate project projection in place.
+- [ ] Refresh project chrome again after Thread observes the revised task so
+      the shell cannot retain a dependency review target from the mutation's
+      intermediate projection; prove the live correction handoff without a
+      manual page refresh.
+- Failing spec-grounding finding: task 086's corrected spec agent first failed
+      the typed tool shape, then correctly attempted the exact owner-requested
+      commands. The imported-source grounding guard rejected those commands
+      because they do not exist yet. Its final retry reached review only by
+      stripping `pnpm test:desktop-sidecar` and `pnpm
+      package:desktop-spike` from the automated criteria, silently weakening
+      the owner-approved contract to prose.
+- [x] Treat only a typed owner `document_revision_requested: spec` instruction
+      as additional grounding for a new executable detail. Keep ordinary
+      notes, provider prose, and unsupported imported-source inventions
+      rejected; prove both exact commands survive the installed spec revision
+      and receive current proof paths. Installed proof re-authored the spec via
+      the validated task writer, approved it through the UI, and read all five
+      exact commands back from task detail before and after worker claim.
+- Failing evidence-identity finding: a later generic human steering note used
+      the same current-evidence identity as the typed owner spec-revision
+      request and replaced it. The durable ledger still contained the owner
+      instruction, but the current evidence read no longer did, so identical
+      task state produced different grounding depending on note order.
+- [x] Give typed owner notes stable event/kind identities distinct from generic
+      source notes. Database projection coverage proves later steering notes
+      no longer erase the current document-revision contract.
+- Failing approval-boundary finding: spec drafting accepted the typed owner
+      revision commands, but `approve-spec` ran the grounding validator without
+      the same current owner evidence and rejected the exact same spec. The
+      authoring and approval boundaries disagreed about whether the release
+      contract was valid.
+- [x] Centralize owner spec-revision requirements and pass the same
+      revision-matched current evidence to both spec authoring and approval.
+      Runtime and endpoint regressions cover the shared grounding contract.
+- Failing pre-worker recovery finding: immediately after approval, the first
+      coordinator tick treated `pnpm test:desktop-sidecar` and `pnpm
+      package:desktop-spike` as invalid because their package scripts did not
+      exist yet. It reset task 086 to exploring and erased the approved spec,
+      although creating those scripts is the implementation task itself.
+- [x] Allow missing declared package scripts while a task is ready or being
+      implemented, but continue rejecting missing scripts at review/gate check
+      and self-referential scripts at every stage. Focused task-gate and
+      orchestrator recovery tests pass 4/4.
+- Failing installed approval-transition finding: approving task 086 updated
+      its authoritative task row to `ready`, while the stored current Thread
+      projection continued to show the superseded spec-review turn and the UI
+      dock said `Needs brief`. The approve route returned before publishing the
+      new read model.
+- [x] Refresh current Thread after successful spec approval and before the
+      endpoint responds. The endpoint regression now asserts that the stored
+      Thread names the approved task with `taskStatus: ready`; installed proof
+      remains part of the task 086 run below.
+- Failing installed approval-invariant finding: the refreshed projection still
+      rendered `Ready` beside `Needs brief`. Task 086's complete brief had been
+      derived from its structured completion boundary, while spec approval only
+      stamped brief approval when `authoredBy` was exactly `project-reintake`.
+      The task lifecycle advanced even though the worker-handoff model still
+      considered the brief unapproved.
+- [x] Make successful spec approval approve any complete current product brief,
+      including a completion-boundary-derived brief, while retaining the
+      re-intake-only warning cleanup. Focused intake and endpoint regressions
+      prove the persisted brief is approved and current Thread no longer emits
+      `Needs brief` for the ready task.
+- Installed pass: after approval, task 086 showed `Ready for work`, `Approved
+      and queued`, and `Resume work`; the false owner-review alert disappeared,
+      the API recorded `approvedBy: human`, and all five acceptance commands
+      remained current. Resume produced `ready -> in_progress via task-claimer`
+      and created the isolated `guildhall/task-task-086` worktree, where the
+      worker began adding the two missing package scripts.
+- Failing installed worker-bootstrap presentation: immediately after Resume,
+      the ticker briefly said `Working on 19 tasks` despite the task-scoped run.
+      During worktree bootstrap, Thread then called the claimed task `Queued`
+      and said work was `paused between worker passes`, while the authoritative
+      task was `in_progress`, assigned to `worker-agent`, and the service log
+      was actively bootstrapping its isolated worktree.
+- [ ] Represent task claim/worktree bootstrap as active focused work across
+      ticker, Thread list, dock, and activity summary; never reinterpret a
+      running scoped task as globally running inventory or a paused pass.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
@@ -55211,7 +55434,14 @@ Repair:
       current proof-path boundary. Authoritative task updates now also project
       every persisted acceptance command into that current proof-path boundary
       immediately, so migration reconciliation is for historical data rather
-      than ordinary new spec writes.
+      than ordinary new spec writes. Structured spec grounding now admits new
+      executable detail only when a typed owner spec-revision instruction
+      explicitly names it; arbitrary notes and model prose remain outside the
+      grounding contract. Typed evidence identities preserve that instruction
+      independently of later generic notes, approval consumes the same
+      revision-matched evidence as authoring, missing implementation-created
+      package scripts are permitted only before review, and successful approval
+      republishes current Thread before returning.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive
@@ -55248,3 +55478,28 @@ Repair:
       both legacy and database-authoritative mutation paths are covered. A
       revert restores the prior approval-loop behavior but does not lose saved
       correction evidence.
+
+### Schema Migration Decision: Required Acceptance Commands
+
+- Persisted schema touched: task evidence note payloads may carry the existing
+      structured `requiredAcceptanceCommands` array on an owner
+      `document_revision_requested` event; no database column, enum, or queue
+      schema is added.
+- Scope and change class: compatible structured payload extension plus a
+      current-evidence identity correction.
+- Existing data impact: existing ledgers remain readable. On reprojection,
+      typed owner revision notes retain an event/kind-based identity and no
+      longer collide with generic notes from the same actor/source.
+- Migration id and safety: no migration is required because the event payload
+      is already open structured data and the current-evidence table is a
+      derived projection. Rebuilding the projection applies the corrected
+      identity rule.
+- Compatibility reader and fixtures: readers tolerate absence of
+      `requiredAcceptanceCommands`; project-state database, spec-quality,
+      intake, task-queue, task-gate, and orchestrator fixtures cover both old
+      generic notes and new typed requirements.
+- Owner-facing plan text: task 086 must retain all five exact proof commands
+      from owner correction through approval, implementation, and gate check.
+- Rollback/revert behavior: reverting restores source-key collisions and the
+      authoring/approval mismatch but does not make existing queue or evidence
+      data unreadable.

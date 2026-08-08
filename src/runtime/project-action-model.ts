@@ -19,6 +19,14 @@ export interface ProjectActionStartReadiness {
   }
 }
 
+export function isFocusedOwnerInputTaskReview(
+  readiness: Pick<ProjectActionStartReadiness, 'code' | 'focusKind' | 'focusTaskId'> | null | undefined,
+): boolean {
+  return readiness?.code === 'owner_input_required' &&
+    Boolean(readiness.focusTaskId?.trim()) &&
+    readiness.focusKind !== 'setup'
+}
+
 export function projectTaskActionHref(
   readiness: Pick<ProjectActionStartReadiness, 'code' | 'focusKind' | 'focusTaskId'>,
   projectId?: string,
@@ -26,7 +34,7 @@ export function projectTaskActionHref(
   const projectRoot = projectId ? `/projects/${encodeURIComponent(projectId)}` : ''
   const taskId = readiness.focusTaskId?.trim()
   const reviewInThread = readiness.focusKind === 'spec_review' ||
-    (readiness.code === 'owner_input_required' && readiness.focusKind === 'brief_cleanup')
+    isFocusedOwnerInputTaskReview(readiness)
   if (reviewInThread) {
     return taskId
       ? `${projectRoot}/thread?thread=${encodeURIComponent(`task:${taskId}`)}`
@@ -612,7 +620,7 @@ function setupModel(
     }
   }
   if (!readiness?.canStart && readiness?.code === 'owner_input_required') {
-    if (readiness.focusTaskId && readiness.focusKind !== 'setup') {
+    if (isFocusedOwnerInputTaskReview(readiness)) {
       return { state: 'ready', freshIntakeNeeded: false }
     }
     return {
@@ -846,8 +854,7 @@ export function resolveProjectActionModel(input: {
     tasks: [],
     releaseLifecycleState: input.releaseLifecycleState,
   })
-  const focusedTaskReview = readiness?.code === 'owner_input_required' &&
-    Boolean(readiness.focusTaskId) && readiness.focusKind !== 'setup'
+  const focusedTaskReview = isFocusedOwnerInputTaskReview(readiness)
   const candidateSecondaryActions = resolved.secondaryActions.length > 0
     ? resolved.secondaryActions
     : input.stored?.secondaryActions ?? []

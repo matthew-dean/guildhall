@@ -146,6 +146,7 @@ export type InvalidAutomatedAcceptanceCommand = {
 export function findInvalidAutomatedAcceptanceCommands(input: {
   task: Pick<Task, 'acceptanceCriteria'>
   projectPath: string
+  allowMissingPackageScripts?: boolean
 }): readonly InvalidAutomatedAcceptanceCommand[] {
   const invalid: InvalidAutomatedAcceptanceCommand[] = []
   for (const criterion of input.task.acceptanceCriteria ?? []) {
@@ -161,7 +162,11 @@ export function findInvalidAutomatedAcceptanceCommands(input: {
       continue
     }
     const scriptReference = packageScriptReferenceForCommand(command, input.projectPath)
-    if (scriptReference && !scriptReference.parsed.scripts.has(scriptReference.script)) {
+    if (
+      scriptReference &&
+      !scriptReference.parsed.scripts.has(scriptReference.script) &&
+      input.allowMissingPackageScripts !== true
+    ) {
       invalid.push({
         criterionId: criterion.id,
         command,

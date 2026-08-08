@@ -12,6 +12,7 @@ export interface CurrentTaskLifecycle {
  * reinterpret historical task definitions.
  */
 export function currentLifecycleForTask(task: Task): CurrentTaskLifecycle | null {
+  if (task.status !== 'exploring') return null
   const state = task as Task & {
     currentLifecycle?: unknown
     runtime?: { currentLifecycle?: unknown }

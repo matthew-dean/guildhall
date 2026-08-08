@@ -855,11 +855,15 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
   count?: number
 } {
   const focus = decision.execution.focus
+  const code = decision.execution.focusKind === 'brief_cleanup' &&
+    decision.execution.code === 'no_unattended_progress'
+    ? 'owner_input_required'
+    : decision.execution.code
   return {
     canStart: decision.execution.state === 'runnable' ||
       decision.execution.state === 'running' ||
       decision.execution.state === 'paused',
-    code: decision.execution.code,
+    code,
     ...(decision.execution.message ? { message: decision.execution.message } : {}),
     ...(focus?.taskId ?? decision.execution.focusTaskId ? { focusTaskId: focus?.taskId ?? decision.execution.focusTaskId } : {}),
     ...(focus?.displayTitle ?? decision.execution.focusTaskTitle ? { focusTaskTitle: focus?.displayTitle ?? decision.execution.focusTaskTitle } : {}),

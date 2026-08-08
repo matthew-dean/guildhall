@@ -256,7 +256,7 @@ describe('assessTaskReadiness', () => {
       title: 'Prove one packaged sidecar boundary',
       spec: 'Build and prove one reversible desktop architecture spike.',
       structuredSpec: importedExecutionBlueprintSpec(),
-      acceptanceCriteria: Array.from({ length: 7 }, (_, index) => ({
+      acceptanceCriteria: Array.from({ length: 8 }, (_, index) => ({
         id: `AC-${index + 1}`,
         description: `Criterion ${index + 1} proves the same packaged sidecar outcome.`,
         verifiedBy: 'review' as const,

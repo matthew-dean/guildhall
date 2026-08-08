@@ -10,6 +10,43 @@ export interface SpecGroundingResult {
   errors: string[]
 }
 
+export interface OwnerSpecRevisionRequirements {
+  instructions: string[]
+  requiredAcceptanceCommands: string[]
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+export function ownerSpecRevisionRequirements(
+  task: Pick<Task, 'notes'>,
+  currentEvidence: unknown,
+): OwnerSpecRevisionRequirements {
+  const evidenceNotes = isRecord(currentEvidence) && isRecord(currentEvidence.byKind) && Array.isArray(currentEvidence.byKind.note)
+    ? currentEvidence.byKind.note.flatMap(record => isRecord(record) && isRecord(record.payload) ? [record.payload] : [])
+    : []
+  const revisions = [...(task.notes ?? []), ...evidenceNotes].flatMap(payload => {
+    if (!isRecord(payload)) return []
+    const agentId = typeof payload.agentId === 'string' ? payload.agentId.trim() : ''
+    const role = typeof payload.role === 'string' ? payload.role.trim() : ''
+    const content = typeof payload.content === 'string' ? payload.content.trim() : ''
+    if (agentId !== 'human' || role !== 'human' || !content || !isRecord(payload.structured)) return []
+    if (payload.structured.event !== 'document_revision_requested' || payload.structured.target !== 'spec') return []
+    const requiredAcceptanceCommands = Array.isArray(payload.structured.requiredAcceptanceCommands)
+      ? payload.structured.requiredAcceptanceCommands
+        .filter((command): command is string => typeof command === 'string')
+        .map(command => command.trim())
+        .filter(Boolean)
+      : []
+    return [{ content, requiredAcceptanceCommands }]
+  })
+  return {
+    instructions: [...new Set(revisions.map(revision => revision.content))],
+    requiredAcceptanceCommands: [...new Set(revisions.flatMap(revision => revision.requiredAcceptanceCommands))],
+  }
+}
+
 const EXECUTABLE_DETAIL_PATTERN = /\b(?:pnpm|npm|node|npx|yarn|bun|python(?:3)?|pytest|vitest|playwright|git)\s+[^\n.;,)]+/gi
 const PROJECT_PATH_PATTERN = /(?:^|[\s`"'(])((?:scripts|src|test|tests|fixtures|docs|internal|dist|output|package\.json|expected-records\.json)[A-Za-z0-9_./:@=-]*)/g
 const MODEL_FAMILY_PATTERN = /\b(?:mixtral|mistral|qwen|deepseek|kimi|glm|nemotron|llama|gemma|phi|command-r|gpt)(?:[A-Za-z0-9./:_-]*)\b/gi
@@ -69,7 +106,11 @@ function structuredCapabilityCoverageErrors(task: GroundingTask, structured: Str
   return [...scopeErrors, ...criterionErrors]
 }
 
-function groundingContext(task: GroundingTask, includeProductBrief = true): string {
+function groundingContext(
+  task: GroundingTask,
+  includeProductBrief = true,
+  ownerRevisionInstructions: readonly string[] = [],
+): string {
   return JSON.stringify({
     title: task.title,
     description: task.description,
@@ -78,6 +119,7 @@ function groundingContext(task: GroundingTask, includeProductBrief = true): stri
     request: task.request,
     requestIntake: task.requestIntake,
     ...(includeProductBrief ? { productBrief: task.productBrief } : {}),
+    ownerRevisionInstructions,
   }).toLowerCase()
 }
 
@@ -132,28 +174,52 @@ function validateImportedPlanningText(
 
 export function validateSpecGrounding(task: Pick<Task,
   'title' | 'description' | 'references' | 'sourceClaims' | 'capabilityBindings' | 'request' | 'requestIntake' | 'productBrief' | 'spec' | 'structuredSpec'
->): SpecGroundingResult {
-  if (task.structuredSpec) return validateStructuredSpecGrounding(task)
+>, options: {
+  ownerRevisionInstructions?: readonly string[]
+  requiredAcceptanceCommands?: readonly string[]
+} = {}): SpecGroundingResult {
+  if (task.structuredSpec) {
+    return validateStructuredSpecGrounding(
+      task,
+      options.ownerRevisionInstructions ?? [],
+      options.requiredAcceptanceCommands ?? [],
+    )
+  }
   return validateImportedPlanningText(task, task.spec?.trim() ?? '', 'Spec', true)
 }
 
-function validateStructuredSpecGrounding(task: GroundingTask): SpecGroundingResult {
+function validateStructuredSpecGrounding(
+  task: GroundingTask,
+  ownerRevisionInstructions: readonly string[],
+  requiredAcceptanceCommands: readonly string[],
+): SpecGroundingResult {
   const structured = StructuredSpec.safeParse(task.structuredSpec)
   if (!structured.success) {
     return { ok: false, errors: ['Structured spec is invalid and cannot be used as a planning contract.'] }
   }
   const coverage = structuredCapabilityCoverageErrors(task, structured.data)
+  const currentCommands = new Set(structured.data.acceptanceCriteria
+    .map(criterion => criterion.command?.trim())
+    .filter((command): command is string => Boolean(command)))
+  const missingRequiredCommands = [...new Set(requiredAcceptanceCommands.map(command => command.trim()).filter(Boolean))]
+    .filter(command => !currentCommands.has(command))
+  const requiredCommandErrors = missingRequiredCommands.length > 0
+    ? [`Structured spec omits owner-required acceptance commands: ${missingRequiredCommands.join(', ')}.`]
+    : []
   const imported = (task.sourceClaims?.length ?? 0) > 0 ||
     task.requestIntake?.evidenceRefs?.some(ref => /^import:/.test(ref)) === true ||
     (task.references?.length ?? 0) > 0 ||
     task.requestIntake?.createdBy === 'workspace-importer'
-  if (!imported) return { ok: coverage.length === 0, errors: coverage }
+  if (!imported) {
+    const errors = [...coverage, ...requiredCommandErrors]
+    return { ok: errors.length === 0, errors }
+  }
 
   // Only typed executable fields can be checked here. The rest of the
   // structured spec is explanatory prose and must not be searched for model-
   // specific vocabulary, commands, paths, or symbols.
-  const context = groundingContext(task, true)
-  const errors: string[] = []
+  const context = groundingContext(task, true, [...ownerRevisionInstructions, ...requiredAcceptanceCommands])
+  const errors: string[] = [...requiredCommandErrors]
   for (const criterion of structured.data.acceptanceCriteria) {
     const command = criterion.command?.trim() ?? ''
     if (!command) continue

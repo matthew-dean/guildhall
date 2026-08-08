@@ -8,8 +8,10 @@ import {
   inferProjectRootFromMemoryDir,
   projectStatePathFromMemoryDir,
   readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseTaskEvidenceCurrent,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
+  withProjectStateWriteLock,
 } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
@@ -40,6 +42,7 @@ import { analyzeRequestIntake, type RequestIntakeOwnerInput } from './request-in
 import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
 import {
   productBriefFromSpecCompletionBoundary,
+  ownerSpecRevisionRequirements,
   validateProductBriefGrounding,
   validateSpecCompletionBoundary,
   validateSpecGrounding,
@@ -305,6 +308,17 @@ export async function materializeCompletedPressureTestIntake(input: {
   domain: string
   projectPath: string
 }): Promise<MaterializedPressureTestIntake | null> {
+  return withProjectStateWriteLock(tasksPathFor(input.memoryDir), () => (
+    materializeCompletedPressureTestIntakeUnlocked(input)
+  ))
+}
+
+async function materializeCompletedPressureTestIntakeUnlocked(input: {
+  memoryDir: string
+  intake: PressureTestIntake
+  domain: string
+  projectPath: string
+}): Promise<MaterializedPressureTestIntake | null> {
   const { intake } = input
   if (intake.status !== 'complete' || intake.target.type === 'project') return null
 
@@ -548,7 +562,14 @@ async function approveSpecFromCurrentSnapshot(input: ApproveSpecInput): Promise<
       error: `Spec is not ready for approval: ${specQuality.errors.join(' ')}`,
     }
   }
-  const specGrounding = validateSpecGrounding(task)
+  const ownerRevisionRequirements = ownerSpecRevisionRequirements(
+    task,
+    readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, task.id),
+  )
+  const specGrounding = validateSpecGrounding(task, {
+    ownerRevisionInstructions: ownerRevisionRequirements.instructions,
+    requiredAcceptanceCommands: ownerRevisionRequirements.requiredAcceptanceCommands,
+  })
   if (!specGrounding.ok) {
     return {
       success: false,
@@ -725,7 +746,7 @@ async function approveSpecFromCurrentSnapshot(input: ApproveSpecInput): Promise<
         : `Spec approval did not advance ${task.id}; the task is still waiting for spec review.`,
     }
   }
-  approveReintakeBriefWithSpec(task, now, approvalActor)
+  approveBriefWithSpec(task, now, approvalActor)
   task.updatedAt = now
   resolveSupersededEscalations(task, {
     now,
@@ -829,14 +850,17 @@ function settleBoundedChildContractWorkWithoutMaterializedChildren(task: Task): 
   return true
 }
 
-function approveReintakeBriefWithSpec(task: Task, now: string, approvalActor: 'human' | 'codex_delegated_owner'): void {
+function approveBriefWithSpec(task: Task, now: string, approvalActor: 'human' | 'codex_delegated_owner'): void {
   const brief = task.productBrief
-  if (!brief || brief.authoredBy !== 'project-reintake') return
-  if (typeof brief.approvedAt === 'string' && brief.approvedAt.trim().length > 0) return
-  brief.approvedBy = approvalActor
-  brief.approvedAt = now
-  brief.nonGoals = removeDraftApprovalWarnings(brief.nonGoals)
-  brief.antiPatterns = removeDraftApprovalWarnings(brief.antiPatterns)
+  if (!brief) return
+  if (typeof brief.approvedAt !== 'string' || brief.approvedAt.trim().length === 0) {
+    brief.approvedBy = approvalActor
+    brief.approvedAt = now
+  }
+  if (brief.authoredBy === 'project-reintake') {
+    brief.nonGoals = removeDraftApprovalWarnings(brief.nonGoals)
+    brief.antiPatterns = removeDraftApprovalWarnings(brief.antiPatterns)
+  }
 }
 
 function removeDraftApprovalWarnings(items: string[] | undefined): string[] | undefined {
@@ -987,6 +1011,26 @@ export interface ResumeExploringInput {
   revisionTarget?: 'brief' | 'spec' | undefined
 }
 
+const OWNER_COMMAND_PREFIX = /^(?:pnpm|npm|npx|yarn|bun|node|python(?:3)?|pytest|vitest|playwright|cargo|rustc|git)\b/
+
+export function extractOwnerRequiredAcceptanceCommands(message: string): string[] {
+  return [...new Set([...message.matchAll(/`([^`\n]+)`/g)]
+    .map(match => match[1]!.trim())
+    .filter(value => OWNER_COMMAND_PREFIX.test(value)))]
+}
+
+function ownerRevisionEvent(input: Pick<ResumeExploringInput, 'message' | 'revisionTarget'>) {
+  if (!input.revisionTarget) return undefined
+  const requiredAcceptanceCommands = input.revisionTarget === 'spec' && input.message
+    ? extractOwnerRequiredAcceptanceCommands(input.message)
+    : []
+  return {
+    event: 'document_revision_requested' as const,
+    target: input.revisionTarget,
+    ...(requiredAcceptanceCommands.length > 0 ? { requiredAcceptanceCommands } : {}),
+  }
+}
+
 export interface RerunTaskStageInput {
   memoryDir: string
   taskId: string
@@ -1079,6 +1123,7 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
       role: 'human',
       content: input.message,
       timestamp: new Date().toISOString(),
+      ...(ownerRevisionEvent(input) ? { structured: ownerRevisionEvent(input) } : {}),
     })
   }
 
@@ -1123,19 +1168,15 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
         role: 'human',
         content: input.message,
         timestamp: now,
-        ...(input.revisionTarget
-          ? { structured: { event: 'document_revision_requested', target: input.revisionTarget } }
-          : {}),
+        ...(ownerRevisionEvent(input) ? { structured: ownerRevisionEvent(input) } : {}),
       },
     })
-  } else if (input.message && !input.preserveStatus && task.status !== 'blocked') {
-    task.status = 'exploring'
-    if (input.revisionTarget === 'brief') delete task.productBrief
-    if (input.revisionTarget === 'spec') resetCurrentPlanForRevision(task)
-    task.updatedAt = new Date().toISOString()
-    queue.lastUpdated = task.updatedAt
-    await writeQueue(input.memoryDir, queue)
   } else if (input.message) {
+    if (!input.preserveStatus && task.status !== 'blocked') task.status = 'exploring'
+    if (input.revisionTarget === 'brief') delete task.productBrief
+    if (input.revisionTarget === 'spec') {
+      resetCurrentPlanForRevision(task, { clearEvidence: false })
+    }
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = task.updatedAt
     await writeQueue(input.memoryDir, queue)

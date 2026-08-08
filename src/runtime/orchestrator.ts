@@ -5334,10 +5334,14 @@ export class Orchestrator {
           ...dirtyTaskFilesAfter,
           ...checkpointTouchedFiles,
         ])
+        const checkpointVerification =
+          durableCheckpointForProgress?.resumeContext?.verification ??
+          readCheckpointVerification(successfulAgentMetadata?.['current_task_checkpoint_verification'])
         const hasCheckpointScopedVerifiedProgress =
           beforeStatus === 'in_progress' &&
           this.hasDurableWorkerHandoffEvidence(successfulAgentMetadata, task.id) &&
-          checkpointTouchedFiles.length > 0
+          checkpointTouchedFiles.length > 0 &&
+          checkpointHasRecordedPassingVerification(checkpointVerification)
         const checkpointNextAction =
           beforeStatus === 'in_progress'
             ? normalizedWorkerCheckpointNextAction(
@@ -5353,9 +5357,6 @@ export class Orchestrator {
             ? durableCheckpointForProgress?.nextActionKind ??
               readCheckpointActionKind(successfulAgentMetadata?.['current_task_checkpoint_next_action_kind'])
             : undefined
-        const checkpointVerification =
-          durableCheckpointForProgress?.resumeContext?.verification ??
-          readCheckpointVerification(successfulAgentMetadata?.['current_task_checkpoint_verification'])
         const hasFailedCheckpointVerification =
           beforeStatus === 'in_progress' &&
           checkpointHasRecordedVerificationFailure(checkpointVerification)
@@ -8200,7 +8201,11 @@ export class Orchestrator {
   private async repairInvalidAcceptanceProofCommandInline(task: Task): Promise<TickOutcome | null> {
     if (!['ready', 'in_progress', 'review', 'gate_check'].includes(task.status)) return null
     const projectPath = task.worktreePath?.trim() || this.resolveEffectiveTaskProjectPath(task)
-    const invalid = findInvalidAutomatedAcceptanceCommands({ task, projectPath })
+    const invalid = findInvalidAutomatedAcceptanceCommands({
+      task,
+      projectPath,
+      allowMissingPackageScripts: task.status === 'ready' || task.status === 'in_progress',
+    })
     if (invalid.length === 0) return null
 
     const beforeStatus = task.status
@@ -8213,6 +8218,7 @@ export class Orchestrator {
       const currentInvalid = findInvalidAutomatedAcceptanceCommands({
         task: current,
         projectPath: currentProjectPath,
+        allowMissingPackageScripts: current.status === 'ready' || current.status === 'in_progress',
       })
       if (currentInvalid.length === 0) return null
 
@@ -13069,6 +13075,13 @@ export class Orchestrator {
       .find((note) => isWorkerSelfCritiqueNote(note, input.agentName))?.content
       .trim()
     let verification = checkpointVerificationHistoryFromMetadata(input.metadata)
+    if (verification.length === 0 && recentVerificationResults.length > 0) {
+      verification = recentVerificationResults.map(result => ({
+        command: result.command,
+        passed: result.passed,
+        observedAt: result.observedAt ?? this.now(),
+      }))
+    }
     if (verification.length === 0) {
       verification = existingCheckpoint?.resumeContext?.verification ?? []
     }

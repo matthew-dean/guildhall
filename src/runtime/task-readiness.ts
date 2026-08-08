@@ -343,7 +343,7 @@ function isLargeTask(task: Task, contextBudget: ContextBudgetEstimate): boolean 
   ) return true
   return contextBudget.risk === 'high' ||
     (task.structuredSpec?.contractSurfaceDeltas?.length ?? 0) >= 6 ||
-    (task.acceptanceCriteria?.length ?? 0) >= 8
+    (task.acceptanceCriteria?.length ?? 0) > 8
 }
 
 function unique(values: Array<string | null | undefined>): string[] {

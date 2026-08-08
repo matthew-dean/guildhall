@@ -2955,6 +2955,13 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     const q = await readTaskQueue()
     expect(q.tasks[0].status).toBe('ready')
     expect(q.tasks[0].notes?.at(-1)?.content).toMatch(/ship it/i)
+    const thread = readProjectStateDatabaseCurrentThread(tmpDir) as {
+      payload: { turns: Array<{ taskId?: string; taskStatus?: string }> }
+    } | null
+    expect(thread?.payload.turns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'task-1', taskStatus: 'ready' }),
+    ]))
+    expect(JSON.stringify(thread?.payload.turns)).not.toMatch(/needs brief|full product brief/i)
   })
 
   it('keeps a script-only release spec and links proof setup when it has no concrete command', async () => {

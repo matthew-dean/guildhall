@@ -237,6 +237,8 @@ export interface OrientationScopeRow {
   blocksStart: boolean
   blocksRelease: boolean
   humanBlocking: boolean
+  dependencyBlocked?: boolean
+  dependencyTaskIds?: string[]
   sourceRefs: string[]
 }
 
@@ -1409,6 +1411,10 @@ function scopeRowsFromProjection(projection: ProjectScopeProjection | null | und
     blocksStart: row.blocksStart,
     blocksRelease: row.blocksRelease,
     humanBlocking: row.humanBlocking,
+    dependencyBlocked: row.dependencyBlocked === true,
+    ...(row.dependencyTaskIds?.length
+      ? { dependencyTaskIds: [...row.dependencyTaskIds] }
+      : {}),
     sourceRefs: [...row.sourceRefs],
   }))
 }

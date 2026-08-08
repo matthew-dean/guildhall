@@ -47,7 +47,7 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueue,
 } from '@guildhall/runtime/project-state-boundary'
-import { validateSpecGrounding } from '@guildhall/runtime/spec-quality'
+import { ownerSpecRevisionRequirements, validateSpecGrounding } from '@guildhall/runtime/spec-quality'
 import { taskDoneButProofMissing } from '@guildhall/runtime/proof-health'
 import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, proofSetupHasTaskIdentity } from '@guildhall/runtime/proof-paths'
 
@@ -504,11 +504,14 @@ async function updateTaskUnlocked(
     const renderedStructuredSpec = normalizedStructuredSpec
       ? normalizeSpecForTaskProjectPath(renderStructuredSpecMarkdown(normalizedStructuredSpec), task.projectPath)
       : undefined
-    if (normalizedStructuredSpec) {
-      const currentEvidence = readProjectStateDatabaseTaskEvidenceCurrent(
-        projectRootForTaskState(input.tasksPath, task),
+    const currentEvidence = normalizedStructuredSpec
+      ? readProjectStateDatabaseTaskEvidenceCurrent(
+        projectRootForTaskState(input.tasksPath, task, metadata),
         task.id,
       )
+      : null
+    const ownerRevisionRequirements = ownerSpecRevisionRequirements(task, currentEvidence)
+    if (normalizedStructuredSpec) {
       const proofContractError = validateStructuredProofContract(task, normalizedStructuredSpec, currentEvidence)
       if (proofContractError) return { success: false, taskId, error: proofContractError }
     }
@@ -516,16 +519,22 @@ async function updateTaskUnlocked(
     const observedSourceClaims = planningSourceClaims(metadata)
     const effectiveSourceClaims = mergePlanningSourceClaims(task.sourceClaims ?? [], observedSourceClaims)
     if (nextSpec) {
-      const grounding = validateSpecGrounding({
-        ...task,
-        sourceClaims: effectiveSourceClaims,
-        references: [...new Set([
-          ...(task.references ?? []),
-          ...observedSourceClaims.flatMap((claim) => claim.references),
-        ])],
-        spec: nextSpec,
-        ...(normalizedStructuredSpec ? { structuredSpec: normalizedStructuredSpec } : {}),
-      })
+      const grounding = validateSpecGrounding(
+        {
+          ...task,
+          sourceClaims: effectiveSourceClaims,
+          references: [...new Set([
+            ...(task.references ?? []),
+            ...observedSourceClaims.flatMap((claim) => claim.references),
+          ])],
+          spec: nextSpec,
+          ...(normalizedStructuredSpec ? { structuredSpec: normalizedStructuredSpec } : {}),
+        },
+        {
+          ownerRevisionInstructions: ownerRevisionRequirements.instructions,
+          requiredAcceptanceCommands: ownerRevisionRequirements.requiredAcceptanceCommands,
+        },
+      )
       if (!grounding.ok) {
         return {
           success: false,

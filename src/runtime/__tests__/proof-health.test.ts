@@ -454,6 +454,32 @@ describe('proof health', () => {
     expect(taskDoneButProofMissing(task)).toBe(true)
   })
 
+  it('does not let an older command gate satisfy a newer criterion without a proof path', () => {
+    const task = {
+      id: 'task-new-contract-old-gate',
+      status: 'done',
+      acceptanceCriteria: [{
+        id: 'current-command-proof',
+        description: 'Run the current desktop sidecar proof.',
+        verifiedBy: 'automated',
+        command: 'pnpm test:desktop-sidecar',
+        createdAt: '2026-08-08T12:00:00.000Z',
+        met: false,
+      }],
+      gateResults: [{
+        type: 'hard',
+        gateId: 'legacy-sidecar-proof',
+        command: 'pnpm test:desktop-sidecar',
+        passed: true,
+        checkedAt: '2026-08-08T11:00:00.000Z',
+      }],
+    }
+
+    expect(completionProofCanSettleUnmetAcceptanceCriteria(task)).toBe(false)
+    expect(normalizeAcceptanceCriteriaForCurrentProof(task).acceptanceCriteria)
+      .toMatchObject([{ met: false }])
+  })
+
   it('keeps command proof blocked when the current hard gate is failed', () => {
     const task = {
       id: 'task-failed-current-gate',

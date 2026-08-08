@@ -5039,6 +5039,44 @@ describe('Orchestrator.tick — routing', () => {
     })
   })
 
+  it('lets a ready implementation task create its approved package script in the worker lane', async () => {
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest' } }), 'utf8')
+    await writeQueue([mkTask({
+      id: 'desktop-sidecar-spike',
+      status: 'ready',
+      domain: 'ghost',
+      projectPath: tmpDir,
+      spec: VALID_SPEC,
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        description: 'The focused sidecar proof passes.',
+        verifiedBy: 'automated',
+        command: 'pnpm test:desktop-sidecar',
+        met: false,
+      }],
+    })])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'desktop-sidecar-spike',
+      agent: 'task-claimer',
+      beforeStatus: 'ready',
+      afterStatus: 'in_progress',
+    })
+    expect((await readQueue()).tasks[0]).toMatchObject({
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      acceptanceCriteria: [expect.objectContaining({ command: 'pnpm test:desktop-sidecar' })],
+    })
+  })
+
   it('records a blueprint sanity review before claiming ready work', async () => {
     await writeQueue([mkTask({
       id: 'a',
@@ -6161,6 +6199,12 @@ describe('Orchestrator.tick — routing', () => {
             'Ran bash command pnpm db:types:remote [PASS]',
             `Read file ${path.join(worktreePath, 'web', 'app', 'types', 'supabase.ts')}`,
           ],
+          recent_verification_results: [{
+            kind: 'command',
+            command: 'pnpm db:types:remote',
+            passed: true,
+            observedAt: '2026-04-01T00:04:00.000Z',
+          }],
           current_task_checkpoint_files_touched: ['web/app/types/supabase.ts'],
         }
       },

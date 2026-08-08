@@ -7,7 +7,7 @@ userGoal: Open the project route named by the navigation item I click.
 scenario: A collapsed project rail expands its active subnavigation on pointer focus, shifting the primary route buttons after pointer-down and before click.
 artifacts:
   - id: collapsed-project-rail
-    kind: interaction_trace
+    kind: flow_steps
     description: Installed collapsed-rail clicks and resulting routes.
     content: "Threads opened Overview; Work opened Inbox; Timeline opened Map; Release opened Facts."
 reviewLanes:

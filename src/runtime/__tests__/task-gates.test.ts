@@ -689,6 +689,27 @@ describe('resolveEffectiveTaskSuccessGates', () => {
     }])
   })
 
+  it('allows an implementation task to create its approved package script before review', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ scripts: { test: 'vitest' } }),
+      'utf8',
+    )
+
+    expect(findInvalidAutomatedAcceptanceCommands({
+      projectPath: tmpDir,
+      allowMissingPackageScripts: true,
+      task: {
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'the new focused proof command runs',
+          verifiedBy: 'automated',
+          command: 'pnpm test:desktop-sidecar',
+        }],
+      } as any,
+    })).toEqual([])
+  })
+
   it('rewrites pnpm test -- <file> vitest commands into direct single-file runs', async () => {
     const webDir = path.join(tmpDir, 'web')
     await fs.mkdir(path.join(webDir, 'tests/unit/shared'), { recursive: true })

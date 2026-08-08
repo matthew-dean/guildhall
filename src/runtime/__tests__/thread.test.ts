@@ -2791,7 +2791,7 @@ describe('buildThread', () => {
           dependsOn: ['task-086'],
           productBrief: completeBrief,
         }),
-      ]
+      ].reverse()
       const snapshot: ProjectSnapshot = {
         projectPath,
         config: {
@@ -2816,10 +2816,14 @@ describe('buildThread', () => {
       expect(thread.turns.find(turn => turn.id === 'spec:task-087')).toBeUndefined()
       expect(thread.turns.find(turn => turn.id === 'inflight:task-087')).toMatchObject({
         status: 'pending',
+        dependencyState: 'waiting',
+        canStart: false,
         dependencyBlockers: [{ taskId: 'task-086', title: 'Prove packaged Tauri sidecar' }],
       })
       expect(thread.turns.find(turn => turn.id === 'inflight:task-088')).toMatchObject({
         status: 'pending',
+        dependencyState: 'waiting',
+        canStart: false,
         dependencyBlockers: [{ taskId: 'task-086', title: 'Prove packaged Tauri sidecar' }],
       })
     } finally {
@@ -3221,6 +3225,8 @@ describe('buildThread', () => {
         phase: 'spec',
         briefApproved: true,
         specDraftPresent: false,
+        dependencyState: 'clear',
+        canStart: true,
         summary: 'The brief is approved. Guildhall is shaping the spec now.',
         checklist: undefined,
       })

@@ -71,7 +71,7 @@ export const PROJECT_STATE_DATABASE_FILE = 'project-state.db'
  * persistence. Existing prose/source claims are not backfilled because they
  * cannot author stable capability identities.
  */
-export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 36
+export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 37
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_TURNS = 2_000
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_BYTES = 512 * 1024
 export const PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN = 'diagnostics'
@@ -382,6 +382,8 @@ export interface ProjectStateDatabaseScopeRow {
   /** Hidden child work can gate a release without inflating progress totals. */
   countInProjectTotals?: boolean
   proofBlocked?: boolean
+  dependencyBlocked?: boolean
+  dependencyTaskIds?: string[]
   blockerSummary?: string
   sourceRefs: string[]
 }
@@ -1860,6 +1862,8 @@ function workItemsWithScopeSelect(columns: string, includeScope: boolean): strin
       work_scope.human_blocking AS scope_row_human_blocking,
       work_scope.count_in_project_totals AS scope_row_count_in_project_totals,
       work_scope.proof_blocked AS scope_row_proof_blocked,
+      work_scope.dependency_blocked AS scope_row_dependency_blocked,
+      work_scope.dependency_task_ids_json AS scope_row_dependency_task_ids_json,
       work_scope.blocker_summary AS scope_row_blocker_summary,
       work_scope.source_refs_json AS scope_row_source_refs_json
     FROM work_items LEFT JOIN work_scope ON work_scope.task_id = work_items.id
@@ -1933,6 +1937,8 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
       human_blocking INTEGER NOT NULL,
       count_in_project_totals INTEGER NOT NULL DEFAULT 1,
       proof_blocked INTEGER NOT NULL DEFAULT 0,
+      dependency_blocked INTEGER NOT NULL DEFAULT 0,
+      dependency_task_ids_json TEXT NOT NULL DEFAULT '[]',
       blocker_summary TEXT,
       source_refs_json TEXT NOT NULL
     );
@@ -2308,6 +2314,12 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
   }
   if (!scopeColumns.some(column => column.name === 'blocker_summary')) {
     database.exec('ALTER TABLE work_scope ADD COLUMN blocker_summary TEXT')
+  }
+  if (!scopeColumns.some(column => column.name === 'dependency_blocked')) {
+    database.exec('ALTER TABLE work_scope ADD COLUMN dependency_blocked INTEGER NOT NULL DEFAULT 0')
+  }
+  if (!scopeColumns.some(column => column.name === 'dependency_task_ids_json')) {
+    database.exec("ALTER TABLE work_scope ADD COLUMN dependency_task_ids_json TEXT NOT NULL DEFAULT '[]'")
   }
   if (previousSchemaVersion > 0 && previousSchemaVersion < 30) {
     rebuildTaskDependencies(database)
@@ -3164,6 +3176,10 @@ function scopeRowFromRow(row: JsonRecord): ProjectStateDatabaseScopeRow | null {
     humanBlocking: Number(row.scope_row_human_blocking ?? 0) === 1,
     ...(Number(row.scope_row_count_in_project_totals ?? 1) === 0 ? { countInProjectTotals: false } : {}),
     proofBlocked: Number(row.scope_row_proof_blocked ?? 0) === 1,
+    dependencyBlocked: Number(row.scope_row_dependency_blocked ?? 0) === 1,
+    ...(parseJson<string[]>(row.scope_row_dependency_task_ids_json, []).length > 0
+      ? { dependencyTaskIds: parseJson<string[]>(row.scope_row_dependency_task_ids_json, []) }
+      : {}),
     ...(typeof row.scope_row_blocker_summary === 'string' && row.scope_row_blocker_summary.trim()
       ? { blockerSummary: row.scope_row_blocker_summary }
       : {}),
@@ -3223,7 +3239,8 @@ function readScopeRowsFromDatabase(database: DatabaseSync): ProjectStateDatabase
       work_scope.scope, work_scope.eligibility_reason, work_scope.hierarchy_role,
       work_scope.handoff_state, work_scope.blocks_start, work_scope.blocks_release,
       work_scope.human_blocking, work_scope.count_in_project_totals,
-      work_scope.proof_blocked, work_scope.blocker_summary, work_scope.source_refs_json
+      work_scope.proof_blocked, work_scope.dependency_blocked,
+      work_scope.dependency_task_ids_json, work_scope.blocker_summary, work_scope.source_refs_json
     FROM work_scope
     LEFT JOIN work_items ON work_items.id = work_scope.task_id
     ORDER BY work_scope.task_id
@@ -3241,6 +3258,8 @@ function readScopeRowsFromDatabase(database: DatabaseSync): ProjectStateDatabase
       scope_row_human_blocking: row.human_blocking,
       scope_row_count_in_project_totals: row.count_in_project_totals,
       scope_row_proof_blocked: row.proof_blocked,
+      scope_row_dependency_blocked: row.dependency_blocked,
+      scope_row_dependency_task_ids_json: row.dependency_task_ids_json,
       scope_row_blocker_summary: row.blocker_summary,
       scope_row_source_refs_json: row.source_refs_json,
     })
@@ -3260,6 +3279,8 @@ function scopeRowKey(row: ProjectStateDatabaseScopeRow): string {
     humanBlocking: row.humanBlocking,
     countInProjectTotals: row.countInProjectTotals ?? true,
     proofBlocked: row.proofBlocked ?? false,
+    dependencyBlocked: row.dependencyBlocked ?? false,
+    dependencyTaskIds: row.dependencyTaskIds ?? [],
     blockerSummary: row.blockerSummary ?? null,
     sourceRefs: row.sourceRefs,
   })
@@ -3274,7 +3295,7 @@ function syncProjectStateDatabaseScopeRows(
   const existingRows = database.prepare(`
     SELECT task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
       blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
-      blocker_summary, source_refs_json
+      dependency_blocked, dependency_task_ids_json, blocker_summary, source_refs_json
     FROM work_scope
     ORDER BY task_id
   `).all() as JsonRecord[]
@@ -3290,6 +3311,8 @@ function syncProjectStateDatabaseScopeRows(
       scope_row_human_blocking: row.human_blocking,
       scope_row_count_in_project_totals: row.count_in_project_totals,
       scope_row_proof_blocked: row.proof_blocked,
+      scope_row_dependency_blocked: row.dependency_blocked,
+      scope_row_dependency_task_ids_json: row.dependency_task_ids_json,
       scope_row_blocker_summary: row.blocker_summary,
       scope_row_source_refs_json: row.source_refs_json,
     })
@@ -3302,8 +3325,8 @@ function syncProjectStateDatabaseScopeRows(
     INSERT INTO work_scope (
       task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
       blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
-      blocker_summary, source_refs_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      dependency_blocked, dependency_task_ids_json, blocker_summary, source_refs_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(task_id) DO UPDATE SET
       scope = excluded.scope,
       eligibility_reason = excluded.eligibility_reason,
@@ -3314,6 +3337,8 @@ function syncProjectStateDatabaseScopeRows(
       human_blocking = excluded.human_blocking,
       count_in_project_totals = excluded.count_in_project_totals,
       proof_blocked = excluded.proof_blocked,
+      dependency_blocked = excluded.dependency_blocked,
+      dependency_task_ids_json = excluded.dependency_task_ids_json,
       blocker_summary = excluded.blocker_summary,
       source_refs_json = excluded.source_refs_json
   `)
@@ -3331,6 +3356,8 @@ function syncProjectStateDatabaseScopeRows(
       row.humanBlocking ? 1 : 0,
       row.countInProjectTotals === false ? 0 : 1,
       row.proofBlocked ? 1 : 0,
+      row.dependencyBlocked ? 1 : 0,
+      json(row.dependencyTaskIds ?? []),
       row.blockerSummary ?? null,
       json(row.sourceRefs),
     )
@@ -3820,8 +3847,8 @@ function writeSnapshotToDatabase(
       INSERT INTO work_scope (
         task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
         blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
-        blocker_summary, source_refs_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        dependency_blocked, dependency_task_ids_json, blocker_summary, source_refs_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     for (const row of scopeRows) {
       insertScopeRow.run(
@@ -3835,6 +3862,8 @@ function writeSnapshotToDatabase(
         row.humanBlocking ? 1 : 0,
         row.countInProjectTotals === false ? 0 : 1,
         row.proofBlocked ? 1 : 0,
+        row.dependencyBlocked ? 1 : 0,
+        json(row.dependencyTaskIds ?? []),
         row.blockerSummary ?? null,
         json(row.sourceRefs),
       )
@@ -4706,8 +4735,8 @@ export function writeProjectStateDatabaseTaskMutation(
             INSERT INTO work_scope (
               task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
               blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
-              blocker_summary, source_refs_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              dependency_blocked, dependency_task_ids_json, blocker_summary, source_refs_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
               scope = excluded.scope,
               eligibility_reason = excluded.eligibility_reason,
@@ -4718,6 +4747,8 @@ export function writeProjectStateDatabaseTaskMutation(
               human_blocking = excluded.human_blocking,
               count_in_project_totals = excluded.count_in_project_totals,
               proof_blocked = excluded.proof_blocked,
+              dependency_blocked = excluded.dependency_blocked,
+              dependency_task_ids_json = excluded.dependency_task_ids_json,
               blocker_summary = excluded.blocker_summary,
               source_refs_json = excluded.source_refs_json
           `)
@@ -4733,6 +4764,8 @@ export function writeProjectStateDatabaseTaskMutation(
             row.humanBlocking ? 1 : 0,
             row.countInProjectTotals === false ? 0 : 1,
             row.proofBlocked ? 1 : 0,
+            row.dependencyBlocked ? 1 : 0,
+            json(row.dependencyTaskIds ?? []),
             row.blockerSummary ?? null,
             json(row.sourceRefs),
           )
@@ -4907,7 +4940,7 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
       const existingScopeRows = database.prepare(`
         SELECT task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
           blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
-          blocker_summary, source_refs_json
+          dependency_blocked, dependency_task_ids_json, blocker_summary, source_refs_json
         FROM work_scope
       `).all() as JsonRecord[]
       const existingScopeRowsByTaskId = new Map(existingScopeRows.map(row => [String(row.task_id), {
@@ -4921,6 +4954,10 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
         humanBlocking: Number(row.human_blocking ?? 0) === 1,
         ...(Number(row.count_in_project_totals ?? 1) === 0 ? { countInProjectTotals: false } : {}),
         proofBlocked: Number(row.proof_blocked ?? 0) === 1,
+        dependencyBlocked: Number(row.dependency_blocked ?? 0) === 1,
+        ...(parseJson<string[]>(row.dependency_task_ids_json, []).length > 0
+          ? { dependencyTaskIds: parseJson<string[]>(row.dependency_task_ids_json, []) }
+          : {}),
         ...(typeof row.blocker_summary === 'string' && row.blocker_summary.trim()
           ? { blockerSummary: row.blocker_summary }
           : {}),
@@ -4933,8 +4970,8 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
         INSERT INTO work_scope (
           task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
           blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
-          blocker_summary, source_refs_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          dependency_blocked, dependency_task_ids_json, blocker_summary, source_refs_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id) DO UPDATE SET
           scope = excluded.scope,
           eligibility_reason = excluded.eligibility_reason,
@@ -4945,6 +4982,8 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
           human_blocking = excluded.human_blocking,
           count_in_project_totals = excluded.count_in_project_totals,
           proof_blocked = excluded.proof_blocked,
+          dependency_blocked = excluded.dependency_blocked,
+          dependency_task_ids_json = excluded.dependency_task_ids_json,
           blocker_summary = excluded.blocker_summary,
           source_refs_json = excluded.source_refs_json
       `)
@@ -4961,6 +5000,8 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
           row.humanBlocking ? 1 : 0,
           row.countInProjectTotals === false ? 0 : 1,
           row.proofBlocked ? 1 : 0,
+          row.dependencyBlocked ? 1 : 0,
+          json(row.dependencyTaskIds ?? []),
           row.blockerSummary ?? null,
           json(row.sourceRefs),
         )
@@ -5223,8 +5264,8 @@ export function writeProjectStateDatabaseTaskBatchMutation(
         INSERT INTO work_scope (
           task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
           blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
-          blocker_summary, source_refs_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          dependency_blocked, dependency_task_ids_json, blocker_summary, source_refs_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id) DO UPDATE SET
           scope = excluded.scope,
           eligibility_reason = excluded.eligibility_reason,
@@ -5235,6 +5276,8 @@ export function writeProjectStateDatabaseTaskBatchMutation(
           human_blocking = excluded.human_blocking,
           count_in_project_totals = excluded.count_in_project_totals,
           proof_blocked = excluded.proof_blocked,
+          dependency_blocked = excluded.dependency_blocked,
+          dependency_task_ids_json = excluded.dependency_task_ids_json,
           blocker_summary = excluded.blocker_summary,
           source_refs_json = excluded.source_refs_json
       `)
@@ -5250,6 +5293,8 @@ export function writeProjectStateDatabaseTaskBatchMutation(
           row.humanBlocking ? 1 : 0,
           row.countInProjectTotals === false ? 0 : 1,
           row.proofBlocked ? 1 : 0,
+          row.dependencyBlocked ? 1 : 0,
+          json(row.dependencyTaskIds ?? []),
           row.blockerSummary ?? null,
           json(row.sourceRefs),
         )
@@ -5528,7 +5573,7 @@ function currentProjectionChangesCurrentState(
   const savedScopeRows = database.prepare(`
     SELECT task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
       blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
-      blocker_summary, source_refs_json
+      dependency_blocked, dependency_task_ids_json, blocker_summary, source_refs_json
     FROM work_scope
   `).all() as JsonRecord[]
   const currentByTaskId = new Map(savedScopeRows.flatMap(row => {
@@ -5543,6 +5588,8 @@ function currentProjectionChangesCurrentState(
       scope_row_human_blocking: row.human_blocking,
       scope_row_count_in_project_totals: row.count_in_project_totals,
       scope_row_proof_blocked: row.proof_blocked,
+      scope_row_dependency_blocked: row.dependency_blocked,
+      scope_row_dependency_task_ids_json: row.dependency_task_ids_json,
       scope_row_blocker_summary: row.blocker_summary,
       scope_row_source_refs_json: row.source_refs_json,
     })
@@ -8330,6 +8377,15 @@ function currentEvidenceIdentity(
   recordedAt: string,
   fallbackId?: string,
 ): string {
+  if (kind === 'note' && isRecord(payload.structured)) {
+    const contractKind = stringValue(payload.structured.event) ?? stringValue(payload.structured.kind)
+    if (contractKind) {
+      const contractSource = stringValue(payload.structured.source) ?? stringValue(payload.agentId) ?? stringValue(payload.role)
+      return contractSource
+        ? `note:structured:${contractKind}:source:${contractSource}`
+        : `note:structured:${contractKind}`
+    }
+  }
   const identityKeys = kind === 'gate_result'
     ? ['gateId', 'command', 'name', 'id']
     : kind === 'review_verdict'

@@ -241,6 +241,8 @@
     sourceNote?: { description?: string | undefined; references: string[] } | undefined
     importedDraft?: boolean | undefined
     dependencyBlockers?: Array<{ taskId: string; title: string }> | undefined
+    dependencyState?: 'waiting' | 'clear' | undefined
+    canStart?: boolean | undefined
     liveAgent?: LiveAgent | undefined
     activity?: LiveActivity[] | undefined
     checklist?: {
@@ -677,12 +679,38 @@
     try {
       const r = await scopedProjectFetch('/api/project/thread', { cache: 'no-store' })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const j = (await r.json()) as { turns?: Turn[]; activeTurnId?: string | null; caughtUp?: boolean; orientationSpine?: ProjectDetail['orientationSpine'] | null }
+      const j = (await r.json()) as {
+        turns?: Turn[]
+        activeTurnId?: string | null
+        caughtUp?: boolean
+        orientationSpine?: ProjectDetail['orientationSpine'] | null
+        sourceRevision?: number
+        currentThreadFreshness?: string
+        startReadiness?: ProjectDetail['startReadiness']
+        actionModel?: ProjectDetail['actionModel']
+        releaseReadiness?: ProjectDetail['releaseReadiness']
+      }
       if (requestId !== threadLoadRequestId) return
       turns = preserveTaskExtras(j.turns ?? [], turns)
       orientationSpine = j.orientationSpine ?? null
       activeTurnId = j.activeTurnId ?? null
       caughtUp = !!j.caughtUp
+      const currentDetail = project.detail
+      const currentRevision = currentDetail?.projectRevision ?? 0
+      const threadRevision = j.sourceRevision ?? 0
+      if (
+        currentDetail &&
+        (!explicitProjectId || currentDetail.id === explicitProjectId) &&
+        j.currentThreadFreshness === 'current' &&
+        threadRevision >= currentRevision
+      ) {
+        project.detail = {
+          ...currentDetail,
+          ...(j.startReadiness ? { startReadiness: j.startReadiness } : {}),
+          ...(j.actionModel ? { actionModel: j.actionModel } : {}),
+          ...(j.releaseReadiness ? { releaseReadiness: j.releaseReadiness } : {}),
+        }
+      }
       const nextSentReplies = { ...sentReplies }
       for (const turn of turns) {
         if (nextSentReplies[turn.id] && turnLiveAgent(turn)) {
@@ -1116,6 +1144,11 @@
     return t.kind === 'inflight' && t.status === 'active' && !turnLiveAgent(t) && !t.importedDraft && t.taskStatus !== 'in_progress' && canStartTaskTurn(t)
   }
 
+  function isDependencyWaiting(turn: InFlightTurn): boolean {
+    return turn.dependencyState === 'waiting' ||
+      (turn.dependencyState == null && (turn.dependencyBlockers?.length ?? 0) > 0)
+  }
+
   function turnStatusChipLabel(t: Turn): string {
     if (t.status === 'done') return 'done'
     if (needsRecovery(t)) return 'Needs recovery'
@@ -1189,7 +1222,7 @@
   function ownershipLabel(t: Turn): string | null {
     if (turnLiveAgent(t)) return 'Working'
     if (needsRecovery(t)) return 'Needs recovery'
-    if (t.kind === 'inflight' && (t.dependencyBlockers?.length ?? 0) > 0) return 'Waiting'
+    if (t.kind === 'inflight' && isDependencyWaiting(t)) return 'Waiting'
     if (guildhallShaping(t)) {
       return runStatus === 'running' || runStatus === 'stopping'
         ? 'Queued'
@@ -1275,7 +1308,7 @@
       return { label: 'Setup', tone: 'neutral' }
     }
     if (turn.kind === 'inflight' && turn.status !== 'done') {
-      if ((turn.dependencyBlockers?.length ?? 0) > 0) {
+      if (isDependencyWaiting(turn)) {
         return { label: 'Waiting', tone: 'neutral' }
       }
       if (ownershipLabel(turn) === 'Ready') {
@@ -1325,7 +1358,7 @@
     const sinceActivity = shortElapsed(agent.silentMs)
     const label = agent.lastEventLabel ?? 'Model call in progress'
     if (agent.lastEventKind === 'provider_wait' && (agent.silentMs ?? 0) >= 60_000) {
-      return `Still waiting for the local model${sinceActivity ? ` · ${sinceActivity}` : ''}`
+      return `The model is still loading or generating${sinceActivity ? ` · ${sinceActivity}` : ''}`
     }
     if (agent.stalled) {
       return `No activity${sinceActivity ? ` for ${sinceActivity.replace(' ago', '')}` : ''}`
@@ -2255,7 +2288,7 @@
         ? 'Your existing project notes are becoming candidate tasks now.'
         : 'Drafting is in progress now.'
     }
-    if ((turn.dependencyBlockers?.length ?? 0) > 0) {
+    if (isDependencyWaiting(turn)) {
       return `Waiting for ${turn.dependencyBlockers?.map(blocker => blocker.title).join(', ')}.`
     }
     if (turn.taskStatus === 'ready' && !live) {
@@ -2285,7 +2318,7 @@
           : 'Part of this import review is already drafted. Review it if you want, or resume to keep turning your project notes into candidate tasks.'
       }
       if (turn.briefApproved && !turn.specDraftPresent) {
-        return runStatus === 'running'
+        return runStatus === 'running' || runStatus === 'stopping'
           ? 'The brief is approved. The spec is queued for drafting.'
           : 'The brief is approved. Resume to draft the spec.'
       }
@@ -2410,8 +2443,9 @@
   }
 
   function canStartTaskTurn(turn: InFlightTurn): boolean {
+    if (typeof turn.canStart === 'boolean') return turn.canStart
     if (projectRunBlocksTaskStart(turn)) return false
-    if ((turn.dependencyBlockers?.length ?? 0) > 0) return false
+    if (isDependencyWaiting(turn)) return false
     return !turnLiveAgent(turn) && (
       turn.taskStatus === 'ready' ||
       turn.taskStatus === 'import_draft' ||
@@ -2473,7 +2507,12 @@
   function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
     return taskStagePresentation(
       { ...turn, liveAgent: turnLiveAgent(turn) },
-      { runStatus, availabilityStatus },
+      {
+        runStatus,
+        availabilityStatus,
+        focusTaskId: startReadiness?.focusTaskId,
+        focusKind: startReadiness?.focusKind,
+      },
     ).tone
   }
 

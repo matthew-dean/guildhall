@@ -103,7 +103,6 @@ import {
   prepareProjectSummaryProjectionFromUnknownQueue,
   readProjectSummaryProjection,
   readProjectSummaryProjectionForMigration,
-  writeProjectSummaryProjection,
   writeProjectSummaryProjectionFromIndexedState,
 } from './project-summary-projection.js'
 import { readProjectCanonicalCurrentState, writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
@@ -1078,6 +1077,10 @@ function scopeRowsForEffectiveTasks(
     humanBlocking: row.humanBlocking,
     ...(row.countInProjectTotals === false ? { countInProjectTotals: false } : {}),
     proofBlocked: row.proofBlocked,
+    dependencyBlocked: row.dependencyBlocked === true,
+    ...(row.dependencyTaskIds?.length
+      ? { dependencyTaskIds: [...row.dependencyTaskIds] }
+      : {}),
     ...(row.blockerSummary ? { blockerSummary: row.blockerSummary } : {}),
     sourceRefs: [...row.sourceRefs],
   }))
@@ -5525,14 +5528,11 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Rebuilds the saved proof and release projection after proof-setup contract normalization so task detail, release readiness, and compact project views share the same current answer.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
-      const ledger = await readProjectMigrationLedger(projectRoot)
-      const applied = ledger.records.some(record => record.id === PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID && record.status === 'applied')
-      return {
-        needed: !applied,
-        affectedPaths: !applied
-          ? [projectStateDatabasePath(projectRoot), 'saved proof and release projection']
-          : [],
-      }
+      // The immediately following effective-projection migration subsumes
+      // this raw-queue refresh. Running both can publish two different
+      // canonical decisions for one project revision, which the append-only
+      // claim ledger correctly rejects.
+      return { needed: false, affectedPaths: [] }
     },
     async apply(projectRoot) {
       const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
@@ -5566,17 +5566,9 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
     async apply(projectRoot) {
-      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-      const current = await readProjectCanonicalCurrentState(projectRoot)
-      const projection = writeProjectSummaryProjection(tasksPath, {
-        projectId: path.basename(projectRoot),
-        projectRoot,
-        queue: current.rawQueue as never,
-        projectionTasks: current.tasks as never,
-        currentStateAuthority: 'database',
-      })
+      const projection = await realignPromotedSummaryWithEffectiveState(projectRoot)
       return {
-        summary: `Reprojected proof and release readiness from current typed evidence (${projection.releaseSummary.state}).`,
+        summary: `Reprojected proof and release readiness from current typed evidence for ${projection.taskCount} task${projection.taskCount === 1 ? '' : 's'} (${projection.doneCount} done).`,
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },

@@ -11,6 +11,7 @@ import {
   projectRootFromMemoryDir,
   projectStatePath,
   projectStatePathFromMemoryDir,
+  withProjectStateWriteLock,
 } from '@guildhall/sessions'
 import { readCachedJson } from './file-read-cache.js'
 import { listBoundedChatSessions } from './bounded-chat.js'
@@ -129,33 +130,61 @@ export async function createPressureTestIntake(input: {
   target: PressureTestIntake['target']
   rawRequest: string
 }): Promise<PressureTestIntake> {
-  const now = new Date().toISOString()
   if (input.target.type === 'project') {
+    const now = new Date().toISOString()
     const intake = await createProjectQuestionIntake(input.memoryDir, input.target, input.rawRequest, now)
     await savePressureTestIntake(input.memoryDir, intake)
     return intake
   }
-  const domains = seedDomainsForRequest(input.rawRequest)
-  domains[0]!.status = 'active'
-  const intake: PressureTestIntake = {
-    id: `pti-${input.target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()}`,
-    rawRequest: input.rawRequest,
-    target: input.target,
-    status: 'active',
-    activeDomainId: domains[0]!.id,
-    pendingQuestion: firstQuestion(domains[0]!, input.target, now),
-    domains,
-    outputs: {
-      assumptions: [],
-      decisions: [],
-      languageMapCandidates: [],
-      taskSplitCandidates: [],
-    },
-    createdAt: now,
-    updatedAt: now,
+  return withProjectStateWriteLock(pressureTestDir(input.memoryDir), async () => {
+    const target = await nextAvailablePressureTestTarget(input.memoryDir, input.target)
+    const now = new Date().toISOString()
+    const domains = seedDomainsForRequest(input.rawRequest)
+    domains[0]!.status = 'active'
+    const intake: PressureTestIntake = {
+      id: `pti-${target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()}`,
+      rawRequest: input.rawRequest,
+      target,
+      status: 'active',
+      activeDomainId: domains[0]!.id,
+      pendingQuestion: firstQuestion(domains[0]!, target, now),
+      domains,
+      outputs: {
+        assumptions: [],
+        decisions: [],
+        languageMapCandidates: [],
+        taskSplitCandidates: [],
+      },
+      createdAt: now,
+      updatedAt: now,
+    }
+    await savePressureTestIntake(input.memoryDir, intake)
+    return intake
+  })
+}
+
+async function nextAvailablePressureTestTarget(
+  memoryDir: string,
+  target: PressureTestIntake['target'],
+): Promise<PressureTestIntake['target']> {
+  const baseId = target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()
+  let candidateId = baseId
+  let suffix = 2
+  while (await fileExists(pressureTestPath(memoryDir, `pti-${candidateId}`))) {
+    candidateId = `${baseId}-${suffix}`
+    suffix += 1
   }
-  await savePressureTestIntake(input.memoryDir, intake)
-  return intake
+  return candidateId === target.id ? target : { ...target, id: candidateId }
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fsp.access(filePath)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
 }
 
 export async function loadPressureTestIntake(input: {

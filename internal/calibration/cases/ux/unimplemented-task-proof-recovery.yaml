@@ -7,15 +7,15 @@ userGoal: Resume approved work and trust that Guildhall performs the implementat
 scenario: A ready task has planned command proof but no worker pass or implementation output. Retry routes directly to generic repository gates and marks the task done.
 artifacts:
   - id: lifecycle-state
-    kind: state_snapshot
+    kind: document_excerpt
     description: Structured task state before and after the retry.
     content: "Before: status ready, no worker output, planned pnpm typecheck and pnpm test proof. After: worker skipped, generic commands passed against unchanged code, status done."
 reviewLanes:
   - ux_comprehension
-  - workflow_integrity
+  - release_risk
 knownFindings:
   - id: proof-before-implementation
-    lane: workflow_integrity
+    lane: release_risk
     severity: critical
     summary: Planned proof on nonterminal work was mistaken for missing proof on completed work.
     impact: Guildhall can claim a release task is complete without producing the requested implementation.

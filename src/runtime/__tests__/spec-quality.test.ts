@@ -98,6 +98,59 @@ describe('validateSpecGrounding', () => {
     expect(lyrical).toEqual(terse)
     expect(lyrical).toEqual({ ok: true, errors: [] })
   })
+
+  it('allows a new command only when a typed owner revision explicitly names it', () => {
+    const structuredSpec = {
+      whatThisIs: 'A bounded desktop proof contract.',
+      problemContext: 'The owner requested a reproducible sidecar check.',
+      goals: ['Prove the sidecar contract.'],
+      nonGoals: ['Do not build the full desktop UI.'],
+      proposedDesign: 'Add the focused proof entry requested by the owner.',
+      keyDecisions: ['Keep the command typed.'],
+      acceptanceCriteria: [{
+        scenario: 'Given the desktop sidecar',
+        expectation: 'Then its typed contract passes.',
+        verificationMode: 'automated' as const,
+        command: 'pnpm test:desktop-sidecar',
+      }],
+      verification: ['Run the typed acceptance command.'],
+      completionBoundary: {
+        productOutcome: 'The sidecar contract is proven.',
+        whatGuildhallCanCompleteInCode: 'Add and run the focused proof.',
+        externalDependencies: 'None known.',
+        ownerOnlySetup: 'None known.',
+        verificationEnvironment: 'The registered project.',
+        whatCountsAsDone: 'The focused proof passes.',
+        whatMustBeSplitOrBlocked: 'Split only independent outcomes.',
+      },
+    }
+
+    const unsupported = validateSpecGrounding({ ...baseTask, structuredSpec })
+    const ownerDirected = validateSpecGrounding(
+      { ...baseTask, structuredSpec },
+      {
+        ownerRevisionInstructions: ['Add the exact command pnpm test:desktop-sidecar.'],
+        requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+      },
+    )
+    const omittedOwnerCommand = validateSpecGrounding(
+      { ...baseTask, structuredSpec: {
+        ...structuredSpec,
+        acceptanceCriteria: structuredSpec.acceptanceCriteria.map(criterion => ({ ...criterion, command: undefined })),
+      } },
+      {
+        ownerRevisionInstructions: ['Add the exact command pnpm test:desktop-sidecar.'],
+        requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+      },
+    )
+
+    expect(unsupported.ok).toBe(false)
+    expect(unsupported.errors.join(' ')).toContain('not present in the visible task/source context')
+    expect(ownerDirected).toEqual({ ok: true, errors: [] })
+    expect(omittedOwnerCommand.errors).toContain(
+      'Structured spec omits owner-required acceptance commands: pnpm test:desktop-sidecar.',
+    )
+  })
 })
 
 describe('validateProductBriefGrounding', () => {

@@ -2799,6 +2799,7 @@ function activityActionFromDecision(
   if (!decision || decision.primaryAction.kind === 'none') return null
   const taskId = decision.primaryAction.targetId
   const execution = decision.execution
+  const readiness = projectDecisionStartReadiness(decision)
   const href = taskId
     ? `/projects/${encodeURIComponent(projectId)}/work?task=${encodeURIComponent(taskId)}`
     : `/projects/${encodeURIComponent(projectId)}/work`
@@ -2811,9 +2812,9 @@ function activityActionFromDecision(
       ...(execution.message ? { detail: execution.message } : {}),
       buttonLabel: briefReview ? 'Review brief' : 'Review spec',
       href: projectTaskActionHref({
-        code: briefReview ? 'owner_input_required' : execution.code,
-        focusKind: execution.focusKind,
-        focusTaskId: taskId,
+        code: readiness.code,
+        focusKind: readiness.focusKind,
+        focusTaskId: readiness.focusTaskId ?? taskId,
       }, projectId),
       tone: 'warn',
       ...(taskId ? { taskId } : {}),
@@ -3082,7 +3083,7 @@ function workProgressFromProjectSummaryProjection(
   const selected = projection.releaseSummary.counts
   const selectedBlocked = projection.releaseSummary.taskStatusCounts.blocked ?? 0
   const selectedShelved = projection.releaseSummary.taskStatusCounts.shelved ?? 0
-  const selectedActive = Math.max(0, selected.total - selected.done - selectedBlocked - selectedShelved)
+  const selectedActive = selected.active
   return {
     counts,
     ...(projection.releaseSummary.scopeMode !== 'unavailable' ? {
@@ -3326,6 +3327,10 @@ function summarizeScopedReleaseWork(
           blocksRelease: row.blocksRelease,
           humanBlocking: row.humanBlocking,
           proofBlocked: row.proofBlocked ?? false,
+          dependencyBlocked: row.dependencyBlocked === true,
+          ...(row.dependencyTaskIds?.length
+            ? { dependencyTaskIds: [...row.dependencyTaskIds] }
+            : {}),
           ...(row.blockerSummary ? { blockerSummary: row.blockerSummary } : {}),
           sourceRefs: [...row.sourceRefs],
         })
@@ -5959,6 +5964,10 @@ function buildOverviewOrientationPreviewSpine(input: {
       blocksStart: row.blocksStart,
       blocksRelease: row.blocksRelease,
       humanBlocking: row.humanBlocking,
+      dependencyBlocked: row.dependencyBlocked === true,
+      ...(row.dependencyTaskIds?.length
+        ? { dependencyTaskIds: [...row.dependencyTaskIds] }
+        : {}),
       sourceRefs: row.sourceRefs,
     })),
     gaps: scope ? [] : [{
@@ -6240,6 +6249,8 @@ function compactOrientationScopeRows(rows: unknown): Array<Record<string, unknow
         'blocksStart',
         'blocksRelease',
         'humanBlocking',
+        'dependencyBlocked',
+        'dependencyTaskIds',
         'sourceRefs',
       ]) {
         if (key in row) summary[key] = row[key]
@@ -7655,6 +7666,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         blocksStart: row.blocksStart === true,
         blocksRelease: row.blocksRelease === true,
         humanBlocking: row.humanBlocking === true,
+        dependencyBlocked: row.dependencyBlocked === true,
+        ...(Array.isArray(row.dependencyTaskIds) && row.dependencyTaskIds.length > 0
+          ? { dependencyTaskIds: row.dependencyTaskIds }
+          : {}),
         sourceRefs: Array.isArray(row.sourceRefs) ? row.sourceRefs : [],
       }]
     })
@@ -8480,7 +8495,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       const now = new Date().toISOString()
-      const release = existing ?? ProjectReleaseSchema.parse({
+      const parsedRelease = existing ? null : ProjectReleaseSchema.safeParse({
         id: releaseId,
         label,
         kind: 'release',
@@ -8497,6 +8512,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         createdAt: now,
         updatedAt: now,
       })
+      if (parsedRelease && !parsedRelease.success) {
+        return c.json({ error: 'Invalid release payload.', issues: parsedRelease.error.issues }, 400)
+      }
+      const release = existing ?? parsedRelease!.data
       const releases = existing
         ? state.rawQueue.releases
         : [...state.rawQueue.releases, release]
@@ -12229,7 +12248,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const coordinators = project.config?.coordinators ?? []
       const defaultCoordinator = coordinators[0]
       if (intake.status === 'complete' && intake.target.type !== 'project' && !defaultCoordinator) {
-        throw new Error('Completed intake cannot create work until the project has a coordinator domain.')
+        return c.json({
+          intake,
+          error: 'Completed intake cannot create work until the project has a coordinator domain.',
+          code: 'coordinator_required',
+        }, 400)
       }
       const materialized = defaultCoordinator
         ? await materializeCompletedPressureTestIntake({
@@ -15178,6 +15201,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           approvalActor,
         })
         if (!result.success) return c.json({ error: result.error ?? 'approve failed' }, 400)
+        await refreshCurrentThreadProjection(project.path, {
+          runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+        })
         return c.json({ ok: true, status: result.newStatus })
       }
 

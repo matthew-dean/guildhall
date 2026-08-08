@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import ThreadTab from '../ThreadTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
 import { project } from '../../../lib/project.svelte.js'
+import type { ProjectDetail } from '../../../lib/types.js'
 
 function json(data: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(data), {
@@ -472,8 +473,24 @@ function installFetchFakes(
     calls.push({ url, init, body })
     if (url.startsWith('/api/project/thread')) {
       const state = options.threadState?.()
-      if (state) return json({ turns: state.turns, activeTurnId: state.activeTurnId, caughtUp: state.caughtUp ?? false, orientationSpine: options.orientationSpine })
-      return json({ turns, activeTurnId, caughtUp: options.caughtUp ?? false, orientationSpine: options.orientationSpine })
+      if (state) return json({
+        turns: state.turns,
+        activeTurnId: state.activeTurnId,
+        caughtUp: state.caughtUp ?? false,
+        orientationSpine: options.orientationSpine,
+        sourceRevision: 2,
+        currentThreadFreshness: 'current',
+        startReadiness: options.startReadiness,
+      })
+      return json({
+        turns,
+        activeTurnId,
+        caughtUp: options.caughtUp ?? false,
+        orientationSpine: options.orientationSpine,
+        sourceRevision: 2,
+        currentThreadFreshness: 'current',
+        startReadiness: options.startReadiness,
+      })
     }
     if (url.startsWith('/api/project/source-note')) {
       if (options.sourceNoteResponse) {
@@ -1410,6 +1427,52 @@ describe('ThreadTab', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Request changes' }))
 
     expect(threadComposer().getByPlaceholderText('Correct the spec or ask for another pass…')).toBeTruthy()
+  })
+
+  it('refreshes project chrome after Thread observes a spec revision', async () => {
+    const currentReadiness = {
+      canStart: true,
+      code: 'ready_work',
+      focusTaskId: 'task-link-controls',
+      focusTaskTitle: 'Stripe Connect -- payment flow for licensed projects',
+      focusKind: 'ready_work',
+      message: 'The revised spec is ready to draft.',
+    }
+    const { calls } = installFetchFakes([
+      specReviewTurn('task-link-controls'),
+    ], 'spec-task-link-controls', { startReadiness: currentReadiness })
+    const refreshSpy = vi.spyOn(project, 'refresh').mockImplementation(async () => {
+      project.detail = {
+        ...(project.detail as ProjectDetail),
+        projectRevision: 1,
+        startReadiness: {
+          canStart: false,
+          code: 'no_unattended_progress',
+          focusTaskId: 'task-dependency',
+          focusTaskTitle: 'Dependency-blocked review',
+          focusKind: 'spec_review',
+          message: 'A dependency-blocked task needs review.',
+        },
+      }
+      return project.detail
+    })
+
+    render(ThreadTab)
+    await selectedThread().findByRole('button', { name: 'View spec' })
+    await userEvent.click(selectedThread().getByRole('button', { name: 'View spec' }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Request changes' }))
+    await userEvent.type(
+      threadComposer().getByPlaceholderText('Correct the spec or ask for another pass…'),
+      'Name the exact desktop proof commands.',
+    )
+    await userEvent.click(threadComposer().getByRole('button', { name: /^send$/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call => call.url.includes('/task/task-link-controls/resume'))).toBe(true)
+      expect(refreshSpy).toHaveBeenCalledTimes(1)
+      expect(project.detail?.startReadiness).toMatchObject(currentReadiness)
+    })
   })
 
   it('renders prior task-chain items as timeline events instead of repeating the task title as a mini task card', async () => {
@@ -3439,9 +3502,31 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findAllByText(/Still waiting for the local model/)
+    await screen.findAllByText(/The model is still loading or generating/)
     expect(screen.getByText('Started write checkpoint')).toBeTruthy()
     expect(screen.getByText('Writing implementation notes')).toBeTruthy()
+  })
+
+  it('keeps approved spec drafting queued while a run is stopping', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      run: { status: 'stopping', mode: 'continuous' },
+    }
+    installFetchFakes([
+      workerTurn({
+        persona: 'spec',
+        taskStatus: 'exploring',
+        liveAgent: undefined,
+        briefApproved: true,
+        specDraftPresent: false,
+        summary: 'The brief is approved. Guildhall is shaping the spec now.',
+      }),
+    ], 'worker-link-controls')
+
+    render(ThreadTab)
+
+    expect((await screen.findAllByText('The brief is approved. The spec is queued for drafting.')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('The brief is approved. Resume to draft the spec.')).toBeNull()
   })
 
   it('labels partial durable progress as recovery work instead of queued work', async () => {
@@ -3937,6 +4022,7 @@ describe('ThreadTab', () => {
 
     expect(source).toContain("if (label === 'Needs brief') return 'warn'")
     expect(source).toContain("if (label === 'Queued' || label === 'Working') return 'running'")
+    expect(source).toMatch(/function taskStateTone[\s\S]*?focusTaskId: startReadiness\?\.focusTaskId,[\s\S]*?focusKind: startReadiness\?\.focusKind,/)
     expect(source).not.toMatch(/agent-attention|tone=\"agent|tone='agent'|return 'agent'/)
   })
 

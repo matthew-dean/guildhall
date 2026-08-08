@@ -60,6 +60,7 @@ import {
   readProjectSavedReleaseState,
   type ProjectSavedReleaseReadModel,
 } from './project-state-boundary.js'
+import { resolveLaunchAgentLifecycleTarget } from './launch-agent.js'
 import type {
   ProjectSummaryProjection,
   ProjectSummaryReleaseSummary,
@@ -997,11 +998,52 @@ function cliEntryPath(): string {
   return fileURLToPath(import.meta.url)
 }
 
+async function runLaunchctl(args: string[], allowFailure = false): Promise<boolean> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('launchctl', args, { stdio: 'ignore' })
+    child.once('error', err => {
+      if (allowFailure) resolvePromise(false)
+      else reject(err)
+    })
+    child.once('exit', code => {
+      if (code === 0) resolvePromise(true)
+      else if (allowFailure) resolvePromise(false)
+      else reject(new Error(`launchctl ${args[0]} failed with exit code ${code ?? 'unknown'}.`))
+    })
+  })
+}
+
+function installedLaunchAgentTarget(port: number) {
+  const target = resolveLaunchAgentLifecycleTarget({ port })
+  return target && existsSync(target.plistPath) ? target : null
+}
+
+async function startInstalledLaunchAgent(port: number): Promise<boolean> {
+  const target = installedLaunchAgentTarget(port)
+  if (!target) return false
+
+  // bootstrap fails when the service is already loaded; kickstart is authoritative in either case.
+  await runLaunchctl(['bootstrap', target.domainTarget, target.plistPath], true)
+  await runLaunchctl(['kickstart', '-k', target.serviceTarget])
+  return true
+}
+
+async function stopInstalledLaunchAgent(port: number): Promise<boolean> {
+  const target = installedLaunchAgentTarget(port)
+  if (!target) return false
+  await runLaunchctl(['bootout', target.domainTarget, target.plistPath], true)
+  return true
+}
+
 async function ensureServiceRunning(intent: ServiceLifecycleIntent): Promise<ServiceRuntimeState> {
   const existing = await discoverServiceRuntimeState(intent.port)
   if (existing) return existing
 
   mkdirSync(join(homedir(), '.guildhall'), { recursive: true })
+
+  if (await startInstalledLaunchAgent(intent.port)) {
+    return waitForServiceReady(intent.port)
+  }
 
   const childArgs = [
     cliEntryPath(),
@@ -1073,11 +1115,20 @@ async function cmdOpen() {
 
 async function cmdStop() {
   const state = await discoverServiceRuntimeState()
+  const stoppedLaunchAgent = await stopInstalledLaunchAgent(DEFAULT_DASHBOARD_PORT)
   if (!state) {
-    console.log('[guildhall] No running service found.')
+    console.log(stoppedLaunchAgent
+      ? '[guildhall] Service stopped.'
+      : '[guildhall] No running service found.')
     return
   }
-  process.kill(state.pid, 'SIGTERM')
+  if (isPidAlive(state.pid)) {
+    try {
+      process.kill(state.pid, 'SIGTERM')
+    } catch {
+      // launchctl may already have reaped the supervised process.
+    }
+  }
   for (let attempt = 0; attempt < 40; attempt++) {
     if (!isPidAlive(state.pid)) break
     await new Promise(resolve => setTimeout(resolve, 150))

@@ -491,6 +491,34 @@ describe('project-state database', () => {
     })
   })
 
+  it('adds dependency read-model columns when opening a schema 36 database', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-legacy-scope', title: 'Legacy scope', status: 'ready' }] },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+    })
+
+    const databasePath = projectStateDatabasePath(projectRoot)
+    const legacyDatabase = new DatabaseSync(databasePath)
+    legacyDatabase.exec(`
+      ALTER TABLE work_scope DROP COLUMN dependency_task_ids_json;
+      ALTER TABLE work_scope DROP COLUMN dependency_blocked;
+      UPDATE project_meta SET schema_version = 36;
+    `)
+    legacyDatabase.close()
+
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: { generatedAt: '2026-07-14T00:01:00.000Z', freshness: 'current' },
+    })
+    expect(readProjectStateDatabaseMetadata(projectRoot)).toMatchObject({ schemaVersion: 37 })
+    const upgradedDatabase = new DatabaseSync(databasePath, { readOnly: true })
+    const columns = upgradedDatabase.prepare('PRAGMA table_info(work_scope)').all() as Array<{ name: string }>
+    expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'dependency_blocked',
+      'dependency_task_ids_json',
+    ]))
+    upgradedDatabase.close()
+  })
+
   it('stores normalized work rows and one compact summary atomically', () => {
     writeProjectStateDatabaseSnapshot(tasksPath, {
       queue: {
@@ -1638,6 +1666,8 @@ describe('project-state database', () => {
         blocksStart: false,
         blocksRelease: true,
         humanBlocking: false,
+        dependencyBlocked: true,
+        dependencyTaskIds: ['task-parent'],
         sourceRefs: ['docs/mvp.md'],
       }],
     })
@@ -1650,6 +1680,10 @@ describe('project-state database', () => {
     expect(readProjectStateDatabaseTaskPoint(tasksPath, 'task-child')?.definition).toMatchObject({
       id: 'task-child',
       spec: child.spec,
+    })
+    expect(readProjectStateDatabaseTaskPoint(tasksPath, 'task-child')?.scopeRow).toMatchObject({
+      dependencyBlocked: true,
+      dependencyTaskIds: ['task-parent'],
     })
     expect(readProjectStateDatabaseTask(tasksPath, 'task-child')?.definition).toMatchObject({ spec: child.spec })
     expect(readProjectStateDatabaseQueue(tasksPath)?.tasks).toEqual(expect.arrayContaining([
@@ -2590,6 +2624,47 @@ describe('project-state database', () => {
       'reviewer',
       'worker',
     ])
+  })
+
+  it('keeps a typed owner contract when a later steering note comes from the same source', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-1', title: 'One', status: 'exploring' }] },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+    })
+    upsertProjectStateDatabaseTaskProof(projectRoot, {
+      taskId: 'task-1',
+      kind: 'note',
+      recordedAt: '2026-07-14T00:01:00.000Z',
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: 'Revise the proof contract.',
+        structured: {
+          event: 'document_revision_requested',
+          source: 'human',
+          revisionTarget: 'spec',
+          requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+        },
+      },
+    })
+    upsertProjectStateDatabaseTaskProof(projectRoot, {
+      taskId: 'task-1',
+      kind: 'note',
+      recordedAt: '2026-07-14T00:02:00.000Z',
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: 'Use the typed schema and save now.',
+      },
+    })
+
+    const current = readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-1')
+    expect(current?.byKind.note).toHaveLength(2)
+    expect(current?.byKind.note?.[0]?.payload.content).toBe('Use the typed schema and save now.')
+    expect(current?.byKind.note?.[1]?.payload.structured).toMatchObject({
+      event: 'document_revision_requested',
+      requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+    })
   })
 
   it('collapses oversized current evidence without touching the historical source', () => {

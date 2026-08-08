@@ -139,12 +139,10 @@ async function seedQueue(queue: TaskQueue): Promise<void> {
       })
     }
   }
-  writeProjectSummaryProjectionFromUnknownQueue(projectStatePath(tmpDir, 'TASKS.json'), {
-    projectId,
-    projectRoot: tmpDir,
-    queue: normalized,
-    queueCommit: false,
-  })
+  // Let pending migrations perform the first canonical summary write after
+  // promotion. Pre-projecting here would bind pre-migration semantics to the
+  // current revision, then make a legitimate migration refresh look like a
+  // conflicting replay of the same canonical claim.
   for (let attempt = 0; attempt < 128; attempt += 1) {
     const prerequisites = await applyProjectMigrations({
       projectRoot: tmpDir,
@@ -538,9 +536,50 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.releaseSummary.scopeMode).toBe('named_release')
     expect(body.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 1,
-      visibleActive: 1,
+      visibleActive: 0,
       visibleBlocked: 0,
     })
+  })
+
+  it('preserves dependency state through the compact scope-row read boundary', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'desktop-mvp',
+      releases: [{
+        id: 'desktop-mvp',
+        label: 'Desktop MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-gate', 'work:task-shell'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        makeTask({ id: 'task-gate', title: 'Prove the architecture gate', status: 'ready', releaseIds: ['desktop-mvp'] }),
+        makeTask({
+          id: 'task-shell',
+          title: 'Build the desktop shell',
+          status: 'exploring',
+          releaseIds: ['desktop-mvp'],
+          dependsOn: ['task-gate'],
+        }),
+      ],
+    })
+
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
+    const response = await app.fetch(new Request(projectUrl('/api/project?surface=overview&compact=true')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    const persistedRow = body.orientationSpine?.scopeRows?.find((row: any) => row.taskId === 'task-shell')
+    expect([
+      persistedRow?.dependencyBlocked,
+      persistedRow?.dependencyTaskIds,
+      persistedRow?.blocksStart,
+    ]).toEqual([true, ['task-gate'], true])
   })
 
   it('keeps Work and Map inventory records bounded while preserving row-level signals', async () => {
@@ -4000,7 +4039,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(project.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
       visibleBlocked: 0,
-      visibleActive: 3,
+      visibleActive: 0,
     })
 
     const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-imported')))
@@ -4008,7 +4047,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(detail.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
       visibleBlocked: 0,
-      visibleActive: 3,
+      visibleActive: 0,
     })
   }, 45000)
 

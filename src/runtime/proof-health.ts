@@ -477,8 +477,17 @@ function commandProofSatisfiedByTask(proofContract: Record<string, unknown>, tas
   if (taskRecord && matchingPaths.length > 0) {
     return matchingPaths.some(path => isCurrentProofPathProven(path, taskRecord))
   }
+  const recoveryBoundary = taskRecord ? proofRecoveryForTask(taskRecord)?.reopenedAt : undefined
+  const commandPath = proofContract.kind === 'command'
+    ? proofContract
+    : {
+        ...proofContract,
+        kind: 'command',
+        updatedAt: proofContract.updatedAt ?? proofContract.createdAt ?? recoveryBoundary,
+        expectedEvidence: [{ id: proofContract.id, required: true }],
+      }
   if (passedGateResultsForTask(task).some((gate) => {
-    return gate.gateId === proofContract.id || commandProofGateMatches(proofContract, gate) || comparableCommand(gate.command) === command
+    return gate.gateId === proofContract.id || commandProofGateMatches(commandPath, gate)
   })) return true
   return (Array.isArray(proofContract.verificationRecords) ? proofContract.verificationRecords : [])
     .some(record => {

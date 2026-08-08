@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyRunStatusToStartReadiness, buildProjectActionModel, projectTaskActionHref, resolveProjectActionModel } from '../project-action-model.js'
+import { applyRunStatusToStartReadiness, buildProjectActionModel, isFocusedOwnerInputTaskReview, projectTaskActionHref, resolveProjectActionModel } from '../project-action-model.js'
 
 describe('applyRunStatusToStartReadiness', () => {
   it('does not leave a saved paused action visible while a run is active', () => {
@@ -20,6 +20,19 @@ describe('applyRunStatusToStartReadiness', () => {
 })
 
 describe('buildProjectActionModel', () => {
+  it('uses one owner-input review predicate across task routing and setup state', () => {
+    expect(isFocusedOwnerInputTaskReview({
+      code: 'owner_input_required',
+      focusKind: 'brief_cleanup',
+      focusTaskId: 'task-086',
+    })).toBe(true)
+    expect(isFocusedOwnerInputTaskReview({
+      code: 'owner_input_required',
+      focusKind: 'setup',
+      focusTaskId: 'task-086',
+    })).toBe(false)
+  })
+
   it('uses the current brief instead of a superseded original description', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },

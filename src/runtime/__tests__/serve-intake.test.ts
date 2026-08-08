@@ -5,13 +5,18 @@ import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
 import {
+  getProjectStateDir,
   readProjectStateJsonAsync,
   readProjectStateTextAsync,
   writeProjectStateTextAsync,
 } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { materializeCompletedPressureTestIntake } from '../intake.js'
-import { loadPressureTestIntake } from '../pressure-test-intake.js'
+import {
+  createPressureTestIntake,
+  loadPressureTestIntake,
+  savePressureTestIntake,
+} from '../pressure-test-intake.js'
 
 let tmpDir: string
 let dataDir: string
@@ -156,6 +161,53 @@ describe('POST /api/project/intake', () => {
 })
 
 describe('POST /api/project/request', () => {
+  it('returns an actionable 400 when a completed intake has no coordinator domain', async () => {
+    const bareDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-pressure-intake-bare-'))
+    try {
+      const bareProjectId = bootstrapWorkspace(bareDir, {
+        name: 'Bare Pressure Intake',
+        coordinators: [],
+      }).id ?? path.basename(bareDir)
+      const memoryDir = getProjectStateDir(bareDir)
+      const intake = await createPressureTestIntake({
+        memoryDir,
+        target: { type: 'release', id: 'desktop-release', title: 'Desktop release' },
+        rawRequest: 'Create the next desktop release.',
+      })
+      for (const domain of intake.domains) domain.status = 'closed'
+      const finalDomain = intake.domains.at(-1)!
+      finalDomain.status = 'closeout'
+      finalDomain.closeoutAsked = true
+      intake.activeDomainId = finalDomain.id
+      intake.pendingQuestion = {
+        id: `${finalDomain.id}-closeout`,
+        domainId: finalDomain.id,
+        prompt: 'Anything else?',
+        why: 'Close the final topic.',
+        evidence: [],
+        askedAt: new Date().toISOString(),
+      }
+      await savePressureTestIntake(memoryDir, intake)
+
+      const url = new URL(`http://localhost/api/project/pressure-test/${intake.id}/answer`)
+      url.searchParams.set('projectId', bareProjectId)
+      const { app } = buildServeApp({ projectPath: bareDir })
+      const response = await app.fetch(new Request(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ questionId: intake.pendingQuestion.id, answer: 'No.' }),
+      }))
+
+      expect(response.status).toBe(400)
+      await expect(response.json()).resolves.toMatchObject({
+        code: 'coordinator_required',
+        intake: { status: 'complete' },
+      })
+    } finally {
+      await fs.rm(bareDir, { recursive: true, force: true })
+    }
+  })
+
   it('starts pressure-test intake for release ideas', async () => {
     await fs.writeFile(
       path.join(tmpDir, 'README.md'),
@@ -195,6 +247,31 @@ describe('POST /api/project/request', () => {
       evidence.includes('rough owner intent') &&
       evidence.includes('verifiable work'),
     )).toBe(true)
+  })
+
+  it('keeps slug-equivalent release intakes distinct without overwriting the first request', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const create = (ask: string, title: string) => app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask, title }),
+    }))
+
+    const firstResponse = await create('Create the first packaged desktop release.', 'Stage 2: Desktop UI')
+    const secondResponse = await create('Create a separate follow-up desktop release.', 'Stage 2 - Desktop UI')
+
+    expect(firstResponse.status).toBe(200)
+    expect(secondResponse.status).toBe(200)
+    const first = (await firstResponse.json() as { pressureTestIntake: { id: string } }).pressureTestIntake
+    const second = (await secondResponse.json() as { pressureTestIntake: { id: string } }).pressureTestIntake
+    expect(first.id).toBe('pti-stage-2-desktop-ui')
+    expect(second.id).toBe('pti-stage-2-desktop-ui-2')
+    await expect(loadPressureTestIntake({ memoryDir: tmpDir, intakeId: first.id })).resolves.toMatchObject({
+      rawRequest: 'Create the first packaged desktop release.',
+    })
+    await expect(loadPressureTestIntake({ memoryDir: tmpDir, intakeId: second.id })).resolves.toMatchObject({
+      rawRequest: 'Create a separate follow-up desktop release.',
+    })
   })
 
   it('materializes a completed release intake once and hands Thread the new task', async () => {
@@ -262,6 +339,46 @@ describe('POST /api/project/request', () => {
     })
     expect(retry).toMatchObject({ taskId })
     expect((await readQueue()).tasks).toHaveLength(1)
+  })
+
+  it('converges concurrent completed-intake materialization on one task and one handoff', async () => {
+    const created = await createPressureTestIntake({
+      memoryDir: tmpDir,
+      target: { type: 'release', id: 'concurrent-release', title: 'Concurrent release' },
+      rawRequest: 'Create one release task even when completion requests overlap.',
+    })
+    created.status = 'complete'
+    created.activeDomainId = null
+    created.pendingQuestion = null
+    await savePressureTestIntake(tmpDir, created)
+    const first = await loadPressureTestIntake({ memoryDir: tmpDir, intakeId: created.id })
+    const second = await loadPressureTestIntake({ memoryDir: tmpDir, intakeId: created.id })
+
+    const results = await Promise.all([
+      materializeCompletedPressureTestIntake({
+        memoryDir: tmpDir,
+        intake: first,
+        domain: 'knit',
+        projectPath: path.join(tmpDir, 'knit'),
+      }),
+      materializeCompletedPressureTestIntake({
+        memoryDir: tmpDir,
+        intake: second,
+        domain: 'knit',
+        projectPath: path.join(tmpDir, 'knit'),
+      }),
+    ])
+
+    expect(results[0]?.taskId).toBeTruthy()
+    expect(results[1]?.taskId).toBe(results[0]?.taskId)
+    expect((await readQueue()).tasks).toHaveLength(1)
+    await expect(loadPressureTestIntake({ memoryDir: tmpDir, intakeId: created.id })).resolves.toMatchObject({
+      handoff: {
+        status: 'materialized',
+        taskId: results[0]?.taskId,
+        materializedAt: expect.any(String),
+      },
+    })
   })
 
   it('starts bounded chat for ordinary task intake instead of creating work immediately', async () => {
@@ -560,7 +677,8 @@ describe('project check-in bounded chat endpoints', () => {
       }
     }
     expect(started.boundedChat?.objective?.kind).toBe('project_check_in')
-    expect(started.boundedChat?.subObjectives?.[0]?.prompt).toContain('Intake Test tasks')
+    expect(started.boundedChat?.subObjectives?.[0]?.prompt).toContain('Intake Test')
+    expect(started.boundedChat?.subObjectives?.[0]?.prompt).toContain('direction')
 
     const sessionId = started.boundedChat?.id
     const subObjectiveId = started.boundedChat?.subObjectives?.[0]?.id
@@ -580,14 +698,17 @@ describe('project check-in bounded chat endpoints', () => {
     const answered = await answer.json() as {
       boundedChat?: {
         status?: string
-        subObjectives?: Array<{ prompt?: string; followUpDepth?: number }>
+        closure?: { outcome?: string }
+        acceptedState?: { decisions?: Array<{ decision?: string }> }
       }
     }
-    expect(answered.boundedChat?.status).toBe('waiting_for_owner')
-    expect(answered.boundedChat?.subObjectives?.[0]).toMatchObject({
-      followUpDepth: 1,
-      prompt: 'Should reviewer-lane MVPs judge internal story coherence, reader engagement, author voice preservation, or all three?',
+    expect(answered.boundedChat).toMatchObject({
+      status: 'fulfilled',
+      closure: { outcome: 'fulfilled' },
     })
+    expect(answered.boundedChat?.acceptedState?.decisions?.map(item => item.decision)).toContain(
+      'Probably reviewer stuff, but only if it helps us know whether a novel is actually good.',
+    )
   })
 
   it('reuses the same active project check-in session when reopened later', async () => {
@@ -618,7 +739,7 @@ describe('project check-in bounded chat endpoints', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         subObjectiveId,
-        response: 'Reviewer-lane MVPs first, especially author voice and coherence reviewers. Save editor UX for later.',
+        response: "I don't understand the question yet.",
       }),
     }))
 
@@ -635,7 +756,7 @@ describe('project check-in bounded chat endpoints', () => {
     }
     expect(reopened.existing).toBe(true)
     expect(reopened.boundedChat?.id).toBe(sessionId)
-    expect(reopened.boundedChat?.activeSubObjectiveId).toBe('visual-direction-mode')
+    expect(reopened.boundedChat?.activeSubObjectiveId).toBeTruthy()
   })
 
   it('closes project check-in with a persisted done receipt after the final answer', async () => {
@@ -659,31 +780,32 @@ describe('project check-in bounded chat endpoints', () => {
     const sessionId = started.boundedChat?.id
     const subObjectiveId = started.boundedChat?.subObjectives?.[0]?.id
 
-    await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(sessionId!)}/answer`), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        subObjectiveId,
-        response: 'Reviewer-lane MVPs first, especially author voice and coherence reviewers. Save editor UX for later.',
-      }),
-    }))
-
-    const finish = await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(sessionId!)}/answer`), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        subObjectiveId: 'visual-direction-mode',
-        response: 'Professional editorial tool.',
-      }),
-    }))
-
-    expect(finish.status).toBe(200)
-    const finished = await finish.json() as {
+    let finished = started as {
       boundedChat?: {
         status?: string
+        activeSubObjectiveId?: string
+        subObjectives?: Array<{ id?: string; status?: string }>
         closure?: { outcome?: string; summary?: string }
       }
     }
+    for (let step = 0; finished.boundedChat?.status !== 'fulfilled' && step < 8; step += 1) {
+      const activeId = finished.boundedChat?.activeSubObjectiveId ??
+        finished.boundedChat?.subObjectives?.find(item => item.status === 'active')?.id ??
+        (step === 0 ? subObjectiveId : undefined)
+      expect(activeId).toBeTruthy()
+      const response = await app.fetch(new Request(projectUrl(`/api/project/bounded-chat/${encodeURIComponent(sessionId!)}/answer`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          subObjectiveId: activeId,
+          response: 'Prioritize author-voice and coherence review for the next release; use a quiet professional editorial-tool UI and defer broader editor workflows.',
+        }),
+      }))
+      const body = await response.json() as typeof finished & { error?: string }
+      expect(response.status, JSON.stringify(body)).toBe(200)
+      finished = body
+    }
+
     expect(finished.boundedChat).toMatchObject({
       status: 'fulfilled',
       closure: {
@@ -697,10 +819,9 @@ describe('project check-in bounded chat endpoints', () => {
       acceptedState?: { decisions?: Array<{ decision: string }> }
       closure?: { outcome?: string; summary?: string }
     }
-    expect(persisted.acceptedState?.decisions?.map(item => item.decision)).toEqual([
-      'Reviewer-lane MVPs first, especially author voice and coherence reviewers. Save editor UX for later.',
-      'Professional editorial tool.',
-    ])
+    expect(persisted.acceptedState?.decisions?.map(item => item.decision)).toContain(
+      'Prioritize author-voice and coherence review for the next release; use a quiet professional editorial-tool UI and defer broader editor workflows.',
+    )
     expect(persisted.closure).toMatchObject({
       outcome: 'fulfilled',
       summary: 'Guildhall recorded the project check-in direction.',

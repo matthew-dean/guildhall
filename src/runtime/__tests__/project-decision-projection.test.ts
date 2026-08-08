@@ -4,6 +4,7 @@ import {
   applyRuntimeExecutionToProjectDecision,
   buildProjectDecisionProjection,
   projectDecisionInFlight,
+  projectDecisionStartReadiness,
   reconcileRegisteredProjectStateObservation,
   resolveRegisteredProjectStateClaimSet,
   reconcileProjectStateObservation,
@@ -12,6 +13,27 @@ import {
 } from '../project-decision-projection.js'
 
 describe('project decision projection', () => {
+  it('normalizes focused brief cleanup as owner input before action routing', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-08T01:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: 'Review the current brief.',
+        focusTaskId: 'task-086',
+        focusTaskTitle: 'Prove packaged Tauri sidecar',
+        focusKind: 'brief_cleanup',
+      },
+      release: { scopeMode: 'unreleased', state: 'active', release: null, blockers: [] },
+    })
+
+    expect(projectDecisionStartReadiness(decision)).toMatchObject({
+      code: 'owner_input_required',
+      focusTaskId: 'task-086',
+      focusKind: 'brief_cleanup',
+    })
+  })
+
   it('does not invent a release-review action after the selected release shipped', () => {
     const decision = buildProjectDecisionProjection({
       generatedAt: '2026-08-08T01:00:00.000Z',

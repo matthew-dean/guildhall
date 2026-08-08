@@ -180,6 +180,7 @@ describe('updateTask', () => {
       }],
       tasks: [{
         ...seedQueue.tasks[0],
+        projectPath: path.join(tmpDir, 'docs', 'harness'),
         releaseIds: ['release-1'],
       }],
     })
@@ -193,7 +194,10 @@ describe('updateTask', () => {
         verifiedBy: 'automated',
         command: 'pnpm test',
       }],
-    }, { current_agent_id: 'spec-agent' })
+    }, {
+      current_agent_id: 'spec-agent',
+      current_task_workspace_project_path: tmpDir,
+    })
 
     expect(result).toMatchObject({
       success: false,
@@ -212,7 +216,10 @@ describe('updateTask', () => {
         verifiedBy: 'automated',
         command: 'pnpm typecheck',
       }],
-    }, { current_agent_id: 'spec-agent' })
+    }, {
+      current_agent_id: 'spec-agent',
+      current_task_workspace_project_path: tmpDir,
+    })
 
     expect(result.success, result.error).toBe(true)
     const task = readProjectTaskQueueSync(tasksPath).tasks[0]!
@@ -232,6 +239,109 @@ describe('updateTask', () => {
     })
     expect(migrations.pending.some(migration => migration.id === reconciliationId)).toBe(false)
     expect(migrations.blocked.some(migration => migration.id === reconciliationId)).toBe(false)
+  })
+
+  it('grounds a new acceptance command in a typed owner spec revision', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        sourceClaims: [{
+          source: 'workspace-importer',
+          title: 'Desktop harness release plan',
+          evidence: 'Build a minimal packaged desktop harness.',
+          references: ['docs/desktop-release.md'],
+          confidence: 'high',
+          linkedTaskHints: [],
+        }],
+        references: ['docs/desktop-release.md'],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: 'owner-spec-revision',
+      kind: 'note',
+      recordedAt: '2026-08-08T21:00:00.000Z',
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: 'Add the exact command pnpm test:desktop-sidecar.',
+        structured: {
+          event: 'document_revision_requested',
+          target: 'spec',
+          requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+        },
+      },
+    })
+
+    const omitted = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A bounded desktop sidecar proof.',
+        problemContext: 'The imported release needs a packaged desktop architecture gate.',
+        goals: ['Prove the desktop sidecar contract.'],
+        nonGoals: ['Do not build the full desktop UI.'],
+        proposedDesign: 'Add the focused proof entry requested by the owner.',
+        keyDecisions: ['Keep executable proof typed.'],
+        acceptanceCriteria: [{
+          scenario: 'Given the desktop sidecar',
+          expectation: 'Then its typed contract passes.',
+          verificationMode: 'review',
+        }],
+        verification: ['Run the typed acceptance command.'],
+        completionBoundary: {
+          productOutcome: 'The sidecar contract is proven.',
+          whatGuildhallCanCompleteInCode: 'Add and run the focused proof.',
+          externalDependencies: 'None known.',
+          ownerOnlySetup: 'None known.',
+          verificationEnvironment: 'The registered project.',
+          whatCountsAsDone: 'The focused proof passes.',
+          whatMustBeSplitOrBlocked: 'Split only independent outcomes.',
+        },
+      },
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(omitted.success).toBe(false)
+    expect(omitted.error).toContain('omits owner-required acceptance commands: pnpm test:desktop-sidecar')
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A bounded desktop sidecar proof.',
+        problemContext: 'The owner requested an exact executable contract.',
+        goals: ['Prove the desktop sidecar contract.'],
+        nonGoals: ['Do not build the full desktop UI.'],
+        proposedDesign: 'Add the focused proof entry requested by the owner.',
+        keyDecisions: ['Keep executable proof typed.'],
+        acceptanceCriteria: [{
+          scenario: 'Given the desktop sidecar',
+          expectation: 'Then its typed contract passes.',
+          verificationMode: 'automated',
+          command: 'pnpm test:desktop-sidecar',
+        }],
+        verification: ['Run the typed acceptance command.'],
+        completionBoundary: {
+          productOutcome: 'The sidecar contract is proven.',
+          whatGuildhallCanCompleteInCode: 'Add and run the focused proof.',
+          externalDependencies: 'None known.',
+          ownerOnlySetup: 'None known.',
+          verificationEnvironment: 'The registered project.',
+          whatCountsAsDone: 'The focused proof passes.',
+          whatMustBeSplitOrBlocked: 'Split only independent outcomes.',
+        },
+      },
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result.success, result.error).toBe(true)
+    const task = readProjectTaskQueueSync(tasksPath).tasks[0]!
+    expect(task.acceptanceCriteria[0]).toMatchObject({ command: 'pnpm test:desktop-sidecar' })
+    expect(task.proofPaths).toContainEqual(expect.objectContaining({
+      kind: 'command',
+      command: 'pnpm test:desktop-sidecar',
+      createdBy: 'spec-agent',
+    }))
   })
 
   it('updates task status', async () => {
