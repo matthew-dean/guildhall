@@ -53,18 +53,17 @@ anything Guildhall can work on; this compatibility note is about the machine
 running Guildhall itself.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.13.0 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | sh
 ```
 
 If you prefer npm and already have Node.js 22 or newer:
 
 ```bash
-npm install -g guildhall@0.13.0
+npm install -g guildhall
 ```
 
-The installer downloads the 0.13.0 macOS package from GitHub Releases and
-checks `guildhall-macos.tar.gz.sha256` before installing. The equivalent
-explicitly pinned command is:
+The installer downloads the latest macOS package from GitHub Releases and
+checks `guildhall-macos.tar.gz.sha256` before installing. To pin a release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.13.0 sh
