@@ -33,10 +33,12 @@ describe('release artifact contract', () => {
     const readme = read('README.md')
     const quickStart = read('docs/guide/quick-start.md')
     const docsIndex = read('docs/index.md')
+    const installerMode = fs.statSync(path.join(root, 'scripts/install.sh')).mode
 
     const curlCommand =
       'curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | sh'
 
+    expect(installerMode & 0o111).not.toBe(0)
     expect(installer).toContain(
       'https://github.com/matthew-dean/guildhall/releases/latest/download/guildhall-macos.tar.gz',
     )
