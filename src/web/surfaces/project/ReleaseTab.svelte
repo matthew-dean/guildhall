@@ -575,7 +575,7 @@
       </NoticeBand>
     {/if}
 
-    {#if spine?.summary?.headline && (section === 'criteria' || !releaseShipped)}
+    {#if spine?.summary?.headline && !hasNamedRelease && (section === 'criteria' || !releaseShipped)}
       <FrameCard
         tone={spineTopBlockerLabel ? 'warn' : 'neutral'}
         padding="compact"

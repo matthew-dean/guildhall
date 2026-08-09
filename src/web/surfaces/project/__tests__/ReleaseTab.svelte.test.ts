@@ -157,6 +157,42 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('Anti-sameness safeguards')).toBeTruthy()
   })
 
+  it('does not present the global project purpose as named-release scope', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/project/spine')) {
+        return json({
+          spine: {
+            summary: {
+              headline: 'Stage 2 is in progress.',
+              purpose: 'The first MVP is headless and defers desktop UI.',
+              selectedScopeLabel: 'Stage 2',
+              includedWorkCount: 9,
+              deferredWorkCount: 0,
+            },
+          },
+        })
+      }
+      return json({
+        ...readyPayload,
+        release: {
+          id: 'stage-2',
+          label: 'Stage 2',
+          state: 'active',
+          description: 'A minimal author-facing desktop flow over the shipped headless harness.',
+        },
+        ready: false,
+        statusCounts: { done: 4, in_progress: 1, ready: 4 },
+        totals: { blockingCount: 0, unfinishedCount: 5, tasks: 9, done: 4 },
+      })
+    }))
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('A minimal author-facing desktop flow over the shipped headless harness.')).toBeTruthy()
+    expect(screen.queryByText('The first MVP is headless and defers desktop UI.')).toBeNull()
+    expect(screen.queryByText('Stage 2 is in progress.')).toBeNull()
+  })
+
   it('renders criteria blockers and the task-state tally', async () => {
     vi.stubGlobal(
       'fetch',
