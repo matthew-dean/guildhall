@@ -7781,18 +7781,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(parentTaskId ? { parentTaskId } : {}),
         scope,
         countInProjectTotals: row.countInProjectTotals !== false,
-        eligibilityReason: row.eligibilityReason ?? '',
-        hierarchyRole: row.hierarchyRole ?? '',
-        status: task.status ?? '',
-        handoffState: row.handoffState ?? '',
+        eligibilityReason: typeof row.eligibilityReason === 'string' ? row.eligibilityReason : '',
+        hierarchyRole: typeof row.hierarchyRole === 'string' ? row.hierarchyRole : '',
+        status: typeof task.status === 'string' ? task.status : '',
+        handoffState: typeof row.handoffState === 'string' ? row.handoffState : '',
         blocksStart: row.blocksStart === true,
         blocksRelease: row.blocksRelease === true,
         humanBlocking: row.humanBlocking === true,
         dependencyBlocked: row.dependencyBlocked === true,
         ...(Array.isArray(row.dependencyTaskIds) && row.dependencyTaskIds.length > 0
-          ? { dependencyTaskIds: row.dependencyTaskIds }
+          ? { dependencyTaskIds: row.dependencyTaskIds.filter((id): id is string => typeof id === 'string') }
           : {}),
-        sourceRefs: Array.isArray(row.sourceRefs) ? row.sourceRefs : [],
+        sourceRefs: Array.isArray(row.sourceRefs)
+          ? row.sourceRefs.filter((ref): ref is string => typeof ref === 'string')
+          : [],
       }]
     }))
     const surfaceOrientationSpine = input.surface === 'overview'

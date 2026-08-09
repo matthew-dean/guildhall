@@ -178,8 +178,21 @@
     }
     return new Set<string>()
   })
+  const selectedScopeTaskIds = $derived.by(() => {
+    const scope = detail.orientationSpine?.selectedTaskScope ?? detail.orientationSpine?.selectedRelease
+    const nodeIds = [...(scope?.nodeIds ?? []), ...(scope?.deferredNodeIds ?? [])]
+    return new Set(nodeIds.map(nodeId => nodeId.replace(/^work:/, '')).filter(Boolean))
+  })
+  const selectedScopeRows = $derived.by(() => {
+    const rows = detail.orientationSpine?.scopeRows ?? []
+    if (selectedScopeTaskIds.size === 0) return rows
+    return rows.filter(row => Boolean(
+      (row.taskId && selectedScopeTaskIds.has(row.taskId)) ||
+      (row.parentTaskId && selectedScopeTaskIds.has(row.parentTaskId)),
+    ))
+  })
   const scopeTaskIds = $derived.by(() => {
-    const ids = (detail.orientationSpine?.scopeRows ?? [])
+    const ids = selectedScopeRows
       .map(row => row.taskId)
       .filter((id): id is string => Boolean(id))
     return new Set(ids)
@@ -189,7 +202,7 @@
   // reviewable from task prose or a route-local status scan.
   const ownerReviewTaskIds = $derived.by(() => new Set(detail.startReadiness?.reviewTaskIds ?? []))
   const scopeByTaskId = $derived.by(() => {
-    const entries = (detail.orientationSpine?.scopeRows ?? [])
+    const entries = selectedScopeRows
       .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
       .map(row => [row.taskId, row.scope] as const)
     return new Map(entries)
@@ -318,11 +331,13 @@
   })
   const workListCountLabel = $derived.by(() => {
     if (workFilter !== 'scope') return `${visibleTasks.length} shown · ${taskCounts.total} total`
+    const current = orientationScopeCounts?.current ?? scopeVisibleCounts.current
+    const deferred = orientationScopeCounts?.deferred ?? scopeVisibleCounts.deferred
     const pieces = [
-      countLabel(scopeVisibleCounts.current, 'current item'),
-      countLabel(scopeVisibleCounts.deferred, 'deferred item'),
+      countLabel(current, 'current item'),
+      countLabel(deferred, 'deferred item'),
     ]
-    return `${pieces.join(' · ')} · ${taskCounts.total} total`
+    return `${pieces.join(' · ')} · ${current + deferred} total`
   })
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {

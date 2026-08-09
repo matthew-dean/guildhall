@@ -1,0 +1,42 @@
+id: current-scope-counts-include-unrelated-backlog
+title: Current scope counts include unrelated backlog
+domain: ux
+productType: project-management
+surfaceType: web-app
+userGoal: Understand exactly how much work belongs to the selected release and how much is explicitly deferred.
+scenario: Overview reports the selected release membership, while Work locally counts every project row outside that release as deferred and includes unrelated backlog in Current scope.
+artifacts:
+  - id: cross-surface-scope-counts
+    kind: copy_snippet
+    description: Overview and Work counts for the same selected release.
+    content: "Overview: 6 Current scope, 12 Deferred. Work: 6 current items, 16 deferred items, 23 total."
+reviewLanes:
+  - ux_comprehension
+  - data_integrity
+knownFindings:
+  - id: selected-release-counts-reinterpreted
+    lane: data_integrity
+    severity: high
+    summary: Work reinterprets unrelated project backlog as selected-release deferred work.
+    impact: The same release appears to change size between views, so the user cannot trust what is queued now or later.
+    minimumUsefulFix: Filter Current scope by explicit selected-release membership, retain execution children through parent identity, and render the shared scope totals.
+    matchHints:
+      - selected release
+      - deferred count
+      - unrelated backlog
+      - cross-surface agreement
+falsePositiveTraps:
+  - id: all-work-inventory
+    summary: Do not fail an explicit All view for showing unrelated backlog; fail when Current scope includes or counts it.
+source:
+  kind: production_miss
+  citation: Narrative Harness and Looma rendered flow audit, 2026-08-09.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-08-09T07:12:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2027-02-09
+  reason: Selected-release projection and Work inventory ownership may evolve.

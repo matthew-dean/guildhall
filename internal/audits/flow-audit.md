@@ -55792,6 +55792,18 @@ Repair:
       Paused row, no `Review breakdown`, and no horizontal overflow. Calibration
       case `local-breakdown-overrides-dependency-waiting` preserves the escaped
       miss.
+- [x] Exact progressive-scope CI exposed a second Work contradiction: the
+      persisted surface summary and explicit release envelope reported 6
+      current / 12 deferred Narrative items and 5 / 8 Looma items, while Work
+      locally counted every unrelated project row as deferred. The joined
+      surface boundary now reuses its scope-normalized compact summary; Work
+      filters Current scope by explicit release membership while retaining an
+      execution child through its parent identity; and Release replaces its
+      generic verdict heading with the shared named-release headline. Focused
+      runtime and component suites pass, followed by the exact three-test
+      rendered agreement gate across Overview, Work, Thread, Release, and
+      Structure. Calibration case
+      `current-scope-counts-include-unrelated-backlog` preserves the miss.
 - [ ] Finish NAR-090 packaged-webview interaction proof at the app's minimum
       desktop window, including success, induced artifact-write failure, retry,
       cancel, visible action geometry, and no clipping. macOS was locked during
@@ -55918,6 +55930,51 @@ Repair:
       generic notes and new typed requirements.
 - Owner-facing plan text: task 086 must retain all five exact proof commands
       from owner correction through approval, implementation, and gate check.
+
+### Contract Touch Decision: Selected Release Scope Agreement
+
+- Work id: `pr20-selected-release-scope-agreement-2026-08-09`.
+- Touched contracts: joined project-surface summary selection; persisted
+      scope-row parent identity at the route adapter; Current scope membership
+      and count presentation; named-release verdict presentation; and the web
+      read type for `parentTaskId`.
+- Contracts considered but not touched: release membership authority, task
+      lifecycle enums, action-model schema, provider/model prose, persistence
+      columns, and public API field names.
+- Required follow-up: none for this repair. Continue the open NAR-090 native
+      packaged-window proof before advancing the Narrative Harness release.
+- Proof required: parent/child execution rows must not double-count current
+      work; unrelated backlog must remain available in All but absent from
+      Current scope; Overview, Work, Thread, Release, and Structure must report
+      the same selected-release counts and headline; typecheck and
+      model-independence must pass.
+- Proof provided: focused release-readiness, WorkTab, and ReleaseTab suites;
+      exact rendered Narrative Harness, Looma, and four-project agreement
+      tests; `pnpm typecheck`; `pnpm model:independence`; and the calibration
+      case named above.
+- Waivers: none.
+- Owner-review items: Current scope means explicit selected-release membership,
+      not every project item outside that release. Execution children inherit
+      membership from their selected parent.
+- Apply/revert behavior: apply the normalized summary and membership filter as
+      one unit. Reverting restores contradictory counts but requires no data
+      cleanup.
+
+### Schema Migration Decision: Selected Release Scope Agreement
+
+- Persisted schema touched: none. The repair reads existing release node IDs,
+      deferred node IDs, scope rows, and optional `parentTaskId` fields.
+- Scope and change class: read-boundary normalization and presentation repair.
+- Existing data impact: no records are rewritten. Existing projects gain
+      consistent counts on their next read.
+- Migration id and required-before-run behavior: none.
+- Compatibility reader: unnamed scopes or older projections without explicit
+      release membership retain the existing scope-row fallback.
+- Fixtures and tests: the focused runtime and component regressions plus the
+      rendered Narrative Harness/Looma fixtures cover both named-release and
+      fallback behavior.
+- Owner-facing plan text: no migration action is required.
+- Rollback/revert behavior: code-only revert; no persisted state rollback.
 - Rollback/revert behavior: reverting restores source-key collisions and the
       authoring/approval mismatch but does not make existing queue or evidence
       data unreadable.

@@ -683,7 +683,7 @@ describe('WorkTab', () => {
     expect(queue).toHaveTextContent('Proof: 11 proven items · 0 missing proof')
     expect(queue).not.toHaveTextContent('0 current tasks')
     expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
-    expect(await screen.findByText('1 current item · 1 deferred item · 2 total')).toBeTruthy()
+    expect(await screen.findByText('11 current items · 31 deferred items · 42 total')).toBeTruthy()
     expect(screen.queryByText('No work is ready to run yet.')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /inspect work later reviewer lane/i })).toBeTruthy()
@@ -787,7 +787,7 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('3 current items · 1 deferred item · 5 total')
+    await screen.findByText('3 current items · 1 deferred item · 4 total')
     expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
     const rows = screen.getAllByRole('button', { name: /inspect work/i })
     expect(rows[0]).toHaveTextContent('E2E tests: complete current-scope proof')

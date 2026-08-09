@@ -977,6 +977,7 @@ export interface ProjectOrientationSpine {
     taskId?: string
     nodeId?: string
     title?: string
+    parentTaskId?: string
     scope?: 'included' | 'deferred' | string
     eligibilityReason?: string
     hierarchyRole?: string

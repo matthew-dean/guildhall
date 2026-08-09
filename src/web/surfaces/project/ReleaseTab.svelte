@@ -618,7 +618,7 @@
           tone={verdict.tone === 'ok' ? 'ok' : 'warn'}
           role="status"
           label="Verdict"
-          title={verdict.label}
+          title={data.release?.id ? spine?.summary?.headline ?? verdict.label : verdict.label}
         >
           <p>{verdict.detail}</p>
         </NoticeBand>

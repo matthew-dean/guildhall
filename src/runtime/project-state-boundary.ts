@@ -1193,10 +1193,14 @@ export function readProjectSurfaceStateAtBoundary(
     options,
   )
   if (!current) return null
+  const compact = current.projection ? compactStateFromDatabaseProjection(current.projection) : null
   return {
     authority: current.authority,
-    compact: current.projection ? compactStateFromDatabaseProjection(current.projection) : null,
-    summary: current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null,
+    compact,
+    // The compact projection normalizes release counts against this same
+    // snapshot's selected scope. Reuse that summary so callers cannot observe
+    // a second, global deferred count from the auxiliary summary row.
+    summary: compact?.summary ?? (current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null),
     thread: current.thread,
     attentionRecords: current.attentionRecords,
     attentionWatermark: current.attentionWatermark,

@@ -150,7 +150,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current MVP is blocked on proof.')).toBeTruthy()
+    expect((await screen.findAllByText('Current MVP is blocked on proof.')).length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Current MVP').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('3 included · 2 later')).toBeTruthy()
     expect(screen.getAllByText('Anti-sameness proof missing').length).toBeGreaterThanOrEqual(1)
@@ -190,7 +190,7 @@ describe('ReleaseTab', () => {
 
     expect(await screen.findByText('A minimal author-facing desktop flow over the shipped headless harness.')).toBeTruthy()
     expect(screen.queryByText('The first MVP is headless and defers desktop UI.')).toBeNull()
-    expect(screen.queryByText('Stage 2 is in progress.')).toBeNull()
+    expect(screen.getByText('Stage 2 is in progress.')).toBeTruthy()
   })
 
   it('renders criteria blockers and the task-state tally', async () => {

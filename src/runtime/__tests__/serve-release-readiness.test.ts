@@ -595,7 +595,7 @@ describe('GET /api/project/release-readiness', () => {
         state: 'active',
         source: 'owner_approved',
         nodeIds: ['work:task-parent', 'work:task-child'],
-        deferredNodeIds: [],
+        deferredNodeIds: ['work:task-later'],
         proofStyle: 'mixed',
       }],
       tasks: [
@@ -612,6 +612,17 @@ describe('GET /api/project/release-readiness', () => {
           status: 'in_progress',
           releaseIds: ['desktop-mvp'],
           hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' } as Task['hierarchy'],
+        }),
+        makeTask({
+          id: 'task-later',
+          title: 'Add a later desktop feature',
+          status: 'shelved',
+          releaseIds: ['desktop-mvp'],
+        }),
+        makeTask({
+          id: 'task-unassigned',
+          title: 'Keep unrelated backlog out of release counts',
+          status: 'spec_review',
         }),
       ],
     })
@@ -638,7 +649,19 @@ describe('GET /api/project/release-readiness', () => {
         parentTaskId: 'task-parent',
         hierarchyRole: 'child',
       }),
+      expect.objectContaining({
+        taskId: 'task-later',
+        scope: 'deferred',
+      }),
+      expect.objectContaining({
+        taskId: 'task-unassigned',
+        scope: 'deferred',
+      }),
     ])
+    expect(body.orientationSpine?.summary).toMatchObject({
+      includedWorkCount: 2,
+      deferredWorkCount: 1,
+    })
   })
 
   it('keeps Work and Map inventory records bounded while preserving row-level signals', async () => {

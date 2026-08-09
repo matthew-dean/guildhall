@@ -12,10 +12,10 @@ artifacts:
     content: "Review breakdown. 7 requirements; no contained work or decomposition proposal yet."
 reviewLanes:
   - ux_comprehension
-  - workflow_correctness
+  - data_integrity
 knownFindings:
   - id: dependency-state-overridden
-    lane: workflow_correctness
+    lane: data_integrity
     severity: high
     summary: A view-local heuristic replaces the shared dependency state and points the user at the wrong action.
     impact: The user reviews an already-approved breakdown instead of finishing the prerequisite that actually blocks execution.
@@ -28,7 +28,7 @@ falsePositiveTraps:
   - id: broad-task-detail
     summary: Do not fail merely because a broad task mentions missing contained work; fail when that detail replaces authoritative readiness or next-action state.
 source:
-  kind: observed
+  kind: production_miss
   citation: Narrative Harness Stage 2 installed flow audit, 2026-08-08.
 labelGovernance:
   labeledBy: product-review
