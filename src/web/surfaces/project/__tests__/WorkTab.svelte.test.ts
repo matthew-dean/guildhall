@@ -1771,18 +1771,52 @@ describe('WorkTab', () => {
   })
 
   it('labels inactive in-progress work as paused when no project run is active', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-build')
+    path.value = '/projects/looma-knit/work?task=task-build'
     render(WorkTab, {
       props: {
         detail: pausedDetail([
-          task({ id: 'task-build', title: 'Build contracts', status: 'in_progress' }),
+          task({
+            id: 'task-build',
+            title: 'Build contracts',
+            status: 'in_progress',
+            acceptanceCriteriaCount: 6,
+          }),
         ]),
       },
     })
 
     expect(await screen.findByText('1 paused task')).toBeTruthy()
     expect(screen.queryByText('1 agent-active')).toBeNull()
-    expect(screen.getByText('Paused')).toBeTruthy()
+    expect(screen.getAllByText('Paused')).toHaveLength(2)
     expect(screen.queryByText('In progress')).toBeNull()
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(within(inspector).getByRole('button', { name: 'Resume' })).toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: 'Start work' })).not.toBeInTheDocument()
+    expect(inspector).toHaveTextContent('6 completion checks defined')
+  })
+
+  it('does not offer Start work for dependency-waiting work', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?task=waiting-task')
+    path.value = '/projects/looma-knit/work?task=waiting-task'
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'unfinished-dependency', title: 'Finish the run flow', status: 'in_progress' }),
+          task({
+            id: 'waiting-task',
+            title: 'Present results',
+            status: 'ready',
+            dependsOn: ['unfinished-dependency'],
+          }),
+        ]),
+      },
+    })
+
+    const inspector = await screen.findByLabelText('Selected work inspector')
+    expect(inspector).toHaveTextContent('Waiting')
+    expect(within(inspector).queryByRole('button', { name: 'Start work' })).not.toBeInTheDocument()
+    expect(within(inspector).getByRole('button', { name: 'Open drawer' })).toBeInTheDocument()
   })
 
   it('keeps active internal steps visible while Guildhall is working on them', async () => {

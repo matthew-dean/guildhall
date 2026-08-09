@@ -56072,3 +56072,41 @@ Repair:
       existing intake and task fixtures.
 - Owner-facing plan text: no migration action is required.
 - Rollback/revert behavior: code-only revert; no persisted-state rollback.
+
+### Contract Touch Decision: Work Inspector Action Agreement
+
+- Work id: `narrative-harness-stage2-live-work-inspector-audit-2026-08-09`.
+- Touched contracts: Work inspector action visibility and labels, plus its
+      compact proof summary. The inspector now treats dependency-waiting work
+      as inspectable but not runnable, labels paused work Resume, and presents
+      shared completion-proof counts when explicit proof paths are compacted.
+- Contracts considered but not touched: task lifecycle, dependency storage,
+      project run control, proof-path schema, release membership, and API
+      response fields.
+- Required follow-up: reinstall the pushed Guildhall build and repeat the
+      Narrative Harness Work-page audit after CI passes.
+- Proof required: a paused selected task shows Resume; a dependency-waiting
+      selected task offers no Start work action; a task with shared expected
+      proof counts does not claim no proof is attached.
+- Proof provided: focused WorkTab component regressions, typecheck, rendered
+      project-flow checks, and live Narrative Harness browser evidence before
+      and after reinstall.
+- Waivers: none.
+- Owner-review items: Open drawer remains available for inspecting waiting work,
+      but it is not presented as an execution command.
+- Apply/revert behavior: apply the inspector action and proof-copy changes with
+      their tests. Reverting is code-only and restores the cross-surface
+      contradiction.
+
+### Schema Migration Decision: Work Inspector Action Agreement
+
+- Persisted schema touched: none.
+- Scope and change class: presentation of existing task, dependency, and proof
+      read-model fields.
+- Existing data impact: none.
+- Migration id, required-before-run behavior, and compatibility reader: none;
+      tasks without proof summary fields retain the existing fallback copy.
+- Fixtures and tests: paused, dependency-waiting, and compact-proof WorkTab
+      fixtures cover the changed behavior.
+- Owner-facing plan text: no migration action is required.
+- Rollback/revert behavior: code-only revert; no persisted-state rollback.

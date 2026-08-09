@@ -148,6 +148,15 @@
     if (blockedStep) return blockedStep.title
     if (task.proofPaths?.[0]?.title) return task.proofPaths[0].title
     if (task.definitionOfDone?.evidenceRequired?.[0]) return task.definitionOfDone.evidenceRequired[0]
+    const expected = task.completionProof?.expectedCount ?? 0
+    const verified = task.completionProof?.verifiedCount ?? 0
+    if (expected > 0) {
+      return verified > 0
+        ? `${verified} / ${expected} verification checks passed`
+        : `${expected} verification checks required`
+    }
+    const acceptanceChecks = task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0
+    if (acceptanceChecks > 0) return `${acceptanceChecks} completion checks defined`
     return 'Proof path not attached yet'
   }
 
@@ -191,7 +200,14 @@
     if (proofMissingSet.has(task.id)) return busy ? 'Reopening...' : 'Run proof'
     if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft task brief'
     if (taskShapingBlockers(task).length > 0) return busy ? 'Shaping...' : 'Continue shaping brief'
+    if (taskStagePresentation(task, { tasks }).key === 'paused') return busy ? 'Resuming...' : 'Resume'
     return busy ? 'Starting...' : 'Start work'
+  }
+
+  function canRunTask(task: Task): boolean {
+    if (proofMissingSet.has(task.id)) return true
+    if (task.status === 'import_draft' || taskShapingBlockers(task).length > 0) return true
+    return isQueuedWorkTask(task)
   }
 
   function selectContained(task: Task): void {
@@ -296,7 +312,7 @@
     {/if}
 
     <div class="inspector-actions">
-      {#if onRunTask}
+      {#if onRunTask && canRunTask(selectedTask)}
         {@const runBusy = runBusyTaskId === selectedTask.id}
         {@const runActive = runActiveTaskId === selectedTask.id}
         <Button variant="agent" size="sm" disabled={runBusy || runActive} onclick={runSelected}>
