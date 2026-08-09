@@ -266,7 +266,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.statusCounts).toEqual({ ready: 1, blocked: 1 })
     expect(body.totals).toMatchObject({ tasks: 2, unfinishedCount: 2 })
     expect(body.diagnostics.statusCounts).toEqual({ ready: 1, blocked: 1 })
-  })
+  }, 15_000)
 
   it('serves the saved release summary without task expansion or repository inspection', async () => {
     await seedQueue({

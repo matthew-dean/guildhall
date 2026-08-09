@@ -56009,7 +56009,10 @@ Repair:
       converge on one persisted intake. The intake API suite passed; its one
       stale project-question expectation was aligned with the existing typed,
       prose-independent planner contract while retaining explicit evidence
-      assertions.
+      assertions. The first post-push release gate passed 298/299 tests; its
+      only failure was the integration-heavy unnamed-release fixture finishing
+      in 5.38 seconds against Vitest's 5-second default, so that fixture now has
+      an explicit 15-second integration-test budget.
 - Waivers: none.
 - Owner-review items: a named release gets a specific system-authored verdict
       title from the same readiness snapshot that owns its tone and detail.
