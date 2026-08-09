@@ -112,12 +112,17 @@
   let closeError = $state<string | null>(null)
 
   $effect(() => {
+    let disposed = false
     const endpoint = section === 'criteria'
       ? '/api/project/release-readiness'
       : '/api/project/release-readiness/summary'
+    data = null
+    error = null
+    initNeeded = false
     projectFetch(endpoint, undefined, activeProjectId)
       .then(r => r.json())
       .then(j => {
+        if (disposed) return
         if (j?.initializationNeeded) {
           initNeeded = true
           return
@@ -161,19 +166,30 @@
         } as ReleasePayload
       })
       .catch(err => {
+        if (disposed) return
         error = err instanceof Error ? err.message : String(err)
       })
+    return () => {
+      disposed = true
+    }
   })
 
   $effect(() => {
+    let disposed = false
+    spine = null
     projectFetch('/api/project/spine?compact=true', { cache: 'no-store' }, activeProjectId)
       .then(r => r.json())
       .then(j => {
+        if (disposed) return
         spine = (j?.spine ?? null) as ProjectOrientationSpine | null
       })
       .catch(() => {
+        if (disposed) return
         spine = null
       })
+    return () => {
+      disposed = true
+    }
   })
 
   function idOf(it: ReleaseItem): string {
@@ -431,6 +447,7 @@
   const openCheckCount = $derived(Math.max(data?.totals.blockingCount ?? 0, unfinishedCount))
 
   const verdict = $derived(data ? releaseVerdictSummary(data) ?? { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' } : { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' })
+  const verdictTitle = $derived(data?.verdict?.title ?? verdict.label)
   const releaseShipped = $derived(data?.release?.state === 'shipped')
   const canShipRelease = $derived(Boolean(data?.release?.id) && !releaseShipped && verdict.state === 'ready')
 
@@ -618,7 +635,7 @@
           tone={verdict.tone === 'ok' ? 'ok' : 'warn'}
           role="status"
           label="Verdict"
-          title={data.release?.id ? spine?.summary?.headline ?? verdict.label : verdict.label}
+          title={verdictTitle}
         >
           <p>{verdict.detail}</p>
         </NoticeBand>

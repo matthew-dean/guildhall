@@ -431,6 +431,7 @@ export interface ProjectReleaseReadiness {
   verdict?: {
     state?: 'empty' | 'work_remaining' | 'blocked' | 'ready' | string
     label?: string
+    title?: string
     tone?: 'ok' | 'warn' | 'neutral' | string
     detail?: string
   }

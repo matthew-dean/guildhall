@@ -303,6 +303,7 @@ describe('GET /api/project/release-readiness', () => {
       summaryFreshness: 'current',
       detailEndpoint: '/api/project/release-readiness?detail=true',
       release: { id: 'first-pass', label: 'First pass' },
+      verdict: { state: 'work_remaining', title: 'First pass has work remaining' },
     })
     expect(body.statusCounts).toEqual(expect.objectContaining({ ready: 1 }))
     expect(body).not.toHaveProperty('gitStory')
@@ -502,7 +503,10 @@ describe('GET /api/project/release-readiness', () => {
       completeness: 'scope',
       checksLoaded: false,
     })
-    expect(body.releaseReadiness.verdict).toBeUndefined()
+    expect(body.releaseReadiness.verdict).toMatchObject({
+      state: 'work_remaining',
+      title: 'First pass has work remaining',
+    })
     expect(body.orientationSpine?.summary?.selectedScopeLabel).toBe('First pass')
     expect(body.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 2,
@@ -653,11 +657,10 @@ describe('GET /api/project/release-readiness', () => {
         taskId: 'task-later',
         scope: 'deferred',
       }),
-      expect.objectContaining({
-        taskId: 'task-unassigned',
-        scope: 'deferred',
-      }),
     ])
+    expect(body.orientationSpine?.scopeRows).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'task-unassigned' }),
+    ]))
     expect(body.orientationSpine?.summary).toMatchObject({
       includedWorkCount: 2,
       deferredWorkCount: 1,

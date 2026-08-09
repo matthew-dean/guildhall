@@ -460,6 +460,27 @@ describe('NodeGitDriver.cherryPickBranch', () => {
     expect(committedFiles).not.toContain('guildhall.yaml')
     expect(committedFiles).not.toContain('memory/TASKS.json')
   })
+
+  it('preserves leading and trailing whitespace in NUL-delimited Git paths', async () => {
+    const driver = new NodeGitDriver()
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'whitespace-path')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-whitespace-path',
+      baseBranch: 'main',
+    })
+    const unusualPath = ' leading-and-trailing.txt '
+    await fs.writeFile(path.join(worktreePath, unusualPath), 'preserve exact path\n', 'utf8')
+    await git(worktreePath, ['add', unusualPath])
+    await git(worktreePath, ['commit', '-q', '-m', 'add exact whitespace path'])
+
+    const result = await driver.cherryPickBranch(repoRoot, 'guildhall/task-whitespace-path', 'main')
+
+    expect(result.ok).toBe(true)
+    await expect(fs.readFile(path.join(repoRoot, unusualPath), 'utf8')).resolves.toBe('preserve exact path\n')
+    const { stdout: committedFiles } = await git(repoRoot, ['show', '--name-only', '--format=', 'HEAD'])
+    expect(committedFiles).toContain(unusualPath)
+  })
 })
 
 describe('NodeGitDriver.checkpointDirtyWork', () => {

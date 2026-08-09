@@ -55978,3 +55978,51 @@ Repair:
       fallback behavior.
 - Owner-facing plan text: no migration action is required.
 - Rollback/revert behavior: code-only revert; no persisted state rollback.
+
+### Contract Touch Decision: Adversarial Release-Flow Integrity
+
+- Work id: `pr20-adversarial-release-flow-integrity-2026-08-09`.
+- Touched contracts: the Work API's selected-release `scopeRows`; Work's
+      consumption of those rows; the release-readiness verdict presentation;
+      stale-response handling when switching projects; exact Git path handling
+      during task-branch landing; and rendered cross-surface agreement checks.
+- Contracts considered but not touched: release membership persistence, task
+      lifecycle enums, provider/model prose, project database tables, queue
+      schema, release transition rules, and public command syntax.
+- Required follow-up: land the separate multiprocess intake-allocation repair
+      from the adversarial review, then rerun the full PR verification matrix.
+- Proof required: unrelated backlog must be absent from shared selected-release
+      rows; execution children must remain through parent membership; Release
+      must render the verdict title from its readiness response and ignore late
+      responses from the previous project; leading/trailing whitespace in Git
+      paths must survive landing; map counts must compare exact current,
+      deferred, and boundary values; all rendered flow checks must pass.
+- Proof provided: 178 focused runtime, Git-driver, Work, and Release component
+      tests passed after the API-boundary repair; the Release suite's 27 tests
+      passed after the readiness-title regression was added; `pnpm typecheck`
+      passed. The first full rendered rerun exposed two stale spine-headline
+      assertions; after replacing them with readiness-API agreement, the full
+      46-test rendered UI matrix passed. `pnpm lint:contracts` also passed with
+      this decision record.
+- Waivers: none.
+- Owner-review items: a named release gets a specific system-authored verdict
+      title from the same readiness snapshot that owns its tone and detail.
+      Orientation prose remains useful elsewhere, but cannot override that
+      verdict or race a different project's response into the view.
+- Apply/revert behavior: apply the API filter, verdict title, response guard,
+      exact-path handling, and their tests together. Reverting is code-only and
+      restores the reviewed contradictions; no data cleanup is required.
+
+### Schema Migration Decision: Adversarial Release-Flow Integrity
+
+- Persisted schema touched: none.
+- Scope and change class: API read-model filtering, system-authored presentation
+      metadata, request lifecycle handling, Git path preservation, and tests.
+- Existing data impact: no project, queue, workspace, task, or evidence records
+      are rewritten.
+- Migration id, required-before-run behavior, and compatibility reader: none.
+      Existing verdict payloads without `title` retain the generic label.
+- Fixtures and tests: focused runtime/component/Git tests and the rendered
+      project matrix cover current and compatibility behavior.
+- Owner-facing plan text: no migration action is required.
+- Rollback/revert behavior: code-only revert; no persisted-state rollback.

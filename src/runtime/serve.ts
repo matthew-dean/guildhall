@@ -6172,6 +6172,22 @@ function taskIdFromOrientationNodeId(value: unknown): string | null {
   return value.startsWith('work:') ? value.slice('work:'.length) : value
 }
 
+function selectedOrientationScopeTaskIds(orientationSpine: Record<string, unknown>): Set<string> {
+  const scope = orientationSpine.selectedTaskScope ?? orientationSpine.selectedRelease ?? orientationSpine.scope
+  if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return new Set()
+  const nodeIds = (scope as { nodeIds?: unknown }).nodeIds
+  const deferredNodeIds = (scope as { deferredNodeIds?: unknown }).deferredNodeIds
+  const ids = new Set<string>()
+  for (const value of [
+    ...(Array.isArray(nodeIds) ? nodeIds : []),
+    ...(Array.isArray(deferredNodeIds) ? deferredNodeIds : []),
+  ]) {
+    const taskId = taskIdFromOrientationNodeId(value)?.trim()
+    if (taskId) ids.add(taskId)
+  }
+  return ids
+}
+
 function overviewTaskIdsForSurface(input: {
   orientationSpine: Record<string, unknown>
   releaseReadiness: Record<string, unknown> | null
@@ -6298,6 +6314,23 @@ function compactReleaseReadinessFromProjection(input: {
       },
       releaseBlockers: blockers,
     }),
+    verdict: releaseVerdictWithTitle(buildReleaseVerdictSummary({
+      hasNamedRelease: Boolean(release?.label),
+      ready,
+      ...(counts.total === 0 ? { notReadyReason: 'No work in the current scope yet.' } : {}),
+      totals: {
+        tasks: counts.total,
+        done: counts.done,
+        blockingCount: counts.blocked,
+        humanBlockingCount: counts.ownerBlocked,
+        proofEvidenceBlockingCount: counts.proofBlocked,
+        unfinishedCount: counts.unfinished,
+        designSystemBlockingCount: 0,
+        dirtyCheckoutBlockingCount: 0,
+      },
+      designSystem: {},
+      dirtyCheckout: { ownedCount: 0 },
+    }), release?.label),
     statusCounts: summary?.taskStatusCounts ?? {},
     releaseBlockers: blockers,
     ...(gitStory ? { gitStory } : {}),
@@ -6344,6 +6377,22 @@ function releaseCountsFromScopeRows(
     })).length,
     proofBlocked: releaseRows.filter(row => row.proofBlocked).length,
   }
+}
+
+function releaseVerdictWithTitle<T extends { state: string; label: string }>(
+  verdict: T,
+  releaseLabel: string | null | undefined,
+): T & { title?: string } {
+  const label = releaseLabel?.trim()
+  if (!label) return verdict
+  const title = verdict.state === 'ready'
+    ? `${label} is ready`
+    : verdict.state === 'work_remaining'
+      ? `${label} has work remaining`
+      : verdict.state === 'empty'
+        ? `${label} has no tracked work`
+        : `${label} is blocked`
+  return { ...verdict, title }
 }
 
 function compactOrientationScopeRows(rows: unknown): Array<Record<string, unknown>> {
@@ -7763,6 +7812,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return enrichTaskForServe(project.path, record, effective)
         }))
       : responseTasks as Array<Record<string, unknown>>
+    const selectedScopeTaskIds = selectedOrientationScopeTaskIds(baseOrientationSpine as Record<string, unknown>)
     const scopeRows = executionScopeRows(responseTasks.flatMap(task => {
       const scopeRow = (task as { scopeRow?: unknown }).scopeRow
       if (!scopeRow || typeof scopeRow !== 'object' || Array.isArray(scopeRow)) return []
@@ -7774,6 +7824,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : typeof (task as { parentId?: unknown }).parentId === 'string'
           ? (task as { parentId: string }).parentId
           : undefined
+      if (selectedScopeTaskIds.size > 0 &&
+        !selectedScopeTaskIds.has(task.id) &&
+        !(parentTaskId && selectedScopeTaskIds.has(parentTaskId))) {
+        return []
+      }
       return [{
         taskId: task.id,
         nodeId: taskScopeNodeId(task.id),
@@ -17849,7 +17904,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       },
       releaseBlockers: savedBlockers,
     })
-    const savedVerdict = buildReleaseVerdictSummary({
+    const savedVerdict = releaseVerdictWithTitle(buildReleaseVerdictSummary({
       hasNamedRelease: Boolean(savedRelease?.label),
       ready: savedReady,
       ...(savedCounts.total === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
@@ -17865,7 +17920,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       },
       designSystem: {},
       dirtyCheckout: { ownedCount: 0 },
-    })
+    }), savedRelease?.label)
 
     // Ordinary detail reads consume the saved diagnostic projection. A live
     // inspection is an explicit action (or an asynchronous projector job),
@@ -18163,7 +18218,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       },
       releaseBlockers: effectiveReleaseBlockers,
     })
-    const diagnosticVerdict = buildReleaseVerdictSummary({
+    const diagnosticVerdict = releaseVerdictWithTitle(buildReleaseVerdictSummary({
       hasNamedRelease: Boolean(savedRelease?.label),
       ready: diagnosticReady,
       ...(scopedTasks.length === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
@@ -18179,7 +18234,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       },
       designSystem,
       dirtyCheckout,
-    })
+    }), savedRelease?.label)
     const diagnostics = {
       freshness: 'request_time',
       currentStateAuthority: state.authority,

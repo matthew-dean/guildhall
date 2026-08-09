@@ -326,7 +326,14 @@ export async function expectProjectOrientationSpineAgreement(
 
   await page.goto(`/projects/${expected.projectId}/release`)
   await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
-  await expect(page.getByText(headline).first()).toBeVisible()
+  const releaseReadinessResponse = await page.request.get(
+    `/api/project/release-readiness/summary?projectId=${encodeURIComponent(expected.projectId)}`,
+  )
+  expect(releaseReadinessResponse.ok()).toBe(true)
+  const releaseReadiness = await releaseReadinessResponse.json()
+  const releaseVerdictTitle = releaseReadiness.verdict?.title ?? releaseReadiness.verdict?.label
+  expect(releaseVerdictTitle).toBeTruthy()
+  await expect(page.getByText(releaseVerdictTitle).first()).toBeVisible()
   if (topBlocker) {
     await expect(page.getByText(topBlocker).first()).toBeVisible()
   }

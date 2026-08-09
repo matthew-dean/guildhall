@@ -802,7 +802,6 @@ export class NodeGitDriver implements GitDriver {
       )
       const candidatePaths = changedStdout
         .split('\0')
-        .map((file) => file.trim())
         .filter(Boolean)
         .filter((file) => !isIgnorableGuildhallStatePath(file.replace(/\/$/, '')))
       const meaningfulPaths = await workingPathsDifferFromBranchTarget(

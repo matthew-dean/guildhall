@@ -73,14 +73,78 @@ describe('ReleaseTab', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({
       ...readyPayload,
       release: { id: '2-0-alpha', label: '2.0 alpha' },
+      verdict: {
+        state: 'ready',
+        label: 'Ready',
+        title: '2.0 alpha is ready',
+        tone: 'ok',
+        detail: '4/4 tasks done · no open release blockers.',
+      },
     })))
 
     render(ReleaseTab)
 
     expect(await screen.findByText('2.0 alpha')).toBeTruthy()
     expect(screen.getByText('Release readiness')).toBeTruthy()
+    expect(screen.getByText('2.0 alpha is ready')).toBeTruthy()
     expect(screen.getByText('4/4 tasks done · no open release blockers.')).toBeTruthy()
     expect(screen.getByText('Open release checks')).toBeTruthy()
+  })
+
+  it('ignores stale release and spine responses after the active project changes', async () => {
+    let resolveOldRelease!: (response: Response) => void
+    let resolveOldSpine!: (response: Response) => void
+    const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input)
+      if (url.includes('projectId=first')) {
+        return new Promise<Response>(resolve => {
+          if (url.includes('/spine')) resolveOldSpine = resolve
+          else resolveOldRelease = resolve
+        })
+      }
+      if (url.includes('/spine')) {
+        return json({ spine: { summary: { headline: 'Second project is current.' } } })
+      }
+      return json({
+        ...readyPayload,
+        release: { id: 'second', label: 'Second project' },
+        verdict: {
+          state: 'ready',
+          label: 'Ready',
+          title: 'Second project is ready',
+          tone: 'ok',
+          detail: '4/4 tasks done · no open release blockers.',
+        },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const rendered = render(ReleaseTab, { props: { activeProjectId: 'first' } })
+    await waitFor(() => {
+      expect(resolveOldRelease).toBeTypeOf('function')
+      expect(resolveOldSpine).toBeTypeOf('function')
+    })
+    await rendered.rerender({ activeProjectId: 'second' })
+    expect(await screen.findByText('Second project is ready')).toBeTruthy()
+
+    resolveOldRelease(json({
+      ...readyPayload,
+      release: { id: 'first', label: 'First project' },
+      verdict: {
+        state: 'ready',
+        label: 'Ready',
+        title: 'First project is ready',
+        tone: 'ok',
+        detail: '4/4 tasks done · no open release blockers.',
+      },
+    }))
+    resolveOldSpine(json({ spine: { summary: { headline: 'First project is stale.' } } }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('First project is ready')).toBeNull()
+      expect(screen.queryByText('First project is stale.')).toBeNull()
+      expect(screen.getByText('Second project is ready')).toBeTruthy()
+    })
   })
 
   it('presents a shipped release as one terminal state without inventing compact blockers', async () => {
@@ -181,6 +245,13 @@ describe('ReleaseTab', () => {
           description: 'A minimal author-facing desktop flow over the shipped headless harness.',
         },
         ready: false,
+        verdict: {
+          state: 'work_remaining',
+          label: 'Work remaining',
+          title: 'Stage 2 has work remaining',
+          tone: 'warn',
+          detail: '5 tasks still need shaping, worker execution, review, or recovery.',
+        },
         statusCounts: { done: 4, in_progress: 1, ready: 4 },
         totals: { blockingCount: 0, unfinishedCount: 5, tasks: 9, done: 4 },
       })
@@ -190,7 +261,8 @@ describe('ReleaseTab', () => {
 
     expect(await screen.findByText('A minimal author-facing desktop flow over the shipped headless harness.')).toBeTruthy()
     expect(screen.queryByText('The first MVP is headless and defers desktop UI.')).toBeNull()
-    expect(screen.getByText('Stage 2 is in progress.')).toBeTruthy()
+    expect(screen.getByText('Stage 2 has work remaining')).toBeTruthy()
+    expect(screen.queryByText('Stage 2 is in progress.')).toBeNull()
   })
 
   it('renders criteria blockers and the task-state tally', async () => {

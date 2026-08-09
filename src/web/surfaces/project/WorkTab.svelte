@@ -178,19 +178,7 @@
     }
     return new Set<string>()
   })
-  const selectedScopeTaskIds = $derived.by(() => {
-    const scope = detail.orientationSpine?.selectedTaskScope ?? detail.orientationSpine?.selectedRelease
-    const nodeIds = [...(scope?.nodeIds ?? []), ...(scope?.deferredNodeIds ?? [])]
-    return new Set(nodeIds.map(nodeId => nodeId.replace(/^work:/, '')).filter(Boolean))
-  })
-  const selectedScopeRows = $derived.by(() => {
-    const rows = detail.orientationSpine?.scopeRows ?? []
-    if (selectedScopeTaskIds.size === 0) return rows
-    return rows.filter(row => Boolean(
-      (row.taskId && selectedScopeTaskIds.has(row.taskId)) ||
-      (row.parentTaskId && selectedScopeTaskIds.has(row.parentTaskId)),
-    ))
-  })
+  const selectedScopeRows = $derived(detail.orientationSpine?.scopeRows ?? [])
   const scopeTaskIds = $derived.by(() => {
     const ids = selectedScopeRows
       .map(row => row.taskId)

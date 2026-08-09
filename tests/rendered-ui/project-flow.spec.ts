@@ -10,18 +10,18 @@ import {
 
 async function expectMapScopeDisclosure(
   projectMap: Locator,
-  expected: { label: string; included: number; minimumDeferred: number },
+  expected: { label: string; included: number; boundaries: number; deferred: number },
 ): Promise<void> {
   const escapedLabel = expected.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const summaryPattern = new RegExp(
-    `^${escapedLabel} has 0/${expected.included} executable work items complete across ${expected.included} product boundaries, with \\d+ later work items\\.$`,
+    `^${escapedLabel} has 0/${expected.included} executable work items complete across ${expected.boundaries} product boundaries, with \\d+ later work items\\.$`,
   )
   const summary = projectMap.getByText(summaryPattern)
   await expect(summary).toBeVisible()
   const deferred = Number((await summary.textContent())?.match(/with (\d+) later work items\.$/)?.[1])
-  expect(deferred).toBeGreaterThanOrEqual(expected.minimumDeferred)
+  expect(deferred).toBe(expected.deferred)
   await expect(
-    projectMap.getByText(`${expected.included} product boundaries · ${deferred} later work items`, { exact: false }).first(),
+    projectMap.getByText(`${expected.boundaries} product boundaries · ${deferred} later work items`, { exact: false }).first(),
   ).toBeVisible()
 }
 
@@ -526,7 +526,8 @@ test('Narrative Harness overview and map show the documented current release sco
   await expectMapScopeDisclosure(projectMap, {
     label: 'Stage 1: Fixture And Evaluation Harness',
     included,
-    minimumDeferred: deferred,
+    boundaries: included,
+    deferred,
   })
   await expect(page.getByRole('heading', { name: 'Scope ledger' })).toBeVisible()
   await expect(projectMap.getByText(pausedTask).first()).toBeVisible()
@@ -580,7 +581,8 @@ test('Looma + Knit map shows V1 hardening as current and Looma convergence as la
   await expectMapScopeDisclosure(projectMap, {
     label: 'Stage 1: V1 Release Hardening',
     included,
-    minimumDeferred: deferred,
+    boundaries: included,
+    deferred,
   })
   await expect(projectMap.getByText('Looma Primitive Convergence').first()).toBeVisible()
   await expect(projectMap.getByText('Looma Editor Integration').first()).toBeVisible()
