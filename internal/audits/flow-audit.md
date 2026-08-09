@@ -55741,6 +55741,35 @@ Repair:
       commands pass; the package contains the allowlisted spawn, stdin, and kill
       permissions and a self-contained sidecar whose real event order is
       `accepted` through `result`.
+- [x] The final automated package proof now crosses the shipped boundary rather
+      than invoking the sidecar behind the webview: production JavaScript calls
+      `prepare_desktop_proof`, builds the request through Rust, starts the exact
+      configured `Command.sidecar('binaries/narrative-harness-sidecar')`, feeds
+      the typed adapter, writes a cache-confined artifact, records
+      `transport: webview-production`, and exits through `finish_desktop_proof`
+      with Node removed from `PATH`. This proof caught a real production defect:
+      the transport had used the unconfigured bare sidecar name even though the
+      Tauri bundle and capability named `binaries/narrative-harness-sidecar`.
+      The package was rebuilt after that repair and the full chain passed.
+- [x] Adversarial re-review found three release blockers and then confirmed them
+      repaired at `08f53a2`: package proof no longer bypasses the webview,
+      rejected or hung termination becomes the non-recoverable
+      `termination_unconfirmed` state with Quit as its only action, and success
+      advances through `Review results` to a bounded Review-phase handoff. A
+      cancellation race before the first sidecar event is also covered so a
+      late spawn cannot outlive a cancelled request. Seventeen adapter tests,
+      eleven renderer/transport tests, TypeScript checking, ten Rust tests, the
+      full unit suite, and the rebuilt package proof pass. Fault-injected native
+      termination and the full Review-to-Run-again interaction remain residual
+      native-test risk, not evidence inferred from test doubles.
+- [x] NAR-091 through NAR-094 now have source-grounded delegated-owner specs,
+      exact acceptance commands, explicit dependency edges, and approved
+      `ready` status. NAR-091 owns strict cache-artifact loading and Draft /
+      Review / Run details; NAR-092 owns Rust-confined native Save/Open; NAR-093
+      owns the two-viewport packaged-native evidence matrix; and NAR-094 owns
+      public guide copy and fresh screenshots. The release summary therefore
+      reports four done, NAR-090 active, four ready, and zero blockers instead
+      of vague shaping requests that hid the intended release sequence.
 - [ ] Finish NAR-090 packaged-webview interaction proof at the app's minimum
       desktop window, including success, induced artifact-write failure, retry,
       cancel, visible action geometry, and no clipping. macOS was locked during
@@ -55752,10 +55781,10 @@ Repair:
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
-| Authoritative API | `startReadiness` focuses task 086 and names brief review as the next action. |
-| Top action | Overview repeats the same decision and opens task 086's Thread. |
-| Work list/cards | Task 086 needs review; dependent tasks are visibly waiting. |
-| Thread | Task 086 is the only current review; dependent reviews are not actionable. |
+| Authoritative API | `startReadiness` focuses NAR-090 as paused live work; the release reports four done, one active, four ready, and no blockers. |
+| Top action | Overview repeats the NAR-090 decision and opens that task in Work without inventing another owner action. |
+| Work list/cards | NAR-090 is the only active item; NAR-091 through NAR-094 are ready but dependency-waiting in order. |
+| Thread | NAR-090 is the current implementation handoff; downstream specs are approved and non-actionable until their dependencies land. |
 | Bottom/status chrome | No claim that all Stage 2 tasks are running. |
 | Visible cards | No competing brief-cleanup or owner-urgency recommendation. |
 
