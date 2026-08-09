@@ -55721,6 +55721,34 @@ Repair:
       boundaries. Guildhall must cap context/token amplification, surface live
       durable-step progress, and fail a no-mutation shaping pass with an explicit
       recovery action instead of retaining a generic running state.
+- Failing NAR-090 implementation finding: after the exact spec was approved,
+      the first worker tick checkpointed only the shared stage type and timeout
+      contract. A second pass emitted all seven author-visible stages before
+      `runMvp` had performed the work, then continued looping. Three ticks used
+      approximately 1.09 million input tokens and 3,417 output tokens without
+      producing a reviewable implementation. The run was stopped and the same
+      isolated worktree was recovered locally. A worker must not claim typed
+      progress from planned prose or pre-emit completion stages; the runtime
+      boundary and bounded mutation/proof budget need to be enforced before a
+      task remains presented as active.
+- [x] Local NAR-090 recovery now runs the packaged sidecar through the production
+      Tauri shell transport, creates a fresh cache-confined request for every
+      attempt, advances the seven visible stages only from actual `runMvp`
+      boundaries, terminates invalid streams, maps failures from typed codes,
+      preserves prepared input for retry, and keeps short desktop windows to a
+      single-screen action layout through progressive disclosure. The focused
+      adapter, run UI, typecheck, full unit suite, and packaged-app proof
+      commands pass; the package contains the allowlisted spawn, stdin, and kill
+      permissions and a self-contained sidecar whose real event order is
+      `accepted` through `result`.
+- [ ] Finish NAR-090 packaged-webview interaction proof at the app's minimum
+      desktop window, including success, induced artifact-write failure, retry,
+      cancel, visible action geometry, and no clipping. macOS was locked during
+      the first two Computer Use attempts, so this evidence remains open rather
+      than being inferred from browser or package tests.
+- [ ] Complete NAR-090's five authoritative Guildhall gates, mark the task done,
+      selectively land the reviewed change to Narrative Harness main without
+      touching the owner's `guildhall.yaml`, and then drive NAR-091 next.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
