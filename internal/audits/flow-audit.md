@@ -56439,6 +56439,19 @@ views showing overlapping project state are a design failure, not a reason to
 refine their copy or alignment: one must be removed or the concepts must be
 recomposed into one coherent owner surface.
 
+The governing audit question is:
+
+> Could a user jump in here, get instantly oriented into where progress is at
+> (which milestone, which tasks), what has been completed, resolve any
+> user-pending questions or approvals, and jump back out in under a minute?
+
+If the answer is not an unqualified yes, the route has failed. Do not answer
+this by inspecting the data model or explaining the page after the fact. Time a
+fresh owner reading and acting through the actual installed product. The amount
+of required human reading is itself decisive evidence: if someone must read a
+report, traverse tabs, or scroll through accumulated context before they can
+orient and act, the information architecture is wrong.
+
 1. Every screen has one clear purpose and a small set of choices. A task that
    needs owner input shows its actual primary action immediately in the owning
    surface. Do not hide it in an off-tab, below-the-fold, unpinned panel.
@@ -56541,6 +56554,11 @@ recomposed into one coherent owner surface.
 - A fresh-owner test names the exact decision and action for every visible
   card, count, tab, and control. Anything that cannot pass that test is removed
   or moved out of the normal product path.
+- A timed fresh-owner test answers the governing question in under one minute:
+  identify the current milestone and task state, recognize completed work,
+  resolve any immediately pending approval/question, and leave with no
+  unanswered “what do I do here?” prompt. Record reading time as well as click
+  count; a route that technically works but requires substantial reading fails.
 - Migration repair is exercised from the same owner path and completes before
   approval; the owner sees a concise success/failure result rather than an
   internal implementation error.
