@@ -297,6 +297,7 @@ export interface ApplyDeterministicVerdictInput {
   verdict: DeterministicVerdict
   now: string
   llmError?: string
+  llmFailureCode?: NonNullable<ReviewVerdict['failureCode']>
   policyVersion?: string
   reviewerId?: string
 }
@@ -352,7 +353,7 @@ export function applyDeterministicVerdict(
     ...(acceptedCriteriaIds.length > 0 ? { acceptedCriteriaIds } : {}),
     ...(proofEvidenceIds.length > 0 ? { proofEvidenceIds } : {}),
     ...(input.llmError !== undefined ? { llmError: input.llmError } : {}),
-    ...(input.llmError !== undefined ? { failureCode: 'provider_unavailable' as const } : {}),
+    ...(input.llmFailureCode !== undefined ? { failureCode: input.llmFailureCode } : {}),
     recordedAt: input.now,
     ...(input.policyVersion !== undefined ? { policyVersion: input.policyVersion } : {}),
   }
@@ -405,9 +406,9 @@ function extractLlmReviewerStructured(task: Task): unknown {
 
 export function recordApprovedReviewProof(
   task: Task,
-  now: string,
-  recordedBy = 'reviewer-agent',
-  proofEvidenceIds?: readonly string[],
+  _now: string,
+  _recordedBy = 'reviewer-agent',
+  _proofEvidenceIds?: readonly string[],
 ): void {
   const proofPaths = (task as unknown as { proofPaths?: Array<Record<string, unknown>> }).proofPaths
   if (!Array.isArray(proofPaths)) return
@@ -432,49 +433,9 @@ export function recordApprovedReviewProof(
     // them before recording evidence so the persisted contract has stable
     // evidence IDs that proof-health can match on every later read.
     proofPath.expectedEvidence = expectedEvidence
-    if (expectedEvidence.length === 0) continue
-
-    const existingRecords = Array.isArray(proofPath.verificationRecords)
-      ? proofPath.verificationRecords.filter((record): record is Record<string, unknown> =>
-          Boolean(record) && typeof record === 'object' && !Array.isArray(record),
-        )
-      : []
-    const currentRecords = [...existingRecords]
-
-    const latestApproved = [...(task.reviewVerdicts ?? [])]
-      .reverse()
-      .find(verdict => verdict.verdict === 'approve')
-    const effectiveProofEvidenceIds = proofEvidenceIds ?? (
-      latestApproved?.reviewerPath === 'llm' ? latestApproved.proofEvidenceIds ?? [] : undefined
-    )
-    const allowedEvidenceIds = effectiveProofEvidenceIds === undefined ? null : new Set(effectiveProofEvidenceIds)
-    expectedEvidence.forEach((evidence, index) => {
-      if (evidence.required === false) return
-      const evidenceId = typeof evidence.id === 'string' && evidence.id.trim()
-        ? evidence.id.trim()
-        : `${proofPathId}-evidence-${index}`
-      if (allowedEvidenceIds && !allowedEvidenceIds.has(evidenceId)) return
-      const description = typeof evidence.description === 'string' && evidence.description.trim()
-        ? evidence.description.trim()
-        : evidenceId
-      const withoutCurrentRecord = currentRecords.filter((record) => record.evidenceId !== evidenceId)
-      withoutCurrentRecord.push({
-        id: `review-proof-${evidenceId}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
-        evidenceId,
-        kind: 'manual',
-        status: 'passed',
-        summary: `Approved review verified: ${description}`,
-        recordedAt: now,
-        recordedBy,
-        evidenceRefs: [],
-      })
-      currentRecords.splice(0, currentRecords.length, ...withoutCurrentRecord)
-    })
-
-    proofPath.verificationRecords = currentRecords
-    proofPath.status = 'verified'
-    proofPath.updatedAt = now
-    proofPath.updatedBy = 'reviewer-agent'
+    // The proof path is the expectation contract. The approving
+    // ReviewVerdict carries the observed stable evidence IDs and is persisted
+    // as typed evidence by the task-state boundary.
   }
 }
 

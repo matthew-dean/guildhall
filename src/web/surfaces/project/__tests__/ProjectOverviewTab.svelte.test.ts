@@ -640,13 +640,21 @@ describe('ProjectOverviewTab', () => {
             id: 'task-current-proof',
             title: 'Current release proof',
             status: 'done',
-            proofPaths: [{ status: 'verified', kind: 'review' }],
+            proofPaths: [{ title: 'Current release proof', status: 'planned', kind: 'review', expectedEvidence: [{ id: 'scope', required: true }] }],
+            reviewVerdicts: [{ verdict: 'approve', proofEvidenceIds: ['scope'] }],
+            completionProof: {
+              state: 'verified',
+              expectedCount: 1,
+              verifiedCount: 1,
+              verified: ['Current release proof'],
+              missing: [],
+            },
           },
           {
             id: 'task-later-proof',
             title: 'Later proof',
             status: 'shelved',
-            proofPaths: [{ title: 'Later blocked proof', status: 'blocked', kind: 'review' }],
+            proofPaths: [{ title: 'Later blocked proof', status: 'planned', kind: 'review', expectedEvidence: [{ id: 'later', required: true }] }],
           },
         ],
         releaseReadiness: {

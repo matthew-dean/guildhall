@@ -122,9 +122,9 @@ export class WorktreeSyncError extends Error {
  *                   on the task by the caller.
  * • `per_attempt` → creates on first dispatch of each revision.
  *
- * The caller is responsible for persisting `worktreePath` / `branchName` /
- * `baseBranch` back onto the `Task` so subsequent reads (reviewer, gate
- * checker, merge) see the same paths.
+ * This low-level allocator does not publish workspace ownership. Dispatch
+ * callers use `ensureAndRegisterTaskWorkspace` so allocation and registration
+ * are one recoverable operation.
  */
 export async function ensureWorktreeForDispatch(
   input: EnsureWorktreeInput,
@@ -195,41 +195,40 @@ export async function ensureWorktreeForDispatch(
       worktreePath: expectedPath,
       branch: expectedBranch,
     })
-    const mergeRecovery = await synchronizeReusableWorktree({
-      task,
+    return compensateFailedWorktreeSetup({
+      projectPath,
       worktreePath: expectedPath,
-      baseBranch: task.baseBranch ?? baseBranch,
       gitDriver,
+      setup: async () => {
+        const mergeRecovery = await synchronizeReusableWorktree({
+          task,
+          worktreePath: expectedPath,
+          baseBranch: task.baseBranch ?? baseBranch,
+          gitDriver,
+        })
+        if (mergeRecovery) {
+          return {
+            worktreePath: expectedPath,
+            branchName: expectedBranch,
+            baseBranch: task.baseBranch ?? baseBranch,
+            created: true,
+            mergeRecovery,
+          }
+        }
+        await prepareAllocatedWorktree({
+          projectPath,
+          workspacePath,
+          worktreePath: expectedPath,
+          worktreeInclude,
+        })
+        return {
+          worktreePath: expectedPath,
+          branchName: expectedBranch,
+          baseBranch: task.baseBranch ?? baseBranch,
+          created: true,
+        }
+      },
     })
-    if (mergeRecovery) {
-      return {
-        worktreePath: expectedPath,
-        branchName: expectedBranch,
-        baseBranch: task.baseBranch ?? baseBranch,
-        created: true,
-        mergeRecovery,
-      }
-    }
-    await pruneProjectRuntimeLinks({
-      projectPath,
-      worktreePath: expectedPath,
-    })
-    await ensureWorkspaceSiblingLinks({
-      workspacePath,
-      projectPath,
-      worktreePath: expectedPath,
-    })
-    await copyWorktreeIncludeFiles({
-      projectPath,
-      worktreePath: expectedPath,
-      include: worktreeInclude ?? [],
-    })
-    return {
-      worktreePath: expectedPath,
-      branchName: expectedBranch,
-      baseBranch: task.baseBranch ?? baseBranch,
-      created: true,
-    }
   }
 
   await gitDriver.createWorktree(projectPath, {
@@ -237,25 +236,60 @@ export async function ensureWorktreeForDispatch(
     branch: expectedBranch,
     baseBranch,
   })
-  await pruneProjectRuntimeLinks({
+  return compensateFailedWorktreeSetup({
     projectPath,
     worktreePath: expectedPath,
+    gitDriver,
+    setup: async () => {
+      await prepareAllocatedWorktree({
+        projectPath,
+        workspacePath,
+        worktreePath: expectedPath,
+        worktreeInclude,
+      })
+      return {
+        worktreePath: expectedPath,
+        branchName: expectedBranch,
+        baseBranch,
+        created: true,
+      }
+    },
   })
-  await ensureWorkspaceSiblingLinks({
-    workspacePath,
-    projectPath,
-    worktreePath: expectedPath,
-  })
+}
+
+async function prepareAllocatedWorktree(input: {
+  projectPath: string
+  workspacePath?: string
+  worktreePath: string
+  worktreeInclude?: string[]
+}): Promise<void> {
+  await pruneProjectRuntimeLinks(input)
+  await ensureWorkspaceSiblingLinks(input)
   await copyWorktreeIncludeFiles({
-    projectPath,
-    worktreePath: expectedPath,
-    include: worktreeInclude ?? [],
+    projectPath: input.projectPath,
+    worktreePath: input.worktreePath,
+    include: input.worktreeInclude ?? [],
   })
-  return {
-    worktreePath: expectedPath,
-    branchName: expectedBranch,
-    baseBranch,
-    created: true,
+}
+
+async function compensateFailedWorktreeSetup<T>(input: {
+  projectPath: string
+  worktreePath: string
+  gitDriver: GitDriver
+  setup: () => Promise<T>
+}): Promise<T> {
+  try {
+    return await input.setup()
+  } catch (setupError) {
+    try {
+      await input.gitDriver.removeWorktree(input.projectPath, input.worktreePath)
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [setupError, cleanupError],
+        `Guildhall worktree setup failed and cleanup could not remove ${input.worktreePath}`,
+      )
+    }
+    throw setupError
   }
 }
 
@@ -285,12 +319,22 @@ export async function cleanupWorktreeForTerminal(
   if (input.preserveForPendingPr) return
   if (!input.task.worktreePath) return
   const worktreePath = resolveRuntimePath(input.task.worktreePath)
-  const ownedRoot = path.resolve(worktreeRootFor(input.projectId))
-  const relativePath = path.relative(ownedRoot, worktreePath)
-  if (relativePath === '' || relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+  const ownedRoots = [
+    path.resolve(worktreeRootFor(input.projectId)),
+    path.resolve(input.projectPath, DEFAULT_WORKTREE_ROOT_SEGMENT),
+  ]
+  if (!ownedRoots.some((ownedRoot) => isDescendantPath(ownedRoot, worktreePath))) {
     throw new Error(`Refusing to remove non-Guildhall worktree for ${input.task.id}: ${worktreePath}`)
   }
   await input.gitDriver.removeWorktree(input.projectPath, worktreePath)
+}
+
+function isDescendantPath(root: string, candidate: string): boolean {
+  const relativePath = path.relative(root, candidate)
+  return relativePath !== ''
+    && relativePath !== '..'
+    && !relativePath.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativePath)
 }
 
 interface EnsureWorkspaceSiblingLinksInput {

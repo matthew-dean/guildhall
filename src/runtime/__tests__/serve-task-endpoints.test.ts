@@ -2357,7 +2357,7 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
 })
 
 describe('POST /api/project/task/:id/mark-done', () => {
-  it('marks a ready task done with human evidence and closes its checklist', async () => {
+  it('does not let a Thread evidence note manufacture completion proof', async () => {
     await seedTask('task-1', {
       status: 'ready',
       assignedTo: null,
@@ -2385,32 +2385,17 @@ describe('POST /api/project/task/:id/mark-done', () => {
         body: JSON.stringify({ evidence: 'supabase db push reports remote database is up to date' }),
       }),
     )
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(409)
     const body = (await res.json()) as Record<string, any>
-    expect(body.status).toBe('done')
+    expect(body.code).toBe('task_completion_proof_required')
 
     const q = await readTaskQueue()
     const task = q.tasks[0]
-    expect(task.status).toBe('done')
+    expect(task.status).toBe('ready')
     expect(task.assignedTo).toBeNull()
-    expect(task.blockReason).toBeUndefined()
-    expect(task.acceptanceCriteria.every((criterion: Record<string, any>) => criterion.met === true)).toBe(true)
-    expect(task.doneSummaryBundle).toMatchObject({
-      taskId: 'task-1',
-      status: 'done',
-      retention: {
-        transcriptPrimaryArtifact: false,
-      },
-    })
-    expect(task.doneSummaryBundle.summary.decision).toMatch(/Task finished as done/)
-    const evidence = await readTaskEvidence(tmpDir, 'task-1')
-    expect(findLastMatching(evidence, event => event.kind === 'escalation')?.payload).toMatchObject({
-      id: 'esc-1',
-      summary: 'Waiting on hosted database credentials',
-    })
-    expect(findLastMatching(evidence, event => event.kind === 'note')?.payload).toMatchObject({
-      content: expect.stringMatching(/supabase db push/),
-    })
+    expect(task.blockReason).toBe('Old blocker')
+    expect(task.acceptanceCriteria.every((criterion: Record<string, any>) => criterion.met === false)).toBe(true)
+    expect(task.doneSummaryBundle).toBeUndefined()
   })
 
   it('rejects mark-done on active execution stages', async () => {
@@ -2419,9 +2404,9 @@ describe('POST /api/project/task/:id/mark-done', () => {
     const res = await app.fetch(
       new Request(projectUrl('/api/project/task/task-1/mark-done'), { method: 'POST' }),
     )
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(409)
     const body = (await res.json()) as Record<string, any>
-    expect(body.error).toMatch(/active run/i)
+    expect(body.error).toMatch(/cannot complete/i)
   })
 })
 

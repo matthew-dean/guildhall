@@ -7,6 +7,160 @@ help_summary: |
 
 <!-- markdownlint-disable MD003 -->
 
+## 2026-08-09 Project config round-trip integrity
+
+- [x] Preserve explicitly configured per-role model overrides when Guildhall rewrites `guildhall.yaml`.
+  Evidence: Narrative Harness's committed `models.openai-api.spec` override was silently removed from the local file
+  without a corresponding user-directed configuration change. The invalid drift was restored before landing release work;
+  the shared provider inference now survives a write/read round trip, and
+  `workspace-config.test.ts` passes 16/16 tests.
+
+## 2026-08-09 Narrative Harness Gate Authority Repair
+
+- Work id: `narrative-harness-gate-authority`.
+- User job: after Guildhall runs a task's stored acceptance commands, the same
+  authoritative proof makes the task completable and every task surface can
+  find its worktree and evidence without a caller copying results between
+  stores.
+- Observed failure: NAR-091's five commands passed and each normalized command
+  proof path became `verified`, but the `gate_check -> done` transition still
+  rejected the task with `required_evidence_missing` because completion used a
+  separate legacy `gateResults`/checkbox predicate. The diagnostic runner also
+  demonstrated that a concrete `tasksPath` write and a project-root evidence
+  write can diverge when ambient data-directory resolution changes.
+- Escaped completion failure: the coordinator's recorded-hard-gates shortcut
+  then marked NAR-091's separate packaged visual-review criterion complete even
+  though no approving verdict named that criterion. This bypassed the same
+  evidence guard that correctly rejected the browser's manual completion.
+- Reopen supersession failure: after the task definition was repaired back to
+  `gate_check`, the older false `completion_summary` still made landing
+  reconciliation and task picking call it done. Reopening now writes a typed
+  `reopened` completion summary whenever current proof no longer satisfies the
+  contract, leaving the old completion in history without operational force.
+- [x] Make current proof satisfaction the single completion authority.
+- [x] Keep task evidence attached to the database selected by `tasksPath`.
+- [x] Persist dispatch workspace metadata through the same normalized project
+  authority and prove it survives an effective-task read.
+- [x] Require exact approving review criterion IDs; a passing command gate may
+  settle only its structurally linked criterion, and mixed work returns to the
+  reviewer instead of sending already-passing implementation back to a worker.
+- [x] Move historical proof-path verification records into typed evidence and
+  reset proof paths to expectation-only state through required migration
+  `0.13.77/proof-verification-evidence-authority`.
+  Evidence: the promoted compressed-authority regression covers command
+  pass/fail, review approve/revise, atomic cleanup, outbox drain, and a
+  ledger-independent second application; focused test, typecheck, and contract
+  detector pass.
+- [ ] Complete NAR-091 through the repaired path without supplying duplicate
+  gate results in the completion mutation.
+
+### Contract Touch Decision: Derived Escalation Authority
+
+- Work id: `narrative-harness-gate-authority`.
+- Touched contracts: the persisted task-definition boundary now excludes
+  `openEscalations`. Open escalation state remains available on effective task
+  reads, but is derived from typed escalation evidence and runtime state rather
+  than copied into the task definition.
+- Contracts considered but not touched: escalation payload shape, escalation
+  lifecycle, task status enums, task-evidence schema, queue revision schema,
+  provider prose, and owner-input routing.
+- Required follow-up: none beyond completing the Narrative Harness task run
+  through the repaired authority.
+- Proof required: blueprint recovery must atomically update the intended task
+  and its evidence without treating untouched tasks as definition changes;
+  project-state sanitization must remove `openEscalations`; existing projects
+  must continue to expose the same effective open-escalation state.
+- Proof provided: focused blueprint-recovery and project-state-boundary
+  regressions pass, and the complete orchestrator suite passes 423/423 tests.
+- Waivers: none.
+- Owner-review items: none. This removes duplicated authority rather than
+  changing the user-visible escalation lifecycle.
+- Apply/revert behavior: applying cleans `openEscalations` on the next task
+  definition write while preserving its typed evidence. Reverting would allow
+  the derived field back into task definitions and restore false multi-task
+  deltas during otherwise single-task mutations.
+
+### Schema Migration Decision: Derived Escalation Authority
+
+- Persisted schema touched: no table, column, enum, or evidence payload changes.
+  Existing task-definition JSON may contain the now-forbidden derived field.
+- Scope and change class: compatible write-boundary cleanup.
+- Existing data impact: readers continue to hydrate open escalations from typed
+  evidence. A later definition write drops only the redundant projected field.
+- Migration id and required-before-run behavior: none; cleanup is lazy and safe
+  on the next authoritative write.
+- Compatibility reader: effective-task hydration already supports definitions
+  with or without the redundant field.
+- Fixtures and tests: project-state-boundary sanitization and orchestrator
+  blueprint-recovery fixtures cover old rows and the cleaned representation.
+- Owner-facing plan and rollback: no owner action is required. A code revert
+  needs no stored-data rollback because the typed evidence remains intact.
+
+### Gate Authority Contract Touch Decision
+
+- Work id: `narrative-harness-gate-authority`.
+- Touched contracts: task completion evidence eligibility, command-proof path
+  persistence, current task evidence routing, exact review-criterion approval,
+  and normalized task workspace
+  projection. `GateResult` now carries an optional typed `executionRoot` so
+  landed-checkout requirements use observed workspace identity instead of a
+  proof-path verification record. Point and batch task writes also preserve the
+  normalized included/deferred release disposition because compatibility
+  `releaseIds` identify a release but cannot encode that disposition.
+- Considered but not touched: command execution, command identity, provider
+  prose, task lifecycle states and transition enum, acceptance criterion schema, release
+  membership, and Narrative Harness product contracts.
+- Required follow-up: rerun NAR-091 gates and completion against its registered
+  global project state, then use the same path for NAR-092 through NAR-094.
+- Proof required: promoted-database integration tests that run gates and then
+  complete from the resulting verified proof; a storage-routing regression;
+  workspace dispatch/effective-task regression; focused suites, typecheck,
+  contract lint, installed build/restart, and real Narrative task-state proof.
+- Proof provided: the complete orchestrator suite passes 423/423; the release
+  gate passes 301/301, including promoted proof authority, selected-release
+  scope, publish login/resume, and artifact tests; model independence passes
+  125/125; `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm lint:deps` pass.
+  The focused normalized-membership regression proves an ordinary task update
+  cannot promote deferred work into the selected release. Installed restart
+  and real NAR-091 completion remain open.
+- Owner-review items: none. The owner explicitly requires Narrative Harness to
+  improve Guildhall at the source model rather than accumulate caller patches.
+- Waivers: none.
+- Apply/revert: applying removes duplicated completion interpretation and binds
+  mutable task writes to one authority; reverting restores contradictory
+  verified-proof and completion state. The optional `executionRoot` field is
+  backward compatible and absent on historical gate results.
+
+### Gate Authority Schema Migration Decision
+
+- Persisted schema touched: proof-path verification records move into the
+  existing typed task-evidence ledger; proof paths retain only expected
+  evidence and reset their display status to `planned`. The compact task
+  summary now retains typed `proofForReleaseId` so indexed release projections
+  select the same release-local proof child as rich task projections.
+- Scope and class: required, data-moving authority correction for promoted
+  SQLite projects. No table or enum addition is required; the existing compact
+  `summary_json` gains one optional typed field. The existing
+  `gate_result` payload gains optional `executionRoot`; compatibility readers
+  already accept its absence.
+- Existing data impact: structured command pass/fail records become
+  `gate_result` evidence with command and execution root; structured review
+  pass/fail records become `review_verdict` approve/revise evidence. No result
+  is inferred from title, summary, or other model prose.
+- Migration id and pre-run requirement:
+  `0.13.77/proof-verification-evidence-authority`, required before runtime use.
+- Safety and compatibility reader: each task definition cleanup and its typed
+  evidence commit through the promoted-task CAS boundary. Compressed-history
+  projects use the transactional SQLite outbox and idempotent mirror flush;
+  legacy task queues remain readable but are not rewritten by this migration.
+- Fixtures and tests: a promoted compressed-authority regression covers
+  command pass/fail, review approve/revise, path cleanup, outbox drain, and a
+  ledger-independent second application.
+- Owner-facing plan and rollback: the migration is automatic because it moves
+  existing structured facts without judgment. Revert restores the old runtime
+  reader only; migrated evidence remains valid audit history and must not be
+  deleted.
+
 ## 2026-08-08 Completed Release Intake Handoff
 
 - Work id: `completed-release-intake-handoff`.
@@ -56129,3 +56283,95 @@ Repair:
       fixtures cover the changed behavior.
 - Owner-facing plan text: no migration action is required.
 - Rollback/revert behavior: code-only revert; no persisted-state rollback.
+
+### Contract Touch Decision: Review Evidence Handoff
+
+- Work id: `narrative-harness-nar-091-review-evidence-handoff-2026-08-09`.
+- Touched contracts: acceptance-criterion proof-path reconciliation, promoted
+      lifecycle point writes, committed-branch review packets, and the bounded
+      persona-review execution budget, plus task-level fan-out review authority.
+      Explicit `review` and `human`
+      criteria now receive stable review evidence targets when no existing
+      review path owns them. Lifecycle writes compare mutations with the
+      effective task that was actually read without persisting derived proof
+      projections. Review packets compare a clean task branch with its recorded
+      base and surface committed screenshot evidence and its README. A reviewer
+      has enough turns to inspect that complete packet before returning its
+      typed verdict. Persona rows remain an audit trail, while one final
+      `reviewer-fanout` verdict owns the aggregate decision and exact stable
+      target ids. An incomplete aggregate approval remains in review as an
+      invalid review contract instead of briefly advancing and bouncing a
+      worker who has no product change to make. Deterministic fallback no
+      longer attempts to settle unresolved review-owned criteria or charges
+      those provider/contract failures to the worker revision budget. Existing
+      max-revision blockers whose latest round is entirely non-substantive are
+      recovered at review even when the older fallback mislabeled them as
+      actionable. Persona review starts from the bounded packet, avoids
+      sequentially reading every changed file, and has a finite 12-turn ceiling.
+      When a generated review proof reuses the exact acceptance-criterion id,
+      that typed criterion approval also satisfies the projected proof path;
+      distinct proof-evidence ids still require explicit approval.
+      Review packets now prioritize the evidence README and production source
+      excerpts ahead of test files, include up to six bounded text excerpts,
+      and are the default persona evidence surface. Default persona fan-out no
+      longer exposes open-ended file-list/read tools; explicit integrations may
+      still add a narrowly scoped read-only tool.
+      The packet presents recorded commands/gates and visual evidence before
+      source excerpts. Up to eight confined committed screenshots (2 MiB each,
+      4 MiB total) are attached as image blocks to the visual-designer turn;
+      paths that escape the task worktree or fail realpath checks are never
+      attached. Non-visual personas continue to receive the bounded text packet.
+      A `revise` result must now attach a concrete `workerInstruction` to every
+      unsatisfied typed finding. Findings that only carry model-authored prose
+      or revision strings are invalid/non-substantive and cannot route a worker
+      or consume product-revision budget; historical blocks made entirely from
+      those findings recover into review. The recovery path now recognizes the
+      fan-out loop's own `reviewer_fanout_max_revisions` code, hydrates its
+      bounded review history before classification, and resolves the matching
+      escalation when the latest round is entirely non-substantive.
+- Contracts considered but not touched: acceptance-criterion schema, proof-path
+      schema, task lifecycle enums, provider prose, fan-out aggregation policy,
+      and owner approval authority. The existing review-verdict shape is reused
+      without adding fields.
+- Required follow-up: rerun NAR-091 through the installed Guildhall build and
+      confirm the screenshot-backed `ac-6` target reaches reviewers by stable
+      id instead of bouncing to an evidence-free worker retry.
+- Proof required: mixed command/review criteria produce both command and review
+      paths without duplicating an existing review owner; stale generated paths
+      disappear when the criterion contract changes; reconciliation is
+      idempotent; a lifecycle point write survives differing read-time proof
+      projections; a clean task branch exposes committed source and screenshot
+      evidence; persona review retains a finite but practical read budget; the
+      aggregate authority persists exact ids and survives the next gate check;
+      incomplete aggregate approvals do not create worker revisions; the real
+      NAR-091 infrastructure-only revision debt self-recovers into a fresh
+      review window; the real NAR-091 flow advances using its committed native
+      evidence matrix.
+- Proof provided: 9 proof-path tests, the focused promoted point-write and
+      committed-review-packet regressions, persona-reviewer tests, and
+      112 focused fan-out/review-contract/proof-authority tests, plus
+      `pnpm typecheck` pass.
+      Installed-app Narrative Harness rerun remains.
+- Waivers: none.
+- Owner-review items: none. This repair exposes evidence already required by
+      the approved task contract; it does not approve that evidence itself.
+- Apply/revert behavior: apply proof reconciliation and reviewer budget
+      together. Reverting is code-only and restores the evidence-free loop.
+
+### Schema Migration Decision: Review Evidence Handoff
+
+- Persisted schema touched: none.
+- Scope and change class: reconciliation of existing acceptance criteria into
+      the existing proof-path shape, plus a runtime execution-budget constant.
+- Existing data impact: active tasks gain a generated review path only when
+      their typed review criterion is otherwise unrepresented. Existing
+      authored review paths remain authoritative. No lifecycle or review-packet
+      data is rewritten merely because an effective proof projection differs.
+- Migration id and required-before-run behavior: none; reconciliation occurs
+      through the same runtime path that already materializes command proof.
+- Compatibility reader: existing proof paths and review verdicts remain valid.
+- Fixtures and tests: focused proof-path and persona-reviewer regressions plus
+      the installed NAR-091 flow.
+- Owner-facing plan text: no migration action is required.
+- Rollback/revert behavior: code-only revert; generated projection rows can be
+      rebuilt from the unchanged acceptance contract.

@@ -15,6 +15,7 @@ import type {
   StructuredPreference,
 } from './policy.js'
 import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
+import { isCurrentProofPathProven } from '@guildhall/shared'
 
 const TaskSelectionMode = z.enum(['all', 'tight'])
 
@@ -620,9 +621,8 @@ function taskReflectionCandidates(task: Task): LearningCandidate[] {
     ? (task as Task & { proofPaths?: Array<Record<string, unknown>> }).proofPaths ?? []
     : []
   for (const proofPath of proofPaths) {
-    const status = typeof proofPath.status === 'string' ? proofPath.status : ''
     const title = typeof proofPath.title === 'string' ? proofPath.title : ''
-    if (status !== 'verified' || !title) continue
+    if (!isCurrentProofPathProven(proofPath, task as unknown as Record<string, unknown>) || !title) continue
     candidates.push({
       id: `task-${task.id}-proof-path-${String(proofPath.id ?? title).replace(/[^a-z0-9_-]+/gi, '-')}`,
       source: 'task',

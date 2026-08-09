@@ -11,7 +11,7 @@ import {
 } from '../proof-paths.js'
 
 describe('proof paths', () => {
-  it('fails a clean command when output does not identify the bounded task', () => {
+  it('rejects a clean command that misses bounded output without mutating its proof expectation', () => {
     const task = {
       proofPaths: [ProofPath.parse({
         id: 'task-world-proof',
@@ -53,8 +53,8 @@ describe('proof paths', () => {
       'project_checkout',
     )
     expect(task.proofPaths[0]).toMatchObject({
-      status: 'blocked',
-      verificationRecords: [{ status: 'failed', executionRoot: 'project_checkout' }],
+      status: 'planned',
+      verificationRecords: [],
     })
   })
 
@@ -231,6 +231,120 @@ describe('proof paths', () => {
     ])
   })
 
+  it('adds stable review evidence targets beside generated command proof', () => {
+    const task = {
+      id: 'task-results',
+      title: 'Review desktop results',
+      acceptanceCriteria: [
+        {
+          id: 'ac-command',
+          description: 'The focused tests pass.',
+          verifiedBy: 'automated',
+          command: 'pnpm test:results',
+          met: false,
+        },
+        {
+          id: 'ac-visual',
+          description: 'The packaged views have clear hierarchy at both target sizes.',
+          verifiedBy: 'review',
+          source: 'documented',
+          met: false,
+        },
+      ],
+      proofPaths: [],
+    } as unknown as Parameters<typeof ensureCommandProofPathsFromAcceptanceCriteria>[0]
+
+    const paths = ensureCommandProofPathsFromAcceptanceCriteria(
+      task,
+      '2026-08-09T22:00:00.000Z',
+      'test',
+    )
+
+    expect(paths).toHaveLength(2)
+    expect(paths[0]).toMatchObject({
+      kind: 'command',
+      expectedEvidence: [{ id: 'ac-command', kind: 'automated' }],
+    })
+    expect(paths[1]).toMatchObject({
+      id: 'task-results-acceptance-review-proof',
+      kind: 'review',
+      source: 'documented',
+      expectedEvidence: [{ id: 'ac-visual', kind: 'manual' }],
+      verificationRecords: [],
+    })
+
+    task.proofPaths = paths
+    expect(ensureCommandProofPathsFromAcceptanceCriteria(
+      task,
+      '2026-08-09T23:00:00.000Z',
+      'second-pass',
+    )).toEqual(paths)
+  })
+
+  it('keeps authored review proof authoritative and removes stale generated review targets', () => {
+    const task = {
+      id: 'task-results',
+      title: 'Review desktop results',
+      acceptanceCriteria: [{
+        id: 'ac-visual',
+        description: 'The packaged views have clear hierarchy.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+      proofPaths: [
+        ProofPath.parse({
+          id: 'authored-review',
+          scope: { type: 'task', id: 'task-results' },
+          title: 'Inspect native captures',
+          summary: 'Review the committed matrix.',
+          kind: 'review',
+          status: 'planned',
+          launchSteps: [],
+          expectedEvidence: [{
+            id: 'ac-visual',
+            kind: 'manual',
+            description: 'The packaged views have clear hierarchy.',
+            required: true,
+          }],
+          verificationRecords: [],
+          relatedTaskIds: ['task-results'],
+          createdAt: '2026-08-09T21:00:00.000Z',
+          updatedAt: '2026-08-09T21:00:00.000Z',
+          createdBy: 'spec-agent',
+        }),
+        ProofPath.parse({
+          id: 'task-results-acceptance-review-proof',
+          scope: { type: 'task', id: 'task-results' },
+          title: 'Review stale',
+          summary: 'Stale generated proof.',
+          kind: 'review',
+          status: 'planned',
+          launchSteps: [],
+          expectedEvidence: [{
+            id: 'stale',
+            kind: 'manual',
+            description: 'Old criterion.',
+            required: true,
+          }],
+          verificationRecords: [],
+          relatedTaskIds: ['task-results'],
+          createdAt: '2026-08-09T21:00:00.000Z',
+          updatedAt: '2026-08-09T21:00:00.000Z',
+          createdBy: 'test',
+        }),
+      ],
+    } as unknown as Parameters<typeof ensureCommandProofPathsFromAcceptanceCriteria>[0]
+
+    const paths = ensureCommandProofPathsFromAcceptanceCriteria(
+      task,
+      '2026-08-09T22:00:00.000Z',
+      'test',
+    )
+
+    expect(paths).toHaveLength(1)
+    expect(paths[0]?.id).toBe('authored-review')
+  })
+
   it('builds a default task proof path from acceptance criteria without creating executable long-running buttons', () => {
     const proofPath = buildTaskProofPath({
       task: {
@@ -370,7 +484,7 @@ describe('proof paths', () => {
     })
   })
 
-  it('renders proof path context that separates planned proof from actual verification', () => {
+  it('renders proof path context as expectations without a duplicate verification ledger', () => {
     const proofPath = ProofPath.parse({
       id: 'project-readiness-proof',
       scope: { type: 'project', id: 'guildhall' },
@@ -396,6 +510,6 @@ describe('proof paths', () => {
     expect(context).toContain('Project readiness')
     expect(context).toContain('copy command: pnpm docs:dev')
     expect(context).toContain('manual required: Browser renders the docs nav.')
-    expect(context).toContain('No verification records yet')
+    expect(context).not.toContain('verification records')
   })
 })

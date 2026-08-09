@@ -645,6 +645,14 @@ function normalizeProviderModelKey(
     : null
 }
 
+function inferSingleProviderModelKey(
+  input: ModelConfigInput | undefined,
+): ModelProviderKey | null {
+  if (!isProviderModelAssignments(input)) return null
+  const configured = MODEL_PROVIDER_KEYS.filter(provider => input[provider] !== undefined)
+  return configured.length === 1 ? (configured[0] ?? null) : null
+}
+
 function expandProviderShortcut(
   shortcut: ProviderModelShortcut | undefined,
 ): ModelAssignmentPartial {
@@ -676,18 +684,13 @@ export function resolveModelsForProvider(
 ): ModelAssignmentPartial {
   if (!input) return {}
   if (!isProviderModelAssignments(input)) return input
-  const normalized = normalizeProviderModelKey(provider)
+  const normalized = normalizeProviderModelKey(provider) ?? inferSingleProviderModelKey(input)
   if (normalized) {
     const direct = input[normalized]
     if (direct) return expandProviderShortcut(direct)
     if (normalized === 'codex-oauth' && input.codex) return expandProviderShortcut(input.codex)
     if (normalized === 'codex' && input['codex-oauth']) return expandProviderShortcut(input['codex-oauth'])
     return {}
-  }
-  const entries = Object.entries(input).filter(([, value]) => value && typeof value === 'object')
-  if (entries.length === 1) {
-    const only = entries[0]?.[1] as ProviderModelShortcut | undefined
-    return expandProviderShortcut(only)
   }
   return {}
 }
@@ -725,7 +728,7 @@ export function writeModelsForProvider(
   provider: string | undefined,
   assignment: ModelAssignmentPartial | undefined,
 ): ModelConfigInput | undefined {
-  const normalized = normalizeProviderModelKey(provider)
+  const normalized = normalizeProviderModelKey(provider) ?? inferSingleProviderModelKey(input)
   if (!normalized) {
     return assignment && Object.keys(assignment).length > 0 ? assignment : undefined
   }

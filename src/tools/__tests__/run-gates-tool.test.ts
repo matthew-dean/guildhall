@@ -10,10 +10,16 @@ import {
   readProjectStateDatabaseTask,
   readProjectStateDatabaseTaskEvidenceCurrent,
   readProjectStateDatabaseTaskEvidenceHistory,
+  readProjectStateDatabaseTaskOverlay,
   readProjectStateDatabaseQueueRevision,
+  setProjectStateDatabaseTaskEvidenceAuthority,
   writeProjectStateDatabaseSnapshot,
 } from '@guildhall/sessions'
 import { reconcileRequestedGatesWithAuthority, runGatesTool } from '../run-gates-tool.js'
+import { updateTask } from '../task-queue.js'
+import { readTasks } from '../task-queue.js'
+import { buildEffectiveTaskFromDatabaseOverlay } from '../../runtime/effective-task.js'
+import { taskDoneButProofMissing } from '../../runtime/proof-health.js'
 
 vi.mock('../gate-runner.js', () => ({
   runGates: vi.fn(),
@@ -273,10 +279,8 @@ describe('runGatesTool scoped exceptions', () => {
           output: 'ok',
         },
       ])
-      expect(raw.tasks[0].proofPaths[0]).toMatchObject({ id: 'command-proof-path', status: 'verified', updatedBy: 'run-gates' })
-      expect(raw.tasks[0].proofPaths[0].verificationRecords).toEqual([
-        expect.objectContaining({ evidenceId: 'command-proof-path-evidence-0', status: 'passed', command: 'pnpm test' }),
-      ])
+      expect(raw.tasks[0].proofPaths[0]).toMatchObject({ id: 'command-proof-path', status: 'planned' })
+      expect(raw.tasks[0].proofPaths[0].verificationRecords).toEqual([])
       const evidence = await readTaskEvidence(projectRoot, 'task-001', { kind: 'gate_result' })
       expect(evidence.map((event) => event.payload)).toEqual([
         {
@@ -326,10 +330,11 @@ describe('runGatesTool scoped exceptions', () => {
       projectRoot,
     })
     promoteProjectStateDatabaseAuthority(projectRoot)
+    setProjectStateDatabaseTaskEvidenceAuthority(projectRoot, 'compressed')
 
     vi.mocked(runGates).mockResolvedValue({
       allPassed: true,
-      results: [{ gateId: 'test', type: 'hard', passed: true, checkedAt: '2026-06-03T00:01:00.000Z', output: 'ok' }],
+      results: [{ gateId: 'test', command: 'pnpm test', type: 'hard', passed: true, checkedAt: '2026-06-03T00:01:00.000Z', output: 'ok' }],
     } as any)
 
     try {
@@ -343,13 +348,104 @@ describe('runGatesTool scoped exceptions', () => {
       expect((result.metadata as Record<string, unknown>).persistedTaskGateResults).toBe(true)
       expect(readProjectStateDatabaseQueueRevision(tasksPath)).toBeGreaterThan(before!)
       expect(readProjectStateDatabaseTask(tasksPath, 'task-001')?.definition).toMatchObject({
-        proofPaths: [expect.objectContaining({ status: 'verified', updatedBy: 'run-gates' })],
+        proofPaths: [expect.objectContaining({ status: 'planned', verificationRecords: [] })],
       })
       expect(readProjectStateDatabaseTask(tasksPath, 'task-001')?.definition).not.toHaveProperty('gateResults')
       expect(readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-001')).toMatchObject({
         byKind: { gate_result: [expect.objectContaining({ payload: expect.objectContaining({ gateId: 'test', passed: true }) })] },
       })
-      expect(readProjectStateDatabaseTaskEvidenceHistory(projectRoot, 'task-001', 'gate_result')).toHaveLength(1)
+      expect(readProjectStateDatabaseTaskEvidenceHistory(projectRoot, 'task-001', 'gate_result')).toHaveLength(0)
+      await expect(readTaskEvidence(projectRoot, 'task-001', { kind: 'gate_result' })).resolves.toHaveLength(1)
+      const task = (await readTasks({ tasksPath })).queue?.tasks.find((candidate) => candidate.id === 'task-001')
+      expect(task).toBeDefined()
+      const effective = buildEffectiveTaskFromDatabaseOverlay(
+        task!,
+        readProjectStateDatabaseTaskOverlay(projectRoot, 'task-001'),
+      )
+      expect(taskDoneButProofMissing({ ...effective, status: 'done' })).toBe(false)
+
+      const completion = await updateTask({
+        tasksPath,
+        taskId: 'task-001',
+        status: 'done',
+      }, {
+        current_agent_id: 'gate-checker-agent',
+        current_task_project_path: projectRoot,
+      })
+      expect(completion.success, completion.error).toBe(true)
+      expect(readProjectStateDatabaseTask(tasksPath, 'task-001')?.definition).toMatchObject({ status: 'done' })
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps promoted gate evidence bound to the tasksPath authority', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-gates-authority-'))
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(tasksPath, '{}', 'utf8')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-06-03T00:00:00.000Z',
+        tasks: [{
+          id: 'task-001',
+          title: 'Run gates',
+          status: 'gate_check',
+          projectPath: projectRoot,
+          proofPaths: [{
+            kind: 'command',
+            command: 'pnpm test',
+            expectedEvidence: ['gate output'],
+            status: 'planned',
+            verificationRecords: [],
+          }],
+          createdAt: '2026-06-03T00:00:00.000Z',
+          updatedAt: '2026-06-03T00:00:00.000Z',
+        }],
+      },
+      summary: {
+        generatedAt: '2026-06-03T00:00:00.000Z',
+        freshness: 'current',
+        counts: { total: 1 },
+        releaseSummary: { release: null },
+      },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    setProjectStateDatabaseTaskEvidenceAuthority(projectRoot, 'compressed')
+    vi.mocked(runGates).mockResolvedValue({
+      allPassed: true,
+      results: [{ gateId: 'test', command: 'pnpm test', type: 'hard', passed: true, checkedAt: '2026-06-03T00:01:00.000Z', output: 'ok' }],
+    } as any)
+
+    const originalDataDir = process.env.GUILDHALL_DATA_DIR
+    try {
+      process.env.GUILDHALL_DATA_DIR = path.join(projectRoot, 'unrelated-data-dir')
+      const result = await runGatesTool.execute(
+        { cwd: projectRoot, gates: [{ id: 'test', label: 'Test', command: 'pnpm test' }] },
+        {
+          cwd: projectRoot,
+          metadata: {
+            current_task_id: 'task-001',
+            current_task_project_path: projectRoot,
+            tasks_path: tasksPath,
+          },
+        },
+      )
+      expect(result.is_error).toBe(false)
+    } finally {
+      if (originalDataDir === undefined) delete process.env.GUILDHALL_DATA_DIR
+      else process.env.GUILDHALL_DATA_DIR = originalDataDir
+    }
+
+    try {
+      expect(readProjectStateDatabaseTask(tasksPath, 'task-001')?.definition).toMatchObject({
+        proofPaths: [expect.objectContaining({ status: 'planned', verificationRecords: [] })],
+      })
+      expect(readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-001')).toMatchObject({
+        byKind: { gate_result: [expect.objectContaining({ payload: expect.objectContaining({ gateId: 'test', passed: true }) })] },
+      })
     } finally {
       await fs.rm(projectRoot, { recursive: true, force: true })
     }

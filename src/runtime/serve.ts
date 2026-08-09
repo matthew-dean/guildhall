@@ -133,6 +133,7 @@ import {
   isProofSetupTask,
   materializeProofSetupTask,
   prepareReleaseProofRecovery,
+  updateTask,
   updateDesignSystem,
 } from '@guildhall/tools'
 import { DesignSystem, explicitTaskStructuralIdentity, ProjectRelease as ProjectReleaseSchema, summarizeDesignSystem, Task as TaskSchema, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
@@ -1449,7 +1450,10 @@ async function readTasksFileNormalized(
         lastUpdated: new Date().toISOString(),
       }
   writeProjectTaskQueueWithSummary(tasksPath, rewritten, {
-    ...(mutationRead ? { expectedQueueRevision: mutationRead.expectedQueueRevision } : {}),
+    ...(mutationRead ? {
+      expectedQueueRevision: mutationRead.expectedQueueRevision,
+      expectedProjectRevision: mutationRead.expectedProjectRevision,
+    } : {}),
   })
   normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
   return tasks
@@ -1564,10 +1568,12 @@ async function writeTasksFilePreservingQueue(
     | Array<Record<string, unknown>>
     | null = null
   let expectedQueueRevision: number | null = null
+  let expectedProjectRevision: number | null = null
   try {
     const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
     parsed = queueRead.queue as typeof parsed
     expectedQueueRevision = queueRead.expectedQueueRevision
+    expectedProjectRevision = queueRead.expectedProjectRevision
   } catch (error) {
     if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') throw error
     parsed = null
@@ -1580,6 +1586,7 @@ async function writeTasksFilePreservingQueue(
   await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, rewritten, {
     projectRoot,
     expectedQueueRevision,
+    expectedProjectRevision,
   })
   normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
 }
@@ -1598,10 +1605,12 @@ async function writeTaskQueueFilePreservingQueue(
     | Array<Record<string, unknown>>
     | null = null
   let expectedQueueRevision: number | null = null
+  let expectedProjectRevision: number | null = null
   try {
     const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
     parsed = queueRead.queue as typeof parsed
     expectedQueueRevision = queueRead.expectedQueueRevision
+    expectedProjectRevision = queueRead.expectedProjectRevision
   } catch (error) {
     if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') throw error
     parsed = null
@@ -1624,6 +1633,7 @@ async function writeTaskQueueFilePreservingQueue(
   await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, rewritten, {
     projectRoot,
     expectedQueueRevision,
+    expectedProjectRevision,
   })
   invalidateTaskQueueReadCaches(tasksPath)
 }
@@ -15924,6 +15934,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
           projectRoot: project.path,
           expectedQueueRevision: queueRead.expectedQueueRevision,
+          expectedProjectRevision: queueRead.expectedProjectRevision,
         })
         return c.json({
           ok: true,
@@ -16111,113 +16122,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const body = await c.req.json().catch(() => ({})) as { evidence?: string }
         const evidence = (body.evidence ?? '').trim()
         const tasksPath = projectTasksPath(project.path)
-      if (!projectTaskStateExistsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-        const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
-        const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
-        const parsed = queueRead.queue as
-          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
-          | Array<Record<string, unknown>>
-        const queue = Array.isArray(parsed)
-          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
-        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
-        if (!task) return c.json({ error: 'task not found' }, 404)
-        if (task.status === 'done') return c.json({ ok: true, status: 'done' })
-        if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
-          return c.json({ error: `task is ${task.status}; stop or finish the active run before marking it done` }, 400)
-        }
-
-        const now = new Date().toISOString()
-        const criteria = Array.isArray(task.acceptanceCriteria)
-          ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
-          : []
-        task.acceptanceCriteria = criteria.map(criterion => ({
-          ...criterion,
-          met: true,
-        }))
-        const newlyResolvedEscalations: Array<Record<string, unknown>> = []
-        if (Array.isArray(task.escalations)) {
-          task.escalations = (task.escalations as Array<Record<string, unknown>>).map(escalation => (
-            escalation.resolvedAt
-              ? escalation
-              : (() => {
-                  const resolved = {
-                    ...escalation,
-                    resolvedAt: now,
-                    resolvedBy: 'human',
-                    resolution: evidence || 'Human confirmed this task is complete.',
-                  }
-                  newlyResolvedEscalations.push(resolved)
-                  return resolved
-                })()
-          ))
-        }
-        delete task.blockReason
-        task.status = 'done'
-        task.assignedTo = null
-        task.updatedAt = now
-        const notes = Array.isArray(task.notes)
-          ? [...task.notes as Array<Record<string, unknown>>]
-          : []
-        notes.push({
-          agentId: 'system:human',
-          role: 'human',
-          content: evidence
-            ? `Marked done from Thread. Evidence: ${evidence}`
-            : 'Marked done from Thread after human confirmation.',
-          timestamp: now,
-        })
-        task.notes = notes
-        task.doneSummaryBundle = buildDoneTaskSummaryBundle({
-          task: task as Task,
-          transcriptRef: {
-            scope: 'local_history',
-            collection: 'transcripts',
-            id,
-            path: getProjectTranscriptPath(project.path, 'exploring', id),
-            contentType: 'text/markdown',
+        if (!projectTaskStateExistsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const result = await updateTask({
+          tasksPath,
+          taskId: id,
+          status: 'done',
+          note: {
+            agentId: 'system:human',
+            role: 'human',
+            content: evidence
+              ? `Completion requested from Thread. Evidence note: ${evidence}`
+              : 'Completion requested from Thread.',
           },
-          createdAt: now,
-          createdBy: 'system:mark-done',
+        }, {
+          current_agent_id: 'system:human',
+          current_task_project_path: project.path,
         })
-        queue.lastUpdated = now
-        if (databaseAuthority) {
-          const promoted = writePromotedTaskDetailMutation(tasksPath, id, {
-            projectId: project.id,
-            projectRoot: project.path,
-            mutate: current => {
-              current.acceptanceCriteria = task.acceptanceCriteria
-              current.status = 'done'
-              delete current.blockReason
-              current.updatedAt = now
-              return current
-            },
-          })
-          if (!promoted) return c.json({ error: 'task not found' }, 404)
-          await appendPromotedHumanTaskNote({
-            taskId: id,
-            action: 'mark-done',
-            now,
-            note: notes.at(-1) as Record<string, unknown>,
-          })
-          await appendTaskEvidence(project.path, id, {
-            id: `${id}-completion-summary-${now.replace(/[^0-9A-Za-z]/g, '')}`,
-            kind: 'completion_summary',
-            recordedAt: now,
-            payload: task.doneSummaryBundle as Record<string, unknown>,
-          })
-          for (const escalation of newlyResolvedEscalations) {
-            const escalationId = typeof escalation.id === 'string' ? escalation.id : `resolved-${id}`
-            await appendTaskEvidence(project.path, id, {
-              id: `${escalationId}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
-              kind: 'escalation',
-              recordedAt: now,
-              payload: escalation,
-            })
-          }
-          return c.json({ ok: true, status: 'done' })
+        if (!result.success) {
+          const missing = result.error?.includes('required_evidence_missing') || result.error?.includes('cannot complete')
+          return c.json({
+            error: result.error ?? 'Guildhall could not complete this task.',
+            code: missing ? 'task_completion_proof_required' : 'task_state_mutation_rejected',
+          }, 409)
         }
-        writeProjectTaskQueueWithSummary(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
         return c.json({ ok: true, status: 'done' })
       }
 
@@ -16484,7 +16411,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           const matchingProofPath = proofPaths.find((path) =>
             comparableCommand(path.command) === comparableCommand(command),
           )
-          if (matchingProofPath && matchingProofPath.status !== 'verified') {
+          if (matchingProofPath && changed) {
             matchingProofPath.status = 'planned'
             matchingProofPath.verificationRecords = []
             matchingProofPath.updatedAt = now

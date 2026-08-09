@@ -64,7 +64,6 @@ import {
 } from './project-decision-projection.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
-import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 
 export const PROJECT_SUMMARY_PROJECTION_VERSION = 28 as const
@@ -334,15 +333,17 @@ function indexedTaskHasCompletionProofGap(
 ): boolean {
   const status = String(task.status ?? '')
   if (status !== 'done' && status !== 'pending_pr') return false
-  // The selected release contract is part of the compact state. A script-only
-  // release makes an absent proof record an explicit gap, not an implicit pass.
-  if (taskDoneButProofMissingForScope(task, proofStyle)) return true
-  if (!proof) return false
+  // The bounded current-proof point is the compact proof authority. Calling
+  // rich-task helpers here would inspect fields such as proofPaths that are
+  // intentionally absent from indexed rows and turn a proven task back into a
+  // blocker merely because its full definition was not opened.
+  if (!proof) return proofStyle === 'script_only'
   if (['needed', 'partial'].includes(proof.state)) return true
   // A compact point can legitimately say `none` while still carrying the
   // acceptance-criteria count. That is an unproven completed task, not a
   // task with no proof contract.
-  return proof.state === 'none' && Number(task.currentSummary?.acceptanceCriteriaCount ?? 0) > 0
+  if (proof.state === 'none' && Number(task.currentSummary?.acceptanceCriteriaCount ?? 0) > 0) return true
+  return proof.state === 'none' && proofStyle === 'script_only' && proof.hasExecutablePath !== true
 }
 
 function indexedTaskCompletionChildren(
@@ -380,7 +381,7 @@ function indexedProofChildBelongsToSelectedRelease(
   selectedReleaseId: string | null,
 ): boolean {
   if (!selectedReleaseId || child.semanticKind !== 'proof_setup') return true
-  return child.releaseIds.includes(selectedReleaseId)
+  return child.proofForReleaseId === selectedReleaseId
 }
 
 function indexedIsMaterializedExecutionChild(
@@ -1059,6 +1060,7 @@ function indexedTaskForScopeProjection(task: ProjectStateDatabaseTask): Task {
     ...(task.priority ? { priority: task.priority } : {}),
     ...(task.workKind ? { workKind: task.workKind } : {}),
     ...(task.semanticKind ? { semanticKind: task.semanticKind } : {}),
+    ...(task.proofForReleaseId ? { proofForReleaseId: task.proofForReleaseId } : {}),
     ...(hierarchy ? { hierarchy } : {}),
     ...(task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {}),
     ...(task.releaseIds.length > 0 ? { releaseIds: task.releaseIds } : {}),

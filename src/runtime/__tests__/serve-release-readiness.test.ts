@@ -2562,7 +2562,11 @@ describe('GET /api/project/release-readiness', () => {
             command: 'pnpm prove:fixture-schemas',
             source: 'inferred',
             expectedEvidence: [{ id: 'fixture-schema', required: true }],
-            verificationRecords: [{ evidenceId: 'fixture-schema', status: 'passed' }],
+            verificationRecords: [{
+              evidenceId: 'fixture-schema',
+              status: 'passed',
+              recordedAt: '2026-07-04T08:50:00.000Z',
+            }],
           }],
           doneSummaryBundle: {
             taskId: 'task-current',
@@ -3126,7 +3130,11 @@ describe('GET /api/project/release-readiness', () => {
             command: 'pnpm test -- generate-story',
             source: 'inferred',
             expectedEvidence: [{ id: 'chapter-generation', required: true }],
-            verificationRecords: [{ evidenceId: 'chapter-generation', status: 'passed' }],
+            verificationRecords: [{
+              evidenceId: 'chapter-generation',
+              status: 'passed',
+              recordedAt: '2026-07-04T08:50:00.000Z',
+            }],
           }],
           doneSummaryBundle: {
             taskId: 'task-current',
@@ -4311,7 +4319,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.workProgress.counts).toMatchObject({
       visibleTotal: 2,
       visibleBlocked: 1,
-      deliveryBlocked: 1,
+      deliveryBlocked: 0,
     })
     expect(body.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 1,

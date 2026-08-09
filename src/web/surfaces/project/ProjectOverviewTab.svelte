@@ -169,8 +169,12 @@
   const primaryProofPaths = $derived.by(() => {
     const proofTasks = currentScopeTaskIds.size > 0 ? currentScopeTasks : tasks.filter(task => task.status !== 'shelved')
     return proofTasks
-      .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
-      .sort((left, right) => proofRank(left.proofPath.status) - proofRank(right.proofPath.status))
+      .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({
+        task,
+        proofPath,
+        proofState: proofPathState(task, proofPath),
+      })))
+      .sort((left, right) => proofRank(left.proofState) - proofRank(right.proofState))
       .slice(0, 3)
   })
   const orientationPins = $derived.by(() => {
@@ -278,14 +282,14 @@
     const primary = primaryProofPaths[0]
     if (primary) {
       return {
-        tone: primaryProofPaths.some(item => item.proofPath.status === 'blocked')
+        tone: primaryProofPaths.some(item => item.proofState === 'missing')
           ? 'warn'
-          : primaryProofPaths.some(item => item.proofPath.status === 'verified')
+          : primaryProofPaths.some(item => item.proofState === 'verified')
             ? 'ok'
             : 'neutral',
         lines: [
           proofPathTitle(primary.task, primary.proofPath),
-          friendlyStatus(primary.proofPath.status),
+          friendlyStatus(primary.proofState),
         ],
       }
     }
@@ -977,13 +981,18 @@
     return proofPath.title ?? taskLabel(task)
   }
 
+  function proofPathState(task: Task, proofPath: NonNullable<Task['proofPaths']>[number]): 'verified' | 'missing' | 'planned' {
+    const label = proofPath.command?.trim() || proofPath.title?.trim() || proofPath.id?.trim()
+    if (label && task.completionProof?.verified?.includes(label)) return 'verified'
+    if (label && task.completionProof?.missing?.includes(label)) return 'missing'
+    return 'planned'
+  }
+
   function proofRank(status: string | undefined): number {
     switch (status) {
-      case 'blocked': return 0
-      case 'in_progress': return 1
-      case 'planned': return 2
-      case 'stale': return 3
-      case 'verified': return 4
+      case 'missing': return 0
+      case 'planned': return 1
+      case 'verified': return 2
       default: return 5
     }
   }

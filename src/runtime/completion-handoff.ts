@@ -16,13 +16,14 @@ export function buildCompletionHandoff(input: {
   completedBy?: string
   summary: string
   proofPaths: readonly ProofPathType[]
+  observedEvidence?: readonly VerificationRecordType[]
   residualRisk?: string
   followUpTaskIds?: readonly string[]
 }): CompletionHandoff {
   const taskProofPaths = input.proofPaths.filter((path) =>
     path.scope.type === 'task' && path.scope.id === input.taskId
   )
-  const records = taskProofPaths.flatMap((path) => path.verificationRecords)
+  const records = [...(input.observedEvidence ?? [])]
   const automatedProof = records.filter((record) => record.kind === 'automated')
   const manualProof = records.filter((record) => record.kind === 'manual' || record.kind === 'browser')
   const providerProof = records.filter((record) => record.kind === 'provider' || record.kind === 'external')
@@ -56,6 +57,7 @@ export function reviewCompletionHandoff(input: {
   taskId: string
   proofPaths: readonly ProofPathType[]
   handoff: CompletionHandoff
+  observedEvidence?: readonly VerificationRecordType[]
 }): { ok: boolean; issues: string[] } {
   const issues: string[] = []
   const taskProofPaths = input.proofPaths.filter((path) =>
@@ -67,7 +69,7 @@ export function reviewCompletionHandoff(input: {
   for (const proofPath of taskProofPaths) {
     for (const evidence of proofPath.expectedEvidence) {
       if (!evidence.required) continue
-      const passed = proofPath.verificationRecords.some((record) =>
+      const passed = (input.observedEvidence ?? []).some((record) =>
         record.evidenceId === evidence.id && record.status === 'passed'
       )
       if (!passed) {

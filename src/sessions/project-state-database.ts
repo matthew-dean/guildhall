@@ -146,6 +146,8 @@ export interface ProjectStateDatabaseSnapshot {
 export interface ProjectStateDatabaseTaskMutation {
   task: Record<string, unknown>
   summary: Record<string, unknown>
+  /** Compact row derived from the post-mutation effective task. */
+  taskSummary?: JsonRecord
   expectedQueueRevision: number
   expectedProjectRevision: number
   lastUpdated?: string | null
@@ -166,7 +168,12 @@ export interface ProjectStateDatabaseTaskMutation {
   evidence?: readonly {
     event: TaskEvidenceEventRecord
     retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+    /** Compressed history is flushed from this transactional SQLite outbox. */
+    history?: 'database' | 'outbox'
   }[]
+  /** Full normalized overlay rows committed with the task mutation. */
+  runtime?: ProjectStateDatabaseTaskRuntime | null
+  workspace?: ProjectStateDatabaseTaskRuntime | null
   /**
    * The runtime's typed decision packet for the revision this mutation will
    * create. Keeping this factory at the write boundary lets SQLite allocate
@@ -194,6 +201,12 @@ export interface ProjectStateDatabaseReleaseSelectionMutation {
   expectedQueueRevision: number
   expectedProjectRevision: number
   lastUpdated?: string | null
+  /** Revision-bound decision packet committed with this release selection. */
+  stateResolution?: (input: {
+    projectRevision: number
+    queueRevision: number
+    generatedAt: string
+  }) => ProjectStateDatabaseStateResolutionSnapshot
   /** Derived domains to enqueue with this authoritative project revision. */
   projectionDomains?: readonly string[]
 }
@@ -219,15 +232,31 @@ export interface ProjectStateDatabaseTaskBatchMutation {
   evidence?: readonly {
     event: TaskEvidenceEventRecord
     retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+    /** Compressed history is flushed from this transactional SQLite outbox. */
+    history?: 'database' | 'outbox'
   }[]
-  /** Replace runtime overlays in the same revision-guarded structural write. */
+  /** Upsert only the supplied runtime overlays in the structural transaction. */
   taskRuntimes?: readonly ProjectStateDatabaseTaskRuntime[]
+  /** Clear runtime overlays for retained tasks in the same transaction. */
+  removeTaskRuntimeIds?: readonly string[]
+  /** Upsert only the supplied workspace overlays in the structural transaction. */
+  taskWorkspaces?: readonly ProjectStateDatabaseTaskRuntime[]
+  /** Clear workspace overlays for retained tasks in the same transaction. */
+  removeTaskWorkspaceIds?: readonly string[]
+  /** Compact rows derived from post-mutation effective tasks, keyed by task id. */
+  taskSummaries?: readonly { taskId: string; summary: JsonRecord }[]
   summary: JsonRecord
   expectedQueueRevision: number
   expectedProjectRevision: number
   lastUpdated?: string | null
   /** Derived domains to enqueue with this authoritative project revision. */
   projectionDomains?: readonly string[]
+  /** Revision-bound decision packet committed with this structural state. */
+  stateResolution?: (input: {
+    projectRevision: number
+    queueRevision: number
+    generatedAt: string
+  }) => ProjectStateDatabaseStateResolutionSnapshot
 }
 
 export type ProjectStateDatabaseCapabilityState = 'planned' | 'retired'
@@ -946,6 +975,8 @@ export interface ProjectStateDatabaseTask {
   workKind: string | null
   /** Stable semantic discriminator used by compact projections, never prose. */
   semanticKind?: string | null
+  /** Release-local execution context for internal proof work. */
+  proofForReleaseId?: string | null
   parentId: string | null
   hierarchy: JsonRecord | null
   dependsOn: string[]
@@ -1308,6 +1339,11 @@ function releaseDefinitionsWithTaskMembership(
     const terminal = status === 'archived' || status === 'cancelled'
     const deferred = status === 'shelved'
     const releaseIds = stringArray(task.releaseIds)
+    const deferredReleaseIds = new Set(
+      [...byId.entries()]
+        .filter(([, release]) => stringArray(release.deferredNodeIds).includes(nodeId))
+        .map(([releaseId]) => releaseId),
+    )
     // The supplied task definition is the complete membership statement for
     // this task when the caller is applying a task edit. A full intake
     // envelope may intentionally keep deferred membership in its release
@@ -1344,7 +1380,10 @@ function releaseDefinitionsWithTaskMembership(
       const nodeIds = stringArray(release.nodeIds)
       const deferredNodeIds = stringArray(release.deferredNodeIds)
       if (!terminal) {
-        const preserveDeferredDisposition = options.clearUnlistedTaskMembership !== true && deferredNodeIds.includes(nodeId)
+        // The task compatibility field identifies releases but cannot encode
+        // included versus deferred. Preserve the normalized disposition while
+        // applying an otherwise complete point edit.
+        const preserveDeferredDisposition = deferredReleaseIds.has(releaseId)
         ;(deferred || preserveDeferredDisposition ? deferredNodeIds : nodeIds).push(nodeId)
       }
       release.nodeIds = [...new Set(nodeIds)]
@@ -3605,7 +3644,7 @@ function workItemSummary(task: JsonRecord): JsonRecord {
   const scalarKeys = [
     'id', 'title', 'description', 'orientationSummary', 'domain', 'status',
     'priority', 'revisionCount', 'updatedAt', 'completedAt', 'assignedTo',
-    'importedDraft', 'requestKind', 'requestStage', 'workKind', 'semanticKind', 'workVisibility',
+    'importedDraft', 'requestKind', 'requestStage', 'workKind', 'semanticKind', 'proofForReleaseId', 'workVisibility',
     'dependsOn', 'hierarchy', 'sourceRefs', 'blockReason',
     'recoveryCode', 'bootstrapRepairOwnership', 'persistedBlockReason', 'shelveReason', 'latestReviewerSummary',
     'terminalSummary', 'openQuestions', 'workerHandoff',
@@ -4685,7 +4724,7 @@ export function writeProjectStateDatabaseTaskMutation(
         json(stringArray(mutation.task.dependsOn)),
         EMPTY_RELEASE_MEMBERSHIP_JSON,
         json(stringArray(mutation.task.sourceRefs ?? mutation.task.references)),
-        json(workItemSummary(mutation.task)),
+        json(mutation.taskSummary ?? workItemSummary(mutation.task)),
         '{}',
         stringValue(mutation.task.updatedAt),
         stringValue(mutation.task.completedAt),
@@ -4696,6 +4735,9 @@ export function writeProjectStateDatabaseTaskMutation(
       }
       syncTaskDependencies(database, [mutation.task])
       syncTaskCapabilityBindings(database, [mutation.task])
+
+      applyTaskOverlayMutation(database, 'task_execution', taskId, mutation.runtime)
+      applyTaskOverlayMutation(database, 'task_workspace', taskId, mutation.workspace)
 
       // A task edit may legitimately assign or unassign the task from a
       // release. Normalize that relationship in this same transaction. The
@@ -5018,6 +5060,11 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
         projectionDomains: mutation.projectionDomains,
         summaryFreshness: 'preserve',
       })
+      const stateResolution = mutation.stateResolution?.({
+        projectRevision: revision,
+        queueRevision: revision,
+        generatedAt,
+      })
       finalizeReleaseMembershipState(database, revision, generatedAt)
       database.prepare(`
         UPDATE queue_state
@@ -5089,8 +5136,16 @@ export function writeProjectStateDatabaseTaskBatchMutation(
     mutation.executionPlanActions !== undefined ||
     mutation.scopeAuthorityRequests !== undefined
   const hasCapabilityMutation = mutation.sourceCapabilities !== undefined
-  if (changedTaskIds.size === 0 && removedTaskIds.length === 0 && !hasEnvelopeMutation && !hasCapabilityMutation && mutation.taskRuntimes === undefined) {
+  if (changedTaskIds.size === 0 && removedTaskIds.length === 0 && !hasEnvelopeMutation && !hasCapabilityMutation &&
+      mutation.taskRuntimes === undefined && mutation.removeTaskRuntimeIds === undefined &&
+      mutation.taskWorkspaces === undefined && mutation.removeTaskWorkspaceIds === undefined && mutation.evidence === undefined) {
     throw new Error('Targeted task batch mutations require a task, runtime overlay, capability catalog, or queue-envelope change')
+  }
+  const taskSummaries = new Map<string, JsonRecord>()
+  for (const entry of mutation.taskSummaries ?? []) {
+    if (!entry.taskId) throw new Error('Targeted task batch summaries require task ids')
+    if (taskSummaries.has(entry.taskId)) throw new Error(`Targeted task batch mutations received duplicate task summary ${entry.taskId}`)
+    taskSummaries.set(entry.taskId, { ...entry.summary })
   }
 
   const database = openDatabase(projectStateDatabasePathFromTasksPath(tasksPath))
@@ -5216,11 +5271,19 @@ export function writeProjectStateDatabaseTaskBatchMutation(
           json(stringArray(task.dependsOn)),
           EMPTY_RELEASE_MEMBERSHIP_JSON,
           json(stringArray(task.sourceRefs ?? task.references)),
-          json(workItemSummary(task)),
+          json(taskSummaries.get(String(task.id)) ?? workItemSummary(task)),
           '{}',
           stringValue(task.updatedAt),
           stringValue(task.completedAt),
         )
+      }
+      const updateTaskSummary = database.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?')
+      for (const [taskId, summary] of taskSummaries) {
+        if (changedTaskIds.has(taskId)) continue
+        const result = updateTaskSummary.run(json(summary), taskId)
+        if (Number(result.changes ?? 0) === 0) {
+          throw new Error(`Cannot update compact summary for unknown work item ${taskId}`)
+        }
       }
       syncTaskDependencies(database, changedTasks)
       normalizedReleaseDefinitions ??= releaseDefinitionsWithTaskMembership(
@@ -5243,8 +5306,17 @@ export function writeProjectStateDatabaseTaskBatchMutation(
         database.prepare('DELETE FROM work_items WHERE id = ?').run(taskId)
       }
       syncTaskCapabilityBindings(database, changedTasks)
-      if (mutation.taskRuntimes !== undefined) {
-        replaceTaskOverlayRowsInDatabase(database, 'task_execution', mutation.taskRuntimes)
+      for (const runtime of mutation.taskRuntimes ?? []) {
+        applyTaskOverlayMutation(database, 'task_execution', runtime.taskId, runtime)
+      }
+      for (const taskId of mutation.removeTaskRuntimeIds ?? []) {
+        if (!removedTaskIds.includes(taskId)) applyTaskOverlayMutation(database, 'task_execution', taskId, null)
+      }
+      for (const workspace of mutation.taskWorkspaces ?? []) {
+        applyTaskOverlayMutation(database, 'task_workspace', workspace.taskId, workspace)
+      }
+      for (const taskId of mutation.removeTaskWorkspaceIds ?? []) {
+        if (!removedTaskIds.includes(taskId)) applyTaskOverlayMutation(database, 'task_workspace', taskId, null)
       }
 
       const scopeRows = mutation.scopeRows ?? []
@@ -5311,6 +5383,11 @@ export function writeProjectStateDatabaseTaskBatchMutation(
         projectionDomains: mutation.projectionDomains,
         summaryFreshness: 'preserve',
       })
+      const stateResolution = mutation.stateResolution?.({
+        projectRevision: revision,
+        queueRevision: revision,
+        generatedAt,
+      })
       finalizeReleaseMembershipState(database, revision, generatedAt)
       const upsertDetail = database.prepare(`
         INSERT INTO work_item_detail (task_id, revision, payload_gzip)
@@ -5361,6 +5438,9 @@ export function writeProjectStateDatabaseTaskBatchMutation(
       )
       syncProjectPlanSnapshot(database, approvedPlan, generatedAt, revision)
       writeProjectOrientationProjection(database, orientation, generatedAt, revision, { preserveOmitted: true })
+      if (stateResolution) {
+        writeProjectStateResolution(database, stateResolution, revision, revision)
+      }
       for (const entry of mutation.evidence ?? []) {
         const durable = compactTaskEvidenceEvent(TaskEvidenceEvent.parse({ ...entry.event }))
         const retention = validateTaskEvidenceRetention(entry.retention)
@@ -6738,6 +6818,11 @@ function withDatabase(projectRoot: string, work: (database: DatabaseSync) => voi
 function withWritableDatabase(projectRoot: string, work: (database: DatabaseSync) => void): void {
   const databasePath = projectStateDatabasePath(projectRoot)
   if (!existsSync(databasePath)) ensureProjectLocalHistoryDir(projectRoot)
+  withWritableDatabaseAtPath(databasePath, work)
+}
+
+function withWritableDatabaseAtPath(databasePath: string, work: (database: DatabaseSync) => void): void {
+  mkdirSync(dirname(databasePath), { recursive: true })
   const database = openDatabase(databasePath)
   try {
     transaction(database, () => work(database))
@@ -7776,6 +7861,23 @@ export function readProjectStateDatabaseTaskEvidenceAuthority(
   }
 }
 
+export function readProjectStateDatabaseTaskEvidenceAuthorityFromTasksPath(
+  tasksPath: string,
+): ProjectStateDatabaseTaskEvidenceAuthority | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readProjectStateDatabaseTaskEvidenceAuthorityFromDatabase(database)
+  } finally {
+    database.close()
+  }
+}
+
 /** Read project and evidence authority plus the project revision together. */
 export function readProjectStateDatabaseTaskEvidenceBoundary(
   projectRoot: string,
@@ -7873,6 +7975,86 @@ export function upsertProjectStateDatabaseTaskRuntime(
   input: ProjectStateDatabaseTaskRuntime,
 ): void {
   upsertProjectStateDatabaseTaskRuntimes(projectRoot, [input])
+}
+
+function patchProjectStateDatabaseTaskOverlay(
+  projectRoot: string,
+  table: ProjectStateDatabaseTaskOverlayTable,
+  domain: ProjectStateDomain,
+  taskId: string,
+  patch: JsonRecord,
+  updatedAt: string,
+): JsonRecord {
+  let result: JsonRecord = {}
+  withWritableDatabase(projectRoot, database => {
+    const row = database.prepare(`SELECT payload_json FROM ${table} WHERE task_id = ?`).get(taskId) as JsonRecord | undefined
+    const current = parseJson<JsonRecord>(row?.payload_json, {})
+    const next: JsonRecord = { ...current }
+    for (const [key, value] of Object.entries(patch)) {
+      if (key === 'taskId' || key === 'updatedAt') continue
+      if (value === undefined) delete next[key]
+      else next[key] = value
+    }
+    next.taskId = taskId
+    next.updatedAt = updatedAt
+    applyTaskOverlayMutation(database, table, taskId, {
+      taskId,
+      updatedAt,
+      payload: next,
+    })
+    commitAuthoritativeMutation(database, {
+      updatedAt,
+      domains: [domain],
+      projectRoot,
+    })
+    result = next
+  })
+  return result
+}
+
+/** Atomically merge one promoted runtime row without reading the aggregate store. */
+export function patchProjectStateDatabaseTaskRuntime(
+  projectRoot: string,
+  taskId: string,
+  patch: JsonRecord,
+  updatedAt: string,
+): JsonRecord {
+  return patchProjectStateDatabaseTaskOverlay(projectRoot, 'task_execution', 'task-runtime', taskId, patch, updatedAt)
+}
+
+/** Atomically merge one promoted workspace row without reading the aggregate store. */
+export function patchProjectStateDatabaseTaskWorkspace(
+  projectRoot: string,
+  taskId: string,
+  patch: JsonRecord,
+  updatedAt: string,
+): JsonRecord {
+  return patchProjectStateDatabaseTaskOverlay(projectRoot, 'task_workspace', 'workspace', taskId, patch, updatedAt)
+}
+
+function clearProjectStateDatabaseTaskOverlay(
+  projectRoot: string,
+  table: ProjectStateDatabaseTaskOverlayTable,
+  domain: ProjectStateDomain,
+  taskId: string,
+): void {
+  withWritableDatabase(projectRoot, database => {
+    const removed = database.prepare(`DELETE FROM ${table} WHERE task_id = ?`).run(taskId)
+    if (Number(removed.changes ?? 0) === 0) return
+    commitAuthoritativeMutation(database, {
+      updatedAt: new Date().toISOString(),
+      domains: [domain],
+      projectRoot,
+    })
+  })
+}
+
+export function clearProjectStateDatabaseTaskRuntime(projectRoot: string, taskId: string): void {
+  clearProjectStateDatabaseTaskOverlay(projectRoot, 'task_execution', 'task-runtime', taskId)
+}
+
+export function clearProjectStateDatabaseTaskWorkspace(projectRoot: string, taskId: string): void {
+  clearProjectStateDatabaseTaskOverlay(projectRoot, 'task_workspace', 'workspace', taskId)
 }
 
 export function upsertProjectStateDatabaseTaskRuntimes(
@@ -7976,6 +8158,29 @@ function syncProjectStateDatabaseTaskOverlay(
   })
 }
 
+function applyTaskOverlayMutation(
+  database: DatabaseSync,
+  table: ProjectStateDatabaseTaskOverlayTable,
+  taskId: string,
+  state: ProjectStateDatabaseTaskRuntime | null | undefined,
+): void {
+  if (state === undefined) return
+  if (state === null) {
+    database.prepare(`DELETE FROM ${table} WHERE task_id = ?`).run(taskId)
+    return
+  }
+  if (state.taskId !== taskId) {
+    throw new Error(`Task overlay mutation for ${taskId} cannot write ${state.taskId}`)
+  }
+  database.prepare(`
+    INSERT INTO ${table} (task_id, updated_at, payload_json)
+    VALUES (?, ?, ?)
+    ON CONFLICT(task_id) DO UPDATE SET
+      updated_at = excluded.updated_at,
+      payload_json = excluded.payload_json
+  `).run(taskId, state.updatedAt ?? new Date().toISOString(), json(state.payload))
+}
+
 /** Replace the mutable runtime overlay; missing rows mean the state was cleared. */
 export function replaceProjectStateDatabaseTaskRuntimes(
   projectRoot: string,
@@ -7997,25 +8202,24 @@ export function upsertProjectStateDatabaseTaskWorkspaces(
 ): void {
   if (inputs.length === 0) return
   withWritableDatabase(projectRoot, database => {
-    const upsert = database.prepare(`
-      INSERT INTO task_workspace (task_id, updated_at, payload_json)
-      VALUES (?, ?, ?)
-      ON CONFLICT(task_id) DO UPDATE SET
-        updated_at = excluded.updated_at,
-        payload_json = excluded.payload_json
-    `)
-    for (const input of inputs) {
-      upsert.run(input.taskId, input.updatedAt ?? new Date().toISOString(), json(input.payload))
-    }
-    const updatedAt = inputs.reduce((latest, input) => {
-      const value = input.updatedAt ?? latest
-      return value > latest ? value : latest
-    }, new Date().toISOString())
-    commitAuthoritativeMutation(database, {
-      updatedAt,
-      domains: ['workspace'],
-      projectRoot,
-    })
+    upsertTaskWorkspacesInDatabase(database, inputs, projectRoot)
+  })
+}
+
+function upsertTaskWorkspacesInDatabase(
+  database: DatabaseSync,
+  inputs: readonly ProjectStateDatabaseTaskRuntime[],
+  projectRoot: string,
+): void {
+  for (const input of inputs) applyTaskOverlayMutation(database, 'task_workspace', input.taskId, input)
+  const updatedAt = inputs.reduce((latest, input) => {
+    const value = input.updatedAt ?? latest
+    return value > latest ? value : latest
+  }, new Date().toISOString())
+  commitAuthoritativeMutation(database, {
+    updatedAt,
+    domains: ['workspace'],
+    projectRoot,
   })
 }
 
@@ -8079,6 +8283,24 @@ export function upsertProjectStateDatabaseTaskProofs(
       domains: ['evidence'],
       projectRoot,
     })
+  })
+}
+
+/**
+ * Refresh bounded current-evidence display without creating proof, history, or
+ * a project revision. This is used for audit-only notes while compressed
+ * history still owns their detail ledger.
+ */
+export function upsertProjectStateDatabaseTaskEvidenceCurrent(
+  projectRoot: string,
+  input: ProjectStateDatabaseTaskProof,
+): void {
+  withWritableDatabase(projectRoot, database => {
+    const payload = compactTaskEvidencePayload(
+      input.kind as Parameters<typeof compactTaskEvidencePayload>[0],
+      isRecord(input.payload) ? input.payload : {},
+    )
+    upsertCurrentTaskEvidence(database, { ...input, payload })
   })
 }
 
@@ -8171,31 +8393,40 @@ export function appendProjectStateDatabaseTaskEvidence(
   const durable = compactTaskEvidenceEvent(TaskEvidenceEvent.parse({ ...event }))
   const bounded = validateTaskEvidenceRetention(retention)
   withWritableDatabase(projectRoot, database => {
-    upsertTaskProofAndCurrentEvidence(database, {
-      id: durable.id,
-      taskId: durable.taskId,
-      kind: durable.kind,
-      recordedAt: durable.recordedAt,
-      payload: durable.payload,
-    })
-    appendTaskEvidenceHistory(database, durable, bounded)
-    // Notes are journal/audit material. They are intentionally prohibited
-    // from deciding readiness, scope, proof, or execution, so storing one
-    // must not manufacture a new project revision or invalidate the shared
-    // decision packet. Decision-bearing evidence kinds take the revisioned
-    // path below and are projected through the packet boundary.
-    if (durable.kind === 'note') return
-    commitAuthoritativeMutation(database, {
-      updatedAt: durable.recordedAt,
-      domains: ['evidence'],
-      // Evidence changes can alter proof blockers and release scope rows.
-      // Mark this as an evidence projection so the projector reopens the
-      // bounded current-evidence rows instead of taking the index-only path.
-      projectionDomains: ['evidence'],
-      projectRoot,
-    })
+    appendTaskEvidenceToDatabase(database, durable, bounded, projectRoot)
   })
   return durable
+}
+
+function appendTaskEvidenceToDatabase(
+  database: DatabaseSync,
+  durable: TaskEvidenceEventRecord,
+  retention: ProjectStateDatabaseTaskEvidenceRetentionInput,
+  projectRoot: string,
+): void {
+  upsertTaskProofAndCurrentEvidence(database, {
+    id: durable.id,
+    taskId: durable.taskId,
+    kind: durable.kind,
+    recordedAt: durable.recordedAt,
+    payload: durable.payload,
+  })
+  appendTaskEvidenceHistory(database, durable, retention)
+  // Notes are journal/audit material. They are intentionally prohibited
+  // from deciding readiness, scope, proof, or execution, so storing one
+  // must not manufacture a new project revision or invalidate the shared
+  // decision packet. Decision-bearing evidence kinds take the revisioned
+  // path below and are projected through the packet boundary.
+  if (durable.kind === 'note') return
+  commitAuthoritativeMutation(database, {
+    updatedAt: durable.recordedAt,
+    domains: ['evidence'],
+    // Evidence changes can alter proof blockers and release scope rows.
+    // Mark this as an evidence projection so the projector reopens the
+    // bounded current-evidence rows instead of taking the index-only path.
+    projectionDomains: ['evidence'],
+    projectRoot,
+  })
 }
 
 /**
@@ -8303,6 +8534,68 @@ export function readProjectStateDatabaseTaskEvidenceHistory(
   } finally {
     database.close()
   }
+}
+
+/** Read evidence rows committed as a compressed-history outbox through a task handle. */
+export function readProjectStateDatabaseTaskEvidenceOutbox(
+  tasksPath: string,
+  taskId?: string,
+): TaskEvidenceEventRecord[] {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return []
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'task_evidence_history')) return []
+    const rows = database.prepare(taskId
+      ? `SELECT task_id, kind, evidence_id, recorded_at, payload_json
+         FROM task_evidence_history WHERE task_id = ?
+         ORDER BY recorded_at ASC, evidence_id ASC`
+      : `SELECT task_id, kind, evidence_id, recorded_at, payload_json
+         FROM task_evidence_history ORDER BY task_id ASC, recorded_at ASC, evidence_id ASC`)
+      .all(...(taskId ? [taskId] : [])) as JsonRecord[]
+    return rows.flatMap(row => {
+      const rowTaskId = stringValue(row.task_id)
+      const kind = stringValue(row.kind)
+      const id = stringValue(row.evidence_id)
+      const recordedAt = stringValue(row.recorded_at)
+      if (!rowTaskId || !kind || !id || !recordedAt) return []
+      const parsed = TaskEvidenceEvent.safeParse({
+        id,
+        taskId: rowTaskId,
+        kind,
+        recordedAt,
+        payload: parseJson<JsonRecord>(row.payload_json, {}),
+      })
+      return parsed.success ? [parsed.data] : []
+    })
+  } finally {
+    database.close()
+  }
+}
+
+/** Acknowledge compressed-history outbox rows only after their mirror write succeeds. */
+export function acknowledgeProjectStateDatabaseTaskEvidenceOutbox(
+  tasksPath: string,
+  events: readonly Pick<TaskEvidenceEventRecord, 'taskId' | 'kind' | 'id' | 'recordedAt' | 'payload'>[],
+): void {
+  if (events.length === 0) return
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  withWritableDatabaseAtPath(databasePath, database => {
+    const remove = database.prepare(
+      'DELETE FROM task_evidence_history WHERE task_id = ? AND kind = ? AND evidence_id = ? AND recorded_at = ? AND payload_json = ?',
+    )
+    for (const event of events) remove.run(
+      event.taskId,
+      event.kind,
+      event.id,
+      event.recordedAt,
+      json(event.payload),
+    )
+  })
 }
 
 /** Read the complete bounded SQLite evidence ledger for a one-time migration. */
@@ -9936,6 +10229,7 @@ function compactTaskFromRow(row: ProjectStateDatabaseTask): JsonRecord {
     ...(row.priority ? { priority: row.priority } : {}),
     ...(row.workKind ? { workKind: row.workKind } : {}),
     ...(row.semanticKind ? { semanticKind: row.semanticKind } : {}),
+    ...(row.proofForReleaseId ? { proofForReleaseId: row.proofForReleaseId } : {}),
     ...(row.parentId || row.hierarchy ? { hierarchy: { ...(row.hierarchy ?? {}), ...(row.parentId ? { parentId: row.parentId } : {}) } } : {}),
     ...(row.dependsOn.length > 0 ? { dependsOn: row.dependsOn } : {}),
     ...(row.releaseIds.length > 0 ? { releaseIds: row.releaseIds } : {}),

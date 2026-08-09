@@ -6,7 +6,9 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
   appendTaskEvidence,
+  flushTaskEvidenceOutboxForTasksPath,
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+  readProjectStateDatabaseTaskEvidenceAuthorityFromTasksPath,
 } from '@guildhall/sessions'
 import type { HardGate } from '@guildhall/core'
 import {
@@ -130,6 +132,13 @@ async function persistGateResultsForCurrentTask(input: {
         : input.cwd
     const databaseAuthority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) === 'database'
     const nextTask = structuredClone(task)
+    const events = input.results.map((result) => ({
+      id: `${taskId}-gate-${result.gateId}-${result.checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
+      taskId,
+      kind: 'gate_result' as const,
+      recordedAt: result.checkedAt,
+      payload: result,
+    }))
     if (!databaseAuthority) {
       const resultIds = new Set(input.results.map((result) => result.gateId))
       const existingGateResults = Array.isArray(nextTask['gateResults'])
@@ -143,26 +152,28 @@ async function persistGateResultsForCurrentTask(input: {
         )
         : []
       nextTask['gateResults'] = [...existingGateResults, ...input.results]
+      recordCommandProofPathResults(nextTask, input.gates, input.results)
     }
-    recordCommandProofPathResults(nextTask, input.gates, input.results)
     const proofContractFailureIds = input.results
       .filter((result) => !commandResultSatisfiesProofContract(nextTask, input.gates, result))
       .map((result) => result.gateId)
     const now = new Date().toISOString()
     nextTask['updatedAt'] = now
     if (databaseAuthority) {
-      const proofPathsChanged = JSON.stringify(task['proofPaths']) !== JSON.stringify(nextTask['proofPaths'])
-      if (proofPathsChanged) {
-        const pointMutation = writePromotedTaskDetailMutation(tasksPath, taskId, {
-          projectId: path.basename(projectRoot),
-          projectRoot,
-          mutate: (current) => ({
-            ...current,
-            proofPaths: nextTask['proofPaths'],
-            updatedAt: now,
-          }),
-        })
-        if (!pointMutation) throw new Error(`Could not persist promoted gate proof paths for task ${taskId}`)
+      const evidenceAuthority = readProjectStateDatabaseTaskEvidenceAuthorityFromTasksPath(tasksPath)
+      const pointMutation = writePromotedTaskDetailMutation(tasksPath, taskId, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+        mutate: (current) => ({ ...current, updatedAt: now }),
+        evidence: events.map((event) => ({
+          event,
+          retention: { maxRecords: 32, maxBytes: 64 * 1024 },
+          ...(evidenceAuthority === 'compressed' ? { history: 'outbox' as const } : {}),
+        })),
+      })
+      if (!pointMutation) throw new Error(`Could not persist promoted gate evidence for task ${taskId}`)
+      if (evidenceAuthority === 'compressed') {
+        await flushTaskEvidenceOutboxForTasksPath(tasksPath, taskId)
       }
     } else {
       queue.tasks[queue.tasks.findIndex((candidate) => candidate['id'] === taskId)] = nextTask
@@ -174,14 +185,9 @@ async function persistGateResultsForCurrentTask(input: {
       })
     }
 
-    await Promise.all(input.results.map((result) =>
-      appendTaskEvidence(projectRoot, taskId, {
-        id: `${taskId}-gate-${result.gateId}-${result.checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
-        kind: 'gate_result',
-        recordedAt: result.checkedAt,
-        payload: result,
-      }),
-    ))
+    if (!databaseAuthority) {
+      await Promise.all(events.map((event) => appendTaskEvidence(projectRoot, taskId, event)))
+    }
     return { persisted: true, proofContractFailureIds }
   } catch (error) {
     throw error instanceof Error ? error : new Error(String(error))

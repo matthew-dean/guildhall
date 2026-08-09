@@ -213,12 +213,12 @@ export class GuildhallAgent {
    * (concatenation of text blocks in the final assistant message) along with
    * the full message list and usage snapshot.
    */
-  async generate(prompt: string): Promise<GenerateResult> {
+  async generate(prompt: string | ConversationMessage): Promise<GenerateResult> {
     return await this.generateWithEvents(prompt)
   }
 
   async generateWithEvents(
-    prompt: string,
+    prompt: string | ConversationMessage,
     onEvent?: (event: StreamEvent) => void | Promise<void>,
     opts?: { signal?: AbortSignal | undefined },
   ): Promise<GenerateResult> {

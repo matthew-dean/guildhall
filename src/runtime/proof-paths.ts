@@ -40,6 +40,8 @@ type CommandProofPath = TaskProofPath & {
   updatedBy?: string
 }
 
+const generatedAcceptanceReviewProofSuffix = '-acceptance-review-proof'
+
 export function stableProofPathId(value: Record<string, unknown>, index: number): string {
   const existing = typeof value.id === 'string' ? value.id.trim() : ''
   if (existing) return existing
@@ -233,7 +235,81 @@ export function ensureCommandProofPathsFromAcceptanceCriteria(
     }))
   }
 
-  return reconciled
+  return ensureReviewProofPathsFromAcceptanceCriteria(
+    { ...task, proofPaths: reconciled },
+    now,
+    createdBy,
+  )
+}
+
+/**
+ * Keep explicit reviewer-owned criteria addressable in the same proof packet
+ * as command evidence. Existing authored review paths win; this adds one
+ * generated path only for criterion IDs that would otherwise be invisible to
+ * reviewers and worker handoff contracts.
+ */
+export function ensureReviewProofPathsFromAcceptanceCriteria(
+  task: Task,
+  now: string,
+  createdBy = 'acceptance-review-proof',
+): NonNullable<Task['proofPaths']> {
+  const paths = Array.isArray(task.proofPaths) ? [...task.proofPaths] : []
+  const generatedId = `${task.id}${generatedAcceptanceReviewProofSuffix}`
+  const generatedIndex = paths.findIndex(path => path.id === generatedId)
+  const authoredPaths = paths.filter((_, index) => index !== generatedIndex)
+  const representedIds = new Set(authoredPaths
+    .flatMap(path => path.expectedEvidence ?? [])
+    .flatMap(evidence =>
+      evidence && typeof evidence === 'object' && 'id' in evidence && typeof evidence.id === 'string'
+        ? [evidence.id]
+        : [],
+    ))
+  const criteria = task.acceptanceCriteria.filter(criterion =>
+    (criterion.verifiedBy === 'review' || criterion.verifiedBy === 'human') &&
+    !representedIds.has(criterion.id),
+  )
+
+  if (criteria.length === 0) return authoredPaths
+
+  const previous = generatedIndex >= 0 ? paths[generatedIndex] : undefined
+  const expectedEvidence = criteria.map(criterion => ExpectedEvidence.parse({
+    id: criterion.id,
+    kind: 'manual',
+    description: criterion.description,
+    required: true,
+  }))
+  const title = `Review ${criteria.map(criterion => criterion.id).join(', ')}`
+  const summary = criteria.map(criterion => criterion.description).join(' ')
+  const source = criteria.every(criterion => criterion.source === 'documented')
+    ? 'documented' as const
+    : 'inferred' as const
+  if (previous &&
+      previous.kind === 'review' &&
+      previous.title === title &&
+      previous.summary === summary &&
+      previous.source === source &&
+      JSON.stringify(previous.expectedEvidence ?? []) === JSON.stringify(expectedEvidence)) {
+    return [...authoredPaths, previous]
+  }
+  const next = ProofPath.parse({
+    ...(previous ?? {}),
+    id: generatedId,
+    scope: { type: 'task', id: task.id },
+    title,
+    summary,
+    kind: 'review',
+    source,
+    status: 'planned',
+    launchSteps: [],
+    expectedEvidence,
+    verificationRecords: [],
+    relatedTaskIds: [task.id],
+    createdAt: previous?.createdAt ?? now,
+    updatedAt: now,
+    createdBy: previous?.createdBy ?? createdBy,
+    updatedBy: createdBy,
+  })
+  return [...authoredPaths, next]
 }
 
 function isGeneratedCommandProofPath(
@@ -274,9 +350,6 @@ function dedupeCommandProofPaths(
     for (const item of path.expectedEvidence ?? []) evidence.set(item.id, item)
     primary.expectedEvidence = [...evidence.values()]
 
-    const records = new Map((primary.verificationRecords ?? []).map(item => [item.id, item]))
-    for (const item of path.verificationRecords ?? []) records.set(item.id, item)
-    primary.verificationRecords = [...records.values()]
     // Two equivalent command rows mean the old state had competing proof
     // authorities. Keep one row, but require a fresh run to establish it.
     primary.status = 'planned'
@@ -370,8 +443,8 @@ export function replaceGenericProjectProofPathsWithSetup(
 
 export function recordCommandProofPathResults(
   task: Pick<Task, 'proofPaths'>,
-  gates: Array<{ id: string; command: string }>,
-  results: Array<{
+  _gates: Array<{ id: string; command: string }>,
+  _results: Array<{
     gateId: string
     type: 'hard' | 'soft'
     passed: boolean
@@ -380,68 +453,27 @@ export function recordCommandProofPathResults(
     output?: string
     checkedAt: string
   }>,
-  recordedBy = 'run-gates',
-  executionRoot?: 'task_worktree' | 'project_checkout',
+  _recordedBy = 'run-gates',
+  _executionRoot?: 'task_worktree' | 'project_checkout',
 ): void {
   if (!Array.isArray(task.proofPaths)) return
-  const commandById = new Map(gates.map((gate) => [gate.id, comparableCommand(gate.command)]))
-
   for (const [index, proofPath] of task.proofPaths.entries()) {
     if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) continue
     const pathRecord = proofPath as Record<string, unknown>
     if (pathRecord.kind !== 'command') continue
     const proofPathId = stableProofPathId(pathRecord, index)
     if (typeof pathRecord.id !== 'string' || !pathRecord.id.trim()) pathRecord.id = proofPathId
-    const proofCommand = comparableCommand(pathRecord.command)
-    if (!proofCommand) continue
-    const result = results.find((candidate) => {
-      const gateCommand = commandById.get(candidate.gateId) ?? ''
-      return candidate.gateId === pathRecord.id || gateCommand === proofCommand
-    })
-    if (!result) continue
-
     const expectedEvidence = Array.isArray(pathRecord.expectedEvidence) ? pathRecord.expectedEvidence : []
-    const existingRecords = Array.isArray(pathRecord.verificationRecords)
-      ? pathRecord.verificationRecords.filter((record): record is Record<string, unknown> =>
-          Boolean(record) && typeof record === 'object' && !Array.isArray(record),
-        )
-      : []
-    let records = existingRecords
-    const evidenceItems = expectedEvidence.length > 0
-      ? expectedEvidence
-      : [{ id: `${proofPathId}-evidence-0`, description: proofCommand }]
-    const contractPassed = commandResultSatisfiesProofContract(task, gates, result)
-    for (const [evidenceIndex, rawEvidence] of evidenceItems.entries()) {
+    const evidenceItems = expectedEvidence.length > 0 ? expectedEvidence : []
+    pathRecord.expectedEvidence = evidenceItems.map((rawEvidence, evidenceIndex) => {
       const evidence = rawEvidence && typeof rawEvidence === 'object' && !Array.isArray(rawEvidence)
         ? rawEvidence as Record<string, unknown>
         : { id: `${proofPathId}-evidence-${evidenceIndex}`, description: String(rawEvidence) }
       const evidenceId = typeof evidence.id === 'string' && evidence.id.trim()
         ? evidence.id.trim()
         : `${proofPathId}-evidence-${evidenceIndex}`
-      const record = {
-        id: `command-proof-${evidenceId}-${result.checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
-        evidenceId,
-        kind: 'automated',
-        status: contractPassed ? 'passed' : 'failed',
-        summary: contractPassed
-          ? `Observed command passed: ${proofCommand}`
-          : `Observed command failed: ${proofCommand}`,
-        command: proofCommand,
-        ...(executionRoot ? { executionRoot } : {}),
-        recordedAt: result.checkedAt,
-        recordedBy,
-        evidenceRefs: [],
-      }
-      records = [...records.filter((candidate) => candidate.evidenceId !== evidenceId), record]
-    }
-
-    pathRecord.verificationRecords = records
-    const requiredEvidence = evidenceItems.filter((evidence) =>
-      !(evidence && typeof evidence === 'object' && !Array.isArray(evidence) && (evidence as Record<string, unknown>).required === false),
-    )
-    pathRecord.status = contractPassed && requiredEvidence.length > 0 ? 'verified' : 'blocked'
-    pathRecord.updatedAt = result.checkedAt
-    pathRecord.updatedBy = recordedBy
+      return { ...evidence, id: evidenceId }
+    })
   }
 }
 
@@ -499,7 +531,7 @@ export function buildProofPathContext(proofPaths: readonly ProofPath[]): string 
   for (const path of paths) {
     lines.push(`### ${path.title}`)
     lines.push(`- Scope: ${path.scope.type}:${path.scope.id}`)
-    lines.push(`- Status: ${path.status}`)
+    lines.push('- Role: expected proof')
     lines.push(`- Summary: ${path.summary}`)
     if (path.launchSteps.length > 0) {
       lines.push('- Launch steps:')
@@ -514,14 +546,6 @@ export function buildProofPathContext(proofPaths: readonly ProofPath[]): string 
         ].filter(Boolean).join('; ')
         lines.push(`  - ${evidence.kind} ${evidence.required ? 'required' : 'optional'}: ${evidence.description}${evidence.sourceRef ? ` (${evidence.sourceRef})` : ''}${expectation ? ` [${expectation}]` : ''}`)
       }
-    }
-    if (path.verificationRecords.length > 0) {
-      lines.push('- Verification records:')
-      for (const record of path.verificationRecords) {
-        lines.push(`  - ${record.kind} ${record.status}: ${record.summary}${record.command ? ` [${record.command}]` : ''}${record.url ? ` [${record.url}]` : ''}`)
-      }
-    } else {
-      lines.push('- No verification records yet.')
     }
     lines.push('')
   }

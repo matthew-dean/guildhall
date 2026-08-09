@@ -240,6 +240,30 @@ describe('review contracts', () => {
     })).toBeNull()
   })
 
+  it('rejects an unsatisfied target that cannot produce a typed worker action', () => {
+    const result = readStructuredReviewResult(JSON.stringify({
+      verdict: 'revise',
+      acceptedCriteriaIds: [],
+      proofEvidenceIds: [],
+      findings: [{
+        targetKind: 'acceptance_criterion',
+        targetId: 'ac-visual',
+        disposition: 'unsatisfied',
+        evidenceRefs: [],
+      }],
+      revisionItems: ['Model-authored prose must not become the worker instruction.'],
+      riskItems: [],
+      followUpItems: [],
+      advisoryScores: {},
+    }))
+
+    expect(result).not.toBeNull()
+    expect(validateStructuredReviewResultTargets(result!, {
+      acceptanceCriterionIds: ['ac-visual'],
+      proofEvidenceIds: [],
+    })).toBeNull()
+  })
+
   it('does not promote a legacy revision sentence into a target finding', () => {
     const legacy = readStructuredReviewResult(JSON.stringify({
       verdict: 'revise',

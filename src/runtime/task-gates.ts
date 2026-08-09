@@ -125,6 +125,7 @@ function packageScriptReferenceForCommand(
   projectPath: string,
 ): { script: string; parsed: NonNullable<ReturnType<typeof readPackageScripts>> } | null {
   const normalized = normalizeCommand(command)
+  if (!/^pnpm\s+/i.test(normalized)) return null
   const dirMatch = /^pnpm\s+--dir\s+(\S+)\s+(.+)$/i.exec(normalized)
   const targetPath = dirMatch ? path.resolve(projectPath, dirMatch[1]!) : projectPath
   const scriptCommand = dirMatch?.[2] ?? normalized.replace(/^pnpm\s+/i, '')

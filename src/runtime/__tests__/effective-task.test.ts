@@ -229,7 +229,7 @@ describe('effective task projection', () => {
     }
   })
 
-  it('can build current task state without reopening historical evidence files', async () => {
+  it('can build current proof state without reopening historical evidence files', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-current-'))
     await appendTaskEvidence(projectRoot, 'task-auth-complete', {
       id: 'note-current',
@@ -253,8 +253,8 @@ describe('effective task projection', () => {
 
     const effective = await buildEffectiveTask(projectRoot, legacyTask(), { evidence: 'current' })
 
-    expect(effective.evidence.map(event => event.kind)).toEqual(['note', 'gate_result'])
-    expect(effective.notes).toEqual([expect.objectContaining({ content: 'Current projection note.' })])
+    expect(effective.evidence.map(event => event.kind)).toEqual(['gate_result'])
+    expect(effective.notes).toEqual([])
     expect(effective.gateResults).toEqual([{
       gateId: 'build',
       type: 'hard',

@@ -337,8 +337,10 @@ describe('applyDeterministicVerdict', () => {
       verdict: v,
       now: '2026-04-21T00:00:00Z',
       llmError: 'connection refused',
+      llmFailureCode: 'provider_timeout',
     })
     expect(q.tasks[0]!.reviewVerdicts[0]!.llmError).toBe('connection refused')
+    expect(q.tasks[0]!.reviewVerdicts[0]!.failureCode).toBe('provider_timeout')
   })
 
   it('throws when the taskId is not in the queue', () => {
@@ -594,7 +596,7 @@ describe('recordLlmVerdict', () => {
     expect(result?.normalizedStatus).toBe('in_progress')
   })
 
-  it('records approved review evidence on the review proof path', () => {
+  it('records approved review evidence on the typed verdict while leaving the proof path expectation-only', () => {
     const q = baseQueue()
     q.tasks[0]!.proofPaths = [{
       kind: 'review',
@@ -607,7 +609,16 @@ describe('recordLlmVerdict', () => {
     q.tasks[0]!.notes.push({
       agentId: 'reviewer-agent',
       role: 'reviewer',
-      content: '**Rubric**\n- acceptance-criteria-met: yes\n\n**Proof path:** no\n\n**Verdict:** Approved\n\n```json\n{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":["scope"]}\n```',
+      content: 'Approved in arbitrary reviewer prose that Guildhall must not parse.',
+      structured: {
+        verdict: 'approve',
+        acceptedCriteriaIds: [],
+        proofEvidenceIds: ['scope'],
+        revisionItems: [],
+        riskItems: [],
+        followUpItems: [],
+        advisoryScores: {},
+      },
       timestamp: 't1',
     })
 
@@ -619,10 +630,12 @@ describe('recordLlmVerdict', () => {
       now: '2026-07-14T00:00:00.000Z',
     })
 
-    expect(q.tasks[0]!.proofPaths?.[0]).toMatchObject({ id: 'review-proof-path', status: 'verified' })
-    expect((q.tasks[0]!.proofPaths?.[0] as Record<string, any>).verificationRecords).toEqual([
-      expect.objectContaining({ evidenceId: 'scope', status: 'passed', kind: 'manual' }),
-    ])
+    expect(q.tasks[0]!.proofPaths?.[0]).toMatchObject({ id: 'review-proof-path', status: 'planned' })
+    expect((q.tasks[0]!.proofPaths?.[0] as Record<string, any>).verificationRecords).toEqual([])
+    expect(q.tasks[0]!.reviewVerdicts.at(-1)).toMatchObject({
+      verdict: 'approve',
+      proofEvidenceIds: ['scope'],
+    })
   })
 
   it('does not materialize review proof for concise approval text', () => {

@@ -17,6 +17,7 @@ import {
 } from '../orchestrator.js'
 import { LivenessTracker } from '../liveness.js'
 import { buildEffectiveTask } from '../effective-task.js'
+import type { PersonaVerdict } from '../reviewer-fanout.js'
 import { hasUsableBlueprint } from '../task-plan-recovery.js'
 import { updateProjectConfig, type ResolvedConfig } from '@guildhall/config'
 import { StructuredSpec, type Task, type TaskQueue, type TaskStatus } from '@guildhall/core'
@@ -55,13 +56,16 @@ import {
 } from '@guildhall/sessions'
 import {
   sanitizeTaskQueueForProjectWrite,
+  readProjectTaskQueueForRichMutation,
   readProjectTaskQueueSync as readProjectTaskQueueFromBoundary,
+  writeProjectTaskQueueAtCurrentStateBoundary,
   writeProjectTaskQueue,
 } from '../project-state-boundary.js'
 import { prepareProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
 import { applyProjectMigrations } from '../migrations.js'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
 import { readMemoryEvents } from '@guildhall/memory-core'
+import { summarizeCurrentProof } from '@guildhall/shared'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -554,37 +558,16 @@ function queueOf(tasks: Task[]): TaskQueue {
  * Mutate a task on disk as if the real agent had called the update-task tool.
  */
 async function mutateTask(id: string, patch: TestTaskPatch): Promise<void> {
-  const q = await readManagedQueue()
+  const q = await readProjectTaskQueueForRichMutation(tmpDir) as TaskQueue
   const t = q.tasks.find((t) => t.id === id)
   if (!t) throw new Error(`No task ${id}`)
-
-  const {
-    assignedTo,
-    revisionCount,
-    retryWindow,
-    proofRecovery,
-    workerRecovery,
-    remediationAttempts,
-    handoffStep,
-    shelveReason,
-    worktreePath,
-    branchName,
-    baseBranch,
-    notes,
-    gateResults,
-    reviewVerdicts,
-    adjudications,
-    escalations,
-    agentIssues,
-    mergeRecord,
-    ...definitionPatch
-  } = patch
+  Object.assign(t, patch)
   // A real update-task completion carries durable proof. Keep callback
   // fixtures honest so the orchestrator's proof-health gate does not reopen a
   // bare status mutation and make these loop tests exercise the wrong state.
-  if (definitionPatch.status === 'done' && !definitionPatch.doneSummaryBundle) {
+  if (patch.status === 'done' && !patch.doneSummaryBundle) {
     const completedAt = patch.updatedAt ?? t.updatedAt ?? '2026-04-01T00:00:00Z'
-    definitionPatch.doneSummaryBundle = {
+    t.doneSummaryBundle = {
       taskId: id,
       status: 'done',
       completedAt,
@@ -605,9 +588,9 @@ async function mutateTask(id: string, patch: TestTaskPatch): Promise<void> {
       createdBy: 'test-harness',
     }
   }
-  if (definitionPatch.status === 'done' && !definitionPatch.completionHandoff &&
+  if (patch.status === 'done' && !patch.completionHandoff &&
     (!Array.isArray(t.proofPaths) || t.proofPaths.length === 0)) {
-    definitionPatch.completionHandoff = {
+    t.completionHandoff = {
       id: `${id}-completion-handoff`,
       taskId: id,
       completedAt: patch.updatedAt ?? t.updatedAt ?? '2026-04-01T00:00:00Z',
@@ -628,101 +611,18 @@ async function mutateTask(id: string, patch: TestTaskPatch): Promise<void> {
       }],
     }
   }
-  if (definitionPatch.status === 'done' && !definitionPatch.acceptanceCriteria && t.acceptanceCriteria.length > 0) {
-    definitionPatch.acceptanceCriteria = t.acceptanceCriteria.map((criterion) => ({
+  if (patch.status === 'done' && !patch.acceptanceCriteria && t.acceptanceCriteria.length > 0) {
+    t.acceptanceCriteria = t.acceptanceCriteria.map((criterion) => ({
       ...criterion,
       met: true,
     }))
   }
-  Object.assign(t, definitionPatch)
-
   const updatedAt = patch.updatedAt ?? t.updatedAt ?? '2026-04-01T00:00:00Z'
-  const runtimePatch = {
-    ...(Object.prototype.hasOwnProperty.call(patch, 'assignedTo') ? { assignedTo } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, 'revisionCount') ? { revisionCount } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, 'retryWindow') ? { retryWindow } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, 'proofRecovery') ? { proofRecovery } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, 'workerRecovery') ? { workerRecovery } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, 'remediationAttempts') ? { remediationAttempts } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, 'handoffStep') ? { handoffStep } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, 'shelveReason') ? { shelveReason } : {}),
-  }
-  if (Object.keys(runtimePatch).length > 0) {
-    await upsertTaskRuntimeState(tmpDir, id, { ...runtimePatch, updatedAt } as unknown as Parameters<typeof upsertTaskRuntimeState>[2])
-  }
-
-  const workspacePatch = {
-    ...(Object.prototype.hasOwnProperty.call(patch, 'worktreePath') ? { worktreePath } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, 'branchName') ? { branchName } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, 'baseBranch') ? { baseBranch } : {}),
-  }
-  if (Object.keys(workspacePatch).length > 0) {
-    await upsertTaskWorkspaceState(tmpDir, id, { ...workspacePatch, updatedAt })
-  }
-
-  const evidence = [
-    ...(notes ?? []).map((payload, index) => ({
-      id: `note-${id}-${payload.timestamp.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
-      kind: 'note' as const,
-      recordedAt: payload.timestamp,
-      payload,
-    })),
-    ...(gateResults ?? []).map((payload, index) => ({
-      id: `gate-${id}-${payload.checkedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
-      kind: 'gate_result' as const,
-      recordedAt: payload.checkedAt,
-      payload,
-    })),
-    ...(reviewVerdicts ?? []).map((payload, index) => ({
-      id: `review-${id}-${payload.recordedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
-      kind: 'review_verdict' as const,
-      recordedAt: payload.recordedAt,
-      payload,
-    })),
-    ...(adjudications ?? []).map((payload, index) => ({
-      id: `adjudication-${id}-${payload.decidedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
-      kind: 'adjudication' as const,
-      recordedAt: payload.decidedAt,
-      payload,
-    })),
-    ...(escalations ?? []).map((payload, index) => ({
-      id: payload.id || `escalation-${id}-${payload.raisedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
-      kind: 'escalation' as const,
-      recordedAt: payload.resolvedAt ?? payload.raisedAt,
-      payload,
-    })),
-    ...(agentIssues ?? []).map((payload, index) => ({
-      id: payload.id || `issue-${id}-${payload.raisedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
-      kind: 'agent_issue' as const,
-      recordedAt: payload.resolvedAt ?? payload.raisedAt,
-      payload,
-    })),
-    ...(mergeRecord ? [{
-      id: `merge-${id}-${(mergeRecord.mergedAt ?? updatedAt).replace(/[^0-9A-Za-z]/g, '')}`,
-      kind: 'merge_record' as const,
-      recordedAt: mergeRecord.mergedAt ?? updatedAt,
-      payload: mergeRecord,
-    }] : []),
-  ]
-  for (const event of evidence) {
-    await appendTaskEvidence(tmpDir, id, event)
-  }
-
-  // The public mutation carries mergeRecord through the same rich boundary as
-  // the other evidence-owned fields. The boundary strips it from the
-  // definition and records it in normalized evidence; appending it only to a
-  // side ledger would not exercise that contract.
-  if (mergeRecord !== undefined) t.mergeRecord = mergeRecord
-
-  // Simulate the public update-task boundary. The queue write must carry the
-  // same CAS token and envelope as a real tool mutation; a direct detail-row
-  // write would bypass summary/scope projection and make callbacks appear to
-  // succeed while the orchestrator still sees the old status.
+  t.updatedAt = updatedAt
   q.lastUpdated = updatedAt
-  writeProjectTaskQueue(tasksPath, q, {
+  await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, q, {
     projectId: 'test-ws',
     projectRoot: tmpDir,
-    expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
   })
 }
 
@@ -734,14 +634,25 @@ interface StubAgent {
   getToolMetadata?(): Record<string, unknown>
 }
 
-const VALID_LLM_REVIEW = [
-  '**Reasoning:** The structured review contract is satisfied.',
-  '',
-  '**Machine result:**',
-  '```json',
-  '{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[],"revisionItems":[],"riskItems":[],"followUpItems":[],"advisoryScores":{}}',
-  '```',
-].join('\n')
+function validLlmReviewForPrompt(prompt: string): string {
+  const acceptanceCriteriaIds = [...prompt.matchAll(/^\d+\. `([^`]+)`: /gm)].map((match) => match[1]!)
+  return [
+    '**Reasoning:** The structured review contract is satisfied.',
+    '',
+    '**Machine result:**',
+    '```json',
+    JSON.stringify({
+      verdict: 'approve',
+      acceptedCriteriaIds: acceptanceCriteriaIds,
+      proofEvidenceIds: [],
+      revisionItems: [],
+      riskItems: [],
+      followUpItems: [],
+      advisoryScores: {},
+    }),
+    '```',
+  ].join('\n')
+}
 
 const VALID_LLM_REVISION = [
   '**Reasoning:** The structured review contract identifies a task-local revision.',
@@ -760,20 +671,11 @@ function withMachineSelfCritique(
     verificationCommands?: Array<{ command: string; status: 'passed' | 'failed' }>
     proofEvidenceIds?: string[]
   } = {},
-): string {
-  return [
-    prose,
-    '',
-    '**Machine self-critique:**',
-    '```json',
-    JSON.stringify({
-      acceptanceCriteria: options.acceptanceCriteria ?? [{ id: 'ac-1', status: 'met' }],
-      changedFiles: options.changedFiles ?? ['src/a.ts'],
-      verificationCommands: options.verificationCommands ?? [{ command: 'pnpm test', status: 'passed' }],
-      proofEvidenceIds: options.proofEvidenceIds ?? [],
-    }),
-    '```',
-  ].join('\n')
+): { content: string; structured: ReturnType<typeof machineSelfCritiqueStructured> } {
+  return {
+    content: prose,
+    structured: machineSelfCritiqueStructured(options),
+  }
 }
 
 function machineSelfCritiqueStructured(
@@ -808,7 +710,7 @@ function stubAgent(
     async generate(prompt: string) {
       calls.push({ prompt })
       if (sideEffect) await sideEffect(prompt)
-      return { text: name === 'reviewer-agent' && text === 'ok' ? VALID_LLM_REVIEW : text }
+      return { text: name === 'reviewer-agent' && text === 'ok' ? validLlmReviewForPrompt(prompt) : text }
     },
   }
 }
@@ -972,6 +874,72 @@ describe('Orchestrator queue writes', () => {
       revisionCount: 2,
     })
     expect((await readTaskEvidence(tmpDir, 'task-one')).some(event => event.id === 'note-task-one')).toBe(true)
+  })
+
+  it('persists a lifecycle point mutation without rewriting effective proof projections', async () => {
+    const initialUpdatedAt = '2026-07-15T00:00:00.000Z'
+    const task = mkTask({
+      id: 'task-projected-proof',
+      status: 'in_progress',
+      updatedAt: initialUpdatedAt,
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        description: 'The focused command passes.',
+        verifiedBy: 'automated',
+        command: 'pnpm test:focused',
+        met: false,
+      }],
+      proofPaths: [{
+        id: 'task-projected-proof-ac-1-command-proof',
+        kind: 'command',
+        command: 'pnpm test:focused',
+        source: 'documented',
+        status: 'planned',
+        expectedEvidence: [{
+          id: 'ac-1',
+          kind: 'automated',
+          description: 'The focused command passes.',
+          required: true,
+        }],
+        verificationRecords: [],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, {
+      version: 1,
+      lastUpdated: initialUpdatedAt,
+      tasks: [task],
+    }, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await upsertTaskRuntimeState(tmpDir, task.id, {
+      assignedTo: 'worker-agent',
+      updatedAt: initialUpdatedAt,
+    })
+    await appendTaskEvidence(tmpDir, task.id, {
+      id: 'gate-ac-1',
+      kind: 'gate_result',
+      recordedAt: '2026-07-15T00:00:30.000Z',
+      payload: {
+        gateId: 'ac-1',
+        command: 'pnpm test:focused',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-07-15T00:00:30.000Z',
+      },
+    })
+
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    await orch.updateQueueAtomically(queue => {
+      const current = queue.tasks.find(candidate => candidate.id === task.id)!
+      expect(current.acceptanceCriteria[0]?.met).toBe(true)
+      current.status = 'review'
+      current.updatedAt = '2026-07-15T00:01:00.000Z'
+      queue.lastUpdated = current.updatedAt
+    })
+
+    const point = readProjectStateDatabaseTaskPointWithRevision(tasksPath, task.id)?.task.definition
+    expect(point).toMatchObject({ status: 'review' })
+    expect((point as Task).acceptanceCriteria[0]?.met).toBe(false)
+    expect((point as Task).proofPaths?.[0]).toMatchObject({ status: 'planned' })
   })
 
   it('rejects malformed runtime fields at the rich-task write boundary', async () => {
@@ -2023,7 +1991,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations[0]!.reason).toBe('human_judgment_required')
   })
 
-  it('seeds a recovery spec immediately when the spec agent ignores the durable-progress nudge', async () => {
+  it('preserves runtime recovery when a no-progress spec turn lacks source-backed contract data', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
       name: 'spec-agent',
@@ -2049,22 +2017,22 @@ describe('Orchestrator.tick — routing', () => {
     })
 
     const out = await orch.tick()
-
     expect(out.kind).toBe('processed')
     if (out.kind === 'processed') {
-      expect(out.agent).toBe('coordinator-recovery')
+      expect(out.agent).toBe('spec-agent')
       expect(out.beforeStatus).toBe('exploring')
-      expect(out.afterStatus).toBe('spec_review')
+      expect(out.afterStatus).toBe('exploring')
     }
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('spec_review')
+    expect(task.status).toBe('exploring')
     expect(task.blockReason).toBeUndefined()
-    expect(task.spec).toContain('## Completion Boundary')
+    expect(task.spec).toBeUndefined()
+    expect(task.notes.at(-1)?.role).toBe('runtime')
     expect(task.escalations ?? []).toHaveLength(0)
   })
 
-  it('treats the live durable-progress refusal wording as spec-agent no-progress', async () => {
+  it('uses the typed no-progress status instead of provider wording', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
       name: 'spec-agent',
@@ -2094,9 +2062,10 @@ describe('Orchestrator.tick — routing', () => {
     expect(out.kind).toBe('processed')
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('spec_review')
+    expect(task.status).toBe('exploring')
     expect(task.blockReason).toBeUndefined()
-    expect(task.spec).toContain('## Completion Boundary')
+    expect(task.spec).toBeUndefined()
+    expect(task.notes.at(-1)?.role).toBe('runtime')
   })
 
   it('recovers the live durable-progress spec-agent blocker on resume', async () => {
@@ -2146,12 +2115,12 @@ describe('Orchestrator.tick — routing', () => {
 
     expect(out).toMatchObject({
       kind: 'processed',
-      agent: 'coordinator-recovery',
+      agent: 'spec-agent',
       beforeStatus: 'exploring',
       afterStatus: 'spec_review',
       transitioned: true,
     })
-    expect(spec.calls).toHaveLength(0)
+    expect(spec.calls).toHaveLength(1)
     const queue = await readQueue()
     const task = queue.tasks[0]!
     const durableEvidence = await readTaskEvidence(tmpDir, 'a')
@@ -2163,9 +2132,6 @@ describe('Orchestrator.tick — routing', () => {
           ? String(event.payload.content)
           : '',
       ),
-    )).toBe(true)
-    expect(task.notes.some(note =>
-      /wrote a deterministic recovery spec seed/i.test(note.content ?? ''),
     )).toBe(true)
     // Recovery reopens this task's bounded essential history so the new seed
     // can preserve prior answers; the stale narration must stay out of the
@@ -2227,7 +2193,7 @@ describe('Orchestrator.tick — routing', () => {
 
     expect(out).toMatchObject({
       kind: 'processed',
-      agent: 'coordinator-recovery',
+      agent: 'spec-agent',
       beforeStatus: 'exploring',
       afterStatus: 'spec_review',
       transitioned: true,
@@ -2276,7 +2242,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.blockReason).toContain('human_judgment_required')
   })
 
-  it('seeds a recovery spec for live durable-progress nudge wording', async () => {
+  it('does not derive a recovery spec from a no-progress message alone', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
       name: 'spec-agent',
@@ -2306,9 +2272,10 @@ describe('Orchestrator.tick — routing', () => {
     expect(out.kind).toBe('processed')
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('spec_review')
+    expect(task.status).toBe('exploring')
     expect(task.blockReason).toBeUndefined()
-    expect(task.spec).toContain('## Completion Boundary')
+    expect(task.spec).toBeUndefined()
+    expect(task.notes.at(-1)?.role).toBe('runtime')
   })
 
   it('preserves durable-progress nudge stalls with an existing spec as runtime recovery', async () => {
@@ -2422,7 +2389,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(out.kind).toBe('processed')
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('spec_review')
+    expect(task.status).toBe('exploring')
     expect(task.blockReason).toBeUndefined()
     expect(task.openQuestions).toBeUndefined()
     expect(await ownerInputsForTask('a')).toHaveLength(0)
@@ -3580,6 +3547,7 @@ describe('Orchestrator.tick — routing', () => {
         status: 'done',
         domain: 'harness',
         title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        references: ['/repo/docs/specs/agent-context-packets-and-compaction.md'],
         description: '3. Implement a no-UI runner that builds a packet from fixture records.',
         spec: [
           '## What this is',
@@ -3643,6 +3611,7 @@ describe('Orchestrator.tick — routing', () => {
         notes: [{
           agentId: 'coordinator',
           role: 'recovery',
+          structured: { event: 'spec_draft_recovery', recoveryCode: 'spec_no_progress' },
           content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
           timestamp: '2026-07-04T15:06:27.010Z',
         }],
@@ -3708,6 +3677,7 @@ describe('Orchestrator.tick — routing', () => {
         notes: [{
           agentId: 'coordinator',
           role: 'recovery',
+          structured: { event: 'spec_draft_recovery', recoveryCode: 'spec_no_progress' },
           content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
           timestamp: '2026-07-04T15:06:27.010Z',
         }],
@@ -3779,6 +3749,7 @@ describe('Orchestrator.tick — routing', () => {
         notes: [{
           agentId: 'coordinator',
           role: 'recovery',
+          structured: { event: 'spec_draft_recovery', recoveryCode: 'spec_no_progress' },
           content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
           timestamp: '2026-07-04T15:06:27.010Z',
         }],
@@ -4608,6 +4579,7 @@ describe('Orchestrator.tick — routing', () => {
         id: 'parent',
         status: 'ready',
         title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        references: ['/repo/docs/harness/implementation-roadmap.md'],
         spec: [
           '## Acceptance Criteria',
           '1. The cited contracts are explicitly defined and usable in code: `FixtureManifest`, `SyntheticAuthorProfile`, `FixturePermissionSetup`, `ExpectedRecordSet`, `ExpectedSignal`.',
@@ -4679,6 +4651,7 @@ describe('Orchestrator.tick — routing', () => {
         id: 'parent',
         status: 'ready',
         title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        references: ['/repo/docs/harness/implementation-roadmap.md'],
         acceptanceCriteria: [
           {
             id: 'run-output',
@@ -4753,7 +4726,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(criteria).not.toContain('stale packet context')
   })
 
-  it('does not fossilize legacy cropped task titles into recovered specs or briefs', async () => {
+  it('does not fossilize a legacy cropped title into synthetic planning state', async () => {
     const fullTitle = 'What commands should I run to smoke test this project without changing files?'
     // Seed this one fixture as historical raw queue data. Normal writes repair
     // the title at the boundary, so only a legacy read can exercise the
@@ -4796,19 +4769,16 @@ describe('Orchestrator.tick — routing', () => {
     expect(out).toMatchObject({
       kind: 'processed',
       taskId: 'a',
-      agent: 'coordinator-recovery',
-      afterStatus: 'spec_review',
+      agent: 'spec-agent',
+      afterStatus: 'exploring',
     })
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.spec).toContain(fullTitle)
-    expect(task.spec).not.toContain('changin...')
-    expect(task.productBrief?.userJob).toContain(fullTitle)
-    expect(task.productBrief?.successMetric).toContain(fullTitle)
-    expect(task.productBrief?.successMetric).not.toContain('changin...')
-    expect(task.acceptanceCriteria.map(ac => ac.description).join('\n')).toContain(fullTitle)
-    expect(task.acceptanceCriteria.map(ac => ac.description).join('\n')).not.toContain('changin...')
+    expect(spec.calls).toHaveLength(1)
+    expect(spec.calls[0]?.prompt).toContain(fullTitle)
+    expect(task.spec).toBeUndefined()
+    expect(task.acceptanceCriteria).toHaveLength(0)
   })
 
   it('does not fossilize agent research narration into durable planning state', async () => {
@@ -4985,7 +4955,6 @@ describe('Orchestrator.tick — routing', () => {
             id: 'ac-1',
             description: 'targeted callback tests pass',
             verifiedBy: 'automated',
-            command: 'pnpm test --filter @knit-app -- --run login-callback-index.flow.test.ts',
             met: true,
           },
         ],
@@ -6514,7 +6483,7 @@ describe('Orchestrator.tick — feedback loop', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique([
+            ...withMachineSelfCritique([
               '**Self-critique:**',
               'For each acceptance criterion:',
               '- [AC-1]: Met — index.html exists and renders Pantry Pulse.',
@@ -6571,7 +6540,7 @@ describe('Orchestrator.tick — feedback loop', () => {
         notes: [{
           agentId: 'worker-agent',
           role: 'self-critique',
-          content: withMachineSelfCritique([
+          ...withMachineSelfCritique([
             '**Self-critique:**',
             'For each acceptance criterion:',
             '- [AC-1]: Met — index.html exists.',
@@ -6631,7 +6600,7 @@ describe('Orchestrator.tick — feedback loop', () => {
         notes: [{
           agentId: 'worker-agent',
           role: 'self-critique',
-          content: withMachineSelfCritique([
+          ...withMachineSelfCritique([
             '**Self-critique:**',
             '- AC-1: Met — packaged sidecar proof passed.',
             '',
@@ -6687,7 +6656,7 @@ describe('Orchestrator.tick — feedback loop', () => {
         notes: [{
           agentId: 'worker-agent',
           role: 'self-critique',
-          content: withMachineSelfCritique([
+          ...withMachineSelfCritique([
             '**Self-critique:**',
             '- AC-1: Met — pnpm build passed.',
             '',
@@ -6749,7 +6718,7 @@ describe('Orchestrator.tick — feedback loop', () => {
         notes: [{
           agentId: 'worker-agent',
           role: 'self-critique',
-          content: withMachineSelfCritique([
+          ...withMachineSelfCritique([
             '**Self-critique:**',
             'For each acceptance criterion:',
             '- AC1: Met — claimed grep passed.',
@@ -6854,7 +6823,7 @@ describe('Orchestrator.tick — feedback loop', () => {
         notes: [{
           agentId: 'worker-agent',
           role: 'self-critique',
-          content: withMachineSelfCritique([
+          ...withMachineSelfCritique([
             '**Self-critique:**',
             '- [AC-1]: Met — the implementation is complete.',
             '',
@@ -6916,7 +6885,7 @@ describe('Orchestrator.tick — feedback loop', () => {
         notes: [{
           agentId: 'worker-agent',
           role: 'self-critique',
-          content: withMachineSelfCritique([
+          ...withMachineSelfCritique([
             '**Self-critique:**',
             'For each acceptance criterion:',
             '- [AC-1]: Met — index.html exists.',
@@ -6998,7 +6967,7 @@ describe('Orchestrator.tick — feedback loop', () => {
         {
           agentId: 'worker-agent',
           role: 'self-critique',
-            content: withMachineSelfCritique('**Self-critique:**\n- AC-1: Met — added focused unit coverage.', {
+            ...withMachineSelfCritique('**Self-critique:**\n- AC-1: Met — added focused unit coverage.', {
               changedFiles: ['web/tests/unit/composables/use-presence.test.ts'],
               verificationCommands: [{ command: 'pnpm test -- use-presence', status: 'failed' }],
             }),
@@ -7103,6 +7072,55 @@ describe('Orchestrator.tick — feedback loop', () => {
     expect(packet).toContain('visual reviewers must not approve')
   })
 
+  it('includes committed branch diffs and screenshot evidence in a clean review packet', async () => {
+    const worktree = path.join(tmpDir, 'committed-ui-worktree')
+    await fs.mkdir(path.join(worktree, 'internal/evidence/results'), { recursive: true })
+    execFileSync('git', ['init', '-b', 'main'], { cwd: worktree, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktree, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: worktree, stdio: 'ignore' })
+    await fs.writeFile(path.join(worktree, 'index.html'), '<main>Before</main>\n', 'utf8')
+    execFileSync('git', ['add', '.'], { cwd: worktree, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'base'], { cwd: worktree, stdio: 'ignore' })
+    execFileSync('git', ['switch', '-c', 'guildhall/task-ui'], { cwd: worktree, stdio: 'ignore' })
+    await fs.writeFile(path.join(worktree, 'index.html'), '<main>After</main>\n', 'utf8')
+    await fs.writeFile(
+      path.join(worktree, 'internal/evidence/results/README.md'),
+      '# Native proof\n\nThe wide and minimum layouts have no clipping.\n',
+      'utf8',
+    )
+    await fs.writeFile(path.join(worktree, 'internal/evidence/results/wide.jpeg'), 'fixture', 'utf8')
+    execFileSync('git', ['add', '.'], { cwd: worktree, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'ui result'], { cwd: worktree, stdio: 'ignore' })
+
+    await writeQueue([mkTask({
+      id: 'a',
+      title: 'Build results UI',
+      description: 'Build and review the desktop results UI.',
+      workKind: 'component',
+      status: 'in_progress',
+      worktreePath: worktree,
+      branchName: 'guildhall/task-ui',
+      baseBranch: 'main',
+    })])
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask('a', { status: 'review' })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker, reviewer: stubAgent('reviewer-agent') }),
+    })
+
+    await orch.tick()
+    await orch.tick()
+
+    const packet = await fs.readFile(taskHistoryPath('a', 'review-packet.md'), 'utf8')
+    expect(packet).toContain('M: index.html')
+    expect(packet).toContain('internal/evidence/results/README.md')
+    expect(packet).toContain('The wide and minimum layouts have no clipping.')
+    expect(packet).toContain('internal/evidence/results/wide.jpeg')
+    expect(packet).not.toContain('Missing desktop/mobile screenshot evidence')
+  })
+
   it('records reflection learning when completed work has a successful playbook', async () => {
     await writeQueue([
       mkTask({
@@ -7183,7 +7201,7 @@ describe('Orchestrator.tick — feedback loop', () => {
           {
             agentId: 'worker-agent',
             role: 'implementation',
-            content: withMachineSelfCritique('**Self-critique:**\n- AC-1: Met — added focused use-collections coverage.', {
+            ...withMachineSelfCritique('**Self-critique:**\n- AC-1: Met — added focused use-collections coverage.', {
               changedFiles: ['web/tests/unit/composables/use-collections.test.ts'],
               verificationCommands: [{ command: 'pnpm test -- use-collections', status: 'passed' }],
             }),
@@ -7230,7 +7248,7 @@ describe('Orchestrator.tick — feedback loop', () => {
           {
             agentId: 'worker-agent',
             role: 'Worker',
-            content: withMachineSelfCritique('**Self-critique:**\nFocused workspace typing verification passed.', {
+            ...withMachineSelfCritique('**Self-critique:**\nFocused workspace typing verification passed.', {
               changedFiles: ['web/app/composables/use-workspace.ts'],
               verificationCommands: [{ command: 'pnpm typecheck', status: 'passed' }],
             }),
@@ -7269,7 +7287,7 @@ describe('Orchestrator.tick — feedback loop', () => {
           {
             agentId: 'worker-agent',
             role: 'implementer',
-            content: withMachineSelfCritique('**Self-critique:**\nFocused workspace typing verification passed.', {
+            ...withMachineSelfCritique('**Self-critique:**\nFocused workspace typing verification passed.', {
               changedFiles: ['web/app/composables/use-workspace.ts'],
               verificationCommands: [{ command: 'pnpm typecheck', status: 'passed' }],
             }),
@@ -7308,7 +7326,7 @@ describe('Orchestrator.tick — feedback loop', () => {
           {
             agentId: 'worker-agent',
             role: 'Backend Engineer',
-            content: withMachineSelfCritique('**Self-critique:**\nFocused restore handler verification passed.', {
+            ...withMachineSelfCritique('**Self-critique:**\nFocused restore handler verification passed.', {
               changedFiles: ['web/server/api/pages/[id]/restore.post.ts'],
               verificationCommands: [{ command: 'pnpm lint', status: 'passed' }],
             }),
@@ -7635,7 +7653,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
         notes: [{
           agentId: 'worker-agent',
           role: 'self-critique',
-          content: withMachineSelfCritique([
+          ...withMachineSelfCritique([
             '**Self-critique:**',
             '- AC1: Met — claimed grep passed.',
             '',
@@ -7733,7 +7751,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       passed: true,
     })
     expect(task.gateResults.at(-1)?.output).toContain('expected exit non_zero')
-    expect(task.proofPaths?.some((proofPath) => proofPath.status === 'verified')).toBe(true)
+    expect(task.proofPaths?.some((proofPath) => proofPath.status === 'planned')).toBe(true)
   })
 
   it('returns self-referential acceptance proof to shaping instead of retrying the worker', async () => {
@@ -7959,12 +7977,8 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(task.proofPaths).toMatchObject([{
       kind: 'command',
       command: "git diff --name-only --exit-code -- . ':!RELEASE_NOTES.md' ':!.guildhall' ':!.guildhall/**'",
-      status: 'verified',
-      verificationRecords: [{
-        evidenceId: 'AC-1',
-        status: 'passed',
-        recordedBy: 'acceptance-command-gates',
-      }],
+      status: 'planned',
+      verificationRecords: [],
     }])
   })
 
@@ -8405,15 +8419,10 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
         id: 'a',
         status: 'gate_check',
         gateResults: [],
-        acceptanceCriteria: [
-          {
-            id: 'ac-12',
-            description: 'Focused unit test passes',
-            verifiedBy: 'automated',
-            met: true,
-            command: 'pnpm test -- --run tests/unit/composables/use-presence.test.ts',
-          } as any,
-        ],
+        structuredSpec: fixtureStructuredSpec('presence composable cleanup', [
+          'web/app/composables/use-presence.ts',
+        ]),
+        acceptanceCriteria: [],
         escalations: [
           {
             id: 'esc-task-011-5',
@@ -8444,13 +8453,21 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       await mutateTask('a', {
         gateResults: [
           {
+            gateId: 'ac-12',
+            command: 'pnpm test -- --run tests/unit/composables/use-presence.test.ts',
+            type: 'hard',
+            passed: true,
+            checkedAt: '2026-05-05T20:07:40.000Z',
+            output: 'focused acceptance test passed',
+          },
+          {
             gateId: 'typecheck',
             type: 'hard',
             passed: false,
             checkedAt: '2026-05-05T20:07:42.704Z',
             output: [
               `> web@ typecheck ${path.join(tmpDir, 'web')}`,
-              "app/composables/use-presence.test.ts(3,23): error TS2305: Module '\"./use-presence\"' has no exported member 'buildPayload'.",
+              "app/composables/use-unrelated.test.ts(3,23): error TS2305: Module '\"./use-unrelated\"' has no exported member 'buildPayload'.",
             ].join('\n'),
           },
           {
@@ -8478,6 +8495,9 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
 
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('done')
+    expect(queue.tasks[0]!.gateResults.find((gate) => gate.gateId === 'typecheck')).toMatchObject({
+      passed: false,
+    })
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('Gate-check scope exception applied')
   })
 
@@ -8492,20 +8512,24 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
           '- Update `web/app/composables/use-workspace.ts` to adopt the generated Supabase types.',
           '- Verify `web/app/types/supabase.ts` remains the generated source of truth.',
         ].join('\n'),
-        acceptanceCriteria: [
-          {
-            id: 'ac-1',
-            description: 'Regenerate types and keep the use-workspace consumer valid.',
-            verifiedBy: 'automated',
-            met: true,
-            command: 'pnpm vitest --run web/tests/unit/composables/use-workspace.test.ts',
-          } as any,
-        ],
+        structuredSpec: fixtureStructuredSpec('generated Supabase type adoption', [
+          'web/app/composables/use-workspace.ts',
+          'web/app/types/supabase.ts',
+        ]),
+        acceptanceCriteria: [],
       }),
     ])
     const gc = stubAgent('gate-checker-agent', async () => {
       await mutateTask('a', {
         gateResults: [
+          {
+            gateId: 'ac-1',
+            command: 'pnpm vitest --run web/tests/unit/composables/use-workspace.test.ts',
+            type: 'hard',
+            passed: true,
+            checkedAt: '2026-05-08T17:47:20.000Z',
+            output: 'focused acceptance test passed',
+          },
           {
             gateId: 'test',
             type: 'hard',
@@ -8535,6 +8559,9 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
 
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('done')
+    expect(queue.tasks[0]!.gateResults.find((gate) => gate.gateId === 'test')).toMatchObject({
+      passed: false,
+    })
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('Gate-check scope exception applied')
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('test:')
   })
@@ -8594,7 +8621,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     )).toBe(true)
   })
 
-  it('completes gate_check from recorded passing hard gates without another model turn', async () => {
+  it('returns mixed gate_check work to review when hard gates pass but review approval is missing', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -8604,17 +8631,27 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
           status: 'exploring',
           source: 'rerun_spec',
         },
-        acceptanceCriteria: [{
-          id: 'review-copy',
-          description: 'Reviewer confirmed the script stays deterministic.',
-          verifiedBy: 'review',
-          met: false,
-        }],
+        acceptanceCriteria: [
+          {
+            id: 'npm-run-build',
+            description: 'The build passes.',
+            verifiedBy: 'automated',
+            command: 'npm run build',
+            met: false,
+          },
+          {
+            id: 'review-copy',
+            description: 'Reviewer confirmed the script stays deterministic.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
         gateResults: [{
           gateId: 'npm-run-build',
           type: 'hard',
           passed: true,
           checkedAt: '2026-07-04T10:07:21.557Z',
+          command: 'npm run build',
           output: 'npm run build passed',
         }],
       }),
@@ -8633,19 +8670,20 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(out.kind).toBe('processed')
     if (out.kind === 'processed') {
       expect(out.beforeStatus).toBe('gate_check')
-      expect(out.afterStatus).toBe('done')
+      expect(out.afterStatus).toBe('review')
       expect(out.agent).toBe('recorded-hard-gates')
     }
     const queue = await readQueue()
-    expect(queue.tasks[0]!.status).toBe('done')
-    expect((queue.tasks[0]! as LegacyTaskView).currentLifecycle).toBeUndefined()
+    expect(queue.tasks[0]!.status).toBe('review')
+    expect(queue.tasks[0]!.assignedTo).toBe('reviewer-agent')
     expect(queue.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
-    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded passing hard gates')
+    expect(queue.tasks[0]!.acceptanceCriteria[1]?.met).toBe(false)
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('review-copy')
     const runtime = await readTaskRuntimeStore(tmpDir)
-    expect(runtime.tasks.a?.currentLifecycle).toBeUndefined()
+    expect(runtime.tasks.a?.assignedTo).toBe('reviewer-agent')
   })
 
-  it('completes gate_check from sidecar-recorded passing hard gates without another model turn', async () => {
+  it('does not let a sidecar-recorded hard gate approve a review-owned criterion', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -8685,13 +8723,67 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(out.kind).toBe('processed')
     if (out.kind === 'processed') {
       expect(out.beforeStatus).toBe('gate_check')
-      expect(out.afterStatus).toBe('done')
+      expect(out.afterStatus).toBe('review')
       expect(out.agent).toBe('recorded-hard-gates')
     }
     const queue = await readQueue()
-    expect(queue.tasks[0]!.status).toBe('done')
-    expect(queue.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
-    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded passing hard gates')
+    expect(queue.tasks[0]!.status).toBe('review')
+    expect(queue.tasks[0]!.assignedTo).toBe('reviewer-agent')
+    expect(queue.tasks[0]!.acceptanceCriteria[0]?.met).toBe(false)
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('review-copy')
+  })
+
+  it('completes mixed gate_check work when command proof and exact review approval are both recorded', async () => {
+    await writeQueue([mkTask({
+      id: 'a',
+      status: 'gate_check',
+      acceptanceCriteria: [
+        {
+          id: 'build',
+          description: 'The build passes.',
+          verifiedBy: 'automated',
+          command: 'npm run build',
+          met: false,
+        },
+        {
+          id: 'visual-review',
+          description: 'The packaged UI is readable.',
+          verifiedBy: 'review',
+          met: false,
+        },
+      ],
+      gateResults: [{
+        gateId: 'build',
+        type: 'hard',
+        command: 'npm run build',
+        passed: true,
+        checkedAt: '2026-07-04T10:07:21.557Z',
+      }],
+      reviewVerdicts: [{
+        verdict: 'approve',
+        reviewerPath: 'llm',
+        acceptedCriteriaIds: ['visual-review'],
+        reason: 'The packaged UI is readable.',
+        failingSignals: [],
+        recordedAt: '2026-07-04T10:07:20.557Z',
+      }],
+    })])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      beforeStatus: 'gate_check',
+      afterStatus: 'done',
+      agent: 'recorded-hard-gates',
+    })
+    const completed = (await readQueue()).tasks[0]!
+    expect(completed.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
   })
 
   it('completes review-verified gate_check from an approving sidecar review without another model turn', async () => {
@@ -8716,7 +8808,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       payload: {
         verdict: 'approve',
         reviewerPath: 'llm',
-        acceptedCriteriaIds: ['ac-review'],
+        acceptedCriteriaIds: ['ac-1'],
         proofEvidenceIds: ['review-proof-path-evidence-0'],
         reason: 'Reviewer approved.',
         reasoning: 'AC 1: Met.',
@@ -8816,18 +8908,18 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     })
     const queue = await readQueue()
     expect(queue.tasks[0]?.status).toBe('done')
-    expect(queue.tasks[0]?.proofPaths?.[0]?.verificationRecords).toEqual([
-      expect.objectContaining({
-        evidenceId: 'review-proof-path-evidence-0',
-        status: 'passed',
-      }),
-    ])
+    expect(queue.tasks[0]?.proofPaths?.[0]?.verificationRecords).toEqual([])
     expect(queue.tasks[0]?.proofPaths?.[0]?.expectedEvidence).toEqual([{
       id: 'review-proof-path-evidence-0',
       kind: 'artifact',
       description: 'The review-only task has durable approval.',
       required: true,
     }])
+    expect(queue.tasks[0]?.reviewVerdicts.at(-1)).toMatchObject({
+      verdict: 'approve',
+      proofEvidenceIds: ['review-proof-path-evidence-0'],
+    })
+    expect(summarizeCurrentProof(queue.tasks[0] as unknown as Record<string, unknown>).state).toBe('proven')
   })
 
   it('repairs synthetic bootstrap verification ellipses from older Guildhall task data', async () => {
@@ -9327,20 +9419,28 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
         status: 'gate_check',
         assignedTo: 'gate-checker-agent',
         worktreePath,
-        acceptanceCriteria: [{
-          id: 'provider-proof',
-          description: 'The model is tested against live provider scenarios.',
-          verifiedBy: 'review',
-          met: false,
-        }],
+        acceptanceCriteria: [
+          {
+            id: 'provider-proof',
+            description: 'The model is tested against live provider scenarios.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'unrelated-review',
+            description: 'The reviewer confirms the unrelated release note.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
         proofPaths: [{
           id: 'command-proof-path',
           kind: 'command',
           command: 'pnpm run prove:deepinfra-drafting-model',
           source: 'documented',
-          status: 'blocked',
+          status: 'planned',
           expectedEvidence: [{
-            id: 'command-proof-path-evidence-0',
+            id: 'provider-proof',
             kind: 'provider',
             description: 'The live provider proof artifact passes.',
             required: true,
@@ -9361,8 +9461,10 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
           reviewerPath: 'llm',
           reason: 'Reviewer approved.',
           reasoning: 'The provider proof is present.',
+          acceptedCriteriaIds: ['unrelated-review'],
+          proofEvidenceIds: ['unrelated-review'],
           failingSignals: [],
-          recordedAt: '2026-07-14T02:25:00.000Z',
+          recordedAt: '2026-07-14T02:26:00.000Z',
         }],
         gateResults: [],
       }),
@@ -9391,11 +9493,16 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       type: 'hard',
       passed: true,
     })
-    expect(recorded.tasks[0]!.proofPaths?.[0]).toMatchObject({ status: 'verified' })
-    expect((recorded.tasks[0]!.proofPaths?.[0] as unknown as { verificationRecords?: unknown[] })?.verificationRecords?.[0]).toMatchObject({
-      status: 'passed',
-      evidenceId: 'command-proof-path-evidence-0',
+    expect(recorded.tasks[0]!.proofPaths?.[0]).toMatchObject({
+      status: 'planned',
+      verificationRecords: [expect.objectContaining({
+        id: 'legacy-provider-proof',
+        evidenceId: 'provider-artifact-0',
+      })],
     })
+    expect(summarizeCurrentProof(recorded.tasks[0] as unknown as Record<string, unknown>).state).toBe('proven')
+    expect(recorded.tasks[0]!.acceptanceCriteria.find((criterion) => criterion.id === 'provider-proof')?.met).toBe(true)
+    expect(recorded.tasks[0]!.acceptanceCriteria.find((criterion) => criterion.id === 'unrelated-review')?.met).toBe(false)
 
     const second = await orch.tick()
     expect(second.kind).toBe('processed')
@@ -9421,6 +9528,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
         reviewVerdicts: [{
           verdict: 'approve',
           reviewerPath: 'llm',
+          acceptedCriteriaIds: ['ac-1'],
           reason: 'Reviewer approved.',
           reasoning: 'AC 1: Met.',
           failingSignals: [],
@@ -9568,15 +9676,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
         structuredSpec: fixtureStructuredSpec('restore route lint cleanup', [
           'web/server/api/pages/[id]/restore.post.ts',
         ]),
-        acceptanceCriteria: [
-          {
-            id: 'ac-1',
-            description: 'Lint no longer warns about deleteTrashRes.',
-            verifiedBy: 'automated',
-            met: true,
-            command: 'pnpm --dir web lint',
-          } as any,
-        ],
+        acceptanceCriteria: [],
       }),
     ])
     const gc = stubAgent('gate-checker-agent', async () => {
@@ -9584,6 +9684,14 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
         status: 'in_progress',
         assignedTo: 'worker-agent',
         gateResults: [
+          {
+            gateId: 'ac-1',
+            command: 'pnpm --dir web lint',
+            type: 'hard',
+            passed: true,
+            checkedAt: '2026-05-09T15:23:40.000Z',
+            output: 'focused lint acceptance passed',
+          },
           {
             gateId: 'test',
             type: 'hard',
@@ -9614,6 +9722,9 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('done')
     expect(queue.tasks[0]!.revisionCount).toBe(0)
+    expect(queue.tasks[0]!.gateResults.find((gate) => gate.gateId === 'test')).toMatchObject({
+      passed: false,
+    })
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('Gate-check scope exception applied')
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('test:')
   })
@@ -9821,6 +9932,12 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
             'Ran bash command pnpm db:types:remote [PASS]',
             `Read file ${path.join(worktreePath, 'web', 'app', 'types', 'supabase.ts')}`,
           ],
+          recent_verification_results: [{
+            kind: 'command',
+            command: 'pnpm db:types:remote',
+            passed: true,
+            observedAt: '2026-04-01T00:01:00.000Z',
+          }],
           current_task_checkpoint_files_touched: ['web/app/types/supabase.ts'],
         }
       },
@@ -9891,6 +10008,12 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
             'Ran bash command pnpm --dir frontend build [PASS]',
             `Edited file ${editedFile}`,
           ],
+          recent_verification_results: [{
+            kind: 'command',
+            command: 'pnpm --dir frontend build',
+            passed: true,
+            observedAt: '2026-04-01T00:01:00.000Z',
+          }],
         }
       },
     }
@@ -9949,7 +10072,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
           {
             agentId: 'worker-agent',
             role: 'Backend Engineer',
-            content: withMachineSelfCritique('**Self-critique:**\nFocused restore handler verification passed.', {
+            ...withMachineSelfCritique('**Self-critique:**\nFocused restore handler verification passed.', {
               changedFiles: ['web/server/api/pages/[id]/restore.post.ts'],
               verificationCommands: [{ command: 'pnpm lint', status: 'passed' }],
             }),
@@ -10658,7 +10781,7 @@ describe('Orchestrator.run — full loops', () => {
             id: 'ac-1',
             description: 'Thing is done',
             verifiedBy: 'automated',
-            command: 'pnpm test',
+            command: 'true',
             met: true,
           },
         ],
@@ -10708,7 +10831,7 @@ describe('Orchestrator.run — full loops', () => {
             id: 'ac-1',
             description: 'Thing is done',
             verifiedBy: 'automated',
-            command: 'pnpm test',
+            command: 'true',
             met: true,
           },
         ],
@@ -10752,7 +10875,7 @@ describe('Orchestrator.run — full loops', () => {
             id: 'ac-1',
             description: 'Thing is done',
             verifiedBy: 'automated',
-            command: 'pnpm test',
+            command: 'true',
             met: true,
           },
         ],
@@ -10818,7 +10941,7 @@ describe('Orchestrator.run — full loops', () => {
             id: 'ac-1',
             description: 'Thing is done',
             verifiedBy: 'automated',
-            command: 'pnpm test',
+            command: 'true',
             met: true,
           },
         ],
@@ -10842,7 +10965,8 @@ describe('Orchestrator.run — full loops', () => {
 
       override async createWorktree(repoRoot: string, opts: any): Promise<void> {
         this.createRoots.push(repoRoot)
-        return super.createWorktree(repoRoot, opts)
+        await super.createWorktree(repoRoot, opts)
+        await fs.mkdir(opts.worktreePath, { recursive: true })
       }
 
       override async cherryPickBranch(repoRoot: string, branch: string, baseBranch: string) {
@@ -10852,7 +10976,8 @@ describe('Orchestrator.run — full loops', () => {
 
       override async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
         this.removeRoots.push(repoRoot)
-        return super.removeWorktree(repoRoot, worktreePath)
+        await super.removeWorktree(repoRoot, worktreePath)
+        await fs.rm(worktreePath, { recursive: true, force: true })
       }
     }
 
@@ -11528,7 +11653,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\n**Minimum-scope check:**\n- Files changed: none.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['src/register.ts'] }),
+            ...withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\n**Minimum-scope check:**\n- Files changed: none.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['src/register.ts'] }),
             timestamp: '2026-05-03T00:10:00.000Z',
           },
         ],
@@ -11596,7 +11721,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\n**Minimal-scope check:**\n- Files changed: dashboard.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['dashboard.vue'] }),
+            ...withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\n**Minimal-scope check:**\n- Files changed: dashboard.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['dashboard.vue'] }),
             timestamp: '2026-05-03T00:10:00.000Z',
           },
         ],
@@ -11665,7 +11790,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique(`**Self-critique:**\n\nAC-1: Met — implementation exists and build passes.\n\n**Minimum-scope check:**\n- Files changed: author-voice-reviewer.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['author-voice-reviewer.ts'] }),
+            ...withMachineSelfCritique(`**Self-critique:**\n\nAC-1: Met — implementation exists and build passes.\n\n**Minimum-scope check:**\n- Files changed: author-voice-reviewer.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['author-voice-reviewer.ts'] }),
             timestamp: '2026-06-16T23:40:00.000Z',
           },
         ],
@@ -11713,7 +11838,7 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.escalations[0]?.resolution).toContain('Superseded')
   })
 
-  it('reopens a stale review-handoff blocker when the self-critique was stored as a JSON wrapper string', async () => {
+  it('keeps a stale review-handoff blocker closed when structured self-critique exists only inside a JSON wrapper string', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -11730,7 +11855,7 @@ describe('Orchestrator.run — full loops', () => {
             content: JSON.stringify({
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: withMachineSelfCritique('**Self-critique:**\n\nAC 1: Met — implementation exists and build passes.\n\nMinimum-scope check:\n- Files changed: scripts/run-packet.mjs.\n- Smallest useful change?: yes.', { changedFiles: ['scripts/run-packet.mjs'] }),
+              ...withMachineSelfCritique('**Self-critique:**\n\nAC 1: Met — implementation exists and build passes.\n\nMinimum-scope check:\n- Files changed: scripts/run-packet.mjs.\n- Smallest useful change?: yes.', { changedFiles: ['scripts/run-packet.mjs'] }),
             }),
             timestamp: '2026-07-04T09:50:53.838Z',
           },
@@ -11764,22 +11889,14 @@ describe('Orchestrator.run — full loops', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('processed')
-    if (out.kind === 'processed') {
-      expect(out.beforeStatus).toBe('in_progress')
-      expect(out.afterStatus).toBe('review')
-    }
+    expect(out.kind).toBe('idle')
 
     const queue = await readQueue()
     const task = queue.tasks.find((candidate) => candidate.id === 'a')
-    expect(task?.status).toBe('review')
-    expect(task?.assignedTo).toBe('reviewer-agent')
-    expect(task?.blockReason ?? null).toBeNull()
-    expect(task?.notes.some((note) =>
-      note.role === 'recovery' &&
-      note.content.includes('review handoff validator bug'),
-    )).toBe(true)
-    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.status).toBe('blocked')
+    expect(task?.assignedTo).toBeNull()
+    expect(task?.blockReason).toContain('guard keeps blocking')
+    expect(task?.escalations[0]?.resolvedAt).toBeUndefined()
   })
 
   it('reopens a stale gate_hard_failure review-handoff blocker after the validator bug is fixed', async () => {
@@ -11796,7 +11913,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\n**Mini-scope check:**\n- Files changed: login.vue, register.vue.\n- Smallest useful change?: yes.\n- Out-of-scope changes: none.`, { changedFiles: ['login.vue', 'register.vue'] }),
+            ...withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\n**Mini-scope check:**\n- Files changed: login.vue, register.vue.\n- Smallest useful change?: yes.\n- Out-of-scope changes: none.`, { changedFiles: ['login.vue', 'register.vue'] }),
             timestamp: '2026-05-13T15:42:00.000Z',
           },
         ],
@@ -11866,7 +11983,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — auth pages are wired and verified.\n\n**Minimum-scope check:**\n- Files changed: register.vue, login.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['register.vue', 'login.vue'] }),
+            ...withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — auth pages are wired and verified.\n\n**Minimum-scope check:**\n- Files changed: register.vue, login.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['register.vue', 'login.vue'] }),
             timestamp: '2026-05-13T19:41:49.000Z',
           },
         ],
@@ -11931,7 +12048,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — auth wiring is complete.\n\n**Minimum-scope check:**\n- Files changed: register.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['register.vue'] }),
+            ...withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — auth wiring is complete.\n\n**Minimum-scope check:**\n- Files changed: register.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['register.vue'] }),
             timestamp: '2026-05-13T19:56:00.000Z',
           },
         ],
@@ -11996,7 +12113,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — auth wiring is complete.\n\n**Minimum-scope check:**\n- Files changed: register.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['register.vue'] }),
+            ...withMachineSelfCritique(`**Self-critique:**\n\nAC-1 (Registration): Met — auth wiring is complete.\n\n**Minimum-scope check:**\n- Files changed: register.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, { changedFiles: ['register.vue'] }),
             timestamp: '2026-05-13T21:05:00.000Z',
           },
         ],
@@ -12058,7 +12175,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique(`**Self-critique:**\n\n**Acceptance criteria:**\n- AC 1 (Conversion): Met — focused tests cover the touched files.\n\n**Minimum-scope check:**\n- Files changed: packages/converter/src/features/variableDeclaration.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.\n\n**Review proof packet:**\n- Changed files / diff scope: packages/converter/src/features/variableDeclaration.ts, packages/converter/test/ts-to-jsdoc.test.ts.\n- Verification commands passed: cd /tmp/project/packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts passed.\n- Working hypothesis at handoff: The converter change and focused tests are ready for reviewer evaluation.\n- Known gaps / follow-up: none.`, {
+            ...withMachineSelfCritique(`**Self-critique:**\n\n**Acceptance criteria:**\n- AC 1 (Conversion): Met — focused tests cover the touched files.\n\n**Minimum-scope check:**\n- Files changed: packages/converter/src/features/variableDeclaration.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.\n\n**Review proof packet:**\n- Changed files / diff scope: packages/converter/src/features/variableDeclaration.ts, packages/converter/test/ts-to-jsdoc.test.ts.\n- Verification commands passed: cd /tmp/project/packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts passed.\n- Working hypothesis at handoff: The converter change and focused tests are ready for reviewer evaluation.\n- Known gaps / follow-up: none.`, {
               changedFiles: ['packages/converter/src/features/variableDeclaration.ts', 'packages/converter/test/ts-to-jsdoc.test.ts'],
             }),
             timestamp: '2026-05-13T15:00:00.000Z',
@@ -12374,6 +12491,7 @@ describe('Orchestrator.run — full loops', () => {
         status: 'in_progress',
         assignedTo: 'worker-agent',
         projectPath,
+        structuredSpec: fixtureStructuredSpec('artifact patch', ['RELEASE_NOTES.md']),
         spec: [
           '## Summary',
           'Append the exact bullet `- Added benchmark artifact evidence.` to `RELEASE_NOTES.md`.',
@@ -12408,7 +12526,7 @@ describe('Orchestrator.run — full loops', () => {
             {
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: withMachineSelfCritique([
+              ...withMachineSelfCritique([
                 '**Self-critique:**',
                 '',
                 'For each acceptance criterion:',
@@ -12462,7 +12580,6 @@ describe('Orchestrator.run — full loops', () => {
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ worker }),
-      gitDriver: new InMemoryGitDriver({ clean: true }),
     })
     const out = await orch.tick()
 
@@ -12493,7 +12610,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'backend-engineer',
-            content: withMachineSelfCritique([
+            ...withMachineSelfCritique([
               '**Self-critique:**',
               '',
               'For each acceptance criterion:',
@@ -12778,7 +12895,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique(`**Self-critique:**\n\nAC-1: Met.\n\n**Minimum-scope check:**\n- Files changed: src/a.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, {
+            ...withMachineSelfCritique(`**Self-critique:**\n\nAC-1: Met.\n\n**Minimum-scope check:**\n- Files changed: src/a.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`, {
               changedFiles: ['src/a.ts'],
               verificationCommands: [{ command: 'pnpm test', status: 'failed' }],
             }),
@@ -12823,11 +12940,19 @@ describe('Orchestrator.run — full loops', () => {
       agents: agentSet({ worker }),
       gitDriver: new InMemoryGitDriver({ clean: true }),
     })
-    await orch.tick()
+    const out = await orch.tick()
 
-    expect(seenPrompt).toContain('already at the review handoff stage')
-    expect(seenPrompt).toContain('Your first action should be the exact handoff')
-    expect(seenPrompt).not.toContain('Open or edit these exact files before any directory listing')
+    expect(seenPrompt).toBe('')
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'in_progress',
+      afterStatus: 'review',
+    })
+    expect((await readQueue()).tasks[0]).toMatchObject({
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+    })
   })
 
   it('uses handoff-specific immediate resume instructions when proof and self-critique exist even with a noisy checkpoint', async () => {
@@ -12842,7 +12967,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: withMachineSelfCritique([
+            ...withMachineSelfCritique([
               '**Self-critique:**',
               '',
               'For each acceptance criterion:',
@@ -12898,12 +13023,19 @@ describe('Orchestrator.run — full loops', () => {
       agents: agentSet({ worker }),
       gitDriver: new InMemoryGitDriver({ clean: true }),
     })
-    await orch.tick()
+    const out = await orch.tick()
 
-    expect(seenPrompt).toContain('already has durable verification proof and a structured self-critique')
-    expect(seenPrompt).toContain('Your first action should be the exact handoff')
-    expect(seenPrompt).not.toContain('Open or edit these files before any directory listing')
-    expect(seenPrompt).not.toContain('Do not use list-files, glob, or generic repo-root shell inspection')
+    expect(seenPrompt).toBe('')
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'in_progress',
+      afterStatus: 'review',
+    })
+    expect((await readQueue()).tasks[0]).toMatchObject({
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+    })
   })
 
   it('reopens an already-existing task-branch blocker so Guildhall can attach the branch and continue', async () => {
@@ -13506,6 +13638,14 @@ describe('Orchestrator.run — full loops', () => {
         guildName: 'The Copywriter',
         verdict: 'approve',
         reasoning: 'Looks good.',
+        acceptedCriteriaIds: ['ac-1'],
+        proofEvidenceIds: [],
+        findings: [{
+          targetKind: 'acceptance_criterion',
+          targetId: 'ac-1',
+          disposition: 'satisfied',
+          evidenceRefs: ['review-packet:ac-1'],
+        }],
         revisionItems: [],
         rawOutput: '**Verdict:** approve',
       },
@@ -13528,13 +13668,82 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.blockReason ?? null).toBeNull()
     expect(task?.notes.some((note) =>
       note.role === 'recovery' &&
-      note.content.includes('availability failures incorrectly counted as hard rejection'),
+      note.content.includes('non-actionable reviewer failures incorrectly counted as hard rejection'),
     )).toBe(true)
     expect(task?.escalations[0]?.resolvedBy).toBe('system')
-    expect(task?.escalations[0]?.resolution).toContain('availability failures stopped counting')
+    expect(task?.escalations[0]?.resolution).toContain('non-actionable reviewer failures stopped counting')
   })
 
-  it('advances a blocked max-revisions task to gate_check when prior LLM review was all-clear', async () => {
+  it('recovers a reviewer fan-out max-revisions blocker built from non-actionable findings', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: 'worker-agent',
+        spec: VALID_SPEC,
+        recoveryCode: 'reviewer_fanout_max_revisions',
+        revisionCount: 4,
+        acceptanceCriteria: [
+          { id: 'visual-review', description: 'The packaged UI is readable.', met: false, verifiedBy: 'review' },
+        ],
+        blockReason: 'max_revisions_exceeded: Exceeded maxRevisions (3). Requires human judgment.',
+        reviewVerdicts: [{
+          verdict: 'revise',
+          reviewerPath: 'llm',
+          reviewerId: 'reviewer-fanout',
+          reason: 'Reviewer fan-out requested revision.',
+          reasoning: 'Narrative wording is audit-only.',
+          findings: [{
+            targetKind: 'acceptance_criterion',
+            targetId: 'visual-review',
+            disposition: 'unsatisfied',
+            evidenceRefs: [],
+          }],
+          recordedAt: '2026-05-03T00:10:00.000Z',
+          failingSignals: ['visual-designer'],
+        }],
+        escalations: [],
+      }),
+    ])
+    const runner: ReviewerFanoutRunner = async ({ personas }) => personas.map(
+      (persona): PersonaVerdict => ({
+        guildSlug: persona.slug,
+        guildName: persona.name,
+        verdict: 'approve',
+        reasoning: 'The packaged UI evidence is readable.',
+        acceptedCriteriaIds: ['visual-review'],
+        proofEvidenceIds: [],
+        findings: [{
+          targetKind: 'acceptance_criterion',
+          targetId: 'visual-review',
+          disposition: 'satisfied',
+          evidenceRefs: ['internal/evidence/desktop.png'],
+        }],
+        revisionItems: [],
+        rawOutput: '**Verdict:** approve',
+      }),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    expect(await orch.tick()).toMatchObject({
+      kind: 'processed',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+    })
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('gate_check')
+    expect(task?.revisionCount).toBe(4)
+    expect(task?.blockReason).toBeUndefined()
+    expect(task?.recoveryCode).toBeUndefined()
+    expect(task?.notes.some((note) => note.content.includes('non-actionable reviewer failures incorrectly counted'))).toBe(true)
+  })
+
+  it('reruns review after max revisions before returning an earlier all-clear task to gate_check', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -13583,6 +13792,10 @@ describe('Orchestrator.run — full loops', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'a')
     expect(task?.status).toBe('gate_check')
     expect(task?.assignedTo).toBe('gate-checker-agent')
+    expect(task?.reviewVerdicts.at(-1)).toMatchObject({
+      verdict: 'approve',
+      acceptedCriteriaIds: ['ac-1'],
+    })
     expect(task?.blockReason ?? null).toBeNull()
     expect(task?.notes.some((note) =>
       note.role === 'recovery' &&
@@ -14464,7 +14677,7 @@ describe('Orchestrator.run — full loops', () => {
     })
 
     expect(result.stopReason).toBe('one_task')
-    expect(picked).toEqual([])
+    expect(picked).toEqual(['context-menu-component'])
     const q = await readManagedQueue()
     expect(q.tasks.find((t) => t.id === 'context-menu')?.status).toBe('ready')
     expect(q.tasks.find((t) => t.id === 'context-menu-component')?.status).toBe('spec_review')
@@ -14984,6 +15197,20 @@ describe('Orchestrator.run — full loops', () => {
         worktreePath,
         branchName: 'guildhall/task-done-summary',
         baseBranch: 'main',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The reviewer approved the completed work.',
+          verifiedBy: 'review',
+          met: true,
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          acceptedCriteriaIds: ['ac-1'],
+          reason: 'Reviewer approved.',
+          failingSignals: [],
+          recordedAt: '2026-04-01T00:19:00.000Z',
+        }],
         doneSummaryBundle: {
           taskId: 'task-done-summary',
           status: 'done',
@@ -15042,6 +15269,59 @@ describe('Orchestrator.run — full loops', () => {
       fromBranch: 'guildhall/task-done-summary',
       toBranch: 'main',
     })
+  })
+
+  it('supersedes stale done-summary evidence when an exact review criterion remains unapproved', async () => {
+    await writeQueue([mkTask({
+      id: 'task-stale-review-completion',
+      status: 'gate_check',
+      acceptanceCriteria: [{
+        id: 'ac-visual',
+        description: 'The packaged UI is visually approved.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+      doneSummaryBundle: {
+        taskId: 'task-stale-review-completion',
+        status: 'done',
+        completedAt: '2026-04-01T00:20:00.000Z',
+        summary: {
+          journey: 'Command gates passed.',
+          decision: 'The task was incorrectly closed.',
+          evidence: 'Only command proof was recorded.',
+          learningCandidates: [],
+          openResidue: 'Visual review is missing.',
+        },
+        retention: {
+          transcriptPrimaryArtifact: false,
+          compactedFullTranscript: false,
+          fullEvidenceAvailable: true,
+        },
+        evidenceRefs: [],
+        createdAt: '2026-04-01T00:20:00.000Z',
+        createdBy: 'recorded-hard-gates',
+      },
+    })])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'task-stale-review-completion',
+      afterStatus: 'review',
+      agent: 'review-criteria-authority',
+    })
+    const task = (await readQueue()).tasks[0]!
+    expect(task.doneSummaryBundle).toMatchObject({
+      status: 'reopened',
+      createdBy: 'completion-authority-repair',
+    })
+    expect(task.acceptanceCriteria[0]?.met).toBe(false)
   })
 
   it('routes proof-recovery work without a blueprint through the spec lane before implementation', async () => {
@@ -15259,7 +15539,7 @@ describe('Orchestrator.run — full loops', () => {
     expect((await readQueue()).tasks[0]?.status).toBe('exploring')
   })
 
-  it('does not complete approved gate-check work when the proof path remains missing', async () => {
+  it('returns gate-check work to review when approval omits the exact review criterion', async () => {
     await writeQueue([
       mkTask({
         id: 'task-proof-path',
@@ -15299,12 +15579,12 @@ describe('Orchestrator.run — full loops', () => {
     expect(out).toMatchObject({
       kind: 'processed',
       taskId: 'task-proof-path',
-      afterStatus: 'in_progress',
+      afterStatus: 'review',
     })
     const q = await readQueue()
-    expect(q.tasks[0]?.status).toBe('in_progress')
-    expect(q.tasks[0]?.assignedTo).toBe('worker-agent')
-    expect(q.tasks[0]?.notes.at(-1)?.content).toContain('still lacks the proof evidence')
+    expect(q.tasks[0]?.status).toBe('review')
+    expect(q.tasks[0]?.assignedTo).toBe('reviewer-agent')
+    expect(q.tasks[0]?.notes.at(-1)?.content).toContain('ac-proof')
   })
 
   it('marks pending PR tasks done and removes the worktree once the PR is merged', async () => {
@@ -19137,11 +19417,16 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
             {
               agentId: 'worker-agent',
               role: 'worker',
-              content: [
+              ...withMachineSelfCritique([
                 '**Self-critique:**',
                 '1. **Implementation is repaired:** Met — Fixed the reviewer findings.',
                 '2. **Build passes:** Met — Verified via pnpm build.',
-              ].join('\n') + '\n\n**Machine self-critique:**\n```json\n{"acceptanceCriteria":[{"id":"ac-1","status":"met"},{"id":"ac-2","status":"met"}],"changedFiles":["src/repaired.ts"],"verificationCommands":[{"command":"pnpm build","status":"passed"}],"proofEvidenceIds":[]}\n```',
+              ].join('\n'), {
+                acceptanceCriteria: [{ id: 'ac-1', status: 'met' }, { id: 'ac-2', status: 'met' }],
+                changedFiles: ['src/repaired.ts'],
+                verificationCommands: [{ command: 'pnpm build', status: 'passed' }],
+                proofEvidenceIds: [],
+              }),
               timestamp: '2026-04-22T00:00:00Z',
             },
           ],
@@ -19187,14 +19472,19 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
             {
               agentId: 'worker-agent',
               role: 'worker',
-              content: [
+              ...withMachineSelfCritique([
                 '**Self-critique:**',
                 '1. **Ghost button renders:** Met — Verified in source.',
                 '2. **Build passes:** Met — Verified via pnpm build.',
                 '',
                 'Out-of-scope changes introduced: None.',
                 'Uncertainties: None.',
-              ].join('\n') + '\n\n**Machine self-critique:**\n```json\n{"acceptanceCriteria":[{"id":"ac-1","status":"met"},{"id":"ac-2","status":"met"}],"changedFiles":["src/ghost-button.ts"],"verificationCommands":[{"command":"pnpm build","status":"passed"}],"proofEvidenceIds":[]}\n```',
+              ].join('\n'), {
+                acceptanceCriteria: [{ id: 'ac-1', status: 'met' }, { id: 'ac-2', status: 'met' }],
+                changedFiles: ['src/ghost-button.ts'],
+                verificationCommands: [{ command: 'pnpm build', status: 'passed' }],
+                proofEvidenceIds: [],
+              }),
               timestamp: '2026-04-21T00:00:00Z',
             },
           ],
@@ -19206,7 +19496,7 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
         calls: [],
         async generate(prompt: string) {
           this.calls.push({ prompt })
-          throw new Error('OpenAI-compatible API HTTP 429: {"status":429,"title":"Too Many Requests"}')
+          throw new Error('Reviewer transport closed without a typed verdict.')
         },
       }
 
@@ -19226,7 +19516,8 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
       expect(task.status).toBe('gate_check')
       expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
       expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
-      expect(task.reviewVerdicts.at(-1)?.llmError).toContain('Too Many Requests')
+      expect(task.reviewVerdicts.at(-1)?.llmError).toContain('transport closed')
+      expect(task.reviewVerdicts.at(-1)?.failureCode).toBe('provider_unavailable')
     },
   )
 
@@ -19384,11 +19675,16 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
             {
               agentId: 'worker-agent',
               role: 'worker',
-              content: [
+              ...withMachineSelfCritique([
                 '**Self-critique:**',
                 '1. **Looma table primitives are wired into Knit:** Met — Verified in source.',
                 '2. **`pnpm -F web build` passes:** Met — Verified via pnpm -F web build.',
-              ].join('\n') + '\n\n**Machine self-critique:**\n```json\n{"acceptanceCriteria":[{"id":"ac-1","status":"met"},{"id":"ac-2","status":"met"}],"changedFiles":["src/table.ts"],"verificationCommands":[{"command":"pnpm -F web build","status":"passed"}],"proofEvidenceIds":[]}\n```',
+              ].join('\n'), {
+                acceptanceCriteria: [{ id: 'ac-1', status: 'met' }, { id: 'ac-2', status: 'met' }],
+                changedFiles: ['src/table.ts'],
+                verificationCommands: [{ command: 'pnpm -F web build', status: 'passed' }],
+                proofEvidenceIds: [],
+              }),
               timestamp: '2026-04-21T00:00:00Z',
             },
           ],
@@ -19438,11 +19734,16 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
             {
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: [
+              ...withMachineSelfCritique([
                 '**Self-critique:**',
                 '- AC1 (Page loads): Met — Verified in browser.',
                 '- AC2 (Mark used removes an item): Met — Verified in browser.',
-              ].join('\n') + '\n\n**Machine self-critique:**\n```json\n{"acceptanceCriteria":[{"id":"AC-01","status":"met"},{"id":"AC-02","status":"met"}],"changedFiles":["src/page.ts"],"verificationCommands":[{"command":"pnpm test","status":"passed"}],"proofEvidenceIds":[]}\n```',
+              ].join('\n'), {
+                acceptanceCriteria: [{ id: 'AC-01', status: 'met' }, { id: 'AC-02', status: 'met' }],
+                changedFiles: ['src/page.ts'],
+                verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+                proofEvidenceIds: [],
+              }),
               timestamp: '2026-04-21T00:00:00Z',
             },
           ],
@@ -19493,7 +19794,7 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
             {
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: [
+              ...withMachineSelfCritique([
                 '**Self-critique:**',
                 '- AC1: Met — generated synopsis, outline, character voice records, world facts, and chapter draft.',
                 '- AC2: Met — `npm run build` and `node scripts/prove-generation.mjs` passed.',
@@ -19505,7 +19806,19 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
                 'Review proof packet:',
                 '- Changed files / diff scope: src/cli/generate.ts, scripts/prove-generation.mjs, fixtures/story-output.json.',
                 '- Verification commands passed: npm run build; node scripts/prove-generation.mjs.',
-              ].join('\n') + '\n\n**Machine self-critique:**\n```json\n{"acceptanceCriteria":[{"id":"synopsis-to-outline-chain","status":"met"},{"id":"chapter-draft-command","status":"met"},{"id":"author-voice-preservation","status":"met"}],"changedFiles":["src/cli/generate.ts","scripts/prove-generation.mjs","fixtures/story-output.json"],"verificationCommands":[{"command":"pnpm build","status":"passed"},{"command":"node scripts/prove-generation.mjs","status":"passed"}],"proofEvidenceIds":[]}\n```',
+              ].join('\n'), {
+                acceptanceCriteria: [
+                  { id: 'synopsis-to-outline-chain', status: 'met' },
+                  { id: 'chapter-draft-command', status: 'met' },
+                  { id: 'author-voice-preservation', status: 'met' },
+                ],
+                changedFiles: ['src/cli/generate.ts', 'scripts/prove-generation.mjs', 'fixtures/story-output.json'],
+                verificationCommands: [
+                  { command: 'pnpm build', status: 'passed' },
+                  { command: 'node scripts/prove-generation.mjs', status: 'passed' },
+                ],
+                proofEvidenceIds: [],
+              }),
               timestamp: '2026-04-21T00:00:00Z',
             },
           ],

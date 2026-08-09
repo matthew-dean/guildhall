@@ -618,7 +618,7 @@ function renderAcceptanceCriteria(task: Task): string {
   if (task.acceptanceCriteria.length === 0) return ''
   const lines = ['### Acceptance Criteria']
   for (const [index, criterion] of task.acceptanceCriteria.entries()) {
-    lines.push(`${index + 1}. ${clipContextBlock(criterion.description, 700)}`)
+    lines.push(`${index + 1}. \`${criterion.id}\`: ${clipContextBlock(criterion.description, 700)}`)
     const command = typeof criterion.command === 'string' ? criterion.command.trim() : ''
     if (command) lines.push(`   Command: \`${command}\``)
   }

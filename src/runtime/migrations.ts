@@ -49,6 +49,7 @@ import {
   compactProjectStateDatabaseEvidence,
   vacuumProjectStateDatabase,
   readProjectStateDatabaseTaskEvidenceAuthority,
+  readProjectStateDatabaseTaskEvidenceOutbox,
   readProjectStateDatabaseTaskOverlayStores,
   readTaskRuntimeStore,
   replaceProjectStateDatabaseTaskRuntimes,
@@ -74,6 +75,8 @@ import {
   migrateDatabaseTaskEvidenceHistoryToCompressed,
   migrateLegacyTaskEvidenceHistoryToDatabase,
   appendTaskEvidence,
+  flushTaskEvidenceOutboxForTasksPath,
+  TASK_EVIDENCE_RETENTION,
   runtimeStatePath,
   taskWorkspaceStatePath,
 } from '@guildhall/sessions'
@@ -105,7 +108,7 @@ import {
   readProjectSummaryProjectionForMigration,
   writeProjectSummaryProjectionFromIndexedState,
 } from './project-summary-projection.js'
-import { readProjectCanonicalCurrentState, writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
+import { readProjectCanonicalCurrentState, writeProjectTaskQueueWithSummary, writePromotedTaskDetailMutation } from './project-state-boundary.js'
 import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from './delivery-read-projection.js'
 import { effectiveTaskTitle } from '@guildhall/shared'
 import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
@@ -118,6 +121,7 @@ import {
   removeEmptyMastraThreadShells,
   retireEmptyMastraDatabase,
 } from '@guildhall/memory-core'
+import { migrateHistoricalProofPathEvidence } from './historical-proof-path-evidence-migration.js'
 
 export type MigrationScope = 'machine' | 'project' | 'workspace' | 'database'
 export type MigrationSafety = 'automatic' | 'prompt' | 'manual' | 'required'
@@ -247,6 +251,7 @@ const NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID = '0.13.73/named-release-member-co
 const INCLUDED_RELEASE_DISPOSITION_COUNT_MIGRATION_ID = '0.13.74/included-release-disposition-counts'
 const CANONICAL_RELEASE_MEMBERSHIP_SUMMARY_MIGRATION_ID = '0.13.75/canonical-release-membership-summary'
 const SELECTED_RELEASE_NODE_MEMBERSHIP_SUMMARY_MIGRATION_ID = '0.13.76/selected-release-node-membership-summary'
+const PROOF_VERIFICATION_EVIDENCE_AUTHORITY_MIGRATION_ID = '0.13.77/proof-verification-evidence-authority'
 const RELEASE_MEMBERSHIP_READ_BOUNDARY_MIGRATION_ID = '0.13.99/release-membership-read-boundary'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
@@ -1126,6 +1131,10 @@ async function realignPromotedSummaryWithEffectiveState(projectRoot: string): Pr
       ...task,
       title: typeof effective.title === 'string' ? effective.title : task.title,
       status: typeof effective.status === 'string' ? effective.status : task.status,
+      ...(typeof effective.semanticKind === 'string' ? { semanticKind: effective.semanticKind } : {}),
+      ...(typeof effective.proofForReleaseId === 'string'
+        ? { proofForReleaseId: effective.proofForReleaseId }
+        : {}),
       updatedAt: typeof effective.updatedAt === 'string' ? effective.updatedAt : task.updatedAt,
       completedAt: typeof effective.completedAt === 'string' ? effective.completedAt : task.completedAt,
       ...(currentSummary && typeof currentSummary === 'object' && !Array.isArray(currentSummary)
@@ -4875,15 +4884,9 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
     async apply(projectRoot) {
-      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-      const projection = backfillProjectSummaryProjection(tasksPath, {
-        projectId: path.basename(projectRoot),
-        projectRoot,
-      })
+      const projection = await realignPromotedSummaryWithEffectiveState(projectRoot)
       return {
-        summary: projection.freshness === 'current'
-          ? `Reprojected release readiness for ${projection.counts.total} scoped task${projection.counts.total === 1 ? '' : 's'} using the selected release's proof children.`
-          : 'Recorded an unavailable release readiness projection because the authoritative project state could not be read.',
+        summary: `Reprojected release readiness for ${projection.taskCount} task${projection.taskCount === 1 ? '' : 's'} from current typed evidence and the selected release's proof children.`,
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },
@@ -5681,6 +5684,83 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: PROOF_VERIFICATION_EVIDENCE_AUTHORITY_MIGRATION_ID,
+    title: 'Move historical proof-path results into typed task evidence',
+    introducedIn: '0.13.77',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Moves observed command and review results into typed task evidence, then returns proof paths to expectation-only state.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskCount = (queue?.tasks ?? []).filter(task => {
+        const parsed = TaskSchema.safeParse(task)
+        return parsed.success && migrateHistoricalProofPathEvidence(parsed.data).changed
+      }).length
+      const pendingOutbox = readProjectStateDatabaseTaskEvidenceAuthority(projectRoot) === 'compressed'
+        ? readProjectStateDatabaseTaskEvidenceOutbox(tasksPath)
+            .filter(event => event.id.startsWith('proof-verification-migration:')).length
+        : 0
+      const needed = taskCount > 0 || pendingOutbox > 0
+      return {
+        needed,
+        affectedPaths: needed
+          ? [
+              projectStateDatabasePath(projectRoot),
+              `${taskCount} task${taskCount === 1 ? '' : 's'} with proof-path result state`,
+              ...(pendingOutbox > 0 ? [`${pendingOutbox} pending compressed-history event${pendingOutbox === 1 ? '' : 's'}`] : []),
+            ]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const evidenceAuthority = readProjectStateDatabaseTaskEvidenceAuthority(projectRoot)
+      if (evidenceAuthority === 'compressed') await flushTaskEvidenceOutboxForTasksPath(tasksPath)
+
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) throw new Error('Historical proof evidence migration requires a readable promoted task queue')
+      let taskCount = 0
+      let evidenceCount = 0
+
+      for (const queuedTask of queue.tasks) {
+        const parsed = TaskSchema.safeParse(queuedTask)
+        if (!parsed.success) continue
+        const prepared = migrateHistoricalProofPathEvidence(parsed.data)
+        if (!prepared.changed) continue
+        const preparedEvidenceSignature = JSON.stringify(prepared.evidence)
+        const committed = writePromotedTaskDetailMutation(tasksPath, parsed.data.id, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          mutate(current) {
+            const currentTask = current as unknown as Pick<Task, 'id' | 'updatedAt' | 'proofPaths'>
+            const currentMigration = migrateHistoricalProofPathEvidence(currentTask)
+            if (!currentMigration.changed || JSON.stringify(currentMigration.evidence) !== preparedEvidenceSignature) {
+              throw new Error(`Historical proof state changed while migrating ${currentTask.id}; retry the migration`)
+            }
+            return { ...currentTask, proofPaths: currentMigration.proofPaths }
+          },
+          evidence: prepared.evidence.map(event => ({
+            event,
+            retention: TASK_EVIDENCE_RETENTION[event.kind],
+            history: evidenceAuthority === 'compressed' ? 'outbox' : 'database',
+          })),
+        })
+        if (!committed) throw new Error(`Promoted task ${parsed.data.id} could not be committed through the atomic task boundary`)
+        if (evidenceAuthority === 'compressed') await flushTaskEvidenceOutboxForTasksPath(tasksPath, parsed.data.id)
+        taskCount += 1
+        evidenceCount += prepared.evidence.length
+      }
+
+      return {
+        summary: `Moved ${evidenceCount} historical proof result${evidenceCount === 1 ? '' : 's'} into typed evidence for ${taskCount} task${taskCount === 1 ? '' : 's'} and reset proof paths to expectations.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
 ]
 
 const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
@@ -5778,6 +5858,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID]: 'migrations.test.ts: attaches task identity to legacy diagnostic blockers only when the task inventory proves it',
   [SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects a completed script-only task without proof as a release blocker',
   [SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID]: 'project-summary-projection.test.ts: publishes source-catalog status from the canonical SQLite catalog',
+  [PROOF_VERIFICATION_EVIDENCE_AUTHORITY_MIGRATION_ID]: 'migrations.test.ts: moves historical proof-path verification records into typed evidence and leaves a second application unchanged',
   [SPEC_REVIEW_GATE_MIGRATION_ID]: 'migrations.test.ts: backfills only legacy spec-review gates and remains idempotent after canonical task writes',
   [DURABLE_SPEC_HANDOFF_MIGRATION_ID]: 'migrations.test.ts: settles only an approved, structurally valid spec handoff and never auto-approves it',
   [DURABLE_DECISION_SNAPSHOT_MIGRATION_ID]: 'migrations.test.ts: rebuilds a missing revision-bound decision packet from normalized state',

@@ -25,28 +25,37 @@ function requiredEvidence(path: RecordValue): RecordValue[] {
     .filter((value): value is RecordValue => value !== null && value.required !== false)
 }
 
-function passedEvidenceIds(path: RecordValue): Set<string> {
-  return new Set(
-    (Array.isArray(path.verificationRecords) ? path.verificationRecords : [])
-      .map(recordValue)
-      .filter((record): record is RecordValue => record?.status === 'passed')
-      .map(record => stringValue(record.evidenceId))
-      .filter((id): id is string => id !== null),
-  )
-}
-
 function passedStructuredReviewEvidenceIds(task: RecordValue): Set<string> {
-  return new Set(
-    [
-      ...evidencePayloads(task, 'review_verdict'),
-      ...(Array.isArray(task.reviewVerdicts) ? task.reviewVerdicts.map(recordValue).filter((value): value is RecordValue => value !== null) : []),
-    ].flatMap(review => {
-      if (review.verdict !== 'approve' && review.decision !== 'approve') return []
-      return Array.isArray(review.proofEvidenceIds)
-        ? review.proofEvidenceIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
-        : []
-    }),
-  )
+  const recordedReviews = evidencePayloads(task, 'review_verdict')
+  const projectedReviews = Array.isArray(task.reviewVerdicts)
+    ? task.reviewVerdicts.map(recordValue).filter((value): value is RecordValue => value !== null)
+    : []
+  const latest = [...recordedReviews, ...projectedReviews]
+    .map((review, index) => ({
+      review,
+      index,
+      recordedAt: Date.parse(String(review.recordedAt ?? '')),
+    }))
+    .filter(({ review }) =>
+      review.verdict === 'approve' || review.decision === 'approve' ||
+      review.verdict === 'revise' || review.decision === 'revise')
+    .sort((left, right) => {
+      const leftAt = Number.isFinite(left.recordedAt) ? left.recordedAt : Number.NEGATIVE_INFINITY
+      const rightAt = Number.isFinite(right.recordedAt) ? right.recordedAt : Number.NEGATIVE_INFINITY
+      return leftAt - rightAt || left.index - right.index
+    })
+    .at(-1)?.review
+  if (!latest || (latest.verdict !== 'approve' && latest.decision !== 'approve')) return new Set()
+  const proofIds = Array.isArray(latest.proofEvidenceIds)
+    ? latest.proofEvidenceIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    : []
+  const acceptedCriteriaIds = Array.isArray(latest.acceptedCriteriaIds)
+    ? latest.acceptedCriteriaIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    : []
+  // Generated review paths deliberately reuse the exact acceptance-criterion
+  // id. In that typed case the criterion approval is the observed review
+  // evidence; distinct proof ids still require explicit proofEvidenceIds.
+  return new Set([...proofIds, ...acceptedCriteriaIds])
 }
 
 function proofLabel(path: RecordValue): string {
@@ -63,7 +72,7 @@ function evidencePayloads(task: RecordValue, kind: string): RecordValue[] {
   return task.evidence.flatMap(value => {
     const event = recordValue(value)
     const payload = event?.kind === kind ? recordValue(event.payload) : null
-    return payload ? [payload] : []
+    return payload ? [{ ...(stringValue(event?.recordedAt) ? { recordedAt: event!.recordedAt } : {}), ...payload }] : []
   })
 }
 
@@ -78,10 +87,14 @@ function evidencePayloads(task: RecordValue, kind: string): RecordValue[] {
  * descriptions remain deliberately irrelevant.
  */
 export function commandProofGateMatches(path: RecordValue, gate: RecordValue): boolean {
+  return commandProofGateIdentityMatches(path, gate) &&
+    (gate.passed === true || gate.status === 'pass' || gate.status === 'passed')
+}
+
+function commandProofGateIdentityMatches(path: RecordValue, gate: RecordValue): boolean {
   if (path.kind !== 'command') return false
   const command = stringValue(path.command)
   if (!command) return false
-  if (!(gate.passed === true || gate.status === 'pass' || gate.status === 'passed')) return false
   const proofBoundary = Date.parse(String(path.updatedAt ?? path.createdAt ?? ''))
   const gateObservedAt = Date.parse(String(gate.checkedAt ?? gate.recordedAt ?? ''))
   if (Number.isFinite(proofBoundary) && Number.isFinite(gateObservedAt) && gateObservedAt < proofBoundary) return false
@@ -95,13 +108,25 @@ export function commandProofGateMatches(path: RecordValue, gate: RecordValue): b
 
 function commandGateMatches(path: RecordValue, task: RecordValue): boolean {
   const recordedGates = evidencePayloads(task, 'gate_result')
-  const gateResults = recordedGates.length > 0
+  const gateResults = Array.isArray(task.evidence)
     ? recordedGates
-    : (Array.isArray(task.gateResults) ? task.gateResults : [])
-  return gateResults
+    : recordedGates.length > 0
+      ? recordedGates
+      : (Array.isArray(task.gateResults) ? task.gateResults : [])
+  const matching = gateResults
     .map(recordValue)
     .filter((gate): gate is RecordValue => gate !== null)
-    .some(gate => commandProofGateMatches(path, gate))
+    .filter(gate => commandProofGateIdentityMatches(path, gate))
+  if (matching.length === 0) return false
+  const latest = matching
+    .map((gate, index) => ({ gate, index, observedAt: Date.parse(String(gate.checkedAt ?? gate.recordedAt ?? '')) }))
+    .sort((left, right) => {
+      const leftAt = Number.isFinite(left.observedAt) ? left.observedAt : Number.NEGATIVE_INFINITY
+      const rightAt = Number.isFinite(right.observedAt) ? right.observedAt : Number.NEGATIVE_INFINITY
+      return leftAt - rightAt || left.index - right.index
+    })
+    .at(-1)?.gate
+  return Boolean(latest && (latest.passed === true || latest.status === 'pass' || latest.status === 'passed'))
 }
 
 /**
@@ -115,19 +140,16 @@ export function isCurrentProofPathProven(
 ): boolean {
   if (commandGateMatches(path, task)) return true
   const expected = requiredEvidence(path)
-  const passed = new Set([
-    ...passedEvidenceIds(path),
-    ...passedStructuredReviewEvidenceIds(task),
-  ])
+  const passed = passedStructuredReviewEvidenceIds(task)
   if (expected.length > 0 && expected.every(evidence => {
     const id = stringValue(evidence.id)
     return id !== null && passed.has(id)
   })) return true
   // Descriptions are for people. They are deliberately excluded from proof
-  // matching: a model's wording must never be treated as a semantic proof
-  // token. Current contracts prove through stable evidence IDs, exact command
-  // gates, or an explicit verified path status with recorded evidence.
-  return expected.length === 0 && path.status === 'verified' && passed.size > 0
+  // matching: a model's wording and mutable path status must never be treated
+  // as semantic proof tokens. Current contracts prove through typed observed
+  // evidence with stable IDs or exact command identity.
+  return false
 }
 
 function pathIsExecutable(path: RecordValue): boolean {

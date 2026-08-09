@@ -1,4 +1,4 @@
-import { afterAll, describe, it, expect } from 'vitest'
+import { afterAll, describe, it, expect, vi } from 'vitest'
 import type { Task } from '@guildhall/core'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -382,6 +382,47 @@ describe('ensureWorktreeForDispatch', () => {
     await expect(fs.access(path.join(result.worktreePath, 'outside.env'))).rejects.toThrow()
   })
 
+  it('removes a newly created worktree when post-creation setup fails', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worktree-setup-failure-'))
+    const projectPath = path.join(tmp, 'app')
+    const projectId = `setup-failure-${path.basename(tmp)}`
+    const seededTask = task({ id: 'copy-failure', projectPath })
+    const expectedPath = computeWorktreePath(projectId, seededTask, 'per_task')
+    await fs.mkdir(projectPath, { recursive: true })
+    await fs.writeFile(path.join(projectPath, '.env'), 'API_TOKEN=local-secret\n')
+
+    const driver = new InMemoryGitDriver()
+    const createWorktree = driver.createWorktree.bind(driver)
+    driver.createWorktree = async (repoRoot, options) => {
+      await createWorktree(repoRoot, options)
+      await fs.mkdir(options.worktreePath, { recursive: true })
+    }
+    const removeWorktree = driver.removeWorktree.bind(driver)
+    driver.removeWorktree = async (repoRoot, worktreePath) => {
+      await removeWorktree(repoRoot, worktreePath)
+      await fs.rm(worktreePath, { recursive: true, force: true })
+    }
+    const copyFailure = vi.spyOn(fs, 'cp').mockRejectedValueOnce(new Error('injected copy failure'))
+
+    try {
+      await expect(ensureWorktreeForDispatch({
+        task: seededTask,
+        mode: 'per_task',
+        projectId,
+        projectPath,
+        baseBranch: 'main',
+        gitDriver: driver,
+        worktreeInclude: ['.env'],
+      })).rejects.toThrow('injected copy failure')
+    } finally {
+      copyFailure.mockRestore()
+    }
+
+    expect(driver.state.createdWorktrees).toHaveLength(1)
+    expect(driver.state.removedWorktrees).toEqual([expectedPath])
+    await expect(fs.access(expectedPath)).rejects.toThrow()
+  })
+
   it('refreshes explicit local config files when reusing a task worktree', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worktree-refresh-'))
     const projectPath = path.join(tmp, 'app')
@@ -449,6 +490,20 @@ describe('cleanupWorktreeForTerminal', () => {
       mode: 'per_task',
       projectId: 'demo-project',
       projectPath: '/repo',
+      gitDriver: driver,
+    })
+    expect(driver.state.removedWorktrees).toEqual([worktreePath])
+  })
+
+  it('removes a Guildhall checkout from the legacy project-local worktree root', async () => {
+    const driver = new InMemoryGitDriver()
+    const projectPath = '/repo'
+    const worktreePath = path.join(projectPath, '.guildhall', 'worktrees', 'demo-project', 'x')
+    await cleanupWorktreeForTerminal({
+      task: task({ worktreePath }),
+      mode: 'per_task',
+      projectId: 'demo-project',
+      projectPath,
       gitDriver: driver,
     })
     expect(driver.state.removedWorktrees).toEqual([worktreePath])

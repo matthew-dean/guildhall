@@ -35,7 +35,7 @@ import {
 import { deriveReleaseContainersFromTaskMembership, releaseLabelFromId, taskScopeNodeId } from './project-scope-projection.js'
 import { applyTaskShaping } from './task-decomposition.js'
 import { isMaterializableSplitAction, materializeSplitChildren } from '@guildhall/tools'
-import { effectiveTaskTitle } from '@guildhall/shared'
+import { effectiveTaskTitle, summarizeCurrentProof } from '@guildhall/shared'
 import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
 import {
   contractShapedImportHasNoConcreteContracts,
@@ -103,11 +103,9 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
   const tasksPath = workspaceImportTasksPath(memoryDir)
   await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-  const expectedQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
   await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
     projectId: path.basename(inferProjectRootFromMemoryDir(memoryDir)),
     projectRoot: inferProjectRootFromMemoryDir(memoryDir),
-    ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
   })
 }
 
@@ -2862,8 +2860,11 @@ function importedCurrentCompletionNeedsFreshProof(input: {
   if (taskHasDurableCompletionEvidence(input.existing)) return false
   const hasUnmetRefreshedCriteria = (input.refreshedAcceptanceCriteria ?? [])
     .some(criterion => criterion.met !== true)
-  const hasUnverifiedRefreshedProof = (input.refreshedProofPaths ?? [])
-    .some(proofPathMissingPassedEvidence)
+  const refreshedProof = summarizeCurrentProof({
+    ...input.existing,
+    proofPaths: input.refreshedProofPaths ?? [],
+  } as unknown as Record<string, unknown>)
+  const hasUnverifiedRefreshedProof = (input.refreshedProofPaths ?? []).length > 0 && refreshedProof.state !== 'proven'
   if (!hasUnmetRefreshedCriteria && !hasUnverifiedRefreshedProof) return false
   return !taskHasVerifiedCompletionEvidence(input.existing)
 }
@@ -2872,7 +2873,7 @@ function taskHasVerifiedCompletionEvidence(task: Task): boolean {
   return (
     taskHasDurableCompletionEvidence(task) ||
     completionHandoffHasVerifiedEvidence(task.completionHandoff) ||
-    (task.proofPaths ?? []).some(proofPathHasPassedEvidence) ||
+    summarizeCurrentProof(task as unknown as Record<string, unknown>).state === 'proven' ||
     (task.gateResults ?? []).some(result => result.passed === true) ||
     (task.reviewVerdicts ?? []).some(verdict => verdict.verdict === 'approve')
   )
@@ -2916,22 +2917,6 @@ function completionHandoffHasVerifiedEvidence(handoff: unknown): boolean {
   return passedVerificationRecords(record.automatedProof).length > 0 ||
     passedVerificationRecords(record.manualProof).length > 0 ||
     passedVerificationRecords(record.providerProof).length > 0
-}
-
-function proofPathHasPassedEvidence(proofPath: unknown): boolean {
-  if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
-  const record = proofPath as Record<string, unknown>
-  // An inferred imported plan can carry a stale `verified` label from an old
-  // intake pass. Only an observed/unsourced status is allowed to preserve a
-  // completion claim; source-backed plans still need actual verification
-  // records before they settle work.
-  if (record.status === 'verified' && record.source !== 'inferred') return true
-  return passedVerificationRecords(record.verificationRecords).length > 0
-}
-
-function proofPathMissingPassedEvidence(proofPath: unknown): boolean {
-  if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return true
-  return !proofPathHasPassedEvidence(proofPath)
 }
 
 function nonEmptyStringArray(value: unknown): string[] {

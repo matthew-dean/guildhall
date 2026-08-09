@@ -33,10 +33,14 @@ import {
 } from '@guildhall/core'
 import {
   appendTaskEvidence,
+  flushTaskEvidenceOutboxForTasksPath,
   atomicWriteText,
   inferProjectRootFromMemoryDir,
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+  readProjectStateDatabaseTaskEvidenceAuthorityFromTasksPath,
   readProjectStateDatabaseTaskEvidenceCurrent,
+  readProjectStateDatabaseTaskPointWithRevision,
+  TASK_EVIDENCE_RETENTION,
   upsertTaskRuntimeState,
   withProjectStateWriteLock,
 } from '@guildhall/sessions'
@@ -49,6 +53,7 @@ import {
 } from '@guildhall/runtime/project-state-boundary'
 import { ownerSpecRevisionRequirements, validateSpecGrounding } from '@guildhall/runtime/spec-quality'
 import { taskDoneButProofMissing } from '@guildhall/runtime/proof-health'
+import { buildEffectiveTaskFromDatabaseOverlay } from '@guildhall/runtime/effective-task'
 import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, proofSetupHasTaskIdentity } from '@guildhall/runtime/proof-paths'
 
 const TASKS_PATH_SCHEMA = z.string().describe(
@@ -211,10 +216,10 @@ function stampWorkerSelfCritiqueContract(
 }
 
 function persistedWorkerSelfCritique(
-  projectRoot: string,
   task: z.infer<typeof Task>,
+  currentEvidence: ReturnType<typeof readProjectStateDatabaseTaskEvidenceCurrent>,
 ): Record<string, unknown> | null {
-  const notes = readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, task.id)?.byKind.note ?? []
+  const notes = currentEvidence?.byKind.note ?? []
   const expectedContract = workerHandoffContractFingerprint(task)
   for (const record of [...notes].reverse()) {
     const payload = record.payload
@@ -448,6 +453,7 @@ async function updateTaskUnlocked(
     const currentAgentId = typeof metadata['current_agent_id'] === 'string'
       ? metadata['current_agent_id'].trim()
       : ''
+    const databaseAuthority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(input.tasksPath) === 'database'
 
     if (!hasTaskMutation(input)) {
       return {
@@ -495,6 +501,13 @@ async function updateTaskUnlocked(
           'Workers cannot author hard gate results. Run command-backed proof through run-gates or let acceptance-command-gates record observed command exits.',
       }
     }
+    if (databaseAuthority && (input.gateResults?.length ?? 0) > 0) {
+      return {
+        success: false,
+        taskId,
+        error: 'Promoted task gate results are observed evidence. Run them through run-gates instead of supplying them to update-task.',
+      }
+    }
 
     const nextStatus = input.status ? TaskStatus.parse(input.status) : undefined
     const normalizedSpec = input.spec !== undefined
@@ -506,12 +519,12 @@ async function updateTaskUnlocked(
     const renderedStructuredSpec = normalizedStructuredSpec
       ? normalizeSpecForTaskProjectPath(renderStructuredSpecMarkdown(normalizedStructuredSpec), task.projectPath)
       : undefined
-    const currentEvidence = normalizedStructuredSpec
-      ? readProjectStateDatabaseTaskEvidenceCurrent(
+    const currentEvidence = databaseAuthority
+      ? readProjectStateDatabaseTaskPointWithRevision(input.tasksPath, task.id)?.overlay?.evidenceCurrent ?? null
+      : readProjectStateDatabaseTaskEvidenceCurrent(
         projectRootForTaskState(input.tasksPath, task, metadata),
         task.id,
       )
-      : null
     const ownerRevisionRequirements = ownerSpecRevisionRequirements(task, currentEvidence)
     if (normalizedStructuredSpec) {
       const proofContractError = validateStructuredProofContract(task, normalizedStructuredSpec, currentEvidence)
@@ -569,7 +582,7 @@ async function updateTaskUnlocked(
       : null
     const workerSelfCritique = workerSelfCritiqueFromMutation ?? (
       currentAgentId === 'worker-agent' && input.status === 'review'
-        ? persistedWorkerSelfCritique(projectRootForTaskState(input.tasksPath, task), task)
+        ? persistedWorkerSelfCritique(task, currentEvidence)
         : null
     )
     const effectiveAcceptanceCriteria = materializeProofCommandFromWorkerHandoff(
@@ -723,6 +736,13 @@ async function updateTaskUnlocked(
           'A task cannot enter spec_review without a durable spec. Save the product brief and spec first, then move it to spec_review.',
       }
     }
+    if (databaseAuthority && input.completedAt?.trim()) {
+      return {
+        success: false,
+        taskId,
+        error: 'Promoted task completion timestamps are assigned by the task transition after current proof is accepted.',
+      }
+    }
     const statusTransition = explicitStatus && explicitStatus !== task.status
       ? applyTaskTransition({
         task,
@@ -730,7 +750,9 @@ async function updateTaskUnlocked(
         actor: currentAgentId || 'update-task',
         evidenceRefs: [`update-task:status:${task.status}->${explicitStatus}`],
         now: new Date().toISOString(),
-        requiredEvidencePresent: explicitStatus === 'done' ? updateIncludesCompletionEvidence(input, task) : undefined,
+        requiredEvidencePresent: explicitStatus === 'done'
+          ? databaseAuthority || updateIncludesCompletionEvidence(input, task)
+          : undefined,
       })
       : null
     if (statusTransition?.kind === 'rejected') {
@@ -814,7 +836,8 @@ async function updateTaskUnlocked(
     const gateEvidence = input.gateResults !== undefined && input.gateResults.length > 0
       ? z.array(GateResult).parse(input.gateResults)
       : []
-    if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
+    if (explicitStatus === 'done') task.completedAt = new Date().toISOString()
+    else if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
     const shouldRefreshSizePlan =
       (nextSpec !== undefined && nextSpec.trim() !== '') ||
       input.workUnitAnalysis !== undefined
@@ -839,15 +862,34 @@ async function updateTaskUnlocked(
     const noteEvidence = normalizedNote
       ? stampWorkerSelfCritiqueContract({ ...normalizedNote, timestamp: task.updatedAt }, task)
       : null
+    const taskEvidenceEvents: TaskEvidenceEvent[] = []
+    if (noteEvidence) {
+      taskEvidenceEvents.push({
+        id: `${taskId}-note-${noteEvidence.timestamp.replace(/[^0-9A-Za-z]/g, '')}`,
+        taskId,
+        kind: 'note',
+        recordedAt: noteEvidence.timestamp,
+        payload: noteEvidence,
+      })
+    }
+    for (const result of gateEvidence) {
+      taskEvidenceEvents.push({
+        id: `${taskId}-gate-${result.gateId}-${result.checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
+        taskId,
+        kind: 'gate_result',
+        recordedAt: result.checkedAt,
+        payload: result,
+      })
+    }
 
     const taskProjectRoot = projectRootForTaskState(input.tasksPath, task, metadata)
     const taskIdsUnchanged = queue.tasks.length === originalTaskIds.size &&
       queue.tasks.every(candidate => originalTaskIds.has(candidate.id))
     const queueEnvelopeUnchanged = JSON.stringify(queue.releases ?? []) === originalReleases &&
       queue.selectedReleaseId === originalSelectedReleaseId
-    const databaseAuthority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(input.tasksPath) === 'database'
     const isPointMutation = taskIdsUnchanged && queueEnvelopeUnchanged
     if (databaseAuthority && isPointMutation) {
+      const evidenceAuthority = readProjectStateDatabaseTaskEvidenceAuthorityFromTasksPath(input.tasksPath)
       const promotedMutation = writePromotedTaskDetailMutation(input.tasksPath, taskId, {
         projectId: path.basename(taskProjectRoot),
         projectRoot: taskProjectRoot,
@@ -856,9 +898,32 @@ async function updateTaskUnlocked(
           originalTask as unknown as Record<string, unknown>,
           task as unknown as Record<string, unknown>,
         ),
+        mutateRuntime: current => ({
+          ...(current ?? {}),
+          taskId,
+          assignedTo: Object.prototype.hasOwnProperty.call(task, 'assignedTo') ? task.assignedTo ?? null : null,
+          updatedAt: task.updatedAt,
+        }),
+        evidence: taskEvidenceEvents.map(event => ({
+          event,
+          retention: TASK_EVIDENCE_RETENTION[event.kind],
+          ...(evidenceAuthority === 'compressed' ? { history: 'outbox' as const } : {}),
+        })),
+        ...(explicitStatus === 'done'
+          ? {
+              validate: ({ nextEffectiveTask }) => {
+                return taskDoneButProofMissing(nextEffectiveTask)
+                  ? `Task ${taskId} cannot complete from ${originalTask.status}: required_evidence_missing`
+                  : null
+              },
+            }
+          : {}),
       })
       if (!promotedMutation) {
         throw new Error(`Could not persist promoted task definition for task ${taskId}`)
+      }
+      if (evidenceAuthority === 'compressed') {
+        await flushTaskEvidenceOutboxForTasksPath(input.tasksPath, taskId)
       }
     } else if (!databaseAuthority || !isPointMutation) {
       writeProjectTaskQueue(input.tasksPath, queue, {
@@ -866,16 +931,16 @@ async function updateTaskUnlocked(
           ? { expectedQueueRevision: queueRead.expectedQueueRevision }
         : {}),
       })
+      await persistUpdateTaskRuntimeState(input.tasksPath, task, metadata)
+      await appendUpdateTaskEvidence({
+        tasksPath: input.tasksPath,
+        task,
+        taskId,
+        metadata,
+        note: noteEvidence,
+        gateResults: gateEvidence,
+      })
     }
-    await persistUpdateTaskRuntimeState(input.tasksPath, task, metadata)
-    await appendUpdateTaskEvidence({
-      tasksPath: input.tasksPath,
-      task,
-      taskId,
-      metadata,
-      note: noteEvidence,
-      gateResults: gateEvidence,
-    })
     return { success: true, taskId }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -1979,16 +2044,19 @@ function eventForExplicitStatus(from: z.infer<typeof TaskStatus>, to: z.infer<ty
 }
 
 function updateIncludesCompletionEvidence(input: UpdateTaskInput, task: z.infer<typeof Task>): boolean {
-  if (input.completedAt?.trim()) return true
-  if (input.gateResults?.some((result) => result.type === 'hard' && result.passed)) return true
-  if (Array.isArray(input.acceptanceCriteria)) {
-    for (const criterion of input.acceptanceCriteria) {
-      const parsed = AcceptanceCriteria.safeParse(criterion)
-      if (parsed.success && parsed.data.met === true) return true
-    }
+  const candidate = {
+    ...task,
+    status: 'done' as const,
+    ...(input.completedAt?.trim() ? { completedAt: input.completedAt.trim() } : {}),
+    ...(input.acceptanceCriteria !== undefined
+      ? { acceptanceCriteria: z.array(AcceptanceCriteria).parse(input.acceptanceCriteria) }
+      : {}),
+    gateResults: [
+      ...task.gateResults,
+      ...(input.gateResults ?? []),
+    ],
   }
-  if (task.gateResults.some((result) => result.type === 'hard' && result.passed)) return true
-  return task.acceptanceCriteria.length > 0 && task.acceptanceCriteria.every((criterion) => criterion.met === true)
+  return !taskDoneButProofMissing(candidate)
 }
 
 function hasTaskMutation(input: UpdateTaskInput): boolean {

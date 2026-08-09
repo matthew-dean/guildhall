@@ -54,6 +54,7 @@ import {
   resolveProjectStateObservationAtBoundary,
 } from '../project-state-boundary.js'
 import { readProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState } from '../project-summary-projection.js'
+import { summarizeCurrentProof } from '@guildhall/shared'
 
 describe('project-state-boundary', () => {
   it('resolves two verifier observations deterministically and fails closed on an equal-authority conflict', async () => {
@@ -720,16 +721,6 @@ describe('project-state-boundary', () => {
       title: 'Finish OAuth setup',
       status: 'blocked',
       spec: 'Keep the real spec.',
-      openEscalations: [
-        {
-          id: 'esc-open',
-          status: 'open',
-          title: 'Need provider credentials',
-          summary: 'The provider setup needs owner credentials.',
-          question: 'Which provider should be used?',
-          createdAt: '2026-06-06T12:00:00.000Z',
-        },
-      ],
     })
     expect(JSON.stringify(result.task)).not.toContain('large raw escalation transcript')
     expect(JSON.stringify(result.task)).not.toContain('esc-resolved')
@@ -737,6 +728,7 @@ describe('project-state-boundary', () => {
       'notes',
       'reviewVerdicts',
       'escalations',
+      'openEscalations',
       'worktreePath',
       'revisionCount',
     ]))
@@ -786,7 +778,10 @@ describe('project-state-boundary', () => {
         ...queue,
         lastUpdated: '2026-07-15T00:01:00.000Z',
         tasks: [{ ...queue.tasks[0], notes: [{ role: 'human', content: 'This must be evidence.' }] }],
-      }, { expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath) }))
+      }, {
+        expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
+        expectedProjectRevision: readProjectStateDatabaseReadBundle(tasksPath)?.projectRevision ?? null,
+      }))
         .toThrow(/evidence\/runtime-owned field notes/i)
     } finally {
       await fs.rm(root, { recursive: true, force: true })
@@ -809,7 +804,10 @@ describe('project-state-boundary', () => {
         ...queue,
         lastUpdated: '2026-07-15T00:01:00.000Z',
         tasks: [{ ...queue.tasks[0], title: 'Renamed task', notes: [], reviewVerdicts: [] }],
-      }, { expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath) }))
+      }, {
+        expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
+        expectedProjectRevision: readProjectStateDatabaseReadBundle(tasksPath)?.projectRevision ?? null,
+      }))
         .not.toThrow()
     } finally {
       await fs.rm(root, { recursive: true, force: true })
@@ -991,8 +989,48 @@ describe('project-state-boundary', () => {
         ...queue,
         lastUpdated: '2026-07-15T00:02:00.000Z',
         tasks: [{ ...queue.tasks[0], title: 'Stale writer' }],
-      }, { expectedQueueRevision: mutationRead.expectedQueueRevision }))
+      }, {
+        expectedQueueRevision: mutationRead.expectedQueueRevision,
+        expectedProjectRevision: mutationRead.expectedProjectRevision,
+      }))
         .toThrow(/Stale targeted task batch: expected revision \d+, found \d+/)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a stale rich queue write after a concurrent runtime mutation', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-paired-cas-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, {
+        version: 1,
+        lastUpdated: '2026-07-15T00:00:00.000Z',
+        releases: [],
+        tasks: [{ id: 'task-1', title: 'Original title', status: 'ready' }],
+      }, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+
+      const staleQueue = await readProjectTaskQueueForRichMutation(root) as {
+        lastUpdated?: string
+        tasks: Array<Record<string, unknown>>
+      }
+      await upsertTaskRuntimeState(root, 'task-1', {
+        assignedTo: 'concurrent-worker',
+        updatedAt: '2026-07-15T00:01:00.000Z',
+      })
+      staleQueue.tasks[0]!.title = 'Stale title replacement'
+      staleQueue.lastUpdated = '2026-07-15T00:02:00.000Z'
+
+      await expect(writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, staleQueue, {
+        projectRoot: root,
+      })).rejects.toThrow(/Stale targeted task batch: expected project revision/)
+      expect(readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks).toEqual([
+        expect.objectContaining({ id: 'task-1', title: 'Original title' }),
+      ])
+      expect(readProjectStateDatabaseTaskOverlay(root, 'task-1')).toMatchObject({
+        runtime: { payload: { assignedTo: 'concurrent-worker' } },
+      })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
@@ -1020,7 +1058,8 @@ describe('project-state-boundary', () => {
         summary: readProjectSummaryProjection(tasksPath) ?? { generatedAt: '2026-07-15T00:00:00.000Z', freshness: 'current' },
         expectedQueueRevision: promotedRevision,
       })
-      const currentRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+      const currentRead = readProjectTaskQueueForMutationSync(tasksPath)
+      const currentRevision = currentRead.expectedQueueRevision
       expect(currentRevision).not.toBeNull()
 
       writeProjectTaskQueueWithSummary(tasksPath, {
@@ -1030,7 +1069,10 @@ describe('project-state-boundary', () => {
           { id: 'task-1', title: 'First task, clarified', status: 'ready' },
           { id: 'task-2', title: 'Second task', status: 'ready' },
         ],
-      }, { expectedQueueRevision: currentRevision })
+      }, {
+        expectedQueueRevision: currentRevision,
+        expectedProjectRevision: currentRead.expectedProjectRevision,
+      })
 
       expect(readProjectStateDatabaseQueueRevision(tasksPath)).toBeGreaterThan(currentRevision!)
     } finally {
@@ -1109,6 +1151,66 @@ describe('project-state-boundary', () => {
       const untouchedAfter = afterDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-2') as { payload_gzip: Uint8Array }
       expect(Buffer.from(untouchedAfter.payload_gzip)).toEqual(Buffer.from(untouchedBefore.payload_gzip))
       afterDatabase.close()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('commits gate evidence with agreeing task, scope, release, and decision projections', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-proof-agreement-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    const now = '2026-07-15T00:01:00.000Z'
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, {
+        version: 1,
+        lastUpdated: '2026-07-15T00:00:00.000Z',
+        selectedReleaseId: 'release-1',
+        releases: [{
+          id: 'release-1', label: 'Proof release', kind: 'release', state: 'active', source: 'owner_approved',
+          proofStyle: 'script_only', nodeIds: ['work:task-proof'], deferredNodeIds: [],
+        }],
+        tasks: [{
+          id: 'task-proof', title: 'Prove the task', status: 'gate_check', releaseIds: ['release-1'],
+          createdAt: '2026-07-15T00:00:00.000Z', updatedAt: '2026-07-15T00:00:00.000Z',
+          acceptanceCriteria: [{
+            id: 'ac-test', description: 'The test passes.', verifiedBy: 'automated', command: 'pnpm test', met: true,
+          }],
+          proofPaths: [{
+            id: 'proof-test', kind: 'command', command: 'pnpm test', status: 'planned',
+            expectedEvidence: [{ id: 'ac-test', kind: 'automated', description: 'The test passes.', required: true }],
+            verificationRecords: [],
+          }],
+        }],
+      }, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+
+      const result = writePromotedTaskDetailMutation(tasksPath, 'task-proof', {
+        projectId: 'proof-agreement',
+        projectRoot: root,
+        mutate: task => ({ ...task, status: 'done', completedAt: now, updatedAt: now }),
+        evidence: [{
+          event: {
+            id: 'gate-proof-test', taskId: 'task-proof', kind: 'gate_result', recordedAt: now,
+            payload: { gateId: 'ac-test', command: 'pnpm test', type: 'hard', passed: true, checkedAt: now },
+          },
+          retention: { maxRecords: 8, maxBytes: 4096 },
+        }],
+      })
+
+      expect(result).not.toBeNull()
+      const detail = await readProjectTaskCurrentStateAtBoundary(root, 'task-proof')
+      expect(detail.task).toMatchObject({ status: 'done' })
+      expect(summarizeCurrentProof(detail.task ?? {})).toMatchObject({ state: 'proven' })
+      const inventoryTask = readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks.find(task => task.id === 'task-proof')
+      expect(inventoryTask).toMatchObject({ currentSummary: { proof: { state: 'proven' } }, scopeRow: { proofBlocked: false } })
+      const summary = readProjectSummaryProjection(tasksPath)
+      expect(summary?.releaseSummary).toMatchObject({ state: 'ready', counts: { total: 1, done: 1, proofBlocked: 0 }, blockers: [] })
+      const bundle = readProjectStateDatabaseReadBundle(tasksPath, { includeStateClaims: true })
+      expect(bundle?.stateResolution).toMatchObject({
+        projectRevision: result?.committedRevision,
+        queueRevision: result?.committedRevision,
+        decision: summary?.decision,
+      })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
@@ -1263,7 +1365,8 @@ describe('project-state-boundary', () => {
       const beforeDatabase = new DatabaseSync(projectStateDatabasePath(root), { readOnly: true })
       const untouchedBefore = beforeDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-2') as { payload_gzip: Uint8Array }
       beforeDatabase.close()
-      const currentRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+      const currentRead = readProjectTaskQueueForMutationSync(tasksPath)
+      const currentRevision = currentRead.expectedQueueRevision
 
       writeProjectTaskQueueWithSummary(tasksPath, {
         ...initialQueue,
@@ -1273,7 +1376,10 @@ describe('project-state-boundary', () => {
           { id: 'task-2', title: 'Untouched task', status: 'ready' },
           { id: 'task-3', title: 'New child', status: 'ready', hierarchy: { parentId: 'task-1' } },
         ],
-      }, { expectedQueueRevision: currentRevision })
+      }, {
+        expectedQueueRevision: currentRevision,
+        expectedProjectRevision: currentRead.expectedProjectRevision,
+      })
 
       expect(readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: 'task-3', title: 'New child' }),
@@ -1393,6 +1499,7 @@ describe('project-state-boundary', () => {
       }, {
         projectRoot: root,
         expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
+        expectedProjectRevision: readProjectStateDatabaseReadBundle(tasksPath)?.projectRevision ?? null,
       })
 
       expect(readProjectStateDatabaseTaskOverlay(root, 'task-keep')).toMatchObject({

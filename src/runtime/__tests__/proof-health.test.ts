@@ -4,6 +4,10 @@ import {
   completionProofCanSettleUnmetAcceptanceCriteria,
   hasActiveProofRecovery,
   normalizeAcceptanceCriteriaForCurrentProof,
+  reconcileAcceptanceCriteriaFromApprovedReview,
+  reviewAcceptanceCriteriaMissingApprovalIds,
+  reviewProofMissingApprovalIds,
+  reviewVerdictLooksNonSubstantive,
   taskHasScriptProofPath,
   taskDoneButReviewConflict,
   taskDoneButProofMissing,
@@ -33,6 +37,109 @@ function reviewedTask(criterion: Record<string, unknown>) {
 }
 
 describe('proof health', () => {
+  it('requires an exact approving review ID for every review-owned criterion', () => {
+    const task = {
+      status: 'gate_check',
+      acceptanceCriteria: [
+        { id: 'ac-command', verifiedBy: 'automated', command: 'pnpm test', met: true },
+        { id: 'ac-visual', verifiedBy: 'review', met: true },
+      ],
+      reviewVerdicts: [{
+        verdict: 'approve',
+        acceptedCriteriaIds: ['ac-other'],
+        recordedAt: '2026-08-09T10:00:00.000Z',
+      }],
+    }
+
+    expect(reviewAcceptanceCriteriaMissingApprovalIds(task)).toEqual(['ac-visual'])
+  })
+
+  it('uses an exact criterion approval for a review path projected from that same criterion', () => {
+    const task = {
+      proofPaths: [{
+        id: 'visual-review-path',
+        kind: 'review',
+        expectedEvidence: [{ id: 'ac-visual', required: true }],
+      }],
+      reviewVerdicts: [{
+        verdict: 'approve',
+        acceptedCriteriaIds: ['ac-visual'],
+        proofEvidenceIds: [],
+        recordedAt: '2026-08-09T10:00:00.000Z',
+      }],
+    }
+
+    expect(reviewProofMissingApprovalIds(task)).toEqual([])
+  })
+
+  it('still requires explicit proof approval when a review path uses a distinct evidence ID', () => {
+    const task = {
+      proofPaths: [{
+        id: 'visual-review-path',
+        kind: 'review',
+        expectedEvidence: [{ id: 'visual-screenshot-proof', required: true }],
+      }],
+      reviewVerdicts: [{
+        verdict: 'approve',
+        acceptedCriteriaIds: ['ac-visual'],
+        proofEvidenceIds: [],
+        recordedAt: '2026-08-09T10:00:00.000Z',
+      }],
+    }
+
+    expect(reviewProofMissingApprovalIds(task)).toEqual(['visual-screenshot-proof'])
+  })
+
+  it('classifies target findings without typed worker instructions as non-substantive', () => {
+    expect(reviewVerdictLooksNonSubstantive({
+      verdict: 'revise',
+      findings: [{
+        targetKind: 'acceptance_criterion',
+        targetId: 'ac-visual',
+        disposition: 'unsatisfied',
+        evidenceRefs: [],
+      }],
+    })).toBe(true)
+    expect(reviewVerdictLooksNonSubstantive({
+      verdict: 'revise',
+      findings: [{
+        targetKind: 'acceptance_criterion',
+        targetId: 'ac-visual',
+        disposition: 'unsatisfied',
+        evidenceRefs: ['screenshot:wide'],
+        workerInstruction: 'Increase the review heading contrast to meet the recorded token threshold.',
+      }],
+    })).toBe(false)
+  })
+
+  it('reconciles only review-owned criteria named by the latest approval', () => {
+    const task = {
+      id: 'task-review-authority',
+      title: 'Review the packaged UI',
+      status: 'gate_check',
+      acceptanceCriteria: [
+        { id: 'ac-command', description: 'Tests pass.', verifiedBy: 'automated', command: 'pnpm test', met: false },
+        { id: 'ac-visual', description: 'The packaged UI is readable.', verifiedBy: 'review', met: false },
+      ],
+      reviewVerdicts: [],
+      notes: [],
+    } as unknown as import('@guildhall/core').Task
+    const authority = {
+      ...task,
+      reviewVerdicts: [{
+        verdict: 'approve',
+        acceptedCriteriaIds: ['ac-visual', 'ac-command'],
+        recordedAt: '2026-08-09T10:00:00.000Z',
+      }],
+    }
+
+    expect(reconcileAcceptanceCriteriaFromApprovedReview(task, authority)).toBe(1)
+    expect(task.acceptanceCriteria).toEqual([
+      expect.objectContaining({ id: 'ac-command', met: false }),
+      expect.objectContaining({ id: 'ac-visual', met: true }),
+    ])
+  })
+
   it('uses the shared current-proof rule for acceptance-linked command paths', () => {
     const task = {
       status: 'done',
@@ -62,7 +169,7 @@ describe('proof health', () => {
     expect(taskDoneButProofMissing(compactTask)).toBe(true)
   })
 
-  it('materializes one durable command proof path per explicit acceptance command', () => {
+  it('materializes one command expectation per explicit acceptance command without storing results on the path', () => {
     const task = {
       id: 'task-command-proof',
       title: 'Run the focused proof',
@@ -98,14 +205,18 @@ describe('proof health', () => {
       checkedAt: '2026-07-18T04:01:00.000Z',
     }], 'acceptance-command-gates')
     expect(task.proofPaths?.[1]).toMatchObject({
-      status: 'verified',
-      verificationRecords: [{
-        evidenceId: 'AC-1',
-        status: 'passed',
-        command: 'pnpm test',
-        recordedBy: 'acceptance-command-gates',
-      }],
+      status: 'planned',
+      verificationRecords: [],
     })
+
+    task.status = 'done'
+    task.gateResults = [{
+      gateId: 'AC-1',
+      type: 'hard',
+      passed: true,
+      checkedAt: '2026-07-18T04:01:00.000Z',
+    }]
+    expect(taskDoneButProofMissing(task)).toBe(false)
   })
 
   it('treats a completed task without a runnable path as incomplete in a script-only release', () => {
@@ -171,6 +282,18 @@ describe('proof health', () => {
           command: 'pnpm run proof:task-parent',
           status: 'passed',
         }],
+      }],
+      evidence: [{
+        id: 'gate-ac-1',
+        taskId: 'task-proof-setup',
+        kind: 'gate_result',
+        recordedAt: '2026-07-18T04:00:00.000Z',
+        payload: {
+          gateId: 'ac-1',
+          command: 'pnpm run proof:task-parent',
+          passed: true,
+          checkedAt: '2026-07-18T04:00:00.000Z',
+        },
       }],
     }
 

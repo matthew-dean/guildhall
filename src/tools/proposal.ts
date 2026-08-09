@@ -109,6 +109,9 @@ export async function proposeTask(input: ProposeTaskInput): Promise<ProposeTaskR
       ...(queueRead.expectedQueueRevision !== null
         ? { expectedQueueRevision: queueRead.expectedQueueRevision }
         : {}),
+      ...(queueRead.expectedProjectRevision !== null
+        ? { expectedProjectRevision: queueRead.expectedProjectRevision }
+        : {}),
     })
     return { success: true, taskId: proposed.id }
   } catch (err) {

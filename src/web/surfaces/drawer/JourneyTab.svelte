@@ -55,15 +55,12 @@
   const passedGateCount = $derived(gates.filter(gate => gate.passed).length)
   const failedGateCount = $derived(gates.filter(gate => gate.passed === false).length)
   const runtimeEvidence = $derived.by(() => {
-    const proofEvidence = proofPaths
-      .flatMap(path => path.verificationRecords ?? [])
-      .filter(record => record.command || record.url || record.summary)
     const gateEvidence = gates.map(gate => ({
       status: gate.passed ? 'passed' : 'failed',
       summary: gate.output ?? gate.gateId ?? 'Gate recorded.',
       command: gate.gateId,
     }))
-    return [...proofEvidence, ...gateEvidence].slice(0, 6)
+    return gateEvidence.slice(0, 6)
   })
   const reviewLaneSummary = $derived((reviewPlan?.selectedLanes ?? []).slice(0, 4).map(friendlyToken).join(', '))
   const hiddenLaneCount = $derived(Math.max(0, (reviewPlan?.selectedLanes?.length ?? 0) - 4))
@@ -426,7 +423,7 @@
                       {#if proofPath.summary}<p class="muted">{proofPath.summary}</p>{/if}
                     </div>
                     <div class="chips">
-                      <Chip label={friendlyToken(proofPath.status)} tone={proofPath.status === 'verified' ? 'ok' : proofPath.status === 'blocked' ? 'warn' : 'neutral'} />
+                      <Chip label="Expected" tone="neutral" />
                       {#if proofPath.scope?.type}<Chip label={`${friendlyToken(proofPath.scope.type)} scope`} tone="neutral" />{/if}
                     </div>
                     {#if proofPath.launchSteps?.length}
@@ -454,16 +451,6 @@
                               tone={typeof evidence === 'object' && evidence.required === false ? 'neutral' : 'accent'}
                             />
                             <span>{evidenceDescription(evidence)}</span>
-                          </li>
-                        {/each}
-                      </ul>
-                    {/if}
-                    {#if proofPath.verificationRecords?.length}
-                      <ul class="proof-list">
-                        {#each proofPath.verificationRecords as record, recordIndex (`verification-${record.id ?? recordIndex}`)}
-                          <li>
-                            <Chip label={record.status ?? 'recorded'} tone={verificationTone(record)} />
-                            <span>{record.summary ?? record.command ?? record.url ?? 'Verification recorded.'}</span>
                           </li>
                         {/each}
                       </ul>

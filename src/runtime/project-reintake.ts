@@ -525,6 +525,7 @@ export async function applyProjectReintakeDraft(input: {
     projectId: path.basename(inferProjectRootFromMemoryDir(input.memoryDir)),
     projectRoot: inferProjectRootFromMemoryDir(input.memoryDir),
     expectedQueueRevision: queueRead.expectedQueueRevision,
+    expectedProjectRevision: queueRead.expectedProjectRevision,
   })
   // A re-intake reframe changes the authoritative planning state. Runtime and
   // worktree overlays from an old execution must not re-promote a stale done
@@ -819,6 +820,7 @@ function readQueueFile(queuePath: string): {
     selectedReleaseId?: string
   }
   expectedQueueRevision: number | null
+  expectedProjectRevision: number | null
 } {
   const result = readProjectTaskQueueForMutationSync(queuePath)
   const parsed = result.queue
@@ -826,6 +828,7 @@ function readQueueFile(queuePath: string): {
     return {
       queue: { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed as Array<Record<string, unknown>> },
       expectedQueueRevision: result.expectedQueueRevision,
+      expectedProjectRevision: result.expectedProjectRevision,
     }
   }
   const record = parsed as {
@@ -844,6 +847,7 @@ function readQueueFile(queuePath: string): {
       ...(record.selectedReleaseId ? { selectedReleaseId: record.selectedReleaseId } : {}),
     },
     expectedQueueRevision: result.expectedQueueRevision,
+    expectedProjectRevision: result.expectedProjectRevision,
   }
 }
 

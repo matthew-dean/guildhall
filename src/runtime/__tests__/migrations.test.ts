@@ -19,6 +19,8 @@ import { projectTaskStateExistsSync, readProjectTaskQueueSync, writeProjectTaskQ
 import { appendTaskEvidence, compressedTaskEvidencePath, readTaskEvidence, readTaskRuntimeStore, runtimeStatePath, taskEvidencePath, upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
 import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from '../delivery-read-projection.js'
 import { buildEffectiveTasks } from '../effective-task.js'
+import { summarizeCurrentProof } from '@guildhall/shared'
+import { buildProjectScopeProjection, taskCompletionProofSatisfiedByLinkedChildren } from '../project-scope-projection.js'
 
 let tmp: string
 let projectRoot: string
@@ -2992,16 +2994,15 @@ describe('applyProjectMigrations', () => {
     })
 
     expect(result.applied.map(item => item.id)).toEqual(['0.13.11/model-independent-machine-boundary'])
-    expect(readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-machine-contract')).toMatchObject({
-      taskId: 'task-machine-contract',
-      byKind: {
-        note: [{
-          payload: {
-            structured: machineContract,
-          },
-        }],
-      },
-    })
+    const repairedCurrent = readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-machine-contract')
+    expect(repairedCurrent?.taskId).toBe('task-machine-contract')
+    expect(repairedCurrent?.byKind.note).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          structured: expect.objectContaining(machineContract),
+        }),
+      }),
+    ]))
     expect((await readTaskEvidence(projectRoot, 'task-machine-contract', { allowLegacy: true })).at(-1)?.payload).toEqual({
       content: historicalContent,
     })
@@ -3840,8 +3841,9 @@ describe('applyProjectMigrations', () => {
       hierarchy: { parentId: parent.id, childIds: [], order: 1, relation: 'decomposes' },
       acceptanceCriteria: [{ id: 'ac-current', description: 'Current proof command passes.', verifiedBy: 'automated', command: 'pnpm proof:current', expectedOutputIncludes: ['guildhall-proof:task-release-parent'], met: true }],
       proofPaths: [{
-        id: 'current-proof-command', kind: 'command', command: 'pnpm proof:current', status: 'verified',
-        verificationRecords: [{ evidenceId: 'ac-current', status: 'passed', command: 'pnpm proof:current', recordedAt: now }],
+        id: 'current-proof-command', kind: 'command', command: 'pnpm proof:current', status: 'planned',
+        expectedEvidence: [{ id: 'ac-current', kind: 'automated', description: 'Current proof command passes.', required: true }],
+        verificationRecords: [],
       }],
       notes: [],
       createdAt: now,
@@ -3872,13 +3874,56 @@ describe('applyProjectMigrations', () => {
           updatedAt: now,
         },
       },
+      evidence: [{
+        event: {
+          id: 'current-proof-gate',
+          taskId: currentProof.id,
+          kind: 'gate_result',
+          recordedAt: now,
+          payload: {
+            gateId: 'ac-current',
+            command: 'pnpm proof:current',
+            type: 'hard',
+            passed: true,
+            checkedAt: now,
+            output: 'guildhall-proof:task-release-parent',
+          },
+        },
+        retention: { maxRecords: 8, maxBytes: 4096 },
+      }],
     })
     promoteProjectStateDatabaseAuthority(projectRoot)
+    const evidenceDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    evidenceDatabase.prepare("UPDATE project_meta SET task_evidence_authority = 'database' WHERE id = 1").run()
+    evidenceDatabase.close()
+    const effectiveBefore = await buildEffectiveTasks(projectRoot, [parent, shippedProof, currentProof] as any, { evidence: 'current' })
+    const effectiveCurrentProof = effectiveBefore.find(task => task.id === currentProof.id)
+    expect(summarizeCurrentProof(effectiveCurrentProof as any)).toMatchObject({ state: 'proven' })
+    const effectiveParent = effectiveBefore.find(task => task.id === parent.id)!
+    expect(taskCompletionProofSatisfiedByLinkedChildren(
+      effectiveParent as any,
+      effectiveBefore as any,
+      'script_only',
+      { kind: 'release', id: 'release-current', label: 'Current' } as any,
+    )).toBe(true)
+    expect(buildProjectScopeProjection({
+      selectedReleaseId: 'release-current',
+      releases: [
+        { id: 'release-shipped', label: 'Shipped', kind: 'release', state: 'shipped', source: 'release_plan', proofStyle: 'script_only', nodeIds: ['work:task-release-parent'], deferredNodeIds: [] },
+        { id: 'release-current', label: 'Current', kind: 'release', state: 'active', source: 'release_plan', proofStyle: 'script_only', nodeIds: ['work:task-release-parent'], deferredNodeIds: [] },
+      ],
+      tasks: effectiveBefore,
+    } as any).release).toMatchObject({ state: 'ready', blockers: [] })
 
     const before = readProjectSummaryProjection(tasksPath)
     expect(before?.releaseSummary?.counts.proofBlocked).toBe(1)
     const first = await applyProjectMigrations({ projectRoot, only: ['0.13.33/release-local-proof-child-scope'] })
     expect(first.applied.map(item => item.id)).toEqual(['0.13.33/release-local-proof-child-scope'])
+    expect(readProjectStateDatabaseTaskPoint(tasksPath, currentProof.id)).toMatchObject({
+      semanticKind: 'proof_setup',
+      proofForReleaseId: 'release-current',
+      currentSummary: { proof: { state: 'proven' } },
+    })
     expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
       freshness: 'current',
       releaseSummary: {
@@ -5029,6 +5074,216 @@ describe('applyProjectMigrations', () => {
         expect.objectContaining({ id: 'task-parent-proof', proofForReleaseId: 'release-shipped', releaseIds: [] }),
       ]),
     })
+  })
+
+  it('moves historical proof-path verification records into typed evidence and leaves a second application unchanged', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const createdAt = '2026-07-23T09:00:00.000Z'
+    const pathBase = {
+      scope: { type: 'task', id: 'task-proof-verification-migration' },
+      source: 'documented',
+      launchSteps: [],
+      relatedTaskIds: ['task-proof-verification-migration'],
+      createdAt,
+      createdBy: 'legacy-runtime',
+    }
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-23T10:04:00.000Z',
+        selectedReleaseId: null,
+        releases: [],
+        tasks: [{
+          id: 'task-proof-verification-migration',
+          title: 'Migrate historical proof results',
+          status: 'gate_check',
+          createdAt,
+          updatedAt: '2026-07-23T10:04:00.000Z',
+          proofPaths: [{
+            ...pathBase,
+            id: 'command-pass',
+            title: 'Passing command',
+            summary: 'Run the passing command.',
+            kind: 'command',
+            command: 'pnpm test:pass',
+            status: 'verified',
+            updatedAt: '2026-07-23T10:01:00.000Z',
+            expectedEvidence: [{ id: 'gate-pass', kind: 'automated', description: 'Passing command exits zero.', required: true }],
+            verificationRecords: [{
+              id: 'verification-command-pass',
+              evidenceId: 'gate-pass',
+              kind: 'automated',
+              status: 'passed',
+              summary: 'Passing command completed.',
+              command: 'pnpm test:pass',
+              executionRoot: 'task_worktree',
+              recordedAt: '2026-07-23T10:01:00.000Z',
+              recordedBy: 'gate-runner',
+              evidenceRefs: [],
+            }],
+          }, {
+            ...pathBase,
+            id: 'command-fail',
+            title: 'Failing command',
+            summary: 'Run the failing command.',
+            kind: 'command',
+            command: 'pnpm test:fail',
+            status: 'blocked',
+            updatedAt: '2026-07-23T10:02:00.000Z',
+            expectedEvidence: [{ id: 'gate-fail', kind: 'automated', description: 'Failing command is recorded.', required: true }],
+            verificationRecords: [{
+              id: 'verification-command-fail',
+              evidenceId: 'gate-fail',
+              kind: 'automated',
+              status: 'failed',
+              summary: 'Failing command exited one.',
+              command: 'pnpm test:fail',
+              executionRoot: 'project_checkout',
+              recordedAt: '2026-07-23T10:02:00.000Z',
+              recordedBy: 'gate-runner',
+              evidenceRefs: [],
+            }],
+          }, {
+            ...pathBase,
+            id: 'review-pass',
+            title: 'Passing review',
+            summary: 'Review the accepted behavior.',
+            kind: 'review',
+            status: 'verified',
+            updatedAt: '2026-07-23T10:03:00.000Z',
+            expectedEvidence: [{ id: 'review-evidence-pass', kind: 'manual', description: 'Reviewer approves.', required: true }],
+            verificationRecords: [{
+              id: 'verification-review-pass',
+              evidenceId: 'review-evidence-pass',
+              kind: 'manual',
+              status: 'passed',
+              summary: 'Review approved.',
+              recordedAt: '2026-07-23T10:03:00.000Z',
+              recordedBy: 'reviewer-one',
+              evidenceRefs: [],
+            }],
+          }, {
+            ...pathBase,
+            id: 'review-fail',
+            title: 'Failing review',
+            summary: 'Review the rejected behavior.',
+            kind: 'review',
+            status: 'blocked',
+            updatedAt: '2026-07-23T10:04:00.000Z',
+            expectedEvidence: [{ id: 'review-evidence-fail', kind: 'manual', description: 'Reviewer records revision.', required: true }],
+            verificationRecords: [{
+              id: 'verification-review-fail',
+              evidenceId: 'review-evidence-fail',
+              kind: 'manual',
+              status: 'failed',
+              summary: 'Review requested revision.',
+              recordedAt: '2026-07-23T10:04:00.000Z',
+              recordedBy: 'reviewer-two',
+              evidenceRefs: [],
+            }],
+          }, {
+            ...pathBase,
+            id: 'browser-pass',
+            title: 'Passing browser proof',
+            summary: 'Exercise the browser flow.',
+            kind: 'browser',
+            status: 'verified',
+            updatedAt: '2026-07-23T10:05:00.000Z',
+            expectedEvidence: [{ id: 'browser-evidence', kind: 'manual', description: 'Browser flow works.', required: true }],
+            verificationRecords: [{
+              id: 'verification-browser-pass',
+              evidenceId: 'browser-evidence',
+              kind: 'manual',
+              status: 'passed',
+              summary: 'Browser flow completed.',
+              recordedAt: '2026-07-23T10:05:00.000Z',
+              recordedBy: 'browser-auditor',
+              evidenceRefs: [],
+            }],
+          }, {
+            ...pathBase,
+            id: 'provider-fail',
+            title: 'Failing provider proof',
+            summary: 'Exercise the provider flow.',
+            kind: 'provider',
+            status: 'blocked',
+            updatedAt: '2026-07-23T10:06:00.000Z',
+            expectedEvidence: [{ id: 'provider-evidence', kind: 'manual', description: 'Provider flow works.', required: true }],
+            verificationRecords: [{
+              id: 'verification-provider-fail',
+              evidenceId: 'provider-evidence',
+              kind: 'manual',
+              status: 'failed',
+              summary: 'Provider flow failed.',
+              recordedAt: '2026-07-23T10:06:00.000Z',
+              recordedBy: 'provider-auditor',
+              evidenceRefs: [],
+            }],
+          }],
+        }],
+      },
+      summary: { projectId: 'migration-test', generatedAt: createdAt, freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    database.prepare("UPDATE project_meta SET task_evidence_authority = 'compressed' WHERE id = 1").run()
+    database.close()
+
+    const before = await getProjectMigrationStatus({
+      projectRoot,
+      only: ['0.13.77/proof-verification-evidence-authority'],
+    })
+    expect(before.blocked.map(item => item.id)).toEqual(['0.13.77/proof-verification-evidence-authority'])
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.77/proof-verification-evidence-authority'],
+    })
+
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.77/proof-verification-evidence-authority'])
+    const task = readProjectStateDatabaseTaskPoint(tasksPath, 'task-proof-verification-migration')
+    expect(task?.definition.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'command-pass', status: 'planned', verificationRecords: [] }),
+      expect.objectContaining({ id: 'command-fail', status: 'planned', verificationRecords: [] }),
+      expect.objectContaining({ id: 'review-pass', status: 'planned', verificationRecords: [] }),
+      expect.objectContaining({ id: 'review-fail', status: 'planned', verificationRecords: [] }),
+      expect.objectContaining({ id: 'browser-pass', status: 'planned', verificationRecords: [] }),
+      expect.objectContaining({ id: 'provider-fail', status: 'planned', verificationRecords: [] }),
+    ]))
+    expect(readProjectStateDatabaseTaskEvidenceHistory(projectRoot, 'task-proof-verification-migration', 'gate_result')).toEqual([])
+    expect(readProjectStateDatabaseTaskEvidenceHistory(projectRoot, 'task-proof-verification-migration', 'review_verdict')).toEqual([])
+
+    const gates = await readTaskEvidence(projectRoot, 'task-proof-verification-migration', { kind: 'gate_result' })
+    expect(gates.map(event => event.payload)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ gateId: 'gate-pass', command: 'pnpm test:pass', passed: true, executionRoot: 'task_worktree' }),
+      expect.objectContaining({ gateId: 'gate-fail', command: 'pnpm test:fail', passed: false, executionRoot: 'project_checkout' }),
+    ]))
+    const reviews = await readTaskEvidence(projectRoot, 'task-proof-verification-migration', { kind: 'review_verdict' })
+    expect(reviews.map(event => event.payload)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'verification-review-pass', verdict: 'approve', reviewerId: 'reviewer-one', proofEvidenceIds: ['review-evidence-pass'] }),
+      expect.objectContaining({ id: 'verification-review-fail', verdict: 'revise', reviewerId: 'reviewer-two', proofEvidenceIds: ['review-evidence-fail'] }),
+      expect.objectContaining({ id: 'verification-browser-pass', verdict: 'approve', reviewerId: 'browser-auditor', proofKind: 'browser', proofEvidenceIds: ['browser-evidence'] }),
+      expect.objectContaining({ id: 'verification-provider-fail', verdict: 'revise', reviewerId: 'provider-auditor', proofKind: 'provider', proofEvidenceIds: ['provider-evidence'] }),
+    ]))
+    await expect(fs.access(compressedTaskEvidencePath(projectRoot, 'task-proof-verification-migration', 'gate_result'))).resolves.toBeUndefined()
+    await expect(fs.access(compressedTaskEvidencePath(projectRoot, 'task-proof-verification-migration', 'review_verdict'))).resolves.toBeUndefined()
+    expect(readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-proof-verification-migration')).toMatchObject({
+      byKind: {
+        gate_result: expect.arrayContaining([expect.objectContaining({ payload: expect.objectContaining({ command: 'pnpm test:pass' }) })]),
+        review_verdict: expect.arrayContaining([expect.objectContaining({ payload: expect.objectContaining({ verdict: 'approve' }) })]),
+      },
+    })
+
+    await writeProjectMigrationLedger(projectRoot, { version: 1, records: [] })
+    const second = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.77/proof-verification-evidence-authority'],
+    })
+    expect(second.applied).toEqual([])
+    expect(second.failed).toEqual([])
+    await expect(readTaskEvidence(projectRoot, 'task-proof-verification-migration')).resolves.toHaveLength(6)
   })
 })
 

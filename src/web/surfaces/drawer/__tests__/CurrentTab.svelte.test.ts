@@ -249,7 +249,7 @@ describe('CurrentTab', () => {
     expect(props.onApproveSpec).toHaveBeenCalledOnce()
   })
 
-  it('surfaces live escalation activity without making a separate task state', () => {
+  it('surfaces live escalation detail and activity without making a separate task state', () => {
     renderCurrent([
       {
         id: 'turn-escalation',
@@ -270,7 +270,7 @@ describe('CurrentTab', () => {
       },
     ])
 
-    expect(screen.getByText('Worker is stuck')).toBeTruthy()
+    expect(screen.getByText('Recovery needed')).toBeTruthy()
     expect(screen.getByText('Component import could not be resolved.')).toBeTruthy()
     expect(screen.getByText('Finished write checkpoint')).toBeTruthy()
   })

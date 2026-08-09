@@ -5,6 +5,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import {
   appendTaskEvidence,
+  flushTaskEvidenceOutboxForTasksPath,
   readTaskEvidence,
   readTaskEvidencePage,
   readTaskRuntimeStore,
@@ -22,14 +23,43 @@ import {
   getProjectSystemStatePath,
   promoteProjectStateDatabaseAuthority,
   projectStateDatabasePath,
+  acknowledgeProjectStateDatabaseTaskEvidenceOutbox,
   readProjectStateDatabaseTaskEvidenceBoundary,
   readProjectStateDatabaseTaskEvidenceHistory,
+  readProjectStateDatabaseTaskEvidenceOutbox,
   readProjectStateDatabaseTaskOverlay,
+  readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseRevisionFromTasksPath,
   setProjectStateDatabaseTaskEvidenceAuthority,
+  writeProjectStateDatabaseTaskMutation,
   writeProjectStateDatabaseSnapshot,
 } from '@guildhall/sessions'
 
 describe('task state store', () => {
+  it('merges promoted runtime patches per task without losing sibling or partial updates', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-task-runtime-row-merge-'))
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-1', title: 'One' }, { id: 'task-2', title: 'Two' }] },
+      summary: {},
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    await Promise.all([
+      upsertTaskRuntimeState(projectRoot, 'task-1', { assignedTo: 'worker-1' }),
+      upsertTaskRuntimeState(projectRoot, 'task-2', { assignedTo: 'worker-2' }),
+    ])
+    await Promise.all([
+      upsertTaskRuntimeState(projectRoot, 'task-1', { revisionCount: 3 }),
+      upsertTaskRuntimeState(projectRoot, 'task-1', { handoffStep: 2 }),
+    ])
+
+    const store = await readTaskRuntimeStore(projectRoot)
+    expect(store.tasks['task-1']).toMatchObject({ assignedTo: 'worker-1', revisionCount: 3, handoffStep: 2 })
+    expect(store.tasks['task-2']).toMatchObject({ assignedTo: 'worker-2' })
+  })
+
   it('stores runtime state in system-local project history', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-task-state-'))
 
@@ -393,6 +423,104 @@ describe('task state store', () => {
       projectAuthority: 'database',
       revision: expect.any(Number),
     })
+  })
+
+  it('publishes compressed history only after the authoritative CAS commits and recovers the outbox on read', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-task-evidence-outbox-'))
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { lastUpdated: '2026-05-24T20:00:00.000Z', tasks: [{ id: 'task-1', title: 'Outbox task', status: 'ready' }] },
+      summary: { generatedAt: '2026-05-24T20:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    setProjectStateDatabaseTaskEvidenceAuthority(projectRoot, 'compressed')
+    const queueRevision = readProjectStateDatabaseQueueRevision(tasksPath)!
+    const projectRevision = readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!
+    const evidence = {
+      event: {
+        id: 'gate-outbox-1',
+        taskId: 'task-1',
+        kind: 'gate_result' as const,
+        recordedAt: '2026-05-24T20:01:00.000Z',
+        payload: { gateId: 'test', type: 'hard', passed: true, checkedAt: '2026-05-24T20:01:00.000Z' },
+      },
+      retention: { maxRecords: 8, maxBytes: 4096 },
+      history: 'outbox' as const,
+    }
+
+    expect(() => writeProjectStateDatabaseTaskMutation(tasksPath, {
+      task: { id: 'task-1', title: 'Outbox task', status: 'gate_check' },
+      summary: { generatedAt: '2026-05-24T20:01:00.000Z', freshness: 'current' },
+      expectedQueueRevision: queueRevision,
+      expectedProjectRevision: projectRevision - 1,
+      evidence: [evidence],
+    })).toThrow(/Stale targeted project mutation/)
+    expect(readProjectStateDatabaseTaskEvidenceOutbox(tasksPath, 'task-1')).toEqual([])
+    await expect(fs.stat(compressedTaskEvidencePath(projectRoot, 'task-1', 'gate_result'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    writeProjectStateDatabaseTaskMutation(tasksPath, {
+      task: { id: 'task-1', title: 'Outbox task', status: 'gate_check' },
+      summary: { generatedAt: '2026-05-24T20:01:00.000Z', freshness: 'current' },
+      expectedQueueRevision: queueRevision,
+      expectedProjectRevision: projectRevision,
+      evidence: [evidence],
+    })
+    expect(readProjectStateDatabaseTaskEvidenceOutbox(tasksPath, 'task-1')).toHaveLength(1)
+
+    await expect(readTaskEvidence(projectRoot, 'task-1', { kind: 'gate_result' })).resolves.toMatchObject([{ id: 'gate-outbox-1' }])
+    expect(readProjectStateDatabaseTaskEvidenceOutbox(tasksPath, 'task-1')).toEqual([])
+    await expect(fs.stat(compressedTaskEvidencePath(projectRoot, 'task-1', 'gate_result'))).resolves.toBeDefined()
+    await expect(flushTaskEvidenceOutboxForTasksPath(tasksPath, 'task-1')).resolves.toBe(0)
+  })
+
+  it('does not acknowledge a newer same-id outbox event through a stale flush snapshot', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-task-evidence-outbox-race-'))
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-1', title: 'Outbox task', status: 'gate_check' }] },
+      summary: {},
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    setProjectStateDatabaseTaskEvidenceAuthority(projectRoot, 'compressed')
+
+    const writeEvidence = (recordedAt: string, passed: boolean): void => {
+      writeProjectStateDatabaseTaskMutation(tasksPath, {
+        task: { id: 'task-1', title: 'Outbox task', status: 'gate_check' },
+        summary: {},
+        expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath)!,
+        expectedProjectRevision: readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!,
+        evidence: [{
+          event: {
+            id: 'same-id',
+            taskId: 'task-1',
+            kind: 'gate_result',
+            recordedAt,
+            payload: { gateId: 'test', passed, checkedAt: recordedAt },
+          },
+          retention: { maxRecords: 8, maxBytes: 4096 },
+          history: 'outbox',
+        }],
+      })
+    }
+
+    writeEvidence('2026-05-24T20:01:00.000Z', true)
+    const staleSnapshot = readProjectStateDatabaseTaskEvidenceOutbox(tasksPath, 'task-1')
+    writeEvidence('2026-05-24T20:02:00.000Z', false)
+    acknowledgeProjectStateDatabaseTaskEvidenceOutbox(tasksPath, staleSnapshot)
+
+    expect(readProjectStateDatabaseTaskEvidenceOutbox(tasksPath, 'task-1')).toMatchObject([{
+      id: 'same-id',
+      recordedAt: '2026-05-24T20:02:00.000Z',
+      payload: { passed: false },
+    }])
+    await expect(flushTaskEvidenceOutboxForTasksPath(tasksPath, 'task-1')).resolves.toBe(1)
+    await expect(readTaskEvidence(projectRoot, 'task-1', { kind: 'gate_result' })).resolves.toMatchObject([{
+      id: 'same-id',
+      recordedAt: '2026-05-24T20:02:00.000Z',
+      payload: { passed: false },
+    }])
   })
 
   it('fails closed when normalized evidence history is unavailable', async () => {

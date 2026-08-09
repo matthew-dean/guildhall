@@ -405,6 +405,41 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(verdicts[0]?.verdict).toBe('approve')
   })
 
+  it('attaches confined committed screenshots to the visual reviewer message', async () => {
+    await fs.writeFile(path.join(tmpDir, 'review-proof.jpg'), Buffer.from('visual-proof-bytes'))
+    const client = new ScriptedApiClient([{ message: assistantMsg(
+      '{"verdict":"approve","acceptedCriteriaIds":[],"proofEvidenceIds":[],"findings":[],"revisionItems":[],"riskItems":[],"followUpItems":[],"advisoryScores":{}}',
+    ) }])
+    const runner = buildDefaultReviewerFanout(
+      { apiClient: client, modelId: 'm' },
+      { personaTimeoutMs: 1_000 },
+    )
+
+    await runner({
+      task: mkTask(),
+      personas: [{
+        slug: 'visual-designer',
+        name: 'The Visual Designer',
+        blurb: 'Checks rendered composition.',
+        role: 'overseer',
+        principles: 'Inspect rendered evidence.',
+        rubric: [{ id: 'visual-evidence-reviewed', question: 'Was rendered evidence inspected?', weight: 1 }],
+        deterministicChecks: [],
+        applicable: () => true,
+      }],
+      builtContext: builtContextStub(),
+      context: 'Review the task.',
+      memoryDir,
+      projectPath: tmpDir,
+      visualEvidencePaths: ['review-proof.jpg'],
+    })
+
+    const requestText = JSON.stringify(client.requests[0])
+    expect(requestText).toContain('review-proof.jpg')
+    expect(requestText).toContain('image/jpeg')
+    expect(requestText).toContain(Buffer.from('visual-proof-bytes').toString('base64'))
+  })
+
   it('default fanout prompts include the planned review lanes and recipes', async () => {
     const client = new ScriptedApiClient([
       {
@@ -602,9 +637,130 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     const q = await readQueue()
     const after = q.tasks[0]!
     expect(after.status).toBe('gate_check')
-    // One ReviewVerdict per persona was persisted.
-    expect(after.reviewVerdicts.length).toBe(calls[0]!.personaSlugs.length)
+    // Persona rows remain available for audit, followed by one task-level
+    // authority row used by every downstream completion check.
+    expect(after.reviewVerdicts.length).toBe(calls[0]!.personaSlugs.length + 1)
     expect(after.reviewVerdicts.every((v) => v.verdict === 'approve')).toBe(true)
+    expect(after.reviewVerdicts.at(-1)?.reviewerId).toBe('reviewer-fanout')
+  })
+
+  it('persists exact aggregate approval authority that survives the next gate check', async () => {
+    await writeDesignSystem(minimalDS)
+    await writeQueue([mkTask({
+      acceptanceCriteria: [{
+        id: 'visual-review',
+        description: 'The packaged UI is readable.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+      proofPaths: [{
+        id: 'visual-review-proof',
+        kind: 'review',
+        expectedEvidence: [{
+          id: 'visual-review-evidence',
+          kind: 'artifact',
+          description: 'Packaged UI inspection evidence.',
+          required: true,
+        }],
+        verificationRecords: [],
+      }],
+    })])
+    const runner: ReviewerFanoutRunner = async ({ personas }) => personas.map(
+      (persona): PersonaVerdict => ({
+        guildSlug: persona.slug,
+        guildName: persona.name,
+        verdict: 'approve',
+        reasoning: `${persona.name} approved.`,
+        acceptedCriteriaIds: ['visual-review'],
+        proofEvidenceIds: ['visual-review-evidence'],
+        findings: [
+          {
+            targetKind: 'acceptance_criterion',
+            targetId: 'visual-review',
+            disposition: 'satisfied',
+            evidenceRefs: ['internal/evidence/desktop.png'],
+          },
+          {
+            targetKind: 'proof_evidence',
+            targetId: 'visual-review-evidence',
+            disposition: 'satisfied',
+            evidenceRefs: ['internal/evidence/desktop.png'],
+          },
+        ],
+        revisionItems: [],
+        rawOutput: '**Verdict:** approve',
+      }),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
+
+    expect(await orch.tick()).toMatchObject({
+      kind: 'processed',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+    })
+    const reviewed = (await readQueue()).tasks[0]!
+    expect(reviewed.reviewVerdicts.at(-1)).toMatchObject({
+      reviewerId: 'reviewer-fanout',
+      verdict: 'approve',
+      acceptedCriteriaIds: ['visual-review'],
+      proofEvidenceIds: ['visual-review-evidence'],
+    })
+
+    expect(await orch.tick()).toMatchObject({
+      kind: 'processed',
+      beforeStatus: 'gate_check',
+      afterStatus: 'done',
+      agent: 'approved-review-gates',
+    })
+  })
+
+  it('keeps an incomplete aggregate approval in review without inventing worker revisions', async () => {
+    await writeDesignSystem(minimalDS)
+    await writeQueue([mkTask({
+      acceptanceCriteria: [{
+        id: 'visual-review',
+        description: 'The packaged UI is readable.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+    })])
+    const runner: ReviewerFanoutRunner = async ({ personas }) => personas.map(
+      (persona): PersonaVerdict => ({
+        guildSlug: persona.slug,
+        guildName: persona.name,
+        verdict: 'approve',
+        reasoning: `${persona.name} approved without naming the required target.`,
+        acceptedCriteriaIds: [],
+        proofEvidenceIds: [],
+        findings: [],
+        revisionItems: [],
+        rawOutput: '**Verdict:** approve',
+      }),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
+
+    expect(await orch.tick()).toMatchObject({
+      kind: 'agent-error',
+      agent: 'reviewer-fanout',
+    })
+    const after = (await readQueue()).tasks[0]!
+    expect(after.status).toBe('review')
+    expect(after.revisionCount).toBe(0)
+    expect(after.reviewVerdicts.at(-1)).toMatchObject({
+      reviewerId: 'reviewer-fanout',
+      verdict: 'revise',
+      failureCode: 'invalid_review_contract',
+    })
   })
 
   it('passes the persisted review plan into reviewer fan-out', async () => {
@@ -1020,7 +1176,8 @@ describe('Orchestrator — reviewer fan-out at review', () => {
 
     const q = await readQueue()
     expect(q.tasks[0]!.status).toBe('gate_check')
-    expect(q.tasks[0]!.reviewVerdicts).toHaveLength(1)
+    expect(q.tasks[0]!.reviewVerdicts).toHaveLength(2)
+    expect(q.tasks[0]!.reviewVerdicts.at(-1)?.reviewerId).toBe('reviewer-fanout')
   })
 
   it('bounces the task to in_progress when any persona revises', async () => {
@@ -1164,6 +1321,45 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(after.reviewVerdicts.length).toBeGreaterThan(0)
     expect(after.reviewVerdicts.every((verdict) => verdict.failureCode === 'provider_unavailable')).toBe(true)
     expect(after.notes.at(-1)?.content).toContain('no product finding was inferred')
+  })
+
+  it('does not send review-owned work to a deterministic fallback or charge a product revision', async () => {
+    await writeDesignSystem(minimalDS)
+    await writeReviewerMode('llm_with_deterministic_fallback')
+    await writeQueue([mkTask({
+      acceptanceCriteria: [{
+        id: 'visual-review',
+        description: 'The packaged UI is readable.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+    })])
+    const runner: ReviewerFanoutRunner = async ({ personas }) => personas.map(
+      (persona): PersonaVerdict => ({
+        guildSlug: persona.slug,
+        guildName: persona.name,
+        verdict: 'revise',
+        reasoning: `${persona.name} was unavailable.`,
+        revisionItems: [],
+        rawOutput: '**Verdict:** revise',
+        failureCode: 'provider_unavailable',
+      }),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
+
+    expect(await orch.tick()).toMatchObject({
+      kind: 'agent-error',
+      agent: 'reviewer-fanout',
+    })
+    const after = (await readQueue()).tasks[0]!
+    expect(after.status).toBe('review')
+    expect(after.revisionCount).toBe(0)
+    expect(after.reviewVerdicts.some((verdict) => verdict.reviewerPath === 'deterministic')).toBe(false)
   })
 
   it('treats prose-only persona output as a contract failure, never as worker feedback', async () => {
