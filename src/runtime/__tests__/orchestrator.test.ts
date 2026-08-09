@@ -87,6 +87,7 @@ type TestTaskPatch = Partial<Task> & Record<string, unknown>
 type LegacyTaskView = Task & {
   runtime?: { proofRecovery?: { reason?: string } }
   proofRecovery?: { reason?: string; reopenedAt?: string }
+  currentLifecycle?: Record<string, unknown>
   workerRecovery?: Record<string, unknown>
 }
 
@@ -383,6 +384,7 @@ async function seedTaskOverlays(tasks: readonly Task[]): Promise<void> {
       ...(task.revisionCount !== undefined ? { revisionCount: task.revisionCount } : {}),
       ...(task.retryWindow !== undefined ? { retryWindow: task.retryWindow } : {}),
       ...(legacyTask.proofRecovery !== undefined ? { proofRecovery: legacyTask.proofRecovery } : {}),
+      ...(legacyTask.currentLifecycle !== undefined ? { currentLifecycle: legacyTask.currentLifecycle } : {}),
       ...(task.remediationAttempts !== undefined ? { remediationAttempts: task.remediationAttempts } : {}),
       ...(legacyTask.workerRecovery !== undefined ? { workerRecovery: legacyTask.workerRecovery } : {}),
       ...(task.handoffStep !== undefined ? { handoffStep: task.handoffStep } : {}),
@@ -12261,6 +12263,87 @@ describe('Orchestrator.run — full loops', () => {
       changedFiles: ['scripts/desktop-sidecar-entry.mjs', 'src-tauri/tauri.conf.json'],
       verificationCommands: [{ command: 'pnpm package:desktop-spike', status: 'passed' }],
     })
+  })
+
+  it('reruns every automated command after a task enters a new lifecycle', async () => {
+    const projectPath = tmpDir
+    await fs.writeFile(path.join(projectPath, 'package.json'), JSON.stringify({
+      scripts: {
+        test: 'node -e "require(\'node:fs\').writeFileSync(\'fresh-test-ran\', \'passed\')"',
+        typecheck: 'node -e "require(\'node:fs\').writeFileSync(\'fresh-typecheck-ran\', \'passed\')"',
+      },
+    }), 'utf8')
+    const reopenedAt = '2026-08-09T00:00:00.000Z'
+    await writeQueue([
+      mkTask({
+        id: 'reopened-gates',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        proofRecovery: {
+          kind: 'proof',
+          reopenedAt: '2026-08-08T22:00:00.000Z',
+          reason: 'An earlier proof repair preceded the current rerun lifecycle.',
+        },
+        currentLifecycle: {
+          reopenedAt,
+          status: 'exploring',
+          source: 'rerun_spec',
+        },
+        acceptanceCriteria: [
+          {
+            id: 'ac-test',
+            description: 'Tests pass in the current lifecycle.',
+            verifiedBy: 'automated',
+            command: 'pnpm test',
+            met: true,
+          },
+          {
+            id: 'ac-typecheck',
+            description: 'Typecheck passes in the current lifecycle.',
+            verifiedBy: 'automated',
+            command: 'pnpm typecheck',
+            met: true,
+          },
+        ],
+        gateResults: [
+          {
+            gateId: 'ac-test',
+            type: 'hard',
+            command: 'pnpm test',
+            passed: true,
+            checkedAt: '2026-08-08T23:00:00.000Z',
+          },
+          {
+            gateId: 'ac-typecheck',
+            type: 'hard',
+            command: 'pnpm typecheck',
+            passed: true,
+            checkedAt: '2026-08-08T23:00:00.000Z',
+          },
+        ],
+      } as Partial<Task>),
+    ])
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      throw new Error('documented commands should run without a model gate pass')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gateChecker.calls).toHaveLength(0)
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'reopened-gates',
+      beforeStatus: 'gate_check',
+      afterStatus: 'done',
+    })
+    await expect(fs.readFile(path.join(projectPath, 'fresh-test-ran'), 'utf8')).resolves.toBe('passed')
+    await expect(fs.readFile(path.join(projectPath, 'fresh-typecheck-ran'), 'utf8')).resolves.toBe('passed')
   })
 
   it('auto-promotes fresh worker self-critique handoffs with verified target-file changes', async () => {

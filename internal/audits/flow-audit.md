@@ -55463,9 +55463,23 @@ Repair:
       A passing `review_handoff` checkpoint on committed task work now also
       rebuilds its missing structured self-critique and advances to review
       without spending another worker-model turn on handoff ceremony. Focused
-      reviewer and orchestrator regressions plus typecheck pass; the installed
-      task-086 replay still needs to prove review advances to fresh worktree
-      command gates without another fake-edit recovery loop.
+      reviewer and orchestrator regressions plus typecheck pass. Installed
+      task-086 replay proved that recovery advances directly through review and
+      executes `pnpm test:desktop-sidecar` and `pnpm package:desktop-spike` in
+      the isolated worktree without another fake-edit worker pass.
+- Failing installed lifecycle-gate finding: that replay still treated the old
+      `pnpm test`, `pnpm typecheck`, and `pnpm build` passes as current because
+      command selection scoped freshness only to `proofRecovery`; the task's
+      authoritative reopened boundary was stored in `currentLifecycle`. Two
+      fresh package gates passed, then the task looped through review instead
+      of rerunning all five commands and completing.
+- [~] Use one verification-lifecycle boundary for command selection and gate
+      completion, regardless of whether the reopen is represented by
+      `proofRecovery` or `currentLifecycle`. A focused regression now proves
+      both previously passing automated commands physically rerun after the
+      lifecycle boundary and settle the task only from fresh execution;
+      typecheck passes. Installed task-086 replay remains required before this
+      finding is complete.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |

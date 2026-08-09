@@ -397,6 +397,27 @@ function proofRecoveryNeedsFreshWorktree(task: Task): boolean {
   )
 }
 
+function currentVerificationLifecycleReopenedAt(task: Task): number {
+  const state = task as Task & {
+    proofRecovery?: { reopenedAt?: unknown }
+    currentLifecycle?: { reopenedAt?: unknown }
+    runtime?: {
+      proofRecovery?: { reopenedAt?: unknown }
+      currentLifecycle?: { reopenedAt?: unknown }
+    }
+  }
+  const boundaries = [
+    state.proofRecovery?.reopenedAt,
+    state.runtime?.proofRecovery?.reopenedAt,
+    state.currentLifecycle?.reopenedAt,
+    state.runtime?.currentLifecycle?.reopenedAt,
+  ]
+    .filter((value): value is string => typeof value === 'string')
+    .map(value => Date.parse(value))
+    .filter(Number.isFinite)
+  return boundaries.length > 0 ? Math.max(...boundaries) : Number.NaN
+}
+
 function shouldRunAcceptanceCommandCriterion(
   task: Task,
   criterion: Task['acceptanceCriteria'][number],
@@ -405,23 +426,14 @@ function shouldRunAcceptanceCommandCriterion(
   if (!command) return false
   const latestHardGate = latestHardGateResultForId(task, criterion.id) ??
     latestHardGateResultForCommand(task, command)
-  const proofRecovery = (task as Task & {
-    proofRecovery?: { reopenedAt?: unknown }
-    runtime?: { proofRecovery?: { reopenedAt?: unknown } }
-  }).proofRecovery ?? (task as Task & {
-    runtime?: { proofRecovery?: { reopenedAt?: unknown } }
-  }).runtime?.proofRecovery
-  const reopenedAt = typeof proofRecovery?.reopenedAt === 'string'
-    ? Date.parse(proofRecovery.reopenedAt)
-    : Number.NaN
+  const reopenedAt = currentVerificationLifecycleReopenedAt(task)
   const gateCheckedAt = latestHardGate
     ? Date.parse(latestHardGate.checkedAt)
     : Number.NaN
   // A passing gate from before a typed proof recovery belongs to the old
   // lifecycle. It must not suppress the command that can settle the current
   // recovery, even when the saved acceptance checkbox still says met.
-  const recoveryNeedsFreshGate = hasActiveProofRecovery(task) &&
-    Number.isFinite(reopenedAt) &&
+  const recoveryNeedsFreshGate = Number.isFinite(reopenedAt) &&
     (!Number.isFinite(gateCheckedAt) || gateCheckedAt <= reopenedAt)
   if (recoveryNeedsFreshGate) return true
   if (!criterion.met) return latestHardGate?.passed !== true
@@ -441,16 +453,8 @@ function hardGateIsCurrentForTask(
   task: Task,
   gate: NonNullable<Task['gateResults']>[number],
 ): boolean {
-  const proofRecovery = (task as Task & {
-    proofRecovery?: { reopenedAt?: unknown }
-    runtime?: { proofRecovery?: { reopenedAt?: unknown } }
-  }).proofRecovery ?? (task as Task & {
-    runtime?: { proofRecovery?: { reopenedAt?: unknown } }
-  }).runtime?.proofRecovery
-  const reopenedAt = typeof proofRecovery?.reopenedAt === 'string'
-    ? Date.parse(proofRecovery.reopenedAt)
-    : Number.NaN
-  if (!hasActiveProofRecovery(task) || !Number.isFinite(reopenedAt)) return true
+  const reopenedAt = currentVerificationLifecycleReopenedAt(task)
+  if (!Number.isFinite(reopenedAt)) return true
   const checkedAt = Date.parse(gate.checkedAt)
   // A retry creates a new proof lifecycle. Old gates are historical evidence,
   // not current completion evidence, even when their IDs still match.
