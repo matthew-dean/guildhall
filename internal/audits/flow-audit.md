@@ -56427,7 +56427,10 @@ action, see an unambiguous result, and return to the next meaningful choice.
 Do this using a fresh-owner perspective and record browser evidence before
 claiming any fix.
 
-The required product standard is deliberately small:
+The required product standard is deliberately small. It is intentionally a
+**radical subtraction mandate**, not a request to rewrite the same reports in
+shorter sentences. Guildhall has mistaken the existence of internal context for
+a reason to display it. That stops here.
 
 1. Every screen has one clear purpose and a small set of choices. A task that
    needs owner input shows its actual primary action immediately in the owning
@@ -56446,10 +56449,55 @@ The required product standard is deliberately small:
    interaction path that needs them. Any migration that requires a decision has
    an explicit repair flow; raw migration identifiers, stack-like errors, and
    body-replacing failure text are never the owner experience.
-6. Replace wall-of-text views with progressive disclosure and visual hierarchy.
-   Keep operational facts available, but default to the minimum needed for the
-   current decision. Remove duplicate presentation rather than merely moving it
-   to a different tab.
+6. Rebuild product information architecture around three explicit levels:
+   **decision**, **details**, and **diagnostics**.
+   - A default product screen is a decision console, not a status report. It
+     shows only: what is happening now, whether the owner needs to intervene,
+     the one to three choices they can make, and the immediate consequence of
+     each choice. If there is no decision, there is no elevated panel.
+   - Details may appear only after the owner chooses to inspect a specific
+     item. They answer a concrete follow-up such as “why is this blocked?” or
+     “what will approval change?” They do not repeat project summaries,
+     timelines, proof inventories, or task prose that was already available
+     elsewhere.
+   - Diagnostics are for debugging Guildhall, agents, providers, migrations,
+     raw task history, verbose proofs, and internal state. They are absent from
+     the normal task path and require deliberate, secondary navigation from a
+     clearly named advanced/diagnostics affordance. They must never be a
+     top-level tab, a default-open card, or the only route to an owner action.
+7. Start every affected view by deleting or hiding information, tabs, cards,
+   counters, and copy. Do not begin by compressing paragraphs, changing labels,
+   adding accordions, or restyling the existing layout. A fact earns default
+   visibility only if its absence would prevent the owner from making the
+   decision on that screen right now. “It might be useful,” “it explains the
+   system,” and “an agent may need it later” are not valid reasons.
+8. Remove duplicate state at the product boundary. A project fact has one
+   visible home. It may be linked from another surface when needed, but it is
+   not re-summarized as another panel, banner, tab, activity item, or count.
+   An internal fact may have zero owner-visible homes.
+9. Reduce navigation to the owner's actual loop. A person must not traverse
+   multiple tabs, drawers, or long scrolls to perform the action Guildhall just
+   told them to take. If the action is real, it is adjacent to the explanation;
+   if it needs context, that context is compact and adjacent too.
+
+### Non-negotiable information rules
+
+- Do not preserve a component merely because it already exists, has tests, or
+  contains data. Delete it from the default experience when it does not serve a
+  present decision.
+- Do not make “more information” a substitute for a decision. No vague status
+  prose, aggregate counts, activity feeds, proof summaries, readiness blobs,
+  release narratives, or task descriptions belong in the primary path unless
+  they immediately change the choice available to the owner.
+- Do not put operational debugging behind a friendly product label. “Action,”
+  “Spec,” “Thread,” “Overview,” and similar top-level surfaces are not dumping
+  grounds. Merge or remove them until each has a distinct owner job.
+- “Progressive disclosure” means a user requests a specific missing answer;
+  it does **not** mean putting the same wall of text inside a collapsed card or
+  a second tab.
+- The normal interface may omit most of what Guildhall knows. Completeness is
+  a property of diagnostics and machine-readable artifacts, not of the owner
+  dashboard.
 
 ### Required acceptance evidence before declaring this recovered
 
@@ -56464,11 +56512,20 @@ The required product standard is deliberately small:
   copy or styling.
 - A zero-context owner can reach and complete a pending spec approval in one
   obvious flow, with the action visible without tab hunting or long scrolling.
+- Each rebuilt route has an explicit inventory of what was removed from the
+  default experience, what is available only through Details, and what moved to
+  Advanced diagnostics. Screenshots and the route contract must demonstrate
+  that the redesign removed decisions' irrelevant context rather than merely
+  shortening or collapsing it.
+- A fresh-owner test names the exact decision and action for every visible
+  card, count, tab, and control. Anything that cannot pass that test is removed
+  or moved out of the normal product path.
 - Migration repair is exercised from the same owner path and completes before
   approval; the owner sees a concise success/failure result rather than an
   internal implementation error.
 
 Do not call a flow audit complete because individual controls render, unit tests
-pass, or a reviewer can reconstruct the state from raw data. The standard is
-whether an owner who did not build Guildhall can tell what is happening, why it
-matters, and what they can do next within a few seconds.
+pass, a wall of text was condensed, or a reviewer can reconstruct the state
+from raw data. The standard is whether an owner who did not build Guildhall can
+tell what is happening, why it matters, and what they can do next within a few
+seconds, without being asked to interpret Guildhall's internal thinking.
