@@ -55651,6 +55651,32 @@ Repair:
 - [x] Preserve ordinary inline Cargo test/check/build/clippy/fmt commands as
       typed owner requirements alongside package commands. The extractor stops
       at prose conjunctions and retains flags, paths, and test filters.
+- Failing Stage 2 graph finding: NAR-090's author job starts from the prepared
+      `workingFixtureDir` and retained setup state owned by NAR-089, but the
+      imported dependency graph marked both tasks parallel with only NAR-087
+      and NAR-088 as parents. That invites isolated workers to invent competing
+      setup-to-run handoffs and defers reconciliation until packaging.
+- [x] Make NAR-090 depend on NAR-089 in addition to NAR-087/NAR-088. The typed
+      run controller now has one explicit upstream input owner; NAR-091 still
+      follows the run task and NAR-092 remains the integration/package boundary.
+- Failing NAR-089 execution finding: after the exact owner spec was approved,
+      the worker consumed three passes without creating or changing any file,
+      then stopped as `no_visible_progress`. The task remained assigned and
+      `in_progress`, but no task surface offered a concrete recovery action or
+      distinguished an empty worker attempt from implementation underway.
+- [ ] A worker pass with no file delta, checkpoint, question, or typed blocker
+      must stop after the first bounded attempt, publish the failed attempt as
+      visible evidence, and offer reviewable retry/take-over recovery without
+      leaving the task looking actively implemented.
+- [x] NAR-089 was taken over at the unchanged task worktree. The recovered
+      implementation gives the bundled sample and one native-selected local
+      fixture the same narrow Rust validation/copy path, edits only an
+      app-cache copy, preserves source bytes and failed edits, exposes one
+      typed `workingFixtureDir` handoff, and packages the three fixture files
+      byte-for-byte. Setup DOM, TypeScript, Rust fixture-input, packaged-app,
+      sidecar-without-Node, and 1280px Browser geometry proofs pass. Native
+      900x700 visual inspection remains queued because the host Mac was locked
+      when Computer Use attempted to attach.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
