@@ -55949,9 +55949,12 @@ Repair:
       the same selected-release counts and headline; typecheck and
       model-independence must pass.
 - Proof provided: focused release-readiness, WorkTab, and ReleaseTab suites;
-      exact rendered Narrative Harness, Looma, and four-project agreement
-      tests; `pnpm typecheck`; `pnpm model:independence`; and the calibration
-      case named above.
+      the complete 46-test rendered UI matrix, including exact Narrative
+      Harness, Looma, consumed-release, and four-project agreement checks;
+      `pnpm typecheck`; `pnpm model:independence`; and the calibration case
+      named above. The rendered assertions now compare Current scope against
+      the authoritative selected-release total and require a completed release
+      to show calm readiness with no invented owner action.
 - Waivers: none.
 - Owner-review items: Current scope means explicit selected-release membership,
       not every project item outside that release. Execution children inherit
@@ -55975,6 +55978,3 @@ Repair:
       fallback behavior.
 - Owner-facing plan text: no migration action is required.
 - Rollback/revert behavior: code-only revert; no persisted state rollback.
-- Rollback/revert behavior: reverting restores source-key collisions and the
-      authoring/approval mismatch but does not make existing queue or evidence
-      data unreadable.

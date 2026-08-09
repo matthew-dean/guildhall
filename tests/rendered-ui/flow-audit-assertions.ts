@@ -21,6 +21,7 @@ export interface ProjectFlowState {
   visibleTotal: number
   visibleActive: number
   visibleBlocked: number
+  selectedScopeTotal: number | null
   runnableCount: number
   waitingOnDependenciesCount: number
   firstRunnableId: string | null
@@ -87,6 +88,12 @@ export async function readProjectFlowState(page: Page, projectId: string): Promi
   const focusTask = Array.isArray(detail.tasks)
     ? detail.tasks.find((task: { id?: string }) => task.id === focusTaskId)
     : null
+  const scopeSummary = detail.orientationSpine?.summary ?? {}
+  const scopeCurrent = scopeSummary.includedWorkCount ?? scopeSummary.includedCount
+  const scopeDeferred = scopeSummary.deferredWorkCount ?? scopeSummary.deferredCount
+  const selectedScopeTotal = typeof scopeCurrent === 'number' && typeof scopeDeferred === 'number'
+    ? scopeCurrent + scopeDeferred
+    : null
 
   return {
     startCanStart: detail.actionModel?.runControl?.startEnabled === true,
@@ -107,6 +114,7 @@ export async function readProjectFlowState(page: Page, projectId: string): Promi
     visibleTotal: counts.visibleTotal ?? 0,
     visibleActive: counts.visibleActive ?? 0,
     visibleBlocked: counts.visibleBlocked ?? 0,
+    selectedScopeTotal,
     runnableCount: queue.runnable?.length ?? 0,
     waitingOnDependenciesCount: queue.blocked?.length ?? 0,
     firstRunnableId: queue.firstRunnable?.task?.id ?? null,
@@ -165,7 +173,7 @@ export async function expectProjectFlowStateAgreement(page: Page, projectId: str
 
   await page.goto(`/projects/${projectId}/work`)
   await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
-  await expect(page.getByText(`${state.visibleTotal} total`)).toBeVisible()
+  await expect(page.getByText(`${state.selectedScopeTotal ?? state.visibleTotal} total`)).toBeVisible()
 
   if (state.startReadinessCode !== 'all_terminal') {
     const accessibleRunControlName = state.runControlLabel ?? state.runControlDisabledReason
