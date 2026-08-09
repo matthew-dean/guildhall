@@ -56012,7 +56012,9 @@ Repair:
       assertions. The first post-push release gate passed 298/299 tests; its
       only failure was the integration-heavy unnamed-release fixture finishing
       in 5.38 seconds against Vitest's 5-second default, so that fixture now has
-      an explicit 15-second integration-test budget.
+      an explicit 15-second integration-test budget. Three concurrent stress
+      runs passed, and the complete local `pnpm test:release` gate then passed
+      all 299 tests.
 - Waivers: none.
 - Owner-review items: a named release gets a specific system-authored verdict
       title from the same readiness snapshot that owns its tone and detail.
