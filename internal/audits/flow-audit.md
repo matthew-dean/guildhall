@@ -55605,6 +55605,34 @@ Repair:
       extractor now records quoted commands and unquoted package commands,
       while grounding still requires the resulting exact typed command. Focused
       intake/spec tests, typecheck, and model-independence tests pass.
+- Failing task-088 execution finding: after an explicit owner retry named the
+      missing files, typed shell contract, dimensions, and proof commands, the
+      worker reported successful checkpoints but committed an empty proof
+      script, no desktop `tsconfig`, no Vite/Vitest dependencies, an 800x600
+      Tauri window, and a generic placeholder shell. The task remained
+      `in_progress` with no blocker while the project activity claimed active
+      work; at the same time, `planExecution` said the same task was paused.
+- [ ] A worker checkpoint must not count as forward progress when required
+      contract files are empty or absent. Review handoff should validate the
+      approved file/command boundary, and project execution plus plan execution
+      must agree on whether the focused task is running or paused.
+- Failing task-088 recovery finding: resuming an already corrected, committed
+      worktree handed it back to the worker instead of reconstructing review.
+      While Stop was pending, that worker added fake macOS traffic-light
+      controls, duplicated a type field, and replaced the reviewed visual
+      system. The task API still said `in_progress` while CLI/release projection
+      called the task `paused`; Start then exposed `running` without an active
+      child process or task revision for several seconds.
+- [ ] Review recovery must pin the committed reviewed revision, prevent worker
+      mutation once stop has been requested, and make API, CLI, release, and
+      execution projections agree on paused/running state. A native-chrome
+      non-goal must also remain an executable review invariant, not merely prose.
+- [x] NAR-088 was recovered through delegated owner review and authoritative
+      gates. `pnpm test:desktop-shell`, `pnpm typecheck`, and
+      `pnpm package:desktop-spike` pass; Browser geometry at 1280x800 and
+      900x700 has no overflow or clipping; the final launch has no fake action
+      or title-bar controls. Only intended shell/build/config files were landed
+      to Narrative Harness main at `f07379c`.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
