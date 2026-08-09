@@ -55473,25 +55473,39 @@ Repair:
       authoritative reopened boundary was stored in `currentLifecycle`. Two
       fresh package gates passed, then the task looped through review instead
       of rerunning all five commands and completing.
-- [~] Use one verification-lifecycle boundary for command selection and gate
+- [x] Use one verification-lifecycle boundary for command selection and gate
       completion, regardless of whether the reopen is represented by
       `proofRecovery` or `currentLifecycle`. A focused regression now proves
       both previously passing automated commands physically rerun after the
       lifecycle boundary and settle the task only from fresh execution;
-      typecheck passes. Installed task-086 replay remains required before this
-      finding is complete.
+      typecheck passes. Installed task-086 replay reran the three stale command
+      paths, retained the two newer package gates, and reached five verified
+      proof paths before landing.
 - Failing installed landing finding: all five task-086 command/proof paths
       reached verified state, but `cherry_pick_local` blocked the task because
       the owner checkout had already deleted `package-lock.json` and contained
       an untracked fixture-run artifact byte-identical to the task branch's
       target. `git apply --check` treated those matching owner changes as
       conflicts and refused to land the unrelated desktop implementation.
-- [~] Exclude a task-delta path from the landing patch only when the owner
+- [x] Exclude a task-delta path from the landing patch only when the owner
       checkout already matches the task branch's exact blob, file mode, or
       deletion target. The integration regression proves the remaining task
       delta is committed while the matching tracked deletion and untracked
-      artifact remain untouched and uncommitted. Installed blocked-task
-      recovery and landing remain required.
+      artifact remain untouched and uncommitted. Installed recovery landed
+      task 086 as commit `edb2548`; `guildhall.yaml`, the deleted lockfile, and
+      the identical untracked fixture artifact remained untouched.
+- Failing installed post-completion finding: the coordinator reported task 086
+      `done`, the desktop delta landed, and its worktree was removed, but the
+      next canonical status read rendered task 086 as `exploring`. Completion
+      cleared `proofRecovery` but left the authoritative `currentLifecycle`
+      overlay, so effective-task projection overrode the new done definition
+      with the old reopened status and blocked all eight dependents again.
+- [~] Settle both recovery markers at every true completion boundary: command
+      gates, recorded hard gates, completed-work landing reconciliation, and
+      merged-PR reconciliation. Focused regressions prove command execution and
+      recorded-gate completion remain `done` in both the effective task and
+      runtime overlay; typecheck passes. Installed canonical status and Browser
+      agreement remain required.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |

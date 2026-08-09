@@ -8594,6 +8594,11 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       mkTask({
         id: 'a',
         status: 'gate_check',
+        currentLifecycle: {
+          reopenedAt: '2026-07-04T10:07:20.000Z',
+          status: 'exploring',
+          source: 'rerun_spec',
+        },
         acceptanceCriteria: [{
           id: 'review-copy',
           description: 'Reviewer confirmed the script stays deterministic.',
@@ -8628,8 +8633,11 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     }
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('done')
+    expect((queue.tasks[0]! as LegacyTaskView).currentLifecycle).toBeUndefined()
     expect(queue.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded passing hard gates')
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks.a?.currentLifecycle).toBeUndefined()
   })
 
   it('completes gate_check from sidecar-recorded passing hard gates without another model turn', async () => {
@@ -12344,6 +12352,9 @@ describe('Orchestrator.run — full loops', () => {
     })
     await expect(fs.readFile(path.join(projectPath, 'fresh-test-ran'), 'utf8')).resolves.toBe('passed')
     await expect(fs.readFile(path.join(projectPath, 'fresh-typecheck-ran'), 'utf8')).resolves.toBe('passed')
+    const settled = await readEffectiveTaskFromQueue('reopened-gates')
+    expect(settled?.status).toBe('done')
+    expect((settled as LegacyTaskView | undefined)?.currentLifecycle).toBeUndefined()
   })
 
   it('auto-promotes fresh worker self-critique handoffs with verified target-file changes', async () => {

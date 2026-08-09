@@ -8102,6 +8102,7 @@ export class Orchestrator {
           await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
             assignedTo: null,
             proofRecovery: undefined,
+            currentLifecycle: undefined,
             updatedAt: now,
           })
         }
@@ -8740,6 +8741,9 @@ export class Orchestrator {
       await this.writeQueue(queue)
       await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
         assignedTo: null,
+        ...(current.status === 'done'
+          ? { proofRecovery: undefined, currentLifecycle: undefined }
+          : {}),
         updatedAt: current.updatedAt,
       })
       // Inline gate completion bypasses the normal post-agent dispatch path,
@@ -10771,6 +10775,13 @@ export class Orchestrator {
       if (mergeOutcome.newStatus === 'done') shelveSupersededFixupTasks(queue, task.id, this.now())
       task.updatedAt = this.now()
       queue.lastUpdated = this.now()
+      await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), task.id, {
+        assignedTo: null,
+        ...(task.status === 'done'
+          ? { proofRecovery: undefined, currentLifecycle: undefined }
+          : {}),
+        updatedAt: task.updatedAt,
+      })
       changed = true
       await this.maybeCleanupWorktree(task, worktreeMode)
     }
@@ -10817,6 +10828,12 @@ export class Orchestrator {
       }
       task.updatedAt = this.now()
       queue.lastUpdated = this.now()
+      await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), task.id, {
+        assignedTo: null,
+        proofRecovery: undefined,
+        currentLifecycle: undefined,
+        updatedAt: task.updatedAt,
+      })
       changed = true
       await this.maybeCleanupWorktree(task, worktreeMode)
     }
