@@ -56375,3 +56375,100 @@ Repair:
 - Owner-facing plan text: no migration action is required.
 - Rollback/revert behavior: code-only revert; generated projection rows can be
       rebuilt from the unchanged acceptance contract.
+
+## 2026-08-09 - Stop-Ship Usability Mandate: Human Control Must Become Coherent
+
+**Owner report. Do not treat this as a list of isolated UI bugs.** The current
+product is unusable for an owner trying to operate a live project. The app has
+accumulated information and controls without an intelligible decision flow. It
+is failing the reason Guildhall exists: to be more usable than repeatedly
+prompting an agent with opaque context.
+
+### Reproduced owner journey evidence
+
+On the Looma + Knit Work list, the owner observed all of the following in one
+normal attempt to make progress:
+
+- The work list shifts after initial render. Selecting `Revisit multi-action…`
+  is then replaced a moment later by selection of `Keep docs/component…`.
+  Selection and list geometry must remain stable across background refreshes;
+  no unsolicited reselection is acceptable.
+- Bottom chrome claims `17 current tasks when you resume` while the project is
+  actively working. Shared project run state, bottom chrome, task list, and
+  top actions are contradictory.
+- The active `Pause` command is visually wrong: it lost the established
+  red/orange-red treatment that distinguishes an interrupting control from an
+  ordinary navigation action.
+- Opening `Keep docs/component…` exposes no usable action. Its enabled
+  `Action` tab does nothing. Its only actual approval command is hidden under
+  `Spec`, below a long scroll, in an unpinned `Spec draft awaiting approval`
+  panel. The owner took roughly a dozen navigation steps to find the only
+  action that could advance the task.
+- `10 specs are ready for your review` is presented as inert, unexplained
+  status text. A count that implies owner work must be a direct, meaningful
+  route to that work or must not be elevated as a call to action.
+- Approving the discovered spec replaces the panel body with a raw migration
+  error: `Run required Guildhall migration
+  0.13.27/acceptance-command-proof-path-reconciliation before starting this
+  project.` This is unacceptable both operationally and as error presentation.
+  Guildhall must proactively run safe required migrations before a user action,
+  or present one concise repair action with a plain-language reason and an
+  outcome. It must never strand the user inside a replaced action panel.
+- Tab hopping reveals repeated, dense, largely duplicative status/proof/task
+  prose. The quantity is itself a product defect: it prevents decision-making
+  rather than supporting it.
+
+### What the next agents must do
+
+This is a **stop-ship, end-to-end product-flow reset**, not another visual
+polish pass. Start from a live registered project and drive the exact owner job:
+open Work, choose a task, understand why it needs attention, take its primary
+action, see an unambiguous result, and return to the next meaningful choice.
+Do this using a fresh-owner perspective and record browser evidence before
+claiming any fix.
+
+The required product standard is deliberately small:
+
+1. Every screen has one clear purpose and a small set of choices. A task that
+   needs owner input shows its actual primary action immediately in the owning
+   surface. Do not hide it in an off-tab, below-the-fold, unpinned panel.
+2. The shared project summary/action model is the only source for run state,
+   selected work, owner-required counts, and next action. A background refresh
+   cannot reorder the list, change selection, or contradict the visible state
+   without a deliberate user-visible explanation.
+3. Counts, banners, and bottom chrome are only shown when actionable; each
+   actionable count links to the precise filtered work it names. Do not invent
+   urgency after work is running, completed, or otherwise not owner-blocked.
+4. Project-control commands use durable semantics: Pause is a clear
+   interrupting/destructive control and visually retains the established
+   red/orange-red affordance. Its effect must be visible across all surfaces.
+5. The system owns its maintenance. Safe pending migrations run before the
+   interaction path that needs them. Any migration that requires a decision has
+   an explicit repair flow; raw migration identifiers, stack-like errors, and
+   body-replacing failure text are never the owner experience.
+6. Replace wall-of-text views with progressive disclosure and visual hierarchy.
+   Keep operational facts available, but default to the minimum needed for the
+   current decision. Remove duplicate presentation rather than merely moving it
+   to a different tab.
+
+### Required acceptance evidence before declaring this recovered
+
+- Live installed-app proof on `localhost:7777`, not component tests alone.
+- The Looma + Knit sequence above is repeated at the original desktop viewport,
+  a narrower desktop viewport, and mobile where applicable. Capture evidence
+  for initial render and the post-refresh state to prove the list and selection
+  remain stable.
+- For every displayed next-action/count/status claim, compare the authoritative
+  API, top action, Work list, selected task inspector, Thread, and bottom
+  chrome. Any disagreement is a shared summary-model defect to repair before
+  copy or styling.
+- A zero-context owner can reach and complete a pending spec approval in one
+  obvious flow, with the action visible without tab hunting or long scrolling.
+- Migration repair is exercised from the same owner path and completes before
+  approval; the owner sees a concise success/failure result rather than an
+  internal implementation error.
+
+Do not call a flow audit complete because individual controls render, unit tests
+pass, or a reviewer can reconstruct the state from raw data. The standard is
+whether an owner who did not build Guildhall can tell what is happening, why it
+matters, and what they can do next within a few seconds.
