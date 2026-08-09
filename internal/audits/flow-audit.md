@@ -55412,7 +55412,30 @@ Repair:
       blocker. The repair must not inspect blocker prose, and ordinary project
       Start does not silently reopen intentionally blocked work. The focused
       endpoint regression, typecheck, contract lint, and model-independence
-      gate pass; installed task 086 replay remains open.
+      gate pass. Installed task 086 replay passed: the task moved from blocked
+      to `in_progress`, cleared the stale blocker, reclaimed the saved worker
+      checkpoint, and remained the one named live focus.
+- [x] Installed cross-surface proof at 1280x720: authoritative task/API state,
+      Thread's first row and active dock, downstream waiting reasons, Pause
+      control, and live ticker all agree that task 086 is working and tasks
+      087-094 are waiting on named prerequisites. The document has 1280px
+      client/scroll width and 720px client/scroll height, with no page clipping.
+- Failing implementation-gate finding: task 086's first worker handoff said all
+      but one acceptance criterion were met while the shared proof summary
+      still listed four required commands with no current evidence. Reviewer
+      contract failure returned the task to implementation, but the worker
+      handoff itself was allowed to claim review-ready work with an explicitly
+      unmet criterion.
+- [ ] Prevent a worker from transitioning to review when its structured
+      self-critique reports any unmet acceptance criterion or current command
+      proof is missing. Reviewer rejection remains defense in depth, not the
+      first authoritative proof guard.
+- [x] Task 086 architecture-gate audit rejected the first successful `.app`:
+      it was 8.3 MB and contained only the app executable, plist, and icon;
+      `test:desktop-sidecar` was a placeholder and no sidecar binary existed.
+      Typed steering returned that evidence to the active worker instead of
+      advancing the release. The package config now validates under Tauri 2;
+      real sidecar/protocol/no-Node proof remains task work.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
@@ -55454,7 +55477,10 @@ Repair:
       independently of later generic notes, approval consumes the same
       revision-matched evidence as authoring, missing implementation-created
       package scripts are permitted only before review, and successful approval
-      republishes current Thread before returning. Focused Start also repairs a
+      republishes current Thread before returning. A failed post-mutation
+      Thread refresh is now logged without rewriting a persisted approval or
+      reply as HTTP failure; later current-state reads retain self-healing
+      ownership. Focused Start also repairs a
       checkpointed implementation blocker only from approved contract,
       readiness, checkpoint, dependency, hold, issue, and escalation fields;
       historical blocker prose remains display-only.
@@ -55468,7 +55494,8 @@ Repair:
       proves decision, top action, action model, run control, setup state, and
       task-specific Thread route agree; the cross-surface API regression proves
       Overview and Work share headline, next action, progress, and release at
-      one revision. Installed Browser proof remains open above. The broader
+      one revision. Installed Browser proof for the active focused run is
+      provided above. The broader
       task-endpoint file still has the pre-existing migration claim-replay
       precondition and two stale-fixture assertions downstream of it; each is
       outside this route/control change.

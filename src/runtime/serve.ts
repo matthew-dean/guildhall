@@ -15315,9 +15315,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
           approvalActor,
         })
         if (!result.success) return c.json({ error: result.error ?? 'approve failed' }, 400)
-        await refreshCurrentThreadProjection(project.path, {
-          runStatus: supervisor.get(project.id)?.status ?? 'stopped',
-        })
+        try {
+          await refreshCurrentThreadProjection(project.path, {
+            runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+          })
+        } catch (error) {
+          console.warn(
+            `[guildhall] spec approval persisted, but current Thread refresh failed for ${id}: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
         return c.json({ ok: true, status: result.newStatus })
       }
 
@@ -15342,9 +15348,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(body.revisionTarget ? { revisionTarget: body.revisionTarget } : {}),
         })
         if (!result.success) return c.json({ error: result.error ?? 'resume failed' }, 400)
-        await refreshCurrentThreadProjection(project.path, {
-          runStatus: supervisor.get(project.id)?.status ?? 'stopped',
-        })
+        try {
+          await refreshCurrentThreadProjection(project.path, {
+            runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+          })
+        } catch (error) {
+          console.warn(
+            `[guildhall] task reply persisted, but current Thread refresh failed for ${id}: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
         return c.json({ ok: true })
       }
 
