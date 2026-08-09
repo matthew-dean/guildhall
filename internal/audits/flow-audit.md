@@ -55704,6 +55704,23 @@ Repair:
       `pnpm typecheck`, `pnpm package:desktop-spike`, and the filtered Rust
       fixture-input tests all pass; the owner's unrelated `guildhall.yaml`
       edit remained untouched and unstaged.
+- Failing NAR-090 handoff finding: after NAR-089 completed, the authoritative
+      project run remained `stopped` while `startReadiness` said both that
+      Guildhall "is shaping" NAR-090 and that the project `canStart`. The task
+      itself was still `exploring`, with no spec revision, assignment, or live
+      run. A stopped project must describe shaping as the available next action,
+      not as work already happening; every surface must derive tense and action
+      from the same run-aware summary state.
+- Failing NAR-090 shaping finding: the task-scoped spec pass ran one opaque tick
+      for nearly five minutes, consumed approximately 1.61 million input tokens
+      and 8,233 output tokens, and persisted no spec, criterion, question, or
+      task evidence. Its transcript proposed mapping four broad adapter events
+      onto seven author-visible narrative stages, which would have simulated
+      progress. The bounded run was stopped and recovered with a source-backed
+      delegated-owner spec that requires typed events at the real `runMvp`
+      boundaries. Guildhall must cap context/token amplification, surface live
+      durable-step progress, and fail a no-mutation shaping pass with an explicit
+      recovery action instead of retaining a generic running state.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
