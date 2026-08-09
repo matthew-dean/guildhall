@@ -56432,6 +56432,13 @@ The required product standard is deliberately small. It is intentionally a
 shorter sentences. Guildhall has mistaken the existence of internal context for
 a reason to display it. That stops here.
 
+**Assume every current product view, tab, card, counter, feed, and stacked
+“live” surface has failed until it earns its way back from the owner job.** Do
+not preserve the present information architecture. In particular, two “live”
+views showing overlapping project state are a design failure, not a reason to
+refine their copy or alignment: one must be removed or the concepts must be
+recomposed into one coherent owner surface.
+
 1. Every screen has one clear purpose and a small set of choices. A task that
    needs owner input shows its actual primary action immediately in the owning
    surface. Do not hide it in an off-tab, below-the-fold, unpinned panel.
@@ -56449,8 +56456,11 @@ a reason to display it. That stops here.
    interaction path that needs them. Any migration that requires a decision has
    an explicit repair flow; raw migration identifiers, stack-like errors, and
    body-replacing failure text are never the owner experience.
-6. Rebuild product information architecture around three explicit levels:
-   **decision**, **details**, and **diagnostics**.
+6. Rebuild product information architecture from the owner’s decisions, with
+   no inheritance obligation to existing screens, tabs, routes, or panels.
+   The only three possible destinations for existing information are
+   **decision**, **specific follow-up detail**, or **deletion**. “Diagnostics”
+   is not a default fourth destination.
    - A default product screen is a decision console, not a status report. It
      shows only: what is happening now, whether the owner needs to intervene,
      the one to three choices they can make, and the immediate consequence of
@@ -56460,21 +56470,23 @@ a reason to display it. That stops here.
      “what will approval change?” They do not repeat project summaries,
      timelines, proof inventories, or task prose that was already available
      elsewhere.
-   - Diagnostics are for debugging Guildhall, agents, providers, migrations,
-     raw task history, verbose proofs, and internal state. They are absent from
-     the normal task path and require deliberate, secondary navigation from a
-     clearly named advanced/diagnostics affordance. They must never be a
-     top-level tab, a default-open card, or the only route to an owner action.
-7. Start every affected view by deleting or hiding information, tabs, cards,
+   - Diagnostics may retain only information that has a demonstrated debugging
+     use and cannot be obtained from source, logs, or an existing engineering
+     tool. It is absent from the product path and requires deliberate,
+     secondary navigation from a clearly named advanced/diagnostics affordance.
+     It must never be a top-level tab, a default-open card, or the only route
+     to an owner action. Most current operational detail should be deleted from
+     the product entirely, not relocated here.
+7. Start every affected view by deleting information, tabs, cards,
    counters, and copy. Do not begin by compressing paragraphs, changing labels,
    adding accordions, or restyling the existing layout. A fact earns default
    visibility only if its absence would prevent the owner from making the
    decision on that screen right now. “It might be useful,” “it explains the
    system,” and “an agent may need it later” are not valid reasons.
-8. Remove duplicate state at the product boundary. A project fact has one
-   visible home. It may be linked from another surface when needed, but it is
-   not re-summarized as another panel, banner, tab, activity item, or count.
-   An internal fact may have zero owner-visible homes.
+8. Remove duplicate state at the product boundary. A project fact has at most
+   one visible home, and only when it changes a live owner decision. It is not
+   re-summarized as another panel, banner, tab, activity item, count, or
+   “live” view. An internal fact normally has zero owner-visible homes.
 9. Reduce navigation to the owner's actual loop. A person must not traverse
    multiple tabs, drawers, or long scrolls to perform the action Guildhall just
    told them to take. If the action is real, it is adjacent to the explanation;
@@ -56482,9 +56494,10 @@ a reason to display it. That stops here.
 
 ### Non-negotiable information rules
 
-- Do not preserve a component merely because it already exists, has tests, or
-  contains data. Delete it from the default experience when it does not serve a
-  present decision.
+- No existing component, tab, route, or view has a presumption of survival.
+  Its code, tests, accumulated data, or prior design work are not reasons to
+  keep it. Delete it unless a fresh-owner scenario proves that it enables a
+  distinct decision that no surviving surface already handles.
 - Do not make “more information” a substitute for a decision. No vague status
   prose, aggregate counts, activity feeds, proof summaries, readiness blobs,
   release narratives, or task descriptions belong in the primary path unless
@@ -56495,9 +56508,15 @@ a reason to display it. That stops here.
 - “Progressive disclosure” means a user requests a specific missing answer;
   it does **not** mean putting the same wall of text inside a collapsed card or
   a second tab.
-- The normal interface may omit most of what Guildhall knows. Completeness is
-  a property of diagnostics and machine-readable artifacts, not of the owner
-  dashboard.
+- Do not relocate every removed fact to Advanced or diagnostics. If a fact has
+  no demonstrated owner or engineering recovery use, remove it entirely. The
+  normal interface should know very little; the source code, durable logs, and
+  machine-readable artifacts are already the proper homes for most system
+  detail.
+- There cannot be two primary views of the same live state. A second timeline,
+  activity stream, live feed, readiness report, or stacked status region must
+  prove a distinct owner decision or be deleted. Different visual treatments
+  of the same answer are duplicate UI, not “more context.”
 
 ### Required acceptance evidence before declaring this recovered
 
@@ -56512,11 +56531,13 @@ a reason to display it. That stops here.
   copy or styling.
 - A zero-context owner can reach and complete a pending spec approval in one
   obvious flow, with the action visible without tab hunting or long scrolling.
-- Each rebuilt route has an explicit inventory of what was removed from the
-  default experience, what is available only through Details, and what moved to
-  Advanced diagnostics. Screenshots and the route contract must demonstrate
-  that the redesign removed decisions' irrelevant context rather than merely
-  shortening or collapsing it.
+- Each rebuilt route has an explicit inventory of every old visible element:
+  retained with its owner decision, moved to a specific follow-up detail with
+  its exact question, retained in diagnostics with its engineering recovery
+  use, or deleted. “Existing feature,” “useful context,” and “might be needed”
+  are rejected classifications. Screenshots and the route contract must prove
+  that the redesign removed irrelevant context rather than shortening,
+  collapsing, or relocating it by default.
 - A fresh-owner test names the exact decision and action for every visible
   card, count, tab, and control. Anything that cannot pass that test is removed
   or moved out of the normal product path.
