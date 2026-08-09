@@ -55516,7 +55516,7 @@ Repair:
       one compatibility task, concluded task 087 did not exist, and tried to
       reconstruct it instead of calling `update-task` against the
       database-authoritative project store.
-- [~] Make the injected task packet and task tools the explicit authoring
+- [x] Make the injected task packet and task tools the explicit authoring
       authority. The orchestrator now labels the path as a task-state handle,
       warns that its compatibility projection may omit database-authoritative
       tasks, and the spec-agent contract forbids raw `TASKS.json` inspection or
@@ -55526,8 +55526,42 @@ Repair:
       source-backed blueprint. The spec lane now has 16 turns while retaining
       the two-turn durable-progress nudge. Focused prompt/routing/factory
       regressions, typecheck, and the model-independence gate pass. Installed
-      task-087 replay must still prove the worker writes a durable spec and
-      returns to `spec_review`.
+      task-087 replay used the preserved source reads, wrote a durable
+      structured spec, and returned to `spec_review` without inspecting or
+      reconstructing the compatibility queue.
+- Failing installed dependency-action finding: while task 087 was blocked and
+      task 088 depended only on completed task 086, canonical status promoted
+      task 088's imported brief as the next owner action. That was locally
+      dependency-valid but globally incoherent for the release sequence: the
+      owner was still repairing the adapter contract that all later desktop
+      work consumes, so Review pointed away from the active recovery job.
+- [ ] Shared next-action ranking must keep an explicitly focused blocked/retry
+      task ahead of unrelated downstream shaping, while still allowing truly
+      independent work when no focused recovery exists.
+- Failing installed spec-turn observability finding: each source-backed spec
+      pass took roughly three to six minutes with no Thread, ticker, or CLI
+      event between dispatch and final task transition. The process was alive
+      and accumulating provider work, but every user-visible surface looked
+      stalled.
+- [ ] Publish bounded per-turn spec activity from provider/tool events so the
+      current task visibly says what is being inspected or saved without
+      exposing hidden reasoning or flooding Activity.
+- Failing installed owner-correction finding: repeated `Request changes`
+      passes fixed one exact contract clause while reintroducing another. The
+      drafts variously omitted the dedicated command, invented a framework,
+      put runtime TypeScript outside `tsconfig`, bypassed the sidecar, erased
+      cancellation phases, collapsed distinct failure codes, proposed skipping
+      the mandatory parity proof, and reintroduced error-message parsing. The
+      durable grounding gate protected exact commands but had no typed surface
+      for the requested protocol members and invariants. After adversarial
+      review, the delegated owner had to call the authoritative `update-task`
+      boundary directly with typed target files, contract deltas, proof
+      disposition, exact acceptance commands, and the reviewed blueprint.
+- [ ] Make exact owner contract corrections first-class typed revision input
+      and give the owner a direct structured-spec edit/replace path in the
+      product. A model rewrite may propose the revision, but it must not be the
+      only way to preserve exact union members, failure codes, invariants, and
+      target files across review loops.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
