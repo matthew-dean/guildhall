@@ -706,9 +706,9 @@
       ) {
         project.detail = {
           ...currentDetail,
-          ...(j.startReadiness ? { startReadiness: j.startReadiness } : {}),
-          ...(j.actionModel ? { actionModel: j.actionModel } : {}),
-          ...(j.releaseReadiness ? { releaseReadiness: j.releaseReadiness } : {}),
+          ...(j.startReadiness !== undefined ? { startReadiness: j.startReadiness } : {}),
+          ...(j.actionModel !== undefined ? { actionModel: j.actionModel } : {}),
+          ...(j.releaseReadiness !== undefined ? { releaseReadiness: j.releaseReadiness } : {}),
         }
       }
       const nextSentReplies = { ...sentReplies }

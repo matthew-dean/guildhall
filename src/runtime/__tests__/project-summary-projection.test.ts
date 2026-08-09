@@ -707,6 +707,54 @@ describe('project-summary-projection', () => {
     expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks.every(task => Object.keys(task.definition).length === 0)).toBe(true)
   })
 
+  it('uses the normalized decision action code in regular and indexed summaries', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-index-normalized-action-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('brief-cleanup', 'ready', { releaseIds: ['release-current'] }),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:brief-cleanup'],
+        deferredNodeIds: [],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'normalized-action', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    const regular = buildProjectSummaryProjection({
+      projectId: 'normalized-action',
+      projectRoot: temp,
+      queue: taskQueue,
+      generatedAt: now,
+    })
+    const indexed = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'normalized-action',
+      generatedAt: now,
+      sourceQueueLastUpdated: now,
+    })
+
+    expect(regular.decision.execution).toMatchObject({
+      code: 'no_unattended_progress',
+      focusKind: 'brief_cleanup',
+    })
+    expect(regular.nextAction).toMatchObject({
+      code: 'owner_input_required',
+      focusTaskId: 'brief-cleanup',
+      focusKind: 'brief_cleanup',
+    })
+    expect(indexed?.decision.execution).toMatchObject({
+      code: 'no_unattended_progress',
+      focusKind: 'brief_cleanup',
+    })
+    expect(indexed?.nextAction).toEqual(regular.nextAction)
+  })
+
   it('uses canonical release membership before executable child rows for indexed release counts', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-index-node-membership-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')

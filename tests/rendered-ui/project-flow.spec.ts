@@ -1,11 +1,29 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 import {
   defineFlowUserJob,
   expectProjectFlowStateAgreement,
   expectProjectOrientationSpineAgreement,
   expectNoClippedContent,
+  expectProgressiveScopeWorkCount,
   readProjectFlowState,
 } from './flow-audit-assertions'
+
+async function expectMapScopeDisclosure(
+  projectMap: Locator,
+  expected: { label: string; included: number; minimumDeferred: number },
+): Promise<void> {
+  const escapedLabel = expected.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const summaryPattern = new RegExp(
+    `^${escapedLabel} has 0/${expected.included} executable work items complete across ${expected.included} product boundaries, with \\d+ later work items\\.$`,
+  )
+  const summary = projectMap.getByText(summaryPattern)
+  await expect(summary).toBeVisible()
+  const deferred = Number((await summary.textContent())?.match(/with (\d+) later work items\.$/)?.[1])
+  expect(deferred).toBeGreaterThanOrEqual(expected.minimumDeferred)
+  await expect(
+    projectMap.getByText(`${expected.included} product boundaries · ${deferred} later work items`, { exact: false }).first(),
+  ).toBeVisible()
+}
 
 const projectSurfaceRoutes = [
   {
@@ -483,8 +501,9 @@ test('Narrative Harness overview and map show the documented current release sco
   await page.goto('/projects/narrative-harness/overview')
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
   await expect(page.getByText('Stage 1: Fixture And Evaluation Harness').first()).toBeVisible()
-  await expect(page.getByText(`${included} work items in view`)).toBeVisible()
+  await expect(page.getByRole('button', { name: `${included} Current scope`, exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: `${deferred} Deferred`, exact: true })).toBeVisible()
+  await expect(page.getByText(`${included} work items in view`)).toHaveCount(0)
   await expect(page.getByText(pausedTask).first()).toBeVisible()
   await expect(page.getByText('Resume', { exact: true }).first()).toBeVisible()
   await expect(page.getByText(/specs are waiting for review before work can start/i)).toHaveCount(0)
@@ -504,15 +523,22 @@ test('Narrative Harness overview and map show the documented current release sco
   await expect(projectMap.getByText('Stage 1: Fixture And Evaluation Harness').first()).toBeVisible()
   await expect(projectMap.getByText('Define fixture, expected-record, prototype-run, and evaluation schemas.').first()).toBeVisible()
   await expect(projectMap.getByText('Implement a no-UI runner that builds a packet from fixture records.').first()).toBeVisible()
-  await expect(projectMap.getByText(`Stage 1: Fixture And Evaluation Harness has 0/${included} executable work items complete across ${included} product boundaries, with ${deferred} later work items.`)).toBeVisible()
+  await expectMapScopeDisclosure(projectMap, {
+    label: 'Stage 1: Fixture And Evaluation Harness',
+    included,
+    minimumDeferred: deferred,
+  })
   await expect(page.getByRole('heading', { name: 'Scope ledger' })).toBeVisible()
-  await expect(projectMap.getByText(`${included} product boundaries · ${deferred} later work items`, { exact: false }).first()).toBeVisible()
   await expect(projectMap.getByText(pausedTask).first()).toBeVisible()
   await expect(projectMap.getByText(/Paused .* Source: implementation-roadmap\.md/i).first()).toBeVisible()
   await expect(projectMap.getByText(/specs are waiting for review before work can start/i)).toHaveCount(0)
   await expect(projectMap.getByText(/needs a clearer brief|need fuller briefs|brief cleanup/i)).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Source trail' })).toBeVisible()
   await expect(projectMap.getByText('implementation-roadmap.md').first()).toBeVisible()
+
+  await page.goto('/projects/narrative-harness/work')
+  await page.getByLabel('Show', { exact: true }).selectOption({ label: 'Current scope' })
+  await expectProgressiveScopeWorkCount(page, { current: included, deferred })
 })
 
 test('Looma + Knit map shows V1 hardening as current and Looma convergence as later', async ({ page }) => {
@@ -541,8 +567,9 @@ test('Looma + Knit map shows V1 hardening as current and Looma convergence as la
   await page.goto('/projects/looma-knit/overview')
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
   await expect(page.getByText('Stage 1: V1 Release Hardening').first()).toBeVisible()
-  await expect(page.getByText('5 work items in view')).toBeVisible()
+  await expect(page.getByRole('button', { name: '5 Current scope', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: `${deferred} Deferred`, exact: true })).toBeVisible()
+  await expect(page.getByText('5 work items in view')).toHaveCount(0)
 
   await page.goto('/projects/looma-knit/map')
   await expect(page.getByRole('heading', { name: 'Project map' })).toBeVisible()
@@ -550,11 +577,19 @@ test('Looma + Knit map shows V1 hardening as current and Looma convergence as la
   await expect(projectMap.getByText('Stage 1: V1 Release Hardening').first()).toBeVisible()
   await expect(projectMap.getByText('Unit tests: use-collections, use-presence, subdomain utils').first()).toBeVisible()
   await expect(projectMap.getByText('E2E tests: login -> create page -> edit -> search flow').first()).toBeVisible()
-  await expect(projectMap.getByText(`Stage 1: V1 Release Hardening has 0/${included} executable work items complete across ${included} product boundaries, with ${deferred} later work items.`)).toBeVisible()
+  await expectMapScopeDisclosure(projectMap, {
+    label: 'Stage 1: V1 Release Hardening',
+    included,
+    minimumDeferred: deferred,
+  })
   await expect(projectMap.getByText('Looma Primitive Convergence').first()).toBeVisible()
   await expect(projectMap.getByText('Looma Editor Integration').first()).toBeVisible()
   await expect(projectMap.getByText('release-plan.md').first()).toBeVisible()
   await expect(projectMap.getByText('PROJECT_STATE.md').first()).toBeVisible()
+
+  await page.goto('/projects/looma-knit/work')
+  await page.getByLabel('Show', { exact: true }).selectOption({ label: 'Current scope' })
+  await expectProgressiveScopeWorkCount(page, { current: included, deferred })
 })
 
 test('consumed selected release is visible as complete while later work stays deferred', async ({ page }) => {

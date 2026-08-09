@@ -883,7 +883,7 @@ export function buildProjectSummaryProjection(
         message: 'Review completed scope.',
       }
     : {
-        ...(start.code ? { code: start.code } : {}),
+        ...(decisionStart.code ? { code: decisionStart.code } : {}),
         label: start.label,
         message: start.message,
         ...(typeof start.count === 'number' ? { count: start.count } : {}),

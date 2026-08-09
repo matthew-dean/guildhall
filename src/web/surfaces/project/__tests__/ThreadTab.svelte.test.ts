@@ -456,6 +456,8 @@ function installFetchFakes(
     runtime?: unknown
     projectRunStatus?: string
     startReadiness?: unknown
+    actionModel?: unknown
+    releaseReadiness?: unknown
     decision?: unknown
     projectAvailability?: { status: string; pausedAt?: string | null; resumedAt?: string | null }
     caughtUp?: boolean
@@ -481,6 +483,8 @@ function installFetchFakes(
         sourceRevision: 2,
         currentThreadFreshness: 'current',
         startReadiness: options.startReadiness,
+        actionModel: options.actionModel,
+        releaseReadiness: options.releaseReadiness,
       })
       return json({
         turns,
@@ -490,6 +494,8 @@ function installFetchFakes(
         sourceRevision: 2,
         currentThreadFreshness: 'current',
         startReadiness: options.startReadiness,
+        actionModel: options.actionModel,
+        releaseReadiness: options.releaseReadiness,
       })
     }
     if (url.startsWith('/api/project/source-note')) {
@@ -570,12 +576,21 @@ function installFetchFakes(
         path: '/repo/looma-knit',
         run: { status: options.projectRunStatus ?? 'running', mode: 'continuous' },
         availability: options.projectAvailability ?? { status: 'active', pausedAt: null, resumedAt: null },
-        startReadiness: options.startReadiness ?? { canStart: true },
+        startReadiness: options.startReadiness !== undefined ? options.startReadiness : { canStart: true },
         ...(options.decision ? { decision: options.decision } : {}),
         ...(options.runtime ? { runtime: options.runtime } : {}),
         ...(project.detail?.taskRoutingContexts ? { taskRoutingContexts: project.detail.taskRoutingContexts } : {}),
         ...(project.detail?.deliverySpine ? { deliverySpine: project.detail.deliverySpine } : {}),
-        ...(project.detail?.actionModel ? { actionModel: project.detail.actionModel } : {}),
+        ...(options.actionModel !== undefined
+          ? { actionModel: options.actionModel }
+          : project.detail?.actionModel
+            ? { actionModel: project.detail.actionModel }
+            : {}),
+        ...(options.releaseReadiness !== undefined
+          ? { releaseReadiness: options.releaseReadiness }
+          : project.detail?.releaseReadiness
+            ? { releaseReadiness: project.detail.releaseReadiness }
+            : {}),
         tasks: [],
       })
     }
@@ -1472,6 +1487,39 @@ describe('ThreadTab', () => {
       expect(calls.some(call => call.url.includes('/task/task-link-controls/resume'))).toBe(true)
       expect(refreshSpy).toHaveBeenCalledTimes(1)
       expect(project.detail?.startReadiness).toMatchObject(currentReadiness)
+    })
+  })
+
+  it('clears stale project projections when the current Thread response explicitly returns null', async () => {
+    project.detail = {
+      ...(project.detail as ProjectDetail),
+      projectRevision: 1,
+      startReadiness: { canStart: true, code: 'ready_work' },
+      actionModel: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      releaseReadiness: {
+        state: 'blocked',
+        counts: { total: 1, done: 0, blocked: 1 },
+        blockers: [],
+      },
+    } as unknown as ProjectDetail
+    installFetchFakes([], null, {
+      startReadiness: null,
+      actionModel: null,
+      releaseReadiness: null,
+    })
+
+    render(ThreadTab)
+
+    await waitFor(() => {
+      expect(project.detail?.startReadiness).toBeNull()
+      expect(project.detail?.actionModel).toBeNull()
+      expect(project.detail?.releaseReadiness).toBeNull()
     })
   })
 
@@ -3125,6 +3173,30 @@ describe('ThreadTab', () => {
         call.url.includes('/task/task-link-controls/resume') &&
         call.body?.message === 'Keep the spike framework-neutral.' &&
         call.body?.revisionTarget === 'brief' &&
+        call.body?.preserveStatus === undefined
+      )).toBe(true)
+    })
+  })
+
+  it('sends spec corrections as typed revision requests', async () => {
+    const { calls } = installFetchFakes([specReviewTurn('task-link-controls')], 'spec-task-link-controls')
+
+    render(ThreadTab)
+    await selectedThread().findByRole('button', { name: /view spec/i })
+    await userEvent.click(selectedThread().getByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /request changes/i }))
+    await userEvent.type(
+      threadComposer().getByPlaceholderText(/correct the spec/i),
+      'Keep the acceptance command exact.',
+    )
+    await userEvent.click(threadComposer().getByRole('button', { name: /^send$/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call =>
+        call.url.includes('/task/task-link-controls/resume') &&
+        call.body?.message === 'Keep the acceptance command exact.' &&
+        call.body?.revisionTarget === 'spec' &&
         call.body?.preserveStatus === undefined
       )).toBe(true)
     })

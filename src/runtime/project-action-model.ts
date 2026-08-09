@@ -646,6 +646,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const tasks = input.tasks ?? []
   const running = input.runStatus === 'running'
   const stopping = input.runStatus === 'stopping'
+  const runActive = running || stopping
   const availabilityPaused = input.availability?.status === 'paused'
   const activeTurn = activeThreadTurn(input.thread)
   const scopeOwnerInput = scopeAuthorityOwnerInput(input.scopeAuthorityRequests ?? [])
@@ -654,7 +655,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const shippedTerminal = input.releaseLifecycleState === 'shipped'
   const blockingInboxItem = setupBlockingInboxItem(inboxItems)
   const setup = setupModel(startReadiness, tasks, activeTurn, blockingInboxItem)
-  const workSummary = input.summaryTasks ? buildProjectWorkSummary(input.summaryTasks, running) : undefined
+  const workSummary = input.summaryTasks ? buildProjectWorkSummary(input.summaryTasks, runActive) : undefined
   if (shippedTerminal) {
     return {
       primaryAction: null,
@@ -682,8 +683,8 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const taskAction = startReadiness?.code === 'all_terminal'
     ? null
     : focusedRunTaskId
-      ? bestTaskAction(tasks.filter(task => task.id === focusedRunTaskId), running)
-      : bestTaskAction(tasks, running)
+      ? bestTaskAction(tasks.filter(task => task.id === focusedRunTaskId), runActive)
+      : bestTaskAction(tasks, runActive)
   const candidates: ProjectAction[] = []
 
   if (startReadiness?.code === 'all_terminal') {
@@ -709,7 +710,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
         : startReadinessAction(startReadiness),
     )
   }
-  if (setupInboxAction && !running) candidates.push(setupInboxAction)
+  if (setupInboxAction && !runActive) candidates.push(setupInboxAction)
   // Start readiness owns whether work is runnable. Compact summaries omit
   // brief/spec detail, so task ranking must never reinterpret a ready item as
   // blocked or incomplete merely because that detail is intentionally absent.
@@ -719,7 +720,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   ) {
     candidates.push(startReadinessAction(startReadiness))
   }
-  if ((running || stopping) && startReadiness?.focusTaskId && !taskAction) {
+  if (runActive && startReadiness?.focusTaskId && !taskAction) {
     candidates.push({
       source: 'start_readiness',
       label: startReadiness.focusTaskTitle?.trim() || 'Current work',
@@ -774,13 +775,13 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     })
     .slice(0, 3)
   const blockedButRunnable = startReadiness?.code === 'proof_evidence_missing'
-  const disabledReason = !running && startReadiness?.canStart === false && !blockedButRunnable
-    ? startReadiness.message
-    : stopping
-      ? 'Pause requested. Guildhall is waiting for active work to stop.'
-    : !running && setupBlocksStart
-      ? setup.detail ?? ownerInput.detail ?? 'Finish setup before starting work.'
-      : undefined
+  const disabledReason = stopping
+    ? 'Pause requested. Guildhall is waiting for active work to stop.'
+    : !runActive && startReadiness?.canStart === false && !blockedButRunnable
+      ? startReadiness.message
+      : !runActive && setupBlocksStart
+        ? setup.detail ?? ownerInput.detail ?? 'Finish setup before starting work.'
+        : undefined
   return {
     primaryAction,
     secondaryActions,

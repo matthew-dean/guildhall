@@ -53,6 +53,23 @@ export function defineFlowUserJob(input: FlowUserJob): FlowUserJob {
   return input
 }
 
+export async function expectProgressiveScopeWorkCount(
+  page: Page,
+  minimum: { current: number; deferred: number },
+): Promise<{ current: number; deferred: number; total: number }> {
+  const workListCount = page.locator('.work-list-count')
+  await expect(workListCount).toHaveText(/^\d+ current items? · \d+ deferred items? · \d+ total$/)
+  const match = (await workListCount.textContent())?.match(/^(\d+) current items? · (\d+) deferred items? · (\d+) total$/)
+  expect(match).not.toBeNull()
+  const current = Number(match?.[1])
+  const deferred = Number(match?.[2])
+  const total = Number(match?.[3])
+  expect(current).toBeGreaterThanOrEqual(minimum.current)
+  expect(deferred).toBeGreaterThanOrEqual(minimum.deferred)
+  expect(current + deferred).toBe(total)
+  return { current, deferred, total }
+}
+
 export async function readProjectFlowState(page: Page, projectId: string): Promise<ProjectFlowState> {
   const response = await page.request.get(`/api/project?projectId=${encodeURIComponent(projectId)}`)
   expect(response.ok()).toBe(true)
@@ -262,11 +279,11 @@ export async function expectProjectOrientationSpineAgreement(
   await expect(page.getByRole('heading', { name: /^(Do this next|Scope status)$/ })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Project orientation' })).toBeVisible()
   await expect(page.getByText(new RegExp(escapeRegExp(scopeLabel))).first()).toBeVisible()
-  await expect(page.getByText(new RegExp(`${included} work items in view`))).toBeVisible()
-  await expect(page.getByText(new RegExp(`${deferred} deferred`))).toBeVisible()
-  if (pinCount > 0) {
-    await expect(page.getByText(/Current focus:/)).toBeVisible()
+  await expect(page.getByRole('button', { name: `${included} Current scope`, exact: true })).toBeVisible()
+  if (deferred > 0) {
+    await expect(page.getByRole('button', { name: `${deferred} Deferred`, exact: true })).toBeVisible()
   }
+  await expect(page.getByText(new RegExp(`${included} work items in view`))).toHaveCount(0)
   if (topBlocker) {
     await expect(page.getByText(topBlocker).first()).toBeVisible()
   }
@@ -283,8 +300,10 @@ export async function expectProjectOrientationSpineAgreement(
 
   await page.goto(`/projects/${expected.projectId}/work`)
   await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
+  const showFilter = page.getByLabel('Show', { exact: true })
+  await showFilter.selectOption({ label: 'Current scope' })
+  await expectProgressiveScopeWorkCount(page, { current: included, deferred })
   if (workAnchor) {
-    const showFilter = page.getByLabel('Show', { exact: true })
     if (await showFilter.count() > 0) {
       await showFilter.selectOption({ label: 'All' })
     }

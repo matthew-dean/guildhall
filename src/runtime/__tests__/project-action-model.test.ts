@@ -1031,9 +1031,25 @@ describe('buildProjectActionModel', () => {
       startEnabled: true,
     })
 
+    const stoppingTask = {
+      id: 'task-stopping',
+      title: 'Stopping task',
+      status: 'in_progress',
+      assignedTo: 'worker-1',
+    }
     const stopping = buildProjectActionModel({
       startReadiness: { canStart: true },
-      tasks: [{ id: 'task-ready', title: 'Ready task', status: 'ready' }],
+      inbox: {
+        items: [{
+          kind: 'bootstrap_missing',
+          severity: 'high',
+          title: 'Bootstrap incomplete',
+          detail: 'A stopped project must address this before the next run.',
+          actionHref: '/settings/ready',
+        }],
+      },
+      tasks: [stoppingTask],
+      summaryTasks: [stoppingTask],
       thread: { turns: [], activeTurnId: null },
       runStatus: 'stopping',
     })
@@ -1042,6 +1058,15 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
       disabledReason: 'Pause requested. Guildhall is waiting for active work to stop.',
     })
+    expect(stopping.primaryAction).toMatchObject({
+      source: 'task',
+      taskId: 'task-stopping',
+      tone: 'running',
+    })
+    expect(stopping.secondaryActions).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ inboxKind: 'bootstrap_missing' }),
+    ]))
+    expect(stopping.workSummary).toMatchObject({ agentActive: 1, paused: 0 })
   })
 
   it('keeps the current running task actionable when compact activity has no task inventory', () => {
