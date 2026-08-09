@@ -8028,6 +8028,68 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(await fs.readFile(path.join(projectPath, 'RELEASE_NOTES.md'), 'utf8')).not.toContain('benchmark artifact evidence')
   })
 
+  it('validates task-authored PNPM scripts against promoted workspace ownership', async () => {
+    const projectPath = path.join(tmpDir, 'acceptance-script-project-copy')
+    const worktreePath = path.join(tmpDir, 'acceptance-script-task-worktree')
+    await fs.mkdir(projectPath, { recursive: true })
+    await fs.mkdir(worktreePath, { recursive: true })
+    await fs.writeFile(
+      path.join(projectPath, 'package.json'),
+      JSON.stringify({ scripts: { test: "node -e 'process.exit(0)'" } }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(worktreePath, 'package.json'),
+      JSON.stringify({ scripts: { 'test:desktop-sidecar': "node -e 'process.exit(0)'" } }),
+      'utf8',
+    )
+    execFileSync('git', ['init', '-b', 'main'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Guildhall Test'], { cwd: worktreePath })
+    execFileSync('git', ['config', 'user.email', 'guildhall-tests@example.com'], { cwd: worktreePath })
+    execFileSync('git', ['add', 'package.json'], { cwd: worktreePath })
+    execFileSync('git', ['commit', '-m', 'add task proof script'], { cwd: worktreePath, stdio: 'ignore' })
+
+    await writeQueue([
+      mkTask({
+        id: 'desktop-sidecar-script',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        worktreePath,
+        branchName: 'guildhall/task-desktop-sidecar-script',
+        baseBranch: 'main',
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The task-authored desktop sidecar proof passes.',
+          verifiedBy: 'automated',
+          command: 'pnpm test:desktop-sidecar',
+          met: false,
+        }],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: stubAgent('gate-checker-agent') }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'desktop-sidecar-script',
+      agent: 'acceptance-command-gates',
+      beforeStatus: 'gate_check',
+    })
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'desktop-sidecar-script')!
+    expect(task.status).toBe('done')
+    expect(task.acceptanceCriteria[0]?.met).toBe(true)
+    expect(task.gateResults.at(-1)).toMatchObject({
+      gateId: 'AC-1',
+      passed: true,
+    })
+  })
+
   it('runs proof recovery against the landed project instead of a stale task worktree', async () => {
     const projectPath = path.join(tmpDir, 'landed-proof-project')
     const worktreePath = path.join(tmpDir, 'landed-proof-stale-worktree')

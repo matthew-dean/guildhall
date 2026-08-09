@@ -7802,9 +7802,10 @@ export class Orchestrator {
     // command that is present in the landed project.
     const taskWorkIsLanded = !proofRecoveryNeedsFreshWorktree(task) &&
       ['merged', 'pushed', 'push_failed_degraded'].includes(task.mergeRecord?.result ?? '')
+    const recoveredWorktreePath = await this.recoverTaskWorktreePath(task)
     const taskProjectPath =
-      !taskWorkIsLanded && typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
-        ? task.worktreePath.trim()
+      !taskWorkIsLanded && recoveredWorktreePath
+        ? recoveredWorktreePath
         : this.resolveEffectiveTaskProjectPath(task)
     const gates = commandCriteria.map(({ criterion }) => ({
       id: criterion.id,
@@ -8200,7 +8201,8 @@ export class Orchestrator {
 
   private async repairInvalidAcceptanceProofCommandInline(task: Task): Promise<TickOutcome | null> {
     if (!['ready', 'in_progress', 'review', 'gate_check'].includes(task.status)) return null
-    const projectPath = task.worktreePath?.trim() || this.resolveEffectiveTaskProjectPath(task)
+    const recoveredWorktreePath = await this.recoverTaskWorktreePath(task)
+    const projectPath = recoveredWorktreePath || this.resolveEffectiveTaskProjectPath(task)
     const invalid = findInvalidAutomatedAcceptanceCommands({
       task,
       projectPath,
@@ -8214,7 +8216,12 @@ export class Orchestrator {
       const current = queue.tasks.find((candidate) => candidate.id === task.id)
       if (!current || !['ready', 'in_progress', 'review', 'gate_check'].includes(current.status)) return null
 
-      const currentProjectPath = current.worktreePath?.trim() || this.resolveEffectiveTaskProjectPath(current)
+      // Workspace ownership is stored outside the compact task row after
+      // promotion. Re-reading the queue under the write lock must preserve
+      // the recovered execution checkout or new task-authored scripts will be
+      // incorrectly validated against the unchanged registered checkout.
+      const currentWorktreePath = await this.recoverTaskWorktreePath(current)
+      const currentProjectPath = currentWorktreePath || this.resolveEffectiveTaskProjectPath(current)
       const currentInvalid = findInvalidAutomatedAcceptanceCommands({
         task: current,
         projectPath: currentProjectPath,

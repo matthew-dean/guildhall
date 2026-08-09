@@ -55433,9 +55433,24 @@ Repair:
 - [x] Task 086 architecture-gate audit rejected the first successful `.app`:
       it was 8.3 MB and contained only the app executable, plist, and icon;
       `test:desktop-sidecar` was a placeholder and no sidecar binary existed.
-      Typed steering returned that evidence to the active worker instead of
-      advancing the release. The package config now validates under Tauri 2;
-      real sidecar/protocol/no-Node proof remains task work.
+      The replacement package is 71.8 MB and contains a 60.4 MB self-contained
+      Node 22 sidecar built by pinned `esbuild` and `@yao-pkg/pkg`. The packaged
+      app launched with `PATH=/usr/bin:/bin`, used the scoped Tauri shell
+      plugin, executed the real `scripts/lib/mvp-harness.mjs#runMvp` fixture
+      path, wrote a schema 1.0.0 artifact with 12/12 review lanes passing, and
+      recorded ordered events plus typed malformed-input and crashed-sidecar
+      outcomes. The measured package proof took 99 ms and returned `go`.
+- Failing task-gate finding: after that proof reached review, Guildhall marked
+      every command stale because the compact promoted task row omitted its
+      isolated-worktree path. Acceptance-script validation and command gates
+      then read the registered checkout's old `package.json`, claimed
+      `test:desktop-sidecar` did not exist, and bounced valid work back to the
+      worker.
+- [x] Recover promoted workspace ownership before both acceptance-script
+      validation passes and before command execution. The regression stores
+      the worktree only in the workspace authority, gives the registered
+      checkout no new script, and proves `pnpm test:desktop-sidecar` executes
+      in the task worktree and reaches verified/done state.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
@@ -55483,7 +55498,11 @@ Repair:
       ownership. Focused Start also repairs a
       checkpointed implementation blocker only from approved contract,
       readiness, checkpoint, dependency, hold, issue, and escalation fields;
-      historical blocker prose remains display-only.
+      historical blocker prose remains display-only. Acceptance command
+      validation and execution now also recover the task's authoritative
+      workspace checkout when the compact task row omits `worktreePath`, so
+      implementation-created scripts are checked where the work actually
+      exists.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive
