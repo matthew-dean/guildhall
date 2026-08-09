@@ -55633,6 +55633,24 @@ Repair:
       900x700 has no overflow or clipping; the final launch has no fake action
       or title-bar controls. Only intended shell/build/config files were landed
       to Narrative Harness main at `f07379c`.
+- Failing NAR-089 shaping finding: after an approved, source-complete brief,
+      focused Start spent roughly two minutes in `exploring` with no revision,
+      event, question, task assignment, or phase detail while every surface
+      claimed generic active work. Stop changed the run to `stopping` but could
+      not interrupt the provider call; only after the model returned `no change`
+      did the project actually stop.
+- [ ] Long shaping calls need visible stage/timing activity and cooperative
+      cancellation. A model pass that returns no durable change must explain
+      why and offer a concrete retry/recovery action instead of making the user
+      infer that nothing happened.
+- Failing mixed-toolchain spec finding: the NAR-089 owner revision named three
+      package-manager commands and `cargo test --manifest-path
+      src-tauri/Cargo.toml fixture_input` in the same ordinary sentence. The
+      typed revision kept all package commands but silently dropped Cargo, so
+      authoritative spec grounding rejected the required Rust proof.
+- [x] Preserve ordinary inline Cargo test/check/build/clippy/fmt commands as
+      typed owner requirements alongside package commands. The extractor stops
+      at prose conjunctions and retains flags, paths, and test filters.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
