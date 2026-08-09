@@ -1038,6 +1038,7 @@ export interface ResumeExploringInput {
 
 const OWNER_COMMAND_PREFIX = /^(?:pnpm|npm|npx|yarn|bun|node|python(?:3)?|pytest|vitest|playwright|cargo|rustc|git)\b/
 const OWNER_INLINE_PACKAGE_COMMAND = /\b((?:pnpm|yarn|bun)\s+(?:run\s+)?[A-Za-z0-9@._:/-]+|npm\s+(?:run\s+)?[A-Za-z0-9@._:/-]+)\b/gi
+const OWNER_INLINE_CARGO_COMMAND = /\b(cargo\s+(?:test|check|build|clippy|fmt)(?:\s+(?!(?:and|then|but)\b)[A-Za-z0-9@._:/=+-]+)*)/gi
 
 export function extractOwnerRequiredAcceptanceCommands(message: string): string[] {
   const quoted = [...message.matchAll(/`([^`\n]+)`/g)]
@@ -1045,7 +1046,9 @@ export function extractOwnerRequiredAcceptanceCommands(message: string): string[
     .filter(value => OWNER_COMMAND_PREFIX.test(value))
   const inlinePackageCommands = [...message.matchAll(OWNER_INLINE_PACKAGE_COMMAND)]
     .map(match => match[1]!.trim())
-  return [...new Set([...quoted, ...inlinePackageCommands])]
+  const inlineCargoCommands = [...message.matchAll(OWNER_INLINE_CARGO_COMMAND)]
+    .map(match => match[1]!.trim().replace(/[.,;:]+$/, ''))
+  return [...new Set([...quoted, ...inlinePackageCommands, ...inlineCargoCommands])]
 }
 
 function ownerRevisionEvent(input: Pick<ResumeExploringInput, 'message' | 'revisionTarget'>) {

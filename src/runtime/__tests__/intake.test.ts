@@ -1922,11 +1922,12 @@ describe('createBugReportTask', () => {
 describe('resumeExploring', () => {
   it('preserves unquoted package commands as typed owner requirements', () => {
     expect(extractOwnerRequiredAcceptanceCommands(
-      'Add an exact task-specific command pnpm test:desktop-shell, retain pnpm typecheck and npm run package:desktop-spike.',
+      'Add pnpm test:desktop-shell, retain pnpm typecheck and npm run package:desktop-spike, then require cargo test --manifest-path src-tauri/Cargo.toml fixture_input.',
     )).toEqual([
       'pnpm test:desktop-shell',
       'pnpm typecheck',
       'npm run package:desktop-spike',
+      'cargo test --manifest-path src-tauri/Cargo.toml fixture_input',
     ])
   })
 
