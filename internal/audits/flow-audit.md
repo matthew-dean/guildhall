@@ -55674,9 +55674,36 @@ Repair:
       app-cache copy, preserves source bytes and failed edits, exposes one
       typed `workingFixtureDir` handoff, and packages the three fixture files
       byte-for-byte. Setup DOM, TypeScript, Rust fixture-input, packaged-app,
-      sidecar-without-Node, and 1280px Browser geometry proofs pass. Native
-      900x700 visual inspection remains queued because the host Mac was locked
-      when Computer Use attempted to attach.
+      sidecar-without-Node, and 1280px Browser geometry proofs pass.
+- [x] Adversarial NAR-089 review found that initial intake could accept a
+      fixture the Stage 1 runner would later reject, Continue had no visible
+      transition, comma-separated list editing could change authored values,
+      contract-valid empty lists were blocked without explanation, production
+      IPC names/payloads were untested, validation feedback was not announced,
+      and the temporary write path could follow an existing link. The repair
+      now mirrors the runner's required story collections and expected-signal
+      shape, cleans rejected cache copies, uses line-preserving optional lists,
+      announces missing required inputs, advances visibly to Run, creates a
+      unique write file with `create_new`, tests all production gateway calls
+      plus Rust handler registration, and makes the packaged sidecar run from
+      the prepared cache copy. The same reviewer confirmed no release blocker
+      remains after the final IPC and accessibility follow-up.
+- [x] Final native NAR-089 proof used the rebuilt packaged `.app`, not the Vite
+      preview. At the default wide window and a dragged 910x701 minimum-window
+      capture, source controls, required inputs, the sticky primary action, and
+      visible text had no horizontal clipping or incoherent overlap. Clicking
+      `Continue to run` in the real Tauri webview invoked the Rust save command,
+      advanced the workflow from Set up to Run, marked Set up complete, and
+      rendered `Your working copy is ready.` Screenshots are saved at
+      `/tmp/narrative-harness-task089-native-wide.png`,
+      `/tmp/narrative-harness-task089-native-final-900x700.png`, and
+      `/tmp/narrative-harness-task089-native-handoff-900x700.png`.
+- [x] Guildhall recorded NAR-089 `done` with all four hard-gate results, and the
+      reviewed 19-file change was selectively landed to Narrative Harness main
+      as `343b9ca`. From that actual checkout, `pnpm test:desktop-setup`,
+      `pnpm typecheck`, `pnpm package:desktop-spike`, and the filtered Rust
+      fixture-input tests all pass; the owner's unrelated `guildhall.yaml`
+      edit remained untouched and unstaged.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
