@@ -657,11 +657,11 @@
   }
 
   function effectiveStatusLabel(task: Task): string {
-    return needsBreakdownReview(task) ? 'Review breakdown' : taskPresentation(task).label
+    return taskPresentation(task).label
   }
 
   function effectiveStatusTone(task: Task): ChipTone {
-    return needsBreakdownReview(task) ? 'warn' : chipTone(taskPresentation(task).tone)
+    return chipTone(taskPresentation(task).tone)
   }
 
   function priorityTone(priority: string | undefined): CardTone {
@@ -698,14 +698,14 @@
     const node = hierarchy.byId.get(task.id)
     const childCount = node?.childIds.length ?? 0
     if (childCount > 0) return nestedWorkCountLabel(childCount)
-    if (needsBreakdownReview(task)) {
-      const count = task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0
-      return `${count} requirements; no contained work or decomposition proposal yet.`
-    }
     const blockers = unmetDependencyIds(task, tasks)
     if (blockers.length > 0) {
       const prefix = task.status === 'blocked' ? 'Blocked by' : 'Waiting on'
       return `${prefix} ${blockers.map(dependencyLabel).join(', ')}`
+    }
+    if (needsBreakdownReview(task)) {
+      const count = task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0
+      return `${count} requirements; no contained work or decomposition proposal yet.`
     }
     const semanticUnits = semanticUnitCount(task)
     if (childCount === 0 && semanticUnits > 0 && isPlanningTask(task)) {

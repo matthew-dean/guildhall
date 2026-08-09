@@ -1583,7 +1583,7 @@ describe('WorkTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?view=board')
   })
 
-  it('flags broad flat ready work as needing breakdown review in the list inspector', async () => {
+  it('keeps authoritative dependency waiting ahead of local breakdown heuristics', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?tree=preview')
     path.value = '/projects/looma-knit/work?tree=preview'
 
@@ -1591,9 +1591,15 @@ describe('WorkTab', () => {
       props: {
         detail: detail([
           task({
+            id: 'dependency',
+            title: 'Finish the current run flow',
+            status: 'in_progress',
+          }),
+          task({
             id: 'broad-ready',
             title: 'Build end-to-end interface system',
             status: 'ready',
+            dependsOn: ['dependency'],
             description: 'Deliver the whole interface system.',
             acceptanceCriteria: Array.from({ length: 7 }, (_, index) => ({
               description: `Requirement ${index + 1}`,
@@ -1606,14 +1612,15 @@ describe('WorkTab', () => {
 
     await screen.findByRole('heading', { name: 'Work list' })
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
-    expect(screen.getByText('Review breakdown')).toBeTruthy()
-    expect(screen.queryByText('Ready')).toBeNull()
+    expect(screen.getByText('Waiting')).toBeTruthy()
+    expect(screen.queryByText('Review breakdown')).toBeNull()
+    expect(screen.getByText('Waiting on Finish the current run flow')).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /inspect work build end-to-end interface system/i }))
 
     const inspector = screen.getByLabelText('Selected work inspector')
-    expect(within(inspector).getByText(/No contained work or decomposition proposal exists yet/i)).toBeTruthy()
-    expect(within(inspector).getByText('Review breakdown')).toBeTruthy()
+    expect(within(inspector).getByText(/No contained work or decomposition proposal is recorded/i)).toBeTruthy()
+    expect(within(inspector).getByText('Waiting')).toBeTruthy()
     expect(within(inspector).getByText(/7 requirements; no contained work or decomposition proposal yet/i)).toBeTruthy()
   })
 

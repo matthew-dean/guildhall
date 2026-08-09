@@ -167,13 +167,11 @@
   }
 
   function taskStatusLabel(task: Task): string {
-    if (hasUnmetDependencies(task, tasks)) return taskStagePresentation(task, { tasks }).label
-    return needsBreakdownReview(task) ? 'Review breakdown' : taskStagePresentation(task, { tasks }).label
+    return taskStagePresentation(task, { tasks }).label
   }
 
   function taskStatusTone(task: Task): ChipTone {
-    if (hasUnmetDependencies(task, tasks)) return chipTone(taskStagePresentation(task, { tasks }).tone)
-    return needsBreakdownReview(task) ? 'warn' : chipTone(taskStagePresentation(task, { tasks }).tone)
+    return chipTone(taskStagePresentation(task, { tasks }).tone)
   }
 
   function chipTone(tone: TaskPresentationTone): ChipTone {
@@ -257,7 +255,7 @@
       {:else if deliverySteps.length > 0}
         <p class="subtle">This item has tracked delivery steps and no contained work.</p>
       {:else if needsBreakdownReview(selectedTask)}
-        <p class="subtle">No contained work or decomposition proposal exists yet. Review a breakdown before treating this as runnable work.</p>
+        <p class="subtle">No contained work or decomposition proposal is recorded for this item.</p>
       {:else}
         <p class="subtle">This item has no contained work yet.</p>
       {/if}
