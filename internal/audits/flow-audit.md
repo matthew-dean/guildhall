@@ -55989,8 +55989,9 @@ Repair:
 - Contracts considered but not touched: release membership persistence, task
       lifecycle enums, provider/model prose, project database tables, queue
       schema, release transition rules, and public command syntax.
-- Required follow-up: land the separate multiprocess intake-allocation repair
-      from the adversarial review, then rerun the full PR verification matrix.
+- Required follow-up: none for the reviewed PR surface. The multiprocess
+      intake-allocation repair is landed; continue NAR-090's packaged native
+      interaction proof once the Mac is unlocked.
 - Proof required: unrelated backlog must be absent from shared selected-release
       rows; execution children must remain through parent membership; Release
       must render the verdict title from its readiness response and ignore late
@@ -56003,7 +56004,12 @@ Repair:
       passed. The first full rendered rerun exposed two stale spine-headline
       assertions; after replacing them with readiness-API agreement, the full
       46-test rendered UI matrix passed. `pnpm lint:contracts` also passed with
-      this decision record.
+      this decision record. Two synchronized-process regressions prove distinct
+      slug-equivalent requests allocate separate files and identical retries
+      converge on one persisted intake. The intake API suite passed; its one
+      stale project-question expectation was aligned with the existing typed,
+      prose-independent planner contract while retaining explicit evidence
+      assertions.
 - Waivers: none.
 - Owner-review items: a named release gets a specific system-authored verdict
       title from the same readiness snapshot that owns its tone and detail.

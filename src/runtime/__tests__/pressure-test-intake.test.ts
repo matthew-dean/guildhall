@@ -327,7 +327,7 @@ describe('pressure-test intake state', () => {
     expect(intake.pendingQuestion?.prompt).not.toContain('Project check-in needed before Guildhall treats this workspace as current')
   })
 
-  it('starts project check-in with a planned question from project evidence', async () => {
+  it('starts project check-in with a typed direction question while retaining project evidence', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
     await writeProjectStateTextAsync(
       memoryDir,
@@ -345,14 +345,16 @@ describe('pressure-test intake state', () => {
     })
 
     expect(intake.pendingQuestion?.prompt).toBe(
-      'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+      'What should Guildhall use as the main direction for Narrative Harness when shaping work?',
     )
-    expect(intake.pendingQuestion?.choices).toEqual([
-      'Reviewer-lane MVPs',
-      'Author-facing editor UX',
-      'Story-memory/schema foundations',
-      'Generation/evaluation loops',
-    ])
+    expect(intake.pendingQuestion?.choices).toBeUndefined()
+    expect(intake.pendingQuestion?.evidence).toEqual([])
+    expect(intake.outputs.projectQuestionPlanner?.inferredFacts.map(fact => fact.text)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('fiction-writing software'),
+        expect.stringContaining('author voice'),
+      ]),
+    )
     expect(intake.pendingQuestion?.prompt).not.toMatch(/workflow|day-to-day|anything else/i)
   })
 
