@@ -206,6 +206,29 @@ describe('deterministicReview', () => {
     expect(v.reasoning).toContain('no hard gates have run')
   })
 
+  it.each([
+    ['task proof recovery', { proofRecovery: { reopenedAt: '2026-08-08T22:57:00.249Z' } }],
+    ['runtime proof recovery', { runtime: { proofRecovery: { reopenedAt: '2026-08-08T22:57:00.249Z' } } }],
+  ])('does not credit stale hard gates after %s reopens the lifecycle', (_label, recoveryState) => {
+    const task = mkTask({
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'desktop spike is packaged', verifiedBy: 'review', met: true },
+      ],
+      gateResults: [{
+        gateId: 'package',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-08-08T22:38:57.670Z',
+      }],
+      ...recoveryState,
+    } as Partial<Task>)
+
+    const verdict = deterministicReview(task)
+
+    expect(verdict.reasoning).toContain('no hard gates have run')
+    expect(shouldAdvanceToGateCheckPendingHardGates(task, verdict.failingSignals)).toBe(true)
+  })
+
   it('credits no-regressions when the only failing hard gate is scoped unrelated repo-red', () => {
     const task = mkTask({
       title: 'Clean unused restore handler binding',

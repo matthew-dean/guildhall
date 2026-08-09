@@ -55,7 +55,7 @@ export function defineFlowUserJob(input: FlowUserJob): FlowUserJob {
 
 export async function expectProgressiveScopeWorkCount(
   page: Page,
-  minimum: { current: number; deferred: number },
+  expected: { current: number; deferred: number },
 ): Promise<{ current: number; deferred: number; total: number }> {
   const workListCount = page.locator('.work-list-count')
   await expect(workListCount).toHaveText(/^\d+ current items? · \d+ deferred items? · \d+ total$/)
@@ -64,8 +64,8 @@ export async function expectProgressiveScopeWorkCount(
   const current = Number(match?.[1])
   const deferred = Number(match?.[2])
   const total = Number(match?.[3])
-  expect(current).toBeGreaterThanOrEqual(minimum.current)
-  expect(deferred).toBeGreaterThanOrEqual(minimum.deferred)
+  expect(current).toBe(expected.current)
+  expect(deferred).toBe(expected.deferred)
   expect(current + deferred).toBe(total)
   return { current, deferred, total }
 }

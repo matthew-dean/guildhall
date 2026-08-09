@@ -3899,6 +3899,30 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(transcript).toMatch(/respect DOM ordering/)
   })
 
+  it('rejects an invalid revision target without mutating the task', async () => {
+    await seedTask('task-1', { status: 'spec_review', spec: 'Keep this spec.' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resume'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Revise the document.',
+          revisionTarget: 'acceptance-criteria',
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({
+      error: 'revisionTarget must be "brief" or "spec".',
+    })
+    const queue = await readTaskQueue() as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]).toMatchObject({ status: 'spec_review', spec: 'Keep this spec.' })
+    const transcript = await readExploringTranscript({ memoryDir, taskId: 'task-1' })
+    expect(transcript.content ?? '').not.toContain('Revise the document.')
+  })
+
   it('reopens a rejected brief for revision instead of returning to the same approval gate', async () => {
     await seedTask('task-1', {
       status: 'exploring',

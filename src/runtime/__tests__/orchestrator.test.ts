@@ -6664,7 +6664,8 @@ describe('Orchestrator.tick — feedback loop', () => {
     const out = await orch.tick()
 
     expect(reviewer.calls).toHaveLength(1)
-    if (out.kind === 'processed') expect(out.agent).not.toBe('coordinator-remediation')
+    expect(out.kind).toBe('processed')
+    expect((out as Extract<typeof out, { kind: 'processed' }>).agent).not.toBe('coordinator-remediation')
     const task = (await readQueue()).tasks.find(candidate => candidate.id === 'desktop-spike')!
     expect(task.notes.some(note =>
       note.role === 'worker-progress-review' &&

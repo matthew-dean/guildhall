@@ -94,49 +94,90 @@ function isIgnorableGuildhallStatePath(file: string): boolean {
   )
 }
 
-async function workingPathMatchesBranchTarget(
+async function workingPathsDifferFromBranchTarget(
   gitRoot: string,
   branch: string,
-  file: string,
-): Promise<boolean> {
-  const { stdout: treeEntry } = await execGit(['ls-tree', branch, '--', file], {
-    cwd: gitRoot,
-    maxBuffer: 1024 * 1024,
-  })
-  const entry = treeEntry.trim()
-  if (!entry) {
-    try {
-      await fs.lstat(path.join(gitRoot, file))
-      return false
-    } catch (err) {
-      return (err as NodeJS.ErrnoException).code === 'ENOENT'
+  files: readonly string[],
+): Promise<string[]> {
+  if (files.length === 0) return []
+  let differingPaths: string[]
+  try {
+    const { stdout } = await execGit(
+      ['diff', '--name-only', '-z', branch, '--', ...files],
+      { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
+    )
+    const differing = new Set(stdout.split('\0').filter(Boolean))
+    differingPaths = files.filter(file => differing.has(file))
+  } catch {
+    // A comparison failure must not discard task work from the landing patch.
+    return [...files]
+  }
+
+  if (differingPaths.length === 0) return []
+
+  // `git diff <branch>` does not compare untracked files with paths added by
+  // the branch. Reconcile all reported paths in two batched Git calls so an
+  // identical owner file is preserved without returning to per-path probes.
+  try {
+    const { stdout: treeOutput } = await execGit(
+      ['ls-tree', '-z', branch, '--', ...differingPaths],
+      { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
+    )
+    const targetEntries = new Map<string, { mode: string; hash: string }>()
+    for (const rawEntry of treeOutput.split('\0').filter(Boolean)) {
+      const tab = rawEntry.indexOf('\t')
+      if (tab < 0) continue
+      const [mode, , hash] = rawEntry.slice(0, tab).split(/\s+/)
+      const file = rawEntry.slice(tab + 1)
+      if (mode && hash && file) targetEntries.set(file, { mode, hash })
     }
-  }
 
-  const [targetMode, , targetHash] = entry.split(/\s+/, 3)
-  if (!targetMode || !targetHash || targetMode === '160000') return false
+    const hashPaths: string[] = []
+    const currentModes = new Map<string, string>()
+    const matchingDeletions = new Set<string>()
+    for (const file of differingPaths) {
+      const target = targetEntries.get(file)
+      let stat: Awaited<ReturnType<typeof fs.lstat>>
+      try {
+        stat = await fs.lstat(path.join(gitRoot, file))
+      } catch (err) {
+        if (!target && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+          matchingDeletions.add(file)
+        }
+        continue
+      }
+      if (!target || target.mode === '160000') continue
+      const currentMode = stat.isSymbolicLink()
+        ? '120000'
+        : stat.isFile()
+          ? (stat.mode & 0o100) !== 0 ? '100755' : '100644'
+          : null
+      if (!currentMode) continue
+      currentModes.set(file, currentMode)
+      hashPaths.push(file)
+    }
 
-  let stat: Awaited<ReturnType<typeof fs.lstat>>
-  try {
-    stat = await fs.lstat(path.join(gitRoot, file))
-  } catch {
-    return false
-  }
-  const currentMode = stat.isSymbolicLink()
-    ? '120000'
-    : stat.isFile()
-      ? (stat.mode & 0o111) !== 0 ? '100755' : '100644'
-      : null
-  if (currentMode !== targetMode) return false
+    const currentHashes = new Map<string, string>()
+    if (hashPaths.length > 0) {
+      const { stdout: hashOutput } = await execGit(
+        ['hash-object', '--', ...hashPaths],
+        { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
+      )
+      const hashes = hashOutput.split('\n').map(value => value.trim()).filter(Boolean)
+      if (hashes.length !== hashPaths.length) return differingPaths
+      hashPaths.forEach((file, index) => currentHashes.set(file, hashes[index]!))
+    }
 
-  try {
-    const { stdout: currentHash } = await execGit(['hash-object', '--', file], {
-      cwd: gitRoot,
-      maxBuffer: 1024 * 1024,
+    return differingPaths.filter((file) => {
+      if (matchingDeletions.has(file)) return false
+      const target = targetEntries.get(file)
+      return !target ||
+        currentModes.get(file) !== target.mode ||
+        currentHashes.get(file) !== target.hash
     })
-    return currentHash.trim() === targetHash
   } catch {
-    return false
+    // Unreadable tree entries or working files remain in the landing patch.
+    return differingPaths
   }
 }
 
@@ -764,12 +805,11 @@ export class NodeGitDriver implements GitDriver {
         .map((file) => file.trim())
         .filter(Boolean)
         .filter((file) => !isIgnorableGuildhallStatePath(file.replace(/\/$/, '')))
-      const meaningfulPaths: string[] = []
-      for (const file of candidatePaths) {
-        if (!await workingPathMatchesBranchTarget(gitRoot, branch, file)) {
-          meaningfulPaths.push(file)
-        }
-      }
+      const meaningfulPaths = await workingPathsDifferFromBranchTarget(
+        gitRoot,
+        branch,
+        candidatePaths,
+      )
 
       if (meaningfulPaths.length > 0) {
         const diffArgs = ['diff', '--binary', `${baseBranch}..${branch}`, '--', ...meaningfulPaths]

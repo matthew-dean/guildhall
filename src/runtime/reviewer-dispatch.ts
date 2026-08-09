@@ -77,11 +77,25 @@ function currentLifecycleHardGates(task: Task): Task['gateResults'] {
   }
 
   const state = task as Task & {
+    proofRecovery?: { reopenedAt?: unknown }
     currentLifecycle?: { reopenedAt?: unknown }
-    runtime?: { currentLifecycle?: { reopenedAt?: unknown } }
+    runtime?: {
+      proofRecovery?: { reopenedAt?: unknown }
+      currentLifecycle?: { reopenedAt?: unknown }
+    }
   }
-  const reopenedAtValue = state.currentLifecycle?.reopenedAt ?? state.runtime?.currentLifecycle?.reopenedAt
-  const reopenedAt = typeof reopenedAtValue === 'string' ? Date.parse(reopenedAtValue) : Number.NaN
+  const lifecycleBoundaries = [
+    state.proofRecovery?.reopenedAt,
+    state.runtime?.proofRecovery?.reopenedAt,
+    state.currentLifecycle?.reopenedAt,
+    state.runtime?.currentLifecycle?.reopenedAt,
+  ]
+    .filter((value): value is string => typeof value === 'string')
+    .map(value => Date.parse(value))
+    .filter(Number.isFinite)
+  const reopenedAt = lifecycleBoundaries.length > 0
+    ? Math.max(...lifecycleBoundaries)
+    : Number.NaN
   if (!Number.isFinite(reopenedAt)) return [...latestById.values()]
 
   return [...latestById.values()].filter((gate) => {

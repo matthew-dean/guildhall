@@ -361,6 +361,68 @@ describe('NodeGitDriver.cherryPickBranch', () => {
     expect(committedFiles).not.toContain(fixturePath)
   })
 
+  it('does not land an executable-mode change already present in the owner checkout', async () => {
+    const driver = new NodeGitDriver()
+    const scriptPath = path.join(repoRoot, 'release.sh')
+    await fs.writeFile(scriptPath, '#!/bin/sh\necho base\n', 'utf8')
+    await git(repoRoot, ['add', 'release.sh'])
+    await git(repoRoot, ['commit', '-q', '-m', 'add release script'])
+
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'matching-owner-mode')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-matching-owner-mode',
+      baseBranch: 'main',
+    })
+    await fs.chmod(path.join(worktreePath, 'release.sh'), 0o755)
+    await fs.writeFile(path.join(worktreePath, 'feature.txt'), 'land me\n', 'utf8')
+    await git(worktreePath, ['add', 'release.sh', 'feature.txt'])
+    await git(worktreePath, ['commit', '-q', '-m', 'task work'])
+
+    await fs.chmod(scriptPath, 0o755)
+    const result = await driver.cherryPickBranch(
+      repoRoot,
+      'guildhall/task-matching-owner-mode',
+      'main',
+    )
+
+    expect(result.ok).toBe(true)
+    const { stdout: committedFiles } = await git(repoRoot, ['show', '--name-only', '--format=', 'HEAD'])
+    expect(committedFiles).toContain('feature.txt')
+    expect(committedFiles).not.toContain('release.sh')
+    expect((await fs.stat(scriptPath)).mode & 0o100).toBe(0o100)
+  })
+
+  it('lands an executable-mode change when the owner checkout has only a group execute bit', async () => {
+    const driver = new NodeGitDriver()
+    const scriptPath = path.join(repoRoot, 'release.sh')
+    await fs.writeFile(scriptPath, '#!/bin/sh\necho base\n', 'utf8')
+    await git(repoRoot, ['add', 'release.sh'])
+    await git(repoRoot, ['commit', '-q', '-m', 'add release script'])
+
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'owner-mode-mismatch')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-owner-mode-mismatch',
+      baseBranch: 'main',
+    })
+    await fs.chmod(path.join(worktreePath, 'release.sh'), 0o755)
+    await git(worktreePath, ['add', 'release.sh'])
+    await git(worktreePath, ['commit', '-q', '-m', 'make script executable'])
+
+    await fs.chmod(scriptPath, 0o654)
+    const result = await driver.cherryPickBranch(
+      repoRoot,
+      'guildhall/task-owner-mode-mismatch',
+      'main',
+    )
+
+    expect(result.ok).toBe(true)
+    const { stdout: committedFiles } = await git(repoRoot, ['show', '--name-only', '--format=', 'HEAD'])
+    expect(committedFiles).toContain('release.sh')
+    expect((await fs.stat(scriptPath)).mode & 0o100).toBe(0o100)
+  })
+
   it('lands product files while ignoring Guildhall runtime state from the task branch', async () => {
     const driver = new NodeGitDriver()
     const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'landing')

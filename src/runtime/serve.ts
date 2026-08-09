@@ -15333,10 +15333,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
           resolveEscalationId?: string
           resolution?: string
           preserveStatus?: boolean
-          revisionTarget?: 'brief' | 'spec'
+          revisionTarget?: unknown
         }
         if (!body.message && !body.resolveEscalationId) {
           return c.json({ error: 'Provide a message or an escalation to resolve' }, 400)
+        }
+        if (
+          body.revisionTarget !== undefined &&
+          body.revisionTarget !== 'brief' &&
+          body.revisionTarget !== 'spec'
+        ) {
+          return c.json({ error: 'revisionTarget must be "brief" or "spec".' }, 400)
         }
         const result = await resumeExploring({
           memoryDir,
