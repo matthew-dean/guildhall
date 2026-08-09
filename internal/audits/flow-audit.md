@@ -55562,6 +55562,37 @@ Repair:
       product. A model rewrite may propose the revision, but it must not be the
       only way to preserve exact union members, failure codes, invariants, and
       target files across review loops.
+- Failing installed implementation-handoff finding: task 087's first worker
+      pass escalated `spec_ambiguous` because the approved target directory
+      `src/desktop` did not exist before implementation, even though creating
+      that target directory was the task. A later acceptance-command recovery
+      then moved `review -> exploring`, cleared the approved spec, and asked for
+      re-intake because the new package script was not yet visible in the
+      registered main checkout. The implementation command passed in the
+      task worktree once the actual code existed.
+- [ ] A worker may create an approved target path, and implementation-created
+      commands must be validated against the authoritative task worktree
+      without erasing an approved spec or routing completed code back through
+      source intake.
+- Failing installed worker/reviewer finding: after the delegated owner supplied
+      a proven implementation, the worker added only a duplicate explicit type
+      re-export beneath the existing wildcard export and called it backward
+      compatibility. The reviewer then remained in `review` for seven minutes
+      with no visible finding, activity detail, or completion signal. Stopping
+      the run returned the task to `in_progress`/`worker-agent` instead of
+      preserving a clear pending-review recovery state.
+- [ ] Bound review calls, publish safe per-turn review activity, reject
+      no-op/duplicate edits deterministically, and preserve the interrupted
+      lane as an explicit resumable state when a run is stopped.
+- Failing installed brief-grounding finding: task 088's generated product brief
+      invented Vue 3, described a general professional writing environment,
+      and duplicated its non-goals as anti-patterns even though the release is
+      a minimal Tauri shell over the existing sample-run sidecar. The delegated
+      owner had to rewrite why-now, success, and scope before approval.
+- [ ] Product-brief shaping must preserve the release's typed architecture and
+      product boundary. Framework choice and broader editor positioning require
+      source evidence or an explicit owner decision; repeated brief fields
+      should be normalized rather than displayed as separate authority.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
