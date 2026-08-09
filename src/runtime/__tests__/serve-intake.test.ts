@@ -406,6 +406,57 @@ describe('POST /api/project/request', () => {
     })
   })
 
+  it('preserves the task handoff when final answer requests overlap', async () => {
+    const created = await createPressureTestIntake({
+      memoryDir: tmpDir,
+      target: { type: 'release', id: 'overlapping-answer-release', title: 'Overlapping answer release' },
+      rawRequest: 'Keep the durable task handoff when the final answer is submitted twice.',
+    })
+    const finalDomain = created.domains.at(-1)!
+    for (const domain of created.domains) {
+      domain.status = domain === finalDomain ? 'closeout' : 'closed'
+      domain.closeoutAsked = true
+    }
+    created.activeDomainId = finalDomain.id
+    created.pendingQuestion = {
+      id: `${finalDomain.id}-closeout`,
+      domainId: finalDomain.id,
+      prompt: 'Anything else?',
+      why: 'This is the final release question.',
+      evidence: [],
+      askedAt: new Date().toISOString(),
+    }
+    await savePressureTestIntake(tmpDir, created)
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const request = async (): Promise<Response> => app.fetch(new Request(
+      projectUrl(`/api/project/pressure-test/${created.id}/answer`),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ questionId: created.pendingQuestion!.id, answer: 'No.' }),
+      },
+    ))
+    const responses = await Promise.all([request(), request()])
+    const bodies = await Promise.all(responses.map(async response => ({
+      status: response.status,
+      body: await response.json() as { taskId?: string },
+    })))
+
+    expect(bodies.map(result => result.status)).toEqual([200, 200])
+    expect(bodies[0]?.body.taskId).toBeTruthy()
+    expect(bodies[1]?.body.taskId).toBe(bodies[0]?.body.taskId)
+    expect((await readQueue()).tasks).toHaveLength(1)
+    await expect(loadPressureTestIntake({ memoryDir: tmpDir, intakeId: created.id })).resolves.toMatchObject({
+      status: 'complete',
+      handoff: {
+        status: 'materialized',
+        taskId: bodies[0]?.body.taskId,
+        materializedAt: expect.any(String),
+      },
+    })
+  })
+
   it('reloads completed-intake state after acquiring the materialization lock', async () => {
     const created = await createPressureTestIntake({
       memoryDir: tmpDir,

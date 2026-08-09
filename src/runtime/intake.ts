@@ -32,6 +32,7 @@ import {
   promoteImportDraftToExploring,
 } from './import-drafts.js'
 import {
+  answerPressureTestQuestion,
   createPressureTestIntake,
   inspectPressureTestEvidence,
   loadPressureTestIntake,
@@ -301,6 +302,32 @@ export interface RoutedRequestResult {
 export interface MaterializedPressureTestIntake {
   taskId: string
   transcriptPath?: string
+}
+
+export async function answerPressureTestQuestionWithMaterialization(input: {
+  memoryDir: string
+  intakeId: string
+  questionId: string
+  answer: string
+  materialization?: {
+    domain: string
+    projectPath: string
+  }
+}): Promise<{
+  intake: PressureTestIntake
+  materialized: MaterializedPressureTestIntake | null
+}> {
+  return withProjectStateWriteLock(tasksPathFor(input.memoryDir), async () => {
+    const intake = await answerPressureTestQuestion(input)
+    const materialized = input.materialization
+      ? await materializeCompletedPressureTestIntakeUnlocked({
+          memoryDir: input.memoryDir,
+          intake,
+          ...input.materialization,
+        })
+      : null
+    return { intake, materialized }
+  })
 }
 
 export async function materializeCompletedPressureTestIntake(input: {

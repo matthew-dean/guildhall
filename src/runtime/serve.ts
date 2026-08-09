@@ -186,11 +186,11 @@ import {
   rerunTaskStage,
   shapeImportDraft,
   createBugReportTask,
+  answerPressureTestQuestionWithMaterialization,
   materializeCompletedPressureTestIntake,
   parseStackTraceTopFile,
 } from './intake.js'
 import {
-  answerPressureTestQuestion,
   createPressureTestIntake,
   loadPressureTestIntake,
   listPressureTestIntakes,
@@ -12419,14 +12419,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!questionId || !answer) {
         return c.json({ error: 'Question and answer are required.' }, 400)
       }
-      const intake = await answerPressureTestQuestion({
-        memoryDir: getProjectStateDir(project.path),
+      const memoryDir = getProjectStateDir(project.path)
+      const defaultCoordinator = project.config?.coordinators?.[0]
+      const { intake, materialized } = await answerPressureTestQuestionWithMaterialization({
+        memoryDir,
         intakeId: c.req.param('id'),
         questionId,
         answer,
+        ...(defaultCoordinator
+          ? {
+              materialization: {
+                domain: defaultCoordinator.domain,
+                projectPath: resolveTaskPathForDomain(project, defaultCoordinator.domain),
+              },
+            }
+          : {}),
       })
-      const coordinators = project.config?.coordinators ?? []
-      const defaultCoordinator = coordinators[0]
       if (intake.status === 'complete' && intake.target.type !== 'project' && !defaultCoordinator) {
         return c.json({
           intake,
@@ -12434,14 +12442,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
           code: 'coordinator_required',
         }, 400)
       }
-      const materialized = defaultCoordinator
-        ? await materializeCompletedPressureTestIntake({
-            memoryDir: getProjectStateDir(project.path),
-            intake,
-            domain: defaultCoordinator.domain,
-            projectPath: resolveTaskPathForDomain(project, defaultCoordinator.domain),
-          })
-        : null
       return c.json({ intake, ...(materialized ? { taskId: materialized.taskId } : {}) })
     } catch (err) {
       try {

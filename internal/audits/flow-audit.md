@@ -56037,3 +56037,38 @@ Repair:
       project matrix cover current and compatibility behavior.
 - Owner-facing plan text: no migration action is required.
 - Rollback/revert behavior: code-only revert; no persisted-state rollback.
+
+### Contract Touch Decision: Concurrent Intake Completion Handoff
+
+- Work id: `pr20-concurrent-intake-completion-handoff-2026-08-09`.
+- Touched contracts: the pressure-test answer endpoint's completion and task
+      materialization boundary. A final answer and its durable task handoff now
+      execute under one project-state write lock.
+- Contracts considered but not touched: pressure-test intake schema, handoff
+      schema, task lifecycle, queue schema, provider/model prose, and public
+      response fields.
+- Required follow-up: none.
+- Proof required: overlapping submissions of the same final answer must
+      converge on one task, return the same task id, and leave the persisted
+      completed intake linked to that task.
+- Proof provided: synchronized API regression in `serve-intake.test.ts`, plus
+      focused intake tests, typecheck, model-independence, and contract lint.
+- Waivers: none.
+- Owner-review items: duplicate final-answer requests are treated as idempotent
+      recovery after the first request completes; they must not erase the
+      handoff or create another task.
+- Apply/revert behavior: apply the serialized answer/materialization operation
+      with its endpoint integration. Reverting restores the stale-write race;
+      no persisted data migration is required.
+
+### Schema Migration Decision: Concurrent Intake Completion Handoff
+
+- Persisted schema touched: none.
+- Scope and change class: existing-record write ordering and idempotency.
+- Existing data impact: no records are rewritten outside the answered intake
+      and its already-defined handoff field.
+- Migration id, required-before-run behavior, and compatibility reader: none.
+- Fixtures and tests: the overlapping final-answer API regression uses the
+      existing intake and task fixtures.
+- Owner-facing plan text: no migration action is required.
+- Rollback/revert behavior: code-only revert; no persisted-state rollback.
