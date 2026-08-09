@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { Task } from '@guildhall/core'
-import { validateProductBriefGrounding, validateSpecCompletionBoundary, validateSpecGrounding } from '../spec-quality.js'
+import {
+  ownerSpecRevisionRequirements,
+  validateProductBriefGrounding,
+  validateSpecCompletionBoundary,
+  validateSpecGrounding,
+} from '../spec-quality.js'
 
 const baseTask = {
   title: 'Build broad-genre drafting model proof',
@@ -28,6 +33,38 @@ const sourceCapabilityTask = {
 }
 
 describe('validateSpecGrounding', () => {
+  it('uses only the active spec revision command while retaining earlier revision instructions', () => {
+    const requirements = ownerSpecRevisionRequirements({
+      notes: [{
+        agentId: 'human',
+        role: 'human',
+        content: 'First run `pnpm test:old`.',
+        timestamp: '2026-08-08T10:00:00.000Z',
+        structured: {
+          event: 'document_revision_requested',
+          target: 'spec',
+          requiredAcceptanceCommands: ['pnpm test:old'],
+        },
+      }, {
+        agentId: 'human',
+        role: 'human',
+        content: 'Replace that proof with `pnpm test:new`.',
+        timestamp: '2026-08-08T11:00:00.000Z',
+        structured: {
+          event: 'document_revision_requested',
+          target: 'spec',
+          requiredAcceptanceCommands: ['pnpm test:new'],
+        },
+      }],
+    }, null)
+
+    expect(requirements.instructions).toEqual([
+      'First run `pnpm test:old`.',
+      'Replace that proof with `pnpm test:new`.',
+    ])
+    expect(requirements.requiredAcceptanceCommands).toEqual(['pnpm test:new'])
+  })
+
   it('rejects plausible commands, paths, and model choices that were not visible', () => {
     const result = validateSpecGrounding({
       ...baseTask,

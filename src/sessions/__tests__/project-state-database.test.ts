@@ -1086,6 +1086,52 @@ describe('project-state database', () => {
     databaseAfter.close()
   })
 
+  it('persists dependency-only scope changes during a release selection mutation', () => {
+    const releases = [
+      { id: 'release-1', label: 'First', kind: 'release', state: 'active', nodeIds: ['task-1', 'task-2'], deferredNodeIds: [] },
+    ]
+    const baseScopeRows = [
+      { taskId: 'task-1', scope: 'included', eligibilityReason: 'selected release', hierarchyRole: 'leaf', handoffState: 'ready', blocksStart: false, blocksRelease: false, humanBlocking: false, sourceRefs: [] as string[] },
+      { taskId: 'task-2', scope: 'included', eligibilityReason: 'selected release', hierarchyRole: 'leaf', handoffState: 'ready', blocksStart: false, blocksRelease: false, humanBlocking: false, sourceRefs: [] as string[] },
+    ] as const
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        lastUpdated: '2026-07-14T00:00:00.000Z',
+        selectedReleaseId: 'release-1',
+        releases,
+        tasks: [
+          { id: 'task-1', title: 'Blocked task', status: 'ready', releaseIds: ['release-1'] },
+          { id: 'task-2', title: 'Dependency', status: 'ready', releaseIds: ['release-1'] },
+        ],
+      },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current', counts: { total: 2 } },
+      scopeRows: [...baseScopeRows],
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const queueRevision = readProjectStateDatabaseQueueRevision(tasksPath)!
+
+    writeProjectStateDatabaseReleaseSelectionMutation(tasksPath, {
+      releases,
+      selectedReleaseId: 'release-1',
+      expectedQueueRevision: queueRevision,
+      expectedProjectRevision: readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!,
+      lastUpdated: '2026-07-15T00:00:00.000Z',
+      summary: { generatedAt: '2026-07-15T00:00:00.000Z', freshness: 'current', counts: { total: 2 } },
+      scopeRows: [{
+        ...baseScopeRows[0],
+        countInProjectTotals: false,
+        dependencyBlocked: true,
+        dependencyTaskIds: ['task-2'],
+      }, baseScopeRows[1]],
+    })
+
+    expect(readProjectStateDatabaseInventory(tasksPath)?.tasks.find(task => task.id === 'task-1')?.scopeRow).toMatchObject({
+      countInProjectTotals: false,
+      dependencyBlocked: true,
+      dependencyTaskIds: ['task-2'],
+    })
+  })
+
   it('commits a structural task delta without rewriting untouched detail payloads', () => {
     writeProjectStateDatabaseSnapshot(tasksPath, {
       queue: {

@@ -1018,21 +1018,46 @@ function installedLaunchAgentTarget(port: number) {
   return target && existsSync(target.plistPath) ? target : null
 }
 
-async function startInstalledLaunchAgent(port: number): Promise<boolean> {
-  const target = installedLaunchAgentTarget(port)
-  if (!target) return false
-
-  // bootstrap fails when the service is already loaded; kickstart is authoritative in either case.
-  await runLaunchctl(['bootstrap', target.domainTarget, target.plistPath], true)
-  await runLaunchctl(['kickstart', '-k', target.serviceTarget])
-  return true
+interface InstalledLaunchAgentCommandOptions {
+  resolveTarget?: typeof installedLaunchAgentTarget
+  runLaunchctl?: typeof runLaunchctl
 }
 
-async function stopInstalledLaunchAgent(port: number): Promise<boolean> {
-  const target = installedLaunchAgentTarget(port)
+export async function startInstalledLaunchAgent(
+  port: number,
+  options: InstalledLaunchAgentCommandOptions = {},
+): Promise<boolean> {
+  const target = (options.resolveTarget ?? installedLaunchAgentTarget)(port)
   if (!target) return false
-  await runLaunchctl(['bootout', target.domainTarget, target.plistPath], true)
-  return true
+  const launchctl = options.runLaunchctl ?? runLaunchctl
+
+  // bootstrap fails when the service is already loaded; kickstart is authoritative in either case.
+  await launchctl(['bootstrap', target.domainTarget, target.plistPath], true)
+  return launchctl(['kickstart', '-k', target.serviceTarget], true)
+}
+
+export async function stopInstalledLaunchAgent(
+  port: number,
+  options: InstalledLaunchAgentCommandOptions = {},
+): Promise<boolean> {
+  const target = (options.resolveTarget ?? installedLaunchAgentTarget)(port)
+  if (!target) return false
+  return (options.runLaunchctl ?? runLaunchctl)(['bootout', target.domainTarget, target.plistPath], true)
+}
+
+export async function startInstalledLaunchAgentIfReady(
+  port: number,
+  options: {
+    start?: typeof startInstalledLaunchAgent
+    waitUntilReady?: typeof waitForServiceReady
+  } = {},
+): Promise<ServiceRuntimeState | null> {
+  try {
+    if (!await (options.start ?? startInstalledLaunchAgent)(port)) return null
+    return await (options.waitUntilReady ?? waitForServiceReady)(port)
+  } catch {
+    return null
+  }
 }
 
 async function ensureServiceRunning(intent: ServiceLifecycleIntent): Promise<ServiceRuntimeState> {
@@ -1041,9 +1066,8 @@ async function ensureServiceRunning(intent: ServiceLifecycleIntent): Promise<Ser
 
   mkdirSync(join(homedir(), '.guildhall'), { recursive: true })
 
-  if (await startInstalledLaunchAgent(intent.port)) {
-    return waitForServiceReady(intent.port)
-  }
+  const installedAgent = await startInstalledLaunchAgentIfReady(intent.port)
+  if (installedAgent) return installedAgent
 
   const childArgs = [
     cliEntryPath(),

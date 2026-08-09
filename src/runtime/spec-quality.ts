@@ -24,9 +24,23 @@ export function ownerSpecRevisionRequirements(
   currentEvidence: unknown,
 ): OwnerSpecRevisionRequirements {
   const evidenceNotes = isRecord(currentEvidence) && isRecord(currentEvidence.byKind) && Array.isArray(currentEvidence.byKind.note)
-    ? currentEvidence.byKind.note.flatMap(record => isRecord(record) && isRecord(record.payload) ? [record.payload] : [])
+    ? currentEvidence.byKind.note.flatMap(record => isRecord(record) && isRecord(record.payload)
+      ? [{ payload: record.payload, recordedAt: typeof record.recordedAt === 'string' ? record.recordedAt : '' }]
+      : [])
     : []
-  const revisions = [...(task.notes ?? []), ...evidenceNotes].flatMap(payload => {
+  const candidates = [
+    ...(task.notes ?? []).map((payload, index) => ({
+      payload,
+      recordedAt: typeof payload.timestamp === 'string' ? payload.timestamp : '',
+      order: index,
+    })),
+    ...evidenceNotes.map((record, index) => ({
+      payload: record.payload,
+      recordedAt: record.recordedAt,
+      order: (task.notes?.length ?? 0) + index,
+    })),
+  ]
+  const revisions = candidates.flatMap(({ payload, recordedAt, order }) => {
     if (!isRecord(payload)) return []
     const agentId = typeof payload.agentId === 'string' ? payload.agentId.trim() : ''
     const role = typeof payload.role === 'string' ? payload.role.trim() : ''
@@ -39,11 +53,16 @@ export function ownerSpecRevisionRequirements(
         .map(command => command.trim())
         .filter(Boolean)
       : []
-    return [{ content, requiredAcceptanceCommands }]
+    return [{ content, requiredAcceptanceCommands, recordedAt, order }]
   })
+  const activeRevision = revisions.reduce<(typeof revisions)[number] | undefined>((latest, revision) => {
+    if (!latest) return revision
+    const timestampOrder = revision.recordedAt.localeCompare(latest.recordedAt)
+    return timestampOrder > 0 || (timestampOrder === 0 && revision.order > latest.order) ? revision : latest
+  }, undefined)
   return {
     instructions: [...new Set(revisions.map(revision => revision.content))],
-    requiredAcceptanceCommands: [...new Set(revisions.flatMap(revision => revision.requiredAcceptanceCommands))],
+    requiredAcceptanceCommands: [...new Set(activeRevision?.requiredAcceptanceCommands ?? [])],
   }
 }
 

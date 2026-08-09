@@ -4872,19 +4872,6 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
     throw new Error(`Cannot select release ${mutation.selectedReleaseId}: release not found in the current envelope`)
   }
 
-  const scopeRowKey = (row: ProjectStateDatabaseScopeRow): string => JSON.stringify({
-    taskId: row.taskId,
-    scope: row.scope,
-    eligibilityReason: row.eligibilityReason,
-    hierarchyRole: row.hierarchyRole,
-    handoffState: row.handoffState,
-    blocksStart: row.blocksStart,
-    blocksRelease: row.blocksRelease,
-    humanBlocking: row.humanBlocking,
-    proofBlocked: row.proofBlocked ?? false,
-    blockerSummary: row.blockerSummary ?? null,
-    sourceRefs: row.sourceRefs,
-  })
   const scopeRowsByTaskId = new Map<string, ProjectStateDatabaseScopeRow>()
   for (const row of mutation.scopeRows) {
     if (scopeRowsByTaskId.has(row.taskId)) throw new Error(`Targeted release selection mutations received duplicate scope row ${row.taskId}`)

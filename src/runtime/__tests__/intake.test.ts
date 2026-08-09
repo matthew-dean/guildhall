@@ -6,6 +6,7 @@ import {
   createExploringTask,
   approveSpec,
   reframeTask,
+  readCurrentTaskEvidenceForSpecApproval,
   resumeExploring,
   createBugReportTask,
   parseStackTraceTopFile,
@@ -594,6 +595,15 @@ describe('approveSpec', () => {
     const result = await approveSpec({ memoryDir, taskId: task.id })
 
     expect(result).toEqual({ success: true, newStatus: 'ready' })
+  })
+
+  it('tolerates only the missing current-evidence revision race during spec approval', () => {
+    expect(readCurrentTaskEvidenceForSpecApproval(tmpDir, 'task-001', () => {
+      throw new Error('Normalized current task evidence is unavailable for promoted project')
+    })).toBeNull()
+    expect(() => readCurrentTaskEvidenceForSpecApproval(tmpDir, 'task-001', () => {
+      throw new Error('Current evidence is corrupt')
+    })).toThrow('Current evidence is corrupt')
   })
 
   it('preserves a fresh lifecycle fence while approving its new spec', async () => {

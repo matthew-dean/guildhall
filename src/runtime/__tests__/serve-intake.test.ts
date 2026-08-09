@@ -381,6 +381,34 @@ describe('POST /api/project/request', () => {
     })
   })
 
+  it('reloads completed-intake state after acquiring the materialization lock', async () => {
+    const created = await createPressureTestIntake({
+      memoryDir: tmpDir,
+      target: { type: 'release', id: 'stale-release', title: 'Stale release' },
+      rawRequest: 'Do not materialize stale completion state.',
+    })
+    created.status = 'complete'
+    created.activeDomainId = null
+    created.pendingQuestion = null
+    await savePressureTestIntake(tmpDir, created)
+    const staleComplete = await loadPressureTestIntake({ memoryDir: tmpDir, intakeId: created.id })
+    const current = await loadPressureTestIntake({ memoryDir: tmpDir, intakeId: created.id })
+    current.status = 'paused'
+    await savePressureTestIntake(tmpDir, current)
+
+    await expect(materializeCompletedPressureTestIntake({
+      memoryDir: tmpDir,
+      intake: staleComplete,
+      domain: 'knit',
+      projectPath: path.join(tmpDir, 'knit'),
+    })).resolves.toBeNull()
+
+    expect((await readQueue()).tasks).toHaveLength(0)
+    const persisted = await loadPressureTestIntake({ memoryDir: tmpDir, intakeId: created.id })
+    expect(persisted.status).toBe('paused')
+    expect(persisted.handoff).toBeUndefined()
+  })
+
   it('starts bounded chat for ordinary task intake instead of creating work immediately', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/request'), {

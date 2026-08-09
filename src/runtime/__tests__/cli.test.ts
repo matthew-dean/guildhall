@@ -27,6 +27,9 @@ import {
   resolveServiceLifecycleIntent,
   serviceStatePath,
   serviceUrlForPort,
+  startInstalledLaunchAgent,
+  startInstalledLaunchAgentIfReady,
+  stopInstalledLaunchAgent,
   waitForServiceReady,
   SHIPPED_CLI_COMMANDS,
   draftEscapedMissCalibrationCase,
@@ -100,6 +103,47 @@ describe('resolveServiceLifecycleIntent', () => {
 })
 
 describe('CLI service lifecycle helpers', () => {
+  const launchAgentTarget = {
+    plistPath: '/Users/tester/Library/LaunchAgents/io.guildhall.agent.plist',
+    domainTarget: 'gui/501',
+    serviceTarget: 'gui/501/io.guildhall.agent',
+  }
+
+  it('reports launchctl command outcomes instead of treating an installed plist as success', async () => {
+    const runLaunchctl = vi.fn(async (args: string[]) => args[0] === 'bootstrap')
+    const options = {
+      resolveTarget: () => launchAgentTarget,
+      runLaunchctl,
+    }
+
+    await expect(startInstalledLaunchAgent(7777, options)).resolves.toBe(false)
+    await expect(stopInstalledLaunchAgent(7777, options)).resolves.toBe(false)
+    expect(runLaunchctl).toHaveBeenNthCalledWith(1, ['bootstrap', 'gui/501', launchAgentTarget.plistPath], true)
+    expect(runLaunchctl).toHaveBeenNthCalledWith(2, ['kickstart', '-k', launchAgentTarget.serviceTarget], true)
+    expect(runLaunchctl).toHaveBeenNthCalledWith(3, ['bootout', 'gui/501', launchAgentTarget.plistPath], true)
+  })
+
+  it('returns control to detached startup when the installed agent fails or never becomes ready', async () => {
+    const readyState = {
+      pid: 123,
+      port: 7777,
+      url: serviceUrlForPort(7777),
+      startedAt: '2026-08-09T00:00:00.000Z',
+    }
+    await expect(startInstalledLaunchAgentIfReady(7777, {
+      start: async () => { throw new Error('kickstart failed') },
+      waitUntilReady: async () => readyState,
+    })).resolves.toBeNull()
+    await expect(startInstalledLaunchAgentIfReady(7777, {
+      start: async () => true,
+      waitUntilReady: async () => { throw new Error('not ready') },
+    })).resolves.toBeNull()
+    await expect(startInstalledLaunchAgentIfReady(7777, {
+      start: async () => true,
+      waitUntilReady: async () => readyState,
+    })).resolves.toEqual(readyState)
+  })
+
   it('parses flags and positionals without letting boolean flags consume paths', () => {
     const parsed = parseArgs(['--no-open', '/tmp/project', '--port', '9001', '--verbose'])
 

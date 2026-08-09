@@ -34,6 +34,7 @@ import {
 import {
   createPressureTestIntake,
   inspectPressureTestEvidence,
+  loadPressureTestIntake,
   renderPressureTestSpec,
   savePressureTestIntake,
   type PressureTestIntake,
@@ -308,9 +309,18 @@ export async function materializeCompletedPressureTestIntake(input: {
   domain: string
   projectPath: string
 }): Promise<MaterializedPressureTestIntake | null> {
-  return withProjectStateWriteLock(tasksPathFor(input.memoryDir), () => (
-    materializeCompletedPressureTestIntakeUnlocked(input)
-  ))
+  return withProjectStateWriteLock(tasksPathFor(input.memoryDir), async () => {
+    const intake = await loadPressureTestIntake({
+      memoryDir: input.memoryDir,
+      intakeId: input.intake.id,
+    })
+    const result = await materializeCompletedPressureTestIntakeUnlocked({ ...input, intake })
+    if (intake.handoff) {
+      input.intake.handoff = { ...intake.handoff }
+      input.intake.updatedAt = intake.updatedAt
+    }
+    return result
+  })
 }
 
 async function materializeCompletedPressureTestIntakeUnlocked(input: {
@@ -498,6 +508,23 @@ function isProjectRevisionRace(error: unknown): boolean {
   return error instanceof Error && /Stale (?:targeted )?project mutation|project state changed|expected (?:project )?revision/i.test(error.message)
 }
 
+function isMissingCurrentTaskEvidenceRevisionRace(error: unknown): boolean {
+  return error instanceof Error && error.message === 'Normalized current task evidence is unavailable for promoted project'
+}
+
+export function readCurrentTaskEvidenceForSpecApproval(
+  projectRoot: string,
+  taskId: string,
+  readCurrentEvidence = readProjectStateDatabaseTaskEvidenceCurrent,
+) {
+  try {
+    return readCurrentEvidence(projectRoot, taskId)
+  } catch (error) {
+    if (!isMissingCurrentTaskEvidenceRevisionRace(error)) throw error
+    return null
+  }
+}
+
 export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecResult> {
   // Approval changes task state and can add a release-local proof child. If a
   // release selection changes while that decision is in flight, discard the
@@ -562,10 +589,8 @@ async function approveSpecFromCurrentSnapshot(input: ApproveSpecInput): Promise<
       error: `Spec is not ready for approval: ${specQuality.errors.join(' ')}`,
     }
   }
-  const ownerRevisionRequirements = ownerSpecRevisionRequirements(
-    task,
-    readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, task.id),
-  )
+  const currentTaskEvidence = readCurrentTaskEvidenceForSpecApproval(projectRoot, task.id)
+  const ownerRevisionRequirements = ownerSpecRevisionRequirements(task, currentTaskEvidence)
   const specGrounding = validateSpecGrounding(task, {
     ownerRevisionInstructions: ownerRevisionRequirements.instructions,
     requiredAcceptanceCommands: ownerRevisionRequirements.requiredAcceptanceCommands,
