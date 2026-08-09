@@ -588,6 +588,7 @@ export function createSpecAgent(
     name: 'spec-agent',
     llm,
     systemPrompt: SPEC_AGENT_PROMPT,
+    maxTurns: 16,
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
     noToolTurnNudge: SPEC_AGENT_NO_TOOL_TURN_NUDGE,
     noToolTurnNudgeLimit: 2,

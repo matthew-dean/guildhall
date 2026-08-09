@@ -376,6 +376,12 @@ describe('agent factories', () => {
     expect(a.name).toBe('spec-agent')
   })
 
+  it('createSpecAgent budgets enough turns to inspect source and save a blueprint', () => {
+    const agent = createSpecAgent(llm)
+    expect((agent as unknown as { engine: { getMaxTurns(): number | null } }).engine.getMaxTurns())
+      .toBe(16)
+  })
+
   it('spec guidance forbids guessed executable proof commands', () => {
     const agent = createSpecAgent(llm)
     const prompt = (agent as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()

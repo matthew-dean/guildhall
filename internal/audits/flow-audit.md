@@ -55520,9 +55520,14 @@ Repair:
       authority. The orchestrator now labels the path as a task-state handle,
       warns that its compatibility projection may omit database-authoritative
       tasks, and the spec-agent contract forbids raw `TASKS.json` inspection or
-      reconstruction. Focused prompt/routing regressions, typecheck, and the
-      model-independence gate pass. Installed task-087 replay must still prove
-      the worker writes a durable spec and returns to `spec_review`.
+      reconstruction. The first installed replay then spent the generic
+      eight-turn budget on seven relevant source reads plus one authoritative
+      `read-tasks` call, proving the lane budget itself was too small for a
+      source-backed blueprint. The spec lane now has 16 turns while retaining
+      the two-turn durable-progress nudge. Focused prompt/routing/factory
+      regressions, typecheck, and the model-independence gate pass. Installed
+      task-087 replay must still prove the worker writes a durable spec and
+      returns to `spec_review`.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
