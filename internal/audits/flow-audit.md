@@ -55770,6 +55770,25 @@ Repair:
       public guide copy and fresh screenshots. The release summary therefore
       reports four done, NAR-090 active, four ready, and zero blockers instead
       of vague shaping requests that hid the intended release sequence.
+- [x] A source-contract re-audit caught NAR-091 before assignment: the existing
+      live headless writer already permits `blocked` findings and `high`
+      severity, while the declared `ReviewFinding` interface and approved task
+      wording named only `pass | needs_attention` and `info | medium`. The task
+      moved through `ready -> exploring -> spec_review -> ready`; it now treats
+      `blocked` as attention, ranks the complete typed severity domain, varies
+      arbitrary prose independently in proof, and binds output-path identity to
+      the exact confined Rust read rather than pretending the artifact JSON
+      contains its own filesystem path. All five command contracts were
+      preserved and NAR-091 remains dependency-waiting on NAR-090.
+- [x] The same review found NAR-092's filesystem-authority wording contradicted
+      its proposed API: the renderer necessarily carries the current prepared
+      and result paths, but the invariant said the renderer supplies no paths.
+      The task moved through the same review lifecycle and now states the
+      enforceable boundary: native dialogs exclusively choose external open
+      sources and save destinations; renderer cache paths are untrusted claims
+      usable only after Rust confinement and current-result identity checks.
+      Proof now includes escaped/stale cache inputs, while every command and
+      dependency remains unchanged.
 - [x] Installed Release-page audit found the Stage 2-specific desktop
       description followed immediately by the global Stage 1 headless-only
       charter, making the active release explain two incompatible scopes.
