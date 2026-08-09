@@ -94,6 +94,52 @@ function isIgnorableGuildhallStatePath(file: string): boolean {
   )
 }
 
+async function workingPathMatchesBranchTarget(
+  gitRoot: string,
+  branch: string,
+  file: string,
+): Promise<boolean> {
+  const { stdout: treeEntry } = await execGit(['ls-tree', branch, '--', file], {
+    cwd: gitRoot,
+    maxBuffer: 1024 * 1024,
+  })
+  const entry = treeEntry.trim()
+  if (!entry) {
+    try {
+      await fs.lstat(path.join(gitRoot, file))
+      return false
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === 'ENOENT'
+    }
+  }
+
+  const [targetMode, , targetHash] = entry.split(/\s+/, 3)
+  if (!targetMode || !targetHash || targetMode === '160000') return false
+
+  let stat: Awaited<ReturnType<typeof fs.lstat>>
+  try {
+    stat = await fs.lstat(path.join(gitRoot, file))
+  } catch {
+    return false
+  }
+  const currentMode = stat.isSymbolicLink()
+    ? '120000'
+    : stat.isFile()
+      ? (stat.mode & 0o111) !== 0 ? '100755' : '100644'
+      : null
+  if (currentMode !== targetMode) return false
+
+  try {
+    const { stdout: currentHash } = await execGit(['hash-object', '--', file], {
+      cwd: gitRoot,
+      maxBuffer: 1024 * 1024,
+    })
+    return currentHash.trim() === targetHash
+  } catch {
+    return false
+  }
+}
+
 async function resolveGitTopLevel(repoRoot: string): Promise<string> {
   let cwd = resolveRuntimePath(repoRoot)
   while (!fsSync.existsSync(cwd)) {
@@ -713,11 +759,17 @@ export class NodeGitDriver implements GitDriver {
       const { stdout: changedStdout } = await execGit(['diff', '--name-only', '-z', `${baseBranch}..${branch}`],
         { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
       )
-      const meaningfulPaths = changedStdout
+      const candidatePaths = changedStdout
         .split('\0')
         .map((file) => file.trim())
         .filter(Boolean)
         .filter((file) => !isIgnorableGuildhallStatePath(file.replace(/\/$/, '')))
+      const meaningfulPaths: string[] = []
+      for (const file of candidatePaths) {
+        if (!await workingPathMatchesBranchTarget(gitRoot, branch, file)) {
+          meaningfulPaths.push(file)
+        }
+      }
 
       if (meaningfulPaths.length > 0) {
         const diffArgs = ['diff', '--binary', `${baseBranch}..${branch}`, '--', ...meaningfulPaths]

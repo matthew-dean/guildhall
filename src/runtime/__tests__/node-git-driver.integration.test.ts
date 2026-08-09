@@ -318,6 +318,49 @@ describe('NodeGitDriver.push', () => {
 })
 
 describe('NodeGitDriver.cherryPickBranch', () => {
+  it('lands the remaining task delta when owner checkout paths already match the branch target', async () => {
+    const driver = new NodeGitDriver()
+    await fs.writeFile(path.join(repoRoot, 'package-lock.json'), '{"lock":true}\n', 'utf8')
+    await git(repoRoot, ['add', 'package-lock.json'])
+    await git(repoRoot, ['commit', '-q', '-m', 'add lockfile'])
+
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'matching-owner-paths')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-matching-owner-paths',
+      baseBranch: 'main',
+    })
+    const fixturePath = path.join('fixtures', 'run.json')
+    await fs.rm(path.join(worktreePath, 'package-lock.json'))
+    await fs.mkdir(path.join(worktreePath, 'fixtures'), { recursive: true })
+    await fs.writeFile(path.join(worktreePath, fixturePath), '{"ok":true}\n', 'utf8')
+    await fs.writeFile(path.join(worktreePath, 'feature.txt'), 'land me\n', 'utf8')
+    await git(worktreePath, ['add', '-A'])
+    await git(worktreePath, ['commit', '-q', '-m', 'task work'])
+
+    await fs.rm(path.join(repoRoot, 'package-lock.json'))
+    await fs.mkdir(path.join(repoRoot, 'fixtures'), { recursive: true })
+    await fs.writeFile(path.join(repoRoot, fixturePath), '{"ok":true}\n', 'utf8')
+
+    const result = await driver.cherryPickBranch(
+      repoRoot,
+      'guildhall/task-matching-owner-paths',
+      'main',
+    )
+
+    expect(result.ok).toBe(true)
+    await expect(fs.readFile(path.join(repoRoot, 'feature.txt'), 'utf8')).resolves.toBe('land me\n')
+    await expect(fs.readFile(path.join(repoRoot, fixturePath), 'utf8')).resolves.toBe('{"ok":true}\n')
+    await expect(fs.stat(path.join(repoRoot, 'package-lock.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    const { stdout: status } = await git(repoRoot, ['status', '--short'])
+    expect(status).toContain(' D package-lock.json')
+    expect(status).toContain('?? fixtures/')
+    const { stdout: committedFiles } = await git(repoRoot, ['show', '--name-only', '--format=', 'HEAD'])
+    expect(committedFiles).toContain('feature.txt')
+    expect(committedFiles).not.toContain('package-lock.json')
+    expect(committedFiles).not.toContain(fixturePath)
+  })
+
   it('lands product files while ignoring Guildhall runtime state from the task branch', async () => {
     const driver = new NodeGitDriver()
     const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'landing')

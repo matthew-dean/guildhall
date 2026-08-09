@@ -55480,6 +55480,18 @@ Repair:
       lifecycle boundary and settle the task only from fresh execution;
       typecheck passes. Installed task-086 replay remains required before this
       finding is complete.
+- Failing installed landing finding: all five task-086 command/proof paths
+      reached verified state, but `cherry_pick_local` blocked the task because
+      the owner checkout had already deleted `package-lock.json` and contained
+      an untracked fixture-run artifact byte-identical to the task branch's
+      target. `git apply --check` treated those matching owner changes as
+      conflicts and refused to land the unrelated desktop implementation.
+- [~] Exclude a task-delta path from the landing patch only when the owner
+      checkout already matches the task branch's exact blob, file mode, or
+      deletion target. The integration regression proves the remaining task
+      delta is committed while the matching tracked deletion and untracked
+      artifact remain untouched and uncommitted. Installed blocked-task
+      recovery and landing remain required.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
