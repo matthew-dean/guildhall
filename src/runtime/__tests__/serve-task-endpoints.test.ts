@@ -2851,6 +2851,86 @@ describe('POST /api/project/task/:id/start', () => {
     }
   })
 
+  it('resumes checkpointed implementation when compacted state has no open blocker', async () => {
+    const now = new Date().toISOString()
+    await seedTasks([
+      {
+        id: 'task-desktop-spike',
+        title: 'Prove packaged desktop sidecar',
+        status: 'blocked',
+        blockReason: 'Historical worker blocker text that no longer has an escalation record.',
+        productBrief: {
+          userJob: 'Prove the packaged desktop architecture.',
+          successMetric: 'The packaged sidecar runs without a separate host runtime.',
+          approvedAt: now,
+        },
+        spec: '## Summary\nBuild and verify the packaged desktop sidecar.',
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The packaged sidecar proof passes.',
+          verifiedBy: 'pnpm test:desktop-sidecar',
+          met: false,
+        }],
+        taskReadiness: {
+          taskKind: 'implementation',
+          recommendation: 'ready',
+          summary: 'Task is ready for a focused worker pass.',
+          dimensions: [],
+          definitionOfDone: { items: [], evidenceRequired: [] },
+          blockerPlans: [],
+          contextBudget: { estimatedTokens: 100, risk: 'low', fitsInOneWorkerBrief: true, reasons: [] },
+          assessedAt: now,
+        },
+        runtime: {
+          openEscalationIds: [],
+          openIssueIds: [],
+        },
+      },
+    ])
+    await writeCheckpoint({
+      tasksPath: taskQueuePath(),
+      memoryDir,
+      taskId: 'task-desktop-spike',
+      agentId: 'worker-agent',
+      intent: 'Fix the failing packaged-app verification.',
+      nextPlannedAction: 'Rerun the declared package command.',
+      nextActionKind: 'rerun_verification',
+      filesTouched: ['tauri.conf.json'],
+    })
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const focusedStart = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-desktop-spike/start'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+        }),
+      )
+
+      expect(focusedStart.status).toBe(200)
+      await vi.waitFor(() => {
+        expect(starts.at(-1)).toMatchObject({
+          preferredTaskId: 'task-desktop-spike',
+          stopAfterOneTask: true,
+        })
+      })
+      const queue = await readTaskQueue()
+      const task = queue.tasks.find((candidate: Record<string, any>) => candidate.id === 'task-desktop-spike')
+      expect(task).toMatchObject({ status: 'in_progress', assignedTo: null })
+      expect(task?.blockReason).toBeUndefined()
+      expect(task?.notes?.at(-1)?.structured).toMatchObject({
+        event: 'orphaned_checkpoint_blocker_repaired',
+        source: 'focused_task_start',
+      })
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
   it('starts a scoped max-revision task when an earlier LLM review already cleared the rubric', async () => {
     await seedTasks([
       {

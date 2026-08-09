@@ -55400,6 +55400,19 @@ Repair:
 - [ ] Represent task claim/worktree bootstrap as active focused work across
       ticker, Thread list, dock, and activity summary; never reinterpret a
       running scoped task as globally running inventory or a paused pass.
+- Failing installed recovery finding: after the service/database compatibility
+      repair, explicitly starting task 086 returned a successful `running`
+      response and then stopped after one tick as `all_terminal`. The task was
+      still `blocked`, even though its approved runnable contract, worker
+      checkpoint, ready task assessment, and empty authoritative escalation
+      set proved that no owner decision remained. Historical blocker prose had
+      survived evidence compaction after the escalation itself was gone.
+- [~] A focused Start now resumes checkpointed implementation work when typed
+      state proves there is no open escalation, owner hold, or dependency
+      blocker. The repair must not inspect blocker prose, and ordinary project
+      Start does not silently reopen intentionally blocked work. The focused
+      endpoint regression, typecheck, contract lint, and model-independence
+      gate pass; installed task 086 replay remains open.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
@@ -55441,7 +55454,10 @@ Repair:
       independently of later generic notes, approval consumes the same
       revision-matched evidence as authoring, missing implementation-created
       package scripts are permitted only before review, and successful approval
-      republishes current Thread before returning.
+      republishes current Thread before returning. Focused Start also repairs a
+      checkpointed implementation blocker only from approved contract,
+      readiness, checkpoint, dependency, hold, issue, and escalation fields;
+      historical blocker prose remains display-only.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive

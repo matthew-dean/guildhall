@@ -1972,6 +1972,119 @@ async function repairSpecTimeoutBlockedTask(projectPath: string, requestedTaskId
   return true
 }
 
+async function repairOrphanedCheckpointBlocker(projectPath: string, requestedTaskId: string): Promise<boolean> {
+  const tasksPath = projectTasksPath(projectPath)
+  if (!projectTaskStateExistsSync(tasksPath)) return false
+  const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
+  const parsed = queueRead.queue as
+    | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+    | Array<Record<string, unknown>>
+  const queue = Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+  const rawTask = queue.tasks.find(candidate => String(candidate.id ?? '') === requestedTaskId)
+  if (!rawTask || rawTask.status !== 'blocked') return false
+
+  const effectiveTask = (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+    ? await buildEffectiveTask(projectPath, rawTask as Task)
+    : rawTask) as unknown as Record<string, unknown>
+  const checkpoint = await readCheckpoint(getProjectStateDir(projectPath), requestedTaskId)
+  const dependencies = Array.isArray(effectiveTask.dependsOn)
+    ? effectiveTask.dependsOn.filter((dependencyId): dependencyId is string => typeof dependencyId === 'string')
+    : []
+  const unresolvedDependencies = dependencies.filter(dependencyId => {
+    const dependency = queue.tasks.find(candidate => String(candidate.id ?? '') === dependencyId)
+    return dependency?.status !== 'done'
+  })
+  const openEscalations = Array.isArray(effectiveTask.escalations)
+    ? effectiveTask.escalations.filter(escalation => (
+        escalation && typeof escalation === 'object' && !('resolvedAt' in escalation)
+      ))
+    : []
+  const openIssues = Array.isArray(effectiveTask.agentIssues)
+    ? effectiveTask.agentIssues.filter(issue => (
+        issue && typeof issue === 'object' && !('resolvedAt' in issue)
+      ))
+    : []
+  const runtime = effectiveTask.runtime && typeof effectiveTask.runtime === 'object' && !Array.isArray(effectiveTask.runtime)
+    ? effectiveTask.runtime as Record<string, unknown>
+    : {}
+  const runtimeOpenEscalations = Array.isArray(runtime.openEscalationIds) ? runtime.openEscalationIds : []
+  const runtimeOpenIssues = Array.isArray(runtime.openIssueIds) ? runtime.openIssueIds : []
+  const productBrief = effectiveTask.productBrief && typeof effectiveTask.productBrief === 'object' && !Array.isArray(effectiveTask.productBrief)
+    ? effectiveTask.productBrief as Record<string, unknown>
+    : null
+  const taskReadiness = effectiveTask.taskReadiness && typeof effectiveTask.taskReadiness === 'object' && !Array.isArray(effectiveTask.taskReadiness)
+    ? effectiveTask.taskReadiness as Record<string, unknown>
+    : null
+  const canResumeCheckpoint =
+    checkpoint?.agentId === 'worker-agent' &&
+    taskHasRunnableSpec(effectiveTask) &&
+    productBrief?.approvedAt != null &&
+    taskReadiness?.recommendation === 'ready' &&
+    !effectiveTask.hold &&
+    unresolvedDependencies.length === 0 &&
+    openEscalations.length === 0 &&
+    openIssues.length === 0 &&
+    runtimeOpenEscalations.length === 0 &&
+    runtimeOpenIssues.length === 0
+  if (!canResumeCheckpoint) return false
+
+  const now = new Date().toISOString()
+  const note = {
+    agentId: 'system',
+    role: 'state-repair',
+    content:
+      'Resumed checkpointed implementation during focused Start because the authoritative task state has no open escalation, owner hold, issue, or dependency blocker.',
+    timestamp: now,
+    structured: {
+      event: 'orphaned_checkpoint_blocker_repaired',
+      source: 'focused_task_start',
+      checkpointStep: checkpoint.step,
+    },
+  }
+  if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') {
+    const promoted = writePromotedTaskDetailMutation(tasksPath, requestedTaskId, {
+      projectId: basename(projectPath),
+      projectRoot: projectPath,
+      mutate: current => {
+        if (current.status !== 'blocked' || current.hold) return null
+        current.status = 'in_progress'
+        delete current.blockReason
+        delete current.recoveryCode
+        current.updatedAt = now
+        return current
+      },
+    })
+    if (!promoted) return false
+    await appendTaskEvidence(projectPath, requestedTaskId, {
+      id: `note-${requestedTaskId}-${now.replace(/[^0-9A-Za-z]/g, '')}-checkpoint-blocker-repair`,
+      kind: 'note',
+      recordedAt: now,
+      payload: note,
+    })
+  } else {
+    rawTask.status = 'in_progress'
+    rawTask.assignedTo = null
+    delete rawTask.blockReason
+    delete rawTask.recoveryCode
+    rawTask.updatedAt = now
+    const notes = Array.isArray(rawTask.notes) ? [...rawTask.notes as Array<Record<string, unknown>>] : []
+    notes.push(note)
+    rawTask.notes = notes
+    queue.lastUpdated = now
+    writeProjectTaskQueueWithSummary(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
+    invalidateTaskQueueReadCaches(tasksPath)
+  }
+  await upsertTaskRuntimeState(projectPath, requestedTaskId, {
+    assignedTo: null,
+    openEscalationIds: [],
+    openIssueIds: [],
+    updatedAt: now,
+  })
+  return true
+}
+
 async function repairWeakRecoverySpecReviewTask(projectPath: string, requestedTaskId: string): Promise<boolean> {
   const tasksPath = projectTasksPath(projectPath)
   if (!projectTaskStateExistsSync(tasksPath)) return false
@@ -11641,7 +11754,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (body.taskId) {
         const repairedSpecTimeout = await repairSpecTimeoutBlockedTask(project.path, body.taskId)
         const repairedWeakRecovery = await repairWeakRecoverySpecReviewTask(project.path, body.taskId)
-        if (repairedSpecTimeout || repairedWeakRecovery) {
+        const repairedCheckpointBlocker = await repairOrphanedCheckpointBlocker(project.path, body.taskId)
+        if (repairedSpecTimeout || repairedWeakRecovery || repairedCheckpointBlocker) {
           // Recovery can touch task, runtime, and historical evidence in
           // sequence. Publish one current decision packet before this Start
           // route reads readiness so it cannot start work from a private,
