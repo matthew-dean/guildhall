@@ -55780,6 +55780,18 @@ Repair:
       proof shows no horizontal overflow, no old headless-charter text, and
       agreement among NAR-090 focus, 4/9 completion, five unfinished items, and
       the API's four-done / one-active / four-ready release summary.
+- [x] Installed Work audit found a view-local acceptance-count heuristic
+      replacing NAR-091 through NAR-093's authoritative dependency state with
+      `Review breakdown`, even though their source-grounded specs were already
+      approved and each task named an unmet prerequisite. Work list and board
+      status now render the shared task presentation; broad flat-work detail is
+      informational and cannot invent a competing action. The 45-test WorkTab
+      suite, typecheck, build, install, and restarted `stale: false` service
+      pass. At 1280x720, the installed Open view shows NAR-091 through NAR-094
+      as four Waiting rows with their exact prerequisites, NAR-090 as the one
+      Paused row, no `Review breakdown`, and no horizontal overflow. Calibration
+      case `local-breakdown-overrides-dependency-waiting` preserves the escaped
+      miss.
 - [ ] Finish NAR-090 packaged-webview interaction proof at the app's minimum
       desktop window, including success, induced artifact-write failure, retry,
       cancel, visible action geometry, and no clipping. macOS was locked during
