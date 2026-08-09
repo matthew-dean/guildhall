@@ -55451,6 +55451,18 @@ Repair:
       the worktree only in the workspace authority, gives the registered
       checkout no new script, and proves `pnpm test:desktop-sidecar` executes
       in the task worktree and reaches verified/done state.
+- Failing review-recovery finding: restarting task 086 after the stale gate
+      repair still sent its clean, committed task branch back to the worker.
+      The handoff guard equated a clean worktree with no implementation, and
+      deterministic review treated hard-gate failures recorded before the
+      task's reopened lifecycle as current. The unnecessary worker pass then
+      timed out and surfaced an old `spec_ambiguous` blocker even though the
+      packaged sidecar remained fully proven in the isolated branch.
+- [~] Preserve clean committed task branches as implementation evidence and
+      evaluate only the latest hard gates from the current reopened lifecycle.
+      Focused reviewer and orchestrator regressions plus typecheck pass; the
+      installed task-086 replay still needs to prove review advances to fresh
+      worktree command gates without another fake-edit recovery loop.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
@@ -55502,7 +55514,11 @@ Repair:
       validation and execution now also recover the task's authoritative
       workspace checkout when the compact task row omits `worktreePath`, so
       implementation-created scripts are checked where the work actually
-      exists.
+      exists. Review recovery now distinguishes a clean task branch with
+      commits ahead of its recorded base from an empty worktree, and
+      deterministic review scopes hard-gate evidence to the current reopened
+      lifecycle instead of letting superseded failures force another worker
+      pass.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive

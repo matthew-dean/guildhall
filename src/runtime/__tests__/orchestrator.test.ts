@@ -6607,6 +6607,65 @@ describe('Orchestrator.tick — feedback loop', () => {
     expect(task.notes.at(-1)?.content).toContain('stale worker self-critique without project-file changes')
   })
 
+  it('does not reject a clean handoff when the isolated task branch contains committed work', async () => {
+    const worktreePath = path.join(tmpDir, 'committed-task-worktree')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'desktop-spike',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        title: 'Package desktop spike',
+        description: 'Package the existing harness in an isolated desktop task.',
+        spec: VALID_SPEC,
+        structuredSpec: fixtureStructuredSpec('Package desktop spike', ['src-tauri/tauri.conf.json']),
+        worktreePath,
+        branchName: 'guildhall/task-desktop-spike',
+        baseBranch: 'main',
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: withMachineSelfCritique([
+            '**Self-critique:**',
+            '- AC-1: Met — packaged sidecar proof passed.',
+            '',
+            'Review proof packet:',
+            '- Changed files / diff scope: src-tauri/tauri.conf.json',
+            '- Verification commands passed: pnpm package:desktop-spike passed.',
+          ].join('\n'), {
+            changedFiles: ['src-tauri/tauri.conf.json'],
+            verificationCommands: [{ command: 'pnpm package:desktop-spike', status: 'passed' }],
+          }),
+          timestamp: '2026-08-09T00:18:00.000Z',
+        }],
+      }),
+    ])
+    const reviewer = stubAgent('reviewer-agent')
+    const gitDriver = new InMemoryGitDriver({
+      clean: true,
+      currentBranch: 'guildhall/task-desktop-spike',
+    })
+    gitDriver.setLocalCommits(worktreePath, [{
+      sha: 'task-commit-sha',
+      subject: 'feat(desktop): package sidecar',
+    }])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(reviewer.calls).toHaveLength(1)
+    if (out.kind === 'processed') expect(out.agent).not.toBe('coordinator-remediation')
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'desktop-spike')!
+    expect(task.notes.some(note =>
+      note.role === 'worker-progress-review' &&
+      note.structured?.reason === 'no_project_file_changes',
+    )).toBe(false)
+  })
+
   it('rejects proof-setup handoffs that claim a broad build without recording the exact command', async () => {
     await writeQueue([
       mkTask({

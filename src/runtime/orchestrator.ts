@@ -12478,7 +12478,8 @@ export class Orchestrator {
       return null
     }
     const dirtyTaskFiles = await this.changedFilesForTask(task)
-    if (!proofSetupNeedsCommand && dirtyTaskFiles.length > 0) return null
+    const hasCommittedTaskWork = await this.taskWorktreeHasCommittedProgress(task)
+    if (!proofSetupNeedsCommand && (dirtyTaskFiles.length > 0 || hasCommittedTaskWork)) return null
 
     const now = this.now()
     await this.withQueueWriteLock(async () => {
@@ -12546,6 +12547,24 @@ export class Orchestrator {
       .some((entry) => entry.passed)
 
     return evidenceMatchesTask || hasMeaningfulVerifiedWork
+  }
+
+  private async taskWorktreeHasCommittedProgress(task: Task): Promise<boolean> {
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    const workspace = await readTaskWorkspaceStore(projectRoot)
+      .then((store) => store.workspaces[task.id] ?? null)
+      .catch(() => null)
+    const worktreePath = task.worktreePath?.trim() || workspace?.worktreePath?.trim()
+    const baseBranch = task.baseBranch?.trim() || workspace?.baseBranch?.trim()
+    if (!worktreePath || !baseBranch) return false
+    const resolvedWorktreePath = resolveRuntimePath(worktreePath)
+    if (!existsSync(resolvedWorktreePath)) return false
+    try {
+      const commits = await this.gitDriver.localCommits(resolvedWorktreePath, baseBranch)
+      return commits.length > 0
+    } catch {
+      return false
+    }
   }
 
   private checkpointTouchedFilesFromMetadata(

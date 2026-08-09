@@ -70,6 +70,26 @@ function effectiveAcceptanceCriteria(task: Task) {
   return task.acceptanceCriteria
 }
 
+function currentLifecycleHardGates(task: Task): Task['gateResults'] {
+  const latestById = new Map<string, Task['gateResults'][number]>()
+  for (const gate of task.gateResults) {
+    if (gate.type === 'hard') latestById.set(gate.gateId, gate)
+  }
+
+  const state = task as Task & {
+    currentLifecycle?: { reopenedAt?: unknown }
+    runtime?: { currentLifecycle?: { reopenedAt?: unknown } }
+  }
+  const reopenedAtValue = state.currentLifecycle?.reopenedAt ?? state.runtime?.currentLifecycle?.reopenedAt
+  const reopenedAt = typeof reopenedAtValue === 'string' ? Date.parse(reopenedAtValue) : Number.NaN
+  if (!Number.isFinite(reopenedAt)) return [...latestById.values()]
+
+  return [...latestById.values()].filter((gate) => {
+    const checkedAt = Date.parse(gate.checkedAt)
+    return Number.isFinite(checkedAt) && checkedAt > reopenedAt
+  })
+}
+
 function reviewTargetsForTask(task: Task) {
   return {
     acceptanceCriterionIds: effectiveAcceptanceCriteria(task).map(criterion => criterion.id),
@@ -93,13 +113,13 @@ export function shouldAdvanceToGateCheckPendingHardGates(
   if (failingSignals.some((signal) => signal !== 'no-regressions')) return false
   const acs = effectiveAcceptanceCriteria(task)
   if (acs.length === 0 || !acs.every((criterion) => criterion.met)) return false
-  return !task.gateResults.some((gate) => gate.type === 'hard')
+  return currentLifecycleHardGates(task).length === 0
 }
 
 export function shouldAdvanceToGateCheckPendingAutomatedVerification(
   task: Task,
 ): boolean {
-  if (task.gateResults.some((gate) => gate.type === 'hard')) return false
+  if (currentLifecycleHardGates(task).length > 0) return false
   const acs = effectiveAcceptanceCriteria(task)
   if (acs.length === 0) return false
 
@@ -170,7 +190,7 @@ export function deterministicReview(
     )
   }
 
-  const hardGates = task.gateResults.filter((g) => g.type === 'hard')
+  const hardGates = currentLifecycleHardGates(task)
   const scopedHardGateDisposition = context
     ? summarizeScopedHardGateDisposition(
         {

@@ -179,6 +179,33 @@ describe('deterministicReview', () => {
     expect(v.verdict).toBe('revise')
   })
 
+  it('ignores superseded hard-gate failures from before the current lifecycle', () => {
+    const task = mkTask({
+      status: 'review',
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'desktop spike is packaged', verifiedBy: 'review', met: true },
+      ],
+      gateResults: [
+        {
+          gateId: 'package',
+          type: 'hard',
+          passed: false,
+          checkedAt: '2026-08-08T22:38:57.670Z',
+        },
+      ],
+      currentLifecycle: {
+        reopenedAt: '2026-08-08T22:57:00.249Z',
+        status: 'exploring',
+        source: 'rerun_spec',
+      },
+    } as Partial<Task>)
+
+    const v = deterministicReview(task)
+
+    expect(v.verdict).toBe('approve')
+    expect(v.reasoning).toContain('no hard gates have run')
+  })
+
   it('credits no-regressions when the only failing hard gate is scoped unrelated repo-red', () => {
     const task = mkTask({
       title: 'Clean unused restore handler binding',
