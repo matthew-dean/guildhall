@@ -1,4 +1,5 @@
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -137,69 +138,112 @@ export async function createPressureTestIntake(input: {
     return intake
   }
   return withProjectStateWriteLock(pressureTestDir(input.memoryDir), async () => {
-    const allocation = await nextAvailablePressureTestTarget(input.memoryDir, input.target, input.rawRequest)
-    if (allocation.existing) return allocation.existing
-    const target = allocation.target
     const now = new Date().toISOString()
     const domains = seedDomainsForRequest(input.rawRequest)
     domains[0]!.status = 'active'
+    return createPressureTestIntakeWithDurableTarget({ ...input, domains, now })
+  })
+}
+
+async function createPressureTestIntakeWithDurableTarget(input: {
+  memoryDir: string
+  target: PressureTestIntake['target']
+  rawRequest: string
+  domains: PressureTestIntake['domains']
+  now: string
+}): Promise<PressureTestIntake> {
+  const baseId = input.target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()
+  let candidateId = baseId
+  let suffix = 2
+  while (true) {
+    const intakeId = `pti-${candidateId}`
+    const existing = await loadPressureTestIntakeIfPresent(input.memoryDir, intakeId)
+    if (existing) {
+      if (samePressureTestIntakeRequest(existing, input)) return existing
+      candidateId = `${baseId}-${suffix}`
+      suffix += 1
+      continue
+    }
+
+    const target = candidateId === input.target.id
+      ? input.target
+      : { ...input.target, id: candidateId }
     const intake: PressureTestIntake = {
-      id: `pti-${target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()}`,
+      id: intakeId,
       rawRequest: input.rawRequest,
       target,
       status: 'active',
-      activeDomainId: domains[0]!.id,
-      pendingQuestion: firstQuestion(domains[0]!, target, now),
-      domains,
+      activeDomainId: input.domains[0]!.id,
+      pendingQuestion: firstQuestion(input.domains[0]!, target, input.now),
+      domains: input.domains,
       outputs: {
         assumptions: [],
         decisions: [],
         languageMapCandidates: [],
         taskSplitCandidates: [],
       },
-      createdAt: now,
-      updatedAt: now,
+      createdAt: input.now,
+      updatedAt: input.now,
     }
-    await savePressureTestIntake(input.memoryDir, intake)
-    return intake
-  })
+    if (await publishPressureTestIntakeExclusive(input.memoryDir, intake)) return intake
+    // Another process claimed this candidate after our read. Re-read it so an
+    // identical retry converges on the winner before a distinct request moves
+    // to the next suffix.
+  }
 }
 
-async function nextAvailablePressureTestTarget(
+async function loadPressureTestIntakeIfPresent(
   memoryDir: string,
-  target: PressureTestIntake['target'],
-  rawRequest: string,
-): Promise<{ target: PressureTestIntake['target']; existing?: PressureTestIntake }> {
-  const baseId = target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()
-  let candidateId = baseId
-  let suffix = 2
-  while (await fileExists(pressureTestPath(memoryDir, `pti-${candidateId}`))) {
-    const existing = await loadPressureTestIntake({
-      memoryDir,
-      intakeId: `pti-${candidateId}`,
-    })
-    if (
-      existing.rawRequest === rawRequest &&
-      existing.target.type === target.type &&
-      existing.target.title === target.title
-    ) {
-      return { target: existing.target, existing }
-    }
-    candidateId = `${baseId}-${suffix}`
-    suffix += 1
-  }
-  return {
-    target: candidateId === target.id ? target : { ...target, id: candidateId },
+  intakeId: string,
+): Promise<PressureTestIntake | null> {
+  try {
+    return await loadPressureTestIntake({ memoryDir, intakeId })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
   }
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
+function samePressureTestIntakeRequest(
+  existing: PressureTestIntake,
+  input: Pick<PressureTestIntake, 'rawRequest' | 'target'>,
+): boolean {
+  return existing.rawRequest === input.rawRequest &&
+    existing.target.type === input.target.type &&
+    existing.target.title === input.target.title
+}
+
+async function publishPressureTestIntakeExclusive(
+  memoryDir: string,
+  intake: PressureTestIntake,
+): Promise<boolean> {
+  const filePath = pressureTestPath(memoryDir, intake.id)
+  const parentDir = path.dirname(filePath)
+  const tempPath = path.join(
+    parentDir,
+    `.${path.basename(filePath)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`,
+  )
+  await fsp.mkdir(parentDir, { recursive: true })
+  let handle: fsp.FileHandle | null = null
   try {
-    await fsp.access(filePath)
+    handle = await fsp.open(tempPath, 'wx')
+    await handle.writeFile(JSON.stringify(intake, null, 2) + '\n', 'utf-8')
+    await handle.sync()
+    await handle.close()
+    handle = null
+    try {
+      // A hard link publishes a complete inode and fails instead of replacing
+      // a candidate another Guildhall process already claimed.
+      await fsp.link(tempPath, filePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
+      throw error
+    }
+    emitProjectSummaryInvalidation(projectRootFromMemoryDir(memoryDir), 'pressure-test-write', { domains: ['thread'] })
     return true
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
-    throw error
+  } finally {
+    await handle?.close().catch(() => undefined)
+    await fsp.rm(tempPath, { force: true }).catch(() => undefined)
   }
 }
 
