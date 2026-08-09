@@ -1993,6 +1993,10 @@ describe('Orchestrator.tick — routing', () => {
       expect(out.beforeStatus).toBe('exploring')
     }
     expect(spec.calls).toHaveLength(1)
+    expect(spec.calls[0]!.prompt).toContain('**Task-state handle (for task tools):**')
+    expect(spec.calls[0]!.prompt).toContain('The injected current-task packet and task tools are authoritative')
+    expect(spec.calls[0]!.prompt).toContain('compatibility projection may omit database-authoritative tasks')
+    expect(spec.calls[0]!.prompt).not.toContain('**Tasks file (for tool calls):**')
   })
 
   it('escalates exploring tasks after repeated spec-agent no-change passes', async () => {

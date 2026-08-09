@@ -4002,7 +4002,8 @@ export class Orchestrator {
     const prompt = [
       ctx.formatted,
       '',
-      `**Tasks file (for tool calls):** ${tasksPath}`,
+      `**Task-state handle (for task tools):** ${tasksPath}`,
+      '**Task-state authority:** The injected current-task packet and task tools are authoritative. Do not inspect or edit this path with filesystem tools; its compatibility projection may omit database-authoritative tasks.',
       `**Memory dir (for tool calls):** ${this.opts.config.memoryDir}`,
       `**Current task ID (for task tools):** ${task.id}`,
       'When a tool requires taskId, use the current task ID exactly. Never use placeholders such as [TASK_ID], <task-id>, or TODO.',

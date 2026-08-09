@@ -55500,12 +55500,29 @@ Repair:
       cleared `proofRecovery` but left the authoritative `currentLifecycle`
       overlay, so effective-task projection overrode the new done definition
       with the old reopened status and blocked all eight dependents again.
-- [~] Settle both recovery markers at every true completion boundary: command
+- [x] Settle both recovery markers at every true completion boundary: command
       gates, recorded hard gates, completed-work landing reconciliation, and
       merged-PR reconciliation. Focused regressions prove command execution and
       recorded-gate completion remain `done` in both the effective task and
-      runtime overlay; typecheck passes. Installed canonical status and Browser
-      agreement remain required.
+      runtime overlay; typecheck passes. Installed canonical status reports
+      task 086 `done`, release progress `1/9`, and task 087 as the sole owner
+      review action. Browser agrees at 1280x720, 1024x768, and 390x844 with no
+      clipped content or horizontal overflow.
+- Failing installed task-087 authoring finding: after a precise owner spec
+      revision request cleared the vague draft, two spec-worker attempts
+      exhausted their turn budget without saving any durable spec. The worker
+      had the exact current task and correction in its injected packet, but
+      opened the retired compact `TASKS.json` with a filesystem tool, saw only
+      one compatibility task, concluded task 087 did not exist, and tried to
+      reconstruct it instead of calling `update-task` against the
+      database-authoritative project store.
+- [~] Make the injected task packet and task tools the explicit authoring
+      authority. The orchestrator now labels the path as a task-state handle,
+      warns that its compatibility projection may omit database-authoritative
+      tasks, and the spec-agent contract forbids raw `TASKS.json` inspection or
+      reconstruction. Focused prompt/routing regressions, typecheck, and the
+      model-independence gate pass. Installed task-087 replay must still prove
+      the worker writes a durable spec and returns to `spec_review`.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |

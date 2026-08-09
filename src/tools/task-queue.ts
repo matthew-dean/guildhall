@@ -51,7 +51,9 @@ import { ownerSpecRevisionRequirements, validateSpecGrounding } from '@guildhall
 import { taskDoneButProofMissing } from '@guildhall/runtime/proof-health'
 import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, proofSetupHasTaskIdentity } from '@guildhall/runtime/proof-paths'
 
-const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
+const TASKS_PATH_SCHEMA = z.string().describe(
+  'Injected project task-state handle. Pass it only to task tools; do not inspect or edit it with filesystem tools.',
+)
 
 const readTasksInputSchema = z.object({ tasksPath: TASKS_PATH_SCHEMA })
 export type ReadTasksInput = z.input<typeof readTasksInputSchema>
@@ -2053,7 +2055,10 @@ export const updateTaskTool = defineTool({
   jsonSchema: {
     type: 'object',
     properties: {
-      tasksPath: { type: 'string', description: 'Absolute path to TASKS.json' },
+      tasksPath: {
+        type: 'string',
+        description: 'Injected project task-state handle for task tools; not a filesystem authority.',
+      },
       taskId: { type: 'string', description: 'Task id. Omit only when exactly one task is active.' },
       title: { type: 'string' },
       executionMode: { type: 'string', enum: ['build', 'diagnose', 'tdd'], description: 'Structured worker loop selection. Never inferred from task prose.' },

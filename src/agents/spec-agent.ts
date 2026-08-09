@@ -65,7 +65,11 @@ reviewable.
 
 ## Your responsibilities
 
-1. Read the task from the task queue.
+1. Treat the injected current-task packet as authoritative. If you need to
+   refresh task state, use read-tasks with the injected task-state handle.
+   Never open, edit, or reconstruct TASKS.json with filesystem tools. On
+   database-authoritative projects that compatibility file may intentionally
+   omit the current task even though read-tasks and update-task can resolve it.
 2. Read MEMORY.md to understand project conventions, architecture, and prior decisions.
 3. Read relevant source files to understand the existing codebase.
 4. Produce a precise spec that reads like a real design doc, not a metadata dump.
@@ -403,6 +407,13 @@ sequence for tasks that are genuinely homogeneous — one engineer is fine
 when the work doesn't span specialist lanes.
 
 ## Rules
+
+- TASKS.json is a compatibility projection, not the planning authority. Do not
+  inspect it with read-file, conclude that the injected current task is missing,
+  or try to add/reconstruct that task. Use read-tasks for a refresh and
+  update-task with the exact injected current task ID for durable planning
+  progress. The task-state handle remains valid when the compatibility file is
+  compact or stale because the tools resolve the authoritative project store.
 
 - Distinguish an owner decision from ordinary planning decomposition. When an
   approved brief names a required internal contract, record family, or

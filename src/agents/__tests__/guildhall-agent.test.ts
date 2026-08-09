@@ -413,6 +413,15 @@ describe('agent factories', () => {
     expect(prompt).toContain('deep intake')
   })
 
+  it('createSpecAgent keeps database-authoritative tasks out of raw TASKS.json inspection', () => {
+    const agent = createSpecAgent(llm)
+    const prompt = (agent as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('injected current-task packet as authoritative')
+    expect(prompt).toContain('Never open, edit, or reconstruct TASKS.json with filesystem tools')
+    expect(prompt).toContain('compatibility file may intentionally')
+    expect(prompt).toContain('update-task with the exact injected current task ID')
+  })
+
   it('createSpecAgent uses Corpus Map entries as the starting abstraction inventory', () => {
     const a = createSpecAgent(llm)
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
