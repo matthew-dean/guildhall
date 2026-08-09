@@ -12191,6 +12191,78 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
+  it('promotes a committed passing review-handoff checkpoint before calling the worker model', async () => {
+    const worktreePath = path.join(tmpDir, 'committed-checkpoint-handoff')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'desktop-sidecar',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        worktreePath,
+        branchName: 'guildhall/task-desktop-sidecar',
+        baseBranch: 'main',
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The packaged sidecar proof passes.',
+          verifiedBy: 'automated',
+          command: 'pnpm package:desktop-spike',
+          met: false,
+        }],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'desktop-sidecar',
+      agentId: 'worker-agent',
+      intent: 'Packaged sidecar implementation and proof are complete.',
+      nextPlannedAction: 'Hand off the verified implementation to review.',
+      nextActionKind: 'review_handoff',
+      filesTouched: ['scripts/desktop-sidecar-entry.mjs', 'src-tauri/tauri.conf.json'],
+      resumeContext: {
+        verification: [{
+          command: 'pnpm package:desktop-spike',
+          passed: true,
+          observedAt: '2026-08-09T00:18:00.000Z',
+        }],
+      },
+    })
+    const worker = stubAgent('worker-agent', async () => {
+      throw new Error('worker should not be called for a proven handoff checkpoint')
+    })
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setLocalCommits(worktreePath, [{
+      sha: 'sidecar-commit',
+      subject: 'fix(desktop): package the real headless harness',
+    }])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(worker.calls).toHaveLength(0)
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'in_progress',
+      afterStatus: 'review',
+      transitioned: true,
+    })
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'desktop-sidecar')!
+    expect(task.status).toBe('review')
+    expect(task.assignedTo).toBe('reviewer-agent')
+    expect(task.notes.find(note => note.role === 'self-critique')?.structured).toMatchObject({
+      acceptanceCriteria: [{ id: 'ac-1', status: 'met' }],
+      changedFiles: ['scripts/desktop-sidecar-entry.mjs', 'src-tauri/tauri.conf.json'],
+      verificationCommands: [{ command: 'pnpm package:desktop-spike', status: 'passed' }],
+    })
+  })
+
   it('auto-promotes fresh worker self-critique handoffs with verified target-file changes', async () => {
     const projectPath = path.join(tmpDir, 'fresh-handoff-target-change')
     await fs.mkdir(projectPath, { recursive: true })

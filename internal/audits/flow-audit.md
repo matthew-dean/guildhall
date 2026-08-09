@@ -55460,9 +55460,12 @@ Repair:
       packaged sidecar remained fully proven in the isolated branch.
 - [~] Preserve clean committed task branches as implementation evidence and
       evaluate only the latest hard gates from the current reopened lifecycle.
-      Focused reviewer and orchestrator regressions plus typecheck pass; the
-      installed task-086 replay still needs to prove review advances to fresh
-      worktree command gates without another fake-edit recovery loop.
+      A passing `review_handoff` checkpoint on committed task work now also
+      rebuilds its missing structured self-critique and advances to review
+      without spending another worker-model turn on handoff ceremony. Focused
+      reviewer and orchestrator regressions plus typecheck pass; the installed
+      task-086 replay still needs to prove review advances to fresh worktree
+      command gates without another fake-edit recovery loop.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |
@@ -55518,7 +55521,10 @@ Repair:
       commits ahead of its recorded base from an empty worktree, and
       deterministic review scopes hard-gate evidence to the current reopened
       lifecycle instead of letting superseded failures force another worker
-      pass.
+      pass. A committed checkpoint whose typed next action is review handoff
+      and whose command evidence passes may reconstruct the structured review
+      packet deterministically, but any newer failed hard gate or substantive
+      reviewer revision suppresses that recovery.
 - Contracts considered but not touched: task/release lifecycle enums,
       action-model schema, provider prompts, and persisted project state.
 - Required follow-up: complete the installed state-agreement table, then drive

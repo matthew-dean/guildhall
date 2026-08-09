@@ -11430,10 +11430,35 @@ export class Orchestrator {
   }): Promise<TickOutcome | null> {
     if (input.beforeStatus !== 'in_progress') return null
     if (input.task.assignedTo && input.task.assignedTo !== 'worker-agent') return null
-    if (this.proofRecoveryIsNewerThanLatestSelfCritique(input.task)) return null
-    if (!this.hasReviewProofPacket(input.task)) return null
-    if (this.hasNewerSubstantiveReviewFeedback(input.task)) return null
-    if (acceptanceCommandGateFailureIsNewerThanSelfCritique(input.task)) return null
+    const checkpoint = await readCheckpoint(this.opts.config.memoryDir, input.task.id).catch(() => null)
+    const checkpointVerification = checkpoint?.resumeContext?.verification
+    const checkpointWrittenAt = checkpoint ? Date.parse(checkpoint.writtenAt) : Number.NaN
+    const hasCheckpointReviewHandoff =
+      checkpoint?.nextActionKind === 'review_handoff' &&
+      checkpoint.filesTouched.length > 0 &&
+      checkpointHasRecordedPassingVerification(checkpointVerification)
+    const hasExistingReviewPacket = this.hasReviewProofPacket(input.task)
+    if (!hasExistingReviewPacket && !hasCheckpointReviewHandoff) return null
+    if (hasExistingReviewPacket && this.proofRecoveryIsNewerThanLatestSelfCritique(input.task)) return null
+    if (hasExistingReviewPacket && this.hasNewerSubstantiveReviewFeedback(input.task)) return null
+    if (hasExistingReviewPacket && acceptanceCommandGateFailureIsNewerThanSelfCritique(input.task)) return null
+    if (!hasExistingReviewPacket && Number.isFinite(checkpointWrittenAt)) {
+      const newerSubstantiveRevision = input.task.reviewVerdicts.some((verdict) => {
+        const recordedAt = Date.parse(verdict.recordedAt)
+        return verdict.verdict === 'revise' &&
+          !reviewVerdictLooksNonSubstantive(verdict) &&
+          Number.isFinite(recordedAt) &&
+          recordedAt > checkpointWrittenAt
+      })
+      const newerFailedGate = input.task.gateResults.some((gate) => {
+        const checkedAt = Date.parse(gate.checkedAt)
+        return gate.type === 'hard' &&
+          gate.passed === false &&
+          Number.isFinite(checkedAt) &&
+          checkedAt > checkpointWrittenAt
+      })
+      if (newerSubstantiveRevision || newerFailedGate) return null
+    }
 
     let hasTaskWorktreeChanges = false
     const proofWorktreePath = input.task.worktreePath?.trim()
@@ -11442,18 +11467,52 @@ export class Orchestrator {
     if (proofWorktreePath) {
       hasTaskWorktreeChanges = !(await this.gitDriver.isClean(proofWorktreePath))
     }
-    const checkpointTouchedFiles = this.checkpointTouchedFilesFromTaskNotes(input.task)
-    if (!hasTaskWorktreeChanges && checkpointTouchedFiles.length === 0) return null
+    const hasCommittedTaskWork = await this.taskWorktreeHasCommittedProgress(input.task)
+    const checkpointTouchedFiles = uniqueStrings([
+      ...this.checkpointTouchedFilesFromTaskNotes(input.task),
+      ...(checkpoint?.filesTouched ?? []),
+    ])
+    if (!hasTaskWorktreeChanges && !hasCommittedTaskWork && checkpointTouchedFiles.length === 0) return null
 
     const now = this.now()
     const queue = await this.readQueue()
     const queuedTask = queue.tasks.find((candidate) => candidate.id === input.task.id)
     if (!queuedTask) return null
     if (queuedTask.status !== 'in_progress') return null
-    if (this.proofRecoveryIsNewerThanLatestSelfCritique(queuedTask)) return null
-    if (!this.hasReviewProofPacket(queuedTask)) return null
-    if (this.hasNewerSubstantiveReviewFeedback(queuedTask)) return null
-    if (acceptanceCommandGateFailureIsNewerThanSelfCritique(queuedTask)) return null
+    if (hasExistingReviewPacket) {
+      if (this.proofRecoveryIsNewerThanLatestSelfCritique(queuedTask)) return null
+      if (!this.hasReviewProofPacket(queuedTask)) return null
+      if (this.hasNewerSubstantiveReviewFeedback(queuedTask)) return null
+      if (acceptanceCommandGateFailureIsNewerThanSelfCritique(queuedTask)) return null
+    } else {
+      const metadata = {
+        recent_verification_results: (checkpointVerification ?? []).map((entry) => ({
+          kind: 'command',
+          command: entry.command,
+          passed: entry.passed,
+          observedAt: entry.observedAt,
+        })),
+      }
+      const structured = this.syntheticCheckpointSelfCritiqueStructured({
+        task: input.task,
+        checkpointTouchedFiles,
+        metadata,
+      })
+      const selfCritique = {
+        agentId: 'worker-agent',
+        role: 'self-critique' as const,
+        content: this.syntheticCheckpointSelfCritique({
+          task: input.task,
+          checkpointTouchedFiles,
+          metadata,
+          structured,
+        }),
+        structured,
+        timestamp: now,
+      }
+      queuedTask.notes.push(selfCritique)
+      await this.recordTaskNoteEvidence(queuedTask, selfCritique)
+    }
 
     ensureReviewerOwnership(queuedTask)
     transitionTaskStatus({
@@ -11468,7 +11527,9 @@ export class Orchestrator {
       agentId: 'coordinator',
       role: 'recovery',
       content:
-        'Guildhall found an existing worker self-critique with a review proof packet and task-scoped worktree changes, so it moved the task to review instead of dispatching another worker turn.',
+        hasExistingReviewPacket
+          ? 'Guildhall found an existing worker self-critique with a review proof packet and task-scoped worktree changes, so it moved the task to review instead of dispatching another worker turn.'
+          : 'Guildhall rebuilt the missing review packet from a passing review-handoff checkpoint and committed task work, then moved the task to review without another worker-model pass.',
       timestamp: now,
     })
     queuedTask.updatedAt = now
@@ -11479,7 +11540,9 @@ export class Orchestrator {
       task_id: input.task.id,
       agent_name: 'coordinator',
       message:
-        'Existing worker review proof packet found. Guildhall moved the task to review instead of asking the worker to rediscover the handoff state.',
+        hasExistingReviewPacket
+          ? 'Existing worker review proof packet found. Guildhall moved the task to review instead of asking the worker to rediscover the handoff state.'
+          : 'Passing review-handoff checkpoint found. Guildhall rebuilt the review packet and moved the task to review without another worker-model pass.',
     })
     return {
       kind: 'processed',
