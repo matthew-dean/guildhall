@@ -55593,6 +55593,18 @@ Repair:
       product boundary. Framework choice and broader editor positioning require
       source evidence or an explicit owner decision; repeated brief fields
       should be normalized rather than displayed as separate authority.
+- Failing installed owner-command finding: the task-088 revision explicitly
+      said `pnpm test:desktop-shell` in ordinary prose, but the typed
+      `requiredAcceptanceCommands` list stayed empty because intake only
+      recognized backtick-quoted commands. Current evidence then compacted the
+      long revision before the command phrase, so both the spec agent and a
+      direct authoritative update hit the circular "script does not exist yet"
+      grounding rejection and removed the required automated proof.
+- [x] Preserve ordinary inline pnpm/yarn/bun and npm-run commands from owner
+      revision prose in the typed command list before evidence compaction. The
+      extractor now records quoted commands and unquoted package commands,
+      while grounding still requires the resulting exact typed command. Focused
+      intake/spec tests, typecheck, and model-independence tests pass.
 
 | Surface | Expected Stage 2 evidence |
 | --- | --- |

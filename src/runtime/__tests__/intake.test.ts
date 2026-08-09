@@ -5,6 +5,7 @@ import os from 'node:os'
 import {
   createExploringTask,
   approveSpec,
+  extractOwnerRequiredAcceptanceCommands,
   reframeTask,
   readCurrentTaskEvidenceForSpecApproval,
   resumeExploring,
@@ -1919,6 +1920,16 @@ describe('createBugReportTask', () => {
 })
 
 describe('resumeExploring', () => {
+  it('preserves unquoted package commands as typed owner requirements', () => {
+    expect(extractOwnerRequiredAcceptanceCommands(
+      'Add an exact task-specific command pnpm test:desktop-shell, retain pnpm typecheck and npm run package:desktop-spike.',
+    )).toEqual([
+      'pnpm test:desktop-shell',
+      'pnpm typecheck',
+      'npm run package:desktop-spike',
+    ])
+  })
+
   beforeEach(async () => {
     await createExploringTask({
       memoryDir,

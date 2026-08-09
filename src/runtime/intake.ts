@@ -1037,11 +1037,15 @@ export interface ResumeExploringInput {
 }
 
 const OWNER_COMMAND_PREFIX = /^(?:pnpm|npm|npx|yarn|bun|node|python(?:3)?|pytest|vitest|playwright|cargo|rustc|git)\b/
+const OWNER_INLINE_PACKAGE_COMMAND = /\b((?:pnpm|yarn|bun)\s+(?:run\s+)?[A-Za-z0-9@._:/-]+|npm\s+(?:run\s+)?[A-Za-z0-9@._:/-]+)\b/gi
 
 export function extractOwnerRequiredAcceptanceCommands(message: string): string[] {
-  return [...new Set([...message.matchAll(/`([^`\n]+)`/g)]
+  const quoted = [...message.matchAll(/`([^`\n]+)`/g)]
     .map(match => match[1]!.trim())
-    .filter(value => OWNER_COMMAND_PREFIX.test(value)))]
+    .filter(value => OWNER_COMMAND_PREFIX.test(value))
+  const inlinePackageCommands = [...message.matchAll(OWNER_INLINE_PACKAGE_COMMAND)]
+    .map(match => match[1]!.trim())
+  return [...new Set([...quoted, ...inlinePackageCommands])]
 }
 
 function ownerRevisionEvent(input: Pick<ResumeExploringInput, 'message' | 'revisionTarget'>) {
