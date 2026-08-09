@@ -55770,6 +55770,16 @@ Repair:
       public guide copy and fresh screenshots. The release summary therefore
       reports four done, NAR-090 active, four ready, and zero blockers instead
       of vague shaping requests that hid the intended release sequence.
+- [x] Installed Release-page audit found the Stage 2-specific desktop
+      description followed immediately by the global Stage 1 headless-only
+      charter, making the active release explain two incompatible scopes.
+      Named releases now omit that global orientation card and retain their own
+      description, verdict, counts, and shared top action. The focused 26-test
+      ReleaseTab suite and a fresh `pnpm build` / `pnpm dev:install` pass; the
+      restarted service reports `stale: false`. At 1280x720, installed Browser
+      proof shows no horizontal overflow, no old headless-charter text, and
+      agreement among NAR-090 focus, 4/9 completion, five unfinished items, and
+      the API's four-done / one-active / four-ready release summary.
 - [ ] Finish NAR-090 packaged-webview interaction proof at the app's minimum
       desktop window, including success, induced artifact-write failure, retry,
       cancel, visible action geometry, and no clipping. macOS was locked during
