@@ -10,6 +10,7 @@ import {
   appendTaskEvidence,
   projectStatePath,
   readProjectStateDatabaseMetadata,
+  readProjectStateDatabaseProjectionState,
   readProjectStateDatabaseQueueDefinition,
   promoteProjectStateDatabaseAuthority,
   updateProjectStateDatabaseSummary,
@@ -580,6 +581,64 @@ describe('GET /api/project/release-readiness', () => {
       persistedRow?.dependencyTaskIds,
       persistedRow?.blocksStart,
     ]).toEqual([true, ['task-gate'], true])
+  })
+
+  it('preserves split-parent identity through compact scope rows before progressive counts', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'desktop-mvp',
+      releases: [{
+        id: 'desktop-mvp',
+        label: 'Desktop MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-parent', 'work:task-child'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-parent',
+          title: 'Build the desktop run flow',
+          status: 'ready',
+          releaseIds: ['desktop-mvp'],
+          hierarchy: { childIds: ['task-child'], relation: 'contains' } as Task['hierarchy'],
+        }),
+        makeTask({
+          id: 'task-child',
+          title: 'Implement the packaged sidecar',
+          status: 'in_progress',
+          releaseIds: ['desktop-mvp'],
+          hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' } as Task['hierarchy'],
+        }),
+      ],
+    })
+
+    const currentQueue = readProjectStateDatabaseQueueDefinition(projectStatePath(tmpDir, 'TASKS.json'))
+    expect(currentQueue?.tasks.find(task => task.id === 'task-child')?.hierarchy).toMatchObject({
+      parentId: 'task-parent',
+    })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
+    const refreshedQueue = readProjectStateDatabaseQueueDefinition(projectStatePath(tmpDir, 'TASKS.json'))
+    expect(refreshedQueue?.tasks.find(task => task.id === 'task-child')?.hierarchy).toMatchObject({
+      parentId: 'task-parent',
+    })
+    expect(readProjectStateDatabaseProjectionState(projectStatePath(tmpDir, 'TASKS.json'))?.scopeRows).toContainEqual(
+      expect.objectContaining({ taskId: 'task-child', parentTaskId: 'task-parent' }),
+    )
+    const response = await app.fetch(new Request(projectUrl('/api/project?surface=work&compact=true')))
+    const body = await response.json() as any
+
+    expect(body.orientationSpine?.scopeRows).toEqual([
+      expect.objectContaining({
+        taskId: 'task-child',
+        parentTaskId: 'task-parent',
+        hierarchyRole: 'child',
+      }),
+    ])
   })
 
   it('keeps Work and Map inventory records bounded while preserving row-level signals', async () => {

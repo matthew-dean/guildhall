@@ -229,6 +229,7 @@ export interface OrientationScopeRow {
   taskId: string
   nodeId: string
   title: string
+  parentTaskId?: string
   scope: 'included' | 'deferred'
   eligibilityReason: string
   hierarchyRole: string
@@ -1403,6 +1404,7 @@ function scopeRowsFromProjection(projection: ProjectScopeProjection | null | und
     taskId: row.taskId,
     nodeId: taskNodeId(row.taskId),
     title: row.title,
+    ...(row.parentTaskId ? { parentTaskId: row.parentTaskId } : {}),
     scope: row.scope,
     eligibilityReason: row.eligibilityReason,
     hierarchyRole: row.hierarchyRole,

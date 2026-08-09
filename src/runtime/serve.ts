@@ -3424,12 +3424,13 @@ function summarizeScopedReleaseWork(
         { selectedScope: scope as ProjectScope | null | undefined },
       )
   const persistedScopeRows: ProjectScopeRow[] | null = options.scopeRows
-    ? options.scopeRows.map(row => {
+      ? options.scopeRows.map(row => {
         const task = tasksById.get(row.taskId)
+        const parentTaskId = task?.hierarchy?.parentId ?? row.parentTaskId
         return normalizeProjectScopeRowReadModel({
           taskId: row.taskId,
           title: task?.title ?? row.taskId,
-          ...(task?.hierarchy?.parentId ? { parentTaskId: task.hierarchy.parentId } : {}),
+          ...(parentTaskId ? { parentTaskId } : {}),
           scope: row.scope,
           countInProjectTotals: row.countInProjectTotals !== false,
           eligibilityReason: row.eligibilityReason as ProjectScopeRow['eligibilityReason'],
@@ -6069,6 +6070,7 @@ function buildOverviewOrientationPreviewSpine(input: {
       taskId: row.taskId,
       nodeId: taskScopeNodeId(row.taskId),
       title: row.title,
+      ...(row.parentTaskId ? { parentTaskId: row.parentTaskId } : {}),
       scope: row.scope,
       eligibilityReason: row.eligibilityReason,
       hierarchyRole: row.hierarchyRole,
@@ -7761,17 +7763,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return enrichTaskForServe(project.path, record, effective)
         }))
       : responseTasks as Array<Record<string, unknown>>
-    const scopeRows = responseTasks.flatMap(task => {
+    const scopeRows = executionScopeRows(responseTasks.flatMap(task => {
       const scopeRow = (task as { scopeRow?: unknown }).scopeRow
       if (!scopeRow || typeof scopeRow !== 'object' || Array.isArray(scopeRow)) return []
       const row = scopeRow as Record<string, unknown>
       const scope = row.scope === 'included' || row.scope === 'deferred' ? row.scope : null
       if (!scope) return []
+      const parentTaskId = typeof row.parentTaskId === 'string' && row.parentTaskId.trim()
+        ? row.parentTaskId
+        : typeof (task as { parentId?: unknown }).parentId === 'string'
+          ? (task as { parentId: string }).parentId
+          : undefined
       return [{
         taskId: task.id,
         nodeId: taskScopeNodeId(task.id),
         title: task.title ?? task.id,
+        ...(parentTaskId ? { parentTaskId } : {}),
         scope,
+        countInProjectTotals: row.countInProjectTotals !== false,
         eligibilityReason: row.eligibilityReason ?? '',
         hierarchyRole: row.hierarchyRole ?? '',
         status: task.status ?? '',
@@ -7785,7 +7794,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : {}),
         sourceRefs: Array.isArray(row.sourceRefs) ? row.sourceRefs : [],
       }]
-    })
+    }))
     const surfaceOrientationSpine = input.surface === 'overview'
       ? compactOrientationSpineForOverviewSurface(baseOrientationSpine as Record<string, unknown>)
       : input.surface === 'work'

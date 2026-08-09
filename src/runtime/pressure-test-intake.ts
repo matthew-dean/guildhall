@@ -137,7 +137,9 @@ export async function createPressureTestIntake(input: {
     return intake
   }
   return withProjectStateWriteLock(pressureTestDir(input.memoryDir), async () => {
-    const target = await nextAvailablePressureTestTarget(input.memoryDir, input.target)
+    const allocation = await nextAvailablePressureTestTarget(input.memoryDir, input.target, input.rawRequest)
+    if (allocation.existing) return allocation.existing
+    const target = allocation.target
     const now = new Date().toISOString()
     const domains = seedDomainsForRequest(input.rawRequest)
     domains[0]!.status = 'active'
@@ -166,15 +168,29 @@ export async function createPressureTestIntake(input: {
 async function nextAvailablePressureTestTarget(
   memoryDir: string,
   target: PressureTestIntake['target'],
-): Promise<PressureTestIntake['target']> {
+  rawRequest: string,
+): Promise<{ target: PressureTestIntake['target']; existing?: PressureTestIntake }> {
   const baseId = target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()
   let candidateId = baseId
   let suffix = 2
   while (await fileExists(pressureTestPath(memoryDir, `pti-${candidateId}`))) {
+    const existing = await loadPressureTestIntake({
+      memoryDir,
+      intakeId: `pti-${candidateId}`,
+    })
+    if (
+      existing.rawRequest === rawRequest &&
+      existing.target.type === target.type &&
+      existing.target.title === target.title
+    ) {
+      return { target: existing.target, existing }
+    }
     candidateId = `${baseId}-${suffix}`
     suffix += 1
   }
-  return candidateId === target.id ? target : { ...target, id: candidateId }
+  return {
+    target: candidateId === target.id ? target : { ...target, id: candidateId },
+  }
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

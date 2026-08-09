@@ -434,6 +434,46 @@ describe('buildProjectActionModel', () => {
     })
   })
 
+  it('replaces stale persisted task actions when current readiness is terminal', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: {
+          source: 'task',
+          label: 'Old task action',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-old',
+          tone: 'warn',
+          taskId: 'task-old',
+        },
+        secondaryActions: [{
+          source: 'task',
+          label: 'Another stale task action',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-other',
+          tone: 'accent',
+          taskId: 'task-other',
+        }],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'All selected release work is complete.',
+      },
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      code: 'release_ready',
+      buttonLabel: 'Open Release',
+      href: '/release',
+    })
+    expect(model.secondaryActions).toEqual([])
+    expect(model.runControl).toMatchObject({ startEnabled: false })
+  })
+
   it('does not let a contradictory ready-work hint override the shared readiness authority', () => {
     const model = buildProjectActionModel({
       startReadiness: {

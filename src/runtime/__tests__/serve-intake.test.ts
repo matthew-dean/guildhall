@@ -14,6 +14,7 @@ import { buildServeApp } from '../serve.js'
 import { materializeCompletedPressureTestIntake } from '../intake.js'
 import {
   createPressureTestIntake,
+  listPressureTestIntakes,
   loadPressureTestIntake,
   savePressureTestIntake,
 } from '../pressure-test-intake.js'
@@ -272,6 +273,30 @@ describe('POST /api/project/request', () => {
     await expect(loadPressureTestIntake({ memoryDir: tmpDir, intakeId: second.id })).resolves.toMatchObject({
       rawRequest: 'Create a separate follow-up desktop release.',
     })
+  })
+
+  it('returns the persisted release intake when the same creation request is retried', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const requestBody = {
+      ask: 'Create the next packaged desktop release.',
+      title: 'Stage 2: Desktop UI',
+    }
+    const create = () => app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    }))
+
+    const [firstResponse, retryResponse] = await Promise.all([create(), create()])
+
+    expect(firstResponse.status).toBe(200)
+    expect(retryResponse.status).toBe(200)
+    const first = (await firstResponse.json() as { pressureTestIntake: { id: string; createdAt: string } }).pressureTestIntake
+    const retry = (await retryResponse.json() as { pressureTestIntake: { id: string; createdAt: string } }).pressureTestIntake
+    expect(retry).toMatchObject({ id: first.id, createdAt: first.createdAt })
+    expect(listPressureTestIntakes(tmpDir).map(intake => intake.id)).toEqual([
+      'pti-stage-2-desktop-ui',
+    ])
   })
 
   it('materializes a completed release intake once and hands Thread the new task', async () => {

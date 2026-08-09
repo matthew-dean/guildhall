@@ -834,10 +834,7 @@ export function resolveProjectActionModel(input: {
       ...(input.stored?.workSummary ? { workSummary: input.stored.workSummary } : {}),
     }
   }
-  const hasResolvedReadiness = Boolean(
-    readiness?.code &&
-    (readiness.canStart || readiness.code !== 'all_terminal'),
-  )
+  const hasResolvedReadiness = Boolean(readiness?.code)
   if (!hasResolvedReadiness) {
     return input.stored ?? buildProjectActionModel({
       startReadiness: readiness,
@@ -856,7 +853,9 @@ export function resolveProjectActionModel(input: {
     releaseLifecycleState: input.releaseLifecycleState,
   })
   const focusedTaskReview = isFocusedOwnerInputTaskReview(readiness)
-  const candidateSecondaryActions = resolved.secondaryActions.length > 0
+  const candidateSecondaryActions = readiness?.code === 'all_terminal'
+    ? resolved.secondaryActions
+    : resolved.secondaryActions.length > 0
     ? resolved.secondaryActions
     : input.stored?.secondaryActions ?? []
   const secondaryActions = candidateSecondaryActions.filter(action => {

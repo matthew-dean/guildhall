@@ -1047,6 +1047,9 @@ function indexedTaskForScopeProjection(task: ProjectStateDatabaseTask): Task {
   const approvedAt = typeof brief.approvedAt === 'string' && brief.approvedAt.trim()
     ? brief.approvedAt
     : undefined
+  const hierarchy = task.hierarchy || task.parentId
+    ? { ...(task.hierarchy ?? {}), ...(task.parentId ? { parentId: task.parentId } : {}) }
+    : undefined
   return {
     id: task.id,
     title: task.title,
@@ -1056,7 +1059,7 @@ function indexedTaskForScopeProjection(task: ProjectStateDatabaseTask): Task {
     ...(task.priority ? { priority: task.priority } : {}),
     ...(task.workKind ? { workKind: task.workKind } : {}),
     ...(task.semanticKind ? { semanticKind: task.semanticKind } : {}),
-    ...(task.hierarchy ? { hierarchy: task.hierarchy } : {}),
+    ...(hierarchy ? { hierarchy } : {}),
     ...(task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {}),
     ...(task.releaseIds.length > 0 ? { releaseIds: task.releaseIds } : {}),
     ...(task.sourceRefs.length > 0 ? { references: task.sourceRefs } : {}),
