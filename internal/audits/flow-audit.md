@@ -57705,6 +57705,13 @@ it will reappear the moment an owner opens Release, Work, or a task record.
   lifecycle contract is also revalidated at the compact database and
   readiness readers: legacy non-lifecycle values such as `blocked` normalize
   to `active`, while the separately typed readiness verdict remains blocked.
+  The shared `ProjectView` presentation boundary now assigns a required
+  migration to exactly one visible control per route: Overview owns the
+  decision card; other routes own the top-bar command and suppress a stale
+  stop-notice link. It consumes the existing action-model/readiness result and
+  does not add client-side migration state, routing, or task ranking.
+  Considered but unchanged: documentation/help routes and content, because
+  this is a current-action ownership repair rather than help content.
   Proof provided: compact migration precedence, mutation refusal parity,
   lifecycle/readiness separation, and an installed Looma Overview replay that
   exposes one update action instead of Review spec. Follow-up proof required:
@@ -57727,6 +57734,11 @@ own field. After build, dev install, restart, and `stale:false`, installed
 Looma Overview showed one `Update project` button, no competing top-bar run
 control, and a guarded migration dialog identifying the required migration and
 affected paths. The dialog was closed without applying the user's migration.
+Installed Work now shows one top-bar `Migrate` control plus the one-line,
+non-actionable reason `Update this project before working.`; its prior stale
+stop-status link to a second migration action is absent. The task list still
+shows the current 16 execution units for orientation, but no longer claims the
+owner should use an unavailable task action first.
 This prevents the raw approval 409 and the active/blocked lifecycle
 contradiction. The separate raw-release-node versus execution-unit count
 mismatch remains an explicit shared-summary follow-up above.

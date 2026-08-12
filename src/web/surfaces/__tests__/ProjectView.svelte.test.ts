@@ -827,6 +827,47 @@ describe('ProjectView', () => {
     expect(screen.getByText('Move task questions into owner-input bounded chat')).toBeInTheDocument()
   })
 
+  it('uses one migration control outside Overview instead of replaying a stale stop notice', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run the required project update before working.',
+        actionHref: '/migrations',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Required migration',
+          buttonLabel: 'Migrate project',
+          href: '/migrations',
+          tone: 'danger',
+          code: 'required_migration_pending',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Migrate', startEnabled: false, pauseEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      run: {
+        status: 'stopped',
+        mode: 'continuous',
+        stopSummary: {
+          stopReason: 'required_migration_pending',
+          stopMessage: 'Run the required project update before working.',
+        },
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('work', null, 'looma-knit', projectPayload)
+
+    expect(screen.getAllByRole('button', { name: /migrate project/i })).toHaveLength(1)
+    expect(screen.queryByRole('link', { name: /migrate project/i })).toBeNull()
+    expect(screen.getByRole('alert', { name: 'Project update required' })).toHaveTextContent('Update this project before working.')
+    expect(screen.queryByText('Run the required project update before working.')).toBeNull()
+  })
+
   it('opens the shared migration repair modal when a task action routes back with repair intent', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/overview?repair=migration')
     path.value = '/projects/looma-knit/overview'

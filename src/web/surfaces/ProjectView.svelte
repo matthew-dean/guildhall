@@ -1030,6 +1030,21 @@
     // the surface that can actually explain and complete it.
     if (!detail || selectedReleaseShipped || currentView === 'overview') return []
     const notices: ShellAttentionNotice[] = []
+    if (requiredMigrationBlocked) {
+      notices.push({
+        id: 'required-migration',
+        code: 'required_migration_pending',
+        reason: 'project_update_required',
+        message: 'Update this project before working.',
+        href: null,
+        priority: 10,
+        tone: 'attention',
+        role: 'alert',
+        ariaLabel: 'Project update required',
+        actionHref: null,
+        actionLabel: null,
+      })
+    }
     if (!routeOwnsPrimaryDecision && startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
       notices.push({
         id: 'start-readiness',
@@ -1045,7 +1060,10 @@
         actionLabel: startReadinessNoticeLabel,
       })
     }
-    if (runStopSummaryText) {
+    // A required migration already owns the visible run control outside
+    // Overview. Repeating an older stop snapshot produces a second command
+    // that only navigates back to the same repair flow.
+    if (runStopSummaryText && !requiredMigrationBlocked) {
       const runStopTone = shellAlertTone(runStopSummarySeverity)
       notices.push({
         id: 'run-stop-summary',
