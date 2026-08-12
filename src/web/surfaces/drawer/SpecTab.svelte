@@ -240,8 +240,25 @@
       onYes={onApproveBrief}
       onNo={onShelve}
       onDifferent={onSendFollowUp}
-    />
+  />
   {:else}
+  {#if specApprovalPending}
+    <Card title="Your decision" tone="warn">
+      <Stack gap="2">
+        {#if specApprovalNeedsBrief}
+          <h3>Spec needs brief details first</h3>
+          <p class="lede">Add the missing success target and structured acceptance criteria before approval can mean the task is ready.</p>
+        {:else}
+          <h3>Approve this spec?</h3>
+          <p class="lede">It is ready for your review. Approving lets Guildhall continue this work item.</p>
+          <Row justify="end">
+            <Button variant="primary" disabled={busy} onclick={onApproveSpec}>Approve spec</Button>
+          </Row>
+        {/if}
+      </Stack>
+    </Card>
+  {/if}
+
   {#if stuck}
     <WhyStuck
       {task}
@@ -545,26 +562,6 @@
     </Card>
   {/if}
   </div>
-
-  {#if specApprovalPending}
-    <Card tone="warn">
-      {#snippet actions()}
-        <Chip label={specApprovalNeedsBrief ? 'Brief incomplete' : 'Awaiting your approval'} tone="warn" />
-      {/snippet}
-      <Stack gap="2">
-        {#if specApprovalNeedsBrief}
-          <h3>Spec needs brief details first</h3>
-          <p class="lede">Add the missing success target and structured acceptance criteria before approval can mean the task is ready.</p>
-        {:else}
-          <h3>Spec draft awaiting approval</h3>
-          <p class="lede">Review the draft on this page, then approve it when it matches what you want.</p>
-          <Row justify="end">
-            <Button variant="primary" disabled={busy} onclick={onApproveSpec}>Approve spec</Button>
-          </Row>
-        {/if}
-      </Stack>
-    </Card>
-  {/if}
 
   {#if exploring}
     <Card title={needsAcceptance ? 'Other note to spec author' : 'Follow-up to spec author'}>

@@ -56666,3 +56666,14 @@ Do not patch its copy or add another summary panel. Rebuild Work around the
 selected owner decision first; retain a deliberately entered queue only when a
 user chooses to browse work. Test the original selection-shift report before
 retaining any auto-selection behavior.
+
+### Repair: spec approval is no longer below the dossier
+
+The prior drawer put `Spec draft awaiting approval` after the review plan,
+handoff packet, task brief, spec body, and acceptance details. A direct review
+route therefore made the action look absent. The Spec route now begins with one
+`Your decision` card when approval is pending: it says what approval unlocks
+and exposes `Approve spec` before the reading material. The old bottom approval
+card was deleted. A rendered regression asserts the button precedes the Spec
+heading and invokes the supplied approval action. Installed-app proof and the
+migration-repair outcome are still required.
