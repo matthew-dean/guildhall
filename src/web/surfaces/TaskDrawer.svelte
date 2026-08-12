@@ -714,13 +714,20 @@
   const runStatus = $derived(payload?.runStatus ?? project.detail?.run?.status ?? 'stopped')
   const availabilityStatus = $derived(payload?.availability?.status ?? project.detail?.availability?.status ?? 'active')
   const hasCurrentTurns = $derived((taskExtras.threadTurns?.length ?? payload?.threadTurns?.length ?? 0) > 0)
-  // An Action tab without current turns immediately resolves back to Overview.
-  // Do not render a control that cannot show a distinct action surface.
-  const tabs = $derived([
-    BASE_TABS[0],
-    ...(hasCurrentTurns ? [{ id: 'current', label: 'Action' } as const] : []),
-    ...BASE_TABS.slice(1),
-  ])
+  // Normal detail only answers the owner's two jobs: understand the current
+  // work or deliberately read its specification. Diagnostic views stay
+  // linkable for audit evidence, but do not compete as peer navigation.
+  const tabs = $derived.by(() => {
+    const diagnosticTab = BASE_TABS.find(tab =>
+      tab.id === activeTab && !['overview', 'spec'].includes(tab.id),
+    )
+    return [
+      BASE_TABS[0],
+      ...(hasCurrentTurns ? [{ id: 'current', label: 'Action' } as const] : []),
+      BASE_TABS[1],
+      ...(diagnosticTab ? [diagnosticTab] : []),
+    ]
+  })
   function isTerminalRunStatus(status: string | undefined): boolean {
     return status === 'done' || status === 'shelved' || status === 'pending_pr'
   }

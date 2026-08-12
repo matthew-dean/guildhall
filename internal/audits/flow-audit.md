@@ -57908,7 +57908,7 @@ choosing to inspect it.
 
 - [x] Make `View task details` open the concise Overview record, never the
   full Spec tab solely because the route came from the task handoff.
-- [ ] Reduce the normal task-record navigation to owner jobs only. Journey,
+- [x] Reduce the normal task-record navigation to owner jobs only. Journey,
   Transcript, Experts, History, and Origin are diagnostic or audit material;
   they must not remain peer tabs beside Overview and Spec.
 - Contract Touch Decision: `TaskDrawer` owns only the detail tab route and
@@ -57934,3 +57934,14 @@ preserves explicit `?tab=spec` review deep links, while the general full-record
 command defaults to owner-oriented Overview. The focused TaskDrawer suite
 passes all 59 tests; `pnpm typecheck`, `pnpm lint:contracts`, `git diff
 --check`, and `pnpm build` pass, and the installed app reports `stale:false`.
+
+#### Evidence: task navigation subtraction repaired
+
+Normal task detail now renders Overview and Spec only, with Action inserted
+only when it contains a distinct current owner decision. Journey, Transcript,
+Experts, History, and Origin remain valid direct links for audit or evidence
+work, but no longer advertise themselves as peer owner decisions. The focused
+TaskDrawer suite passes all 60 tests, including normal-tab subtraction and
+direct Journey/Transcript route coverage. After fresh installation, Narrative
+Harness NAR-091 rendered only Overview and Spec at 1280px with no page-level
+horizontal overflow; the installed app reported `stale:false`.

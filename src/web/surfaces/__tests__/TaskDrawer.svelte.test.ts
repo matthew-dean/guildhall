@@ -216,6 +216,29 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('tab', { name: 'Action' })).not.toBeInTheDocument()
   })
 
+  it('keeps normal task detail navigation to owner jobs instead of diagnostic tabs', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('tab', { name: 'Overview' })
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Overview', 'Spec'])
+    for (const label of ['Journey', 'Transcript', 'Experts', 'History', 'Origin']) {
+      expect(screen.queryByRole('tab', { name: label })).not.toBeInTheDocument()
+    }
+  })
+
   it('leads with one resume command when this runnable task is the project action', async () => {
     const user = userEvent.setup()
     project.detail = {
@@ -1205,6 +1228,9 @@ describe('TaskDrawer', () => {
   })
 
   it('shows a readable task journey for completed work', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=journey')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    path.href = '/projects/looma-knit/task/task-link-editor?tab=journey'
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -1276,7 +1302,7 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await userEvent.click(await screen.findByRole('tab', { name: 'Journey' }))
+    await screen.findByRole('tab', { name: 'Journey', selected: true })
 
     expect(screen.getByText('Task journey')).toBeInTheDocument()
     expect(screen.queryByText('Checkpoint saved')).not.toBeInTheDocument()
@@ -1290,6 +1316,9 @@ describe('TaskDrawer', () => {
   })
 
   it('shows task sizing and done summary without making transcript the primary completed-task artifact', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=journey')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    path.href = '/projects/looma-knit/task/task-link-editor?tab=journey'
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -1358,7 +1387,7 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await userEvent.click(await screen.findByRole('tab', { name: 'Journey' }))
+    await screen.findByRole('tab', { name: 'Journey', selected: true })
 
     expect(screen.getByText('Large task')).toBeInTheDocument()
     expect(screen.getByText('Decompose before execution')).toBeInTheDocument()
@@ -1368,13 +1397,19 @@ describe('TaskDrawer', () => {
     expect(screen.getByText('Transcript compacted')).toBeInTheDocument()
     expect(screen.queryByText('Please build it.')).not.toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('tab', { name: 'Transcript' }))
-    expect(screen.getByText('Source conversation')).toBeInTheDocument()
+    window.history.pushState({}, '', '/projects/looma-knit/task/task-link-editor?tab=transcript')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    path.href = '/projects/looma-knit/task/task-link-editor?tab=transcript'
+    await screen.findByRole('tab', { name: 'Transcript', selected: true })
+    expect(await screen.findByText('Source conversation')).toBeInTheDocument()
     expect(screen.getByText(/This task is done, so Journey is the friendly summary/)).toBeInTheDocument()
     expect(screen.getByText('Please build it.')).toBeInTheDocument()
   })
 
   it('loads the transcript only after its tab is opened', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=transcript')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    path.href = '/projects/looma-knit/task/task-link-editor?tab=transcript'
     const { exploringTranscript: _transcript, contextDebug: _context, recentEvents: _events, ...detail } = drawerPayload()
     const transcript = {
       content: '# Exploring Transcript\n\n## user\n\nPlease build it.\n',
@@ -1396,10 +1431,6 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByRole('tab', { name: 'Overview' })
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('extras?include=transcript'))).toBe(false)
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Transcript' }))
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('extras?include=transcript'))).toBe(true))
   })
 
