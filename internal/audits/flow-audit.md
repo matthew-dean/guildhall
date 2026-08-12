@@ -57964,3 +57964,32 @@ feed or inactive controls. Its entire first viewport was the shared `Work ready
 to resume` handoff and `Open Work` command, matching Overview, Release, Work,
 and Timeline. It had no page-level horizontal overflow at 1280px. This is a
 passing baseline, not a reason to retain Thread as a duplicate live dashboard.
+
+### Repair: Migration decisions do not expose storage internals
+
+#### Migration decision user job before implementation
+
+When Guildhall needs to update a project before it can run, the owner needs to
+know what update is required and have one safe way to apply it. Filesystem
+paths, database names, and generated-record counts do not help that decision
+and make a short recovery step look dangerous.
+
+- [x] Keep the migration name, plain-language impact, and one apply command;
+  remove affected-path and changed-path dumps from the owner flow.
+- Contract Touch Decision: shared migration status continues to own the
+  migration id, title, summary, and apply action. `ProjectView` changes only
+  their presentation. Considered but unchanged: migration execution,
+  readiness gating, task routing, migration persistence, and project state.
+  Proof required: ProjectView regression and installed Looma replay without
+  applying the user-owned migration. Apply/revert changes only what internal
+  metadata is displayed.
+- Schema Migration Decision: none; this is presentation over the existing
+  migration contract.
+- Evidence, 2026-08-12: `ProjectView.svelte.test.ts` passes all 67 tests;
+  `pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and `pnpm
+  build` pass. After `pnpm dev:install`, service restart, and
+  `/api/stale-server` reporting `stale:false`, Looma's required-update dialog
+  showed the migration name, its plain-language summary, and `Apply required
+  migration`. It did not show the project database pathname, an affected-path
+  list, or the `generated proof paths` record count. The migration was not
+  applied because that would mutate the active user project.

@@ -451,7 +451,7 @@ describe('ProjectView', () => {
     ['work', 'Knit: add link editor controls'],
     ['planner', 'Knit: add link editor controls'],
     ['map', 'Project map'],
-    ['timeline', 'Coordinator timeline'],
+    ['timeline', 'Project activity'],
     ['release', 'Scope readiness'],
     ['settings', 'Settings'],
     ['workspace-import', 'Review existing project work'],
@@ -812,8 +812,8 @@ describe('ProjectView', () => {
     await user.click(screen.getByRole('button', { name: /update project/i }))
     await screen.findByRole('dialog', { name: /migrate project/i })
     expect(screen.getByText('Move legacy project memory into split project state')).toBeInTheDocument()
-    expect(screen.getByText('memory/')).toBeInTheDocument()
-    expect(screen.getByText('.guildhall/')).toBeInTheDocument()
+    expect(screen.queryByText('memory/')).not.toBeInTheDocument()
+    expect(screen.queryByText('.guildhall/')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /apply required migration/i }))
 
@@ -959,8 +959,7 @@ describe('ProjectView', () => {
 
     expect(await screen.findByText('Migration complete.')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Close' }).every(button => button.hasAttribute('disabled'))).toBe(false)
-    expect(screen.getByLabelText('Migration changed paths')).toHaveTextContent('memory/')
-    expect(screen.getByLabelText('Migration changed paths')).toHaveTextContent('.guildhall/')
+    expect(screen.queryByLabelText('Migration changed paths')).not.toBeInTheDocument()
   })
 
   it('does not present stable done-only projects as paused or needing setup attention', async () => {

@@ -738,10 +738,6 @@
       default: return null
     }
   })
-  const migrationChangedPaths = $derived.by(() => {
-    const paths = migrationApplyResult?.applied?.flatMap(item => item.affectedPaths ?? []) ?? []
-    return [...new Set(paths)].slice(0, 8)
-  })
   function orientationLabel(value: unknown): string | null {
     if (typeof value === 'string') {
       const trimmed = value.trim()
@@ -1909,16 +1905,6 @@
           label="Migration complete"
           title={migrationAppliedMessage}
         />
-        {#if migrationChangedPaths.length}
-          <div class="migration-card migration-card-complete">
-            <Chip label="Changed paths" tone="ok" />
-            <div class="migration-paths" aria-label="Migration changed paths">
-              {#each migrationChangedPaths as affectedPath}
-                <code>{affectedPath}</code>
-              {/each}
-            </div>
-          </div>
-        {/if}
       {/if}
       {#if migrationStatusLoading}
         <p class="muted">Checking migrations...</p>
@@ -1930,13 +1916,6 @@
           <h4>{primaryRequiredMigration.title}</h4>
           {#if primaryRequiredMigration.summary}
             <p>{primaryRequiredMigration.summary}</p>
-          {/if}
-          {#if primaryRequiredMigration.affectedPaths?.length}
-            <div class="migration-paths" aria-label="Affected paths">
-              {#each primaryRequiredMigration.affectedPaths as affectedPath}
-                <code>{affectedPath}</code>
-              {/each}
-            </div>
           {/if}
         </div>
       {:else if !migrationAppliedMessage}
@@ -2279,10 +2258,6 @@
     font-size: var(--gh-type-size-panel-title);
     line-height: var(--gh-type-line-height-tight);
   }
-  .migration-card-complete {
-    border-color: color-mix(in srgb, var(--gh-color-feedback-ok) 36%, var(--border));
-    background: color-mix(in srgb, var(--gh-color-feedback-ok) 14%, var(--bg-raised-2));
-  }
   .migration-steps {
     display: grid;
     gap: var(--s-2);
@@ -2319,19 +2294,6 @@
   .migration-steps li.done::before {
     border-color: var(--gh-color-feedback-ok);
     background: var(--gh-color-feedback-ok);
-  }
-  .migration-paths {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-  }
-  .migration-paths code {
-    padding: 0.2rem 0.45rem;
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, var(--bg-base) 62%, transparent);
-    color: var(--text);
-    font-size: var(--gh-type-size-meta);
   }
 
   @media (max-width: 900px) {
