@@ -57948,3 +57948,11 @@ TaskDrawer suite passes all 60 tests, including normal-tab subtraction and
 direct Journey/Transcript route coverage. After fresh installation, Narrative
 Harness NAR-091 rendered only Overview and Spec at 1280px with no page-level
 horizontal overflow; the installed app reported `stale:false`.
+
+#### Evidence: task Overview telemetry subtraction repaired
+
+On 2026-08-12, fresh installed NAR-091 Overview contained neither `Task size`,
+`Request shape`, `Latest checkpoint`, nor `Review plan`; it retained its
+delivery steps, task dependencies, and the `Resume only this work item` action.
+The two-tab record had no page-level horizontal overflow at 1280px. Focused
+Overview/TaskDrawer coverage passes 62 tests and `pnpm typecheck` passes.
