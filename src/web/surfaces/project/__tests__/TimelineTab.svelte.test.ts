@@ -30,10 +30,55 @@ describe('TimelineTab', () => {
       },
     })
 
-    expect(screen.getByText('Coordinator timeline')).toBeTruthy()
+    expect(screen.getByText('Project activity')).toBeTruthy()
     expect(
       screen.getByText('No events recorded yet. Start the coordinator to populate the timeline.'),
     ).toBeTruthy()
+  })
+
+  it('puts the shared current action ahead of collapsed activity and diagnostics', async () => {
+    const user = userEvent.setup()
+    render(TimelineTab, {
+      props: {
+        detail: {
+          id: 'looma-knit',
+          name: 'Looma + Knit',
+          path: '/repo/looma-knit',
+          tasks: [],
+          actionModel: {
+            primaryAction: {
+              source: 'start_readiness',
+              label: 'Work ready to resume',
+              taskLabel: 'Keep the current flow coherent',
+              taskId: 'task-a',
+              buttonLabel: 'Open Work',
+              href: '/work?task=task-a',
+              tone: 'accent',
+              code: 'ready_work',
+            },
+            secondaryActions: [],
+            runControl: { label: 'Resume', startEnabled: true },
+            ownerInput: { active: false },
+            setup: { state: 'ready', freshIntakeNeeded: false },
+          },
+          recentEvents: [
+            { at: '2026-05-19T15:00:00.000Z', event: { type: 'error', message: 'worker transcript' } },
+            { at: '2026-05-19T14:59:00.000Z', event: { type: 'agent_started', task_id: 'task-a', agent_name: 'worker-agent' } },
+          ],
+        },
+      },
+    })
+
+    expect(screen.getByLabelText('Current project status').textContent).toContain('Work ready to resume')
+    expect(screen.getByLabelText('Current project status').textContent).toContain('Current item: Keep the current flow coherent')
+    const history = screen.getByText('Activity history').closest('details') as HTMLDetailsElement
+    expect(history.open).toBe(false)
+    const diagnostics = screen.getByText('Technical event details').closest('details') as HTMLDetailsElement
+    expect(diagnostics.open).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: 'Open Work' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-a')
+    expect(path.state).toEqual({ backgroundPath: '/projects/looma-knit/timeline' })
   })
 
   it('renders recent events newest-first and opens task events in the drawer route', async () => {
@@ -71,7 +116,7 @@ describe('TimelineTab', () => {
     })
 
     const rows = screen.getAllByText(/15:0/)
-    expect(rows.map(row => row.textContent)).toEqual(['15:02:00', '15:01:00', '15:00:00'])
+    expect(rows.map(row => row.textContent)).toEqual(['15:02:00', '15:00:00', '15:01:00'])
     expect(screen.getByText('ERROR: bootstrap failed')).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: /Task A Ready/ }))

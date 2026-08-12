@@ -3,10 +3,11 @@
   the top so the user sees new events without scrolling.
 -->
 <script lang="ts">
+  import Button from '../../lib/Button.svelte'
   import Card from '../../lib/ui-compat/Card.svelte'
   import { onEvent, summarizeEvent, eventTaskId, eventCssClass } from '../../lib/events.js'
   import { nav, path } from '../../lib/nav.svelte.js'
-  import { currentTaskHref } from '../../lib/project-routes.js'
+  import { currentTaskHref, projectActionHref } from '../../lib/project-routes.js'
   import type { ProjectActivityHistoryPage, ProjectDetail, EventEnvelope } from '../../lib/types.js'
 
   interface Props {
@@ -108,6 +109,12 @@
     if (id) nav(currentTaskHref(id), { backgroundPath: path.value })
   }
 
+  function openCurrentAction(): void {
+    const href = detail.actionModel?.primaryAction?.href
+    if (!href) return
+    nav(projectActionHref(href, detail.id), { backgroundPath: path.value })
+  }
+
   function isProviderHealthEvent(ev: EventEnvelope): boolean {
     return (ev.event?.type ?? '') === 'provider_health_changed'
   }
@@ -127,6 +134,11 @@
     const inner = ev.event ?? ev
     const text = `${inner.type ?? ''}\n${inner.message ?? ''}\n${inner.reason ?? ''}`.toLowerCase()
     return text.includes('empty assistant message') || text.includes('empty model reply') || text.includes('empty assistant reply')
+  }
+
+  function isDiagnosticEvent(ev: EventEnvelope): boolean {
+    const type = ev.event?.type ?? ev.type ?? ''
+    return type === 'error' || type === 'agent_error'
   }
 
   function eventKey(ev: EventEnvelope): string {
@@ -172,48 +184,110 @@
   }
 
   const operatorEvents = $derived(dedupeEvents(events.filter(ev => !isProviderHealthEvent(ev) && !isRawTraceEvent(ev) && !isEmptyModelEvent(ev))))
+  const recentHistoryEvents = $derived(operatorEvents.filter(ev => !isDiagnosticEvent(ev)).slice(0, 5))
+  const diagnosticEvents = $derived(operatorEvents.filter(isDiagnosticEvent))
+  const currentAction = $derived(detail.actionModel?.primaryAction ?? null)
+  const currentStatus = $derived.by(() => {
+    if (currentAction) {
+      return {
+        title: currentAction.label ?? 'Work needs your attention',
+        detail: currentAction.taskLabel
+          ? `Current item: ${currentAction.taskLabel}`
+          : currentAction.detail ?? 'Open the current work to continue.',
+        buttonLabel: currentAction.buttonLabel ?? 'Open Work',
+      }
+    }
+    if (detail.run?.status === 'running' || detail.run?.status === 'stopping') {
+      return {
+        title: detail.run.status === 'stopping' ? 'Stopping work' : 'Work in progress',
+        detail: 'Guildhall is working on the current project.',
+        buttonLabel: null,
+      }
+    }
+    return {
+      title: 'Nothing needs your attention',
+      detail: 'There is no project decision waiting right now.',
+      buttonLabel: null,
+    }
+  })
 </script>
 
-<Card title="Coordinator timeline">
-  {#if historyLoading && events.length === 0}
-    <p class="muted">Loading retained activity...</p>
-  {:else if historyError && events.length === 0}
-    <p class="muted">Activity history is unavailable right now: {historyError}</p>
-  {:else if events.length === 0}
-    <p class="muted">No events recorded yet. Start the coordinator to populate the timeline.</p>
-  {:else if operatorEvents.length === 0}
-    <p class="muted">No project updates are ready to show yet.</p>
-  {:else}
-    <div class="feed">
-      {#each operatorEvents as ev, i (i)}
-        {@const text = summarizeEvent(ev)}
-        {#if text}
-          {@const tid = eventTaskId(ev)}
-          {@const cls = eventCssClass(ev)}
-          <div class="ev ev-{cls}">
-            <span class="ts">{(ev.at ?? '').slice(11, 19)}</span>
-            {#if tid}
-              <button type="button" class="ev-link" onclick={() => onClickEvent(ev)}>
-                {text}
-              </button>
-            {:else}
-              <span>{text}</span>
+<Card title="Project activity">
+  <section class="timeline-status" aria-label="Current project status">
+    <p class="timeline-status-label">Current status</p>
+    <div class="timeline-status-main">
+      <div>
+        <h2>{currentStatus.title}</h2>
+        <p>{currentStatus.detail}</p>
+      </div>
+      {#if currentAction && currentStatus.buttonLabel}
+        <Button variant="primary" size="sm" onclick={openCurrentAction}>{currentStatus.buttonLabel}</Button>
+      {/if}
+    </div>
+  </section>
+
+  <details class="timeline-history">
+    <summary>Activity history</summary>
+    <div class="timeline-history-body">
+      {#if historyLoading && events.length === 0}
+        <p class="muted">Loading retained activity...</p>
+      {:else if historyError && events.length === 0}
+        <p class="muted">Activity history is unavailable right now: {historyError}</p>
+      {:else if events.length === 0}
+        <p class="muted">No events recorded yet. Start the coordinator to populate the timeline.</p>
+      {:else if recentHistoryEvents.length === 0}
+        <p class="muted">No owner-readable activity is ready to show yet.</p>
+      {:else}
+        <div class="feed">
+          {#each recentHistoryEvents as ev, i (i)}
+            {@const text = summarizeEvent(ev)}
+            {#if text}
+              {@const tid = eventTaskId(ev)}
+              {@const cls = eventCssClass(ev)}
+              <div class="ev ev-{cls}">
+                <span class="ts">{(ev.at ?? '').slice(11, 19)}</span>
+                {#if tid}
+                  <button type="button" class="ev-link" onclick={() => onClickEvent(ev)}>
+                    {text}
+                  </button>
+                {:else}
+                  <span>{text}</span>
+                {/if}
+              </div>
             {/if}
+          {/each}
+        </div>
+      {/if}
+
+      {#if diagnosticEvents.length > 0}
+        <details class="timeline-diagnostics">
+          <summary>Technical event details</summary>
+          <div class="feed">
+            {#each diagnosticEvents as ev, i (`diagnostic-${i}`)}
+              {@const text = summarizeEvent(ev)}
+              {#if text}
+                <div class="ev ev-{eventCssClass(ev)}">
+                  <span class="ts">{(ev.at ?? '').slice(11, 19)}</span>
+                  <span>{text}</span>
+                </div>
+              {/if}
+            {/each}
           </div>
+        </details>
+      {/if}
+
+      <div class="history-pagination">
+        {#if historyPage?.hasMore}
+          <button type="button" class="history-more" onclick={loadOlderActivity} disabled={historyLoadingMore}>
+            {historyLoadingMore ? 'Loading earlier updates...' : 'Show earlier updates'}
+          </button>
         {/if}
-      {/each}
+        {#if historyResult}
+          <p class="muted compact history-result" role="status" aria-live="polite">{historyResult}</p>
+        {/if}
+      </div>
     </div>
-    <div class="history-pagination">
-      {#if historyPage?.hasMore}
-        <button type="button" class="history-more" onclick={loadOlderActivity} disabled={historyLoadingMore}>
-          {historyLoadingMore ? 'Loading earlier updates...' : 'Show earlier updates'}
-        </button>
-      {/if}
-      {#if historyResult}
-        <p class="muted compact history-result" role="status" aria-live="polite">{historyResult}</p>
-      {/if}
-    </div>
-  {/if}
+  </details>
 </Card>
 
 <style>
@@ -224,6 +298,48 @@
   .compact {
     margin: 0 0 var(--s-3);
     font-size: var(--gh-type-size-meta);
+  }
+  .timeline-status {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .timeline-status-label {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .timeline-status-main {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: var(--s-3);
+  }
+  .timeline-status h2,
+  .timeline-status p {
+    margin: 0;
+  }
+  .timeline-status h2 {
+    font-size: var(--gh-type-size-heading-sm);
+  }
+  .timeline-status-main > div {
+    display: grid;
+    gap: var(--s-1);
+  }
+  .timeline-history {
+    margin-top: var(--s-4);
+  }
+  .timeline-history > summary,
+  .timeline-diagnostics > summary {
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: var(--gh-type-size-meta);
+    font-weight: 700;
+  }
+  .timeline-history-body,
+  .timeline-diagnostics {
+    margin-top: var(--s-3);
   }
   .feed {
     display: flex;

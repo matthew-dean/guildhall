@@ -57849,3 +57849,50 @@ pass. The normal rendered fixture is presently protected by its required
 manual runtime migration, so the installed, already-migrated Narrative Harness
 project supplied the browser evidence for this post-migration flow rather than
 the fixture silently applying that user-owned migration.
+
+### Finding: Timeline is still an unhelpful raw transcript
+
+#### Timeline user job before implementation
+
+When an owner opens Timeline, they need to know whether the project is running,
+stopped, or needs attention, plus the one place to resolve any problem. Older
+events are supporting history, not a second live dashboard or a wall of raw
+agent messages.
+
+- [x] Replace raw failed-agent messages and duplicated work events with one
+  owner-readable latest-status summary linked to the shared next action when
+  one exists.
+- [x] Keep older event history reverse chronological and collapsed by default;
+  it must never outrank the current status or repeat it as a second live view.
+- Contract Touch Decision: `detail.actionModel` and `detail.run` remain the
+  shared owners of current status and continuation. `TimelineTab` will only
+  present those fields and move retained event payload behind history/diagnostic
+  disclosure; it will not reinterpret task lifecycle or rank a new action.
+  Considered but unchanged: event storage, history pagination API, action-model
+  ranking, readiness, task routing, and migration state. Proof required:
+  Timeline component regression and installed Narrative Harness replay.
+- Schema Migration Decision: none; this is presentation over existing shared
+  action and retained event data.
+- Evidence, 2026-08-12: installed Narrative Harness Timeline is reverse
+  chronological and has a working-looking `Show earlier updates` control, but
+  its first visible content is the unbounded reviewer-fanout error followed by
+  repeated Task 90 start/finish events. It does not explain whether the owner
+  needs to act or link to the current shared continuation NAR-091. This fails
+  the under-a-minute orientation standard.
+
+#### Evidence: Timeline handoff repaired
+
+On 2026-08-12, Timeline was reduced from an exposed event transcript to a
+single shared project-status handoff. In the fresh installed Narrative Harness
+app, its first viewport now contains `Work ready to resume`, the named NAR-091
+item, and one `Open Work` command. Activity history and technical event details
+are both closed; the prior raw reviewer-fanout failure and repeated Task 90
+events are not part of initial orientation. The page has no horizontal overflow
+at 1280px. Selecting `Open Work` reached the focused NAR-091 Work route, which
+showed the same `Resume this work item` continuation. The action was not run
+because that would start the user's active Narrative Harness work.
+
+`TimelineTab.svelte.test.ts` passes all 8 tests, including the status-first,
+collapsed-history, nested-diagnostics, and shared-action route regression.
+`pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and `pnpm build`
+pass; the installed app reports `stale:false`.
