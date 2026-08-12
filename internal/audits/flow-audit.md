@@ -56667,6 +56667,16 @@ selected owner decision first; retain a deliberately entered queue only when a
 user chooses to browse work. Test the original selection-shift report before
 retaining any auto-selection behavior.
 
+### Repair: Work selection has one route authority
+
+The Looma + Knit reselection was caused by an old `?task=` URL value remaining
+authoritative after a user chose a different list row. Refresh then restored the
+old item. A Work-row click now writes the chosen task into the route; a direct
+link still selects and filters its named task, while a user-click route update
+does not replace the user's current filter. The focused Work suite covers mouse
+and keyboard selection plus legacy route parameters (46 passing tests). Live
+post-refresh proof remains required.
+
 ### Repair: spec approval is no longer below the dossier
 
 The prior drawer put `Spec draft awaiting approval` after the review plan,

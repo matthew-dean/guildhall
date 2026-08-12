@@ -463,13 +463,19 @@
   function selectWork(task: Task): void {
     selectedWorkId = task.id
     runWorkError = null
+    // The route is the selection authority. Keeping an older `?task=` after a
+    // user click lets a refresh silently put the old row back in focus.
+    const url = new URL(window.location.href)
+    if (url.searchParams.get('task') !== task.id || url.searchParams.has('work')) {
+      url.searchParams.set('task', task.id)
+      url.searchParams.delete('work')
+      nav(`${url.pathname}${url.search}${url.hash}`, { backgroundPath: path.value })
+    }
   }
 
   function selectWorkById(taskId: string): void {
-    if (allWorkItems.some(task => task.id === taskId)) {
-      selectedWorkId = taskId
-      runWorkError = null
-    }
+    const task = allWorkItems.find(candidate => candidate.id === taskId)
+    if (task) selectWork(task)
   }
 
   async function loadMoreWork(): Promise<void> {
@@ -823,6 +829,10 @@
     if (!routeTaskId) return
     const routeTask = allWorkItems.find(task => task.id === routeTaskId)
     if (!routeTask) return
+    // A user click writes the route after local selection is set. That route
+    // update must not reinterpret the click as a deep-link and replace their
+    // deliberately chosen list filter.
+    if (selectedWorkId === routeTaskId) return
     selectedWorkId = routeTaskId
     runWorkError = null
     workFilter = workFilterForTask(routeTask)

@@ -1419,6 +1419,7 @@ describe('WorkTab', () => {
     expect(screen.queryByLabelText('Work hierarchy columns')).toBeNull()
 
     await userEvent.click(screen.getByRole('button', { name: /inspect work interface design system/i }))
+    expect(path.href).toBe('/projects/looma-knit/work?tree=preview&task=feature-root')
 
     const inspector = screen.getByLabelText('Selected work inspector')
     expect(inspector).toHaveTextContent('Build the interface design system')
@@ -1427,6 +1428,7 @@ describe('WorkTab', () => {
     await userEvent.click(within(inspector).getByRole('button', { name: /button primitive/i }))
 
     expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Ship the reusable button primitive')
+    expect(path.href).toBe('/projects/looma-knit/work?tree=preview&task=task-button')
   })
 
   it('does not echo the selected title outside the selected work inspector', async () => {
