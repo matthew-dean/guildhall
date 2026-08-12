@@ -428,6 +428,14 @@
     })
   }
 
+  function openProjectDecision(): void {
+    const targetTaskId = project.detail?.actionModel?.primaryAction?.taskId
+    if (!targetTaskId) return
+    nav(currentTaskHref(targetTaskId, scopedProjectId()), {
+      backgroundPath: drawerBackgroundPath(),
+    })
+  }
+
   async function submitApproveSpec() {
     const note = approveSpecNote.trim()
     const body = note ? { approvalNote: note } : undefined
@@ -664,6 +672,14 @@
   })
   const fullRecordRequested = $derived(requestedFullRecord(routeHref || navPath.href || currentBrowserHref()))
   const focusedSpecReview = $derived(task?.status === 'spec_review' && !fullRecordRequested)
+  const projectPrimaryAction = $derived(project.detail?.actionModel?.primaryAction ?? null)
+  const projectDecisionElsewhere = $derived(Boolean(
+    !fullRecordRequested &&
+    !focusedSpecReview &&
+    task?.id &&
+    projectPrimaryAction?.taskId &&
+    projectPrimaryAction.taskId !== task.id,
+  ))
   const currentWorkProgress = $derived(task ? payload?.workProgress?.byTaskId?.[task.id] ?? null : null)
   const currentDeliveryBadge = $derived(deliveryProgressBadge(currentWorkProgress))
   const allTaskContext = $derived.by(() => {
@@ -1097,7 +1113,7 @@
     </Button>
   </header>
 
-  {#if payload && !focusedSpecReview}
+  {#if payload && !focusedSpecReview && !projectDecisionElsewhere}
     <div class="gh-drawer-tabs">
       <Tabs
         tabs={tabs}
@@ -1167,6 +1183,18 @@
           onRequestChanges={handleRequestSpecChanges}
           onOpenFullRecord={openFullTaskRecord}
         />
+      {:else if projectDecisionElsewhere && projectPrimaryAction}
+        <UtilityPanel as="section" className="drawer-project-decision" tone="warn" railStrength="strong" ariaLabel="Project decision">
+          <span class="outcome-eyebrow">Project needs your decision first</span>
+          <strong>{projectPrimaryAction.label}</strong>
+          {#if projectPrimaryAction.detail}
+            <span>{projectPrimaryAction.detail}</span>
+          {/if}
+          <div class="drawer-project-decision-actions">
+            <Button variant="primary" size="sm" onclick={openProjectDecision}>{projectPrimaryAction.buttonLabel}</Button>
+            <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View this task record</Button>
+          </div>
+        </UtilityPanel>
       {:else if activeTab === 'current'}
         <CurrentTab
           {task}
@@ -1240,7 +1268,7 @@
     {/if}
   </div>
 
-  {#if payload && task}
+  {#if payload && task && !projectDecisionElsewhere}
     <footer class="gh-drawer-foot">
       {#if isWorkspaceImportTask}
         <div class="footer-actions-left">
@@ -1693,6 +1721,15 @@
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-relaxed);
+  }
+  :global(.drawer-project-decision) {
+    display: grid;
+    gap: var(--s-3);
+  }
+  .drawer-project-decision-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
   }
   .modal-copy {
     margin: 0;

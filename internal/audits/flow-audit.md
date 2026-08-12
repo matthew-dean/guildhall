@@ -57169,6 +57169,11 @@ an Action tab and then quietly send the owner back to Overview.
 - Fix: `Action` is now conditional on current action content. Existing action
   buttons remain in the drawer footer and focused decision surfaces; no new
   local action classification is introduced.
+- Related root correction: opening an unrelated task while the shared project
+  model names a different owner decision now leads with that decision and a
+  direct route to it. The unrelated task record is an explicit `View this task
+  record` choice, not the default wall of task-size, checkpoint, review-plan,
+  source, and hierarchy detail.
 - Contract Touch Decision: consumes existing drawer thread-turn state only.
   No route, task, API, or persisted contract changed.
 - Schema Migration Decision: none; no persisted data changed.

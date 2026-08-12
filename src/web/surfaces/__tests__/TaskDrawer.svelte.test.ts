@@ -216,6 +216,48 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('tab', { name: 'Action' })).not.toBeInTheDocument()
   })
 
+  it('routes an unrelated task to the project decision instead of dumping its full record', async () => {
+    const user = userEvent.setup()
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          label: 'Review the release spec',
+          detail: 'A spec needs approval before work can continue.',
+          buttonLabel: 'Review next spec',
+          href: '/work?task=task-review',
+          tone: 'warn',
+          taskId: 'task-review',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: false },
+        ownerInput: { active: true },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({ threadTurns: [] })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Project needs your decision first')
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.queryByText('Task size')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Review next spec' }))
+    expect(path.value).toBe('/projects/looma-knit/task/task-review')
+  })
+
   it('opens on an overview with review plan details when one is recorded', async () => {
     const payload = drawerPayload({
       threadTurns: [],
