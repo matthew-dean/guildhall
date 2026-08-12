@@ -57459,3 +57459,37 @@ downstream task that is merely waiting on work elsewhere.
   delivery steps, task size, review plan, or evidence requirements appeared.
   `View task details` opened `?detail=full&tab=spec`. The default action
   surface had no horizontal overflow at `1280x720` or `390x844`.
+
+### Repair: Work waits for its own inventory
+
+#### Work user job before implementation
+
+When an owner opens Work, the list must settle once. Guildhall may show a
+brief loading transition, but it may not render the different ordering from
+Overview and then move every row once the Work inventory arrives.
+
+- [x] Hold Work and Planner content while a positively identified Overview or
+  Map task payload is being replaced by the Work inventory.
+- [x] Replay Looma + Knit Work from a cold navigation, wait through the first
+  refresh, select a row, and prove that neither the row order nor selection
+  changes without an owner action.
+- Contract Touch Decision: `ProjectDetail.taskPayload.surface` is the existing
+  response identity for bounded project inventories. ProjectView now uses that
+  identity to decide whether a previously loaded payload belongs to Work;
+  it does not rank tasks, change selection, alter the task payload, or modify
+  the project store's request sequencing. Legacy payloads with no surface
+  marker keep their existing immediate rendering behavior. Proof required and
+  provided: a ProjectView regression begins with an explicit Overview payload,
+  requires the selected-view loading state instead of its task row, then proves
+  only the resolved Work row renders. Installed Looma + Knit proof remains
+  open. Apply/revert changes only the cross-surface loading boundary.
+- Schema Migration Decision: none; no persisted fields or API shapes change.
+- Evidence, 2026-08-12: installed runtime `0.13.2-1786568898-31076` reported
+  `stale:false`. At `1280px` wide, Looma + Knit Work held the same 16 rows for
+  3.5 seconds after initial load, with no horizontal overflow. Selecting the
+  reported `LOO-7BD5ZE Revisit multi-action FAB behavior only if real app
+  demand appears` row held both its task URL and selected row for a further
+  3.5 seconds. The available installed-browser session did not expose viewport
+  resizing, so narrow/mobile geometry remains covered by the existing
+  responsive component suite rather than being represented as a false live
+  browser claim for this repair.

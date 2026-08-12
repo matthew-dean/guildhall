@@ -471,6 +471,39 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Loading project...')).not.toBeInTheDocument()
   })
 
+  it('waits for the Work inventory instead of rendering a previous Overview ordering', async () => {
+    const pendingProject = deferredResponse()
+    const overviewPayload = detail({
+      tasks: [task({ id: 'task-overview-only', title: 'Overview ordering task' })],
+      taskPayload: { surface: 'overview', kind: 'selected_scope_cards' },
+    } as Partial<ProjectDetail>)
+    const workPayload = detail({
+      tasks: [task({ id: 'task-work-only', title: 'Work inventory task' })],
+      taskPayload: { surface: 'work', kind: 'project_work_inventory' },
+    } as Partial<ProjectDetail>)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return pendingProject.promise
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      return json({})
+    }))
+    project.detail = overviewPayload
+    project.error = null
+
+    render(ProjectView, { initialView: 'work', initialSub: null, projectId: 'looma-knit' })
+
+    await waitFor(() => {
+      expect(screen.getByText(/Loading the selected view/)).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Overview ordering task')).not.toBeInTheDocument()
+
+    pendingProject.resolve(json(workPayload))
+    await waitFor(() => {
+      expect(screen.getByText('Work inventory task')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Overview ordering task')).not.toBeInTheDocument()
+  })
+
   it('renders Release readiness when the broad project payload is still loading', async () => {
     const pendingProject = deferredResponse()
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

@@ -143,7 +143,12 @@
     if (currentView === 'overview' || currentView === 'map') {
       return !detail.orientationSpine && !detail.tasks
     }
-    if (currentView === 'work' || currentView === 'planner') return !('tasks' in detail)
+    if (currentView === 'work' || currentView === 'planner') {
+      // Overview and Work intentionally carry different bounded inventories.
+      // Never render Overview rows while Work is still loading: their order
+      // is valid for different jobs and visibly reorders the list on arrival.
+      return Boolean(detail.taskPayload?.surface && detail.taskPayload.surface !== 'work')
+    }
     return false
   })
   const routeFocusedTaskId = $derived.by(() => {
