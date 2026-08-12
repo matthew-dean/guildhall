@@ -439,7 +439,6 @@
   async function submitApproveSpec() {
     const note = approveSpecNote.trim()
     const body = note ? { approvalNote: note } : undefined
-    approveSpecOpen = false
     if (taskId === 'task-workspace-import') {
       busy = true
       try {
@@ -454,6 +453,7 @@
           return
         }
         await load()
+        approveSpecOpen = false
         return
       } catch (err) {
         error = friendlyFetchError(err)
@@ -462,7 +462,7 @@
         busy = false
       }
     }
-    await post('approve-spec', body)
+    if (await post('approve-spec', body)) approveSpecOpen = false
   }
 
   function handleResolveEscalation(escalation: Escalation, mode: 'retry' | 'resolve' = 'resolve') {
@@ -1545,6 +1545,9 @@
   size="sm"
 >
   {#snippet children()}
+    {#if error}
+      <p class="form-error" role="alert">{error}</p>
+    {/if}
     <Field label="Note (optional)">
       <Textarea
         bind:value={approveSpecNote}

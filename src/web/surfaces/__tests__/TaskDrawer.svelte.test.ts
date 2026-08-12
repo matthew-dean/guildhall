@@ -1963,6 +1963,31 @@ describe('TaskDrawer', () => {
     })
   })
 
+  it('keeps the approval modal open when spec approval fails', async () => {
+    openDrawerOn('spec', { fullRecord: true })
+    const payload = drawerPayload()
+    payload.task.status = 'spec_review'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/approve-spec')) {
+        return json({ error: 'Project update required before approval.' }, { status: 409 })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, { taskId: 'task-link-editor', projectId: 'looma-knit', onClose: vi.fn() })
+
+    await screen.findByRole('button', { name: /approve spec/i })
+    await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^approve$/i }))
+
+    expect(await screen.findByRole('dialog', { name: /approve spec/i })).toBeInTheDocument()
+    expect(await screen.findByText('Project update required before approval.')).toBeInTheDocument()
+  })
+
   it('surfaces spec approval on the Spec tab beside the draft', async () => {
     openDrawerOn('spec')
     const payload = drawerPayload()

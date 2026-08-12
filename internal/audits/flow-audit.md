@@ -58048,3 +58048,17 @@ the shared current action for an individual project.
   reported `Ready to resume`, matching the service's `ready_work` action and
   its project Overview. Selecting either `Open project` or `Resume` remains
   visible without reading the historical count telemetry.
+
+### Repair: Failed spec approval keeps its decision surface
+
+- [x] Keep an approval modal open until its approval mutation succeeds; render
+  the returned error in the modal rather than replacing the task body or
+  dismissing the only available action.
+- Contract Touch Decision: the task approval mutation and migration routing
+  are unchanged. `TaskDrawer` owns only modal lifetime and the presentation of
+  its existing request error. Schema Migration Decision: none.
+- Evidence, 2026-08-12: focused TaskDrawer coverage passes 61/61, including a
+  409 approval response that keeps `Approve spec` open with the returned
+  message and the approval command still available. `pnpm typecheck` and
+  `git diff --check` pass. Installed replay remains pending because Looma's
+  current required project update intentionally gates its task approvals.
