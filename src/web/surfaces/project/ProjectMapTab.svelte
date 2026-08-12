@@ -538,25 +538,15 @@
     <div class="map-hero-copy">
       <p class="eyebrow">{detail.name ?? detail.id ?? 'Project'}</p>
       <h1>Project map</h1>
-      <p>{mapHeadline}</p>
-      {#if targetAudience}
-        <p class="muted">{targetAudience}</p>
-      {/if}
+      <p>{taskScopeLabel}</p>
+      <strong>{progress && progress.total > 0 ? `${progress.done ?? 0}/${progress.total} work items complete` : countLabel(spine?.summary?.includedWorkCount ?? spine?.summary?.includedCount, 'executable work item')}</strong>
+      <div class="map-actions">
+        <Button variant="primary" onclick={() => go(currentProjectHref('/work?view=queue', activeProjectId))}>
+          <Icon name="list-checks" size={16} />
+          Open Work
+        </Button>
+      </div>
     </div>
-    <Card title={workContainerTitle} titleTag="h2" padding="compact" density="dense" className="map-scope-card">
-      <div class="scope-stack">
-        <Chip label={taskScopeLabel} tone={sourceIsInferred(selectedScopeSource) ? 'warn' : 'accent'} />
-        <strong>{progress && progress.total > 0 ? `${progress.done ?? 0}/${progress.total} executable ${progress.total === 1 ? 'work item' : 'work items'} complete` : countLabel(spine?.summary?.includedWorkCount ?? spine?.summary?.includedCount, 'executable work item')}</strong>
-        <span>{selectedRelease ? `${countLabel(selectedRelease.nodeIds?.length ?? 0, 'product boundary', 'product boundaries')} · ` : ''}{countLabel(deferredWorkCount, 'later work item')} · {countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')} · {countLabel(sourceGapCount, 'gap')}</span>
-      </div>
-    </Card>
-    <Card title="Proof mode" titleTag="h2" padding="compact" density="dense" className="map-boundary-card">
-      <div class="scope-stack">
-        <Chip label={executionBoundary?.label ?? 'Missing'} tone={executionBoundaryTone(executionBoundary?.mode)} />
-        <strong>{friendlyStatus(executionBoundary?.proofStyle ?? 'unspecified')}</strong>
-        <span>{executionBoundary?.detail ?? 'Guildhall needs this before it can safely run the current task scope unattended.'}</span>
-      </div>
-    </Card>
   </section>
 
   {#if !spine}
@@ -564,6 +554,32 @@
       <p class="muted">No project spine has been generated yet.</p>
     </Card>
   {:else}
+    <details class="map-details">
+      <summary>Inspect project map</summary>
+      <div class="map-details-content">
+        <section class="map-detail-intro">
+          <p>{mapHeadline}</p>
+          {#if targetAudience}
+            <p class="muted">{targetAudience}</p>
+          {/if}
+          <div class="map-detail-cards">
+            <Card title={workContainerTitle} titleTag="h2" padding="compact" density="dense" className="map-scope-card">
+              <div class="scope-stack">
+                <Chip label={taskScopeLabel} tone={sourceIsInferred(selectedScopeSource) ? 'warn' : 'accent'} />
+                <strong>{progress && progress.total > 0 ? `${progress.done ?? 0}/${progress.total} executable ${progress.total === 1 ? 'work item' : 'work items'} complete` : countLabel(spine?.summary?.includedWorkCount ?? spine?.summary?.includedCount, 'executable work item')}</strong>
+                <span>{selectedRelease ? `${countLabel(selectedRelease.nodeIds?.length ?? 0, 'product boundary', 'product boundaries')} · ` : ''}{countLabel(deferredWorkCount, 'later work item')} · {countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')} · {countLabel(sourceGapCount, 'gap')}</span>
+              </div>
+            </Card>
+            <Card title="Proof mode" titleTag="h2" padding="compact" density="dense" className="map-boundary-card">
+              <div class="scope-stack">
+                <Chip label={executionBoundary?.label ?? 'Missing'} tone={executionBoundaryTone(executionBoundary?.mode)} />
+                <strong>{friendlyStatus(executionBoundary?.proofStyle ?? 'unspecified')}</strong>
+                <span>{executionBoundary?.detail ?? 'Guildhall needs this before it can safely run the current task scope unattended.'}</span>
+              </div>
+            </Card>
+          </div>
+        </section>
+
     <section class="map-stats" aria-label="Project map progress">
       <UtilityPanel className="stat" tone="neutral">
         <strong>{countLabel(progress?.total, 'work item')}</strong>
@@ -934,6 +950,8 @@
         </Card>
       </div>
     </section>
+      </div>
+    </details>
   {/if}
 </div>
 
@@ -947,10 +965,7 @@
   }
 
   .map-hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) repeat(2, minmax(16rem, 22rem));
-    gap: var(--s-4);
-    align-items: start;
+    max-width: 48rem;
   }
 
   .map-hero-copy {
@@ -975,7 +990,6 @@
   }
 
   .map-hero-copy p {
-    max-width: 72rem;
     margin: var(--s-2) 0 0;
     color: var(--text);
     line-height: var(--gh-type-line-height-body);
@@ -988,6 +1002,53 @@
   .lane-meta {
     color: var(--text-muted);
     line-height: var(--gh-type-line-height-body);
+  }
+
+  .map-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    margin-top: var(--s-4);
+  }
+
+  .map-details {
+    border-top: 1px solid var(--border);
+    padding-top: var(--s-3);
+  }
+
+  .map-details > summary {
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
+  }
+
+  .map-details[open] > summary {
+    color: var(--text);
+  }
+
+  .map-details-content {
+    display: grid;
+    gap: var(--s-4);
+    margin-top: var(--s-4);
+  }
+
+  .map-detail-intro {
+    display: grid;
+    gap: var(--s-3);
+    max-width: 72rem;
+  }
+
+  .map-detail-intro > p {
+    margin: 0;
+    color: var(--text);
+    line-height: var(--gh-type-line-height-body);
+  }
+
+  .map-detail-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s-4);
   }
 
   .scope-stack {
@@ -1299,23 +1360,13 @@
     margin-top: var(--s-2);
   }
 
-  .map-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-  }
-
   @container (max-width: 60rem) {
     .map-layout {
       grid-template-columns: 1fr;
     }
 
-    .map-hero {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .map-hero-copy {
-      grid-column: 1 / -1;
+    .map-detail-cards {
+      grid-template-columns: 1fr;
     }
 
     .map-stats {
@@ -1337,7 +1388,6 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .map-hero,
     .lane-head,
     :global(.child-row) {
       grid-template-columns: 1fr;

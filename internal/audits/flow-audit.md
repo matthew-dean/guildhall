@@ -57993,3 +57993,33 @@ and make a short recovery step look dangerous.
   migration`. It did not show the project database pathname, an affected-path
   list, or the `generated proof paths` record count. The migration was not
   applied because that would mutate the active user project.
+
+### Repair: Project map is orientation first, not an exposed audit export
+
+#### Project-map user job before implementation
+
+When an owner opens Project map, they need a release name, current progress,
+and one route back to current work. The full scope ledger, proof contracts,
+source trail, capability catalog, and history are audit material; presenting
+all of them by default turns a navigation mistake into several minutes of
+reading with no clearer decision.
+
+- [x] Show only the selected scope, progress, and `Open Work` on first entry.
+  Keep the detailed map behind an explicit `Inspect project map` disclosure.
+- Contract Touch Decision: the orientation spine remains the shared owner of
+  release scope, progress, work mapping, proof, source, and gaps. This route
+  changes only which existing presentation is initially expanded. Considered
+  but unchanged: scope membership, action ranking, proof evaluation, source
+  ingestion, release selection, and task routing. Proof required: map
+  regression and installed Narrative Harness replay at desktop and narrow
+  widths. Apply/revert changes only default disclosure state.
+- Schema Migration Decision: none; no persisted data or API contract changes.
+- Evidence, 2026-08-12: `ProjectMapTab.svelte.test.ts` passes all 11 tests,
+  and `pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and `pnpm
+  build` pass. After fresh installation and `/api/stale-server` reporting
+  `stale:false`, the installed Narrative Harness map at desktop width showed
+  only `Stage 2: Local Desktop Harness MVP`, `5/9 work items complete`,
+  `Open Work`, and `Inspect project map`. The former first-read ledger,
+  source trail, proof contract, blockers, and capability catalog appeared
+  only after opening that disclosure. The default route is now readable in a
+  few seconds rather than several minutes.
