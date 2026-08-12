@@ -108,6 +108,29 @@ describe('WorkTab', () => {
     expect(await screen.findByRole('button', { name: /inspect work finished a/i })).toBeTruthy()
   })
 
+  it('keeps a selected queue item to one executable action', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue&task=task-review')
+    path.value = '/projects/looma-knit/work?view=queue&task=task-review'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-review', title: 'Review the selected spec', status: 'spec_review' }),
+          task({ id: 'task-other', title: 'Later review work', status: 'spec_review' }),
+        ]),
+      },
+    })
+
+    const inspector = await screen.findByLabelText('Selected work inspector')
+    expect(within(inspector).getByRole('button', { name: 'Review spec' })).toBeInTheDocument()
+    expect(within(inspector).queryByText('Scope')).toBeNull()
+    expect(within(inspector).queryByText('Proof')).toBeNull()
+    expect(within(inspector).queryByText('Rollup')).toBeNull()
+    expect(within(inspector).queryByText('Contained work')).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Delivery queue' })).toBeNull()
+    expect(screen.queryByText('Recent progress')).toBeNull()
+  })
+
   it('keeps the list focused on task identity and opens the selected task from mouse and keyboard', async () => {
     render(WorkTab, {
       props: {
@@ -429,16 +452,13 @@ describe('WorkTab', () => {
       },
     })
 
-    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
-    expect(queue).toHaveTextContent('Current task scope')
-    expect(queue).toHaveTextContent('Implement a no-UI runner that builds a packet from fixture records.')
-    expect(queue).toHaveTextContent('Needs brief: finish the handoff before a worker can start.')
-    expect(queue).toHaveTextContent('6 current tasks')
-    expect(queue).toHaveTextContent('0 blocked')
-    expect(queue).toHaveTextContent('12 deferred')
-    expect(queue).not.toHaveTextContent('0 ready to resume')
-    expect(queue).not.toHaveTextContent('26 blocked')
-    expect(queue).not.toHaveTextContent('No runnable task')
+    expect(screen.queryByRole('region', { name: 'Delivery queue' })).toBeNull()
+    expect(screen.getByRole('button', {
+      name: /inspect work implement a no-ui runner that builds a packet from fixture records/i,
+    })).toBeTruthy()
+    expect(screen.queryByText('Current task scope')).not.toBeInTheDocument()
+    expect(screen.queryByText('Needs brief: finish the handoff before a worker can start.')).not.toBeInTheDocument()
+    expect(screen.queryByText('26 blocked')).not.toBeInTheDocument()
   })
 
   it('keeps selected-scope source and proof context visible when work is runnable', async () => {
@@ -584,10 +604,7 @@ describe('WorkTab', () => {
       },
     })
 
-    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
-    expect(queue).toHaveTextContent('1 need proof')
-    expect(queue).not.toHaveTextContent('0 current tasks')
-    expect(queue).not.toHaveTextContent('0 blocked')
+    expect(screen.queryByRole('region', { name: 'Delivery queue' })).toBeNull()
     expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('needs-proof')
     expect(await screen.findByText('1 proof gap')).toBeTruthy()
     expect(screen.getByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeTruthy()

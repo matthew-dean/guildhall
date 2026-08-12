@@ -57574,3 +57574,40 @@ is here.
   anonymous action, and no route had page-level horizontal overflow. The
   browser session did not offer viewport resizing, so narrow/mobile live
   geometry remains unclaimed for this repair.
+
+### Repair: Browsed Work selection is an action, not an inspector dossier
+
+#### Work-queue user job before implementation
+
+When an owner deliberately browses Work and selects a row, they need the
+selected task's identity, current state, and the one control that opens its
+next action. Scope restatements, proof counts, source summaries, rollups,
+contained-work trees, delivery checklists, and recent activity do not help the
+selection decision and must not compete with it.
+
+- [x] Make the `?view=queue` selected-row panel action-only.
+- [x] Replay Looma + Knit queue selection and prove the selected review item
+  exposes `Review spec` without an inspector dossier or selection movement.
+- Contract Touch Decision: `WorkTreePreview` receives a presentation-only
+  `actionOnly` input derived from the existing Work route's `view=queue`
+  parameter. It continues to consume the selected task identity and current
+  task-state presentation, but does not execute work, derive an alternate next
+  action, or change task selection/routing. The existing detailed inspector
+  remains outside the explicit queue presentation while its replacement is
+  audited. Considered but unchanged: task schema, task-action endpoints,
+  project action model, work inventory ordering, proof data, and persistence.
+  Proof required: queue render regression and installed selection replay.
+- Schema Migration Decision: none; route interpretation and client rendering
+  only, with no persisted fields or API shape changes.
+- Evidence: `pnpm vitest run
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts` (47 passing),
+  `pnpm typecheck`, `pnpm lint:contracts`, and `git diff --check` passed.
+  After `pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall
+  start`, `/api/stale-server` reported `stale:false`. On installed Looma + Knit
+  at `/projects/looma-knit/work?view=queue&task=task-import-1rpbo8n`, the
+  selected `LOO-EBUYE7` rendered only its identity, `REVIEW SPEC` state, and
+  `Review spec`; no Scope, Proof, Rollup, Contained work, Delivery queue, or
+  Recent progress content was present, and desktop `scrollWidth ===
+  clientWidth` at 1280px. Clicking `Review spec` opened the task review route
+  with `Request changes` and `Approve spec`, with no alert. The browser session
+  did not offer viewport resizing, so narrow/mobile geometry remains unclaimed.

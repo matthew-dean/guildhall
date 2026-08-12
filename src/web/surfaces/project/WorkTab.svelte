@@ -310,6 +310,11 @@
       selectedReleaseShipped,
     )
   })
+  const queueMode = $derived.by(() => {
+    path.href
+    if (typeof window === 'undefined') return false
+    return new URL(window.location.href).searchParams.get('view') === 'queue'
+  })
   const focusedWork = $derived.by(() => {
     path.href
     const routeTaskId = readSelectedWorkIdFromUrl()
@@ -803,7 +808,7 @@
   {#if activeWorkView === 'board'}
     <PlannerTab detail={boardDetail} />
   {:else}
-    {#if deliveryQueue}
+    {#if deliveryQueue && !queueMode}
       <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : scopeQueueFallback ? 'warn' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
         <div class="queue-copy">
           <p class="queue-label">{scopeQueueFallback?.label ?? 'Delivery queue'}</p>
@@ -946,15 +951,18 @@
           runActiveTaskId={effectiveRunActiveId}
           proofMissingTaskIds={[...proofMissingTaskIds]}
           runError={runWorkError}
+          actionOnly={queueMode}
         />
       {/if}
     </div>
   {/if}
 
-  <details class="progress-more progress-more--full">
-    <summary>Recent progress</summary>
-    <ProgressFeed {progress} {tasks} />
-  </details>
+  {#if !queueMode}
+    <details class="progress-more progress-more--full">
+      <summary>Recent progress</summary>
+      <ProgressFeed {progress} {tasks} />
+    </details>
+  {/if}
 </div>
 {/if}
 

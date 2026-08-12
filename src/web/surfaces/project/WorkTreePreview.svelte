@@ -21,6 +21,7 @@
     runActiveTaskId?: string | null
     proofMissingTaskIds?: readonly string[]
     runError?: string | null
+    actionOnly?: boolean
   }
 
   type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
@@ -35,6 +36,7 @@
     runActiveTaskId = null,
     proofMissingTaskIds = [],
     runError = null,
+    actionOnly = false,
   }: Props = $props()
 
   const proofMissingSet = $derived(new Set(proofMissingTaskIds))
@@ -231,6 +233,33 @@
 </script>
 
 <aside class="work-inspector" aria-label="Selected work inspector">
+  {#if actionOnly}
+    {#if selectedTask}
+      <div class="inspector-head">
+        <div>
+          <p class="details-context">Selected work</p>
+          <h3>{taskDisplayLabel(selectedTask, friendlyTaskId(selectedTask.id))}</h3>
+        </div>
+        <Chip label={taskStatusLabel(selectedTask)} tone={taskStatusTone(selectedTask)} />
+      </div>
+      <div class="inspector-actions">
+        {#if onRunTask && canRunTask(selectedTask)}
+          {@const runBusy = runBusyTaskId === selectedTask.id}
+          {@const runActive = runActiveTaskId === selectedTask.id}
+          <Button variant="primary" size="sm" disabled={runBusy || runActive} onclick={runSelected}>
+            {runButtonLabel(selectedTask, runBusy, runActive)}
+          </Button>
+        {:else}
+          <Button variant="primary" size="sm" onclick={openSelected}>{openButtonLabel(selectedTask)}</Button>
+        {/if}
+      </div>
+      {#if runError}
+        <p class="run-error" role="alert">{runError}</p>
+      {/if}
+    {:else}
+      <p class="subtle">Select work to open its next action.</p>
+    {/if}
+  {:else}
   <p class="panel-label">Inspector</p>
   {#if selectedTask}
     {@const rollup = rollupFor(selectedTask)}
@@ -333,6 +362,7 @@
     {/if}
   {:else}
     <p class="subtle">Select work to inspect its scope, proof path, contained work, and delivery checklist.</p>
+  {/if}
   {/if}
 </aside>
 
