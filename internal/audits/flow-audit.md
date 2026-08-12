@@ -56568,3 +56568,101 @@ pass, a wall of text was condensed, or a reviewer can reconstruct the state
 from raw data. The standard is whether an owner who did not build Guildhall can
 tell what is happening, why it matters, and what they can do next within a few
 seconds, without being asked to interpret Guildhall's internal thinking.
+
+## 2026-08-12 - Owner Entry-Flow Reset (In Progress)
+
+### User job
+
+An owner opens Guildhall, picks the project that needs them, sees the current
+milestone and the one action that changes it, takes that action, and returns to
+work. The first two routes must provide orientation and an executable decision
+in under one minute, without a drawer, tab hunt, report reading, or duplicated
+next-action message.
+
+### Live baseline
+
+- Installed `0.13.2` at `localhost:7777`, with `/api/stale-server` reporting
+  `stale:false`, rendered seven projects as a Guild hall, a five-number metric
+  strip, Work mix, Attention, Running now, dense project cards, and a detail
+  drawer. The owner’s actual decision was buried under six summaries.
+- The authoritative `/api/service/projects` response already gave Looma + Knit
+  one shared action: `owner_review_required`, routed to
+  `task-import-1rpbo8n`. The home and overview then restated that same answer
+  in several incompatible visual forms.
+- Live Looma + Knit Overview repeated the primary action in top chrome and a
+  `Do this next` card, then added Work mix, Current release, Blocked work, Next
+  run, and a bottom status sentence that contradicted the visible paused state.
+  It required reading a report before an owner could act.
+
+### Reset inventory
+
+- **Delete from default home:** Guild hall role avatars, fleet metric strip,
+  Work mix, Attention, Running now, task activity charts, project detail
+  drawer, and its duplicate project status/count summaries. None answers a
+  distinct first-screen owner choice.
+- **Retain on default home:** one stable project row per project, its current
+  state, one short outcome sentence, and one direct project/open-or-pause
+  control. A project needing an owner decision earns a visible direct route to
+  that decision.
+- **Delete from default overview:** the second cross-route `Do this next`
+  panel, Work mix, map preview, glance cards, blocked-work list, next-run
+  panel, signals grid, live ticker, and release report cards. The default
+  overview keeps one current milestone/progress sentence and the authoritative
+  primary action. Specific work is reached through that action or the Work
+  route, not duplicated here.
+- **Not moved to diagnostics:** the removed fleet/task/release/timeline
+  summaries. They are duplicated or irrelevant to an immediate owner recovery,
+  so they do not earn a diagnostics destination.
+
+### Contract Touch Decision: Entry-Flow Presentation Reset
+
+- Work id: flow-audit owner entry-flow reset.
+- Touched contracts: existing `ProjectActionModel` presentation at home and
+  project overview; project route ownership of the primary action.
+- Contracts considered but not touched: task lifecycle, project summary
+  projection persistence, action ranking, readiness calculation, migration
+  protocol, and API payload schemas. The routes consume the same shared action
+  model; they do not create a client-side alternative.
+- Required follow-up: prove top chrome, overview action, Work selected task,
+  Thread, and bottom chrome agree after the reset; repair the shared model if
+  they do not.
+- Proof required: installed-app browser evidence at the reported desktop,
+  narrow desktop, and mobile dimensions; stable post-refresh selection; a
+  timed fresh-owner pass with click count and reading time.
+- Proof provided: focused overview and shell regressions (65 tests), typecheck,
+  and a production build. The installed app was rebuilt with `pnpm dev:install`,
+  restarted, and `/api/stale-server` returned `stale:false` from the new
+  artifact. On Looma + Knit at 1280x720, Overview is one 249px-high decision
+  region with no document overflow: project, current stage, one owner-action
+  sentence, and `Open item`/`View work`. `Open item` routed directly to
+  `/projects/looma-knit/work?task=task-import-1rpbo8n`, the shared action's
+  target. Narrow-desktop and mobile proof remain required before this route is
+  complete.
+- Waivers: none.
+- Owner-review items: the exact set of surviving project controls is subject to
+  the live owner pass; no removed report surface is grandfathered in.
+- Apply/revert behavior: apply the route reset together so a project has one
+  action authority. Revert code only; no persisted project state changes.
+
+### Schema Migration Decision: Entry-Flow Presentation Reset
+
+- Persisted schema touched: none.
+- Scope and change class: client presentation deletion and route composition.
+- Existing data impact: none.
+- Migration id and required-before-run behavior: none.
+- Compatibility reader: existing project and action-model payloads remain
+  unchanged.
+- Fixtures and tests: home/overview rendering regressions plus installed-app
+  flow proof.
+- Owner-facing plan text: no project migration is required.
+- Rollback/revert behavior: code-only revert.
+
+### Follow-up finding: Work is the next stop-ship route
+
+The repaired Overview correctly reached the selected Looma + Knit item, but
+the destination immediately presented a dense filter strip, a ten-row table,
+and a full inspector beside it. This violates the same one-minute owner job.
+Do not patch its copy or add another summary panel. Rebuild Work around the
+selected owner decision first; retain a deliberately entered queue only when a
+user chooses to browse work. Test the original selection-shift report before
+retaining any auto-selection behavior.

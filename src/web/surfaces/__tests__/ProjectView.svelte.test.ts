@@ -446,7 +446,7 @@ describe('ProjectView', () => {
   })
 
   it.each([
-    ['overview', 'Work mix'],
+    ['overview', 'What needs your attention'],
     ['inbox', 'Choose link editor scope'],
     ['work', 'Knit: add link editor controls'],
     ['planner', 'Knit: add link editor controls'],
@@ -578,7 +578,7 @@ describe('ProjectView', () => {
     expect(path.value).toBe('/projects/looma-knit/task/task-import-1')
   })
 
-  it('lets Do this next own owner-input blockers on secondary pages', async () => {
+  it('keeps an owner-input blocker in the shared shell action on secondary pages', async () => {
     const projectPayload = detail({
       startReadiness: {
         canStart: false,
@@ -628,13 +628,9 @@ describe('ProjectView', () => {
 
     await renderProjectView('overview', null, 'looma-knit', projectPayload)
 
-    const alerts = screen.getAllByRole('alert')
-    const specAlerts = alerts.filter(alert => within(alert).queryByText('2 specs are waiting for review before work can start. Start with "Spec A".'))
-    const idleAlerts = alerts.filter(alert => within(alert).queryByText('Waiting on input: 2 awaiting approval.'))
-
-    expect(specAlerts).toHaveLength(1)
-    expect(idleAlerts).toHaveLength(0)
-    expect(within(specAlerts[0]!).getByRole('link', { name: /review next spec/i })).toBeInTheDocument()
+    expect(screen.queryByRole('alert', { name: 'Needs you' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Spec A' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open work' })).toBeInTheDocument()
   })
 
   it('surfaces required migrations as the primary setup action and can apply them intentionally', async () => {
@@ -716,11 +712,11 @@ describe('ProjectView', () => {
 
     await renderProjectView('overview', null, 'looma-knit', migrationBlocked)
 
-    expect(screen.getAllByRole('button', { name: /migrate project/i }).length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Required migration').length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Run required Guildhall migration/).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: /repair project/i }).length).toBeGreaterThan(0)
+    expect(screen.getByRole('heading', { name: 'Project update required' })).toBeInTheDocument()
+    expect(screen.getByText('Guildhall needs to update this project before it can run.')).toBeInTheDocument()
 
-    await user.click(screen.getAllByRole('button', { name: /migrate project/i }).at(-1)!)
+    await user.click(screen.getAllByRole('button', { name: /repair project/i }).at(-1)!)
     await screen.findByRole('dialog', { name: /migrate project/i })
     expect(screen.getByText('Move legacy project memory into split project state')).toBeInTheDocument()
     expect(screen.getByText('memory/')).toBeInTheDocument()
@@ -879,10 +875,8 @@ describe('ProjectView', () => {
 
     await renderProjectView('overview', null, 'looma-knit', projectPayload)
 
-    expect(screen.getByRole('status', { name: 'Release shipped' })).toHaveTextContent('Release shipped.')
-    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('Stage 1 shipped')
-    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('15/15 complete')
-    expect(screen.getByText('Stable')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Current release' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Shipped' })).toBeInTheDocument()
     expect(screen.queryByText('A stale migration check says this project needs attention.')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /resume/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /pause/i })).not.toBeInTheDocument()
@@ -1435,8 +1429,7 @@ describe('ProjectView', () => {
     const topbar = document.querySelector('header.topbar')
     expect(topbar).not.toBeNull()
     expect(topbar).toHaveTextContent('Needs provider')
-    expect(screen.getByRole('link', { name: /choose provider/i })).toHaveAttribute('href', '/providers')
-    expect(screen.queryByRole('link', { name: /open next action/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /choose provider/i })).toBeInTheDocument()
     expect(screen.getAllByText('Provider unavailable').length).toBeGreaterThan(0)
   })
 
@@ -1543,6 +1536,14 @@ describe('ProjectView', () => {
         focusKind: 'repository_followup',
       },
       actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Release blocked by uncommitted changes.',
+          buttonLabel: 'Open release',
+          href: '/release',
+          tone: 'warn',
+          code: 'repository_followup_required',
+        },
         runControl: {
           label: 'Repo follow-up',
           startEnabled: false,
@@ -1569,10 +1570,8 @@ describe('ProjectView', () => {
 
     await renderProjectView('overview', null, 'looma-knit', blocked)
 
-    const blockerAlert = screen.getByRole('alert', { name: 'Needs you' })
-    expect(blockerAlert).toHaveClass('single-line')
-    expect(blockerAlert).toHaveTextContent('Release blocked by uncommitted changes.')
-    expect(blockerAlert).toHaveTextContent('Open release')
+    expect(screen.queryByRole('alert', { name: 'Needs you' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open release' })).toBeInTheDocument()
     const pauseButton = screen.getByRole('button', { name: 'Pause project processing' })
     expect(pauseButton).toHaveTextContent('Pause')
     expect(screen.queryByRole('button', { name: /repo follow-up/i })).not.toBeInTheDocument()

@@ -19,7 +19,6 @@
   import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
-  import DoThisNext from './DoThisNext.svelte'
   import IntakeModal from './IntakeModal.svelte'
   import { project } from '../lib/project.svelte.js'
   import { onEvent } from '../lib/events.js'
@@ -719,7 +718,14 @@
   const startReadiness = $derived(detail?.startReadiness ?? null)
   const primaryAction = $derived(detail?.actionModel?.primaryAction ?? null)
   const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
-  const selectedReleaseShipped = $derived(detail?.decision?.release?.lifecycleState === 'shipped')
+  // Both fields are projections of the selected release. Older compact reads
+  // may omit `decision`, so lifecycle truth must not depend on that optional
+  // presentation field and resurrect stale owner urgency after shipment.
+  const selectedReleaseShipped = $derived(
+    detail?.decision?.release?.lifecycleState === 'shipped' ||
+    detail?.releaseReadiness?.release?.state === 'shipped' ||
+    detail?.releaseReadiness?.scope?.state === 'shipped',
+  )
   const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
   const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
   const providerDecisionText = $derived(
@@ -1022,9 +1028,6 @@
       ? detail.bootstrapStatus.steps?.find(s => s.result === 'fail') ?? null
       : null,
   )
-  const showDoThisNext = $derived(
-    currentView !== 'overview' && currentView !== 'thread' && currentView !== 'inbox',
-  )
   const startReadinessNoticeHref = $derived.by(() => {
     if (selectedReleaseShipped || !startReadiness || startReadiness.canStart || allTerminalStart || requiredMigrationBlocked) return null
     if (primaryAction?.href) return projectActionHref(primaryAction.href, activeProjectId)
@@ -1042,7 +1045,10 @@
     return startReadinessActionLabel(startReadiness)
   })
   const shellAttentionNotices = $derived.by(() => {
-    if (!detail || selectedReleaseShipped) return []
+    // Overview owns the project-level decision. Repeating it in shell chrome
+    // turns one action into competing instructions before the owner reaches
+    // the surface that can actually explain and complete it.
+    if (!detail || selectedReleaseShipped || currentView === 'overview') return []
     const notices: ShellAttentionNotice[] = []
     if (startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
       notices.push({
@@ -1679,10 +1685,6 @@
           </AlertBand>
         {/each}
     {/snippet}
-        {#if detail && showDoThisNext}
-          <DoThisNext />
-        {/if}
-
         <div class="body">
           {#if !detail}
             {#if currentView === 'thread'}
@@ -1864,6 +1866,7 @@
         </div>
 
     {#snippet footer()}
+      {#if currentView !== 'overview'}
       <div class="project-ticker ticker-{projectTicker.tone}" aria-label="Live project ticker">
         <div class="project-ticker-main">
           <StatusDot tone={projectTicker.tone} pulse={projectTicker.pulse} size="sm" />
@@ -1890,6 +1893,7 @@
           {/if}
         </div>
       </div>
+      {/if}
     {/snippet}
 
   {#if intakeOpen}
