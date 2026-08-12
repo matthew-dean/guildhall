@@ -57174,8 +57174,14 @@ an Action tab and then quietly send the owner back to Overview.
   direct route to it. The unrelated task record is an explicit `View this task
   record` choice, not the default wall of task-size, checkpoint, review-plan,
   source, and hierarchy detail.
-- Contract Touch Decision: consumes existing drawer thread-turn state only.
-  No route, task, API, or persisted contract changed.
+- Contract Touch Decision: consumes the existing shared
+  `ProjectDetail.actionModel.primaryAction`, drawer task payload, and route
+  contract. The drawer now gives the project decision precedence when its task
+  ID differs from the open record; it does not create, re-rank, or reinterpret
+  an owner action locally. No endpoint, persisted task, release, or project
+  contract changed. Required follow-up: keep any new owner-facing decision on
+  the shared action model. Proof: a drawer regression covers the diverging task
+  and action IDs, and installed browser proof verifies the actual route.
 - Schema Migration Decision: none; no persisted data changed.
 
 #### Evidence, 2026-08-12
@@ -57200,6 +57206,14 @@ an Action tab and then quietly send the owner back to Overview.
   changes` immediately visible.
 - The installed LaunchAgent is running the freshly installed
   `0.13.2-1786562310-22410` runtime. `/api/stale-server` reports `stale:false`.
+- Fresh installed Looma + Knit proof at `1280x720`: directly opening unrelated
+  `LOO-QE2UZJ` (ContextMenu) shows only `Project needs your decision first`,
+  the shared `Review a spec` action, and an explicit `View this task record`
+  escape hatch. It exposes no tabs, checkpoint, task size, review plan, or
+  raw task record by default. Choosing `Review next spec` routed to
+  `LOO-EBUYE7` and rendered `Approve spec` and `Request changes` immediately
+  beside a compact spec-at-a-glance summary. The installed LaunchAgent reports
+  `stale:false` at runtime `0.13.2-1786563260-70137`.
 
 ### Repair: Timeline shows project updates, not the transport
 

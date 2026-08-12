@@ -254,6 +254,7 @@ describe('TaskDrawer', () => {
     await screen.findByText('Project needs your decision first')
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(screen.queryByText('Task size')).not.toBeInTheDocument()
+    expect(screen.queryByText('Checkpoint saved')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Review next spec' }))
     expect(path.value).toBe('/projects/looma-knit/task/task-review')
   })

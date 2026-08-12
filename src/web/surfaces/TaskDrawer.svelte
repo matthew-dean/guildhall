@@ -784,6 +784,8 @@
   )
   const drawerOutcome = $derived.by(() => {
     if (!task) return null
+    // An unrelated task record must not compete with the project's owner decision.
+    if (projectDecisionElsewhere) return null
     if (task.status === 'shelved') {
       return {
         tone: 'warn',
