@@ -1160,6 +1160,10 @@
   )
   const showRunButton = $derived(
     !selectedReleaseShipped &&
+      // Overview owns a required project update in its decision card. Showing
+      // the same command in the shell turns one required action into two
+      // competing controls before the user can read why it matters.
+      (!requiredMigrationBlocked || currentView !== 'overview') &&
       (
         runStatus === 'running' ||
         runStatus === 'stopping' ||

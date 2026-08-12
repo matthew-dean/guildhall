@@ -805,11 +805,11 @@ describe('ProjectView', () => {
 
     await renderProjectView('overview', null, 'looma-knit', migrationBlocked)
 
-    expect(screen.getAllByRole('button', { name: /repair project/i }).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: /update project/i })).toHaveLength(1)
     expect(screen.getByRole('heading', { name: 'Project update required' })).toBeInTheDocument()
     expect(screen.getByText('Guildhall needs to update this project before it can run.')).toBeInTheDocument()
 
-    await user.click(screen.getAllByRole('button', { name: /repair project/i }).at(-1)!)
+    await user.click(screen.getByRole('button', { name: /update project/i }))
     await screen.findByRole('dialog', { name: /migrate project/i })
     expect(screen.getByText('Move legacy project memory into split project state')).toBeInTheDocument()
     expect(screen.getByText('memory/')).toBeInTheDocument()
@@ -881,7 +881,7 @@ describe('ProjectView', () => {
 
     await renderProjectView('overview', null, 'looma-knit', migrationBlocked)
 
-    await user.click(screen.getAllByRole('button', { name: /migrate project/i }).at(-1)!)
+    await user.click(screen.getByRole('button', { name: /update project/i }))
     await screen.findByRole('dialog', { name: /migrate project/i })
     await user.click(screen.getByRole('button', { name: /apply required migration/i }))
 

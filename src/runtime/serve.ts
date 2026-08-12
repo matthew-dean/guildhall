@@ -6154,11 +6154,15 @@ function releaseReadinessReleaseFromScope(input: {
   // release is a persisted queue record; a proposed/current scope remains a
   // scope and must be rendered as one.
   if (!existing) return null
+  const lifecycle = ProjectReleaseSchema.shape.state.safeParse(existing.state)
   return {
     id: existing.id,
     label: existing.label,
     kind: existing.kind === 'milestone' ? 'milestone' : existing.kind === 'marker' ? 'marker' : 'release',
-    state: existing.state ?? 'active',
+    // Older persisted rows can contain a readiness verdict such as `blocked`
+    // here. The release envelope owns lifecycle only; readiness stays in the
+    // separate verdict/count fields returned by this payload.
+    state: lifecycle.success ? lifecycle.data : 'active',
     source: existing.source ?? scope?.source ?? 'inferred',
     description: existing.description ?? null,
     // `scope` may be a hierarchy-compacted scheduler view. It can describe

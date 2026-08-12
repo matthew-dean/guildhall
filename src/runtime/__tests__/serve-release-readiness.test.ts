@@ -312,6 +312,43 @@ describe('GET /api/project/release-readiness', () => {
     expect(body).not.toHaveProperty('openEscalations')
   })
 
+  it('keeps a legacy readiness verdict out of the release lifecycle envelope', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'legacy-release',
+      releases: [{
+        id: 'legacy-release',
+        label: 'Legacy release',
+        kind: 'release',
+        // Older SQLite rows used the readiness verdict in this lifecycle slot.
+        // Seed the compatibility shape directly so the response boundary owns
+        // its normalization rather than trusting test-only parsed input.
+        state: 'blocked' as any,
+        source: 'release_plan',
+        nodeIds: ['work:task-ready'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [makeTask({
+        id: 'task-ready',
+        title: 'Ready task',
+        status: 'ready',
+        releaseIds: ['legacy-release'],
+        spec: 'A complete release task specification.',
+        acceptanceCriteria: [{ id: 'ac-ready', description: 'The task can run.', verifiedBy: 'review', met: false }],
+      })],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    expect(response.status).toBe(200)
+    const body = await response.json() as any
+
+    expect(body.release).toMatchObject({ id: 'legacy-release', state: 'active' })
+    expect(body.release.state).not.toBe('blocked')
+  })
+
   it('serves saved diagnostics by default and requires an explicit live query for inspection', async () => {
     await seedQueue({
       version: 1,

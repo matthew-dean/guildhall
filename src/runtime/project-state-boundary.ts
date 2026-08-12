@@ -56,6 +56,7 @@ import {
 } from '@guildhall/sessions'
 import {
   Task,
+  ProjectRelease as ProjectReleaseSchema,
   type ProjectRelease,
   type TaskQueue,
   type TaskEvidenceEvent as TaskEvidenceEventRecord,
@@ -683,8 +684,13 @@ export function resolveSelectedReleaseTaskContract(
 
 function persistableRelease(release: ProjectRelease): ProjectRelease {
   const description = (release as ProjectRelease & { description?: string | null }).description
+  // SQLite compatibility rows can predate the lifecycle/readiness split and
+  // contain a readiness verdict such as `blocked` in the lifecycle column.
+  // Never leak that invalid value back into compact product projections.
+  const lifecycle = ProjectReleaseSchema.shape.state.safeParse(release.state)
   return {
     ...release,
+    state: lifecycle.success ? lifecycle.data : 'active',
     nodeIds: [...(release.nodeIds ?? [])],
     deferredNodeIds: [...(release.deferredNodeIds ?? [])],
     ...(typeof description === 'string' ? { description } : { description: undefined }),

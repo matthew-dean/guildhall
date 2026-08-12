@@ -57683,22 +57683,33 @@ it will reappear the moment an owner opens Release, Work, or a task record.
   immediate failure is that compact reads reuse saved review readiness while
   the mutation boundary independently rejects that same review for a required
   migration.
-- [ ] Overlay the existing required-migration gate onto every compact shared
+- [x] Overlay the existing required-migration gate onto every compact shared
   start/action projection before it reaches product surfaces, so a visible
   owner command cannot be refused by the mutation boundary for hidden setup.
-- [ ] Remove or reconcile the duplicate derived release state/count projection
-  at the source; do not normalize conflicting values inside individual views.
-- [ ] Add deterministic agreement coverage and replay Looma Overview, Work,
-  Release, and task review from the installed app.
+- [x] Normalize legacy readiness verdicts out of the persisted release
+  lifecycle envelope at the shared database/readiness boundary; do not
+  normalize conflicting values inside individual views.
+- [ ] Reconcile the separate 17 raw release-node IDs versus 16 execution-unit
+  count at the source, including split-parent membership, so every owner-facing
+  count names the same unit of work.
+- [x] Add deterministic compatibility coverage and replay the installed Looma
+  Overview migration handoff.
+- [ ] Replay Looma Work, Release, and task review against the same current
+  snapshot after count semantics are reconciled.
 - Contract Touch Decision: `startBlockerForRequiredMigrations` is already the
   mutation and full-read gate. Compact `startReadiness` and `actionModel` must
   consume that same typed result before presentation; the migration status
   therefore has precedence over saved owner-review readiness. Considered but
-  unchanged: release membership, release lifecycle state, saved count
-  projection, migration execution endpoint, task approval protocol, and
-  persistence. Proof required: compact Overview/Work/Map action agreement,
-  mutation refusal parity, and an installed Looma replay that exposes the
-  migration action instead of Review spec.
+  unchanged: release membership, saved count projection, migration execution
+  endpoint, task approval protocol, and persistence. The existing release
+  lifecycle contract is also revalidated at the compact database and
+  readiness readers: legacy non-lifecycle values such as `blocked` normalize
+  to `active`, while the separately typed readiness verdict remains blocked.
+  Proof provided: compact migration precedence, mutation refusal parity,
+  lifecycle/readiness separation, and an installed Looma Overview replay that
+  exposes one update action instead of Review spec. Follow-up proof required:
+  shared count semantics and cross-surface replay after the split-parent count
+  is repaired.
 - Schema Migration Decision: none; required-migration status is existing
   durable data read through an existing gate. This repair changes only the
   derived compact response precedence, with no new stored field or migration.
@@ -57706,15 +57717,16 @@ it will reappear the moment an owner opens Release, Work, or a task record.
 #### Evidence: hidden migration gate repaired
 
 On 2026-08-12, normal compact Looma reads previously returned
-`owner_review_required` and `Review next spec`, while the full diagnostic
-read and every mutation returned `required_migration_pending` for
+`owner_review_required` and `Review next spec`, while the full diagnostic read
+and every mutation returned `required_migration_pending` for
 `0.13.27/acceptance-command-proof-path-reconciliation`. The compact response
-now returns that same typed migration readiness and `Migrate project` action.
-After build, dev install, restart, and `stale:false`, installed Looma Work
-showed the migration repair rather than the spec approval route; it had no
-alert or horizontal overflow at 1280px. This prevents the raw approval 409
-but does not resolve the separately observed lifecycle/count mismatch:
-`releaseSummary.release.state` remains `active` while the legacy
-`releaseReadiness.release.state` is `blocked`, and the task payload still
-reports 17 alongside a selected scope of 16. Those values remain an explicit
-shared-summary follow-up above.
+now returns that same typed migration readiness. A compatibility regression
+seeds the old `release.state: 'blocked'` row and proves the release envelope
+normalizes to lifecycle `active`; the separate readiness verdict remains its
+own field. After build, dev install, restart, and `stale:false`, installed
+Looma Overview showed one `Update project` button, no competing top-bar run
+control, and a guarded migration dialog identifying the required migration and
+affected paths. The dialog was closed without applying the user's migration.
+This prevents the raw approval 409 and the active/blocked lifecycle
+contradiction. The separate raw-release-node versus execution-unit count
+mismatch remains an explicit shared-summary follow-up above.

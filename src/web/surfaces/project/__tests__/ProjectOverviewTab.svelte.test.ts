@@ -138,7 +138,7 @@ describe('ProjectOverviewTab owner decision', () => {
       onMigrate,
     })
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Repair project' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Update project' }))
     expect(onMigrate).toHaveBeenCalledTimes(1)
   })
 
