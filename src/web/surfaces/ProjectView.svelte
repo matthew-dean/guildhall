@@ -1007,8 +1007,12 @@
     if (blockers.bootstrap) return 'Open readiness checks'
     return startReadinessActionLabel(startReadiness)
   })
-  const workSurfaceOwnsPrimaryDecision = $derived(
-    currentView === 'work' && Boolean(primaryAction?.taskId || startReadiness?.focusTaskId),
+  const routeOwnsPrimaryDecision = $derived(
+    Boolean(primaryAction) && (
+      currentView === 'work' ||
+      currentView === 'thread' ||
+      currentView === 'release'
+    ),
   )
   const shellAttentionNotices = $derived.by(() => {
     // Overview owns the project-level decision. Repeating it in shell chrome
@@ -1016,7 +1020,7 @@
     // the surface that can actually explain and complete it.
     if (!detail || selectedReleaseShipped || currentView === 'overview') return []
     const notices: ShellAttentionNotice[] = []
-    if (!workSurfaceOwnsPrimaryDecision && startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
+    if (!routeOwnsPrimaryDecision && startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
       notices.push({
         id: 'start-readiness',
         code: startReadiness.code,

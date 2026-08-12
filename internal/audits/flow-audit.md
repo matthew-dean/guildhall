@@ -57068,6 +57068,34 @@ send the owner into unrelated work.
   outstanding audit item because the browser client could not connect to the
   restarted localhost service during this run.
 
+#### Follow-up: Thread cannot substitute activity for a missing decision
+
+- Finding: the selection fix was incomplete. The live Looma + Knit owner action
+  targets `task-import-1rpbo8n`, which is deliberately absent from the Thread
+  projection. Falling back to the server's old active turn made a paused task
+  look like the current project and rendered a list, history, and active dock
+  that could not answer the owner's actual question.
+- Fix: Thread now takes the shared primary action from its current response as
+  well as the shell snapshot. When that action's task is not in the Thread
+  projection, the default screen contains only the current decision and its
+  direct action. `Browse project activity` is an explicit escape hatch; the
+  stale thread is no longer a substitute for the project decision. The project
+  shell also defers to Work, Thread, and Release when one of those routes has
+  an action-model decision, so it does not repeat the same action above the
+  route that owns it. Secondary routes retain the shell notice when they only
+  have legacy start-readiness data.
+- Contract Touch Decision: consume the existing `ProjectActionModel` response
+  field in Thread and compare its task ID to the existing typed Thread turn
+  task IDs. Considered but unchanged: action ranking, action route semantics,
+  task state, thread persistence, response shape, and selection model for a
+  represented owner action. Proof required/provided: a component regression
+  supplies an action whose task is absent from Thread, asserts the list/detail/
+  dock are not rendered, and verifies the direct action preserves its task
+  route. Apply/revert: applying prevents stale history from taking ownership;
+  reverting restores that misleading fallback.
+- Schema Migration Decision: none; this is an in-memory presentation of
+  existing response fields and stores no new data.
+
 ### Repair: Release starts with the owner decision
 
 #### Release user job before implementation
@@ -57270,6 +57298,37 @@ check.
   `0 of 16 complete` and Release detail `0/16 done` for the same Stage 1
   scope. Both surfaces name `Review a spec` and the same ten pending reviews;
   the service reports `stale:false` at runtime `0.13.2-1786564327-91914`.
+
+#### Follow-up: Orientation progress uses the execution boundary
+
+- Finding: following Thread's focused review action to Work exposed a second
+  `0 of 17 complete` count. Release readiness was correctly using 16 execution
+  units, but the orientation preview recomputed its summary from release
+  membership while ignoring the saved spine's materialized-child boundary.
+- Fix: the preview now summarizes its current saved scope rows through the
+  shared execution-row counter. Work, Overview, and Release therefore use one
+  owner-visible unit of progress; raw release membership remains available for
+  audit rather than being presented as a second progress total. The compact
+  Work response also projects `releaseSummary.counts` from the same compact
+  release-readiness result before it returns, so its later legacy-summary
+  spread cannot reintroduce a parent-plus-child total.
+- Contract Touch Decision: `ProjectOrientationSpine.summary` is an existing
+  cross-surface derived contract. Its current progress and included/deferred
+  counts now reuse the `ProjectScopeRow` execution counter that already owns
+  parent/child suppression. Considered but unchanged: durable release
+  membership, hierarchy, task status, scope-row persistence, action routing,
+  and API response shape. Proof: the release runtime regression creates one
+  parent plus three materialized children and requires both readiness and the
+  Work orientation summary to report three execution units.
+- Schema Migration Decision: none; this corrects an in-memory summary of the
+  existing saved rows and requires no stored-data rewrite.
+- Evidence, 2026-08-12: installed Looma + Knit proof at `1280x720` showed the
+  focused Thread handoff as one `Review a spec` decision, with no horizontal
+  overflow. `Review next spec` opened `LOO-EBUYE7` in Work with `Review spec`
+  immediately visible and `0 of 16 complete`. The compact Work API returned
+  `16` for `releaseSummary.counts.total`, orientation progress, and release
+  readiness. The same Thread decision and no-horizontal-overflow result held
+  at `1000x720` and `390x844`; the installed service reported `stale:false`.
 
 ### Repair: Timeline shows project updates, not the transport
 

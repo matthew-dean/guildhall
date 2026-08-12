@@ -665,6 +665,34 @@ describe('ProjectView', () => {
     expect(screen.queryByLabelText('Live project ticker')).not.toBeInTheDocument()
   })
 
+  it('lets Thread own an action-model decision instead of repeating it in shell chrome', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        message: '10 specs are ready for your review before work can continue',
+        actionHref: '/work?task=task-spec-a',
+        focusTaskId: 'task-spec-a',
+        focusKind: 'owner_review',
+        count: 10,
+      },
+      actionModel: {
+        primaryAction: {
+          taskId: 'task-spec-a',
+          label: 'Review a spec',
+          buttonLabel: 'Review next spec',
+          href: '/work?task=task-spec-a',
+          tone: 'warn',
+        },
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('thread', null, 'looma-knit', projectPayload)
+
+    expect(screen.queryByRole('alert', { name: 'Needs you' })).not.toBeInTheDocument()
+  })
+
   it('surfaces required migrations as the primary setup action and can apply them intentionally', async () => {
     const user = userEvent.setup()
     const migrationBlocked = detail({

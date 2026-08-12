@@ -339,6 +339,8 @@
   let threadLoadRequestId = 0
   let orientationSpine = $state<ProjectDetail['orientationSpine'] | null>(null)
   let activeTurnId = $state<string | null>(null)
+  let threadActionModel = $state<ProjectDetail['actionModel'] | null>(null)
+  let projectActivityVisible = $state(false)
   let caughtUp = $state(false)
   let loaded = $state(false)
   let loadError = $state<string | null>(null)
@@ -694,6 +696,7 @@
       turns = preserveTaskExtras(j.turns ?? [], turns)
       orientationSpine = j.orientationSpine ?? null
       activeTurnId = j.activeTurnId ?? null
+      threadActionModel = j.actionModel ?? null
       caughtUp = !!j.caughtUp
       const currentDetail = project.detail
       const currentRevision = currentDetail?.projectRevision ?? 0
@@ -1515,6 +1518,17 @@
   })
   const visibleTurns = $derived(currentTurns)
   const visibleList = $derived(threadChains.map(chain => chain.latestTurn))
+  const ownerAction = $derived(
+    project.detail?.actionModel?.primaryAction
+      ?? threadActionModel?.primaryAction
+      ?? null,
+  )
+  const ownerActionHasThread = $derived(
+    !ownerAction?.taskId || threadChains.some(chain =>
+      chain.turns.some(turn => 'taskId' in turn && turn.taskId === ownerAction.taskId),
+    ),
+  )
+  const showProjectDecisionFirst = $derived(Boolean(ownerAction && !ownerActionHasThread && !projectActivityVisible))
   const compactListView = $derived(compactThreadMode && compactPane === 'list')
   const compactDetailView = $derived(compactThreadMode && compactPane === 'detail')
   const activeOwnerInputQuestions = $derived(
@@ -3239,6 +3253,11 @@
     })
   }
 
+  function openProjectDecision(): void {
+    if (!ownerAction?.href) return
+    nav(projectActionHref(ownerAction.href, explicitProjectId), { backgroundPath: path.value })
+  }
+
   function showThreadListPane(): void {
     if (!compactThreadMode) return
     compactPane = 'list'
@@ -3691,7 +3710,24 @@
   {:else}
     <div class="thread-body">
       {@render capabilityRequestDecisions()}
-      {#if threadChains.length === 0}
+      {#if showProjectDecisionFirst}
+        <Card title="What needs your attention" titleTag="h2" tone={ownerAction?.tone === 'danger' ? 'danger' : ownerAction?.tone === 'warn' ? 'warn' : 'accent'} variant="callout" railStrength="strong">
+          <div class="thread-project-decision">
+            <div>
+              <h3>{ownerAction?.label ?? 'Project needs your decision'}</h3>
+              {#if ownerAction?.detail}
+                <p>{ownerAction.detail}</p>
+              {/if}
+            </div>
+            <Row justify="end" wrap>
+              <Button variant="secondary" onclick={() => (projectActivityVisible = true)}>Browse project activity</Button>
+              <Button variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'} onclick={openProjectDecision}>
+                {ownerAction?.buttonLabel ?? 'Continue'}
+              </Button>
+            </Row>
+          </div>
+        </Card>
+      {:else if threadChains.length === 0}
         <Card title="Nothing current">
           <p class="muted">
             {allTerminalReadinessMessage ?? 'No open questions, queued work, blockers, or active requests right now.'}
@@ -3699,7 +3735,12 @@
         </Card>
       {/if}
 
-      {#if threadChains.length > 0}
+      {#if threadChains.length > 0 && !showProjectDecisionFirst}
+        {#if ownerAction && !ownerActionHasThread}
+          <Row justify="end">
+            <Button variant="ghost" size="sm" onclick={() => (projectActivityVisible = false)}>Back to project decision</Button>
+          </Row>
+        {/if}
         <div class="thread-columns" class:thread-columns-compact={compactThreadMode}>
           {#if !compactThreadMode || compactPane === 'list'}
           <aside
@@ -6106,6 +6147,19 @@
     flex-direction: column;
     gap: var(--gh-space-3);
     overflow: hidden;
+  }
+  .thread-project-decision {
+    display: grid;
+    gap: var(--gh-space-3);
+  }
+  .thread-project-decision h3,
+  .thread-project-decision p {
+    margin: 0;
+  }
+  .thread-project-decision > div {
+    display: grid;
+    gap: var(--gh-space-2);
+    max-width: 58rem;
   }
   .lede { margin: 0; color: var(--thread-color-muted); font-size: var(--gh-type-size-meta); }
   .handoff-copy {

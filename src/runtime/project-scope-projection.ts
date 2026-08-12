@@ -514,7 +514,7 @@ export function buildProjectScopeProjection(
       includedDependencyIds: options.includedDependencyIds,
     }))
     .filter((row): row is ProjectScopeRow => Boolean(row))
-  const counts = summarizeRows(rows)
+  const counts = summarizeExecutionScopeRows(rows)
   const setupTask = currentTasks.find(task =>
     isProjectSetupTask(task.id) &&
     !['done', 'pending_pr', 'archived', 'cancelled'].includes(String(task.status ?? '')),
@@ -947,7 +947,7 @@ function sourceRefsForTask(task: Task): string[] {
   return refs.length > 0 ? refs : [`task:${task.id}`]
 }
 
-function summarizeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['counts'] {
+export function summarizeExecutionScopeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['counts'] {
   const counted = executionRows(rows)
   const included = counted.filter(row => row.scope === 'included')
   return {

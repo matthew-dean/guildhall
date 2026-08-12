@@ -3818,6 +3818,8 @@ describe('GET /api/project/release-readiness', () => {
 
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project?surface=work')))
+    const projectBody = await projectRes.json() as any
 
     expect(body.diagnostics.statusCounts).toEqual({ in_progress: 1, ready: 2 })
     expect(body.totals.tasks).toBe(3)
@@ -3831,7 +3833,9 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.release.nodeIds).toEqual(body.scope.nodeIds)
     expect(body.diagnostics.blockedByAgent).toEqual([])
     expect(body.releaseBlockers ?? []).toEqual([])
-  })
+    expect(projectBody.orientationSpine.summary.includedWorkCount).toBe(3)
+    expect(projectBody.orientationSpine.summary.progress.total).toBe(3)
+  }, 20000)
 
   it('does not let stale completion proof mark revised in-progress work as done', async () => {
     await seedQueue({

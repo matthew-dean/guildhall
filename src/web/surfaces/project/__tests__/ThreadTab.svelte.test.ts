@@ -855,6 +855,41 @@ describe('ThreadTab', () => {
     expect(selectedThread().queryByText('This old active turn must not replace the review decision.')).toBeNull()
   })
 
+  it('does not replace an unrepresented owner decision with stale Thread activity', async () => {
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-stale-thread',
+        taskId: 'task-stale-thread',
+        taskTitle: 'Old paused task',
+        summary: 'This activity must not become the project decision.',
+      }),
+    ], 'worker-stale-thread', {
+      actionModel: {
+        primaryAction: {
+          label: 'Review a spec',
+          taskId: 'task-current-review',
+          taskLabel: 'Review the current spec before work continues.',
+          detail: '10 specs are ready for your review before work can continue',
+          buttonLabel: 'Review next spec',
+          href: '/work?task=task-current-review',
+          tone: 'warn',
+          code: 'owner_review_required',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'What needs your attention' })
+    expect(screen.getByText('10 specs are ready for your review before work can continue')).toBeTruthy()
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+    expect(screen.queryByLabelText('Active thread dock')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Review next spec' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-current-review')
+  })
+
   it('opens a routed bounded-chat prompt directly on compact Thread even when many threads exist', async () => {
     installViewportMatchMedia(640)
     installBrowserFakes('/projects/looma-knit/thread?thread=bc-new-thread-1')

@@ -241,7 +241,7 @@ import {
   type ProjectOrientationCharter,
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
-import { buildProjectScopeProjection, executionScopeRows, normalizeProjectScopeRowReadModel, projectScopeMembershipCounts, projectScopeRowNeedsOwnerInput, releaseLabelFromId, selectedProjectScopeForQueue, summarizeProjectScopeOutsideWork, taskCompletionProofSatisfiedByLinkedChildren, taskScopeNodeId, type ProjectScope, type ProjectScopeProjection, type ProjectScopeRow } from './project-scope-projection.js'
+import { buildProjectScopeProjection, executionScopeRows, normalizeProjectScopeRowReadModel, projectScopeMembershipCounts, projectScopeRowNeedsOwnerInput, releaseLabelFromId, selectedProjectScopeForQueue, summarizeExecutionScopeRows, summarizeProjectScopeOutsideWork, taskCompletionProofSatisfiedByLinkedChildren, taskScopeNodeId, type ProjectScope, type ProjectScopeProjection, type ProjectScopeRow } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -5803,7 +5803,16 @@ function buildOverviewOrientationPreviewSpine(input: {
     focusTaskTitle?: string
     focusKind?: string
   } | null
-  sourceSpine?: Pick<ProjectOrientationSpine, 'selectedRelease' | 'selectedTaskScope' | 'scope' | 'summary' | 'release' | 'sourceHealth' | 'sourceTrail' | 'executionBoundary'> | null
+  sourceSpine?: Pick<ProjectOrientationSpine, 'selectedRelease' | 'selectedTaskScope' | 'scope' | 'scopeRows' | 'summary' | 'release' | 'sourceHealth' | 'sourceTrail' | 'executionBoundary'> | null
+  releaseCounts?: {
+    total: number
+    done: number
+    ready: number
+    active: number
+    blocked: number
+    deferred: number
+    proofBlocked: number
+  } | null
   now?: string
 }): Record<string, unknown> {
   const now = input.now ?? new Date().toISOString()
@@ -5836,6 +5845,31 @@ function buildOverviewOrientationPreviewSpine(input: {
   )
   const scope = projection.selectedScope
   const scopeRows = executionScopeRows(projection.rows)
+  // The saved spine already applies the materialized-child execution boundary.
+  // Reusing it keeps Orientation, Work, and Release from counting a parent and
+  // its child as separate owner work while a compact preview refreshes.
+  const currentScopeRows: ProjectScopeRow[] = input.sourceSpine?.scopeRows?.length
+    ? executionScopeRows(input.sourceSpine.scopeRows.map(row => ({
+        ...row,
+        countInProjectTotals: true,
+        proofBlocked: false,
+      }) as ProjectScopeRow))
+    : scopeRows
+  const scopedCounts = summarizeExecutionScopeRows(currentScopeRows)
+  // Release readiness is the shared progress contract for the selected scope.
+  // Use it when present; scope rows remain the compatibility fallback for a
+  // pre-readiness preview.
+  const currentCounts = input.releaseCounts
+    ? {
+        ...scopedCounts,
+        included: input.releaseCounts.total,
+        deferred: input.releaseCounts.deferred,
+        ready: input.releaseCounts.ready,
+        active: input.releaseCounts.active,
+        done: input.releaseCounts.done,
+        proofBlocked: input.releaseCounts.proofBlocked,
+      }
+    : scopedCounts
   const selectedRelease = scope
     ? sourceSpine?.selectedRelease?.id === scope.id
       ? sourceSpine.selectedRelease
@@ -5890,19 +5924,19 @@ function buildOverviewOrientationPreviewSpine(input: {
     scopeId: scope?.id ?? null,
     // Overview completion is bounded to the selected scope. Later work is a
     // separate count and must not make a current release look less complete.
-    total: projection.counts.included,
+    total: currentCounts.included,
     // Maturity counts describe the assembled plan, not the bounded task page
     // used by this preview. Preserve the saved plan counts while refreshing
     // execution/proof counts from the current compact release projection.
     briefed: sourceProgress?.briefed ?? 0,
-    specced: sourceProgress?.specced ?? scopeRows.filter(row => row.scope === 'included' && (row.status === 'spec_review' || row.status === 'ready')).length,
+    specced: sourceProgress?.specced ?? currentScopeRows.filter(row => row.scope === 'included' && (row.status === 'spec_review' || row.status === 'ready')).length,
     sliced: sourceProgress?.sliced ?? 0,
-    ready: projection.counts.ready,
-    active: scopeRows.filter(row => row.scope === 'included' && !['done', 'pending_pr', 'archived', 'cancelled', 'shelved', 'blocked'].includes(row.status ?? '')).length,
-    proven: Math.max(0, projection.counts.done - projection.counts.proofBlocked),
-    done: projection.counts.done,
-    blocked: scopeRows.filter(row => row.scope === 'included' && row.status === 'blocked').length,
-    deferred: projection.counts.deferred,
+    ready: currentCounts.ready,
+    active: currentCounts.active,
+    proven: Math.max(0, currentCounts.done - currentCounts.proofBlocked),
+    done: currentCounts.done,
+    blocked: input.releaseCounts?.blocked ?? currentScopeRows.filter(row => row.scope === 'included' && row.blocksRelease).length,
+    deferred: currentCounts.deferred,
   }
   const hasExplicitRelease = selectedRelease !== null
   const start = input.startReadiness ?? null
@@ -5972,10 +6006,10 @@ function buildOverviewOrientationPreviewSpine(input: {
   const sourceHealth = input.sourceSpine
     ? sourceHealthForCompactOrientationSpine(input.sourceSpine as unknown as Record<string, unknown>)
     : {
-        inferred: projection.rows.length,
-        documented: [...new Set(scopeRows.flatMap(row => row.sourceRefs ?? []))]
+        inferred: currentScopeRows.length,
+        documented: [...new Set(currentScopeRows.flatMap(row => row.sourceRefs ?? []))]
           .filter(ref => !ref.startsWith('task:')).length,
-        deferred: projection.counts.deferred,
+        deferred: currentCounts.deferred,
         conflicts: 0,
         gaps: scope ? 0 : 1,
       }
@@ -5984,10 +6018,10 @@ function buildOverviewOrientationPreviewSpine(input: {
     purpose: input.charter?.goal ?? 'Project shape is being inferred.',
     selectedReleaseLabel: release?.label ?? null,
     selectedScopeLabel: displayScopeLabel,
-    includedCount: projection.counts.included,
-    includedWorkCount: projection.counts.included,
-    deferredCount: projection.counts.deferred,
-    deferredWorkCount: projection.counts.deferred,
+    includedCount: currentCounts.included,
+    includedWorkCount: currentCounts.included,
+    deferredCount: currentCounts.deferred,
+    deferredWorkCount: currentCounts.deferred,
     pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],
     topBlocker,
     // Start readiness owns the executable decision. The compact projection is
@@ -7925,6 +7959,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
           availability: overviewState?.availability ?? surfaceState?.availability ?? undefined,
         })
       : summary.actionModel
+    const sharedReleaseCounts = isRecord(compactReleaseReadiness) && isRecord(compactReleaseReadiness.releaseCounts)
+      ? compactReleaseReadiness.releaseCounts as {
+          total: number
+          done: number
+          ready: number
+          active: number
+          blocked: number
+          deferred: number
+          proofBlocked: number
+        }
+      : null
     const responseStartMessage = responseStartReadiness?.message
     if (typeof responseStartMessage === 'string' && responseStartMessage.trim().length > 0) {
       const orientationSummary = (orientationSpine as { summary?: unknown }).summary
@@ -7946,6 +7991,35 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
       }
     }
+    if (sharedReleaseCounts) {
+      const orientationSummary = (orientationSpine as { summary?: unknown }).summary
+      const orientationSummaryRecord = orientationSummary && typeof orientationSummary === 'object' && !Array.isArray(orientationSummary)
+        ? orientationSummary as Record<string, unknown>
+        : {}
+      orientationSpine = {
+        ...orientationSpine,
+        summary: {
+          ...orientationSummaryRecord,
+          includedCount: sharedReleaseCounts.total,
+          includedWorkCount: sharedReleaseCounts.total,
+          deferredCount: sharedReleaseCounts.deferred,
+          deferredWorkCount: sharedReleaseCounts.deferred,
+          progress: {
+            ...(orientationSummaryRecord.progress as Record<string, unknown> | undefined),
+            total: sharedReleaseCounts.total + sharedReleaseCounts.deferred,
+            done: sharedReleaseCounts.done,
+            ready: sharedReleaseCounts.ready,
+            active: sharedReleaseCounts.active,
+            blocked: sharedReleaseCounts.blocked,
+            deferred: sharedReleaseCounts.deferred,
+            proven: Math.max(0, sharedReleaseCounts.done - sharedReleaseCounts.proofBlocked),
+          },
+        },
+      }
+    }
+    const releaseSummary = summary.releaseSummary && sharedReleaseCounts
+      ? { ...summary.releaseSummary, counts: sharedReleaseCounts }
+      : summary.releaseSummary
     const totalEffectiveCount = responseInventory?.total ?? scopedResponseTasks.length
     const hasMore = responseInventory?.hasMore ?? (responseInventoryLimit !== null && inventoryEnd < totalEffectiveCount)
     return {
@@ -7984,6 +8058,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         selectedScopeAndDeferredCount: (orientationSpine as { summary?: { progress?: { total?: number } } }).summary?.progress?.total ?? null,
       },
       workProgress: workProgressFromProjectSummaryProjection(projection),
+      ...(releaseSummary ? { releaseSummary } : {}),
       releaseReadiness: compactReleaseReadiness,
       startReadiness: responseStartReadiness,
       actionModel: responseActionModel,
@@ -8284,15 +8359,56 @@ export function buildServeApp(opts: ServeOptions = {}): {
         charter: reconciledOrientationSpine.charter,
         startReadiness: responseStartReadiness,
         sourceSpine: reconciledOrientationSpine,
+        releaseCounts: isRecord(releaseReadiness) && isRecord(releaseReadiness.releaseCounts)
+          ? releaseReadiness.releaseCounts as {
+              total: number
+              done: number
+              ready: number
+              active: number
+              blocked: number
+              deferred: number
+              proofBlocked: number
+            }
+          : null,
       })
+      const sharedReleaseCounts = isRecord(releaseReadiness) && isRecord(releaseReadiness.releaseCounts)
+        ? releaseReadiness.releaseCounts as {
+            total: number
+            done: number
+            ready: number
+            active: number
+            blocked: number
+            deferred: number
+            proofBlocked: number
+          }
+        : null
+      const orientationSummary = sharedReleaseCounts
+        ? {
+            ...(currentOrientationPreview.summary as Record<string, unknown>),
+            includedCount: sharedReleaseCounts.total,
+            includedWorkCount: sharedReleaseCounts.total,
+            deferredCount: sharedReleaseCounts.deferred,
+            deferredWorkCount: sharedReleaseCounts.deferred,
+            progress: {
+              ...(currentOrientationPreview.summary as { progress?: Record<string, unknown> }).progress,
+              total: sharedReleaseCounts.total + sharedReleaseCounts.deferred,
+              done: sharedReleaseCounts.done,
+              ready: sharedReleaseCounts.ready,
+              active: sharedReleaseCounts.active,
+              blocked: sharedReleaseCounts.blocked,
+              deferred: sharedReleaseCounts.deferred,
+              proven: Math.max(0, sharedReleaseCounts.done - sharedReleaseCounts.proofBlocked),
+            },
+          }
+        : currentOrientationPreview.summary
       const orientationSpine = overviewSurface
         ? {
             ...compactOrientationSpineForOverviewSurface(reconciledOrientationSpine as unknown as Record<string, unknown>),
-            summary: currentOrientationPreview.summary,
+            summary: orientationSummary,
           }
         : {
             ...reconciledOrientationSpine,
-            summary: currentOrientationPreview.summary,
+            summary: orientationSummary,
           }
       const selectedProgressTaskIds = selectedTaskIdsForProgress(orientationSpine as Record<string, unknown>)
       const progressTaskIds = new Set(
