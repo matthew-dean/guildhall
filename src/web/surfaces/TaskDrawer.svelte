@@ -773,6 +773,17 @@
     !hasUnansweredTaskQuestion &&
     (!hasCurrentTurns || task?.status === 'ready'),
   )
+  // The shared project action has already chosen this task. Lead with that
+  // command; the record is available only when the owner explicitly asks for it.
+  const showFocusedRunAction = $derived(Boolean(
+    task &&
+    !fullRecordRequested &&
+    !focusedSpecReview &&
+    !projectDecisionElsewhere &&
+    !isWorkspaceImportTask &&
+    canRunTaskDirectly &&
+    projectPrimaryAction?.taskId === task.id,
+  ))
   const canResumeHold = $derived(!projectStartBlocker && isHeld && !firstOpenEscalation)
   const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
   const firstOpenEscalationGuidance = $derived(escalationUserGuidance(firstOpenEscalation))
@@ -1115,7 +1126,7 @@
     </Button>
   </header>
 
-  {#if payload && !focusedSpecReview && !projectDecisionElsewhere}
+  {#if payload && !focusedSpecReview && !projectDecisionElsewhere && !showFocusedRunAction}
     <div class="gh-drawer-tabs">
       <Tabs
         tabs={tabs}
@@ -1133,6 +1144,34 @@
       </div>
     {:else if !payload}
       <p class="loading">Loading...</p>
+      {:else}
+      {#if showFocusedRunAction && task}
+        <UtilityPanel
+          as="section"
+          className="drawer-run-action"
+          tone="accent"
+          railStrength="strong"
+          ariaLabel="Current task action"
+        >
+          <span class="outcome-eyebrow">Ready to continue</span>
+          <strong>Resume this work item</strong>
+          <span class="drawer-run-action-copy">Guildhall can continue this work item.</span>
+          {#if runError}
+            <span class="drawer-run-action-error">{runError}</span>
+          {/if}
+          <div class="drawer-run-action-actions">
+            <Button
+              variant="agent"
+              size="sm"
+              disabled={runBusy || runStatus === 'stopping'}
+              onclick={() => runProject('start', task.id)}
+            >
+              <Icon name="sparkles" size={14} />
+              Resume only this work item
+            </Button>
+            <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View task details</Button>
+          </div>
+        </UtilityPanel>
       {:else}
       {#if drawerOutcome && !activeTabOwnsEscalationDecision && !focusedSpecReview}
         <UtilityPanel
@@ -1267,10 +1306,11 @@
           />
         {/if}
       {/if}
+      {/if}
     {/if}
   </div>
 
-  {#if payload && task && !projectDecisionElsewhere}
+  {#if payload && task && !projectDecisionElsewhere && !showFocusedRunAction}
     <footer class="gh-drawer-foot">
       {#if isWorkspaceImportTask}
         <div class="footer-actions-left">
@@ -1727,6 +1767,29 @@
   :global(.drawer-project-decision) {
     display: grid;
     gap: var(--s-3);
+  }
+  :global(.drawer-run-action) {
+    display: grid;
+    gap: var(--s-3);
+  }
+  :global(.drawer-run-action) strong {
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
+  }
+  :global(.drawer-run-action-copy) {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-relaxed);
+  }
+  .drawer-run-action-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+  .drawer-run-action-error {
+    color: var(--danger);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-tight);
   }
   .drawer-project-decision-actions {
     display: flex;

@@ -57392,9 +57392,32 @@ downstream task that is merely waiting on work elsewhere.
   and next action. At `1280x720`, Overview -> Open Work -> Open task reached
   `NAR-091` and displayed `Resume only this work item`; the Overview also had
   no horizontal overflow at `390x844` with `Open Work` visible.
-- [ ] Radical follow-up: the `NAR-091` task record still presents the old
+- [x] Radical follow-up: the `NAR-091` task record still presents the old
   dossier wall (description, task links, all delivery rows, sizing, request
   shape, review plan, and evidence requirements) before or alongside one
   resume command. Redesign the default task route as an action surface with
   the current command pinned at the top; move non-decision data out of the
   default entirely, not merely into smaller cards or shorter prose.
+- Contract Touch Decision: `ProjectDetail.actionModel.primaryAction` and the
+  task drawer's existing one-task start endpoint are consumed unchanged. The
+  drawer now treats the shared primary action as presentation authority when
+  it names the opened, directly runnable task: it renders one resume command
+  and makes the record an explicit `detail=full` route. Considered but
+  unchanged: task state, run protocol, action ranking, task-detail response,
+  persistence, and project-summary projection. Required proof: a component
+  regression must show no tabs or dossier before the command and must preserve
+  the full-record route; installed Narrative Harness proof must show the same
+  result from Overview -> Work -> task. Apply/revert affects only the default
+  drawer presentation and leaves the record and execution semantics intact.
+- Schema Migration Decision: none; this is an in-memory presentation change
+  over existing action-model and task-detail fields, with no stored schema,
+  compatibility reader, fixture migration, or rollback data work.
+- Evidence, 2026-08-12: `TaskDrawer.svelte.test.ts` proves a matching shared
+  primary action suppresses tabs and dossier content, keeps one scoped-resume
+  command, and preserves the explicit full-record route. In the installed
+  `stale:false` runtime `0.13.2-1786568266-11192`, Narrative Harness replayed
+  Overview -> Open Work -> Open task to `NAR-091`. The drawer showed only
+  `Resume only this work item` and `View task details`; no tabs, task links,
+  delivery steps, task size, review plan, or evidence requirements appeared.
+  `View task details` opened `?detail=full&tab=spec`. The default action
+  surface had no horizontal overflow at `1280x720` or `390x844`.

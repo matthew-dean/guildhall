@@ -216,6 +216,58 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('tab', { name: 'Action' })).not.toBeInTheDocument()
   })
 
+  it('leads with one resume command when this runnable task is the project action', async () => {
+    const user = userEvent.setup()
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          label: 'Resume the link editor work',
+          detail: 'This is the next runnable work item.',
+          buttonLabel: 'Resume work',
+          href: '/work?task=task-link-editor',
+          tone: 'accent',
+          taskId: 'task-link-editor',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'review',
+        openQuestions: [],
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('button', { name: 'Resume only this work item' })
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.queryByText('Task size')).not.toBeInTheDocument()
+    expect(screen.queryByText('Add the link editing controls to the selected text menu.')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'View task details' }))
+    await waitFor(() => {
+      expect(path.href).toBe('/projects/looma-knit/task/task-link-editor?detail=full&tab=spec')
+    })
+  })
+
   it('routes an unrelated task to the project decision instead of dumping its full record', async () => {
     const user = userEvent.setup()
     project.detail = {
