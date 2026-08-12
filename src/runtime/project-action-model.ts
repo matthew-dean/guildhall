@@ -578,7 +578,9 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const ownerReview = readiness.code === 'owner_review_required'
   const label = ownerReview ? 'Review a spec' : startReadinessActionLabel(readiness)
   const taskLabel = ownerReview ? readiness.focusTaskTitle?.trim() : undefined
-  const detail = readiness.message && readiness.message !== label
+  // The selected task is the decision. A review-queue count is operational
+  // context, not an explanation that competes with that task on every surface.
+  const detail = !ownerReview && readiness.message && readiness.message !== label
       ? readiness.message
       : undefined
   return {

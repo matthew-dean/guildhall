@@ -735,7 +735,6 @@ describe('buildProjectActionModel', () => {
       source: 'start_readiness',
       label: 'Review a spec',
       taskLabel: 'Continue drafted spec work',
-      detail: '10 specs are ready for your review before work can continue.',
       buttonLabel: 'Review next spec',
       href: '/work?task=task-spec-a',
       tone: 'warn',
@@ -746,6 +745,7 @@ describe('buildProjectActionModel', () => {
       label: 'Review needed',
       startEnabled: false,
     })
+    expect(ownerReview.primaryAction?.detail).toBeUndefined()
 
     const pausedSpecReview = buildProjectActionModel({
       startReadiness: {

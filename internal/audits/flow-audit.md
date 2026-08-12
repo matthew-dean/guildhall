@@ -57530,3 +57530,47 @@ owner deliberately needs it.
   had no page-level horizontal overflow at `1280px`; this browser session did
   not expose viewport resizing, so narrow/mobile live geometry is not claimed
   for this repair.
+
+### Repair: Owner review leads with the selected spec, not its queue count
+
+#### Owner-review user job before implementation
+
+When Guildhall has selected a spec for review, the owner needs its name and
+one review command. The number of other reviews is not an instruction and
+cannot displace the selected work as the visible explanation of why the owner
+is here.
+
+- [x] Remove owner-review queue-count prose from the shared primary action
+  while retaining the typed count in readiness for non-product operational use.
+- [x] Rebuild and replay Looma + Knit Overview, Work, Thread, and Release to
+  prove their primary owner action presents the same selected spec without the
+  queue count becoming a competing instruction.
+- Contract Touch Decision: `ProjectAction.detail` is the existing shared
+  display contract for the current owner decision. For typed
+  `owner_review_required`, it now intentionally remains absent because
+  `taskLabel`, `taskId`, and `buttonLabel` fully identify the executable
+  action. The `StartReadiness.count` and message remain unchanged as typed
+  machine/readiness context. Considered but unchanged: task ranking, review
+  selection, persisted project projection, readiness schema, and task routes.
+  Proof required: action-model regression and installed cross-surface replay.
+  Apply/revert changes only shared decision presentation.
+- Follow-up presentation decision: Thread now consumes the existing
+  `ProjectAction.taskLabel` before the optional action detail and removes its
+  local `Browse project activity` alternative. Considered but unchanged:
+  thread selection, project-activity route, action ranking, and the shared
+  action payload. The task label is already the shared selected-task identity;
+  this adds no Thread-local selection logic. Proof required: Thread regression
+  and installed replay with one named selected spec and one action.
+- Schema Migration Decision: none; the action detail is derived on read and
+  no persisted schema or API compatibility shape changes.
+- Evidence, 2026-08-12: action-model, focused Work, Overview, and Thread
+  regressions pass (209 focused assertions); `pnpm typecheck`,
+  `pnpm lint:contracts`, and the packaged build pass. In installed runtime
+  `0.13.2-1786569778-87977`, `/api/stale-server` returned `stale:false` and
+  the shared primary action named `LOO-EBUYE7` with no action detail. At
+  `1280px`, Overview, focused Work, Thread, and Release each exposed one
+  review control for that same selected spec; none displayed the `10 specs`
+  queue-count sentence, Thread named the selected task instead of offering an
+  anonymous action, and no route had page-level horizontal overflow. The
+  browser session did not offer viewport resizing, so narrow/mobile live
+  geometry remains unclaimed for this repair.

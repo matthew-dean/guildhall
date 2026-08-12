@@ -3727,12 +3727,13 @@
           <div class="thread-project-decision">
             <div>
               <h3>{ownerAction?.label ?? 'Project needs your decision'}</h3>
-              {#if ownerAction?.detail}
+              {#if ownerAction?.taskLabel}
+                <p class="thread-project-decision-task">{ownerAction.taskLabel}</p>
+              {:else if ownerAction?.detail}
                 <p>{ownerAction.detail}</p>
               {/if}
             </div>
             <Row justify="end" wrap>
-              <Button variant="secondary" onclick={() => (projectActivityVisible = true)}>Browse project activity</Button>
               <Button variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'} onclick={openProjectDecision}>
                 {ownerAction?.buttonLabel ?? 'Continue'}
               </Button>
@@ -6186,6 +6187,9 @@
     display: grid;
     gap: var(--gh-space-2);
     max-width: 58rem;
+  }
+  .thread-project-decision-task {
+    color: var(--text-muted);
   }
   .lede { margin: 0; color: var(--thread-color-muted); font-size: var(--gh-type-size-meta); }
   .handoff-copy {
