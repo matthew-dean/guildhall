@@ -22,6 +22,7 @@
     proofMissingTaskIds?: readonly string[]
     runError?: string | null
     actionOnly?: boolean
+    readyWorkTaskId?: string | null
   }
 
   type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
@@ -37,6 +38,7 @@
     proofMissingTaskIds = [],
     runError = null,
     actionOnly = false,
+    readyWorkTaskId = null,
   }: Props = $props()
 
   const proofMissingSet = $derived(new Set(proofMissingTaskIds))
@@ -208,6 +210,7 @@
     if (proofMissingSet.has(task.id)) return busy ? 'Reopening...' : 'Run proof'
     if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft task brief'
     if (taskShapingBlockers(task).length > 0) return busy ? 'Shaping...' : 'Continue shaping brief'
+    if (task.id === readyWorkTaskId) return busy ? 'Resuming...' : 'Resume this work item'
     if (taskStagePresentation(task, { tasks }).key === 'paused') return busy ? 'Resuming...' : 'Resume'
     return busy ? 'Starting...' : 'Start work'
   }

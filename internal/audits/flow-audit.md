@@ -57801,3 +57801,51 @@ the update finishes.
   and `Update this project before working.` It contained no Work controls,
   task-list heading, task rows, or page-level horizontal overflow at 1280px.
   The migration was not applied.
+
+### Repair: Browsed Work starts with work that can still move
+
+#### Work-queue user job before implementation
+
+When an owner deliberately opens Work, they need the selected release's work
+that still needs a decision or execution. Finished records are useful only
+after that question is answered; they cannot sit above the first actionable
+item simply because the durable scope retains complete history.
+
+- [x] Make the default browsed Work slice the selected scope's nonterminal
+  work plus any completion-proof recovery item. Keep complete/deferred scope
+  history available only through an explicit filter.
+- [x] Remove the filter and board console from an action-backed browsed queue;
+  it is a short selection list, not a second dashboard.
+- Contract Touch Decision: the selected scope remains owned by the shared
+  orientation/release boundary. `WorkTab` applies a presentation-only default
+  slice over that already-authoritative membership; it does not rank tasks,
+  alter the primary action, or mutate task/release state. Considered but
+  unchanged: project action model, task inventory API, scope membership,
+  readiness, proof evaluation, and task routing. Proof required: Work
+  regression and installed Narrative Harness queue replay. Apply/revert
+  affects only the default filtered presentation of an explicitly browsed
+  Work route.
+- Schema Migration Decision: none; no persisted state or API contract changes.
+
+#### Evidence: current Work queue repaired
+
+On 2026-08-12, the installed Narrative Harness continuation route exposed a
+console of List/Board, Show, and Part controls before the work itself. Its
+default list began with completed history, and selecting the shared
+`ready_work` item reinterpreted the resulting route as a deep link, replacing
+the list selection a moment later. The repaired route at
+`/projects/narrative-harness/work?view=queue` now presented four current
+items, no filter or board controls, and no page-level horizontal overflow at
+1024px. Selecting NAR-091 remained selected after 1.5 seconds and revealed
+one visible `Resume this work item` command, matching the shared action model.
+The command was not invoked because it would start the user's active
+Narrative Harness work.
+
+`WorkTab.svelte.test.ts` and `WorkTab.focused.svelte.test.ts` pass all 54
+tests, including the no-scope action fallback, completed-history exclusion,
+filter preservation after selection, and shared resume-label regression.
+`pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and `pnpm build`
+pass. The normal rendered fixture is presently protected by its required
+manual runtime migration, so the installed, already-migrated Narrative Harness
+project supplied the browser evidence for this post-migration flow rather than
+the fixture silently applying that user-owned migration.

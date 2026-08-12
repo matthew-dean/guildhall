@@ -131,6 +131,51 @@ describe('WorkTab', () => {
     expect(screen.queryByText('Recent progress')).toBeNull()
   })
 
+  it('keeps a selected ready-work action in the current queue and names the shared resume command', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?view=queue')
+    path.value = '/projects/narrative-harness/work'
+    const readyWork = task({ id: 'task-ready-work', title: 'Continue the shared ready task', status: 'review' })
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-finished', title: 'Completed scope history', status: 'done' }),
+          readyWork,
+        ], {
+          id: 'narrative-harness',
+          actionModel: {
+            primaryAction: {
+              source: 'start_readiness',
+              label: 'Work ready to resume',
+              taskLabel: readyWork.title,
+              taskId: readyWork.id,
+              buttonLabel: 'Open Work',
+              href: `/work?task=${readyWork.id}`,
+              tone: 'accent',
+              code: 'ready_work',
+            },
+            secondaryActions: [],
+            runControl: { label: 'Resume', startEnabled: true, pauseEnabled: true },
+            ownerInput: { active: false },
+            setup: { state: 'ready', freshIntakeNeeded: false },
+          },
+          orientationSpine: {
+            scopeRows: [
+              { taskId: 'task-finished', scope: 'included' },
+              { taskId: readyWork.id, scope: 'included' },
+            ],
+          },
+        }),
+      },
+    })
+
+    expect(screen.queryByRole('toolbar', { name: /work view controls/i })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /inspect work continue the shared ready task/i }))
+    expect(screen.queryByRole('toolbar', { name: /work view controls/i })).toBeNull()
+    expect(within(screen.getByLabelText('Selected work inspector')).getByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /inspect work completed scope history/i })).toBeNull()
+  })
+
   it('runs the shared ready-work target from the focused route without another task-opening hop', async () => {
     window.history.replaceState({}, '', '/projects/narrative-harness/work?task=task-091')
     path.value = '/projects/narrative-harness/work?task=task-091'
@@ -709,7 +754,7 @@ describe('WorkTab', () => {
     expect(screen.getByRole('button', { name: /^run proof$/i })).toBeTruthy()
   })
 
-  it('keeps completed selected-scope counts visible when no work is ready to run', async () => {
+  it('keeps completed selected-scope context out of the default Work inventory', async () => {
     render(WorkTab, {
       props: {
         detail: detail([
@@ -791,14 +836,14 @@ describe('WorkTab', () => {
     expect(queue).toHaveTextContent('Sources: implementation-roadmap.md, architecture-notes.md, deepinfra-drafting-model-selection.md')
     expect(queue).toHaveTextContent('Proof: 11 proven items · 0 missing proof')
     expect(queue).not.toHaveTextContent('0 current tasks')
-    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
-    expect(await screen.findByText('11 current items · 31 deferred items · 42 total')).toBeTruthy()
-    expect(screen.queryByText('No work is ready to run yet.')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /inspect work later reviewer lane/i })).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('current')
+    expect(await screen.findByText('No current work.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show scope history' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /inspect work later reviewer lane/i })).toBeNull()
   })
 
-  it('defaults to the selected scope before unrelated global blocked work', async () => {
+  it('defaults to current selected-scope work before completed history or unrelated blocked work', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue')
     path.value = '/projects/looma-knit/work'
     render(WorkTab, {
@@ -898,13 +943,17 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('3 current items · 1 deferred item · 4 total')
-    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
+    await screen.findByText('2 current items')
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('current')
     expect(screen.getByRole('button', { name: /inspect work e2e tests: complete current-scope proof/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /inspect work typescript: generate proper types from supabase/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /inspect work typescript tests: verified/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /inspect work later release polish/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /inspect work typescript tests: verified/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /inspect work later release polish/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /inspect work block menu/i })).not.toBeInTheDocument()
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'scope')
+    expect(await screen.findByRole('button', { name: /inspect work typescript tests: verified/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work later release polish/i })).toBeInTheDocument()
   })
 
   it('reopens proof-missing completed work before starting the selected item', async () => {
@@ -2087,8 +2136,8 @@ describe('WorkTab', () => {
     })
 
     expect(await screen.findByText('Shape fixture and expected-record ground truth')).toBeTruthy()
-    expect((screen.getByRole('combobox', { name: /^show$/i }) as HTMLSelectElement).value).toBe('planning')
-    expect(screen.getByText('2 work items')).toBeTruthy()
+    expect(screen.queryByRole('toolbar', { name: /work view controls/i })).toBeNull()
+    expect(screen.getByText('1 current item')).toBeTruthy()
     expect(screen.getByText('Paused')).toBeTruthy()
   })
 

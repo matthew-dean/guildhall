@@ -36,7 +36,7 @@
   }
 
   type WorkView = 'list' | 'board'
-  type WorkFilter = 'queued' | 'scope' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'review' | 'needs-you'
+  type WorkFilter = 'current' | 'queued' | 'scope' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'review' | 'needs-you'
 
   let { detail, mode = 'list' }: Props = $props()
 
@@ -72,6 +72,7 @@
   let runWorkError = $state<string | null>(null)
   let inventoryLoadBusy = $state(false)
   let pendingRouteScrollTaskId = $state<string | null>(null)
+  let pendingLocalSelectionTaskId = $state<string | null>(null)
   const workRowEls = new Map<string, HTMLElement>()
 
   const viewOptions = [
@@ -80,8 +81,9 @@
   ]
 
   const workFilterOptions = [
+    { value: 'current', label: 'Current work' },
     { value: 'queued', label: 'Ready to run' },
-    { value: 'scope', label: 'Current scope' },
+    { value: 'scope', label: 'Scope history' },
     { value: 'planning', label: 'Planning' },
     { value: 'open', label: 'Open' },
     { value: 'all', label: 'All' },
@@ -204,7 +206,7 @@
   const allWorkItems = $derived([...tasks, ...importDrafts])
   const workAreasByTaskId = $derived(viewModel.workAreasByTaskId)
   const workAreaOptions = $derived(viewModel.workAreaOptions)
-  const showsPlanningArtifacts = $derived(['scope', 'planning', 'open', 'all'].includes(workFilter))
+  const showsPlanningArtifacts = $derived(['current', 'scope', 'planning', 'open', 'all'].includes(workFilter))
   const filterableTasks = $derived(showsPlanningArtifacts ? allWorkItems : tasks)
   const visibleTasks = $derived(filterableTasks.filter(matchesWorkFilter))
   const partFilterOptions = $derived.by(() => {
@@ -222,6 +224,11 @@
   const effectiveRunActiveId = $derived(runWorkActiveId ?? (
     projectRunActive && selectedWork && isActiveWorkTask(selectedWork) ? selectedWork.id : null
   ))
+  const readyWorkTaskId = $derived(
+    detail.actionModel?.primaryAction?.code === 'ready_work'
+      ? detail.actionModel.primaryAction.taskId ?? null
+      : null,
+  )
   const boardDetail = $derived({
     ...detail,
     tasks: visibleTasks,
@@ -266,6 +273,7 @@
     )
   })
   const workListCountLabel = $derived.by(() => {
+    if (workFilter === 'current') return countLabel(visibleTasks.length, 'current item')
     if (workFilter !== 'scope') {
       const noun = workFilter === 'review'
         ? 'review'
@@ -315,6 +323,9 @@
     if (typeof window === 'undefined') return false
     return new URL(window.location.href).searchParams.get('view') === 'queue'
   })
+  // When a shared action already identifies the work to continue, browsing is
+  // a short selection list, not a second dashboard to configure.
+  const actionQueueMode = $derived(queueMode && Boolean(detail.actionModel?.primaryAction?.taskId))
   const focusedWork = $derived.by(() => {
     path.href
     const routeTaskId = readSelectedWorkIdFromUrl()
@@ -402,6 +413,7 @@
     // user click lets a refresh silently put the old row back in focus.
     const url = new URL(window.location.href)
     if (url.searchParams.get('task') !== task.id || url.searchParams.has('work')) {
+      pendingLocalSelectionTaskId = task.id
       url.searchParams.set('task', task.id)
       url.searchParams.delete('work')
       nav(`${url.pathname}${url.search}${url.hash}`, { backgroundPath: path.value })
@@ -487,6 +499,7 @@
   }
 
   function emptyFilterTitle(): string {
+    if (workFilter === 'current') return 'No current work.'
     if (selectedReleaseShipped && workFilter === 'open') return 'Release work is complete.'
     if (workFilter === 'queued') return 'No work is ready to run yet.'
     if (workFilter === 'scope') return 'No current-scope work is visible yet.'
@@ -499,6 +512,7 @@
   }
 
   function emptyFilterDetail(): string {
+    if (workFilter === 'current') return 'Completed scope history is available when you need it.'
     if (selectedReleaseShipped && workFilter === 'open') return 'This release has shipped. Completed work stays available when you need the record.'
     if (workFilter === 'queued') return 'Planning and review work is still waiting. Use Planning to inspect intake and spec work.'
     if (workFilter === 'scope') return 'Current and deferred scope rows will appear here once Guildhall maps them to work records.'
@@ -513,6 +527,7 @@
   function emptyFilterAction(): { label: string; filter: WorkFilter } | null {
     if (selectedReleaseShipped && workFilter === 'open') return { label: 'Show completed work', filter: 'scope' }
     if (workFilter === 'queued' && allWorkItems.some(isPlanningTask)) return { label: 'Show planning', filter: 'planning' }
+    if (workFilter === 'current' && scopeTaskIds.size > 0) return { label: 'Show scope history', filter: 'scope' }
     if (workFilter !== 'queued') return { label: 'Show queued work', filter: 'queued' }
     return null
   }
@@ -520,6 +535,15 @@
   function matchesWorkFilter(task: Task): boolean {
     if (partFilter !== 'all' && workAreaForTask(task).id !== partFilter) return false
     if (workFilter === 'all') return true
+    if (workFilter === 'current') {
+      const isCurrentScopeTask = scopeTaskIds.size > 0
+        ? scopeTaskIds.has(task.id)
+        : task.id === detail.actionModel?.primaryAction?.taskId
+      return isCurrentScopeTask && (
+        !['done', 'pending_pr', 'shelved'].includes(task.status ?? '') ||
+        isProofMissingTask(task)
+      )
+    }
     if (workFilter === 'scope') return scopeTaskIds.has(task.id)
     if (workFilter === 'queued') return isQueuedWorkTask(task)
     if (workFilter === 'planning') return isPlanningTask(task)
@@ -533,7 +557,8 @@
 
   function defaultWorkFilterForTasks(): WorkFilter {
     if (selectedReleaseShipped) return 'open'
-    if (scopeTaskIds.size > 0) return 'scope'
+    if (actionQueueMode) return 'current'
+    if (scopeTaskIds.size > 0) return 'current'
     if (tasks.some(isQueuedWorkTask)) return 'queued'
     if (tasks.some(isPlanningTask)) return 'planning'
     if (tasks.some(task => task.status === 'blocked')) return 'blocked'
@@ -711,10 +736,19 @@
     // A user click writes the route after local selection is set. That route
     // update must not reinterpret the click as a deep-link and replace their
     // deliberately chosen list filter.
-    if (selectedWorkId === routeTaskId) return
+    if (selectedWorkId === routeTaskId) {
+      if (pendingLocalSelectionTaskId === routeTaskId) pendingLocalSelectionTaskId = null
+      return
+    }
+    const isLocalSelectionEcho = pendingLocalSelectionTaskId === routeTaskId
+    pendingLocalSelectionTaskId = null
     selectedWorkId = routeTaskId
     runWorkError = null
-    workFilter = workFilterForTask(routeTask)
+    // A click from the current queue writes the route after selection. Do not
+    // turn that route echo into a different filter and make the list jump.
+    if (!isLocalSelectionEcho) {
+      workFilter = workFilterForTask(routeTask)
+    }
     workFilterUserSelected = true
     partFilter = 'all'
     pendingRouteScrollTaskId = routeTaskId
@@ -813,21 +847,23 @@
   </section>
 {:else}
 <div class="work-list-view">
-  <UtilityPanel as="div" className="work-view-header" tone="neutral" role="toolbar" ariaLabel="Work view controls">
-    <SegmentedControl label="Work view" ariaLabel="Work view" value={activeWorkView} options={viewOptions} onChange={setWorkView} />
-    <div class="work-view-actions">
-      <div class="show-picker" role="group" aria-label="Shown work">
-        <label for="work-view-show">Show</label>
-        <Select id="work-view-show" value={workFilter} options={workFilterOptions} onchange={onWorkFilterSelect} />
-      </div>
-      {#if partFilterOptions.length > 2}
-        <div class="show-picker" role="group" aria-label="Work part">
-          <label for="work-view-part">Part</label>
-          <Select id="work-view-part" value={partFilter} options={partFilterOptions} onchange={(value) => { partFilter = value }} />
+  {#if !actionQueueMode}
+    <UtilityPanel as="div" className="work-view-header" tone="neutral" role="toolbar" ariaLabel="Work view controls">
+      <SegmentedControl label="Work view" ariaLabel="Work view" value={activeWorkView} options={viewOptions} onChange={setWorkView} />
+      <div class="work-view-actions">
+        <div class="show-picker" role="group" aria-label="Shown work">
+          <label for="work-view-show">Show</label>
+          <Select id="work-view-show" value={workFilter} options={workFilterOptions} onchange={onWorkFilterSelect} />
         </div>
-      {/if}
-    </div>
-  </UtilityPanel>
+        {#if partFilterOptions.length > 2}
+          <div class="show-picker" role="group" aria-label="Work part">
+            <label for="work-view-part">Part</label>
+            <Select id="work-view-part" value={partFilter} options={partFilterOptions} onchange={(value) => { partFilter = value }} />
+          </div>
+        {/if}
+      </div>
+    </UtilityPanel>
+  {/if}
 
   {#if activeWorkView === 'board'}
     <PlannerTab detail={boardDetail} />
@@ -976,6 +1012,7 @@
           proofMissingTaskIds={[...proofMissingTaskIds]}
           runError={runWorkError}
           actionOnly={queueMode}
+          {readyWorkTaskId}
         />
       {/if}
     </div>
