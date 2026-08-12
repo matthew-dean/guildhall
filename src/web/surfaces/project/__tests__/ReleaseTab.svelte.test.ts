@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/svelte'
+import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import ReleaseTab from '../ReleaseTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
@@ -347,7 +347,7 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('2')).toBeTruthy()
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith('/api/project/release-readiness')
+      expect(fetch).toHaveBeenCalledWith('/api/project/release-readiness?live=true')
     })
   })
 
@@ -487,7 +487,7 @@ describe('ReleaseTab', () => {
     })
   })
 
-  it('shows projection release blockers as concrete criteria rows', async () => {
+  it('keeps aggregate release blockers out of the detail checklist', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -521,14 +521,12 @@ describe('ReleaseTab', () => {
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
     expect(await screen.findByText('Release checks')).toBeTruthy()
-    expect(screen.getByText('Release blockers')).toBeTruthy()
-    expect(screen.getByText('2 tasks still open.')).toBeTruthy()
-    expect(screen.getByText('Link editing UI')).toBeTruthy()
-    expect(screen.getByText('Link editing UI: needs a clearer brief before unattended work can run.')).toBeTruthy()
-    expect(screen.getByText('Block menu / block side menu')).toBeTruthy()
+    expect(screen.queryByText('Release blockers')).toBeNull()
+    expect(screen.queryByText('Link editing UI')).toBeNull()
+    expect(screen.queryByText('Block menu / block side menu')).toBeNull()
   })
 
-  it('keeps repository and checkout blockers out of the release-blocker task row', async () => {
+  it('keeps repository follow-up separate from the task-check categories', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -573,12 +571,8 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    const releaseBlockersLabel = await screen.findByText('Release blockers')
-    const releaseBlockersRow = releaseBlockersLabel.closest('li')
-    expect(releaseBlockersRow).toBeTruthy()
-    expect(within(releaseBlockersRow as HTMLElement).getByText('1 task still open.')).toBeTruthy()
-    expect(within(releaseBlockersRow as HTMLElement).queryByText('Repository follow-up: main')).toBeNull()
-    expect(within(releaseBlockersRow as HTMLElement).queryByText('Project checkout')).toBeNull()
+    await screen.findByText('Criteria')
+    expect(screen.queryByText('Release blockers')).toBeNull()
     expect(screen.getByText('1 repository follow-up.')).toBeTruthy()
     expect(screen.getAllByText('Repository follow-up').length).toBeGreaterThanOrEqual(1)
   })

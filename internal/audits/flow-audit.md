@@ -57215,6 +57215,50 @@ an Action tab and then quietly send the owner back to Overview.
   beside a compact spec-at-a-glance summary. The installed LaunchAgent reports
   `stale:false` at runtime `0.13.2-1786563260-70137`.
 
+### Repair: Release checks agree with the owner decision
+
+#### Release detail user job before implementation
+
+When an owner chooses `Inspect release details`, every displayed check must
+describe the same current project state as the owner decision that led them
+there. A missing diagnostic payload must never be rendered as a green, clear
+check.
+
+- Finding: the saved release projection correctly retained the ten
+  `spec_review` tasks in its status counts, while the shared owner action said
+  ten specs required review. Release detail read that projection-only endpoint
+  but treated its intentionally absent diagnostic arrays as empty, displaying
+  `No specs awaiting approval.`
+- Fix: expanded Release detail is an explicit current-state inspection
+  (`release-readiness?live=true`). The live readiness response exposes the
+  same typed check arrays at the top level as well as under diagnostics, so
+  the UI never converts omitted data into a passing state. The duplicate
+  aggregate blocker row is removed; its task total did not tell the owner
+  anything beyond the named checks below it.
+- Contract Touch Decision: the release-readiness response gains the existing
+  typed diagnostic arrays (`openEscalations`, incomplete/unapproved briefs,
+  `unapprovedSpecs`, shelved and agent-blocked work, and missing proof) on
+  explicit live reads. Considered but not changed: saved summary contract,
+  action model, task lifecycle, release membership, persistence, and routing.
+  Proof required: component test must request the explicit live endpoint and
+  runtime integration must expose pending spec IDs at both response levels.
+  Apply/revert: applying makes an existing live fact visible; reverting hides
+  it again and permits false-clear detail rows. No data migration is needed.
+- Schema Migration Decision: none; this is an additive read-model response
+  field and changes no stored schema.
+
+#### Follow-up finding, 2026-08-12: scope count authority
+
+- [ ] Align Overview and Release progress counts to the same execution-scope
+  unit. Live Looma + Knit evidence shows Overview's selected Stage 1 scope as
+  `0 of 17 complete`, while explicit Release inspection reports `0/16 done`.
+  The dropped record is the ready ContextMenu parent whose materialized child
+  work causes `executionScopeRows` to suppress it. Both counts have a
+  defensible internal meaning, but presenting them as the same release
+  progress is a source-model failure. Decide and persist one owner-facing
+  unit (prefer execution work), then make the shared action model, Overview,
+  Release summary, Release detail, Work, Thread, and status chrome consume it.
+
 ### Repair: Timeline shows project updates, not the transport
 
 #### Timeline user job before implementation

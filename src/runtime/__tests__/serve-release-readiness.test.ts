@@ -266,6 +266,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.statusCounts).toEqual({ ready: 1, blocked: 1 })
     expect(body.totals).toMatchObject({ tasks: 2, unfinishedCount: 2 })
     expect(body.diagnostics.statusCounts).toEqual({ ready: 1, blocked: 1 })
+    expect(body.unapprovedSpecs).toEqual([])
   }, 15_000)
 
   it('serves the saved release summary without task expansion or repository inspection', async () => {
@@ -964,6 +965,11 @@ describe('GET /api/project/release-readiness', () => {
     const body = await res.json() as any
 
     expect(body.diagnostics.designSystem).toMatchObject({
+      drafted: false,
+      approved: false,
+      source: 'none',
+    })
+    expect(body.designSystem).toMatchObject({
       drafted: false,
       approved: false,
       source: 'none',
@@ -3942,6 +3948,8 @@ describe('GET /api/project/release-readiness', () => {
     const body = await res.json() as any
     expect(body.diagnostics.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-1'])
     expect(body.diagnostics.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
+    expect(body.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-1'])
+    expect(body.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
     expect(body.totals.humanBlockingCount).toBe(2)
     expect(body.totals.blockingCount).toBe(2)
     expect(body.totals.unfinishedCount).toBe(2)

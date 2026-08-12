@@ -116,7 +116,7 @@
   $effect(() => {
     let disposed = false
     const endpoint = section === 'criteria'
-      ? '/api/project/release-readiness'
+      ? '/api/project/release-readiness?live=true'
       : '/api/project/release-readiness/summary'
     data = null
     error = null
@@ -249,15 +249,6 @@
     }
   }
 
-  function isWorkReleaseBlocker(item: ReleaseItem): boolean {
-    const id = idOf(item)
-    return !(
-      id.startsWith('repository-followup:') ||
-      id === 'dirty-checkout' ||
-      id === 'design-system'
-    )
-  }
-
   interface Criterion {
     key: string
     label: string
@@ -268,12 +259,6 @@
   const criteria = $derived<Criterion[]>(
     data
       ? [
-          {
-            key: 'release-blockers',
-            label: hasNamedRelease ? 'Release blockers' : 'Scope blockers',
-            items: (data.releaseBlockers ?? []).filter(isWorkReleaseBlocker),
-            clearLabel: `No open ${blockerNoun}s.`,
-          },
           {
             key: 'escalations',
             label: 'Open escalations',
@@ -423,7 +408,6 @@
   const designSystemBlockingCount = $derived(data?.totals.designSystemBlockingCount ?? (dsLabel().clear ? 0 : 1))
   const hasNamedRelease = $derived(Boolean(data?.release?.label ?? projectSummary?.release?.label))
   const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Scope readiness')
-  const blockerNoun = $derived(hasNamedRelease ? 'release blocker' : 'scope blocker')
 
   const verdict = $derived(data ? releaseVerdictSummary(data) ?? { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' } : { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' })
   const verdictTitle = $derived(data?.verdict?.title ?? verdict.label)
