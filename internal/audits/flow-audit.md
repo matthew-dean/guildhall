@@ -58033,10 +58033,18 @@ actual attention queue. Aggregate work mix, role avatars, decorative scores,
 and historical task totals cannot answer either question and must not override
 the shared current action for an individual project.
 
-- [ ] Remove fleet dashboard telemetry from the default home and make a
+- [x] Remove fleet dashboard telemetry from the default home and make a
   `ready_work` shared action render as ready to resume rather than paused.
 - Contract Touch Decision: `ProjectCardSummary` now maps the shared
   `actionModel.primaryAction.code` before historical task counts for the
   visible project stage. ProjectsHome removes only presentation. Considered
   but unchanged: action ranking, task counts, run state, and project routing.
 - Schema Migration Decision: none.
+- Evidence, 2026-08-12: focused `project-summary` and `ProjectsHome` tests
+  pass 44/44, and `pnpm typecheck` and `pnpm build` pass. After fresh
+  installation and `/api/stale-server` reporting `stale:false`, the installed
+  home showed the project chooser directly: no Guild hall score, Work mix,
+  aggregate active count, or running-now panel. Its Narrative Harness card
+  reported `Ready to resume`, matching the service's `ready_work` action and
+  its project Overview. Selecting either `Open project` or `Resume` remains
+  visible without reading the historical count telemetry.
