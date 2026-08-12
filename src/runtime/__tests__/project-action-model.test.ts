@@ -75,12 +75,13 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Build synopsis expansion',
+      label: 'Work ready to resume',
+      taskLabel: 'Build synopsis expansion',
       buttonLabel: 'Open Work',
       href: '/work?task=task-synopsis',
       tone: 'accent',
     })
-    expect(model.primaryAction?.detail).toBe('"Build synopsis expansion" is ready to run.')
+    expect(model.primaryAction?.detail).toBeUndefined()
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
@@ -105,7 +106,8 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Paused task',
+      label: 'Work paused',
+      taskLabel: 'Paused task',
       href: '/work?task=task-paused',
       taskId: 'task-paused',
     })
@@ -337,13 +339,14 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Build synopsis expansion',
+      label: 'Work ready to resume',
+      taskLabel: 'Build synopsis expansion',
       buttonLabel: 'Open Work',
       href: '/work?task=task-synopsis',
       tone: 'accent',
       taskId: 'task-synopsis',
     })
-    expect(model.primaryAction?.detail).toBe('"Build synopsis expansion" is ready to run.')
+    expect(model.primaryAction?.detail).toBeUndefined()
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
@@ -500,7 +503,8 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Build story context',
+      label: 'Work ready to resume',
+      taskLabel: 'Build story context',
       buttonLabel: 'Open Work',
     })
     expect(model.primaryAction?.detail).toBeUndefined()

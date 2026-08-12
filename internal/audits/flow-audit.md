@@ -57611,3 +57611,59 @@ selection decision and must not compete with it.
   clientWidth` at 1280px. Clicking `Review spec` opened the task review route
   with `Request changes` and `Approve spec`, with no alert. The browser session
   did not offer viewport resizing, so narrow/mobile geometry remains unclaimed.
+
+### Repair: Runnable work is a state plus a task, not repeated prose
+
+#### Ready-work user job before implementation
+
+When a project is ready to resume, the owner needs to see that state, the one
+task Guildhall will continue, and the route to its executable command. Repeating
+the task title as a heading, quoted status sentence, and destination label does
+not add orientation; it disguises one fact as three pieces of information.
+
+- [x] Make the shared ready/paused-work action present one stable state label,
+  one compact task identity, and no duplicate readiness sentence.
+- [x] Suppress the generic project-level `Resume` while the focused work item
+  owns the shared `ready_work` action; keep project-level Pause for active runs.
+- [x] Replay Narrative Harness Overview and its Work handoff from the installed
+  app. Prove the state, task key, action target, and run control agree.
+- Contract Touch Decision: `ProjectAction` is the existing shared presentation
+  contract for project readiness. `ready_work` and `paused_live_work` will use
+  it to expose the state separately from the selected task identity; no route
+  may reconstruct either locally. Considered but unchanged: readiness ranking,
+  run protocol, task lifecycle, persistence, endpoint shapes, and task routing.
+  Proof required: action-model and Overview regressions, installed Narrative
+  Harness replay, and cross-surface state agreement.
+- Schema Migration Decision: none; this is a derived presentation correction
+  over existing action-model fields with no stored data or API-shape change.
+
+#### Evidence
+
+On 2026-08-12, after `pnpm build`, `pnpm dev:install`, and a fresh service
+restart, `/api/stale-server` reported `stale: false` from the installed app.
+At 1280px, Narrative Harness Overview showed only the project, Stage 2, `5 of
+9 complete`, `Work ready to resume`, `NAR-091`, its title, and `Open Work`.
+Clicking that one control opened `/projects/narrative-harness/work?task=task-091`,
+which showed `READY`, the same task key and title, and one direct command:
+`Resume this work item`. The top bar contained no generic `Resume`; both routes
+had no alert and `scrollWidth === clientWidth`. The browser surface did not
+offer viewport resizing, so narrow/mobile geometry remains unclaimed. The
+direct command's request and inline failure rendering are covered by the Work
+tab regression rather than clicking it against the user's active project.
+
+### Finding: local service startup needs a reliable readiness handoff
+
+The development installer replaces the active app while `guildhall start` may
+report a timeout before its background process has bound the listener. A retry
+then finds a healthy, fresh service. This makes the required installed-app
+proof unnecessarily ambiguous and should be fixed at the launcher/readiness
+boundary rather than documented as a manual timing ritual.
+
+- [ ] Make `guildhall start` wait for the same service readiness signal the
+  browser and stale-server endpoint use, and return success only after the
+  listener is available.
+- Contract Touch Decision: considered service lifecycle/status protocol and
+  installer handoff. No change in this repair; a later fix must preserve the
+  existing CLI start/stop contract and prove a cold start plus replacement
+  install without a false timeout.
+- Schema Migration Decision: none; expected work is process readiness only.

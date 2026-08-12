@@ -576,11 +576,16 @@ function threadHrefForTask(taskId: string | undefined): string {
 
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
   const ownerReview = readiness.code === 'owner_review_required'
-  const label = ownerReview ? 'Review a spec' : startReadinessActionLabel(readiness)
-  const taskLabel = ownerReview ? readiness.focusTaskTitle?.trim() : undefined
+  const runnableWork = readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
+  const label = ownerReview
+    ? 'Review a spec'
+    : runnableWork
+      ? (readiness.code === 'paused_live_work' ? 'Work paused' : 'Work ready to resume')
+      : startReadinessActionLabel(readiness)
+  const taskLabel = ownerReview || runnableWork ? readiness.focusTaskTitle?.trim() : undefined
   // The selected task is the decision. A review-queue count is operational
   // context, not an explanation that competes with that task on every surface.
-  const detail = !ownerReview && readiness.message && readiness.message !== label
+  const detail = !ownerReview && !runnableWork && readiness.message && readiness.message !== label
       ? readiness.message
       : undefined
   return {

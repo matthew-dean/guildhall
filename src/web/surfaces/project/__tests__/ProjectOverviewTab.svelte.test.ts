@@ -91,6 +91,33 @@ describe('ProjectOverviewTab owner decision', () => {
     expect(screen.getByRole('button', { name: 'Review next spec' })).toBeInTheDocument()
   })
 
+  it('keeps runnable work state separate from the selected task identity', () => {
+    render(ProjectOverviewTab, {
+      detail: detail({
+        actionModel: {
+          ...detail().actionModel,
+          primaryAction: {
+            label: 'Work ready to resume',
+            taskLabel: 'Present draft review evaluation and provenance',
+            taskId: 'task-091',
+            buttonLabel: 'Open Work',
+            href: '/work?task=task-091',
+            tone: 'accent',
+            code: 'ready_work',
+          },
+        },
+      }) as any,
+      projectTicker: ticker,
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Work ready to resume' })).toBeInTheDocument()
+    expect(screen.getByText('NAR-091')).toBeInTheDocument()
+    expect(screen.getByText('Present draft review evaluation and provenance')).toBeInTheDocument()
+    expect(screen.queryByText(/ready to continue review/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
+  })
+
   it('runs the supplied repair action instead of exposing a raw migration route', async () => {
     const onMigrate = vi.fn()
     render(ProjectOverviewTab, {

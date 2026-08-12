@@ -131,6 +131,104 @@ describe('WorkTab', () => {
     expect(screen.queryByText('Recent progress')).toBeNull()
   })
 
+  it('runs the shared ready-work target from the focused route without another task-opening hop', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=task-091')
+    path.value = '/projects/narrative-harness/work?task=task-091'
+    const fetchSpy = vi.fn(async () => json({}))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-091', title: 'Present draft review evaluation and provenance', status: 'review' }),
+        ], {
+          id: 'narrative-harness',
+          actionModel: {
+            primaryAction: {
+              source: 'start_readiness',
+              label: 'Work ready to resume',
+              taskLabel: 'Present draft review evaluation and provenance',
+              taskId: 'task-091',
+              buttonLabel: 'Open Work',
+              href: '/work?task=task-091',
+              tone: 'accent',
+              code: 'ready_work',
+            },
+            secondaryActions: [],
+            runControl: { label: 'Resume', startEnabled: true, pauseEnabled: true },
+            ownerInput: { active: false },
+            setup: { state: 'ready', freshIntakeNeeded: false },
+          },
+          startReadiness: {
+            canStart: true,
+            code: 'ready_work',
+            focusKind: 'ready_work',
+            focusTaskId: 'task-091',
+          },
+        }),
+      },
+    })
+
+    expect(await screen.findByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open task' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Ready')).toBeInTheDocument()
+    expect(screen.queryByText('Open this work to take the next step.')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Resume this work item' }))
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.some(([input]) => String(input).includes('/api/project/task/task-091/start'))).toBe(true)
+    })
+  })
+
+  it('keeps a focused ready-work start failure beside the command', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=task-091')
+    path.value = '/projects/narrative-harness/work?task=task-091'
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/project/task/task-091/start')) {
+        return new Response(JSON.stringify({ error: 'Guildhall could not resume this work item.' }), {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return json({})
+    }))
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-091', title: 'Present draft review evaluation and provenance', status: 'review' }),
+        ], {
+          id: 'narrative-harness',
+          actionModel: {
+            primaryAction: {
+              source: 'start_readiness',
+              label: 'Work ready to resume',
+              taskLabel: 'Present draft review evaluation and provenance',
+              taskId: 'task-091',
+              buttonLabel: 'Open Work',
+              href: '/work?task=task-091',
+              tone: 'accent',
+              code: 'ready_work',
+            },
+            secondaryActions: [],
+            runControl: { label: 'Resume', startEnabled: true, pauseEnabled: true },
+            ownerInput: { active: false },
+            setup: { state: 'ready', freshIntakeNeeded: false },
+          },
+          startReadiness: {
+            canStart: true,
+            code: 'ready_work',
+            focusKind: 'ready_work',
+            focusTaskId: 'task-091',
+          },
+        }),
+      },
+    })
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume this work item' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Guildhall could not resume this work item.')
+  })
+
   it('keeps the list focused on task identity and opens the selected task from mouse and keyboard', async () => {
     render(WorkTab, {
       props: {

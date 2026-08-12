@@ -687,6 +687,11 @@
   const startReadiness = $derived(detail?.startReadiness ?? null)
   const primaryAction = $derived(detail?.actionModel?.primaryAction ?? null)
   const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
+  // A runnable work item has its own explicit command in focused Work. Keeping
+  // a generic Resume beside it creates two competing answers to one decision.
+  const focusedRunnablePrimaryAction = $derived(
+    primaryAction?.code === 'ready_work' && Boolean(primaryAction.taskId),
+  )
   // Both fields are projections of the selected release. Older compact reads
   // may omit `decision`, so lifecycle truth must not depend on that optional
   // presentation field and resurrect stale owner urgency after shipment.
@@ -1156,10 +1161,11 @@
   const showRunButton = $derived(
     !selectedReleaseShipped &&
       (
-        availabilityPaused ||
         runStatus === 'running' ||
         runStatus === 'stopping' ||
-        (!allTerminalStart && (!availabilityPaused || startDisabledReason !== 'No tasks to start'))
+        (!focusedRunnablePrimaryAction &&
+          (availabilityPaused ||
+            (!allTerminalStart && (!availabilityPaused || startDisabledReason !== 'No tasks to start'))))
       ),
   )
   const runControlPauses = $derived(

@@ -335,6 +335,7 @@
     return `${counts.done ?? 0} of ${counts.total} complete`
   })
   const focusedDecisionDetail = $derived.by(() => {
+    if (focusedWork && isFocusedRunnableWork(focusedWork)) return null
     const sharedDetail = detail.actionModel?.primaryAction?.detail?.trim()
     if (sharedDetail) return sharedDetail
     if (focusedWork?.status === 'spec_review') return 'Review this spec so Guildhall can continue.'
@@ -645,7 +646,21 @@
     if (task.status === 'spec_review') return 'Review spec'
     if (task.status === 'blocked') return 'Open task'
     if (task.status === 'done' || task.status === 'pending_pr') return 'View record'
+    if (isFocusedRunnableWork(task)) return 'Resume this work item'
     return 'Open task'
+  }
+
+  function isFocusedRunnableWork(task: Task): boolean {
+    return detail.actionModel?.primaryAction?.code === 'ready_work' &&
+      detail.actionModel.primaryAction.taskId === task.id
+  }
+
+  function focusedStatusLabel(task: Task): string {
+    return isFocusedRunnableWork(task) ? 'Ready' : effectiveStatusLabel(task)
+  }
+
+  function focusedStatusTone(task: Task): ChipTone {
+    return isFocusedRunnableWork(task) ? 'ok' : effectiveStatusTone(task)
   }
 
   function goToSharedAction(): void {
@@ -737,15 +752,24 @@
           <div class="work-focus-copy">
             <div class="work-focus-meta">
               <span>{taskDisplayKey(focusedWork, allWorkItems, detail.id)}</span>
-              <Chip label={effectiveStatusLabel(focusedWork)} tone={effectiveStatusTone(focusedWork)} />
+              <Chip label={focusedStatusLabel(focusedWork)} tone={focusedStatusTone(focusedWork)} />
             </div>
             <h2>{focusedWork.title ?? 'Untitled work'}</h2>
-            <p>{focusedDecisionDetail}</p>
+            {#if focusedDecisionDetail}
+              <p>{focusedDecisionDetail}</p>
+            {/if}
           </div>
-          <Button variant={effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger' ? 'human' : 'primary'} onclick={() => openFocusedWork(focusedWork)}>
+          <Button
+            variant={effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger' ? 'human' : 'primary'}
+            disabled={runWorkBusyId === focusedWork.id || runWorkActiveId === focusedWork.id}
+            onclick={() => isFocusedRunnableWork(focusedWork) ? void runWorkItem(focusedWork.id) : openFocusedWork(focusedWork)}
+          >
             {focusedActionLabel(focusedWork)}
           </Button>
         </div>
+        {#if runWorkError}
+          <p class="work-focus-error" role="alert">{runWorkError}</p>
+        {/if}
       </Card>
     {:else if detail.actionModel?.primaryAction}
       <Card title="What needs your attention" titleTag="h2" tone="accent" variant="callout" railStrength="strong">
@@ -1021,6 +1045,10 @@
   .work-focus-footer {
     display: flex;
     justify-content: flex-start;
+  }
+  .work-focus-error {
+    margin: var(--s-3) 0 0;
+    color: var(--gh-color-danger-text, #c43a3a);
   }
   .work-list-view {
     display: flex;

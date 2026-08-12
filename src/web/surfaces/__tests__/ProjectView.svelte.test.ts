@@ -1445,6 +1445,48 @@ describe('ProjectView', () => {
     expect(topbar).not.toHaveTextContent('Provider')
   })
 
+  it('keeps generic Resume out of project chrome when focused work owns the next action', async () => {
+    const readyWork = detail({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        message: 'Knit: add link editor controls is ready to continue review.',
+        actionHref: '/work?task=task-link-editor',
+        focusTaskId: 'task-link-editor',
+        focusTaskTitle: 'Knit: add link editor controls',
+        focusKind: 'ready_work',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          code: 'ready_work',
+          taskId: 'task-link-editor',
+          label: 'Work ready to resume',
+          taskLabel: 'Knit: add link editor controls',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-link-editor',
+          tone: 'accent',
+        },
+        secondaryActions: [],
+        runControl: {
+          label: 'Resume',
+          startEnabled: true,
+          pauseEnabled: true,
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    })
+    installFetchFakes(readyWork)
+
+    await renderProjectView('overview', null, 'looma-knit', readyWork)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).not.toHaveTextContent('Resume')
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
+  })
+
   it('labels owner-input recovery blockers without saying answer', async () => {
     const recoveryDetail = detail({
       startReadiness: {
