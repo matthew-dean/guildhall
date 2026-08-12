@@ -124,16 +124,16 @@ describe('TimelineTab', () => {
     await screen.findByText('ERROR: newest')
     expect(screen.getAllByText(/15:0/).map(row => row.textContent)).toEqual(['15:01:00', '15:00:00'])
 
-    await user.click(screen.getByRole('button', { name: 'Load older activity' }))
+    await user.click(screen.getByRole('button', { name: 'Show earlier updates' }))
 
-    expect((await screen.findByRole('status')).textContent).toContain('Loaded 2 older events.')
+    expect((await screen.findByRole('status')).textContent).toContain('Loaded 2 earlier updates.')
     expect(screen.getAllByText(/14:5|15:0/).map(row => row.textContent)).toEqual([
       '15:01:00',
       '15:00:00',
       '14:59:00',
       '14:58:00',
     ])
-    expect(screen.queryByRole('button', { name: 'Load older activity' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Show earlier updates' })).toBeNull()
   })
 
   it('skips duplicate-only retained pages in one load-older action', async () => {
@@ -183,13 +183,59 @@ describe('TimelineTab', () => {
     })
 
     await screen.findByText('ERROR: newest')
-    await user.click(screen.getByRole('button', { name: 'Load older activity' }))
+    await user.click(screen.getByRole('button', { name: 'Show earlier updates' }))
 
-    expect((await screen.findByRole('status')).textContent).toContain('Loaded 1 older event.')
+    expect((await screen.findByRole('status')).textContent).toContain('Loaded 1 earlier update.')
     expect(screen.getAllByText('ERROR: newest')).toHaveLength(1)
     expect(screen.getByText('ERROR: older')).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledTimes(3)
-    expect(screen.queryByRole('button', { name: 'Load older activity' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Show earlier updates' })).toBeNull()
+  })
+
+  it('retires earlier-history control when it only finds hidden transport events', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const cursor = new URL(String(input), 'http://localhost').searchParams.get('cursor')
+      if (cursor === '1') {
+        return new Response(JSON.stringify({
+          events: [{ at: '2026-05-19T14:59:00.000Z', event: { type: 'assistant_delta', message: 'internal trace' } }],
+          cursor: 1,
+          limit: 100,
+          total: 2,
+          hasMore: true,
+          nextCursor: 2,
+        }), { headers: { 'content-type': 'application/json' } })
+      }
+      if (cursor === '2') {
+        return new Response(JSON.stringify({
+          events: [{ at: '2026-05-19T14:58:00.000Z', event: { type: 'provider_health_changed', message: 'healthy' } }],
+          cursor: 2,
+          limit: 100,
+          total: 2,
+          hasMore: false,
+        }), { headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        events: [{ at: '2026-05-19T15:00:00.000Z', event: { type: 'error', message: 'newest' } }],
+        cursor: 0,
+        limit: 100,
+        total: 3,
+        hasMore: true,
+        nextCursor: 1,
+      }), { headers: { 'content-type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TimelineTab, {
+      props: { detail: { id: 'looma-knit', name: 'Looma + Knit', path: '/repo/looma-knit', tasks: [] } },
+    })
+
+    await screen.findByText('ERROR: newest')
+    await user.click(screen.getByRole('button', { name: 'Show earlier updates' }))
+
+    expect((await screen.findByRole('status')).textContent).toContain('No earlier user-visible updates.')
+    expect(screen.queryByRole('button', { name: 'Show earlier updates' })).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
   it('hides provider health noise from the default timeline', () => {
@@ -226,10 +272,10 @@ describe('TimelineTab', () => {
 
     expect(screen.getByText(/Task A Ready/)).toBeTruthy()
     expect(screen.queryByText(/provider health/i)).toBeNull()
-    expect(screen.getByText('2 connection checks hidden.')).toBeTruthy()
+    expect(screen.queryByText('2 connection checks hidden.')).toBeNull()
   })
 
-  it('opens raw live agent events when the project is running', () => {
+  it('does not put raw live agent events in the owner timeline', () => {
     render(TimelineTab, {
       props: {
         detail: {
@@ -256,10 +302,9 @@ describe('TimelineTab', () => {
       },
     })
 
-    expect(screen.getByText('Live agent stream')).toBeTruthy()
-    expect(screen.getByText(/2 raw agent events from the current recent stream/)).toBeTruthy()
-    const details = document.querySelector('details.raw-trace')
-    expect(details?.hasAttribute('open')).toBe(true)
-    expect(screen.getByText('Show live agent event details')).toBeTruthy()
+    expect(screen.getByText('Builder started Task A')).toBeTruthy()
+    expect(screen.queryByText('Live agent stream')).toBeNull()
+    expect(screen.queryByText('Show live agent event details')).toBeNull()
+    expect(screen.queryByText('Checking files')).toBeNull()
   })
 })

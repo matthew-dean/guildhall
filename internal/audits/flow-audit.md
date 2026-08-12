@@ -57165,3 +57165,27 @@ counts, or proof diagnostics for every task.
   changes` immediately visible.
 - The installed LaunchAgent is running the freshly installed
   `0.13.2-1786562310-22410` runtime. `/api/stale-server` reports `stale:false`.
+
+### Repair: Timeline shows project updates, not the transport
+
+#### Timeline user job before implementation
+
+When an owner opens Timeline, they can glance at the newest meaningful project
+updates in reverse chronological order and open a related task when an update
+requires context. They should not have to interpret connection checks, token
+stream fragments, model recovery traces, or an older-history control that
+appears to do nothing.
+
+- Finding: Timeline correctly ordered events newest-first but devoted its first
+  screen to counts of hidden transport events and a raw live-stream disclosure.
+  When an older page contained only those hidden events, its button remained
+  available despite producing no visible change.
+- Fix: remove transport and model-recovery reporting from the owner timeline.
+  It now shows only project updates. `Show earlier updates` retires after one
+  attempt that finds no user-visible update, rather than asking for repeated
+  clicks with no result.
+- Contract Touch Decision: existing activity-history paging and event envelope
+  contracts are consumed unchanged. This is a projection/filtering correction;
+  task routing remains via the existing event task ID. No API or persistence
+  contract changed.
+- Schema Migration Decision: none; no persisted data changed.

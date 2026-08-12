@@ -81,11 +81,12 @@
 
       historyPage = page
       const added = operatorEventCount(events) - before
+      historyPage = added > 0 || !page
+        ? page
+        : { ...page, hasMore: false, nextCursor: undefined }
       historyResult = added > 0
-        ? `Loaded ${added} older event${added === 1 ? '' : 's'}.`
-        : page?.hasMore
-          ? 'No additional visible activity was found yet.'
-          : 'No older activity remains.'
+        ? `Loaded ${added} earlier update${added === 1 ? '' : 's'}.`
+        : 'No earlier user-visible updates.'
     } catch (error) {
       historyError = error instanceof Error ? error.message : String(error)
     } finally {
@@ -170,13 +171,7 @@
     return dedupeEvents(input.filter(ev => !isProviderHealthEvent(ev) && !isRawTraceEvent(ev) && !isEmptyModelEvent(ev))).length
   }
 
-  const emptyModelEvents = $derived(events.filter(isEmptyModelEvent))
   const operatorEvents = $derived(dedupeEvents(events.filter(ev => !isProviderHealthEvent(ev) && !isRawTraceEvent(ev) && !isEmptyModelEvent(ev))))
-  const rawTraceEvents = $derived(events.filter(isRawTraceEvent))
-  const hiddenProviderHealthCount = $derived(events.filter(isProviderHealthEvent).length)
-  const hiddenRawTraceCount = $derived(rawTraceEvents.length)
-  const hiddenEmptyModelCount = $derived(emptyModelEvents.length)
-  const runActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
 </script>
 
 <Card title="Coordinator timeline">
@@ -187,42 +182,8 @@
   {:else if events.length === 0}
     <p class="muted">No events recorded yet. Start the coordinator to populate the timeline.</p>
   {:else if operatorEvents.length === 0}
-    <p class="muted">
-      Only connection checks and raw agent trace events are hidden. Project activity will appear here when tasks move.
-    </p>
-    <p class="muted compact">{hiddenProviderHealthCount} connection checks hidden. {hiddenRawTraceCount} live agent events hidden.</p>
+    <p class="muted">No project updates are ready to show yet.</p>
   {:else}
-    {#if hiddenEmptyModelCount > 0}
-      <div class="recovery-summary" role="note">
-        <strong>{hiddenEmptyModelCount} model-recovery event{hiddenEmptyModelCount === 1 ? '' : 's'} summarized</strong>
-        <span>Empty model replies happened during unattended work. Task state stayed intact, and recovery guidance was recorded instead of repeating each raw failure here.</span>
-      </div>
-    {/if}
-    {#if hiddenProviderHealthCount > 0}
-      <p class="muted compact">{hiddenProviderHealthCount} connection checks hidden.</p>
-    {/if}
-    {#if hiddenRawTraceCount > 0}
-      {#if runActive}
-        <div class="live-stream-summary" role="note">
-          <strong>Live agent stream</strong>
-          <span>{hiddenRawTraceCount} raw agent event{hiddenRawTraceCount === 1 ? '' : 's'} from the current recent stream. Older raw events may roll off this view.</span>
-        </div>
-      {/if}
-      <details class="raw-trace" open={runActive}>
-        <summary>{runActive ? 'Show live agent event details' : `${hiddenRawTraceCount} live agent event${hiddenRawTraceCount === 1 ? '' : 's'} hidden`}</summary>
-        <div class="feed raw">
-          {#each rawTraceEvents as ev, i (i)}
-            {@const text = summarizeEvent(ev)}
-            {#if text}
-              <div class="ev ev-raw">
-                <span class="ts">{(ev.at ?? '').slice(11, 19)}</span>
-                <span>{text}</span>
-              </div>
-            {/if}
-          {/each}
-        </div>
-      </details>
-    {/if}
     <div class="feed">
       {#each operatorEvents as ev, i (i)}
         {@const text = summarizeEvent(ev)}
@@ -245,7 +206,7 @@
     <div class="history-pagination">
       {#if historyPage?.hasMore}
         <button type="button" class="history-more" onclick={loadOlderActivity} disabled={historyLoadingMore}>
-          {historyLoadingMore ? 'Loading older activity...' : 'Load older activity'}
+          {historyLoadingMore ? 'Loading earlier updates...' : 'Show earlier updates'}
         </button>
       {/if}
       {#if historyResult}
@@ -272,48 +233,6 @@
     font-size: var(--gh-type-size-meta);
     max-height: 70vh;
     overflow-y: auto;
-  }
-  .feed.raw {
-    margin-top: var(--s-2);
-    max-height: 240px;
-  }
-  .raw-trace {
-    margin: 0 0 var(--s-3);
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-  }
-  .raw-trace summary {
-    cursor: pointer;
-  }
-  .recovery-summary {
-    display: grid;
-    gap: var(--s-1);
-    margin: 0 0 var(--s-3);
-    padding: var(--s-2) var(--s-3);
-    border: 1px solid color-mix(in oklab, var(--warn) 34%, transparent);
-    border-radius: var(--r-2);
-    background: color-mix(in oklab, var(--warn) 10%, transparent);
-    color: var(--text);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
-  }
-  .recovery-summary span {
-    color: var(--text-muted);
-  }
-  .live-stream-summary {
-    display: grid;
-    gap: var(--s-1);
-    margin: 0 0 var(--s-3);
-    padding: var(--s-2) var(--s-3);
-    border: 1px solid color-mix(in oklab, var(--accent) 34%, transparent);
-    border-radius: var(--r-2);
-    background: color-mix(in oklab, var(--accent) 10%, transparent);
-    color: var(--text);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
-  }
-  .live-stream-summary span {
-    color: var(--text-muted);
   }
   .ev {
     display: flex;
