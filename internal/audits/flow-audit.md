@@ -56958,3 +56958,45 @@ start` once and immediately get the updated service. The installer must first
 quiesce the old LaunchAgent and its child before it removes that versioned
 runtime; then it may publish the new current pointer and load the replacement
 agent. A deleted runtime must never be a possible service executable.
+
+#### Contract Touch Decision: installed service handoff
+
+- Work id: `flow-audit-installed-service-handoff`.
+- Touched contracts: the packaged macOS installer lifecycle now has an explicit
+  quiesce-before-prune ordering for the user-level LaunchAgent and its recorded
+  service process.
+- Considered but not touched: project/task/release schemas, service API
+  response schema, LaunchAgent plist command shape, and portable detached
+  service startup. They retain their existing contracts.
+- Required follow-up and proof: installer contract regression, macOS package
+  build, installed update followed by one stop/start, stale-server proof, and
+  retained current-package launch verification.
+- Apply/revert behavior: if the old service cannot stop, the installer fails
+  before changing `current` or pruning payloads. Reverting the code restores
+  the unsafe ordering and is not acceptable without an equivalent barrier.
+
+#### Schema Migration Decision: installed service handoff
+
+- Persisted schema touched: none. The existing service-state file is read only
+  to identify the process that must exit before install pruning.
+- Change class and existing-data impact: installer lifecycle ordering only.
+  Existing malformed or stale state remains safely removable after LaunchAgent
+  quiescence.
+- Migration, compatibility reader, fixtures, and rollback: no migration or
+  compatibility reader is required; release-artifact regression and installed
+  service proof cover the behavior; code-only revert.
+
+#### Installed service-handoff evidence, 2026-08-12
+
+- The installer now unloads `io.guildhall.agent`, waits for the recorded
+  service PID to exit, clears its state record, and only then replaces
+  `~/.guildhall/app/current` or prunes any versioned payload. A service that
+  will not stop leaves the prior install untouched rather than creating a
+  deleted-runtime launch path.
+- `sh -n scripts/install.sh` and the release-artifact, dev-install-layout,
+  launch-agent, and CLI lifecycle suites pass (53 tests).
+- With the previous packaged service running, `pnpm dev:install` installed a
+  new package. One subsequent `guildhall stop && guildhall start` succeeded
+  without `ENOENT`; `/api/stale-server` returned `stale:false` and named the
+  new `0.13.2-1786559900-10575` runtime. The active install was the sole
+  retained versioned payload after the handoff.
