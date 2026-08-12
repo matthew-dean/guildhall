@@ -57145,6 +57145,18 @@ counts, or proof diagnostics for every task.
 
 #### Evidence, 2026-08-12
 
+- TimelineTab regressions pass (7 tests), including newest-first page merge,
+  task routing, hidden transport filtering, and removal of an exhausted
+  earlier-history action after it finds only hidden records.
+- Fresh installed Looma + Knit browser proof at `1280x720` shows only three
+  meaningful updates in reverse chronological order. The former connection
+  check count and raw live-event disclosure are absent; document and body are
+  both `1280px` wide with no horizontal overflow.
+- The installed LaunchAgent reports `stale:false` for runtime
+  `0.13.2-1786562583-32141`.
+
+#### Evidence, 2026-08-12
+
 - WorkTab regressions now assert the deliberately small default list, absence
   of pseudo-table diagnostics, stable keyboard/mouse selection, and an
   immediately visible selected-task action. The focused Work suites pass: 50
