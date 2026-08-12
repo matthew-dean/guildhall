@@ -27,6 +27,7 @@ function detail(overrides: Record<string, unknown> = {}) {
     releaseReadiness: {
       release: { id: 'release-1', label: 'Milestone one', kind: 'release', state: 'active' },
       scope: { id: 'release-1', label: 'Milestone one', kind: 'release', state: 'active' },
+      releaseCounts: { done: 1, total: 4 },
     },
     ...overrides,
   }
@@ -46,9 +47,10 @@ describe('ProjectOverviewTab owner decision', () => {
 
     expect(screen.getByRole('heading', { name: 'What needs your attention' })).toBeInTheDocument()
     expect(screen.getByText('Milestone one')).toBeInTheDocument()
+    expect(screen.getByText('1 of 4 complete')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Review the next spec' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Review spec' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'View work' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'View work' })).not.toBeInTheDocument()
     expect(screen.queryByText('Work mix')).not.toBeInTheDocument()
     expect(screen.queryByText('Blocked work')).not.toBeInTheDocument()
     expect(screen.queryByText('Next run')).not.toBeInTheDocument()
@@ -60,6 +62,33 @@ describe('ProjectOverviewTab owner decision', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Review spec' }))
     expect(path.href).toBe('/projects/looma-knit/work?task=task-001')
+  })
+
+  it('keeps an owner-review target compact and separate from the review command', () => {
+    render(ProjectOverviewTab, {
+      detail: detail({
+        actionModel: {
+          ...detail().actionModel,
+          primaryAction: {
+            label: 'Review a spec',
+            taskLabel: 'Keep the component, editor, and migration roadmaps synchronized as their status changes.',
+            taskId: 'task-import-1rpbo8n',
+            detail: '10 specs are ready for your review before work can continue.',
+            buttonLabel: 'Review next spec',
+            href: '/work?task=task-import-1rpbo8n',
+            tone: 'warn',
+            code: 'owner_review_required',
+          },
+        },
+      }) as any,
+      projectTicker: ticker,
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Review a spec' })).toBeInTheDocument()
+    expect(screen.getByText('LOO-EBUYE7')).toBeInTheDocument()
+    expect(screen.getByText(/Keep the component, editor, and migration roadmaps synchronized/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Review next spec' })).toBeInTheDocument()
   })
 
   it('runs the supplied repair action instead of exposing a raw migration route', async () => {

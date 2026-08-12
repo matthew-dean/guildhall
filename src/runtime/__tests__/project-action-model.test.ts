@@ -716,6 +716,37 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
     })
 
+    const ownerReview = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        message: '10 specs are ready for your review before work can continue.',
+        actionHref: '/work?task=task-spec-a',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Continue drafted spec work',
+        focusKind: 'owner_review',
+        count: 10,
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(ownerReview.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Review a spec',
+      taskLabel: 'Continue drafted spec work',
+      detail: '10 specs are ready for your review before work can continue.',
+      buttonLabel: 'Review next spec',
+      href: '/work?task=task-spec-a',
+      tone: 'warn',
+      code: 'owner_review_required',
+      taskId: 'task-spec-a',
+    })
+    expect(ownerReview.runControl).toMatchObject({
+      label: 'Review needed',
+      startEnabled: false,
+    })
+
     const pausedSpecReview = buildProjectActionModel({
       startReadiness: {
         canStart: false,

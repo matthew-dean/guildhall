@@ -56879,22 +56879,82 @@ strip that suggests seven equally important jobs.
   (17px client height at the default desktop viewport), while the focused body
   exposes only `Request changes`, `Approve spec`, and `Read full task record`.
 
-### New finding: repair modal is correct, but the Overview behind it is still noisy
+### Repair: Overview now owns one named owner decision
 
 The required-migration recovery action is now executable and understandable,
 but the underlying Overview still shows `10 specs are ready for your review
 before work can continue`, `Open item`, and `View work` alongside the modal.
 The count is not itself an executable decision, and it competes with the one
-repair action. When the migration modal is open, the recovery decision must
-own the route; after it closes, Overview needs the same shared focused action
-model as Work rather than parallel generic prompts.
+repair action. The migration modal remains the active recovery decision when
+it is open. Outside that repair state, Overview now consumes the same focused
+action model as Work rather than parallel generic prompts.
+
+#### Overview user job before implementation
+
+When an owner opens Overview, they must see the active milestone, exact
+milestone progress, the focused work item selected by the shared action model,
+why that one item is next, and one button that opens it. A count may add
+context but cannot replace the selected item or become a second decision.
+Overview must not show a generic
+`Open item` label, a duplicate `View work` route, or locally choose a
+different task from Work and the task drawer.
+
+#### Contract Touch Decision: owner-review action wording
+
+- Work id: `flow-audit-overview-owner-decision`.
+- Touched contracts: the derived `ProjectActionModel` now maps
+  `owner_review_required` readiness to a stable review command, its existing
+  focused task target label, and a typed review button label.
+- Considered but not touched: persisted task schema, start-readiness schema,
+  release-summary schema, migration schema, task selection rules, and route
+  schema.
+- Required follow-up and proof: action-model regression, Overview rendered
+  regression, typecheck, installed Looma + Knit API/model agreement, and
+  desktop/narrow/mobile browser proof.
+- Apply/revert behavior: a deterministic presentation projection change; no
+  persisted project data changes. Reverting restores the generic action text.
+
+#### Schema Migration Decision: owner-review action wording
+
+- Persisted schema touched: none.
+- Change class and existing-data impact: additive optional action-model target
+  label plus Overview action removal only; existing readers remain compatible.
+- Migration, compatibility reader, fixtures, and rollback: no migration or
+  compatibility reader is required; action-model and Overview tests cover the
+  behavior; code-only revert.
+
+#### Installed Overview evidence, 2026-08-12
+
+- The real Looma + Knit API now returns one `owner_review_required` action:
+  `Review a spec`, target task `task-import-1rpbo8n`, short display key
+  `LOO-EBUYE7`, and `Review next spec`. Its task ID, title, route, and review
+  count agree with start readiness and focused Work.
+- At `/projects/looma-knit/overview`, the route shows only the milestone,
+  exact shared progress (`0 of 17 complete`), the named review command, one
+  single-line task target, the contextual count, and one `Review next spec`
+  control. The prior `Open item` and secondary `View work` controls are absent.
+- At desktop, narrow desktop, and `390x844` mobile, document width matched the
+  viewport and the one action remained visible. The mobile action measured
+  316px wide. One click opened the same focused Work route and its `Review
+  spec` action for `LOO-EBUYE7`.
+- Regressions: action-model, ProjectOverviewTab, focused Work, and ProjectView
+  suites pass (111 tests total); typecheck and packaged build pass.
 
 ### New finding: installed-service handoff can require a second start
 
-After two consecutive `pnpm dev:install` runs, the first immediate
+After consecutive `pnpm dev:install` runs, the first immediate
 `guildhall stop && guildhall start` tried to spawn the now-deleted previous
-packaged runtime and raised `ENOENT`; the new `~/.guildhall/app/current`
-pointer was already correct, and a second `guildhall start` then launched the
-new package successfully. The final running service reported `stale:false`
-from `0.13.2-1786558711-51755`. Audit the installer/launcher handoff for an
-atomic runtime transition; do not make operators retry a normal restart.
+packaged runtime and raised `ENOENT`; a later automatic LaunchAgent restart
+did eventually recover. The new `~/.guildhall/app/current` pointer was already
+correct and the final running service reported `stale:false` from
+`0.13.2-1786559572-94576`. Audit the installer/launcher handoff for an atomic
+runtime transition; do not make operators retry or wait through a normal
+restart.
+
+#### Installed-service handoff user job before implementation
+
+After installing an update, an operator can run `guildhall stop && guildhall
+start` once and immediately get the updated service. The installer must first
+quiesce the old LaunchAgent and its child before it removes that versioned
+runtime; then it may publish the new current pointer and load the replacement
+agent. A deleted runtime must never be a possible service executable.

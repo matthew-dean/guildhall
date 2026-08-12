@@ -160,6 +160,7 @@ export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'runn
 export interface ProjectAction {
   source: ProjectActionSource
   label: string
+  taskLabel?: string
   detail?: string
   content?: string
   buttonLabel: string
@@ -299,6 +300,9 @@ function workHrefForTask(taskId: string | undefined): string {
 function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): string {
   if (readiness.code === 'required_migration_pending') return 'Migrate project'
   if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
+  if (readiness.code === 'owner_review_required') {
+    return readiness.count && readiness.count > 1 ? 'Review next spec' : 'Review spec'
+  }
   if (readiness.code === 'owner_input_required') {
     if (readiness.focusKind === 'brief_cleanup') return 'Review brief'
     if (readiness.focusKind === 'spec_review') return 'Review spec'
@@ -335,6 +339,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (readiness.code === 'scope_source_conflict') return 'Review conflict'
   if (readiness.code === 'repository_followup_required') return 'Repo follow-up'
   if (readiness.code === 'paused_live_work') return 'Resume'
+  if (readiness.code === 'owner_review_required') return 'Review needed'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'blocked_work') return 'Needs recovery'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'brief_cleanup') return 'Review brief'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'spec_review') return 'Review needed'
@@ -350,6 +355,9 @@ function isProviderReadinessCode(code: string | undefined): boolean {
 }
 
 function startReadinessActionLabel(readiness: ProjectActionStartReadiness): string {
+  if (readiness.code === 'owner_review_required') {
+    return readiness.focusTaskTitle?.trim() || 'Spec review pending'
+  }
   if (readiness.code === 'owner_input_required') {
     if (readiness.focusKind === 'brief_cleanup') return readiness.focusTaskTitle?.trim() || 'Review task brief'
     if (readiness.focusKind === 'spec_review') return readiness.focusTaskTitle?.trim() || 'Review spec'
@@ -567,13 +575,16 @@ function threadHrefForTask(taskId: string | undefined): string {
 }
 
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
-  const label = startReadinessActionLabel(readiness)
+  const ownerReview = readiness.code === 'owner_review_required'
+  const label = ownerReview ? 'Review a spec' : startReadinessActionLabel(readiness)
+  const taskLabel = ownerReview ? readiness.focusTaskTitle?.trim() : undefined
   const detail = readiness.message && readiness.message !== label
       ? readiness.message
       : undefined
   return {
     source: readiness.code === 'owner_input_required' ? 'owner_input' : 'start_readiness',
     label,
+    ...(taskLabel ? { taskLabel } : {}),
     detail,
     buttonLabel: startReadinessButtonLabel(readiness),
     href: readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),

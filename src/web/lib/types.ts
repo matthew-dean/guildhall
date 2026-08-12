@@ -1467,6 +1467,7 @@ export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'runn
 export interface ProjectAction {
   source?: ProjectActionSource | string
   label?: string
+  taskLabel?: string
   detail?: string
   content?: string
   buttonLabel?: string

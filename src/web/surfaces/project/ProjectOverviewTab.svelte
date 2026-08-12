@@ -3,6 +3,7 @@
   import Card from '../../lib/ui-compat/Card.svelte'
   import Icon from '../../lib/Icon.svelte'
   import { formatUserPath } from '../../lib/display-path.js'
+  import { taskDisplayKey } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, projectActionHref } from '../../lib/project-routes.js'
   import type { ProjectDetail, ProjectActionTone } from '../../lib/types.js'
@@ -27,6 +28,12 @@
   const releaseShipped = $derived(release?.state === 'shipped')
   const releaseLabel = $derived(release?.label ?? 'Current scope')
   const releaseTitle = $derived(release?.kind === 'release' ? 'Current release' : 'Current scope')
+  const releaseProgress = $derived.by(() => {
+    if (releaseShipped) return null
+    const counts = releaseReadiness?.releaseCounts
+    if (!counts || typeof counts.total !== 'number' || counts.total <= 0) return null
+    return `${counts.done} of ${counts.total} complete`
+  })
 
   function decisionTone(tone: ProjectActionTone | string | undefined): DecisionTone {
     if (tone === 'danger' || tone === 'warn' || tone === 'running' || tone === 'accent') return tone
@@ -39,6 +46,8 @@
       const migration = primary.code === 'required_migration_pending'
       return {
         label: migration ? 'Project update required' : primary.label ?? 'Open work',
+        taskLabel: primary.taskLabel?.trim() || null,
+        taskId: primary.taskId?.trim() || null,
         detail: migration ? 'Guildhall needs to update this project before it can run.' : primary.detail ?? '',
         button: migration ? 'Repair project' : primary.buttonLabel ?? 'Open work',
         href: primary.href ?? '/work',
@@ -53,6 +62,8 @@
       const migration = readiness.code === 'required_migration_pending'
       return {
         label: migration ? 'Project update required' : readiness.focusTaskTitle ?? 'Open work',
+        taskLabel: null,
+        taskId: readiness.focusTaskId?.trim() || null,
         detail: migration ? 'Guildhall needs to update this project before it can run.' : readiness.message ?? '',
         button: migration ? 'Repair project' : 'Open work',
         href: readiness.actionHref ?? '/work',
@@ -63,6 +74,8 @@
 
     return {
       label: 'Nothing needs your attention',
+      taskLabel: null,
+      taskId: null,
       detail: 'There is no action waiting on you right now.',
       button: 'View work',
       href: '/work',
@@ -70,6 +83,7 @@
       migration: false,
     }
   })
+  const nextActionTaskKey = $derived(nextAction.taskId ? taskDisplayKey(nextAction.taskId, [], activeProjectId) : null)
 
   function go(href: string): void {
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
@@ -96,11 +110,20 @@
     <div class="decision">
       <div>
         <p class="decision-milestone">{releaseLabel}</p>
+        {#if releaseProgress}
+          <p class="decision-progress">{releaseProgress}</p>
+        {/if}
         {#if releaseShipped}
           <h2>Shipped</h2>
           <p>This release is complete. There is nothing you need to do here.</p>
         {:else}
           <h2>{nextAction.label}</h2>
+          {#if nextAction.taskLabel}
+            <p class="decision-task" title={nextAction.taskLabel}>
+              {#if nextActionTaskKey}<span>{nextActionTaskKey}</span>{/if}
+              {nextAction.taskLabel}
+            </p>
+          {/if}
           {#if nextAction.detail}
             <p>{nextAction.detail}</p>
           {/if}
@@ -117,9 +140,6 @@
             {/if}
             {nextAction.button}
           </Button>
-          {#if nextAction.button !== 'View work'}
-            <Button variant="secondary" onclick={() => go('/work')}>View work</Button>
-          {/if}
         </div>
       {/if}
     </div>
@@ -167,6 +187,28 @@
     margin: var(--s-1) 0 0;
     color: var(--gh-color-text-secondary);
     overflow-wrap: anywhere;
+  }
+
+  .decision-task {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    max-inline-size: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .decision-task span {
+    flex: none;
+    color: var(--gh-color-text-muted);
+    font-family: var(--gh-font-mono, ui-monospace, monospace);
+    font-size: var(--gh-type-size-1);
+  }
+
+  .decision-progress {
+    color: var(--gh-color-text-muted) !important;
+    font-size: var(--gh-type-size-1);
   }
 
   .decision {
