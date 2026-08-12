@@ -314,6 +314,51 @@ describe('buildProjectScopeProjection', () => {
     })
   })
 
+  it('focuses runnable review work before a downstream dependency block', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-dependent', 'work:task-review'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        task({
+          id: 'task-dependent',
+          title: 'Package the app',
+          status: 'ready',
+          dependsOn: ['task-review'],
+          releaseIds: ['stage-1'],
+          spec: 'Package the current app.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Package succeeds.', verifiedBy: 'automated', met: false }],
+        }),
+        task({
+          id: 'task-review',
+          title: 'Review the desktop adapter',
+          status: 'review',
+          releaseIds: ['stage-1'],
+        }),
+      ],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-dependent')).toMatchObject({
+      dependencyBlocked: true,
+    })
+    expect(projection.start).toMatchObject({
+      canStart: true,
+      code: 'ready_work',
+      focusTaskId: 'task-review',
+      focusKind: 'ready_work',
+    })
+  })
+
   it('lets project Start advance an exploring source-backed shaping task', () => {
     const projection = buildProjectScopeProjection({
       version: 1,

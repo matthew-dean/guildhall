@@ -57353,3 +57353,48 @@ appears to do nothing.
   task routing remains via the existing event task ID. No API or persistence
   contract changed.
 - Schema Migration Decision: none; no persisted data changed.
+
+### Repair: Decision routes lead to a recoverable cause
+
+#### Narrative Harness user job before implementation
+
+When the Stage 2 owner chooses the one action Guildhall presents, the opened
+task must be able to resolve the stated blocker. Guildhall may not route to a
+downstream task that is merely waiting on work elsewhere.
+
+- [x] Live finding: Narrative Harness Overview sent the owner to ready
+  `NAR-092` because it was dependency-blocked, although its prerequisite
+  `NAR-091` was executable review work. The Task route then rendered a large
+  record with no action that could unblock the project.
+- [x] Repair the shared selected-scope precedence so an explicit blocked task
+  remains first, but inherited dependency blocking never hides runnable review
+  work that can actually advance the release.
+- [x] Advance the compact summary projection version with the precedence change
+  so an installed runtime refreshes its saved decision packet instead of
+  continuing to serve the old route until unrelated project data changes.
+- [x] Keep the orientation pin in that regenerated packet aligned with the
+  final shared action focus, rather than the pre-action execution candidate.
+- Contract Touch Decision: the selected-scope start state, project decision,
+  action model, and orientation pin remain existing derived contracts. The
+  decision now carries the refined start-action focus and the compact summary
+  projection version advances so existing installed projects regenerate it.
+  Considered but unchanged: task status, dependency schema, release membership,
+  proof records, and all task persistence. Proof: focused scope, decision, and
+  summary regressions plus installed Narrative Harness replay. Apply/revert:
+  applying reprojects current state only; reverting restores the stale
+  downstream focus, with no durable task-data rollback.
+- Schema Migration Decision: no persisted task or project schema changes. The
+  versioned compact projection is an on-read cache; old versions remain
+  compatibility-readable, are marked stale, and regenerate on startup.
+- Evidence, 2026-08-12: an installed `stale:false` runtime regenerated the
+  Narrative Harness summary. The API now agrees on `task-091` across the
+  action model, start readiness, decision execution focus, orientation pin,
+  and next action. At `1280x720`, Overview -> Open Work -> Open task reached
+  `NAR-091` and displayed `Resume only this work item`; the Overview also had
+  no horizontal overflow at `390x844` with `Open Work` visible.
+- [ ] Radical follow-up: the `NAR-091` task record still presents the old
+  dossier wall (description, task links, all delivery rows, sizing, request
+  shape, review plan, and evidence requirements) before or alongside one
+  resume command. Redesign the default task route as an action surface with
+  the current command pinned at the top; move non-decision data out of the
+  default entirely, not merely into smaller cards or shorter prose.

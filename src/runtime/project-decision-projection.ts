@@ -948,6 +948,8 @@ export function applyProjectActionModelPrimaryAction(
     source?: string
     taskId?: string
     code?: string
+    label?: string
+    detail?: string
   } | null | undefined,
 ): ProjectDecisionProjection {
   if (!action || decision.conflicts.length > 0 || decision.ownerInput.state === 'required' || decision.ownerReview.state === 'required') return decision
@@ -965,8 +967,23 @@ export function applyProjectActionModelPrimaryAction(
       : decision.execution.state === 'paused'
         ? 'resume' as const
         : 'open_work' as const
+  const actionTitle = action.label?.trim() || decision.execution.focusTaskTitle || taskId
+  // Start readiness owns the executable decision. Keep its refined action
+  // focus in the same packet so orientation cannot retain a downstream task.
+  const execution = action.source === 'start_readiness'
+    ? {
+        ...decision.execution,
+        state: action.code === 'ready_work' ? 'runnable' as const : decision.execution.state,
+        code: action.code ?? decision.execution.code,
+        focusTaskId: taskId,
+        focusTaskTitle: actionTitle,
+        focus: { taskId, displayTitle: actionTitle },
+        ...(action.detail?.trim() ? { message: action.detail.trim() } : {}),
+      }
+    : decision.execution
   return {
     ...decision,
+    execution,
     primaryAction: {
       kind,
       targetId: taskId,

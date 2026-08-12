@@ -48,6 +48,7 @@ import {
   reconcileOrientationSpineWithReleaseTruth,
   type OrientationReleaseState,
   type OrientationReleaseTruth,
+  type OrientationPin,
   type OrientationWorkspaceImportDraftContext,
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
@@ -66,9 +67,9 @@ import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 28 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 32 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -1532,7 +1533,10 @@ export function buildProjectSummaryProjectionFromIndexedState(
     releaseSummary,
     rows,
     nextAction,
-    focus: initialDecision.execution.focus,
+    // The action model may refine a stale execution focus to the task that
+    // can actually continue. Keep the persisted orientation pin on that same
+    // shared decision instead of preserving the downstream task it replaced.
+    focus: decision.execution.focus,
     currentProofByTaskId,
   })
   return {
@@ -1680,10 +1684,24 @@ function synchronizeIndexedOrientationSpine(
     : input.releaseSummary.state === 'blocked'
       ? `${label} needs attention.`
       : `${label} is in progress.`
+  const focusPinKind: OrientationPin['kind'] = input.nextAction.focusKind === 'proof'
+    ? 'proof'
+    : input.nextAction.focusKind === 'spec_review'
+      ? 'review'
+      : input.nextAction.code === 'ready_work' || input.nextAction.code === 'paused_live_work'
+        ? 'active_work'
+        : 'owner_input'
   const activePins = input.focus
-    ? spine.activePins.map(pin => pin.id === `start-focus:${input.focus!.taskId}`
-      ? { ...pin, nodeId: `work:${input.focus!.taskId}`, label: input.focus!.displayTitle }
-      : pin)
+    ? [
+        ...spine.activePins.filter(pin => !pin.id.startsWith('start-focus:')),
+        {
+          id: `start-focus:${input.focus.taskId}`,
+          nodeId: `work:${input.focus.taskId}`,
+          label: input.focus.displayTitle,
+          kind: focusPinKind,
+          href: `/work?task=${encodeURIComponent(input.focus.taskId)}`,
+        },
+      ]
     : spine.activePins
   const patchNode = (node: ProjectOrientationSpine['roots'][number]): ProjectOrientationSpine['roots'][number] => {
     const taskId = node.id.startsWith('work:') ? node.id.slice('work:'.length) : null

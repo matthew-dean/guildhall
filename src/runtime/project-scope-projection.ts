@@ -1080,6 +1080,21 @@ export function summarizeProjectScopeStart(
       actionHref: `/work?task=${encodeURIComponent(specWork.taskId)}`,
     }
   }
+  // Review work is already executable. Do not send the owner to a later task
+  // which is only waiting on that review.
+  const reviewWork = included.find(row => !row.dependencyBlocked && row.handoffState === 'review')
+  if (reviewWork) {
+    return {
+      canStart: true,
+      code: 'ready_work',
+      label: 'Start',
+      focusTaskId: reviewWork.taskId,
+      focusTaskTitle: reviewWork.title,
+      focusKind: 'ready_work',
+      message: `"${reviewWork.title}" is ready to continue review.`,
+      actionHref: `/work?task=${encodeURIComponent(reviewWork.taskId)}`,
+    }
+  }
   const blocked = included.find(row => row.handoffState === 'blocked' || row.dependencyBlocked)
   if (blocked) {
     const dependencyReview = blocked.dependencyTaskIds

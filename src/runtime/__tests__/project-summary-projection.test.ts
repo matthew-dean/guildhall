@@ -561,6 +561,9 @@ describe('project-summary-projection', () => {
     })
 
     expect(projection.decision.primaryAction.targetId).toBe(projection.actionModel?.primaryAction?.taskId)
+    expect(projection.orientationSpine?.summary.pinnedNow).toEqual([
+      projection.decision.execution.focusTaskTitle,
+    ])
   })
 
   it('projects Work summary counts from the full task inventory', () => {

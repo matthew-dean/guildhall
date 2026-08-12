@@ -107,6 +107,36 @@ describe('project decision projection', () => {
     }).primaryAction).toEqual({ kind: 'none', reasonCode: 'release_shipped' })
   })
 
+  it('aligns execution focus with the shared start action', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-12T20:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        focusTaskId: 'downstream-task',
+        focusTaskTitle: 'Downstream task',
+        focusKind: 'blocked_work',
+        message: 'Downstream work is waiting.',
+      },
+      release: { scopeMode: 'named_release', release: { id: 'release-1' }, state: 'active', blockers: [] },
+    })
+
+    expect(applyProjectActionModelPrimaryAction(decision, {
+      source: 'start_readiness',
+      taskId: 'review-task',
+      code: 'ready_work',
+      label: 'Continue review',
+      detail: 'Continue the review task before its dependent work.',
+    }).execution).toMatchObject({
+      state: 'runnable',
+      code: 'ready_work',
+      focusTaskId: 'review-task',
+      focusTaskTitle: 'Continue review',
+      focus: { taskId: 'review-task', displayTitle: 'Continue review' },
+      message: 'Continue the review task before its dependent work.',
+    })
+  })
+
   it('attaches a focus title only from the canonical task in the captured snapshot', () => {
     const decision = buildProjectDecisionProjection({
       projectRevision: 43,
