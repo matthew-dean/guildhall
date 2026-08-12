@@ -489,6 +489,44 @@ help_summary: |
   per viewport, no duplicate actions, narrative text capped at two lines outside
   disclosures, and no empty informational cards.
 
+### Repair: Thread does not render a stopped work queue as a conversation
+
+#### Thread user job before implementation
+
+When the owner opens Thread and Guildhall has no question or approval for
+them, they should learn that immediately and get one route to the selected
+work. Queued tasks and review notes are activity, not a conversation the owner
+must read before deciding what to do.
+
+- [x] Default a stopped shared `ready_work` state to `No response needed` and
+  one `Open work` route rather than the Thread list, selected detail, active
+  dock, and queued/history stack.
+- [x] Replay the installed Narrative Harness stopped-ready route at desktop and
+  mobile; confirm owner-input and live-run states retain their dedicated
+  response and progress surfaces.
+- Contract Touch Decision: Thread consumes the existing shared
+  `actionModel.primaryAction.code`, task ID, label, detail, and href without
+  changing their authority or ranking. It suppresses only the local thread
+  presentation when that model says `ready_work`, the referenced task is
+  already represented in Thread, and no run is active. Considered but
+  unchanged: thread event persistence, task status, run protocol, owner-input
+  routing, live-agent activity, and task-detail APIs. Proof required/provided:
+  a Thread component regression checks that a stopped ready-work state exposes
+  neither list, detail, nor dock and that its one button retains the scoped
+  Work href. Installed route proof remains open. Apply/revert affects default
+  presentation only; detailed Thread behavior remains for owner input and live
+  activity.
+- Schema Migration Decision: none; no persisted schema, event envelope, or
+  compatibility reader changes.
+- Evidence, 2026-08-12: `ThreadTab.svelte.test.ts` covers the stopped
+  `ready_work` presentation and retained scoped Work route. In the installed
+  `stale:false` runtime `0.13.2-1786568575-20640`, Narrative Harness Thread
+  rendered only `No response needed`, the selected task, its one-sentence
+  status, and `Open Work`; it contained no Thread list, selected-detail pane,
+  active dock, queued task rows, or reviewer history. `Open Work` routed to
+  `task-091`. The same compact Thread had no horizontal overflow at `1280x720`
+  or `390x844`.
+
 ### Installed Flow Proof
 
 - Installed artifact:

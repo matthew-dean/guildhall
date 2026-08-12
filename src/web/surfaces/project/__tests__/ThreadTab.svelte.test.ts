@@ -890,6 +890,39 @@ describe('ThreadTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?task=task-current-review')
   })
 
+  it('keeps a stopped ready-work Thread to one route back to the selected work', async () => {
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-ready-work',
+        taskId: 'task-ready-work',
+        taskTitle: 'Resume the focused work',
+        summary: 'This queue detail belongs in Work, not the default Thread view.',
+      }),
+    ], 'worker-ready-work', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Resume the focused work',
+          taskId: 'task-ready-work',
+          detail: 'Guildhall can continue this work item.',
+          buttonLabel: 'Open work',
+          href: '/work?task=task-ready-work',
+          tone: 'accent',
+          code: 'ready_work',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'No response needed' })
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+    expect(screen.queryByLabelText('Active thread dock')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Open work' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-ready-work')
+  })
+
   it('opens a routed bounded-chat prompt directly on compact Thread even when many threads exist', async () => {
     installViewportMatchMedia(640)
     installBrowserFakes('/projects/looma-knit/thread?thread=bc-new-thread-1')

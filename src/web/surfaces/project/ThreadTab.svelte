@@ -1529,6 +1529,18 @@
     ),
   )
   const showProjectDecisionFirst = $derived(Boolean(ownerAction && !ownerActionHasThread && !projectActivityVisible))
+  // Thread is for a response, not a second work queue. When the shared action
+  // says Guildhall can resume a represented task, leave its history out of the
+  // default view and send the owner to the one work item instead.
+  const showReadyWorkSummary = $derived(Boolean(
+    ownerAction &&
+    ownerActionHasThread &&
+    !showProjectDecisionFirst &&
+    !projectActivityVisible &&
+    ownerAction.code === 'ready_work' &&
+    runStatus !== 'running' &&
+    runStatus !== 'stopping',
+  ))
   const compactListView = $derived(compactThreadMode && compactPane === 'list')
   const compactDetailView = $derived(compactThreadMode && compactPane === 'detail')
   const activeOwnerInputQuestions = $derived(
@@ -3727,6 +3739,20 @@
             </Row>
           </div>
         </Card>
+      {:else if showReadyWorkSummary}
+        <Card title="No response needed" titleTag="h2" tone="accent" variant="callout" railStrength="strong">
+          <div class="thread-project-decision">
+            <div>
+              <h3>{ownerAction?.label ?? 'Work is ready to continue'}</h3>
+              {#if ownerAction?.detail}
+                <p>{ownerAction.detail}</p>
+              {/if}
+            </div>
+            <Row justify="end" wrap>
+              <Button variant="primary" onclick={openProjectDecision}>{ownerAction?.buttonLabel ?? 'Open work'}</Button>
+            </Row>
+          </div>
+        </Card>
       {:else if threadChains.length === 0}
         <Card title="Nothing current">
           <p class="muted">
@@ -3735,7 +3761,7 @@
         </Card>
       {/if}
 
-      {#if threadChains.length > 0 && !showProjectDecisionFirst}
+      {#if threadChains.length > 0 && !showProjectDecisionFirst && !showReadyWorkSummary}
         {#if ownerAction && !ownerActionHasThread}
           <Row justify="end">
             <Button variant="ghost" size="sm" onclick={() => (projectActivityVisible = false)}>Back to project decision</Button>
