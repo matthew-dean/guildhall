@@ -866,6 +866,9 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('link', { name: /migrate project/i })).toBeNull()
     expect(screen.getByRole('alert', { name: 'Project update required' })).toHaveTextContent('Update this project before working.')
     expect(screen.queryByText('Run the required project update before working.')).toBeNull()
+    expect(screen.queryByRole('toolbar', { name: /work view controls/i })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Work list' })).toBeNull()
+    expect(screen.queryByText('Knit: add link editor controls')).toBeNull()
   })
 
   it('opens the shared migration repair modal when a task action routes back with repair intent', async () => {

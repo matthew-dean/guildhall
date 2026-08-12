@@ -1789,23 +1789,27 @@
               <WorkspaceImportTab />
             {/await}
           {:else if currentView === 'work'}
-            {#await loadWorkTab()}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {:then module}
-              {@const WorkTab = module.default}
-              <WorkTab {detail} mode="list" />
-            {/await}
+            {#if !requiredMigrationBlocked}
+              {#await loadWorkTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const WorkTab = module.default}
+                <WorkTab {detail} mode="list" />
+              {/await}
+            {/if}
           {:else if currentView === 'planner'}
-            {#await loadWorkTab()}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {:then module}
-              {@const WorkTab = module.default}
-              <WorkTab {detail} mode="board" />
-            {/await}
+            {#if !requiredMigrationBlocked}
+              {#await loadWorkTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const WorkTab = module.default}
+                <WorkTab {detail} mode="board" />
+              {/await}
+            {/if}
           {:else if currentView === 'facts'}
             {#await loadFactsTab()}
               <div class="page-centered page-centered-inline">

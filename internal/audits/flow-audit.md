@@ -57771,3 +57771,33 @@ the explanatory gate on Work, and the same migration command on Release with
 `0/16 done`. There was no page-level horizontal overflow at 1440px Overview,
 1024px Work, or 390px Release. The migration was not applied, so task-review
 actions correctly remain gated rather than presenting a contradictory action.
+
+### Repair: A required project update suppresses non-executable work
+
+#### Migration-gate user job before implementation
+
+When a required project update blocks every task action, the owner needs one
+clear command to apply that update. Work and Board must not present a task
+inventory, filters, or a second decision surface that cannot be acted on until
+the update finishes.
+
+- [x] Suppress Work and Board content while the shared required-migration gate
+  is active; the existing top-bar migration command and one-line reason remain
+  the sole visible route decision.
+- Contract Touch Decision: `ProjectView.requiredMigrationBlocked` already
+  derives from the shared `startReadiness` response and owns this presentation
+  gate. Work/Board are suppressed at the route boundary and do not receive a
+  second local migration interpretation. Considered but unchanged: migration
+  execution, action-model ranking, task inventory API, task routing, and
+  persisted project state. Proof required: ProjectView regression and an
+  installed Looma Work replay. Apply/revert changes only whether unavailable
+  route content is rendered.
+- Schema Migration Decision: none; this is route presentation over existing
+  shared readiness data.
+- Evidence, 2026-08-12: `ProjectView.svelte.test.ts` passes all 67 tests,
+  including the migration-gated Work assertion. `pnpm typecheck`,
+  `pnpm lint:contracts`, and `git diff --check` pass. After a fresh installed
+  build reported `stale:false`, Looma Work rendered only the `Migrate` command
+  and `Update this project before working.` It contained no Work controls,
+  task-list heading, task rows, or page-level horizontal overflow at 1280px.
+  The migration was not applied.
