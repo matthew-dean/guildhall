@@ -87,7 +87,9 @@ export function releaseVerdictSummary(
   const taskCount = totals?.tasks ?? 0
   const doneCount = totals?.done ?? 0
   const unfinishedCount = totals?.unfinishedCount ?? unfinishedCountFromStatusCounts(releaseReadiness.statusCounts)
-  const dirtyCheckoutCount = releaseReadiness.dirtyCheckout?.ownedCount ?? totals?.dirtyCheckoutBlockingCount ?? 0
+  const dirtyCheckoutCount = releaseReadiness.dirtyCheckout?.error
+    ? Math.max(releaseReadiness.dirtyCheckout.ownedCount ?? 0, 1)
+    : releaseReadiness.dirtyCheckout?.ownedCount ?? totals?.dirtyCheckoutBlockingCount ?? 0
   const designSystemBlockingCount = totals?.designSystemBlockingCount ?? (
     releaseReadiness.checksLoaded === false
       ? 0
@@ -118,7 +120,7 @@ export function releaseVerdictSummary(
     },
     designSystem: releaseReadiness.designSystem ?? {},
     dirtyCheckout: {
-      ownedCount: dirtyCheckoutCount,
+      ownedCount: releaseReadiness.dirtyCheckout?.ownedCount ?? 0,
       ...(releaseReadiness.dirtyCheckout?.error ? { error: releaseReadiness.dirtyCheckout.error } : {}),
     },
   })

@@ -10,10 +10,11 @@
   import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import Button from '../../lib/Button.svelte'
+  import { taskDisplayKey } from '../../lib/identifier-labels.js'
   import { nav } from '../../lib/nav.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { releaseVerdictSummary } from '../../lib/release-readiness.js'
-  import type { ProjectOrientationSpine, ProjectReleaseReadiness, ProjectSummaryRelease } from '../../lib/types.js'
+  import type { ProjectDetail, ProjectOrientationSpine, ProjectReleaseReadiness, ProjectSummaryRelease } from '../../lib/types.js'
 
   interface ReleaseItem {
     id?: string
@@ -100,8 +101,9 @@
     subView?: string | null
     activeProjectId?: string | null
     projectSummary?: ProjectSummaryRelease | null
+    projectDetail?: ProjectDetail | null
   }
-  let { subView = null, activeProjectId = null, projectSummary = null }: Props = $props()
+  let { subView = null, activeProjectId = null, projectSummary = null, projectDetail = null }: Props = $props()
   const section = $derived(subView ?? 'verdict')
 
   let data = $state<ReleasePayload | null>(null)
@@ -332,26 +334,6 @@
     return { label: ds.label ?? `draft · rev ${ds.revision ?? 0}`, tone: 'warn' as const, clear: false }
   })
 
-  const unfinishedCount = $derived.by(() => {
-    if (!data) return 0
-    const terminal = new Set(['done', 'shelved', 'cancelled', 'archived', 'pending_pr'])
-    return Object.entries(data.statusCounts).reduce((total, [status, count]) => {
-      return terminal.has(status) ? total : total + count
-    }, 0)
-  })
-  const dirtyCheckoutCount = $derived(data?.dirtyCheckout?.ownedCount ?? 0)
-  const dirtyCheckoutError = $derived(data?.dirtyCheckout?.error ?? '')
-  const checkoutInspectionError = $derived(
-    dirtyCheckoutError
-      ? /git status|fatal: not a git repository|spawn git enoent/i.test(dirtyCheckoutError)
-        ? 'Guildhall could not inspect the configured repository boundary with git. Check that git is available and that any workspace child repos are reachable.'
-        : dirtyCheckoutError
-      : '',
-  )
-  const managedCheckoutFilesLabel = (count: number): string =>
-    `${count} Guildhall-managed checkout ${count === 1 ? 'file' : 'files'}`
-  const managedCheckoutNeedsVerb = (count: number): string =>
-    count === 1 ? 'needs' : 'need'
   function normalizedGitStoryState(state: string | undefined): string {
     return String(state ?? '').trim().toLowerCase()
   }
@@ -440,33 +422,26 @@
   const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
   const designSystemBlockingCount = $derived(data?.totals.designSystemBlockingCount ?? (dsLabel().clear ? 0 : 1))
   const hasNamedRelease = $derived(Boolean(data?.release?.label ?? projectSummary?.release?.label))
-  const readinessNoun = $derived(hasNamedRelease ? 'release' : 'scope')
   const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Scope readiness')
   const blockerNoun = $derived(hasNamedRelease ? 'release blocker' : 'scope blocker')
-  const openCheckNoun = $derived(hasNamedRelease ? 'release check' : 'scope check')
-  const openCheckCount = $derived(Math.max(data?.totals.blockingCount ?? 0, unfinishedCount))
 
   const verdict = $derived(data ? releaseVerdictSummary(data) ?? { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' } : { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' })
   const verdictTitle = $derived(data?.verdict?.title ?? verdict.label)
   const releaseShipped = $derived(data?.release?.state === 'shipped')
   const canShipRelease = $derived(Boolean(data?.release?.id) && !releaseShipped && verdict.state === 'ready')
+  const ownerAction = $derived(projectDetail?.actionModel?.primaryAction ?? null)
+  const ownerActionTaskKey = $derived(ownerAction?.taskId ? taskDisplayKey(ownerAction.taskId, [], activeProjectId) : null)
+  const hasOwnerAction = $derived(Boolean(ownerAction?.href && ownerAction?.buttonLabel))
 
   const sectionCopy = $derived(
     section === 'criteria'
         ? {
           title: hasNamedRelease ? 'Release checks' : 'Scope checks',
-          description: hasNamedRelease
-            ? 'Expand any row to inspect the tasks, approvals, checkout state, and repository follow-ups for the current release.'
-            : 'Expand any row to inspect the tasks, approvals, checkout state, and repository follow-ups for the current project scope.',
+          description: 'Inspect only when you need the underlying checks.',
         }
       : {
           title: releaseShipped ? 'Release shipped' : readinessTitle,
-          description: releaseShipped
-            ? `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} scoped work items complete.`
-            : data?.release?.description ?? data?.scope?.description
-              ?? (hasNamedRelease
-                ? 'A quick read on whether the current release is ready to hand off, ship, or deliberately defer.'
-                : 'A quick read on whether the current project scope is ready to hand off, ship, or deliberately defer.'),
+          description: '',
           },
   )
   const releaseLabel = $derived(data?.release?.label ?? data?.scope?.label ?? projectSummary?.release?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Unreleased work')
@@ -475,62 +450,6 @@
   const statusRows = $derived(
     data ? Object.entries(data.statusCounts).sort((a, b) => b[1] - a[1]) : [],
   )
-  const releaseBlockerLabel = $derived(
-    data
-      ? `${openCheckCount} open ${openCheckNoun}${openCheckCount === 1 ? '' : 's'}`
-      : `0 open ${openCheckNoun}s`,
-  )
-  const blockerStack = $derived.by(() => {
-    if (!data) return []
-    const rows: Array<{ key: string; label: string; count: number; detail: string }> = []
-    const add = (key: string, label: string, count: number, detail: string) => {
-      if (count > 0) rows.push({ key, label, count, detail })
-    }
-    add(
-      'shaping',
-      'Needs shaping',
-      data.incompleteBriefs?.length ?? 0,
-      extraOf(data.incompleteBriefs?.[0] ?? {}) || titleOf(data.incompleteBriefs?.[0] ?? {}) || 'Imported work needs source-backed briefs before unattended execution.',
-    )
-    add(
-      'escalations',
-      'Open escalations',
-      data.openEscalations.length,
-      escalationDetailOf(data.openEscalations[0] ?? {}) || 'A task is waiting on a recovery decision.',
-    )
-    const approvalCount = data.unapprovedBriefs.length + data.unapprovedSpecs.length
-    add(
-      'approval',
-      'Approval waiting',
-      approvalCount,
-      `${approvalCount} ${approvalCount === 1 ? 'brief or spec is' : 'briefs or specs are'} waiting for review.`,
-    )
-    add(
-      'proof',
-      'Proof missing',
-      data.proofMissingDoneTasks?.length ?? 0,
-      titleOf(data.proofMissingDoneTasks?.[0] ?? {}) || 'Completed work still needs proof evidence.',
-    )
-    add(
-      'blocked',
-      'Agent-blocked tasks',
-      data.blockedByAgent.length,
-      extraOf(data.blockedByAgent[0] ?? {}) || titleOf(data.blockedByAgent[0] ?? {}) || 'A task is blocked in automation.',
-    )
-    add(
-      'checkout',
-      'Project checkout',
-      dirtyCheckoutError ? 1 : dirtyCheckoutCount,
-      dirtyCheckoutError ? checkoutInspectionError : `${managedCheckoutFilesLabel(dirtyCheckoutCount)} ${managedCheckoutNeedsVerb(dirtyCheckoutCount)} cleanup.`,
-    )
-    add(
-      'repository',
-      'Repository follow-up',
-      gitStoryBlockers.length,
-      gitStoryBlockers[0] ? gitBlockerCopy(gitStoryBlockers[0]).label : 'Branches or checkouts need landing decisions.',
-    )
-    return rows
-  })
   const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No tracked work yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
   const spineReleaseBlocker = $derived(spine?.release?.blockers?.[0] ?? null)
   const spineBlockerNode = $derived(spineReleaseBlocker?.owningNodeId ? spine?.nodes?.[spineReleaseBlocker.owningNodeId] ?? null : null)
@@ -575,13 +494,7 @@
         {#if releaseShipped}
           <StatusPill label="Shipped" tone="ok" />
         {:else}
-          <StatusPill label={verdict.label} tone={verdict.tone} emphasis="default" />
           <StatusPill label={taskDoneLabel} tone="neutral" />
-          {#if canShipRelease}
-            <Button variant="primary" size="sm" disabled={closeBusy} onclick={() => void shipRelease()}>
-              {closeBusy ? 'Shipping…' : 'Ship release'}
-            </Button>
-          {/if}
         {/if}
       {/snippet}
     </SectionHeader>
@@ -621,123 +534,45 @@
 
     {#if section === 'verdict'}
       {#if releaseShipped}
-        <div class="release-receipt-actions">
-          <Button
-            variant="secondary"
-            size="sm"
-            onclick={() => nav(currentProjectHref('/release/criteria', activeProjectId))}
-          >
-            View release checks
-          </Button>
-        </div>
-      {:else}
-        <NoticeBand
-          tone={verdict.tone === 'ok' ? 'ok' : 'warn'}
-          role="status"
-          label="Verdict"
-          title={verdictTitle}
-        >
-          <p>{verdict.detail}</p>
+        <NoticeBand tone="ok" role="status" label="Release" title="This release is complete">
+          <p>There is nothing you need to do here.</p>
         </NoticeBand>
+      {:else}
         <FrameCard
-          tone={data.totals.blockingCount === 0 ? 'ok' : 'warn'}
+          tone={ownerAction?.tone === 'danger' ? 'danger' : ownerAction?.tone === 'warn' ? 'warn' : verdict.tone === 'ok' ? 'ok' : 'neutral'}
           padding="compact"
-          class="summary-card"
+          class="release-action-card"
         >
-        {#snippet header()}
-          <SectionHeader
-            title="Current counts"
-            description={`A compact view of the signals feeding the ${readinessNoun} verdict.`}
-            headingTag="h3"
-            density="dense"
-          >
-            {#snippet meta()}
-              <StatusPill label={releaseBlockerLabel} tone={data.totals.blockingCount === 0 ? 'ok' : 'warn'} />
-            {/snippet}
-          </SectionHeader>
-        {/snippet}
-
-        <div class="summary-grid" aria-label={`${readinessTitle} summary counts`}>
-          <div class="summary-stat">
-            <span class="summary-label">Tasks done</span>
-            <strong>{data.totals.tasks === 0 ? 'No tracked work' : `${data.totals.done}/${data.totals.tasks}`}</strong>
-          </div>
-          <div class="summary-stat">
-            <span class="summary-label">Open {hasNamedRelease ? 'release checks' : 'checks'}</span>
-            <strong>{openCheckCount}</strong>
-          </div>
-          <div class="summary-stat">
-            <span class="summary-label">Unfinished tasks</span>
-            <strong>{data.totals.unfinishedCount ?? unfinishedCount}</strong>
-          </div>
-          <div class="summary-stat">
-            <span class="summary-label">Design system</span>
-            <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
-          </div>
-          {#if data.dirtyCheckout}
-            <div class="summary-stat">
-              <span class="summary-label">Project checkout</span>
-          <StatusPill
-                label={dirtyCheckoutError ? 'inspection failed' : dirtyCheckoutCount > 0 ? `${dirtyCheckoutCount} managed ${dirtyCheckoutCount === 1 ? 'file' : 'files'} dirty` : 'clean'}
-                tone={dirtyCheckoutError || dirtyCheckoutCount > 0 ? 'warn' : 'ok'}
-              />
+          <div class="release-action">
+            <div>
+              <p class="release-action-label">{hasOwnerAction ? 'What needs your attention' : 'Release status'}</p>
+              <h3>{hasOwnerAction ? ownerAction?.label : verdictTitle}</h3>
+              {#if ownerAction?.taskLabel}
+                <p class="release-action-task" title={ownerAction.taskLabel}>
+                  {#if ownerActionTaskKey}<span>{ownerActionTaskKey}</span>{/if}
+                  {ownerAction.taskLabel}
+                </p>
+              {/if}
+              <p>{hasOwnerAction ? ownerAction?.detail : verdict.detail}</p>
             </div>
-          {/if}
-          {#if data.gitStory}
-            <div class="summary-stat">
-              <span class="summary-label">Repository follow-up</span>
-              <StatusPill
-                label={gitStoryBlockers.length > 0 ? `${gitStoryBlockers.length} open` : 'clear'}
-                tone={gitStoryBlockers.length > 0 ? 'warn' : 'ok'}
-              />
+            <div class="release-action-controls">
+              {#if hasOwnerAction}
+                <Button
+                  variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'}
+                  onclick={() => nav(projectActionHref(ownerAction?.href ?? '/work', activeProjectId))}
+                >
+                  {ownerAction?.buttonLabel}
+                </Button>
+              {:else if canShipRelease}
+                <Button variant="primary" disabled={closeBusy} onclick={() => void shipRelease()}>
+                  {closeBusy ? 'Shipping…' : 'Ship release'}
+                </Button>
+              {/if}
+              <Button variant="ghost" size="sm" onclick={() => nav(currentProjectHref('/release/criteria', activeProjectId))}>
+                Inspect release details
+              </Button>
             </div>
-          {/if}
-        </div>
-        {#if blockerStack.length > 0}
-          <div class="blocker-stack" aria-label="Current blocker stack">
-            <strong>What blocks this</strong>
-            <ul>
-              {#each blockerStack as row (row.key)}
-                <li>
-                  <span>
-                    <b>{row.label}</b>
-                    <small>{row.detail}</small>
-                  </span>
-                  <StatusPill label={`${row.count} open`} tone="warn" />
-                </li>
-              {/each}
-            </ul>
           </div>
-        {/if}
-        {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
-          <p class="dirty-detail">
-            {managedCheckoutFilesLabel(dirtyCheckoutCount)} {managedCheckoutNeedsVerb(dirtyCheckoutCount)} cleanup before {data.release?.label ? 'the current release' : 'current work'} can be ready.
-            Open diagnostics if you need the exact file list.
-          </p>
-        {:else if dirtyCheckoutError}
-          <p class="dirty-detail">
-            <strong>Could not inspect checkout</strong>. {checkoutInspectionError}
-          </p>
-        {/if}
-        {#if gitStoryBlockers.length > 0}
-          <div class="git-story-detail">
-            <strong>Repository follow-up</strong>
-            {#if gitStoryBlockers.length > visibleGitStoryBlockers.length}
-              <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} repository follow-ups.</p>
-            {/if}
-            <ul>
-              {#each visibleGitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
-                {@const copy = gitBlockerCopy(blocker)}
-                <li>
-                  <span>{copy.label}</span>
-                  {#if copy.detail}
-                    <small>{copy.detail}</small>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          </div>
-        {/if}
         </FrameCard>
       {/if}
     {/if}
@@ -875,96 +710,69 @@
     container-type: inline-size;
   }
 
-  :global(.summary-card),
   :global(.criteria-card),
   :global(.tally-card) {
     min-inline-size: 0;
   }
 
-  .summary-grid {
-    display: grid;
-    gap: var(--gh-space-3);
-  }
-
-  .summary-stat {
-    display: grid;
-    gap: var(--gh-space-1);
-  }
-
-  .summary-label,
   .muted {
     color: var(--text-muted);
     font-size: var(--gh-type-size-body);
     line-height: var(--gh-type-line-height-body);
   }
 
-  .summary-stat strong {
-    font-size: var(--gh-type-size-section-title);
-    line-height: var(--gh-type-line-height-tight);
+  .release-action {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: var(--gh-space-4);
   }
 
-  .dirty-detail {
-    margin: var(--gh-space-3) 0 0;
+  .release-action > div:first-child {
+    min-inline-size: 0;
+  }
+
+  .release-action-label,
+  .release-action p {
+    margin: 0;
     color: var(--text-muted);
     font-size: var(--gh-type-size-body);
     line-height: var(--gh-type-line-height-body);
   }
 
-  .blocker-stack {
-    display: grid;
-    gap: var(--gh-space-2);
-    margin-top: var(--gh-space-3);
+  .release-action-label {
+    margin-bottom: var(--gh-space-1) !important;
+    font-weight: var(--gh-type-weight-strong);
+    text-transform: uppercase;
   }
 
-  .blocker-stack ul {
-    display: grid;
-    gap: var(--gh-space-2);
+  .release-action h3 {
     margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .blocker-stack li {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--gh-space-3);
-    align-items: start;
-    padding-top: var(--gh-space-2);
-    border-top: 1px solid var(--gh-color-border-subtle);
-  }
-
-  .blocker-stack span {
-    min-width: 0;
-    display: grid;
-    gap: var(--gh-space-1);
-  }
-
-  .blocker-stack small {
-    color: var(--text-muted);
-  }
-
-  .git-story-detail {
-    display: grid;
-    gap: var(--gh-space-2);
-    margin: var(--gh-space-3) 0 0;
     color: var(--text);
-    font-size: var(--gh-type-size-body);
+    font-size: var(--gh-type-size-panel-title);
+    line-height: var(--gh-type-line-height-tight);
   }
 
-  .git-story-detail ul {
-    display: grid;
-    gap: var(--gh-space-1);
-    margin: 0;
-    padding-inline-start: 1.1rem;
+  .release-action-task {
+    display: flex;
+    gap: var(--gh-space-2);
+    margin-top: var(--gh-space-1) !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .git-story-detail li {
-    display: grid;
-    gap: 0.1rem;
+  .release-action-task span {
+    flex: none;
+    font-family: var(--gh-font-mono, ui-monospace, monospace);
   }
 
-  .git-story-detail small {
-    color: var(--text-muted);
+  .release-action-controls {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    justify-content: flex-end;
   }
 
   .release-spine {
@@ -1033,10 +841,6 @@
 
   .crit-det {
     width: 100%;
-  }
-
-  .release-receipt-actions {
-    display: flex;
   }
 
   .crit-summary {
@@ -1140,15 +944,19 @@
     border-top: none;
   }
 
-  @container (min-width: 42rem) {
-    .summary-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-  }
-
   @media (max-width: 720px) {
-    .release-spine {
+    .release-spine,
+    .release-action {
       grid-template-columns: 1fr;
+    }
+
+    .release-action {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .release-action-controls {
+      justify-content: flex-start;
     }
   }
 </style>

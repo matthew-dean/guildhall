@@ -1678,7 +1678,7 @@
                 </div>
               {:then module}
                 {@const ReleaseTab = module.default}
-                <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} />
+                <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} projectDetail={detail} />
               {/await}
             {:else}
               <div class="page-centered page-centered-inline">
@@ -1816,7 +1816,7 @@
               </div>
             {:then module}
               {@const ReleaseTab = module.default}
-              <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} />
+              <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} projectDetail={detail} />
             {/await}
         {:else if currentView === 'settings'}
           {#await loadSettingsTab()}

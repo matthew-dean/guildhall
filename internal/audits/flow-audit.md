@@ -57067,3 +57067,51 @@ send the owner into unrelated work.
   runtime. Fresh desktop, narrow-desktop, and mobile browser proof remains an
   outstanding audit item because the browser client could not connect to the
   restarted localhost service during this run.
+
+### Repair: Release starts with the owner decision
+
+#### Release user job before implementation
+
+When the owner follows a release link, they must see the current release,
+progress, and the one decision that needs them. If the project is waiting for
+a spec review, the release route must offer that review directly. Counts,
+checkout detail, repository state, and task tallies are inspection material;
+they must not be mistaken for the next action.
+
+- Finding: the default release route fetched readiness independently, derived
+  a local verdict, then led with duplicate counts and a blocker stack. It could
+  receive the owner from Overview without exposing an executable action.
+- Fix: the default release view consumes `ProjectDetail.actionModel` from the
+  project shell. It renders one progress marker plus the shared action and its
+  direct route. Release checks remain a deliberate inspection route. A shipped
+  release now ends with an unambiguous completion state and no invented follow-
+  up action.
+- Shared-model correction: a checkout inspection error now counts as a release
+  blocker while retaining its error classification. The release verdict cannot
+  report ready merely because the inspection found zero dirty files before it
+  failed.
+- Contract Touch Decision: `ProjectDetail.actionModel` and
+  `ProjectReleaseReadiness` are existing cross-surface contracts. ReleaseTab
+  now consumes them rather than re-ranking raw readiness signals. No endpoint
+  response shape, persisted project data, action route contract, or task schema
+  changes. Proof: ReleaseTab and ProjectView regressions cover direct shared
+  action routing, terminal shipped state, removed default diagnostics, and
+  checkout-inspection failure.
+- Schema Migration Decision: none; this changes only presentation and derived
+  readiness handling for existing in-memory response fields.
+
+#### Evidence, 2026-08-12
+
+- The focused ReleaseTab, ProjectView, and ThreadTab suites pass: 211 tests.
+  The ReleaseTab regression proves `Review next spec` uses the shared action
+  route including its focused task query, rather than routing to a generic
+  release report.
+- Installed browser proof on Looma + Knit at `1280x720`: the release route
+  shows `0/17 done`, the short task key, one review decision, and a visible
+  `Review next spec` control. That control opens the focused Work item; its
+  `Review spec` control opens a drawer with `Approve spec` immediately visible.
+  The document and body both measured `1280px` wide, so this route had no
+  page-level horizontal overflow.
+- `pnpm build`, `pnpm dev:install`, `guildhall stop`, and `guildhall start`
+  completed; `/api/stale-server` reports `stale: false` for the installed
+  runtime. Narrow-desktop and mobile browser proof remain open audit work.

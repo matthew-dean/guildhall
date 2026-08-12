@@ -452,7 +452,7 @@ describe('ProjectView', () => {
     ['planner', 'Knit: add link editor controls'],
     ['map', 'Project map'],
     ['timeline', 'Coordinator timeline'],
-    ['release', 'Current counts'],
+    ['release', 'Scope readiness'],
     ['settings', 'Settings'],
     ['workspace-import', 'Review existing project work'],
     ['facts', 'Project facts'],
@@ -467,7 +467,7 @@ describe('ProjectView', () => {
   it('loads project detail before rendering a cold direct Release route', async () => {
     await renderProjectViewWithoutInitialDetail('release')
 
-    expect(await screen.findByText('Current counts')).toBeInTheDocument()
+    expect(await screen.findByText('Scope readiness')).toBeInTheDocument()
     expect(screen.queryByText('Loading project...')).not.toBeInTheDocument()
   })
 
@@ -497,9 +497,8 @@ describe('ProjectView', () => {
 
     render(ProjectView, { initialView: 'release', initialSub: null, projectId: 'looma-knit' })
 
-    expect(await screen.findByText('Current counts')).toBeInTheDocument()
-    expect(screen.getByText('Tasks done')).toBeInTheDocument()
-    expect(screen.getByText('3/3')).toBeInTheDocument()
+    expect(await screen.findByText('Scope readiness')).toBeInTheDocument()
+    expect(screen.getByText('Release status')).toBeInTheDocument()
     pendingProject.resolve(json(detail()))
   })
 
