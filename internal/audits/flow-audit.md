@@ -57249,15 +57249,27 @@ check.
 
 #### Follow-up finding, 2026-08-12: scope count authority
 
-- [ ] Align Overview and Release progress counts to the same execution-scope
-  unit. Live Looma + Knit evidence shows Overview's selected Stage 1 scope as
-  `0 of 17 complete`, while explicit Release inspection reports `0/16 done`.
-  The dropped record is the ready ContextMenu parent whose materialized child
-  work causes `executionScopeRows` to suppress it. Both counts have a
-  defensible internal meaning, but presenting them as the same release
-  progress is a source-model failure. Decide and persist one owner-facing
-  unit (prefer execution work), then make the shared action model, Overview,
-  Release summary, Release detail, Work, Thread, and status chrome consume it.
+- [x] Align Overview and Release progress counts to the same execution-scope
+  unit. Live Looma + Knit evidence showed Overview's selected Stage 1 scope as
+  `0 of 17 complete`, while explicit Release inspection reported `0/16 done`.
+  The dropped record was the ready ContextMenu parent whose materialized child
+  work caused `executionScopeRows` to suppress it. The compact shared release
+  count now uses that same execution boundary, so Overview's progress no
+  longer counts a parent and child as separate owner work. A project-route
+  regression covers included parent/child work plus deferred scope work.
+- Contract Touch Decision: `releaseCounts` is an existing derived summary
+  contract. Its `total`, state dimensions, and owner/proof counts now describe
+  included execution rows; `deferred` describes deferred execution rows. The
+  raw release membership list remains intact for audit and routing. Considered
+  but unchanged: task hierarchy, scope-row schema, release membership, task
+  status, and API shape. Proof required: a compact project route must show one
+  execution task for a parent/child release instead of double-counting it.
+- Schema Migration Decision: none; existing scope rows already carry the
+  hierarchy and inclusion fields needed for this derived projection.
+- Evidence: fresh installed Looma + Knit proof at `1280x720` shows Overview
+  `0 of 16 complete` and Release detail `0/16 done` for the same Stage 1
+  scope. Both surfaces name `Review a spec` and the same ten pending reviews;
+  the service reports `stale:false` at runtime `0.13.2-1786564327-91914`.
 
 ### Repair: Timeline shows project updates, not the transport
 

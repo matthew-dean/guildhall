@@ -666,6 +666,12 @@ describe('GET /api/project/release-readiness', () => {
       includedWorkCount: 2,
       deferredWorkCount: 1,
     })
+    expect(body.releaseReadiness.releaseCounts).toMatchObject({
+      total: 1,
+      done: 0,
+      unfinished: 1,
+      deferred: 1,
+    })
   })
 
   it('keeps Work and Map inventory records bounded while preserving row-level signals', async () => {

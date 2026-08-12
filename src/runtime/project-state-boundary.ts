@@ -1004,6 +1004,8 @@ export interface ProjectCompactStateReadModel {
   selectedTask: ProjectStateDatabaseTask | null
   /** Selected execution scope from this same queue/scope snapshot. */
   scope: ProjectScope | null
+  /** Scope rows for the selected execution count and hierarchy boundary. */
+  scopeRows: ProjectStateDatabaseScopeRow[]
   repositories: ProjectStateDatabaseRepository[]
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
   summary: ProjectSummaryProjection | null
@@ -1029,6 +1031,7 @@ function compactStateFromDatabaseProjection(
     queue: current.queue as ProjectStateDatabaseQueue,
     inventory: current.inventory,
     scope,
+    scopeRows: current.scopeRows,
     repositories: current.repositories,
     selectedTask: current.selectedTask,
     diagnostics: current.diagnostics,
@@ -1141,6 +1144,8 @@ export interface ProjectOverviewStateReadModel {
   summary: ProjectSummaryProjection | null
   /** Current normalized membership for the saved selected release only. */
   scope: ProjectScope | null
+  /** Scope rows from the same saved overview transaction. */
+  scopeRows: ProjectStateDatabaseScopeRow[]
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
   availability: ProjectStateDatabaseSurfaceState['availability']
   memoryHealth: ProjectStateDatabaseSurfaceState['memoryHealth']
@@ -1185,6 +1190,7 @@ export function readProjectOverviewStateAtBoundary(
     authority: current.authority,
     summary,
     scope,
+    scopeRows: current.scopeRows,
     diagnostics: current.diagnostics,
     availability: current.availability,
     memoryHealth: current.memoryHealth,

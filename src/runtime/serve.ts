@@ -6364,28 +6364,34 @@ function releaseCountsFromScopeRows(
 ): NonNullable<ProjectSummaryProjection['releaseSummary']>['counts'] {
   if (!scope || scope.nodeIds.length === 0 || scopeRows.length === 0) return fallback
   const releaseTaskIds = new Set(
-    scope.nodeIds
+    [...scope.nodeIds, ...scope.deferredNodeIds]
       .map(nodeId => nodeId.replace(/^work:/, '').trim())
       .filter(Boolean),
   )
   if (releaseTaskIds.size === 0) return fallback
-  const releaseRows = scopeRows.filter(row => releaseTaskIds.has(row.taskId))
-  const done = releaseRows.filter(row => row.handoffState === 'done').length
+  // A materialized child replaces its parent as the owner-visible execution
+  // unit. Progress must use that same boundary as Release detail, Work, and
+  // the orientation spine rather than counting both records from membership.
+  const releaseRows = executionScopeRows(
+    scopeRows.filter(row => releaseTaskIds.has(row.taskId)),
+  )
+  const includedRows = releaseRows.filter(row => row.scope === 'included')
+  const done = includedRows.filter(row => row.handoffState === 'done').length
   return {
-    total: releaseTaskIds.size,
+    total: includedRows.length,
     done,
-    unfinished: Math.max(0, releaseTaskIds.size - done),
-    ready: releaseRows.filter(row => row.handoffState === 'ready').length,
-    active: releaseRows.filter(row => row.handoffState === 'paused' || row.handoffState === 'review').length,
-    blocked: releaseRows.filter(row => row.blocksRelease).length,
-    deferred: scope.deferredNodeIds.length,
-    ownerBlocked: releaseRows.filter(row => projectScopeRowNeedsOwnerInput({
+    unfinished: Math.max(0, includedRows.length - done),
+    ready: includedRows.filter(row => row.handoffState === 'ready').length,
+    active: includedRows.filter(row => row.handoffState === 'paused' || row.handoffState === 'review').length,
+    blocked: includedRows.filter(row => row.blocksRelease).length,
+    deferred: releaseRows.filter(row => row.scope === 'deferred').length,
+    ownerBlocked: includedRows.filter(row => projectScopeRowNeedsOwnerInput({
       scope: row.scope,
       status: row.handoffState as ProjectScopeRow['status'],
       handoffState: row.handoffState as ProjectScopeRow['handoffState'],
       humanBlocking: row.humanBlocking,
     })).length,
-    proofBlocked: releaseRows.filter(row => row.proofBlocked).length,
+    proofBlocked: includedRows.filter(row => row.proofBlocked).length,
   }
 }
 
@@ -7649,6 +7655,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       projection,
       rawQueue: scopeQueue as never,
       scope: readinessScope as unknown as ProjectScope | null,
+      scopeRows: overviewState?.scopeRows ?? compactState?.scopeRows ?? [],
       diagnostics: overviewState?.diagnostics ?? compactState?.diagnostics ?? null,
     })
     // Pre-promotion projects retain a narrow compatibility path until their
