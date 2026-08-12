@@ -57667,3 +57667,54 @@ boundary rather than documented as a manual timing ritual.
   existing CLI start/stop contract and prove a cold start plus replacement
   install without a false timeout.
 - Schema Migration Decision: none; expected work is process readiness only.
+
+### Finding: Looma exposes conflicting release state and scope counts
+
+#### Shared-summary user job before implementation
+
+An owner must be able to trust every visible project surface to describe the
+same release. A release cannot be simultaneously active and blocked, and a
+scope cannot be both 16 and 17 tasks depending on which legacy projection a
+route happens to read. The chosen action may hide the discrepancy today, but
+it will reappear the moment an owner opens Release, Work, or a task record.
+
+- [x] Trace `releaseSummary`, `releaseReadiness`, task-payload scope membership,
+  and action-model scope selection to one canonical release snapshot. The
+  immediate failure is that compact reads reuse saved review readiness while
+  the mutation boundary independently rejects that same review for a required
+  migration.
+- [ ] Overlay the existing required-migration gate onto every compact shared
+  start/action projection before it reaches product surfaces, so a visible
+  owner command cannot be refused by the mutation boundary for hidden setup.
+- [ ] Remove or reconcile the duplicate derived release state/count projection
+  at the source; do not normalize conflicting values inside individual views.
+- [ ] Add deterministic agreement coverage and replay Looma Overview, Work,
+  Release, and task review from the installed app.
+- Contract Touch Decision: `startBlockerForRequiredMigrations` is already the
+  mutation and full-read gate. Compact `startReadiness` and `actionModel` must
+  consume that same typed result before presentation; the migration status
+  therefore has precedence over saved owner-review readiness. Considered but
+  unchanged: release membership, release lifecycle state, saved count
+  projection, migration execution endpoint, task approval protocol, and
+  persistence. Proof required: compact Overview/Work/Map action agreement,
+  mutation refusal parity, and an installed Looma replay that exposes the
+  migration action instead of Review spec.
+- Schema Migration Decision: none; required-migration status is existing
+  durable data read through an existing gate. This repair changes only the
+  derived compact response precedence, with no new stored field or migration.
+
+#### Evidence: hidden migration gate repaired
+
+On 2026-08-12, normal compact Looma reads previously returned
+`owner_review_required` and `Review next spec`, while the full diagnostic
+read and every mutation returned `required_migration_pending` for
+`0.13.27/acceptance-command-proof-path-reconciliation`. The compact response
+now returns that same typed migration readiness and `Migrate project` action.
+After build, dev install, restart, and `stale:false`, installed Looma Work
+showed the migration repair rather than the spec approval route; it had no
+alert or horizontal overflow at 1280px. This prevents the raw approval 409
+but does not resolve the separately observed lifecycle/count mismatch:
+`releaseSummary.release.state` remains `active` while the legacy
+`releaseReadiness.release.state` is `blocked`, and the task payload still
+reports 17 alongside a selected scope of 16. Those values remain an explicit
+shared-summary follow-up above.

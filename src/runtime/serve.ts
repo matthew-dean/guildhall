@@ -7944,7 +7944,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const detailRecentEvents = input.includeDetailSections
       ? supervisor.recent(project.id, undefined, project.path)
       : null
-    const responseStartReadiness = repositoryFollowupStartReadinessFromReleaseReadiness(
+    // Mutations reject required migrations before they reach task approval or
+    // execution. Compact project reads must expose that exact gate first so a
+    // visible Review/Resume command cannot lead to an inevitable 409.
+    const requiredMigrationBlocker = await startBlockerForRequiredMigrations(project.path)
+    const responseStartReadiness = requiredMigrationBlocker ?? repositoryFollowupStartReadinessFromReleaseReadiness(
       compactReleaseReadiness,
       detailResponseTasks as Array<Record<string, unknown>>,
       summary.startReadiness,
