@@ -57034,3 +57034,36 @@ the project navigation when that history is actually needed.
   selection, owner-input, or event authority. ProjectView regressions must
   prove terminal Thread and live Work add no footer report.
 - Schema Migration Decision: none; no stored data is touched.
+
+### Repair: Thread follows the shared owner decision
+
+#### Thread user job before implementation
+
+When the owner opens Thread from a project blocked on a named approval or
+question, Thread must open that same work item. The server's last active turn
+is history, not permission for Thread to override the shared action model and
+send the owner into unrelated work.
+
+- Finding: `defaultThreadChainId` ignored the shared primary task whenever
+  start readiness was blocked. On Looma + Knit, readiness and Overview named
+  `task-import-1rpbo8n` for spec review while Thread selected an unrelated
+  historical active turn.
+- Fix: use the shared execution focus or primary action task for default Thread
+  selection regardless of whether Guildhall can presently start more work.
+- Contract Touch Decision: selection consumes the existing shared action-model
+  task ID; no action, route, project, or stored-thread schema changed.
+- Schema Migration Decision: none; selection is a client projection.
+
+#### Evidence, 2026-08-12
+
+- `ThreadTab.svelte.test.ts` now supplies a blocked owner-review action and an
+  unrelated active worker turn, then proves Thread selects the review task.
+  The focused suite passes: 120 tests.
+- The live Looma + Knit project reports `task-import-1rpbo8n` as the shared
+  primary owner-review task while its Thread endpoint identifies a different
+  historical active turn. This is the real disagreement the regression covers.
+- `pnpm build`, `pnpm dev:install`, `guildhall stop`, and `guildhall start`
+  completed; `/api/stale-server` reports `stale: false` for the installed
+  runtime. Fresh desktop, narrow-desktop, and mobile browser proof remains an
+  outstanding audit item because the browser client could not connect to the
+  restarted localhost service during this run.

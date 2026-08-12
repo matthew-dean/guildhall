@@ -817,6 +817,44 @@ describe('ThreadTab', () => {
     expect(selectedThread().queryByText('Guildhall is cleaning up task intake.')).toBeNull()
   })
 
+  it('opens the shared owner-review task instead of an unrelated active turn', async () => {
+    const focusedReview = specReviewTurn('task-review-first', {
+      taskTitle: 'Review the focused spec',
+      spec: '## Summary\nApprove this spec before work continues.',
+    })
+    const unrelatedActive = workerTurn({
+      id: 'worker-unrelated',
+      taskId: 'task-unrelated',
+      taskTitle: 'Unrelated active work',
+      summary: 'This old active turn must not replace the review decision.',
+    })
+    installFetchFakes([unrelatedActive, focusedReview], 'worker-unrelated', {
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        actionHref: '/work?task=task-review-first',
+        focusTaskId: 'task-review-first',
+        focusKind: 'owner_review',
+      },
+      actionModel: {
+        primaryAction: {
+          label: 'Review a spec',
+          taskId: 'task-review-first',
+          buttonLabel: 'Review spec',
+          href: '/work?task=task-review-first',
+          tone: 'warn',
+          code: 'owner_review_required',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await selectedThread().findByText('Review the spec draft')
+    expect(document.querySelector('[aria-label="Active thread dock"]')?.getAttribute('data-turn-id')).toBe('spec-task-review-first')
+    expect(selectedThread().queryByText('This old active turn must not replace the review decision.')).toBeNull()
+  })
+
   it('opens a routed bounded-chat prompt directly on compact Thread even when many threads exist', async () => {
     installViewportMatchMedia(640)
     installBrowserFakes('/projects/looma-knit/thread?thread=bc-new-thread-1')

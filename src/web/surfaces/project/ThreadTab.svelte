@@ -1580,7 +1580,7 @@
     }
     const primaryTaskId = project.detail?.decision?.execution?.focusTaskId
       ?? project.detail?.actionModel?.primaryAction?.taskId
-    if (startReadiness?.canStart !== false && primaryTaskId) {
+    if (primaryTaskId) {
       const primaryTaskChain = chains.find(chain => chain.turns.some(turn => 'taskId' in turn && turn.taskId === primaryTaskId))
       if (primaryTaskChain) return primaryTaskChain.id
     }
