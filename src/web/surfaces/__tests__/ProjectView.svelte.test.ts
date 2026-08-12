@@ -633,6 +633,39 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'Open work' })).toBeInTheDocument()
   })
 
+  it('lets focused Work own an owner-review decision instead of repeating it in shell chrome', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        message: '10 specs are ready for your review before work can continue',
+        actionHref: '/work?task=task-spec-a',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Spec A',
+        focusKind: 'owner_review',
+        count: 10,
+      },
+      actionModel: {
+        primaryAction: {
+          taskId: 'task-spec-a',
+          label: 'Review Spec A',
+          buttonLabel: 'Review spec',
+          href: '/work?task=task-spec-a',
+          tone: 'warn',
+        },
+      },
+      tasks: [task({ id: 'task-spec-a', title: 'Spec A', status: 'spec_review' })],
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('work', null, 'looma-knit', projectPayload)
+
+    expect(screen.getByRole('button', { name: 'Review spec' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open item' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert', { name: 'Needs you' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Live project ticker')).not.toBeInTheDocument()
+  })
+
   it('surfaces required migrations as the primary setup action and can apply them intentionally', async () => {
     const user = userEvent.setup()
     const migrationBlocked = detail({

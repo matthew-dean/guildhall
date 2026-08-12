@@ -74,6 +74,7 @@
     if (!readiness) return null
     if (readiness.code === 'no_unattended_progress') return readiness.focusKind ?? null
     if (readiness.code === 'owner_input_required') return 'awaiting_human'
+    if (readiness.code === 'owner_review_required') return 'owner_review'
     return null
   }
 
@@ -1051,13 +1052,16 @@
     if (blockers.bootstrap) return 'Open readiness checks'
     return startReadinessActionLabel(startReadiness)
   })
+  const workSurfaceOwnsPrimaryDecision = $derived(
+    currentView === 'work' && Boolean(primaryAction?.taskId || startReadiness?.focusTaskId),
+  )
   const shellAttentionNotices = $derived.by(() => {
     // Overview owns the project-level decision. Repeating it in shell chrome
     // turns one action into competing instructions before the owner reaches
     // the surface that can actually explain and complete it.
     if (!detail || selectedReleaseShipped || currentView === 'overview') return []
     const notices: ShellAttentionNotice[] = []
-    if (startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
+    if (!workSurfaceOwnsPrimaryDecision && startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
       notices.push({
         id: 'start-readiness',
         code: startReadiness.code,
@@ -1873,7 +1877,7 @@
         </div>
 
     {#snippet footer()}
-      {#if currentView !== 'overview'}
+      {#if currentView !== 'overview' && !workSurfaceOwnsPrimaryDecision}
       <div class="project-ticker ticker-{projectTicker.tone}" aria-label="Live project ticker">
         <div class="project-ticker-main">
           <StatusDot tone={projectTicker.tone} pulse={projectTicker.pulse} size="sm" />

@@ -71,7 +71,9 @@ describe('WorkTab', () => {
     cleanup()
   })
 
-  it('does not dump completed scope rows into the default shipped-release view', async () => {
+  it('does not dump completed scope rows into the explicitly opened inventory', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue')
+    path.value = '/projects/looma-knit/work'
     const projectDetail = detail([
       task({ id: 'task-done-a', title: 'Finished A', status: 'done' }),
       task({ id: 'task-done-b', title: 'Finished B', status: 'done' }),
@@ -205,9 +207,9 @@ describe('WorkTab', () => {
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' }))
   })
 
-  it('opens an owner-review focus into the exact selected-release review set', async () => {
-    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=review-one')
-    path.value = '/projects/narrative-harness/work?task=review-one'
+  it('filters the explicitly opened inventory to the selected-release review set', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?view=queue&task=review-one')
+    path.value = '/projects/narrative-harness/work'
 
     render(WorkTab, {
       props: {
@@ -370,6 +372,8 @@ describe('WorkTab', () => {
   })
 
   it('summarizes scoped current work instead of raw internal delivery blockers', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue')
+    path.value = '/projects/looma-knit/work'
     render(WorkTab, {
       props: {
         detail: detail([
@@ -524,8 +528,8 @@ describe('WorkTab', () => {
   })
 
   it('keeps proof-missing completed work visible from the focused Work route', async () => {
-    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=proof-task')
-    path.value = '/projects/narrative-harness/work?task=proof-task'
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?view=queue&task=proof-task')
+    path.value = '/projects/narrative-harness/work'
 
     render(WorkTab, {
       props: {
@@ -690,6 +694,8 @@ describe('WorkTab', () => {
   })
 
   it('defaults to the selected scope before unrelated global blocked work', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue')
+    path.value = '/projects/looma-knit/work'
     render(WorkTab, {
       props: {
         detail: detail([
@@ -799,8 +805,8 @@ describe('WorkTab', () => {
 
   it('reopens proof-missing completed work before starting the selected item', async () => {
     const fetchSpy = vi.mocked(fetch)
-    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=proof-task')
-    path.value = '/projects/narrative-harness/work?task=proof-task'
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?view=queue&task=proof-task')
+    path.value = '/projects/narrative-harness/work'
 
     render(WorkTab, {
       props: {
@@ -1897,6 +1903,8 @@ describe('WorkTab', () => {
   })
 
   it('keeps the primary-action internal shaping task visible in Work', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue')
+    path.value = '/projects/looma-knit/work'
     render(WorkTab, {
       props: {
         detail: {

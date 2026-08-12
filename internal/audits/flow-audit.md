@@ -56736,3 +56736,72 @@ resume` while the project is working. This is not a layout polish issue:
 replace the route with a focused owner-decision surface and an explicitly
 entered queue. Do not retain the filters, table, inspector, or duplicate
 progress report as the default route merely by compressing them.
+
+#### Work-route user job before implementation
+
+When an owner opens Work from the project action or a direct task link, they
+must see the current milestone, the one work item that needs their decision,
+what that decision changes, and its executable action without reading a queue
+or opening a drawer. They may deliberately choose `Browse work` only after
+that decision is clear. The API/shared summary, selected task, visible action,
+and status chrome must agree; a delayed refresh must not change selection or
+move the primary action.
+
+#### Contract Touch Decision: focused Work route
+
+- Work id: `flow-audit-work-focus`.
+- Touched contracts: the existing `ProjectActionModel.primaryAction`,
+  `StartReadiness.focusTaskId`, task display-key, and release-summary response
+  fields are presented directly by Work.
+- Considered but not touched: task schema, project-summary computation,
+  route schema, persisted selection, release state, and task status rules.
+- Required follow-up and proof: focused-route and retained-inventory render
+  suites, typecheck, installed desktop/narrow/mobile evidence, and a
+  selection-refresh check on Looma + Knit.
+- Apply/revert behavior: client-only route presentation. `?view=queue` retains
+  the existing inventory while its eventual replacement is designed; no project
+  data is changed.
+
+#### Schema Migration Decision: focused Work route
+
+- Persisted schema touched: none.
+- Change class and existing-data impact: derived client presentation only;
+  none.
+- Migration, compatibility reader, fixtures, and rollback: no migration or
+  compatibility reader is required; focused and queue fixtures cover both
+  paths; code-only revert.
+
+#### Installed focused-Work evidence, 2026-08-12
+
+- Rebuilt, installed, and restarted the packaged app. `/api/stale-server`
+  reported `stale:false` from the current package before the browser pass.
+- At `/projects/looma-knit/work?task=task-import-1rpbo8n`, desktop now showed
+  one decision: the Stage 1 milestone, `0 of 17 complete`, short key
+  `LOO-EBUYE7`, the pending spec title, and `Review spec`. The default queue,
+  inspector, filters, recent-progress feed, shell alert, and bottom ticker
+  were absent. `Browse work` is the only deliberate route to the old
+  inventory.
+- The shared `owner_review_required` state now wins over scoped-work fallback
+  text, so a focused route cannot say `17 current tasks when you resume` while
+  it asks for review. The shell and footer defer to Work when that route owns
+  the same focused task, rather than repeating the action.
+- Geometry proof: document width equaled viewport width at `1280x720`,
+  `960x720`, and `390x844`. On mobile the decision card was 374px wide inside
+  a 390px viewport and its `Review spec` button was a visible 316px-wide
+  full-row control. A post-refresh wait retained `LOO-EBUYE7` and the same
+  selected task title.
+- Click proof: `Review spec` opened the selected drawer directly on its
+  approval card. Confirming approval encountered the real required migration
+  and routed to a `Migrate project` modal with one named migration and an
+  explicit `Apply required migration` action; no raw internal error was
+  rendered. The migration was not applied to the active Looma + Knit project.
+
+### Remaining stop-ship finding: direct task review is still a dossier
+
+The direct approval action is now visible and executable, but after it opens,
+the task drawer still exposes seven top-level tabs and a long legacy packet of
+checkpoint, brief, spec, acceptance, and provenance material below the
+decision. The next task-detail pass must retain the approval outcome and any
+owner question, then remove the rest of that default reading burden instead
+of moving it among shallow tabs. The task detail needs the same one-minute
+route contract as focused Work.

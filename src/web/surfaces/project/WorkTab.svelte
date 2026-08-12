@@ -16,10 +16,10 @@
   import TaskCard from '../../lib/TaskCard.svelte'
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { friendlyPriority } from '../../lib/display.js'
-  import { friendlyTaskId } from '../../lib/identifier-labels.js'
+  import { friendlyTaskId, taskDisplayKey } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { sourceRefsSummary } from '../../lib/source-refs.js'
   import { taskGroundingDetail } from '../../lib/task-grounding.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
@@ -344,6 +344,50 @@
     return list
   })
   const selectedWorkVisible = $derived(Boolean(selectedWorkId && allWorkItems.some(task => task.id === selectedWorkId)))
+  const focusedMode = $derived.by(() => {
+    path.href
+    if (boardMode || typeof window === 'undefined') return false
+    const params = new URL(window.location.href).searchParams
+    if (params.get('view') === 'queue') return false
+    const routeTaskId = readSelectedWorkIdFromUrl()
+    const actionTaskId = detail.actionModel?.primaryAction?.taskId
+    const readinessTaskId = detail.startReadiness?.focusTaskId
+    // Focus mode is only for an actual shared decision. A raw task URL is a
+    // useful diagnostic/deep-link compatibility path, not permission to
+    // invent an owner decision from a task's local status.
+    return Boolean(
+      actionTaskId ||
+      readinessTaskId ||
+      selectedReleaseShipped,
+    )
+  })
+  const focusedWork = $derived.by(() => {
+    path.href
+    const routeTaskId = readSelectedWorkIdFromUrl()
+    const actionTaskId = detail.actionModel?.primaryAction?.taskId
+    const readinessTaskId = detail.startReadiness?.focusTaskId
+    const taskId = routeTaskId ?? actionTaskId ?? readinessTaskId
+    return taskId ? allWorkItems.find(task => task.id === taskId) ?? null : null
+  })
+  const workMilestone = $derived(
+    detail.orientationSpine?.summary?.headline
+      ?? detail.releaseSummary?.release?.label
+      ?? detail.releaseReadiness?.release?.label
+      ?? 'Current work',
+  )
+  const completedWorkLabel = $derived.by(() => {
+    const counts = detail.releaseSummary?.counts
+    if (!counts || !Number.isFinite(counts.total) || counts.total <= 0) return null
+    return `${counts.done ?? 0} of ${counts.total} complete`
+  })
+  const focusedDecisionDetail = $derived.by(() => {
+    const sharedDetail = detail.actionModel?.primaryAction?.detail?.trim()
+    if (sharedDetail) return sharedDetail
+    if (focusedWork?.status === 'spec_review') return 'Review this spec so Guildhall can continue.'
+    if (focusedWork?.status === 'exploring') return 'Review the brief before Guildhall starts this work.'
+    if (focusedWork?.status === 'blocked') return 'Open this work to resolve what is blocking it.'
+    return 'Open this work to take the next step.'
+  })
 
   function compareTasks(left: Task, right: Task, key: SortKey, dir: SortDir): number {
     const direction = dir === 'asc' ? 1 : -1
@@ -790,6 +834,28 @@
     if (next === 'board') nav(currentProjectHref('/work?view=board'))
   }
 
+  function browseWork(): void {
+    nav(currentProjectHref('/work?view=queue', detail.id))
+  }
+
+  function openFocusedWork(task: Task): void {
+    const tab = task.status === 'spec_review' ? '?tab=spec' : ''
+    nav(`${currentTaskHref(task.id, detail.id)}${tab}`, { backgroundPath: path.value })
+  }
+
+  function focusedActionLabel(task: Task): string {
+    if (task.status === 'spec_review') return 'Review spec'
+    if (task.status === 'blocked') return 'Open task'
+    if (task.status === 'done' || task.status === 'pending_pr') return 'View record'
+    return 'Open task'
+  }
+
+  function goToSharedAction(): void {
+    const action = detail.actionModel?.primaryAction
+    if (!action?.href) return
+    nav(projectActionHref(action.href, detail.id), { backgroundPath: path.value })
+  }
+
   function readWorkViewFromUrl(fallbackBoard: boolean): WorkView {
     if (fallbackBoard) return 'board'
     const params = new URL(window.location.href).searchParams
@@ -857,6 +923,73 @@
   })
 </script>
 
+{#if focusedMode}
+  <section class="work-focus" aria-label="Current work">
+    <header class="work-focus-header">
+      <p class="work-focus-eyebrow">{workMilestone}</p>
+      <h1>Current work</h1>
+      {#if completedWorkLabel}
+        <p class="work-focus-progress">{completedWorkLabel}</p>
+      {/if}
+    </header>
+
+    {#if focusedWork}
+      <Card title="What needs your attention" titleTag="h2" tone={effectiveStatusTone(focusedWork) === 'danger' ? 'danger' : effectiveStatusTone(focusedWork) === 'warn' ? 'warn' : 'accent'} variant="callout" railStrength="strong">
+        <div class="work-focus-decision">
+          <div class="work-focus-copy">
+            <div class="work-focus-meta">
+              <span>{taskDisplayKey(focusedWork, allWorkItems, detail.id)}</span>
+              <Chip label={effectiveStatusLabel(focusedWork)} tone={effectiveStatusTone(focusedWork)} />
+            </div>
+            <h2>{focusedWork.title ?? 'Untitled work'}</h2>
+            <p>{focusedDecisionDetail}</p>
+          </div>
+          <Button variant={effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger' ? 'human' : 'primary'} onclick={() => openFocusedWork(focusedWork)}>
+            {focusedActionLabel(focusedWork)}
+          </Button>
+        </div>
+      </Card>
+    {:else if detail.actionModel?.primaryAction}
+      <Card title="What needs your attention" titleTag="h2" tone="accent" variant="callout" railStrength="strong">
+        <div class="work-focus-decision">
+          <div class="work-focus-copy">
+            <h2>{detail.actionModel.primaryAction.label ?? 'Continue project work'}</h2>
+            {#if detail.actionModel.primaryAction.detail}
+              <p>{detail.actionModel.primaryAction.detail}</p>
+            {/if}
+          </div>
+          <Button variant="primary" onclick={goToSharedAction}>{detail.actionModel.primaryAction.buttonLabel ?? 'Continue'}</Button>
+        </div>
+      </Card>
+    {:else if selectedReleaseShipped}
+      <Card title="Current release" titleTag="h2" tone="ok" variant="callout" railStrength="strong">
+        <div class="work-focus-decision">
+          <div class="work-focus-copy">
+            <h2>Shipped</h2>
+            <p>This release is complete. There is nothing you need to do here.</p>
+          </div>
+          <Button variant="secondary" onclick={browseWork}>Browse work</Button>
+        </div>
+      </Card>
+    {:else}
+      <Card title="Current work" titleTag="h2" tone="neutral" variant="callout">
+        <div class="work-focus-decision">
+          <div class="work-focus-copy">
+            <h2>Nothing needs your attention</h2>
+            <p>Guildhall has no owner decision waiting right now.</p>
+          </div>
+          <Button variant="secondary" onclick={browseWork}>Browse work</Button>
+        </div>
+      </Card>
+    {/if}
+
+    {#if focusedWork}
+      <div class="work-focus-footer">
+        <Button variant="secondary" onclick={browseWork}>Browse work</Button>
+      </div>
+    {/if}
+  </section>
+{:else}
 <div class="work-list-view">
   <UtilityPanel as="div" className="work-view-header" tone="neutral" role="toolbar" ariaLabel="Work view controls">
     <SegmentedControl label="Work view" ariaLabel="Work view" value={activeWorkView} options={viewOptions} onChange={setWorkView} />
@@ -1097,8 +1230,64 @@
     <ProgressFeed {progress} {tasks} />
   </details>
 </div>
+{/if}
 
 <style>
+  .work-focus {
+    display: grid;
+    gap: var(--s-4);
+    max-width: var(--gh-layout-measure-wide);
+    min-width: 0;
+    padding: var(--s-4) var(--s-4) var(--s-6);
+  }
+  .work-focus-header,
+  .work-focus-copy {
+    min-width: 0;
+  }
+  .work-focus-eyebrow,
+  .work-focus-progress,
+  .work-focus-copy p {
+    margin: 0;
+    color: var(--text-muted);
+  }
+  .work-focus-eyebrow {
+    font-size: var(--gh-type-size-1);
+    font-weight: var(--gh-type-weight-strong);
+    letter-spacing: 0;
+    text-transform: uppercase;
+  }
+  .work-focus h1,
+  .work-focus h2 {
+    margin: var(--s-1) 0 0;
+    color: var(--text);
+    line-height: var(--gh-type-line-height-tight);
+  }
+  .work-focus h1 { font-size: var(--gh-type-size-5); }
+  .work-focus h2 { font-size: var(--gh-type-size-4); }
+  .work-focus-progress { margin-top: var(--s-1); }
+  .work-focus-decision {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--s-4);
+  }
+  .work-focus-copy {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .work-focus-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+  }
+  .work-focus-footer {
+    display: flex;
+    justify-content: flex-start;
+  }
   .work-list-view {
     display: flex;
     flex-direction: column;
@@ -1420,6 +1609,16 @@
   }
 
   @media (max-width: 860px) {
+    .work-focus {
+      padding: var(--s-3) var(--s-3) var(--s-5);
+    }
+    .work-focus-decision {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .work-focus-decision :global(button) {
+      inline-size: 100%;
+    }
     :global(.work-view-header) {
       align-items: stretch;
       flex-direction: column;

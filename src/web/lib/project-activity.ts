@@ -332,6 +332,19 @@ function readinessTicker(detail: ProjectDetail | null | undefined): ProjectActiv
       timeLabel: null,
     }
   }
+  if (readiness.code === 'owner_review_required') {
+    return {
+      tone: 'warn',
+      pulse: false,
+      actorLabel: 'Review',
+      label: 'Review',
+      message: readiness.focusTaskTitle || 'Review the next spec',
+      detail: readiness.count && readiness.count > 1
+        ? `${readiness.count - 1} more waiting behind it`
+        : 'Waiting for spec review',
+      timeLabel: null,
+    }
+  }
   if (readiness.code === 'required_migration_pending') {
     return {
       tone: 'warn',
