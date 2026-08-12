@@ -57908,6 +57908,9 @@ choosing to inspect it.
 
 - [x] Make `View task details` open the concise Overview record, never the
   full Spec tab solely because the route came from the task handoff.
+- [ ] Reduce the normal task-record navigation to owner jobs only. Journey,
+  Transcript, Experts, History, and Origin are diagnostic or audit material;
+  they must not remain peer tabs beside Overview and Spec.
 - Contract Touch Decision: `TaskDrawer` owns only the detail tab route and
   presentation. It will retain explicit `?tab=spec` deep links for review
   actions, but the general full-record command must use Overview. Considered
