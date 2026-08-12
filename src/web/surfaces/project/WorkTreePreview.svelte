@@ -191,6 +191,12 @@
     if (selectedTask) nav(currentTaskHref(selectedTask.id), { backgroundPath: path.value })
   }
 
+  function openButtonLabel(task: Task): string {
+    if (task.status === 'spec_review') return 'Review spec'
+    if (task.status === 'import_draft') return 'Review task brief'
+    return 'Open task'
+  }
+
   async function runSelected(): Promise<void> {
     if (selectedTask) await onRunTask?.(selectedTask.id)
   }
@@ -237,6 +243,17 @@
         <h3>{taskDisplayLabel(selectedTask, friendlyTaskId(selectedTask.id))}</h3>
       </div>
       <Chip label={taskStatusLabel(selectedTask)} tone={taskStatusTone(selectedTask)} />
+    </div>
+
+    <div class="inspector-actions">
+      <Button variant="primary" size="sm" onclick={openSelected}>{openButtonLabel(selectedTask)}</Button>
+      {#if onRunTask && canRunTask(selectedTask)}
+        {@const runBusy = runBusyTaskId === selectedTask.id}
+        {@const runActive = runActiveTaskId === selectedTask.id}
+        <Button variant="agent" size="sm" disabled={runBusy || runActive} onclick={runSelected}>
+          {runButtonLabel(selectedTask, runBusy, runActive)}
+        </Button>
+      {/if}
     </div>
 
     <dl>
@@ -311,16 +328,6 @@
       </section>
     {/if}
 
-    <div class="inspector-actions">
-      {#if onRunTask && canRunTask(selectedTask)}
-        {@const runBusy = runBusyTaskId === selectedTask.id}
-        {@const runActive = runActiveTaskId === selectedTask.id}
-        <Button variant="agent" size="sm" disabled={runBusy || runActive} onclick={runSelected}>
-          {runButtonLabel(selectedTask, runBusy, runActive)}
-        </Button>
-      {/if}
-      <Button variant="primary" size="sm" onclick={openSelected}>Open drawer</Button>
-    </div>
     {#if runError}
       <p class="run-error" role="alert">{runError}</p>
     {/if}

@@ -108,7 +108,7 @@ describe('WorkTab', () => {
     expect(await screen.findByRole('button', { name: /inspect work finished a/i })).toBeTruthy()
   })
 
-  it('sorts tasks by user-selected columns and opens tasks from mouse and keyboard', async () => {
+  it('keeps the list focused on task identity and opens the selected task from mouse and keyboard', async () => {
     render(WorkTab, {
       props: {
         detail: detail([
@@ -146,25 +146,14 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('1 shown · 3 total')
+    await screen.findByText('1 work item')
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'all')
-    await userEvent.click(screen.getByRole('button', { name: /^work$/i }))
-    expect(screen.getAllByRole('button', { name: /inspect work/i })[0]?.textContent).toContain('Alpha task')
-
-    await userEvent.click(screen.getByRole('button', { name: /priority/i }))
-    expect(screen.getAllByRole('button', { name: /inspect work/i })[0]?.textContent).toContain('Alpha task')
-
-    await userEvent.click(screen.getByRole('button', { name: /priority/i }))
-    expect(screen.getAllByRole('button', { name: /inspect work/i })[0]?.textContent).toContain('Beta task')
-
-    expect(screen.getByText('Blocked on missing credentials.')).toBeTruthy()
-    expect(screen.getByText('Completed cleanly.')).toBeTruthy()
-    expect(screen.getByText('Rerun focused typecheck.')).toBeTruthy()
-    expect(screen.getByText('—')).toBeTruthy()
+    expect(screen.getByText('3 work items')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^priority/i })).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /inspect work beta task/i }))
     expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Beta task')
-    await userEvent.click(screen.getByRole('button', { name: /open drawer/i }))
+    await userEvent.click(screen.getByRole('button', { name: /open task/i }))
     expect(path.value).toBe('/projects/looma-knit/task/task-beta')
 
     path.value = '/projects/looma-knit/work'
@@ -201,7 +190,7 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('1 shown · 2 total')
+    await screen.findByText('1 work item')
     expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('planning')
     expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('What commands should I run')
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' }))
@@ -237,7 +226,7 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('2 shown · 3 total')
+    await screen.findByText('2 reviews')
     expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('review')
     expect(screen.getByRole('button', { name: /inspect work review the context packet proof/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /inspect work review the world-state proof/i })).toBeTruthy()
@@ -263,14 +252,14 @@ describe('WorkTab', () => {
 
     const row = await screen.findByRole('button', { name: /inspect work define safe smoke-test commands/i })
     expect(row).toHaveTextContent('Define safe smoke-test commands')
-    expect(row).toHaveTextContent('What commands should I run to smoke test this project without changing files?')
+    expect(row).not.toHaveTextContent('What commands should I run to smoke test this project without changing files?')
     const inspector = screen.getByLabelText('Selected work inspector')
     expect(inspector).toHaveTextContent('Define safe smoke-test commands')
     expect(inspector).toHaveTextContent('What commands should I run to smoke test this project without changing files?')
     expect(within(inspector).getByRole('button', { name: /running/i })).toBeDisabled()
   })
 
-  it('shows source-grounded task detail in the row subcopy and selected inspector', async () => {
+  it('keeps source-grounded detail in the selected inspector rather than every row', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-source')
     path.value = '/projects/looma-knit/work?task=task-source'
 
@@ -288,7 +277,7 @@ describe('WorkTab', () => {
     })
 
     const row = await screen.findByRole('button', { name: /inspect work define safe smoke-test commands/i })
-    expect(row).toHaveTextContent('Source: smoke-test-commands.md')
+    expect(row).not.toHaveTextContent('smoke-test-commands.md')
     const inspector = screen.getByLabelText('Selected work inspector')
     expect(inspector).toHaveTextContent('Source')
     expect(inspector).toHaveTextContent('smoke-test-commands.md')
@@ -326,7 +315,7 @@ describe('WorkTab', () => {
     expect(within(inspector).queryByRole('button', { name: /draft and run/i })).not.toBeInTheDocument()
   })
 
-  it('shows delivery-step progress on visible work rows', async () => {
+  it('keeps delivery-step progress in the selected inspector', async () => {
     render(WorkTab, {
       props: {
         detail: {
@@ -367,8 +356,9 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('1 delivery step blocked')
-    expect(screen.getByText('Import review flow')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /inspect work import review flow/i }))
+    const inspector = await screen.findByLabelText('Selected work inspector')
+    expect(inspector).toHaveTextContent('0 / 1 done · 1 blocked')
   })
 
   it('summarizes scoped current work instead of raw internal delivery blockers', async () => {
@@ -599,7 +589,7 @@ describe('WorkTab', () => {
     expect(queue).not.toHaveTextContent('0 current tasks')
     expect(queue).not.toHaveTextContent('0 blocked')
     expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('needs-proof')
-    expect(await screen.findByText('1 shown · 2 total')).toBeTruthy()
+    expect(await screen.findByText('1 proof gap')).toBeTruthy()
     expect(screen.getByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /^run proof$/i })).toBeTruthy()
   })
@@ -795,11 +785,10 @@ describe('WorkTab', () => {
 
     await screen.findByText('3 current items · 1 deferred item · 4 total')
     expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
-    const rows = screen.getAllByRole('button', { name: /inspect work/i })
-    expect(rows[0]).toHaveTextContent('E2E tests: complete current-scope proof')
-    expect(rows[1]).toHaveTextContent('TypeScript: generate proper types from Supabase')
-    expect(rows[2]).toHaveTextContent('TypeScript tests: verified')
-    expect(rows[3]).toHaveTextContent('Later release polish')
+    expect(screen.getByRole('button', { name: /inspect work e2e tests: complete current-scope proof/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work typescript: generate proper types from supabase/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work typescript tests: verified/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work later release polish/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /inspect work block menu/i })).not.toBeInTheDocument()
   })
 
@@ -941,12 +930,11 @@ describe('WorkTab', () => {
     })
 
     expect(await screen.findByRole('combobox', { name: /^show$/i })).toHaveValue('queued')
-    expect(screen.getByText('1 waiting task')).toBeInTheDocument()
-    expect(screen.getByText('1 Ready')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work ready task/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /inspect work waiting task/i })).not.toBeInTheDocument()
   })
 
-  it('renders task summary counts from the shared project action model', async () => {
+  it('does not turn shared summary counts into a second work-list dashboard', async () => {
     render(WorkTab, {
       props: {
         detail: detail([task({ id: 'visible-task', title: 'Visible task', status: 'ready' })], {
@@ -975,9 +963,9 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('2 waiting tasks')).toBeInTheDocument()
-    expect(screen.getByText('1 Ready')).toBeInTheDocument()
-    expect(screen.getByText('1 Needs brief')).toBeInTheDocument()
+    expect(await screen.findByText('1 work item')).toBeInTheDocument()
+    expect(screen.queryByText('2 waiting tasks')).not.toBeInTheDocument()
+    expect(screen.queryByText('1 Needs brief')).not.toBeInTheDocument()
   })
 
   it('prefers shaped work units over proof-step badges for planning work and names blockers by task title', async () => {
@@ -1043,19 +1031,17 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('3 planned units')
+    await screen.findByRole('button', { name: /inspect work implement a no-ui runner that builds a packet from fixture records/i })
     const runnerRow = screen.getByRole('button', { name: /inspect work implement a no-ui runner that builds a packet from fixture records/i })
-    expect(runnerRow).toHaveTextContent('Waiting on Define fixture, expected-record, prototype-run, and evaluation schemas.')
-    expect(runnerRow).not.toHaveTextContent('Blocked')
-    expect(runnerRow).toHaveTextContent('Waiting')
+    expect(runnerRow).not.toHaveTextContent('Waiting on Define fixture, expected-record, prototype-run, and evaluation schemas.')
     expect(runnerRow).not.toHaveTextContent('0/2 delivery steps')
 
     await userEvent.click(runnerRow)
     const inspector = screen.getByLabelText('Selected work inspector')
-    expect(within(inspector).getAllByText('3 planned work units are already shaped for this item.')).toHaveLength(2)
+    expect(within(inspector).getAllByText('3 planned work units are already shaped for this item.').length).toBeGreaterThan(0)
   })
 
-  it('shows the orientation spine path on work rows', async () => {
+  it('does not repeat the orientation spine path on every work row', async () => {
     render(WorkTab, {
       props: {
         detail: {
@@ -1092,7 +1078,7 @@ describe('WorkTab', () => {
     })
 
     await screen.findByText('Finding taxonomy')
-    expect(screen.getByText('Anti-sameness safeguards / Finding taxonomy')).toBeInTheDocument()
+    expect(screen.queryByText('Anti-sameness safeguards / Finding taxonomy')).not.toBeInTheDocument()
   })
 
   it('can filter the mixed Looma and Knit work list by source part', async () => {
@@ -1143,13 +1129,11 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('2 shown · 2 total')
-    expect(screen.getByRole('button', { name: /inspect work knit pages task/i })).toHaveTextContent('Knit')
-    expect(screen.getByRole('button', { name: /inspect work looma component task/i })).toHaveTextContent('Looma')
+    await screen.findByText('2 work items')
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^part$/i }), 'domain:knit')
 
-    expect(screen.getByText('1 shown · 2 total')).toBeInTheDocument()
+    expect(screen.getByText('1 work item')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /inspect work knit pages task/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /inspect work looma component task/i })).not.toBeInTheDocument()
   })
@@ -1192,16 +1176,15 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('3 shown · 3 total')
+    await screen.findByText('3 work items')
     expect(screen.getByRole('combobox', { name: /^part$/i })).toHaveTextContent('Knit')
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'all')
-    await screen.findByText('3 shown · 3 total')
+    await screen.findByText('3 work items')
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^part$/i }), 'task-domain:knit')
 
-    expect(screen.getByText('1 shown · 3 total')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /inspect work knit draft task/i })).toHaveTextContent('Knit')
+    expect(screen.getByText('1 work item')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /inspect work looma ready task/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /inspect work looma draft task/i })).not.toBeInTheDocument()
   })
@@ -1622,7 +1605,7 @@ describe('WorkTab', () => {
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
     expect(screen.getByText('Waiting')).toBeTruthy()
     expect(screen.queryByText('Review breakdown')).toBeNull()
-    expect(screen.getByText('Waiting on Finish the current run flow')).toBeTruthy()
+    expect(screen.queryByText('Waiting on Finish the current run flow')).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /inspect work build end-to-end interface system/i }))
 
@@ -1656,14 +1639,14 @@ describe('WorkTab', () => {
       },
     })
 
-    await screen.findByText('1 shown · 3 total')
+    await screen.findByText('1 work item')
     expect(screen.getByText('Ready feature work')).toBeTruthy()
     expect(screen.queryByText('Completed feature proof')).toBeNull()
     expect(screen.queryByText('Shelved idea')).toBeNull()
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'all')
 
-    expect(screen.getByText('3 shown · 3 total')).toBeTruthy()
+    expect(screen.getByText('3 work items')).toBeTruthy()
     expect(screen.getByText('Completed feature proof')).toBeTruthy()
     expect(screen.getByText('Shelved idea')).toBeTruthy()
   })
@@ -1700,13 +1683,13 @@ describe('WorkTab', () => {
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'open')
 
     await screen.findByText('Pantry Pulse app spec')
-    expect(screen.getAllByText('1 nested work item').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('Pantry Pulse app spec / Inventory tracking feature')).toBeTruthy()
-    expect(screen.getByText('Pantry Pulse app spec / Inventory tracking feature / Build inventory list')).toBeTruthy()
+    expect(screen.queryByText('1 nested work item')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pantry Pulse app spec / Inventory tracking feature')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pantry Pulse app spec / Inventory tracking feature / Build inventory list')).not.toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/parent task/i)
   })
 
-  it('uses explicit work summary labels instead of overloaded active/draft terms', async () => {
+  it('does not put stage-summary labels above the work list', async () => {
     render(WorkTab, {
       props: {
         detail: runningDetail([
@@ -1731,8 +1714,9 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('1 Working')).toBeTruthy()
-    expect(screen.getByText('1 Ready')).toBeTruthy()
+    expect(await screen.findByText('Build contracts')).toBeTruthy()
+    expect(screen.queryByText('1 Working')).not.toBeInTheDocument()
+    expect(screen.queryByText('1 Ready')).not.toBeInTheDocument()
     expect(screen.queryByText('1 being shaped')).toBeNull()
     expect(screen.queryByText('1 import draft')).toBeNull()
     expect(document.body.textContent).not.toContain('agent-active')
@@ -1742,8 +1726,7 @@ describe('WorkTab', () => {
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
 
-    expect(screen.getByText('Queued')).toBeTruthy()
-    expect(screen.getByText('1 import draft')).toBeTruthy()
+    expect(screen.getByText('Shape brief')).toBeTruthy()
   })
 
   it('defaults to Planning when a project has shaping work but no execution-ready work', async () => {
@@ -1767,7 +1750,7 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('2 shown · 2 total')).toBeTruthy()
+    expect(await screen.findByText('2 work items')).toBeTruthy()
     expect(screen.getByRole('option', { name: /^ready to run$/i })).toBeTruthy()
     expect((screen.getByRole('combobox', { name: /^show$/i }) as HTMLSelectElement).value).toBe('planning')
     expect(screen.queryByText('No work is ready to run yet.')).toBeNull()
@@ -1794,7 +1777,7 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('1 paused task')).toBeTruthy()
+    expect(await screen.findByText('1 work item')).toBeTruthy()
     expect(screen.queryByText('1 agent-active')).toBeNull()
     expect(screen.getAllByText('Paused')).toHaveLength(2)
     expect(screen.queryByText('In progress')).toBeNull()
@@ -1824,7 +1807,7 @@ describe('WorkTab', () => {
     const inspector = await screen.findByLabelText('Selected work inspector')
     expect(inspector).toHaveTextContent('Waiting')
     expect(within(inspector).queryByRole('button', { name: 'Start work' })).not.toBeInTheDocument()
-    expect(within(inspector).getByRole('button', { name: 'Open drawer' })).toBeInTheDocument()
+    expect(within(inspector).getByRole('button', { name: 'Open task' })).toBeInTheDocument()
   })
 
   it('keeps active internal steps visible while Guildhall is working on them', async () => {
@@ -1897,9 +1880,9 @@ describe('WorkTab', () => {
     })
 
     expect(await screen.findByText('Shape fixture and expected-record ground truth')).toBeTruthy()
-    expect(screen.getByText('1 shown · 2 total')).toBeTruthy()
+    expect(screen.getByText('1 work item')).toBeTruthy()
     expect((screen.getByRole('combobox', { name: /^show$/i }) as HTMLSelectElement).value).toBe('queued')
-    expect(screen.getByText('1 Working')).toBeTruthy()
+    expect(screen.queryByText('1 Working')).not.toBeInTheDocument()
   })
 
   it('keeps the primary-action internal shaping task visible in Work', async () => {
@@ -1990,7 +1973,7 @@ describe('WorkTab', () => {
 
     expect(await screen.findByText('Shape fixture and expected-record ground truth')).toBeTruthy()
     expect((screen.getByRole('combobox', { name: /^show$/i }) as HTMLSelectElement).value).toBe('planning')
-    expect(screen.getByText('2 shown · 2 total')).toBeTruthy()
+    expect(screen.getByText('2 work items')).toBeTruthy()
     expect(screen.getByText('Paused')).toBeTruthy()
   })
 
@@ -2046,27 +2029,25 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByText('1 Ready')).toBeTruthy()
+    expect(await screen.findByText('1 work item')).toBeTruthy()
     expect(screen.queryByText('2 Needs brief')).toBeNull()
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
 
-    expect(screen.getByText('2 Needs brief')).toBeTruthy()
+    expect(screen.queryByText('2 Needs brief')).toBeNull()
     expect(screen.queryByText('3 ready for worker')).toBeNull()
   })
 
-  it('puts the wide work-list grid inside a named horizontal scroll region', () => {
+  it('keeps the default work list free of database-style columns and horizontal scrolling', () => {
     const source = readFileSync('src/web/surfaces/project/WorkTab.svelte', 'utf8')
-    const scrollBlock = source.match(/\.work-list-scroll\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
-    const stackBlock = source.match(/:global\(\.work-list-stack\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
 
-    expect(source).toContain('class="work-list-scroll"')
-    expect(source).toContain('aria-label="Scrollable work list columns"')
-    expect(scrollBlock).toContain('overflow-x: auto')
-    expect(stackBlock).toContain('minmax(280px, 1fr)')
-    expect(stackBlock).toContain('inline-size: max(100%, 860px)')
-    expect(source).toContain('@media (max-width: 860px)')
-    expect(source).toContain('--work-list-columns: minmax(0, 1fr)')
+    expect(source).toContain('ariaLabel="Work items"')
+    expect(source).not.toContain('class="work-list-scroll"')
+    expect(source).not.toContain('Scrollable work list columns')
+    expect(source).not.toContain('list-column-head')
+    expect(source).not.toContain('row-updated')
+    expect(source).not.toContain('row-revisions')
+    expect(source).toContain('-webkit-line-clamp: 1')
   })
 
   it('routes imported-draft review and view-mode controls through project-scoped links', async () => {

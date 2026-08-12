@@ -57115,3 +57115,53 @@ they must not be mistaken for the next action.
 - `pnpm build`, `pnpm dev:install`, `guildhall stop`, and `guildhall start`
   completed; `/api/stale-server` reports `stale: false` for the installed
   runtime. Narrow-desktop and mobile browser proof remain open audit work.
+
+### Repair: Work is a decision list, not a project database
+
+#### Work user job before implementation
+
+When an owner deliberately browses Work, they can scan the relevant slice,
+recognize a short task key, title, and state, select one task without the
+selection changing, and open its real action immediately. The list is not a
+place to read timestamps, priority, source excerpts, hierarchy paths, revision
+counts, or proof diagnostics for every task.
+
+- Finding: Work presented a six-column pseudo-table plus row-level source,
+  hierarchy, proof, delivery, and dependency prose. It also locally sorted and
+  re-ranked server work, making selection and ordering harder to trust. The
+  actual task action was buried at the bottom of a separate inspector.
+- Fix: Work rows now contain only a project-scoped short key, one-line task
+  title, and state. The server project order is preserved. Selection opens a compact
+  inspector whose first controls are the meaningful action (`Review spec`,
+  `Review task brief`, or `Open task`) and, when appropriate, a run control.
+  Supporting task material remains attached to that selected item rather than
+  duplicated across the whole list.
+- Contract Touch Decision: Work continues to consume existing project task,
+  action-model, route-selection, and work-progress contracts. No endpoint,
+  persisted task, release, or project contract changed. The removed local sort
+  and row projections were presentation-only behavior, not an authoritative
+  ordering contract.
+- Schema Migration Decision: none; no persisted data changed.
+
+#### Evidence, 2026-08-12
+
+- WorkTab regressions now assert the deliberately small default list, absence
+  of pseudo-table diagnostics, stable keyboard/mouse selection, and an
+  immediately visible selected-task action. The focused Work suites pass: 50
+  tests.
+- Live Looma + Knit browser evidence before this repair: selecting `Revisit
+  multi-action FAB behavior only if real app demand appears`, then waiting
+  2.5 seconds, kept that row active and its inspector title unchanged. The
+  historical automatic reselection was not observable in the installed build;
+  the route remains the selection authority and is separately covered by its
+  regression.
+- Fresh installed Looma + Knit proof at `1280x720`: the review list shows ten
+  one-line rows with short `LOO-…` keys and a state only. A long title measured
+  one visible line (`16px` client height) with its full text clipped rather
+  than expanding the row (`31px` scroll height); the page had no horizontal
+  overflow. Selecting `Revisit multi-action FAB behavior only if real app
+  demand appears` kept it active and put `Review spec` at the top of the
+  inspector. That action opened a drawer with `Approve spec` and `Request
+  changes` immediately visible.
+- The installed LaunchAgent is running the freshly installed
+  `0.13.2-1786562310-22410` runtime. `/api/stale-server` reports `stale:false`.

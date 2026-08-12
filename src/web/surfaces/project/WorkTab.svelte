@@ -15,21 +15,16 @@
   import SegmentedControl from '../../lib/SegmentedControl.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
-  import { friendlyPriority } from '../../lib/display.js'
-  import { friendlyTaskId, taskDisplayKey } from '../../lib/identifier-labels.js'
+  import { taskDisplayKey } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { sourceRefsSummary } from '../../lib/source-refs.js'
-  import { taskGroundingDetail } from '../../lib/task-grounding.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
-  import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
-  import { hasUnmetDependencies, unmetDependencyIds } from '../../lib/task-dependencies.js'
+  import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
   import { isCompleteForWorkerHandoff, needsSourceRecoveryShaping, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
-  import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
-  import { deliveryProgressBadge, type DeliveryProgressBadge } from '../../lib/work-progress-display.js'
-  import { orientationPathByWorkId } from '../../lib/orientation-paths.js'
+  import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
   import { taskDisplayLabel, taskSourceQuestion } from '@guildhall/shared'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
@@ -40,32 +35,8 @@
     mode?: 'list' | 'board'
   }
 
-  type SortKey = 'title' | 'status' | 'area' | 'priority' | 'updated' | 'revisions'
-  type SortDir = 'asc' | 'desc'
   type WorkView = 'list' | 'board'
   type WorkFilter = 'queued' | 'scope' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'review' | 'needs-you'
-
-  const STATUS_SORT_ORDER: Record<string, number> = {
-    proposed: 0,
-    exploring: 1,
-    spec_review: 2,
-    ready: 3,
-    pending: 3,
-    in_progress: 4,
-    review: 5,
-    gate_check: 6,
-    blocked: 7,
-    shelved: 8,
-    pending_pr: 9,
-    done: 10,
-  }
-
-  const PRIORITY_SORT_ORDER: Record<string, number> = {
-    critical: 0,
-    high: 1,
-    normal: 2,
-    low: 3,
-  }
 
   let { detail, mode = 'list' }: Props = $props()
 
@@ -90,8 +61,6 @@
   })
 
   let progress = $state('Loading...')
-  let sortKey = $state<SortKey>('updated')
-  let sortDir = $state<SortDir>('desc')
   let routeWorkView = $state<WorkView>('list')
   let workFilter = $state<WorkFilter>('queued')
   let partFilter = $state('all')
@@ -126,7 +95,6 @@
   const activeWorkView = $derived<WorkView>(routeWorkView)
   const hierarchy = $derived(buildWorkHierarchy(tasks))
   const deliveryQueue = $derived(detail.deliverySpine?.queue ?? null)
-  const orientationPaths = $derived(orientationPathByWorkId(detail.orientationSpine))
   const deliveryFirstRunnable = $derived(deliveryQueue?.firstRunnable ?? null)
   const projectRunning = $derived(detail.run?.status === 'running')
   const projectRunActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
@@ -193,26 +161,6 @@
     const entries = selectedScopeRows
       .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
       .map(row => [row.taskId, row.scope] as const)
-    return new Map(entries)
-  })
-  const scopeRowByTaskId = $derived.by(() => {
-    const entries = (detail.orientationSpine?.scopeRows ?? [])
-      .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
-      .map(row => [row.taskId, row] as const)
-    return new Map(entries)
-  })
-  const releaseBlockerTaskIds = $derived.by(() => {
-    const taskIds = new Set((detail.tasks ?? []).map(task => task.id))
-    return new Set((detail.releaseReadiness?.releaseBlockers ?? [])
-      .map(blocker => blocker.id)
-      .filter((id): id is string => Boolean(id && taskIds.has(id))))
-  })
-  const releaseBlockerRankByTaskId = $derived.by(() => {
-    const taskIds = new Set((detail.tasks ?? []).map(task => task.id))
-    const entries = (detail.releaseReadiness?.releaseBlockers ?? [])
-      .map((blocker, index) => ({ id: blocker.id, index }))
-      .filter((entry): entry is { id: string; index: number } => Boolean(entry.id && taskIds.has(entry.id)))
-      .map(entry => [entry.id, entry.index] as const)
     return new Map(entries)
   })
   const proofMissingCount = $derived(proofMissingTaskIds.size || (detail.startReadiness?.code === 'proof_evidence_missing' ? detail.startReadiness.count ?? 0 : 0))
@@ -318,7 +266,16 @@
     )
   })
   const workListCountLabel = $derived.by(() => {
-    if (workFilter !== 'scope') return `${visibleTasks.length} shown · ${taskCounts.total} total`
+    if (workFilter !== 'scope') {
+      const noun = workFilter === 'review'
+        ? 'review'
+        : workFilter === 'needs-you'
+          ? 'decision'
+          : workFilter === 'needs-proof'
+            ? 'proof gap'
+            : 'work item'
+      return countLabel(visibleTasks.length, noun)
+    }
     const current = orientationScopeCounts?.current ?? scopeVisibleCounts.current
     const deferred = orientationScopeCounts?.deferred ?? scopeVisibleCounts.deferred
     const pieces = [
@@ -332,17 +289,9 @@
     return `${count} ${count === 1 ? singular : plural}`
   }
 
-  const sortedTasks = $derived.by(() => {
-    const list = [...visibleTasks]
-    list.sort((left, right) => {
-      if (workFilter === 'scope') {
-        const scopeDelta = compareScopedTasks(left, right)
-        if (scopeDelta !== 0) return scopeDelta
-      }
-      return compareTasks(left, right, sortKey, sortDir)
-    })
-    return list
-  })
+  // The server ordering is the project ordering. This surface deliberately
+  // does not invent a second ranking for people to decipher.
+  const sortedTasks = $derived([...visibleTasks])
   const selectedWorkVisible = $derived(Boolean(selectedWorkId && allWorkItems.some(task => task.id === selectedWorkId)))
   const focusedMode = $derived.by(() => {
     path.href
@@ -388,70 +337,6 @@
     if (focusedWork?.status === 'blocked') return 'Open this work to resolve what is blocking it.'
     return 'Open this work to take the next step.'
   })
-
-  function compareTasks(left: Task, right: Task, key: SortKey, dir: SortDir): number {
-    const direction = dir === 'asc' ? 1 : -1
-    const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' })
-
-    let delta = 0
-    switch (key) {
-      case 'title':
-        delta = compareText(left.title ?? '', right.title ?? '')
-        break
-      case 'status':
-        delta = (STATUS_SORT_ORDER[left.status ?? ''] ?? 99) - (STATUS_SORT_ORDER[right.status ?? ''] ?? 99)
-        break
-      case 'area':
-        delta = compareText(workAreaForTask(left).label, workAreaForTask(right).label)
-        break
-      case 'priority':
-        delta = (PRIORITY_SORT_ORDER[left.priority ?? 'normal'] ?? 99) - (PRIORITY_SORT_ORDER[right.priority ?? 'normal'] ?? 99)
-        break
-      case 'updated':
-        delta = Date.parse(left.updatedAt ?? '') - Date.parse(right.updatedAt ?? '')
-        break
-      case 'revisions':
-        delta = (left.revisionCount ?? 0) - (right.revisionCount ?? 0)
-        break
-    }
-
-    if (delta === 0) {
-      delta = compareText(left.title ?? '', right.title ?? '')
-    }
-    return delta * direction
-  }
-
-  function compareScopedTasks(left: Task, right: Task): number {
-    const delta = scopeTaskRank(left) - scopeTaskRank(right)
-    if (delta !== 0) return delta
-    return 0
-  }
-
-  function scopeTaskRank(task: Task): number {
-    const row = scopeRowByTaskId.get(task.id)
-    if (!row) return 50
-    if (row.scope === 'deferred') return 40
-    if (detail.startReadiness?.focusTaskId === task.id) return 0
-    const releaseBlockerRank = releaseBlockerRankByTaskId.get(task.id)
-    if (typeof releaseBlockerRank === 'number') return 1 + releaseBlockerRank
-    if (releaseBlockerTaskIds.has(task.id) || row.blocksStart || row.blocksRelease || row.humanBlocking) return 10
-    if (!['done', 'pending_pr'].includes(task.status ?? '')) return 10
-    return 20
-  }
-
-  function toggleSort(next: SortKey): void {
-    if (sortKey === next) {
-      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
-      return
-    }
-    sortKey = next
-    sortDir = next === 'title' || next === 'area' ? 'asc' : 'desc'
-  }
-
-  function sortLabel(key: SortKey): string {
-    if (sortKey !== key) return ''
-    return sortDir === 'asc' ? ' ↑' : ' ↓'
-  }
 
   function openTask(task: Task): void {
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
@@ -555,33 +440,6 @@
     if (isQueuedWorkTask(task)) return 'queued'
     if (isPlanningTask(task)) return 'planning'
     return 'open'
-  }
-
-  function taskProgress(task: Task) {
-    const id = typeof task.id === 'string' ? task.id : ''
-    return id ? detail.workProgress?.byTaskId?.[id] : null
-  }
-
-  function semanticUnitCount(task: Task): number {
-    return task.workUnitCount ?? task.workUnitAnalysis?.units?.length ?? 0
-  }
-
-  function dependencyLabel(taskId: string): string {
-    const dependency = tasks.find(candidate => candidate.id === taskId)
-    return dependency ? taskDisplayLabel(dependency) : friendlyTaskId(taskId)
-  }
-
-  function taskDeliveryBadge(task: Task): DeliveryProgressBadge | null {
-    const childCount = hierarchy.byId.get(task.id)?.childIds.length ?? 0
-    const semanticUnits = semanticUnitCount(task)
-    if (childCount === 0 && semanticUnits > 0 && isPlanningTask(task)) {
-      return {
-        label: `${semanticUnits} planned ${semanticUnits === 1 ? 'unit' : 'units'}`,
-        title: `${semanticUnits} semantic work ${semanticUnits === 1 ? 'unit is' : 'units are'} already shaped for this task before proof steps begin.`,
-        tone: 'neutral',
-      }
-    }
-    return deliveryProgressBadge(taskProgress(task))
   }
 
   function openImportedDraft(task: Task): void {
@@ -717,78 +575,13 @@
     return chipTone(taskPresentation(task).tone)
   }
 
-  function priorityTone(priority: string | undefined): CardTone {
-    switch (priority) {
-      case 'critical':
-        return 'danger'
-      case 'high':
-        return 'warn'
-      case 'low':
-        return 'ok'
-      default:
-        return 'neutral'
-    }
-  }
-
   function listItemTone(task: Task): CardTone {
     const tone = effectiveStatusTone(task)
     return tone === 'running' ? 'accent' : tone
   }
 
-  function formatUpdatedAt(value: string | undefined): string {
-    if (!value) return '—'
-    const date = new Date(value)
-    if (Number.isNaN(date.getTime())) return '—'
-    return date.toLocaleString([], {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    })
-  }
-
-  function taskSecondaryText(task: Task): string {
-    const node = hierarchy.byId.get(task.id)
-    const childCount = node?.childIds.length ?? 0
-    if (childCount > 0) return nestedWorkCountLabel(childCount)
-    const blockers = unmetDependencyIds(task, tasks)
-    if (blockers.length > 0) {
-      const prefix = task.status === 'blocked' ? 'Blocked by' : 'Waiting on'
-      return `${prefix} ${blockers.map(dependencyLabel).join(', ')}`
-    }
-    if (needsBreakdownReview(task)) {
-      const count = task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0
-      return `${count} requirements; no contained work or decomposition proposal yet.`
-    }
-    const semanticUnits = semanticUnitCount(task)
-    if (childCount === 0 && semanticUnits > 0 && isPlanningTask(task)) {
-      return `${semanticUnits} planned work ${semanticUnits === 1 ? 'unit' : 'units'} already shaped.`
-    }
-    if (task.workKind) return workKindLabel(task.workKind)
-    if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
-    if (task.terminalSummary?.headline) return task.terminalSummary.headline
-    if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
-    const grounding = taskGroundingDetail(task)
-    if (grounding) return grounding
-    if (taskSourceQuestion(task)) return taskSourceQuestion(task)!
-    if (task.description) return task.description
-    return friendlyTaskId(task.id)
-  }
-
   function primitiveLabel(primitive: { id?: string; label?: string }): string {
     return primitive.label?.trim() || primitive.id || 'Primitive'
-  }
-
-  function orientationPathForTask(task: Task): string {
-    return orientationPaths.get(task.id) ?? ''
-  }
-
-  function hierarchyBreadcrumb(task: Task): string {
-    const orientationPath = orientationPathForTask(task)
-    if (orientationPath) return orientationPath
-    const crumbs = hierarchy.byId.get(task.id)?.breadcrumb ?? []
-    if (crumbs.length <= 1) return ''
-    return crumbs.map(crumb => crumb.title).join(' / ')
   }
 
   function needsBreakdownReview(task: Task): boolean {
@@ -1056,44 +849,6 @@
 
         <div class="work-list-overview">
           <div class="work-list-count">{workListCountLabel}</div>
-          <div class="work-summary">
-            {#if taskCounts.agentActive > 0}
-              <Chip label={countLabel(taskCounts.agentActive, 'Working', 'Working')} tone="running" />
-            {/if}
-            {#if taskCounts.paused > 0}
-              <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
-            {/if}
-            {#if taskCounts.waiting > 0}
-              <Chip label={countLabel(taskCounts.waiting, 'waiting task')} tone="warn" />
-            {/if}
-            {#if taskCounts.reviewWaiting > 0}
-              <Chip label={countLabel(taskCounts.reviewWaiting, 'Review', 'Review')} tone="warn" />
-            {/if}
-            {#if taskCounts.gatesWaiting > 0}
-              <Chip label={countLabel(taskCounts.gatesWaiting, 'Gates', 'Gates')} tone="warn" />
-            {/if}
-            {#if taskCounts.shaping > 0}
-              <Chip label={countLabel(taskCounts.shaping, 'Queued', 'Queued')} tone="running" />
-            {/if}
-            {#if taskCounts.specRevisionQueued > 0}
-              <Chip label={countLabel(taskCounts.specRevisionQueued, 'Queued', 'Queued')} tone="running" />
-            {/if}
-            {#if taskCounts.readyForWorker > 0}
-              <Chip label={countLabel(taskCounts.readyForWorker, 'Ready', 'Ready')} tone="ok" />
-            {/if}
-            {#if taskCounts.needsSpecCleanup > 0}
-              <Chip label={countLabel(taskCounts.needsSpecCleanup, 'Needs brief', 'Needs brief')} tone="warn" />
-            {/if}
-            {#if taskCounts.awaitingApproval > 0}
-              <Chip label={countLabel(taskCounts.awaitingApproval, 'Review', 'Review')} tone="warn" />
-            {/if}
-            {#if taskCounts.done > 0}
-              <Chip label={`${taskCounts.done} done`} tone="ok" />
-            {/if}
-            {#if visibleImportDraftCount > 0}
-              <Chip label={countLabel(visibleImportDraftCount, 'import draft')} tone="neutral" />
-            {/if}
-          </div>
         </div>
 
         {#if visibleImportDraftCount > 0 && nextImportDraft}
@@ -1144,66 +899,37 @@
             {/if}
           </UtilityPanel>
         {:else}
-          <div class="work-list-scroll" role="region" aria-label="Scrollable work list columns">
-            <CardList className="work-list-stack">
-              <div class="list-column-head" aria-label="Sort work list">
-                <button type="button" class:active={sortKey === 'title'} onclick={() => toggleSort('title')}>Work{sortLabel('title')}</button>
-                <button type="button" class:active={sortKey === 'status'} onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button>
-                <button type="button" class:active={sortKey === 'area'} onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button>
-                <button type="button" class:active={sortKey === 'priority'} onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button>
-                <button type="button" class:active={sortKey === 'updated'} onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button>
-                <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
-              </div>
-              {#each sortedTasks as task (task.id)}
-                {@const deliveryBadge = taskDeliveryBadge(task)}
-                <CardListItem
-                  as="button"
-                  className="work-list-row"
-                  tone={listItemTone(task)}
-                  railTone={listItemTone(task) === 'neutral' ? 'neutral' : listItemTone(task)}
-                  railStrength="strong"
-                  ariaLabel={`Inspect work ${taskDisplayLabel(task, task.id)}`}
-                  ariaCurrent={selectedWorkId === task.id ? 'true' : null}
-                  selected={selectedWorkId === task.id}
-                  elementRef={(node) => setWorkRowElement(task.id, node)}
-                  onclick={() => selectWork(task)}
-                  onkeydown={(event) => onTaskKey(event, task)}
-                >
-                  <span class="row-main">
-                    <span class="task-title">{taskDisplayLabel(task)}</span>
-                    {#if hierarchyBreadcrumb(task)}
-                      <span class="task-breadcrumb">{hierarchyBreadcrumb(task)}</span>
-                    {/if}
-                    <span class="task-subcopy">{taskSecondaryText(task)}</span>
-                  </span>
-                  <span class="row-status">
-                    <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
-                    {#if deliveryBadge}
-                      <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} title={deliveryBadge.title} size="compact" />
-                    {/if}
-                  </span>
-                  <span class="row-domain">
-                    {workAreaForTask(task).label}
-                  </span>
-                  <span class="row-priority">
-                    <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
-                  </span>
-                  <span class="row-updated">
-                    {formatUpdatedAt(task.updatedAt)}
-                  </span>
-                  <span class="row-revisions">
-                    {task.revisionCount ?? 0}
-                  </span>
-                </CardListItem>
-              {/each}
-            </CardList>
-          </div>
-          {#if inventoryPage?.hasMore}
+          <CardList className="work-list-stack" ariaLabel="Work items">
+            {#each sortedTasks as task (task.id)}
+              <CardListItem
+                as="button"
+                className="work-list-row"
+                tone={listItemTone(task)}
+                railTone={listItemTone(task) === 'neutral' ? 'neutral' : listItemTone(task)}
+                railStrength="strong"
+                ariaLabel={`Inspect work ${taskDisplayLabel(task, task.id)}`}
+                ariaCurrent={selectedWorkId === task.id ? 'true' : null}
+                selected={selectedWorkId === task.id}
+                elementRef={(node) => setWorkRowElement(task.id, node)}
+                onclick={() => selectWork(task)}
+                onkeydown={(event) => onTaskKey(event, task)}
+              >
+                <span class="row-main">
+                  <span class="task-key">{taskDisplayKey(task.id, allWorkItems, detail.id)}</span>
+                  <span class="task-title" title={taskDisplayLabel(task)}>{taskDisplayLabel(task)}</span>
+                </span>
+                <span class="row-status">
+                  <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
+                </span>
+              </CardListItem>
+            {/each}
+          </CardList>
+          {#if inventoryPage?.hasMore && workFilter === 'all'}
             <div class="inventory-more">
               <Button variant="secondary" size="sm" disabled={inventoryLoadBusy} onclick={() => void loadMoreWork()}>
                 {inventoryLoadBusy ? 'Loading more work' : 'Load more work'}
               </Button>
-              <span class="muted">Showing {allWorkItems.length} of {inventoryPage.totalEffectiveCount ?? allWorkItems.length} work items.</span>
+              <span class="muted">More work is available.</span>
             </div>
           {/if}
         {/if}
@@ -1325,9 +1051,6 @@
   }
   .work-list-overview {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--s-3);
     margin-bottom: var(--s-3);
   }
   .work-list-inspector-layout {
@@ -1346,13 +1069,6 @@
     font-weight: var(--gh-type-weight-strong);
     line-height: var(--gh-type-line-height-tight);
     white-space: nowrap;
-  }
-  .work-summary {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: var(--gh-space-2);
-    min-width: 0;
   }
   :global(.delivery-queue-panel) {
     display: block;
@@ -1437,19 +1153,6 @@
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
   }
-  .work-list-scroll {
-    max-inline-size: 100%;
-    min-inline-size: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding-block: var(--gh-space-1) var(--gh-space-2);
-    scrollbar-gutter: stable;
-  }
-  .work-list-scroll:focus-visible {
-    outline: var(--gh-layout-focus-ring-width) solid var(--gh-color-border-focus);
-    outline-offset: var(--gh-space-1);
-  }
-
   .inventory-more {
     display: flex;
     align-items: center;
@@ -1458,55 +1161,14 @@
     margin-top: var(--gh-space-3);
   }
   :global(.work-list-stack) {
-    --work-list-columns:
-      minmax(280px, 1fr)
-      minmax(120px, max-content)
-      minmax(96px, 124px)
-      minmax(84px, max-content)
-      minmax(96px, max-content)
-      48px;
     display: grid;
-    grid-template-columns: var(--work-list-columns);
     gap: var(--gh-space-2);
-    inline-size: max(100%, 860px);
-  }
-  .list-column-head {
-    display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: subgrid;
-    align-items: center;
-    gap: var(--gh-space-2);
-    padding: 0 var(--s-3);
-  }
-  .list-column-head button {
-    min-width: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--text-muted);
-    font: inherit;
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    letter-spacing: 0.05em;
-    line-height: var(--gh-type-line-height-tight);
-    text-align: left;
-    text-transform: uppercase;
-    cursor: pointer;
-  }
-  .list-column-head button:nth-child(5),
-  .list-column-head button:nth-child(6) {
-    text-align: right;
-  }
-  .list-column-head button:hover,
-  .list-column-head button.active {
-    color: var(--text);
   }
   :global(.work-list-row) {
-    display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: subgrid;
+    display: flex;
     align-items: center;
-    gap: var(--gh-space-2);
+    justify-content: space-between;
+    gap: var(--gh-space-3);
     width: 100%;
     border-radius: var(--r-2);
     color: inherit;
@@ -1520,8 +1182,14 @@
   }
   :global(.work-list-row) .row-main {
     display: grid;
-    gap: 4px;
+    gap: var(--gh-space-1);
     min-width: 0;
+  }
+  :global(.work-list-row) .task-key {
+    color: var(--text-muted);
+    font-family: var(--gh-font-mono, ui-monospace, monospace);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
   }
   :global(.work-list-row) .task-title {
     display: -webkit-box;
@@ -1533,53 +1201,11 @@
     -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
   }
-  :global(.work-list-row) .task-subcopy {
-    display: -webkit-box;
-    overflow: hidden;
-    font-size: var(--gh-type-size-meta);
-    color: var(--text-muted);
-    line-height: var(--gh-type-line-height-body);
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-  :global(.work-list-row) .task-breadcrumb {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    line-height: var(--gh-type-line-height-tight);
-  }
-  :global(.work-list-row) .row-status,
-  :global(.work-list-row) .row-domain,
-  :global(.work-list-row) .row-priority,
-  :global(.work-list-row) .row-updated,
-  :global(.work-list-row) .row-revisions {
-    min-width: 0;
-  }
-  :global(.work-list-row) .row-status,
-  :global(.work-list-row) .row-priority {
+  :global(.work-list-row) .row-status {
     display: inline-flex;
+    flex: none;
     align-items: center;
     justify-content: flex-start;
-  }
-  :global(.work-list-row) .row-domain {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  :global(.work-list-row) .row-updated,
-  :global(.work-list-row) .row-revisions {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    line-height: var(--gh-type-line-height-tight);
-    text-align: right;
-    white-space: nowrap;
-  }
-  @supports not (grid-template-columns: subgrid) {
-    .list-column-head,
-    :global(.work-list-row) {
-      grid-template-columns: var(--work-list-columns);
-    }
   }
   .progress-more {
     align-self: stretch;
@@ -1630,47 +1256,18 @@
       flex-direction: column;
       align-items: stretch;
     }
-    .work-list-overview {
-      flex-direction: column;
-      align-items: stretch;
-    }
-    .work-summary {
-      justify-content: flex-start;
-    }
     .work-list-inspector-layout.has-selection {
       grid-template-columns: minmax(0, 1fr);
     }
-    .work-list-scroll {
-      overflow-x: visible;
-      padding-block-end: 0;
-    }
-    :global(.work-list-stack) {
-      --work-list-columns: minmax(0, 1fr);
-      inline-size: 100%;
-    }
     :global(.work-list-row) {
-      grid-template-columns: minmax(0, 1fr);
       align-items: stretch;
-    }
-    .list-column-head {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--gh-space-2);
-      padding: 0;
+      flex-direction: column;
     }
     :global(.work-list-row) .task-title {
       font-size: var(--gh-type-size-meta);
     }
-    :global(.work-list-row) .task-subcopy {
-      -webkit-line-clamp: 3;
-    }
-    :global(.work-list-row) .row-status,
-    :global(.work-list-row) .row-priority {
+    :global(.work-list-row) .row-status {
       justify-content: flex-start;
-    }
-    :global(.work-list-row) .row-updated,
-    :global(.work-list-row) .row-revisions {
-      text-align: left;
     }
   }
 </style>
