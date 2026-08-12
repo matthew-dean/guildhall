@@ -16,7 +16,6 @@
   import Modal from '../lib/Modal.svelte'
   import AlertBand from '../../../packages/ui/src/components/AlertBand.svelte'
   import NoticeBand from '../../../packages/ui/src/components/NoticeBand.svelte'
-  import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
   import IntakeModal from './IntakeModal.svelte'
@@ -24,7 +23,6 @@
   import { onEvent } from '../lib/events.js'
   import { path, nav } from '../lib/nav.svelte.js'
   import { currentProjectHref, projectActionHref, projectFetch } from '../lib/project-routes.js'
-  import { buildProjectTicker } from '../lib/project-activity.js'
   import { dedupeProjectAttention } from '../lib/project-attention.js'
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
@@ -33,7 +31,7 @@
   import { activeEscalations } from '../lib/escalation.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
-  import type { AgentQuestion, EventEnvelope, ProjectDetail, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, StartReadiness, Task } from '../lib/types.js'
+  import type { AgentQuestion, ProjectDetail, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, StartReadiness, Task } from '../lib/types.js'
 
   type MigrationApplyStage = 'idle' | 'applying' | 'refreshing-project' | 'refreshing-inbox' | 'checking-status' | 'complete'
   type MigrationApplyResult = {
@@ -125,8 +123,6 @@
   let inboxError = $state<string | null>(null)
   let inboxLoadInFlight = false
   let inboxLoadQueued = false
-  let latestTickerEvent = $state<EventEnvelope | null>(null)
-  let tickerNow = $state(Date.now())
   const detail = $derived.by(() => {
     const current = project.detail
     if (!current) return null
@@ -217,21 +213,6 @@
   $effect(() => {
     const off = onEvent(ev => {
       const t = ev.event?.type ?? ''
-      if (
-        t === 'agent_started' ||
-        t === 'agent_finished' ||
-        t === 'task_transition' ||
-        t === 'tool_started' ||
-        t === 'tool_completed' ||
-        t === 'assistant_complete' ||
-        t === 'line_complete' ||
-        t === 'error' ||
-        t === 'escalation_raised' ||
-        t === 'provider_health_changed' ||
-        t.startsWith('supervisor_')
-      ) {
-        latestTickerEvent = pickLatestEvent(latestTickerEvent, ev)
-      }
       // Refresh on anything that might change inbox state.
       if (
         t.startsWith('task_') ||
@@ -678,19 +659,6 @@
     return lines.find(line => /\berror\b|failed|Cannot find module|command not found|spawn ENOENT/i.test(line)) ?? lines[0] ?? null
   }
 
-  function eventAtMillis(event: EventEnvelope | null | undefined): number {
-    const at = event?.at
-    if (!at) return -1
-    const value = Date.parse(at)
-    return Number.isFinite(value) ? value : -1
-  }
-
-  function pickLatestEvent(current: EventEnvelope | null, candidate: EventEnvelope | null): EventEnvelope | null {
-    if (!candidate) return current
-    if (!current) return candidate
-    return eventAtMillis(candidate) >= eventAtMillis(current) ? candidate : current
-  }
-
   function hasVisibleUnansweredQuestion(task: Task): boolean {
     const status = task.status ?? ''
     if (['done', 'shelved', 'blocked', 'pending_pr'].includes(status)) return false
@@ -701,18 +669,6 @@
     return status === 'done' || status === 'shelved' || status === 'pending_pr'
   }
 
-  $effect(() => {
-    latestTickerEvent = (detail?.recentEvents ?? []).reduce<EventEnvelope | null>(
-      (current, candidate) => pickLatestEvent(current, candidate),
-      null,
-    )
-  })
-  $effect(() => {
-    const handle = setInterval(() => {
-      tickerNow = Date.now()
-    }, 5000)
-    return () => clearInterval(handle)
-  })
   const actualRunStatus = $derived(detail?.run?.status ?? 'stopped')
   const runStatus = $derived(optimisticRunStatus ?? actualRunStatus)
   $effect(() => {
@@ -818,7 +774,6 @@
         ? startReadiness?.message ?? 'All tasks are already finished.'
       : null,
   )
-  const projectTicker = $derived(buildProjectTicker(detail, latestTickerEvent, new Date(tickerNow)))
   const currentScopedTasks = $derived.by(() => {
     const tasks = detail?.tasks ?? []
     const includedRows = detail?.orientationSpine?.scopeRows?.filter(row => row.scope === 'included') ?? []
@@ -1764,7 +1719,6 @@
                   {inboxItems}
                   {inboxLoaded}
                   {inboxError}
-                  {projectTicker}
                   {activeProjectId}
                   onMigrate={openMigrationModal}
                 />
@@ -1875,37 +1829,6 @@
           {/await}
         {/if}
         </div>
-
-    {#snippet footer()}
-      {#if currentView !== 'overview' && !workSurfaceOwnsPrimaryDecision}
-      <div class="project-ticker ticker-{projectTicker.tone}" aria-label="Live project ticker">
-        <div class="project-ticker-main">
-          <StatusDot tone={projectTicker.tone} pulse={projectTicker.pulse} size="sm" />
-          <span class="project-ticker-actor">{projectTicker.actorLabel ?? projectTicker.label}</span>
-          <span class="project-ticker-message">
-            {projectTicker.message}
-            {#if projectTicker.detail}
-              {' - '}{projectTicker.detail}
-            {/if}
-          </span>
-        </div>
-        <div class="project-ticker-side">
-          {#if runStatus === 'running' || runStatus === 'stopping'}
-            <a
-              class="project-ticker-link"
-              href={currentProjectHref('/timeline', activeProjectId)}
-              onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/timeline', activeProjectId)) }}
-            >
-              View live stream
-            </a>
-          {/if}
-          {#if projectTicker.timeLabel}
-            <span class="project-ticker-time">{projectTicker.timeLabel}</span>
-          {/if}
-        </div>
-      </div>
-      {/if}
-    {/snippet}
 
   {#if intakeOpen}
     <IntakeModal onClose={() => setTimeout(() => (intakeOpen = false), 160)} />
@@ -2147,9 +2070,6 @@
     font-weight: var(--gh-type-weight-strong);
   }
 
-  .main {
-    min-width: 0;
-  }
   .topbar {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -2245,11 +2165,6 @@
   }
   .rail-status {
     display: flex;
-  }
-  .btn-inner {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
   }
   .actions-menu {
     position: relative;
@@ -2403,86 +2318,12 @@
     }
   }
 
-  .band {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-2);
-  }
   .page-centered {
   }
   .body {
     display: flex;
     flex-direction: column;
     gap: var(--s-5);
-  }
-  .project-ticker {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--s-3);
-    min-width: 0;
-    padding: var(--s-2) var(--s-5);
-    border-top: 1px solid var(--border);
-    background: color-mix(in srgb, var(--bg-raised) 94%, black 6%);
-  }
-  .project-ticker-main {
-    flex: 1 1 auto;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
-  }
-  .project-ticker-side {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    min-width: 0;
-  }
-  .project-ticker-link {
-    color: var(--accent);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    text-decoration: none;
-    white-space: nowrap;
-  }
-  .project-ticker-link:hover {
-    text-decoration: underline;
-  }
-  .project-ticker-actor {
-    flex: 0 1 auto;
-    min-width: 0;
-    color: var(--text);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    overflow-wrap: anywhere;
-  }
-  .project-ticker-message {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
-  }
-  .project-ticker-time {
-    flex: none;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    white-space: nowrap;
-  }
-  .ticker-active .project-ticker-actor,
-  .ticker-ok .project-ticker-actor {
-    color: var(--accent-2);
-  }
-  .ticker-warn .project-ticker-actor {
-    color: var(--warn);
-  }
-  .ticker-danger .project-ticker-actor {
-    color: var(--danger);
   }
   .muted {
     color: var(--text-muted);
@@ -2539,23 +2380,6 @@
     }
     .body {
       gap: var(--s-4);
-    }
-    .project-ticker {
-      padding: var(--s-2) var(--s-4);
-    }
-    .project-ticker-main {
-      align-items: flex-start;
-      flex-wrap: wrap;
-    }
-    .project-ticker-actor {
-      flex-basis: 100%;
-      line-height: var(--gh-type-line-height-caption);
-    }
-    .project-ticker-side {
-      display: none;
-    }
-    .project-ticker-message {
-      white-space: normal;
     }
   }
   @media (max-width: 520px) {

@@ -595,7 +595,7 @@ describe('ProjectView', () => {
     await screen.findAllByText('Review the waiting spec before Guildhall can continue')
     expect(screen.getAllByText('Review the waiting spec before Guildhall can continue')).toHaveLength(1)
     expect(screen.getByRole('link', { name: /review spec/i })).toBeInTheDocument()
-    expect(screen.getByText('Spec review pending')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Live project ticker')).not.toBeInTheDocument()
   })
 
   it('dedupes shell attention when spec approval blocks both start readiness and idle summary', async () => {
@@ -1233,7 +1233,7 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Loading project...')).toBeNull()
   })
 
-  it('shows all-terminal supervisor stop detail in the project ticker footer', async () => {
+  it('does not add a passive footer report to a terminal Thread route', async () => {
     const projectPayload = detail({
       run: { status: 'stopped', mode: 'continuous' },
       tasks: [
@@ -1255,8 +1255,7 @@ describe('ProjectView', () => {
 
     await renderProjectView('thread', null, 'looma-knit', projectPayload)
 
-    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('Run finished')
-    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('No actionable tasks remain')
+    expect(screen.queryByLabelText('Live project ticker')).not.toBeInTheDocument()
   })
 
   it('does not treat open escalation records on terminal shelved work as live blockers', async () => {
@@ -1659,8 +1658,7 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: /pausing/i })).toBeDisabled()
   })
 
-  it('links a running project ticker to the live Timeline stream', async () => {
-    const user = userEvent.setup()
+  it('does not add a second live feed below Work while a run is active', async () => {
     const running = detail({
       run: { status: 'running', mode: 'one_task' },
       startReadiness: { canStart: true, message: 'Ready' },
@@ -1670,10 +1668,7 @@ describe('ProjectView', () => {
 
     await renderProjectView('work', null, 'looma-knit', running)
 
-    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('Advancing one task')
-    await user.click(screen.getByRole('link', { name: 'View live stream' }))
-
-    expect(path.value).toBe('/projects/looma-knit/timeline')
+    expect(screen.queryByLabelText('Live project ticker')).not.toBeInTheDocument()
   })
 
   it('acknowledges pause immediately while the project run is stopping', async () => {

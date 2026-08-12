@@ -57010,3 +57010,27 @@ action as a neutral secondary button whenever nothing was actively executing,
 which made it look like a status rather than an intentional control. Pause now
 uses the danger treatment consistently; its shared enablement and endpoint are
 unchanged.
+
+### Repair: remove the duplicate project ticker
+
+#### Project-shell user job before implementation
+
+When an owner opens Work, Thread, Release, or any other project route, that
+route must own its decision. Guildhall must not append a second status strip
+which repeats a raw event, stale count, or already-visible owner decision.
+Timeline is the one intentional place to inspect activity; it is available in
+the project navigation when that history is actually needed.
+
+- Finding: ProjectView ranked recent events and readiness locally, then rendered
+  the result as a persistent footer on almost every route. The footer repeated
+  Work's selected task, Thread's owner input, or release status and sometimes
+  supplied a second "live" presentation below the page that already described
+  the same work.
+- Fix: remove the shell ticker, its client-side event ranking, five-second
+  refresh loop, and responsive CSS. Project state and controls remain on their
+  owning route; Timeline remains the activity surface.
+- Contract Touch Decision: no persisted or API contract changes. The removal
+  stops a duplicate client presentation rather than changing readiness, run,
+  selection, owner-input, or event authority. ProjectView regressions must
+  prove terminal Thread and live Work add no footer report.
+- Schema Migration Decision: none; no stored data is touched.
