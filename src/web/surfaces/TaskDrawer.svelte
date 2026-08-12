@@ -423,7 +423,7 @@
   }
 
   function openFullTaskRecord(): void {
-    nav(`${currentTaskHref(taskId, scopedProjectId())}?detail=full&tab=spec`, {
+    nav(`${currentTaskHref(taskId, scopedProjectId())}?detail=full&tab=overview`, {
       backgroundPath: drawerBackgroundPath(),
     })
   }

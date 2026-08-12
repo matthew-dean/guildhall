@@ -264,7 +264,7 @@ describe('TaskDrawer', () => {
     expect(screen.queryByText('Add the link editing controls to the selected text menu.')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'View task details' }))
     await waitFor(() => {
-      expect(path.href).toBe('/projects/looma-knit/task/task-link-editor?detail=full&tab=spec')
+      expect(path.href).toBe('/projects/looma-knit/task/task-link-editor?detail=full&tab=overview')
     })
   })
 
@@ -2016,7 +2016,7 @@ describe('TaskDrawer', () => {
     })
 
     await userEvent.click(screen.getByRole('button', { name: 'Read full task record' }))
-    await waitFor(() => expect(path.href).toContain('?detail=full&tab=spec'))
+    await waitFor(() => expect(path.href).toContain('?detail=full&tab=overview'))
   })
 
   it('hands a required migration to the shared project repair flow instead of rendering the raw error', async () => {

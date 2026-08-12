@@ -57896,3 +57896,38 @@ because that would start the user's active Narrative Harness work.
 collapsed-history, nested-diagnostics, and shared-action route regression.
 `pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and `pnpm build`
 pass; the installed app reports `stale:false`.
+
+### Repair: Task detail must not default to the full specification
+
+#### Task-detail user job before implementation
+
+When an owner opens a task record from the current-work handoff, they need the
+task identity, current state, delivery progress, and executable next action.
+They should only read the full implementation specification after deliberately
+choosing to inspect it.
+
+- [x] Make `View task details` open the concise Overview record, never the
+  full Spec tab solely because the route came from the task handoff.
+- Contract Touch Decision: `TaskDrawer` owns only the detail tab route and
+  presentation. It will retain explicit `?tab=spec` deep links for review
+  actions, but the general full-record command must use Overview. Considered
+  but unchanged: task identity, shared action model, spec-review routing,
+  task payload, history/diagnostic data, and approval state. Proof required:
+  task drawer route regression and installed Narrative Harness replay.
+- Schema Migration Decision: none; this changes only the initial route tab.
+- Evidence, 2026-08-12: installed NAR-091's focused task page was concise and
+  actionable, but `View task details` forced `?detail=full&tab=spec`, exposing
+  the full multi-screen implementation plan on first entry. Its Overview tab
+  already contains the bounded task state and action context, so the forced
+  Spec route is a presentation/routing defect.
+
+#### Evidence: full task record default repaired
+
+On 2026-08-12, the installed NAR-091 task handoff's `View task details`
+command opened `/task/task-091?detail=full&tab=overview`; Overview was the
+active tab and the page had no horizontal overflow at 1280px. The full
+implementation plan remains behind the explicit Spec tab. `TaskDrawer` now
+preserves explicit `?tab=spec` review deep links, while the general full-record
+command defaults to owner-oriented Overview. The focused TaskDrawer suite
+passes all 59 tests; `pnpm typecheck`, `pnpm lint:contracts`, `git diff
+--check`, and `pnpm build` pass, and the installed app reports `stale:false`.
