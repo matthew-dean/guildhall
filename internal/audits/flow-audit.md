@@ -57956,3 +57956,11 @@ On 2026-08-12, fresh installed NAR-091 Overview contained neither `Task size`,
 delivery steps, task dependencies, and the `Resume only this work item` action.
 The two-tab record had no page-level horizontal overflow at 1280px. Focused
 Overview/TaskDrawer coverage passes 62 tests and `pnpm typecheck` passes.
+
+### Evidence: Narrative Harness Thread agrees with the shared handoff
+
+On 2026-08-12, installed Narrative Harness Thread showed no synthetic thread
+feed or inactive controls. Its entire first viewport was the shared `Work ready
+to resume` handoff and `Open Work` command, matching Overview, Release, Work,
+and Timeline. It had no page-level horizontal overflow at 1280px. This is a
+passing baseline, not a reason to retain Thread as a duplicate live dashboard.
