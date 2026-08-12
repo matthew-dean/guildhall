@@ -196,6 +196,26 @@ describe('TaskDrawer', () => {
     })
   })
 
+  it('does not render an inert Action tab when the task has no current action content', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('tab', { name: 'Overview' })
+    expect(screen.queryByRole('tab', { name: 'Action' })).not.toBeInTheDocument()
+  })
+
   it('opens on an overview with review plan details when one is recorded', async () => {
     const payload = drawerPayload({
       threadTurns: [],

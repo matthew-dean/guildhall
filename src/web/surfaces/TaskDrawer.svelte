@@ -698,7 +698,13 @@
   const runStatus = $derived(payload?.runStatus ?? project.detail?.run?.status ?? 'stopped')
   const availabilityStatus = $derived(payload?.availability?.status ?? project.detail?.availability?.status ?? 'active')
   const hasCurrentTurns = $derived((taskExtras.threadTurns?.length ?? payload?.threadTurns?.length ?? 0) > 0)
-  const tabs = $derived([BASE_TABS[0], { id: 'current', label: 'Action' }, ...BASE_TABS.slice(1)] as const)
+  // An Action tab without current turns immediately resolves back to Overview.
+  // Do not render a control that cannot show a distinct action surface.
+  const tabs = $derived([
+    BASE_TABS[0],
+    ...(hasCurrentTurns ? [{ id: 'current', label: 'Action' } as const] : []),
+    ...BASE_TABS.slice(1),
+  ])
   function isTerminalRunStatus(status: string | undefined): boolean {
     return status === 'done' || status === 'shelved' || status === 'pending_pr'
   }

@@ -57155,6 +57155,24 @@ counts, or proof diagnostics for every task.
 - The installed LaunchAgent reports `stale:false` for runtime
   `0.13.2-1786562583-32141`.
 
+### Repair: Task actions do not pretend to exist
+
+#### Task drawer user job before implementation
+
+When an owner opens a task, every visible tab must take them to a distinct,
+useful surface. A task with no current action conversation must not advertise
+an Action tab and then quietly send the owner back to Overview.
+
+- Finding: TaskDrawer always rendered `Action`, while its own state effect
+  immediately reset that tab to Overview when the task had no current turns.
+  This produced the reported enabled tab that appeared to do nothing.
+- Fix: `Action` is now conditional on current action content. Existing action
+  buttons remain in the drawer footer and focused decision surfaces; no new
+  local action classification is introduced.
+- Contract Touch Decision: consumes existing drawer thread-turn state only.
+  No route, task, API, or persisted contract changed.
+- Schema Migration Decision: none; no persisted data changed.
+
 #### Evidence, 2026-08-12
 
 - WorkTab regressions now assert the deliberately small default list, absence
