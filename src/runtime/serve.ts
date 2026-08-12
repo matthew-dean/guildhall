@@ -3191,6 +3191,7 @@ function publishFleetSummaryFromSavedState(
 
 function workProgressFromProjectSummaryProjection(
   projection: ProjectSummaryProjection,
+  selectedExecutionCounts?: Pick<NonNullable<ProjectSummaryProjection['releaseSummary']>['counts'], 'total' | 'done' | 'active'> | null,
 ): ServiceProjectSummary['workProgress'] {
   const counts = {
     visibleTotal: projection.counts.total,
@@ -3203,7 +3204,13 @@ function workProgressFromProjectSummaryProjection(
     deliveryDone: 0,
     deliveryBlocked: 0,
   }
-  const selected = projection.releaseSummary.counts
+  // Compact product surfaces may receive an execution-normalized release
+  // envelope while the durable projection retains full parent/child membership
+  // for audit and routing. Progress totals must describe the same executable
+  // units as the visible scope, never the raw graph cardinality.
+  const selected = selectedExecutionCounts
+    ? { ...projection.releaseSummary.counts, ...selectedExecutionCounts }
+    : projection.releaseSummary.counts
   const selectedBlocked = projection.releaseSummary.taskStatusCounts.blocked ?? 0
   const selectedShelved = projection.releaseSummary.taskStatusCounts.shelved ?? 0
   const selectedActive = selected.active
@@ -6165,10 +6172,11 @@ function releaseReadinessReleaseFromScope(input: {
     state: lifecycle.success ? lifecycle.data : 'active',
     source: existing.source ?? scope?.source ?? 'inferred',
     description: existing.description ?? null,
-    // `scope` may be a hierarchy-compacted scheduler view. It can describe
-    // runnable work, but normalized release membership owns this boundary.
-    nodeIds: existing.nodeIds ?? [],
-    deferredNodeIds: existing.deferredNodeIds ?? [],
+    // Compact product responses expose execution membership. The durable
+    // release graph can retain a parent and its materialized children for
+    // audit and routing, but it is not a second owner-facing work count.
+    nodeIds: scope?.nodeIds ?? existing.nodeIds ?? [],
+    deferredNodeIds: scope?.deferredNodeIds ?? existing.deferredNodeIds ?? [],
     proofStyle: existing.proofStyle ?? 'unspecified',
   }
 }
@@ -6176,10 +6184,18 @@ function releaseReadinessReleaseFromScope(input: {
 function releaseReadinessScopeFromProjection(
   projection: ProjectScopeProjection | null,
   fallbackScope: ProjectScope | null,
+  persistedScopeRows: readonly ProjectStateDatabaseScopeRow[] = [],
 ): ProjectScope | null {
   const baseScope = projection?.selectedScope ?? fallbackScope
   if (!baseScope) return null
-  const rows = executionScopeRows(projection?.rows ?? [])
+  const scopedTaskIds = new Set(
+    [...baseScope.nodeIds, ...baseScope.deferredNodeIds]
+      .map(nodeId => taskIdFromOrientationNodeId(nodeId)?.trim())
+      .filter((taskId): taskId is string => Boolean(taskId)),
+  )
+  const rows = executionScopeRows((projection?.rows ?? persistedScopeRows).filter(row =>
+    scopedTaskIds.has(row.taskId) || (row.parentTaskId ? scopedTaskIds.has(row.parentTaskId) : false),
+  ))
     .filter(row => row.countInProjectTotals !== false)
   const includedNodeIds = rows
     .filter(row => row.scope === 'included')
@@ -6279,6 +6295,7 @@ function compactReleaseReadinessFromProjection(input: {
   scope?: ProjectScope | null
   scopeRows?: readonly ProjectStateDatabaseScopeRow[]
   diagnostics?: ProjectStateDatabaseDiagnosticProjectionSnapshot | null
+  startReadiness?: { code?: string; count?: number } | null
 }): Record<string, unknown> {
   const summary = input.projection.releaseSummary
   const fallbackCounts = summary?.counts ?? {
@@ -6292,11 +6309,22 @@ function compactReleaseReadinessFromProjection(input: {
     ownerBlocked: 0,
     proofBlocked: 0,
   }
-  const counts = releaseCountsFromScopeRows(input.scope ?? null, input.scopeRows ?? [], fallbackCounts)
+  const executionScope = releaseReadinessScopeFromProjection(null, input.scope ?? null, input.scopeRows ?? [])
+  const scopeCounts = releaseCountsFromScopeRows(executionScope, input.scopeRows ?? [], fallbackCounts)
+  const proofGapCode = input.startReadiness?.code ?? input.projection.decision?.primaryAction?.reasonCode
+  const recordedProofGapCount = proofGapCode === 'proof_evidence_missing'
+    ? Math.max(1, input.startReadiness?.count ?? 0)
+    : 0
+  const counts = {
+    ...scopeCounts,
+    // Proof readiness is an independently persisted typed fact. A compact
+    // scope row without proof metadata must not erase it from progress.
+    proofBlocked: Math.max(scopeCounts.proofBlocked, recordedProofGapCount),
+  }
   const release = input.rawQueue
     ? releaseReadinessReleaseFromScope({
         rawQueue: input.rawQueue,
-        scope: input.scope ?? null,
+        scope: executionScope,
         selectedReleaseId: input.rawQueue.selectedReleaseId,
       })
     : summary?.release
@@ -6312,7 +6340,7 @@ function compactReleaseReadinessFromProjection(input: {
       completeness: 'scope',
       checksLoaded: false,
       release,
-      scope: input.scope ?? input.projection.scope,
+      scope: executionScope ?? input.projection.scope,
       ready: false,
       requiresRefresh: true,
       notReadyReason: 'The saved project summary is refreshing.',
@@ -6345,7 +6373,7 @@ function compactReleaseReadinessFromProjection(input: {
     completeness: 'scope',
     checksLoaded: false,
     release,
-    scope: input.scope ?? input.projection.scope,
+    scope: executionScope ?? input.projection.scope,
     ready,
     // Release metrics are an explicit envelope. They are not task statuses:
     // active, blocked, ownerBlocked, proofBlocked, and deferred may overlap
@@ -6429,7 +6457,11 @@ function releaseCountsFromScopeRows(
       handoffState: row.handoffState as ProjectScopeRow['handoffState'],
       humanBlocking: row.humanBlocking,
     })).length,
-    proofBlocked: includedRows.filter(row => row.proofBlocked).length,
+    // A compact scope row can lag the saved proof summary. Never turn a
+    // recorded proof gap into a visible completion merely because the row
+    // projection omitted that flag; the shared envelope fails closed until
+    // both representations agree.
+    proofBlocked: Math.max(fallback.proofBlocked, includedRows.filter(row => row.proofBlocked).length),
   }
 }
 
@@ -7695,6 +7727,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       scope: readinessScope as unknown as ProjectScope | null,
       scopeRows: overviewState?.scopeRows ?? compactState?.scopeRows ?? [],
       diagnostics: overviewState?.diagnostics ?? compactState?.diagnostics ?? null,
+      startReadiness: summary.startReadiness,
     })
     // Pre-promotion projects retain a narrow compatibility path until their
     // first background refresh. Promoted projects must already have the
@@ -7763,7 +7796,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // but the selected scope is owned by the same compact database snapshot
     // consumed by Release detail. Overlay only that canonical scope here so
     // every ordinary surface answers membership from one relation.
-    const compactScope = overviewState?.scope ?? compactState?.scope ?? null
+    const executionScope = isRecord(compactReleaseReadiness.scope)
+      ? compactReleaseReadiness.scope as unknown as ProjectScope
+      : null
+    // Keep the durable release graph intact in the database, but compact owner
+    // surfaces must navigate and count the execution scope that already
+    // suppresses a decomposed parent in favor of its materialized children.
+    const compactScope = executionScope ?? overviewState?.scope ?? compactState?.scope ?? null
     const baseOrientationSpine = compactScope
       ? {
           ...initialOrientationSpine,
@@ -7967,7 +8006,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           availability: overviewState?.availability ?? surfaceState?.availability ?? undefined,
         })
       : summary.actionModel
-    const sharedReleaseCounts = isRecord(compactReleaseReadiness) && isRecord(compactReleaseReadiness.releaseCounts)
+    let sharedReleaseCounts = isRecord(compactReleaseReadiness) && isRecord(compactReleaseReadiness.releaseCounts)
       ? compactReleaseReadiness.releaseCounts as {
           total: number
           done: number
@@ -7978,6 +8017,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
           proofBlocked: number
         }
       : null
+    if (sharedReleaseCounts && responseStartReadiness?.code === 'proof_evidence_missing') {
+      sharedReleaseCounts = {
+        ...sharedReleaseCounts,
+        proofBlocked: Math.max(1, sharedReleaseCounts.proofBlocked, responseStartReadiness.count ?? 0),
+      }
+    }
+    const compactProofBlocked = isRecord(compactReleaseReadiness) && isRecord(compactReleaseReadiness.totals)
+      ? compactReleaseReadiness.totals.proofEvidenceBlockingCount
+      : null
+    if (sharedReleaseCounts && typeof compactProofBlocked === 'number') {
+      sharedReleaseCounts = {
+        ...sharedReleaseCounts,
+        proofBlocked: Math.max(sharedReleaseCounts.proofBlocked, compactProofBlocked),
+      }
+    }
     const responseStartMessage = responseStartReadiness?.message
     if (typeof responseStartMessage === 'string' && responseStartMessage.trim().length > 0) {
       const orientationSummary = (orientationSpine as { summary?: unknown }).summary
@@ -8065,7 +8119,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         selectedScopeCount: (orientationSpine as { summary?: { includedWorkCount?: number } }).summary?.includedWorkCount ?? null,
         selectedScopeAndDeferredCount: (orientationSpine as { summary?: { progress?: { total?: number } } }).summary?.progress?.total ?? null,
       },
-      workProgress: workProgressFromProjectSummaryProjection(projection),
+      workProgress: workProgressFromProjectSummaryProjection(projection, sharedReleaseCounts),
       ...(releaseSummary ? { releaseSummary } : {}),
       releaseReadiness: compactReleaseReadiness,
       startReadiness: responseStartReadiness,
@@ -8357,29 +8411,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         fullOrientationSpine,
         orientationReleaseTruth,
       )
-      const currentOrientationPreview = buildOverviewOrientationPreviewSpine({
-        projectId: project.id,
-        rawQueue: {
-          tasks: orientationTasks as unknown as Array<Record<string, unknown>>,
-          releases: rawQueue.releases as unknown as ProjectRelease[],
-          ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
-        },
-        charter: reconciledOrientationSpine.charter,
-        startReadiness: responseStartReadiness,
-        sourceSpine: reconciledOrientationSpine,
-        releaseCounts: isRecord(releaseReadiness) && isRecord(releaseReadiness.releaseCounts)
-          ? releaseReadiness.releaseCounts as {
-              total: number
-              done: number
-              ready: number
-              active: number
-              blocked: number
-              deferred: number
-              proofBlocked: number
-            }
-          : null,
-      })
-      const sharedReleaseCounts = isRecord(releaseReadiness) && isRecord(releaseReadiness.releaseCounts)
+      let sharedReleaseCounts = isRecord(releaseReadiness) && isRecord(releaseReadiness.releaseCounts)
         ? releaseReadiness.releaseCounts as {
             total: number
             done: number
@@ -8390,9 +8422,37 @@ export function buildServeApp(opts: ServeOptions = {}): {
             proofBlocked: number
           }
         : null
-      const orientationSummary = sharedReleaseCounts
+      if (sharedReleaseCounts && responseStartReadiness?.code === 'proof_evidence_missing') {
+        sharedReleaseCounts = {
+          ...sharedReleaseCounts,
+          proofBlocked: Math.max(1, sharedReleaseCounts.proofBlocked, responseStartReadiness.count ?? 0),
+        }
+      }
+      const readinessProofBlocked = isRecord(releaseReadiness) && isRecord(releaseReadiness.totals)
+        ? releaseReadiness.totals.proofEvidenceBlockingCount
+        : null
+      if (sharedReleaseCounts && typeof readinessProofBlocked === 'number') {
+        sharedReleaseCounts = {
+          ...sharedReleaseCounts,
+          proofBlocked: Math.max(sharedReleaseCounts.proofBlocked, readinessProofBlocked),
+        }
+      }
+      const currentOrientationPreview = buildOverviewOrientationPreviewSpine({
+        projectId: project.id,
+        rawQueue: {
+          tasks: orientationTasks as unknown as Array<Record<string, unknown>>,
+          releases: rawQueue.releases as unknown as ProjectRelease[],
+          ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
+        },
+        charter: reconciledOrientationSpine.charter,
+        startReadiness: responseStartReadiness,
+        sourceSpine: reconciledOrientationSpine,
+        releaseCounts: sharedReleaseCounts,
+      })
+      const currentOrientationSummary = currentOrientationPreview.summary as unknown as Record<string, unknown>
+      let orientationSummary: Record<string, unknown> = sharedReleaseCounts
         ? {
-            ...(currentOrientationPreview.summary as Record<string, unknown>),
+            ...currentOrientationSummary,
             includedCount: sharedReleaseCounts.total,
             includedWorkCount: sharedReleaseCounts.total,
             deferredCount: sharedReleaseCounts.deferred,
@@ -8408,7 +8468,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
               proven: Math.max(0, sharedReleaseCounts.done - sharedReleaseCounts.proofBlocked),
             },
           }
-        : currentOrientationPreview.summary
+        : currentOrientationSummary
+      if (typeof readinessProofBlocked === 'number' && readinessProofBlocked > 0) {
+        const progress = orientationSummary.progress as Record<string, unknown> | undefined
+        const done = typeof progress?.done === 'number' ? progress.done : 0
+        orientationSummary = {
+          ...orientationSummary,
+          progress: {
+            ...progress,
+            proven: Math.max(0, done - readinessProofBlocked),
+          },
+        }
+      }
       const orientationSpine = overviewSurface
         ? {
             ...compactOrientationSpineForOverviewSurface(reconciledOrientationSpine as unknown as Record<string, unknown>),
@@ -8426,7 +8497,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       )
       const blockerTaskIds = releaseBlockerTaskIdsForProgress(releaseReadiness, progressTaskIds)
       const workProgress = !diagnosticRequested && currentState.summary
-        ? workProgressFromProjectSummaryProjection(currentState.summary)
+        ? workProgressFromProjectSummaryProjection(currentState.summary, sharedReleaseCounts)
         : deriveProjectWorkProgress(
             orientationTasks as unknown as Array<Record<string, unknown>>,
             {
@@ -17839,9 +17910,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   function releaseReadinessSavedScope(state: ProjectReleaseReadModel): ProjectScope | null {
-    // The boundary owns release membership. Keeping this accessor deliberately
-    // boring prevents the route from becoming a second scope authority.
-    return state.scope
+    // The boundary owns release membership. The persisted graph may retain a
+    // parent alongside its materialized children for audit and routing, but a
+    // product response needs the same executable scope as Overview, Work, and
+    // Map. Derive it once here instead of letting Release detail expose a
+    // second countable representation of the same work.
+    return releaseReadinessScopeFromProjection(null, state.scope, state.scopeRows)
   }
 
   function releaseReadinessDiagnosticScope(state: ProjectCanonicalCurrentState): ProjectScope | null {

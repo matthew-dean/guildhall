@@ -700,7 +700,7 @@ describe('GET /api/project/release-readiness', () => {
       expect.objectContaining({ taskId: 'task-unassigned' }),
     ]))
     expect(body.orientationSpine?.summary).toMatchObject({
-      includedWorkCount: 2,
+      includedWorkCount: 1,
       deferredWorkCount: 1,
     })
     expect(body.releaseReadiness.releaseCounts).toMatchObject({
@@ -709,6 +709,20 @@ describe('GET /api/project/release-readiness', () => {
       unfinished: 1,
       deferred: 1,
     })
+    expect(body.taskPayload).toMatchObject({
+      selectedScopeCount: 1,
+      selectedScopeAndDeferredCount: 2,
+    })
+    expect(body.workProgress.selectedCounts).toMatchObject({
+      visibleTotal: 1,
+    })
+
+    const releaseUrl = new URL('http://localhost/api/project/release-readiness')
+    releaseUrl.searchParams.set('projectId', projectId)
+    const releaseDetail = await (await app.fetch(new Request(releaseUrl))).json() as any
+    expect(releaseDetail.scope.nodeIds).toEqual(['work:task-child'])
+    expect(releaseDetail.release.nodeIds).toEqual(['work:task-child'])
+    expect(releaseDetail.totals).toMatchObject({ tasks: 1, unfinishedCount: 1 })
   })
 
   it('keeps Work and Map inventory records bounded while preserving row-level signals', async () => {

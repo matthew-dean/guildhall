@@ -57689,13 +57689,14 @@ it will reappear the moment an owner opens Release, Work, or a task record.
 - [x] Normalize legacy readiness verdicts out of the persisted release
   lifecycle envelope at the shared database/readiness boundary; do not
   normalize conflicting values inside individual views.
-- [ ] Reconcile the separate 17 raw release-node IDs versus 16 execution-unit
-  count at the source, including split-parent membership, so every owner-facing
-  count names the same unit of work.
+- [x] Make compact owner surfaces consume the existing execution-normalized
+  scope for both task selection and selected-work progress, while preserving
+  the full durable parent/child release graph only for audit and routing.
 - [x] Add deterministic compatibility coverage and replay the installed Looma
   Overview migration handoff.
-- [ ] Replay Looma Work, Release, and task review against the same current
-  snapshot after count semantics are reconciled.
+- [x] Replay Looma Work and Release against the same current snapshot after
+  count semantics are reconciled. Task review remains correctly unavailable
+  until the visible required migration is applied.
 - Contract Touch Decision: `startBlockerForRequiredMigrations` is already the
   mutation and full-read gate. Compact `startReadiness` and `actionModel` must
   consume that same typed result before presentation; the migration status
@@ -57712,11 +57713,19 @@ it will reappear the moment an owner opens Release, Work, or a task record.
   does not add client-side migration state, routing, or task ranking.
   Considered but unchanged: documentation/help routes and content, because
   this is a current-action ownership repair rather than help content.
+  The compact `orientationSpine`, `taskPayload`, and `workProgress` contracts
+  now use the existing execution scope/count envelope returned by shared
+  release readiness; durable release membership remains the full hierarchy
+  relation for audit and routing. Considered but unchanged: release-membership
+  persistence, task hierarchy, Map structural rows, migration state, and task
+  identity routes. Proof required: parent-plus-materialized-child regression
+  and installed Looma agreement across Overview, Work, and Release.
   Proof provided: compact migration precedence, mutation refusal parity,
-  lifecycle/readiness separation, and an installed Looma Overview replay that
-  exposes one update action instead of Review spec. Follow-up proof required:
-  shared count semantics and cross-surface replay after the split-parent count
-  is repaired.
+  lifecycle/readiness separation, a split-parent execution-scope regression,
+  and installed Looma cross-surface replay. Overview, Work, Map, compact
+  release readiness, and detailed release readiness now consume the same
+  execution scope rather than exposing the durable relation as an extra work
+  item.
 - Schema Migration Decision: none; required-migration status is existing
   durable data read through an existing gate. This repair changes only the
   derived compact response precedence, with no new stored field or migration.
@@ -57740,5 +57749,25 @@ stop-status link to a second migration action is absent. The task list still
 shows the current 16 execution units for orientation, but no longer claims the
 owner should use an unavailable task action first.
 This prevents the raw approval 409 and the active/blocked lifecycle
-contradiction. The separate raw-release-node versus execution-unit count
-mismatch remains an explicit shared-summary follow-up above.
+contradiction.
+
+#### Evidence: split-parent scope agreement repaired
+
+On 2026-08-12, Looma's selected release retained one durable parent plus four
+materialized children. That is correct for audit and routing, but product
+responses inconsistently treated it as 17 countable work items even while Work
+progress said 16. The shared release-readiness accessor now derives the
+owner-facing execution scope from the persisted scope rows. Its split-parent
+regression proves compact Work and detailed Release expose only the child as
+the executable unit while keeping the underlying queue relationship intact.
+
+After `pnpm build`, `pnpm dev:install`, `guildhall stop`, and `guildhall
+start`, the fresh installed app reported `stale:false`. Looma's Overview, Work,
+and Map compact responses each reported a 16-item selected scope, 16-item
+release membership, and 16 visible execution units; detailed Release reported
+the same 16-item scope/release and 16 tasks. Browser replay showed one
+`Update project` action on Overview, a visible top-bar `Migrate` command plus
+the explanatory gate on Work, and the same migration command on Release with
+`0/16 done`. There was no page-level horizontal overflow at 1440px Overview,
+1024px Work, or 390px Release. The migration was not applied, so task-review
+actions correctly remain gated rather than presenting a contradictory action.
