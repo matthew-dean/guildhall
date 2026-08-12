@@ -57911,6 +57911,9 @@ choosing to inspect it.
 - [x] Reduce the normal task-record navigation to owner jobs only. Journey,
   Transcript, Experts, History, and Origin are diagnostic or audit material;
   they must not remain peer tabs beside Overview and Spec.
+- [x] Remove task-sizing, request-shape, checkpoint, and reviewer-budget
+  panels from normal Overview; they are planning telemetry, not the owner's
+  current decision.
 - Contract Touch Decision: `TaskDrawer` owns only the detail tab route and
   presentation. It will retain explicit `?tab=spec` deep links for review
   actions, but the general full-record command must use Overview. Considered

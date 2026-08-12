@@ -334,7 +334,7 @@ describe('TaskDrawer', () => {
     expect(path.value).toBe('/projects/looma-knit/task/task-review')
   })
 
-  it('opens on an overview with review plan details when one is recorded', async () => {
+  it('keeps reviewer planning metadata out of the normal task overview', async () => {
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -384,12 +384,9 @@ describe('TaskDrawer', () => {
       '/projects/looma-knit/overview',
     )
     expect(screen.getByText(taskDisplayKey('task-link-editor', [], 'looma-knit'))).toBeInTheDocument()
-    await screen.findByText('Review plan')
-    expect(screen.getByText('Balanced review')).toBeInTheDocument()
-    expect(screen.getByText('1 reviewer group')).toBeInTheDocument()
-    expect(screen.getByText('5 lanes')).toBeInTheDocument()
-    expect(screen.getByText('UX Comprehension')).toBeInTheDocument()
-    expect(screen.getByText(/visual-evidence/)).toBeInTheDocument()
+    expect(screen.queryByText('Review plan')).not.toBeInTheDocument()
+    expect(screen.queryByText('Balanced review')).not.toBeInTheDocument()
+    expect(screen.queryByText('UX Comprehension')).not.toBeInTheDocument()
   })
 
   it('shows delivery-step progress in the drawer header from shared work progress', async () => {
@@ -2906,8 +2903,8 @@ describe('TaskDrawer', () => {
     await screen.findByText('Knit: add link editor controls')
     expect(screen.getByText('This task is out of the active queue.')).toBeTruthy()
     expect(screen.getAllByText('Duplicate of the existing link editor task.').length).toBeGreaterThan(0)
-    expect(screen.getByText('Latest checkpoint')).toBeTruthy()
-    expect(screen.getByText(/Rerun the focused toolbar test/)).toBeTruthy()
+    expect(screen.queryByText('Latest checkpoint')).toBeNull()
+    expect(screen.queryByText(/Rerun the focused toolbar test/)).toBeNull()
     expect(screen.queryByRole('button', { name: /put on hold/i })).toBeNull()
     expect(screen.getAllByRole('button', { name: /^unshelve$/i }).length).toBeGreaterThan(0)
   })
