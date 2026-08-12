@@ -4,12 +4,7 @@
   import Row from '../../lib/Row.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Textarea from '../../lib/Textarea.svelte'
-  import { briefScopeForReaders } from '../../lib/brief-display.js'
-  import { readableTaskDescription } from '../../lib/task-display.js'
-  import type { Task } from '../../lib/types.js'
-
   interface Props {
-    task: Task
     busy?: boolean
     onApprove: () => void
     onRequestChanges: (message: string) => Promise<void>
@@ -17,7 +12,6 @@
   }
 
   let {
-    task,
     busy = false,
     onApprove,
     onRequestChanges,
@@ -26,21 +20,6 @@
 
   let requestingChanges = $state(false)
   let changeRequest = $state('')
-
-  const summary = $derived.by(() => {
-    const scope = task.productBrief
-      ? briefScopeForReaders(task.productBrief, task.title)
-      : readableTaskDescription(task.description, task.title)
-    return conciseExcerpt(scope || task.spec || '')
-  })
-  const finishConditionCount = $derived(task.acceptanceCriteria?.length ?? 0)
-
-  function conciseExcerpt(value: string): string {
-    const normalized = value.replace(/\s+/g, ' ').trim()
-    if (!normalized) return 'Guildhall has a draft ready for your review.'
-    const sentence = normalized.match(/^(.+?[.!?])(?:\s|$)/)?.[1] ?? normalized
-    return sentence.length > 280 ? `${sentence.slice(0, 277).trimEnd()}...` : sentence
-  }
 
   async function submitChanges(): Promise<void> {
     const message = changeRequest.trim()
@@ -86,41 +65,27 @@
       </Card>
     {/if}
 
-    <section class="spec-review-summary" aria-label="Spec at a glance">
-      <h3>What will change</h3>
-      <p>{summary}</p>
-      {#if finishConditionCount > 0}
-        <p class="spec-review-conditions">{finishConditionCount} finish {finishConditionCount === 1 ? 'condition is' : 'conditions are'} recorded.</p>
-      {/if}
+    <section class="spec-review-record-link" aria-label="Task record">
       <Button variant="ghost" size="sm" onclick={onOpenFullRecord}>Read full task record</Button>
     </section>
   </Stack>
 </div>
 
 <style>
-  .spec-review-decision :global(h3),
-  .spec-review-summary h3 {
+  .spec-review-decision :global(h3) {
     margin: 0;
     color: var(--text);
     font-size: var(--gh-type-size-panel-title);
     line-height: var(--gh-type-line-height-tight);
   }
-  .spec-review-decision :global(p),
-  .spec-review-summary p {
+  .spec-review-decision :global(p) {
     margin: var(--s-1) 0 0;
     color: var(--text-muted);
     font-size: var(--gh-type-size-body);
     line-height: var(--gh-type-line-height-body);
   }
-  .spec-review-summary {
-    display: grid;
-    gap: var(--s-2);
-    max-inline-size: 62ch;
-  }
-  .spec-review-summary p {
-    margin: 0;
-  }
-  .spec-review-conditions {
-    font-size: var(--gh-type-size-meta) !important;
+  .spec-review-record-link {
+    display: flex;
+    justify-content: flex-start;
   }
 </style>

@@ -1218,7 +1218,6 @@
       {/if}
       {#if focusedSpecReview && task}
         <SpecReviewDecision
-          {task}
           {busy}
           onApprove={handleApproveSpec}
           onRequestChanges={handleRequestSpecChanges}

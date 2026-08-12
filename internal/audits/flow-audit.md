@@ -57493,3 +57493,40 @@ Overview and then move every row once the Work inventory arrives.
   resizing, so narrow/mobile geometry remains covered by the existing
   responsive component suite rather than being represented as a false live
   browser claim for this repair.
+
+### Repair: Spec review does not repeat the task as generated prose
+
+#### Spec-review user job before implementation
+
+Once an owner has opened a focused spec review, they need to decide whether to
+approve it or request a correction. The task title already identifies the work.
+A generated restatement of that title and a count of hidden finish conditions
+do not help the decision; the full record remains available only when the
+owner deliberately needs it.
+
+- [x] Delete the default `What will change` restatement and finish-condition
+  count from focused spec review.
+- [x] Rebuild and replay Looma + Knit spec review to prove its default drawer
+  contains only the decision, its two actions, and the explicit full-record
+  route.
+- Contract Touch Decision: `SpecReviewDecision` no longer consumes task
+  description, product brief, spec prose, or acceptance criteria for the
+  focused review route. The drawer title, approve action, revision action, and
+  full-record route retain their existing contracts. Considered but unchanged:
+  task/spec persistence, approval endpoint, revision endpoint, full task
+  payload, action model, and task routing. Proof required: drawer regression
+  and installed Looma + Knit replay. Apply/revert affects only default review
+  presentation and introduces no local decision logic.
+- Schema Migration Decision: none; no persisted schema, API response, or
+  compatibility reader changes.
+- Evidence, 2026-08-12: `TaskDrawer.svelte.test.ts` passes all 59 tests,
+  including a regression that the focused review contains no `What will
+  change` heading, no generated finish-condition count, no tabs, and no
+  handoff packet. `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm build`
+  pass. An installed `stale:false` runtime replayed Looma + Knit Work ->
+  `Review spec`: the focused drawer showed its one-line ellipsized short-key
+  title, `Your decision`, `Request changes`, `Approve spec`, and `Read full
+  task record`, with no generated prose beneath the decision. Desktop geometry
+  had no page-level horizontal overflow at `1280px`; this browser session did
+  not expose viewport resizing, so narrow/mobile live geometry is not claimed
+  for this repair.

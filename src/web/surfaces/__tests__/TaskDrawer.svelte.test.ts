@@ -2000,6 +2000,8 @@ describe('TaskDrawer', () => {
     await screen.findByText('Approve this spec?')
     expect(screen.queryByRole('tab')).toBeNull()
     expect(screen.queryByText('Latest handoff packet')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'What will change' })).toBeNull()
+    expect(screen.queryByText(/finish conditions are recorded/i)).toBeNull()
     expect(screen.getByRole('button', { name: 'Read full task record' })).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: 'Request changes' }))
