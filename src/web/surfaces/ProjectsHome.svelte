@@ -1,20 +1,13 @@
 <script lang="ts">
   import { onEvent } from '../lib/events.js'
   import { nav } from '../lib/nav.svelte.js'
-  import Activity from 'lucide-svelte/icons/activity'
   import AlertTriangle from 'lucide-svelte/icons/triangle-alert'
-  import CheckCircle2 from 'lucide-svelte/icons/check-circle-2'
   import Cpu from 'lucide-svelte/icons/cpu'
-  import FileClock from 'lucide-svelte/icons/file-clock'
   import FolderPlus from 'lucide-svelte/icons/folder-plus'
   import Inbox from 'lucide-svelte/icons/inbox'
-  import PlayCircle from 'lucide-svelte/icons/circle-play'
-  import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
-  import Chip from '../lib/Chip.svelte'
   import ProjectsShell from '../lib/layout/ProjectsShell.svelte'
   import ProjectCard from '../lib/ProjectCard.svelte'
-  import SideDrawer from '../lib/SideDrawer.svelte'
   import { createProjectSummaryCache, mergeServiceProjectSummaries } from '../lib/project-summary.js'
   import { projectHref } from '../lib/project-routes.js'
   import { getCachedService, setCachedService } from '../lib/service-cache.js'
@@ -24,7 +17,6 @@
   let loading = $state(true)
   let error = $state<string | null>(null)
   let busyId = $state<string | null>(null)
-  let selectedProjectId = $state<string | null>(null)
   let optimisticRuns = $state<Record<string, boolean>>({})
   let refreshHandle: ReturnType<typeof setTimeout> | null = null
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
@@ -112,10 +104,10 @@
     }, delay)
   }
 
-  async function openProject(projectId: string): Promise<void> {
+  async function openProject(projectId: string, href?: string | null): Promise<void> {
     busyId = projectId
     try {
-      nav(projectHref(projectId, '/overview'))
+      nav(href ?? projectHref(projectId, '/overview'))
     } finally {
       busyId = null
     }
@@ -222,7 +214,6 @@
 
   const cards = $derived(projectSummaryCache.summarize(service))
   const needsYouCount = $derived(cards.filter(card => card.needsAttention).length)
-  const selectedProject = $derived(cards.find(card => card.id === selectedProjectId) ?? null)
   const defaultProviderStatus = $derived(service?.defaultProviderStatus ?? null)
   const defaultProviderWarning = $derived(defaultProviderStatus?.warnings?.[0] ?? null)
   const defaultProviderLabel = $derived(defaultProviderStatus?.preferredProviderLabel ?? defaultProviderStatus?.activeProviderLabel ?? 'Providers')
@@ -245,20 +236,8 @@
     return slash >= 0 ? trimmed.slice(slash + 1) : trimmed
   }
 
-  function inspectProject(projectId: string): void {
-    selectedProjectId = projectId
-  }
-
-  function closeProjectDetails(): void {
-    selectedProjectId = null
-  }
-
   function openNeedsYou(): void {
     nav('/needs-you')
-  }
-
-  function countNoun(count: number, singular: string, plural = `${singular}s`): string {
-    return count === 1 ? singular : plural
   }
 
 </script>
@@ -268,7 +247,7 @@
   <header class="hero">
     <div>
       <h1>Projects &amp; Workspaces</h1>
-      <p class="lede">Guild members, project queues, and blockers across your local work.</p>
+      <p class="lede">Choose a project to see its current work and next decision.</p>
     </div>
     <div class="hero-actions">
       {#if defaultProviderStatus}
@@ -335,7 +314,6 @@
             summary={card}
             busy={busyId === card.id}
             optimisticRunning={Boolean(optimisticRuns[card.id])}
-            onInspect={inspectProject}
             onOpen={openProject}
             onStart={startProject}
             onStop={stopProject}
@@ -345,91 +323,6 @@
     </div>
   {/if}
 
-  <SideDrawer
-    open={selectedProject !== null}
-    title={selectedProject?.name ?? 'Project details'}
-    onClose={closeProjectDetails}
-  >
-    {#if selectedProject}
-      <div class="project-drawer">
-        <div class="drawer-identity">
-          <p class="drawer-path">{selectedProject.path}</p>
-          <div class="drawer-chips" aria-label="Project status summary">
-            <Chip label={selectedProject.statusLabel} tone={selectedProject.tone === 'warn' ? 'warn' : selectedProject.tone === 'active' ? 'running' : selectedProject.tone === 'success' ? 'ok' : 'neutral'} />
-            <Chip label={selectedProject.maturityLabel} tone="accent" />
-          </div>
-        </div>
-        {#if selectedProject.blurb}
-          <p class="drawer-blurb">{selectedProject.blurb}</p>
-        {/if}
-        <section class="drawer-section">
-          <h3>Where it is</h3>
-          <p><strong>{selectedProject.maturityLabel}:</strong> {selectedProject.maturityDescription}</p>
-        </section>
-        <section class="drawer-section">
-          <h3>Current status</h3>
-          <p>{selectedProject.activityLabel}</p>
-          {#if selectedProject.recentLabel}
-            <p class="drawer-muted">{selectedProject.recentLabel}</p>
-          {/if}
-        </section>
-        {#if selectedProject.projectCheckIn?.needed || selectedProject.provider?.tone === 'warn' || selectedProject.gitStory}
-          <section class="drawer-section">
-            <h3>Needs attention</h3>
-            {#if selectedProject.projectCheckIn?.needed}
-              <p><strong>{selectedProject.projectCheckIn.title ?? 'Project check-in needed'}:</strong> {selectedProject.projectCheckIn.detail ?? 'Answer the first project questions in Thread.'}</p>
-            {/if}
-            {#if selectedProject.provider?.tone === 'warn'}
-              <p><strong>Provider:</strong> {selectedProject.provider.title}</p>
-            {/if}
-            {#if selectedProject.gitStory}
-              <p><strong>{selectedProject.gitStory.label}:</strong> {selectedProject.gitStory.title}</p>
-            {/if}
-          </section>
-        {/if}
-        <section class="drawer-section">
-          <h3>Recent and next</h3>
-          <div class="drawer-work-grid">
-            <div class="drawer-work-card">
-              <span class="drawer-work-label">Recently completed</span>
-              <strong>{selectedProject.completedLabel ?? 'No completed task recorded yet'}</strong>
-            </div>
-            <div class="drawer-work-card">
-              <span class="drawer-work-label">Next up</span>
-              <strong>{selectedProject.nextLabel ?? 'No next task detected'}</strong>
-            </div>
-          </div>
-        </section>
-        <section class="drawer-section">
-          <h3>Counts</h3>
-          <div class="drawer-counts" aria-label="Project task counts">
-            {#if selectedProject.counts.active > 0}
-              <span class="drawer-count tone-running"><Activity size={13} /><strong>{selectedProject.counts.active}</strong><span>{countNoun(selectedProject.counts.active, 'active task')}</span></span>
-            {/if}
-            {#if selectedProject.counts.draftReview > 0}
-              <span class="drawer-count tone-warn"><FileClock size={13} /><strong>{selectedProject.counts.draftReview}</strong><span>{countNoun(selectedProject.counts.draftReview, 'draft brief')}</span></span>
-            {/if}
-            {#if selectedProject.counts.blocked > 0}
-              <span class="drawer-count tone-warn"><AlertTriangle size={13} /><strong>{selectedProject.counts.blocked}</strong><span>{countNoun(selectedProject.counts.blocked, 'blocked task')}</span></span>
-            {/if}
-            {#if selectedProject.counts.done > 0}
-              <span class="drawer-count tone-ok"><CheckCircle2 size={13} /><strong>{selectedProject.counts.done}</strong><span>{countNoun(selectedProject.counts.done, 'done task')}</span></span>
-            {/if}
-            <span class="drawer-count tone-neutral"><PlayCircle size={13} /><strong>{selectedProject.counts.total}</strong><span>{countNoun(selectedProject.counts.total, 'total task')}</span></span>
-          </div>
-        </section>
-      </div>
-    {/if}
-
-    {#snippet footer()}
-      {#if selectedProject}
-        <ActionBar>
-          <Button variant="secondary" onclick={closeProjectDetails}>Close</Button>
-          <Button variant="primary" onclick={() => openProject(selectedProject.id)}>Open project</Button>
-        </ActionBar>
-      {/if}
-    {/snippet}
-  </SideDrawer>
 </ProjectsShell>
 
 <style>
@@ -547,337 +440,6 @@
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
   }
-  .floor {
-    display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr);
-    gap: var(--s-3);
-    align-items: center;
-    margin-bottom: var(--s-2);
-    padding: var(--s-2);
-    border: 1px solid var(--glass-border);
-    border-radius: var(--r-2);
-    background:
-      var(--glass-reflect-violet),
-      linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), color-mix(in srgb, white 1%, transparent)),
-      var(--glass-bg);
-    box-shadow: var(--glass-shadow), var(--glass-etch);
-  }
-  .floor-head {
-    min-width: 0;
-    display: flex;
-    gap: var(--s-2);
-    align-items: center;
-  }
-  .floor-kicker {
-    margin: 0;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-  }
-  .floor-head .floor-kicker {
-    margin-bottom: 0;
-  }
-  .floor-head strong {
-    display: inline-flex;
-    gap: var(--s-1);
-    align-items: center;
-    font-size: var(--gh-type-size-body);
-    line-height: var(--gh-type-line-height-tight);
-  }
-  .floor-head strong :global(svg) {
-    color: var(--accent-2);
-  }
-  .guild-table {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-  }
-  .guild-members {
-    min-width: 0;
-    display: flex;
-    gap: var(--s-1);
-  }
-  .guild-member {
-    --avatar-color: var(--avatar-system);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.22rem;
-    border: 1px solid color-mix(in srgb, var(--avatar-color) 22%, var(--glass-border));
-    border-radius: 999px;
-    background: var(--glass-bg-strong);
-    box-shadow: inset 0 1px 0 color-mix(in srgb, white 9%, transparent);
-  }
-  .guild-avatar {
-    display: grid;
-    place-items: center;
-    width: 1.4rem;
-    height: 1.4rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--avatar-color) 20%, transparent);
-    color: color-mix(in srgb, var(--avatar-color) 84%, white);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-  }
-  .guild-member-active {
-    border-color: color-mix(in srgb, var(--avatar-color) 42%, var(--border));
-  }
-  .guild-member-active .guild-avatar {
-    background: color-mix(in srgb, var(--avatar-color) 30%, transparent);
-    color: var(--avatar-color);
-    animation: guild-member-working 1.6s ease-in-out infinite;
-  }
-  .avatar-tone-coordinator { --avatar-color: var(--avatar-coordinator); }
-  .avatar-tone-spec { --avatar-color: var(--avatar-spec); }
-  .avatar-tone-builder { --avatar-color: var(--avatar-builder); }
-  .avatar-tone-reviewer { --avatar-color: var(--avatar-reviewer); }
-  .avatar-tone-gate { --avatar-color: var(--avatar-gate); }
-  .avatar-tone-human { --avatar-color: var(--avatar-human); }
-  .avatar-tone-system { --avatar-color: var(--avatar-system); }
-  @keyframes guild-member-working {
-    0%, 100% {
-      transform: translateX(0);
-      box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-2) 0%, transparent);
-    }
-    50% {
-      transform: translateX(2px);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-2) 12%, transparent);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .guild-member-active .guild-avatar {
-      animation: none;
-    }
-  }
-  .floor-metrics {
-    min-width: 0;
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--s-1);
-  }
-  .floor-metric {
-    min-width: 0;
-    display: inline-flex;
-    gap: 0.35rem;
-    align-items: center;
-    justify-content: center;
-    min-inline-size: 3.2rem;
-    padding: 0.32rem var(--s-2);
-    border: 1px solid var(--glass-border);
-    border-radius: var(--r-1);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, white 7%, transparent), transparent 52%),
-      color-mix(in srgb, var(--glass-bg-strong) 86%, transparent);
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    line-height: var(--gh-type-line-height-tight);
-  }
-  .floor-metric strong {
-    color: currentColor;
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-control);
-  }
-  .floor-metric.tone-running,
-  .floor-metric.tone-active {
-    color: var(--accent-2);
-    border-color: color-mix(in srgb, var(--accent-2) 30%, var(--border));
-  }
-  .floor-metric.tone-warn,
-  .floor-metric.tone-draft {
-    color: var(--signal-warn-strong);
-    border-color: color-mix(in srgb, var(--signal-warn-strong) 35%, var(--border));
-  }
-  .floor-metric.tone-done {
-    color: var(--accent);
-    border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  }
-  .dashboard {
-    display: grid;
-    grid-template-columns: minmax(22rem, 2fr) repeat(2, minmax(13rem, 1fr));
-    gap: var(--s-2);
-    padding-bottom: var(--s-2);
-    align-items: stretch;
-  }
-  .dashboard-panel {
-    min-width: 0;
-    display: grid;
-    gap: var(--s-2);
-    align-content: start;
-  }
-  .panel-head {
-    min-width: 0;
-    display: flex;
-    justify-content: space-between;
-    align-items: start;
-    gap: var(--s-3);
-  }
-  .panel-head :global(svg) {
-    color: var(--text-muted);
-    flex: none;
-  }
-  .panel-kicker {
-    margin: 0 0 2px;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    text-transform: uppercase;
-  }
-  .panel-head h2 {
-    margin: 0;
-    font-size: var(--gh-type-size-section-title);
-    line-height: var(--gh-type-line-height-tight);
-  }
-  .panel-value,
-  .panel-copy {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
-  }
-  .panel-copy {
-    margin: 0;
-  }
-  .project-drawer {
-    display: grid;
-    gap: var(--s-4);
-    color: var(--text-muted);
-    line-height: var(--gh-type-line-height-body);
-  }
-  .project-drawer p {
-    margin: 0;
-  }
-  .drawer-identity {
-    display: grid;
-    gap: var(--s-2);
-  }
-  .drawer-path {
-    font-family: var(--font-mono);
-    font-size: var(--gh-type-size-meta);
-    color: var(--text-soft);
-    overflow-wrap: anywhere;
-  }
-  .drawer-chips,
-  .drawer-counts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-    align-items: center;
-  }
-  .drawer-blurb {
-    color: var(--text-readable);
-    font-size: var(--gh-type-size-body);
-    line-height: var(--gh-type-line-height-body);
-  }
-  .drawer-section {
-    display: grid;
-    gap: var(--s-2);
-    padding-block-start: var(--s-3);
-    border-top: 1px solid var(--border);
-  }
-  .drawer-section h3 {
-    margin: 0;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    text-transform: uppercase;
-  }
-  .drawer-section strong {
-    color: var(--text);
-  }
-  .drawer-muted {
-    color: var(--text-soft);
-  }
-  .drawer-work-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--s-2);
-  }
-  .drawer-work-card {
-    min-width: 0;
-    display: grid;
-    gap: var(--s-1);
-    padding: var(--s-3);
-    border: 1px solid var(--glass-inset-border);
-    border-radius: var(--r-2);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, white 5%, transparent), color-mix(in srgb, white 1%, transparent)),
-      var(--glass-inset-bg);
-    box-shadow: var(--glass-inset-etch);
-  }
-  .drawer-work-label {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    text-transform: uppercase;
-  }
-  .drawer-work-card strong {
-    color: var(--text-readable);
-    font-size: var(--gh-type-size-body);
-    line-height: var(--gh-type-line-height-body);
-  }
-  .drawer-count {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.2rem 0.48rem;
-    border-radius: 999px;
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    background: color-mix(in srgb, var(--glass-bg-strong) 82%, transparent);
-    border: 1px solid var(--glass-border);
-    color: var(--text-muted);
-  }
-  .drawer-count :global(svg) {
-    flex: none;
-  }
-  .drawer-count strong {
-    color: currentColor;
-    font-variant-numeric: tabular-nums;
-  }
-  .drawer-count.tone-running {
-    color: var(--accent-2);
-    background: color-mix(in srgb, var(--accent-2) 14%, transparent);
-    border-color: color-mix(in srgb, var(--accent-2) 32%, var(--border));
-  }
-  .drawer-count.tone-warn {
-    color: var(--signal-warn-strong);
-    background: color-mix(in srgb, var(--signal-warn-strong) 13%, transparent);
-    border-color: color-mix(in srgb, var(--signal-warn-strong) 32%, var(--border));
-  }
-  .drawer-count.tone-ok {
-    color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
-  }
-  @media (max-width: 680px) {
-    .drawer-work-grid {
-      grid-template-columns: 1fr;
-    }
-  }
-  .project-sparks {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(1.4rem, 1fr));
-    gap: var(--s-1);
-  }
-  .project-sparks span {
-    height: 2rem;
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, var(--text-muted) 12%, transparent);
-  }
-  .project-sparks .project-spark-live {
-    border-color: color-mix(in srgb, var(--accent-2) 42%, var(--border));
-    background: color-mix(in srgb, var(--accent-2) 22%, transparent);
-  }
-  :global(.project-sparks .project-spark-tip) {
-    display: block;
-    min-width: 0;
-  }
-  :global(.project-sparks .project-spark-tip > span:first-child) {
-    display: block;
-    width: 100%;
-    height: 2rem;
-  }
   .projects-area {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -905,18 +467,6 @@
     }
     .projects-area {
       grid-template-columns: 1fr;
-    }
-    .floor {
-      grid-template-columns: 1fr;
-    }
-    .dashboard {
-      grid-template-columns: 1fr;
-    }
-    .guild-members {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .floor-metrics {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 </style>

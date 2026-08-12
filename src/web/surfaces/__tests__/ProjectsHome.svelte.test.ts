@@ -90,9 +90,9 @@ describe('ProjectsHome', () => {
 
     await screen.findByText('Looma knit')
     expect(screen.getByText('Loading project status...')).toBeTruthy()
-    const loadingCards = screen.getAllByRole('button', { name: /still loading project state/i })
+    const loadingCards = screen.getAllByRole('status', { name: /still loading project state/i })
     expect(loadingCards).toHaveLength(2)
-    expect(loadingCards[0]?.classList.contains('project-card-loading')).toBe(true)
+    expect(loadingCards[0]?.closest('section')?.classList.contains('project-card-loading')).toBe(true)
     expect(loadingCards[0]?.querySelectorAll('.gh-skeleton').length).toBeGreaterThan(0)
     expect(loadingCards[0]?.querySelector('.loading-bars')).toBeNull()
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service/projects')
@@ -137,9 +137,9 @@ describe('ProjectsHome', () => {
     render(ProjectsHome)
 
     await screen.findByText('Looma + Knit')
-    expect(screen.getByRole('button', { name: /Looma \+ Knit, still loading project state/i })).toBeTruthy()
+    expect(screen.getByRole('status', { name: /Looma \+ Knit/i })).toBeTruthy()
     expect(screen.getByText('Status unavailable')).toBeTruthy()
-    expect(screen.getByText('Stable')).toBeTruthy()
+    expect(screen.getByText('2 of 2 tasks are done.')).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain('/api/service')
     expect(fetchMock.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?projectId='))).toBe(false)
@@ -169,39 +169,30 @@ describe('ProjectsHome', () => {
     expect(window.location.pathname).toBe('/projects/looma-knit/overview')
   })
 
-  it('does not invent an in-page project details pane from card selection', async () => {
+  it('does not make the project card a second ambiguous navigation control', async () => {
     const fetchMock = vi.fn(async () => json(servicePayload))
     vi.stubGlobal('fetch', fetchMock)
 
     render(ProjectsHome)
     await screen.findByText('Looma knit')
 
-    await userEvent.click(screen.getByRole('button', { name: 'Project: Looma knit' }))
-
-    expect(path.value).toBe('/')
-    expect(window.location.pathname).toBe('/')
-    expect(screen.getByText('Where it is')).toBeTruthy()
-    expect(screen.getByText('Current status')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Show Looma knit details on this page' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Project: Looma knit' })).toBeNull()
+    expect(screen.queryByText('Where it is')).toBeNull()
+    expect(screen.queryByText('Current status')).toBeNull()
   })
 
-  it('shows full project details with chip counts and recent/next work', async () => {
+  it('does not hide a dense project telemetry drawer behind card selection', async () => {
     const fetchMock = vi.fn(async () => json(servicePayload))
     vi.stubGlobal('fetch', fetchMock)
 
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    await userEvent.click(screen.getByRole('button', { name: 'Project: Fair Labor License' }))
-
-    expect(screen.getByText(/Fair Labor License is a platform for helping OSS projects/)).toBeTruthy()
-    expect(screen.getByText('Recently completed')).toBeTruthy()
-    expect(screen.getByText('Project onboarding brief')).toBeTruthy()
-    expect(screen.getByText('Next up')).toBeTruthy()
-    expect(screen.getByText('Unblock: Stripe Connect payment flow')).toBeTruthy()
-    expect(screen.getAllByText('1').length).toBeGreaterThan(0)
-    expect(screen.getAllByLabelText('1 blocked work item').length).toBeGreaterThan(0)
-    expect(screen.getAllByLabelText('4 total work items').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/Fair Labor License is a platform for helping OSS projects/)).toBeNull()
+    expect(screen.queryByText('Recently completed')).toBeNull()
+    expect(screen.queryByText('Next up')).toBeNull()
+    expect(screen.queryByLabelText('Project task counts')).toBeNull()
+    expect(screen.getAllByRole('button', { name: /open project/i })).toHaveLength(2)
   })
 
   it('opens the fleet needs-you view instead of a random project inbox', async () => {
@@ -355,7 +346,7 @@ describe('ProjectsHome', () => {
     await screen.findByText('Commerce')
 
     expect(screen.getAllByText('Needs migration').length).toBeGreaterThanOrEqual(2)
-    expect(screen.getAllByText('Migrate')).toHaveLength(2)
+    expect(screen.getAllByText('Run the required Guildhall migration before starting this project.')).toHaveLength(2)
     expect(screen.queryByText('ready')).toBeNull()
     expect(screen.queryByText('2 paused')).toBeNull()
     expect(screen.queryByText('Project questions')).toBeNull()
@@ -411,9 +402,11 @@ describe('ProjectsHome', () => {
     render(ProjectsHome)
     await screen.findByText('Commerce')
 
-    const card = screen.getByRole('button', { name: 'Project: Commerce' })
-    expect(card.textContent).toContain('needs input')
-    expect(card.textContent).not.toContain('ready')
+    expect(screen.getByLabelText('Project status: Needs you')).toBeTruthy()
+    expect(screen.getByText('Shape the first spec before Guildhall creates work.')).toBeTruthy()
+    expect(screen.queryByText('No task activity yet.')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Open Thread' }))
+    expect(path.value).toBe('/thread')
     expect(screen.queryByRole('button', { name: /start intake/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull()
   })
@@ -427,37 +420,25 @@ describe('ProjectsHome', () => {
 
     expect(screen.queryByText('Guild hall')).toBeNull()
     expect(screen.queryByText('Work mix')).toBeNull()
-    expect(screen.getAllByLabelText(/Project work mix:/)).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: /open project/i })).toHaveLength(2)
   })
 
-  it('uses specific project-avatar tooltips instead of repeated filler copy', async () => {
+  it('keeps project cards to current state and real commands', async () => {
     const fetchMock = vi.fn(async () => json(servicePayload))
     vi.stubGlobal('fetch', fetchMock)
 
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    expect(screen.queryByLabelText(/assigned or relevant/i)).toBeNull()
-    expect(screen.getByLabelText('Coordinator: 1 blocker to triage in Fair Labor License.')).toBeTruthy()
-    expect(screen.getByLabelText('Builder: 1 active work item waiting for a run in Fair Labor License.')).toBeTruthy()
-    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done work item in Fair Labor License.')).toBeTruthy()
-    expect(screen.getAllByText('Coordinator').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Builder').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Reviewer').length).toBeGreaterThan(0)
-
-    await userEvent.hover(screen.getByLabelText('Coordinator: 1 blocker to triage in Fair Labor License.'))
-    expect((await screen.findByRole('tooltip')).textContent).toBe('Coordinator: 1 blocker to triage in Fair Labor License.')
-  })
-
-  it('keeps role palette tones on project avatars without a duplicate dashboard', async () => {
-    const fetchMock = vi.fn(async () => json(servicePayload))
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(ProjectsHome)
-    await screen.findByText('Fair Labor License')
-
-    expect(screen.getByLabelText('Builder: 1 active work item waiting for a run in Fair Labor License.').classList.contains('avatar-tone-builder')).toBe(true)
-    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done work item in Fair Labor License.').classList.contains('avatar-tone-reviewer')).toBe(true)
+    const card = screen.getByText('Fair Labor License').closest('section')!
+    expect(card).toBeTruthy()
+    expect(card.textContent).toContain('1 blocked task needs attention.')
+    expect(card.querySelector('[aria-label^="Project work mix:"]')).toBeNull()
+    expect(card.querySelector('[aria-label="Guild members assigned to this project"]')).toBeNull()
+    expect(card.querySelector('[aria-label="Project task summary"]')).toBeNull()
+    expect(card.querySelector('[aria-label^="Recent task activity"]')).toBeNull()
+    expect(screen.getAllByRole('button', { name: /open project/i })).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /^resume$/i })).toBeTruthy()
   })
 
   it('resumes and pauses projects with project ids in the endpoint', async () => {

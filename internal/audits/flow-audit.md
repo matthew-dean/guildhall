@@ -58035,10 +58035,16 @@ the shared current action for an individual project.
 
 - [x] Remove fleet dashboard telemetry from the default home and make a
   `ready_work` shared action render as ready to resume rather than paused.
+- [x] Reduce every project card to its shared current status, one plain-language
+  state sentence, and visible `Open project` / run controls. Remove the task-mix
+  bar, activity chart, inferred role roster, count strip, extra status chips,
+  and the dense click-through details drawer.
 - Contract Touch Decision: `ProjectCardSummary` now maps the shared
   `actionModel.primaryAction.code` before historical task counts for the
-  visible project stage. ProjectsHome removes only presentation. Considered
-  but unchanged: action ranking, task counts, run state, and project routing.
+  visible project stage and formats the shared action detail before generic
+  count-derived status copy. ProjectsHome and ProjectCard remove only
+  presentation. Considered but unchanged: action ranking, task counts, run
+  state, and project routing.
 - Schema Migration Decision: none.
 - Evidence, 2026-08-12: focused `project-summary` and `ProjectsHome` tests
   pass 44/44, and `pnpm typecheck` and `pnpm build` pass. After fresh
@@ -58048,6 +58054,15 @@ the shared current action for an individual project.
   reported `Ready to resume`, matching the service's `ready_work` action and
   its project Overview. Selecting either `Open project` or `Resume` remains
   visible without reading the historical count telemetry.
+- Evidence, 2026-08-12, follow-up: focused `ProjectsHome` coverage passes
+  21/21, `pnpm typecheck`, `pnpm build`, and `git diff --check` pass. After
+  fresh installation and `/api/stale-server` reporting `stale:false`, the
+  installed 1280x720 home had no task-mix bar, activity chart, role roster,
+  count strip, extra status chips, or details drawer; it had no horizontal
+  overflow. Its buttons were the actual shared decisions: Looma's `Review next
+  spec` opened `task-import-1rpbo8n`, and Narrative Harness's `Open Work`
+  opened `task-091`. The former generic first click is no longer required to
+  reach a pending decision.
 
 ### Repair: Failed spec approval keeps its decision surface
 

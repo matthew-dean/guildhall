@@ -42,6 +42,7 @@ export interface ProjectCardSummary {
   }
   ticker: ProjectActivityLine
   actionLabel: string
+  openHref: string | null
   runActionLabel: string | null
   canOpen: boolean
   canStart: boolean
@@ -170,6 +171,9 @@ function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummar
     return project.actionModel.primaryAction.taskLabel
       ? `${project.actionModel.primaryAction.taskLabel} is ready to resume.`
       : 'Work is ready to resume.'
+  }
+  if (project.actionModel?.primaryAction) {
+    return project.actionModel.primaryAction.detail ?? project.actionModel.primaryAction.label
   }
   const running = (project.run?.status ?? 'stopped') === 'running'
   const oneTaskRun = running && project.run?.mode === 'one_task'
@@ -420,6 +424,7 @@ export function summarizeProjectCard(
       taskActivity: project.taskActivity ?? emptyTaskActivity(),
       ticker: buildProjectCardTicker(project),
       actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
+      openHref: null,
       runActionLabel: null,
       canOpen: true,
       canStart: false,
@@ -461,7 +466,10 @@ export function summarizeProjectCard(
     counts,
     taskActivity: project.taskActivity ?? emptyTaskActivity(),
     ticker: buildProjectCardTicker(project),
-    actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
+    actionLabel: initializationNeeded
+      ? 'Open setup'
+      : project.actionModel?.primaryAction?.buttonLabel ?? 'Open project',
+    openHref: initializationNeeded ? null : project.actionModel?.primaryAction?.href ?? null,
     runActionLabel: initializationNeeded
       ? null
       : running
