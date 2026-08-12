@@ -1618,6 +1618,7 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'Open release' })).toBeInTheDocument()
     const pauseButton = screen.getByRole('button', { name: 'Pause project processing' })
     expect(pauseButton).toHaveTextContent('Pause')
+    expect(pauseButton).toHaveClass('v-danger')
     expect(screen.queryByRole('button', { name: /repo follow-up/i })).not.toBeInTheDocument()
 
     await user.click(pauseButton)

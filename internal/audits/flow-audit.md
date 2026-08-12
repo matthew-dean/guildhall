@@ -57000,3 +57000,13 @@ agent. A deleted runtime must never be a possible service executable.
   without `ENOENT`; `/api/stale-server` returned `stale:false` and named the
   new `0.13.2-1786559900-10575` runtime. The active install was the sole
   retained versioned payload after the handoff.
+
+### Repair: project pause remains a destructive project control
+
+The shared action model correctly keeps `pauseEnabled` true when a project is
+blocked on an owner review: the owner may still deliberately stop future
+project processing. The top-bar control previously rendered that real Pause
+action as a neutral secondary button whenever nothing was actively executing,
+which made it look like a status rather than an intentional control. Pause now
+uses the danger treatment consistently; its shared enablement and endpoint are
+unchanged.

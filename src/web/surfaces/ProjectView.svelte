@@ -1514,7 +1514,7 @@
           {/if}
           {#if detail && showRunButton}
             <Button
-              variant={runControlPauses ? (pausedBlockedControl ? 'secondary' : 'danger') : requiredMigrationBlocked ? 'human' : 'agent'}
+              variant={runControlPauses ? 'danger' : requiredMigrationBlocked ? 'human' : 'agent'}
               size="sm"
               iconOnly={topbarLabelsCollapsed}
               disabled={busy || migrationApplyBusy || runStatus === 'stopping' || (!runControlPauses && startDisabledReason !== null && !requiredMigrationBlocked)}
