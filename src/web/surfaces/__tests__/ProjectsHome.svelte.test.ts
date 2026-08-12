@@ -418,26 +418,16 @@ describe('ProjectsHome', () => {
     expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull()
   })
 
-  it('summarizes the project floor and exposes card work mix visuals', async () => {
+  it('opens directly into the project chooser without aggregate telemetry', async () => {
     const fetchMock = vi.fn(async () => json(servicePayload))
     vi.stubGlobal('fetch', fetchMock)
 
     render(ProjectsHome)
-    await screen.findByText('Guild hall')
+    await screen.findByText('Looma knit')
 
-    expect(screen.getByLabelText('1 running now')).toBeTruthy()
-    expect(screen.getByLabelText('3 active work items')).toBeTruthy()
-    expect(screen.getByLabelText('Builder: working')).toBeTruthy()
+    expect(screen.queryByText('Guild hall')).toBeNull()
+    expect(screen.queryByText('Work mix')).toBeNull()
     expect(screen.getAllByLabelText(/Project work mix:/)).toHaveLength(2)
-    expect(screen.getByLabelText(/Project work mix: 2 active, 0 drafts, 0 blocked, 3 done/)).toBeTruthy()
-    await userEvent.hover(screen.getByLabelText('3 active work items'))
-    expect((await screen.findByRole('tooltip')).textContent).toContain('work currently queued or in progress')
-    await userEvent.unhover(screen.getByLabelText('3 active work items'))
-    await userEvent.hover(screen.getByText('3 active'))
-    expect(screen.queryByRole('tooltip')).toBeNull()
-    await userEvent.unhover(screen.getByText('3 active'))
-    await userEvent.hover(screen.getByLabelText('Looma knit: running now. Agents are working on 2 tasks.'))
-    expect((await screen.findByRole('tooltip')).textContent).toContain('Looma knit: running now. Agents are working on 2 tasks.')
   })
 
   it('uses specific project-avatar tooltips instead of repeated filler copy', async () => {
@@ -459,17 +449,13 @@ describe('ProjectsHome', () => {
     expect((await screen.findByRole('tooltip')).textContent).toBe('Coordinator: 1 blocker to triage in Fair Labor License.')
   })
 
-  it('assigns stable role palette tones to dashboard and project avatars', async () => {
+  it('keeps role palette tones on project avatars without a duplicate dashboard', async () => {
     const fetchMock = vi.fn(async () => json(servicePayload))
     vi.stubGlobal('fetch', fetchMock)
 
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    expect(screen.getByLabelText('Coordinator: directing live work').classList.contains('avatar-tone-coordinator')).toBe(true)
-    expect(screen.getByLabelText('Spec: at table').classList.contains('avatar-tone-spec')).toBe(true)
-    expect(screen.getByLabelText('Builder: working').classList.contains('avatar-tone-builder')).toBe(true)
-    expect(screen.getByLabelText('Reviewer: inspecting blocks').classList.contains('avatar-tone-reviewer')).toBe(true)
     expect(screen.getByLabelText('Builder: 1 active work item waiting for a run in Fair Labor License.').classList.contains('avatar-tone-builder')).toBe(true)
     expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done work item in Fair Labor License.').classList.contains('avatar-tone-reviewer')).toBe(true)
   })

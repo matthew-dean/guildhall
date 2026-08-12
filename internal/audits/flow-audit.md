@@ -58023,3 +58023,20 @@ reading with no clearer decision.
   source trail, proof contract, blockers, and capability catalog appeared
   only after opening that disclosure. The default route is now readable in a
   few seconds rather than several minutes.
+
+### Repair: Project home defers fleet telemetry to the projects themselves
+
+#### Project-home user job before implementation
+
+When an owner opens Guildhall, they need to choose a project or open the
+actual attention queue. Aggregate work mix, role avatars, decorative scores,
+and historical task totals cannot answer either question and must not override
+the shared current action for an individual project.
+
+- [ ] Remove fleet dashboard telemetry from the default home and make a
+  `ready_work` shared action render as ready to resume rather than paused.
+- Contract Touch Decision: `ProjectCardSummary` now maps the shared
+  `actionModel.primaryAction.code` before historical task counts for the
+  visible project stage. ProjectsHome removes only presentation. Considered
+  but unchanged: action ranking, task counts, run state, and project routing.
+- Schema Migration Decision: none.

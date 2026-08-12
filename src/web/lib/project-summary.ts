@@ -111,6 +111,7 @@ function actionModelStage(project: ServiceProjectSummary): string | null {
   if (code === 'no_provider' || code === 'no_loaded_model' || code === 'model_unavailable' || code === 'provider_unavailable') {
     return 'Needs provider'
   }
+  if (code === 'ready_work') return 'Ready to resume'
   return null
 }
 
@@ -165,6 +166,11 @@ function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummar
     return project.startReadiness.message
   }
   if (project.projectCheckIn?.needed) return `${project.projectCheckIn.title ?? 'Project check-in needed'}.`
+  if (project.actionModel?.primaryAction?.code === 'ready_work') {
+    return project.actionModel.primaryAction.taskLabel
+      ? `${project.actionModel.primaryAction.taskLabel} is ready to resume.`
+      : 'Work is ready to resume.'
+  }
   const running = (project.run?.status ?? 'stopped') === 'running'
   const oneTaskRun = running && project.run?.mode === 'one_task'
   if (oneTaskRun) return 'Advancing one task.'
@@ -282,6 +288,14 @@ function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['co
     return {
       maturityLabel: 'Setup',
       maturityDescription: 'The basic project setup contract is still missing.',
+    }
+  }
+  if (project.actionModel?.primaryAction?.code === 'ready_work') {
+    return {
+      maturityLabel: 'Ready to resume',
+      maturityDescription: project.actionModel.primaryAction.taskLabel
+        ? `${project.actionModel.primaryAction.taskLabel} is the next work item.`
+        : 'The current work item is ready to continue.',
     }
   }
   if (counts.total === 0) {

@@ -83,6 +83,8 @@
   const primaryTaskSignal = $derived(
     ['Needs migration', 'Needs provider', 'Update Guildhall'].includes(displayStatusLabel)
       ? displayStatusLabel
+      : displayStatusLabel === 'Ready to resume'
+        ? 'ready to resume'
       : summary.counts.blocked > 0
       ? `${summary.counts.blocked} blocked`
       : summary.counts.active > 0

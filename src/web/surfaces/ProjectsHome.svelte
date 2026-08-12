@@ -7,7 +7,6 @@
   import Cpu from 'lucide-svelte/icons/cpu'
   import FileClock from 'lucide-svelte/icons/file-clock'
   import FolderPlus from 'lucide-svelte/icons/folder-plus'
-  import Folders from 'lucide-svelte/icons/folders'
   import Inbox from 'lucide-svelte/icons/inbox'
   import PlayCircle from 'lucide-svelte/icons/circle-play'
   import ActionBar from '../lib/ActionBar.svelte'
@@ -16,11 +15,7 @@
   import ProjectsShell from '../lib/layout/ProjectsShell.svelte'
   import ProjectCard from '../lib/ProjectCard.svelte'
   import SideDrawer from '../lib/SideDrawer.svelte'
-  import Tooltip from '../lib/Tooltip.svelte'
-  import UtilityPanel from '../lib/UtilityPanel.svelte'
-  import WorkMixChart from '../lib/WorkMixChart.svelte'
-  import { avatarToneForRole } from '../lib/avatar-palette.js'
-  import { createProjectSummaryCache, mergeServiceProjectSummaries, type ProjectCardSummary } from '../lib/project-summary.js'
+  import { createProjectSummaryCache, mergeServiceProjectSummaries } from '../lib/project-summary.js'
   import { projectHref } from '../lib/project-routes.js'
   import { getCachedService, setCachedService } from '../lib/service-cache.js'
   import type { ServiceDetail } from '../lib/types.js'
@@ -226,21 +221,8 @@
   })
 
   const cards = $derived(projectSummaryCache.summarize(service))
-  const overview = $derived({
-    total: cards.length,
-    running: cards.filter(card => card.canStop || optimisticRuns[card.id]).length,
-    taskTotal: cards.reduce((sum, card) => sum + card.counts.total, 0),
-    active: cards.reduce((sum, card) => sum + card.counts.active, 0),
-    blocked: cards.reduce((sum, card) => sum + card.counts.blocked, 0),
-    drafts: cards.reduce((sum, card) => sum + card.counts.draftReview, 0),
-    done: cards.reduce((sum, card) => sum + card.counts.done, 0),
-    shelved: cards.reduce((sum, card) => sum + card.counts.shelved, 0),
-  })
-  const readyTaskCount = $derived(Math.max(0, overview.taskTotal - overview.active - overview.blocked - overview.drafts - overview.done - overview.shelved))
   const needsYouCount = $derived(cards.filter(card => card.needsAttention).length)
-  const firstNeedsYouProject = $derived(cards.find(card => card.needsAttention) ?? null)
   const selectedProject = $derived(cards.find(card => card.id === selectedProjectId) ?? null)
-  const dashboardTotal = $derived(Math.max(1, overview.taskTotal))
   const defaultProviderStatus = $derived(service?.defaultProviderStatus ?? null)
   const defaultProviderWarning = $derived(defaultProviderStatus?.warnings?.[0] ?? null)
   const defaultProviderLabel = $derived(defaultProviderStatus?.preferredProviderLabel ?? defaultProviderStatus?.activeProviderLabel ?? 'Providers')
@@ -255,15 +237,6 @@
     return `${count} ${count === 1 ? singular : plural}`
   }
 
-  function runningNowLabel(count: number): string {
-    return `${count} running now`
-  }
-
-  function projectSparkTitle(project: ProjectCardSummary): string {
-    const running = project.canStop || optimisticRuns[project.id]
-    return `${project.name}: ${running ? 'running now' : 'not running now'}. ${project.activityLabel}`
-  }
-
   function compactModelLabel(model: string | null | undefined): string {
     if (!model) return ''
     const trimmed = model.trim()
@@ -271,13 +244,6 @@
     const slash = trimmed.lastIndexOf('/')
     return slash >= 0 ? trimmed.slice(slash + 1) : trimmed
   }
-
-  const guildMembers = $derived([
-    { role: 'Coordinator', state: overview.running > 0 ? 'directing live work' : 'at table', initial: 'C', active: overview.running > 0 },
-    { role: 'Spec', state: overview.running > 0 && overview.drafts > 0 ? 'shaping briefs' : 'at table', initial: 'S', active: overview.running > 0 && overview.drafts > 0 },
-    { role: 'Builder', state: overview.running > 0 && overview.active > 0 ? 'working' : 'at table', initial: 'B', active: overview.running > 0 && overview.active > 0 },
-    { role: 'Reviewer', state: overview.running > 0 && overview.blocked > 0 ? 'inspecting blocks' : 'at table', initial: 'R', active: overview.running > 0 && overview.blocked > 0 },
-  ].map(member => ({ ...member, tone: avatarToneForRole(member.role) })))
 
   function inspectProject(projectId: string): void {
     selectedProjectId = projectId
@@ -362,145 +328,6 @@
     {#if showingPartialProjectStatus}
       <p class="loading-inline" role="status">Loading project status...</p>
     {/if}
-    <section class="floor" aria-label="Guild hall project overview">
-      <div class="floor-head">
-        <p class="floor-kicker">Guild hall</p>
-        <Tooltip text={countLabel(overview.total, 'project')}>
-          <strong aria-label={countLabel(overview.total, 'project')}>
-            <Folders size={18} />
-            <span>{overview.total}</span>
-          </strong>
-        </Tooltip>
-      </div>
-      <div class="guild-table" aria-label="Guild members at the table">
-        <div class="guild-members">
-          {#each guildMembers as member (member.role)}
-            <Tooltip text={`${member.role}: ${member.state}`}>
-              <span
-                class={`guild-member avatar-tone-${member.tone}`}
-                class:guild-member-active={member.active}
-                aria-label={`${member.role}: ${member.state}`}
-              >
-                <span class="guild-avatar">{member.initial}</span>
-              </span>
-            </Tooltip>
-          {/each}
-        </div>
-      </div>
-      <div class="floor-metrics">
-        <Tooltip text={`${runningNowLabel(overview.running)}: projects whose coordinator loop is currently on.`}>
-          <span class="floor-metric tone-running" aria-label={runningNowLabel(overview.running)}>
-            <PlayCircle size={16} />
-            <strong>{overview.running}</strong>
-          </span>
-        </Tooltip>
-        <Tooltip text={`${countLabel(overview.active, 'active work item')}: work currently queued or in progress across all projects.`}>
-          <span class="floor-metric tone-active" aria-label={countLabel(overview.active, 'active work item')}>
-            <Activity size={16} />
-            <strong>{overview.active}</strong>
-          </span>
-        </Tooltip>
-        <Tooltip text={`${countLabel(overview.blocked, 'blocked work item')}: work that needs triage, recovery, or a decision.`}>
-          <span class="floor-metric tone-warn" aria-label={countLabel(overview.blocked, 'blocked work item')}>
-            <AlertTriangle size={16} />
-            <strong>{overview.blocked}</strong>
-          </span>
-        </Tooltip>
-        <Tooltip text={`${countLabel(overview.drafts, 'draft brief')}: task ideas waiting to become approved work.`}>
-          <span class="floor-metric tone-draft" aria-label={countLabel(overview.drafts, 'draft brief')}>
-            <FileClock size={16} />
-            <strong>{overview.drafts}</strong>
-          </span>
-        </Tooltip>
-        <Tooltip text={`${countLabel(overview.done, 'work item done', 'work items done')}: completed work across all projects.`}>
-          <span class="floor-metric tone-done" aria-label={countLabel(overview.done, 'work item done', 'work items done')}>
-            <CheckCircle2 size={16} />
-            <strong>{overview.done}</strong>
-          </span>
-        </Tooltip>
-      </div>
-    </section>
-
-    <section class="dashboard" aria-label="Projects dashboard">
-      <UtilityPanel className="dashboard-panel dashboard-panel-wide" tone="accent">
-        <div class="panel-head">
-          <div>
-            <p class="panel-kicker">Work mix</p>
-            <h2>{countLabel(overview.taskTotal, 'work item')}</h2>
-          </div>
-          <span class="panel-value">{countLabel(readyTaskCount, 'ready work item')}</span>
-        </div>
-        <WorkMixChart
-          ariaLabel={`Work mix across projects: ${overview.active} active, ${readyTaskCount} ready, ${needsYouCount} projects need attention, ${overview.done} done.`}
-          segments={[
-            {
-              key: 'active',
-              label: 'active',
-              count: overview.active,
-              tone: 'active',
-              ariaLabel: `${countLabel(overview.active, 'active work item')}: active or in-progress work.`,
-              tooltip: `${countLabel(overview.active, 'active work item')}: active or in-progress work.`,
-            },
-            {
-              key: 'ready',
-              label: 'ready',
-              count: readyTaskCount,
-              tone: 'ready',
-              ariaLabel: `${countLabel(readyTaskCount, 'ready work item')}: work that can be picked up without another brief review.`,
-              tooltip: `${countLabel(readyTaskCount, 'ready work item')}: work that can be picked up without another brief review.`,
-            },
-            {
-              key: 'attention',
-              label: 'projects need you',
-              count: needsYouCount,
-              tone: 'attention',
-              ariaLabel: `${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`,
-              tooltip: `${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`,
-            },
-            {
-              key: 'done',
-              label: 'done',
-              count: overview.done,
-              tone: 'done',
-              ariaLabel: `${countLabel(overview.done, 'done work item')}: completed work.`,
-              tooltip: `${countLabel(overview.done, 'done work item')}: completed work.`,
-            },
-          ]}
-          emptyLabel="No work items yet"
-        />
-      </UtilityPanel>
-      <UtilityPanel className="dashboard-panel" tone={needsYouCount === 0 ? 'neutral' : 'warn'}>
-        <div class="panel-head">
-          <div>
-            <p class="panel-kicker">Attention</p>
-            <h2>{needsYouCount === 0 ? 'Clear' : countLabel(needsYouCount, 'project')}</h2>
-          </div>
-          <AlertTriangle size={18} />
-        </div>
-        <p class="panel-copy">
-          {needsYouCount === 0
-            ? 'No project needs your decision right now.'
-            : `${firstNeedsYouProject?.name ?? 'A project'} has the first waiting item.`}
-        </p>
-      </UtilityPanel>
-      <UtilityPanel className="dashboard-panel" tone={overview.running > 0 ? 'ok' : 'neutral'}>
-        <div class="panel-head">
-          <div>
-            <p class="panel-kicker">Running now</p>
-            <h2>{runningNowLabel(overview.running)}</h2>
-          </div>
-          <PlayCircle size={18} />
-        </div>
-        <div class="project-sparks" aria-label={`${overview.running} projects running now across ${overview.total} projects`}>
-          {#each cards as card (card.id)}
-            <Tooltip text={projectSparkTitle(card)} className="project-spark-tip">
-              <span class:project-spark-live={card.canStop || optimisticRuns[card.id]} aria-label={projectSparkTitle(card)}></span>
-            </Tooltip>
-          {/each}
-        </div>
-      </UtilityPanel>
-    </section>
-
     <div class="projects-area">
       <div class="grid">
         {#each cards as card (card.id)}
