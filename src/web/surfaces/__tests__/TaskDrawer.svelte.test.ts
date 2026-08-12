@@ -98,10 +98,12 @@ function installBrowserFakes() {
   vi.stubGlobal('confirm', vi.fn(() => true))
 }
 
-function openDrawerOn(tab: 'overview' | 'current' | 'spec') {
-  window.history.replaceState({}, '', `/projects/looma-knit/task/task-link-editor?tab=${tab}`)
-  path.value = `/projects/looma-knit/task/task-link-editor?tab=${tab}`
-  path.href = `/projects/looma-knit/task/task-link-editor?tab=${tab}`
+function openDrawerOn(tab: 'overview' | 'current' | 'spec', options: { fullRecord?: boolean } = {}) {
+  const detail = options.fullRecord ? '&detail=full' : ''
+  const href = `/projects/looma-knit/task/task-link-editor?tab=${tab}${detail}`
+  window.history.replaceState({}, '', href)
+  path.value = href
+  path.href = href
 }
 
 describe('TaskDrawer', () => {
@@ -313,6 +315,7 @@ describe('TaskDrawer', () => {
   })
 
   it('makes decomposition sizing visible as work to create, not owner recommendations', async () => {
+    openDrawerOn('overview', { fullRecord: true })
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -381,6 +384,7 @@ describe('TaskDrawer', () => {
   })
 
   it('offers a split action for decomposition child work scoped to the current task', async () => {
+    openDrawerOn('overview', { fullRecord: true })
     const user = userEvent.setup()
     const payload = drawerPayload({
       threadTurns: [],
@@ -450,6 +454,7 @@ describe('TaskDrawer', () => {
   })
 
   it('offers a clear action when split-required child tasks have not been created yet', async () => {
+    openDrawerOn('overview', { fullRecord: true })
     const user = userEvent.setup()
     const payload = drawerPayload({
       threadTurns: [],
@@ -1474,6 +1479,7 @@ describe('TaskDrawer', () => {
   })
 
   it('runs and manages the task from drawer controls without losing project scope', async () => {
+    openDrawerOn('overview', { fullRecord: true })
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'spec_review'
     payload.task.openQuestions = []
@@ -1765,7 +1771,7 @@ describe('TaskDrawer', () => {
   })
 
   it('approves a task spec with an optional note from the drawer footer flow', async () => {
-    openDrawerOn('spec')
+    openDrawerOn('spec', { fullRecord: true })
     const payload = drawerPayload({
       threadTurns: [
         {
@@ -1840,12 +1846,60 @@ describe('TaskDrawer', () => {
 
     await screen.findByText('Approve this spec?')
     expect(screen.queryByText(/waiting in Thread/i)).toBeNull()
+    expect(screen.queryByRole('tab')).toBeNull()
+    expect(screen.queryByText('Acceptance criteria')).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
     await userEvent.click(screen.getByRole('button', { name: /^approve$/i }))
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/approve-spec'))).toBe(true)
     })
+  })
+
+  it('keeps a pending spec to one executable review decision and sends requested changes to the spec', async () => {
+    openDrawerOn('spec')
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/resume')) {
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          message: 'Keep the scope focused on the selected-text menu.',
+          revisionTarget: 'spec',
+        })
+        return json({ ok: true })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Approve this spec?')
+    expect(screen.queryByRole('tab')).toBeNull()
+    expect(screen.queryByText('Latest handoff packet')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Read full task record' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Request changes' }))
+    await userEvent.type(
+      screen.getByPlaceholderText('Describe the correction Guildhall should make.'),
+      'Keep the scope focused on the selected-text menu.',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Send changes' }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/resume'))).toBe(true)
+    })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Read full task record' }))
+    await waitFor(() => expect(path.href).toContain('?detail=full&tab=spec'))
   })
 
   it('hands a required migration to the shared project repair flow instead of rendering the raw error', async () => {
@@ -1884,7 +1938,7 @@ describe('TaskDrawer', () => {
   })
 
   it('shows stale acceptance proof state on the Spec tab', async () => {
-    openDrawerOn('spec')
+    openDrawerOn('spec', { fullRecord: true })
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -1929,7 +1983,7 @@ describe('TaskDrawer', () => {
   })
 
   it('does not offer unqualified spec approval when the structured brief is incomplete', async () => {
-    openDrawerOn('spec')
+    openDrawerOn('spec', { fullRecord: true })
     const payload = drawerPayload()
     payload.task.status = 'spec_review'
     payload.task.spec = '## Summary\nReview the Font Something variable-font specimen flow.'

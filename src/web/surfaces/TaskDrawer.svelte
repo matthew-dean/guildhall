@@ -19,6 +19,7 @@
   import OverviewTab from './drawer/OverviewTab.svelte'
   import SpecTab from './drawer/SpecTab.svelte'
   import CurrentTab from './drawer/CurrentTab.svelte'
+  import SpecReviewDecision from './drawer/SpecReviewDecision.svelte'
   import JourneyTab from './drawer/JourneyTab.svelte'
   import TranscriptTab from './drawer/TranscriptTab.svelte'
   import HistoryTab from './drawer/HistoryTab.svelte'
@@ -202,6 +203,15 @@
       return raw
     }
     return null
+  }
+
+  function requestedFullRecord(href: string): boolean {
+    const queryStart = href.indexOf('?')
+    const hashStart = href.indexOf('#', queryStart)
+    const search = queryStart >= 0
+      ? href.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart)
+      : (typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, ''))
+    return new URLSearchParams(search).get('detail') === 'full'
   }
 
   const BASE_TABS = [
@@ -404,6 +414,18 @@
   function handleApproveSpec() {
     approveSpecNote = ''
     approveSpecOpen = true
+  }
+
+  async function handleRequestSpecChanges(message: string): Promise<void> {
+    if (!(await post('resume', { message, revisionTarget: 'spec' }))) return
+    await project.refresh(scopedProjectId())
+    toast.success('Guildhall will revise this spec.')
+  }
+
+  function openFullTaskRecord(): void {
+    nav(`${currentTaskHref(taskId, scopedProjectId())}?detail=full&tab=spec`, {
+      backgroundPath: drawerBackgroundPath(),
+    })
   }
 
   async function submitApproveSpec() {
@@ -640,6 +662,8 @@
     }
     return next
   })
+  const fullRecordRequested = $derived(requestedFullRecord(routeHref || navPath.href || currentBrowserHref()))
+  const focusedSpecReview = $derived(task?.status === 'spec_review' && !fullRecordRequested)
   const currentWorkProgress = $derived(task ? payload?.workProgress?.byTaskId?.[task.id] ?? null : null)
   const currentDeliveryBadge = $derived(deliveryProgressBadge(currentWorkProgress))
   const allTaskContext = $derived.by(() => {
@@ -1052,7 +1076,7 @@
           <span>{taskDisplayKey(taskId, allTaskContext, scopedProjectId())}</span>
         {/if}
       </nav>
-      <h3>{displayTaskTitle}</h3>
+      <h3 title={displayTaskTitle}>{displayTaskTitle}</h3>
       {#if currentDeliveryBadge}
         <div class="drawer-progress-line">
           <Chip
@@ -1067,7 +1091,7 @@
     </Button>
   </header>
 
-  {#if payload}
+  {#if payload && !focusedSpecReview}
     <div class="gh-drawer-tabs">
       <Tabs
         tabs={tabs}
@@ -1086,7 +1110,7 @@
     {:else if !payload}
       <p class="loading">Loading...</p>
       {:else}
-      {#if drawerOutcome && !activeTabOwnsEscalationDecision}
+      {#if drawerOutcome && !activeTabOwnsEscalationDecision && !focusedSpecReview}
         <UtilityPanel
           as="section"
           className="drawer-outcome"
@@ -1099,7 +1123,7 @@
           <span>{drawerOutcome.detail}</span>
         </UtilityPanel>
       {/if}
-      {#if devServers.length > 0}
+      {#if devServers.length > 0 && !focusedSpecReview}
         <section class="drawer-dev-servers" aria-label="Runtime dev servers">
           {#each devServers as server}
             <UtilityPanel as="div" className="drawer-dev-server" tone="neutral">
@@ -1129,7 +1153,15 @@
           {/each}
         </section>
       {/if}
-      {#if activeTab === 'current'}
+      {#if focusedSpecReview && task}
+        <SpecReviewDecision
+          {task}
+          {busy}
+          onApprove={handleApproveSpec}
+          onRequestChanges={handleRequestSpecChanges}
+          onOpenFullRecord={openFullTaskRecord}
+        />
+      {:else if activeTab === 'current'}
         <CurrentTab
           {task}
           turns={taskExtras.threadTurns ?? payload.threadTurns ?? []}
@@ -1226,7 +1258,7 @@
             Open import review
           </Button>
         </div>
-      {:else}
+      {:else if !focusedSpecReview}
         <div class="footer-actions-left">
           <div class="run-controls">
             {#if runError}
@@ -1607,6 +1639,12 @@
     display: grid;
     gap: var(--s-1);
     min-width: 0;
+  }
+  .drawer-title-block h3 {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .drawer-breadcrumb {
     display: flex;

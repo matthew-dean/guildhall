@@ -56805,3 +56805,96 @@ decision. The next task-detail pass must retain the approval outcome and any
 owner question, then remove the rest of that default reading burden instead
 of moving it among shallow tabs. The task detail needs the same one-minute
 route contract as focused Work.
+
+#### Task-review user job before implementation
+
+For a pending spec, the drawer's default job is only: identify the work,
+understand what approval permits, inspect the concise task outcome and finish
+conditions, then approve or ask for a correction. Checkpoint packets,
+transcripts, reviewer budgets, acceptance-command editing, provenance,
+history, and task-management utilities do not earn a place in that initial
+decision. A full record may remain reachable only through one explicit
+secondary route after the decision is clear; it must not be a parallel tab
+strip that suggests seven equally important jobs.
+
+#### Contract Touch Decision: focused pending-spec review
+
+- Work id: `flow-audit-task-review-focus`.
+- Touched contracts: the existing task `resume` action is invoked with its
+  existing `revisionTarget: 'spec'` field when the owner requests a revision.
+- Considered but not touched: task status schema, approval action schema,
+  task-detail payload, persisted task content, history/provenance schemas, and
+  task route schema.
+- Required follow-up and proof: drawer regression proving the default has no
+  tab strip or packet, approval and revision action tests, typecheck, build,
+  and installed Looma + Knit desktop/narrow/mobile proof.
+- Apply/revert behavior: a client route presentation change using the existing
+  action contract. `?detail=full&tab=spec` deliberately retains the legacy
+  full record; reverting restores the former tabbed default without changing
+  task data.
+
+#### Schema Migration Decision: focused pending-spec review
+
+- Persisted schema touched: none.
+- Change class and existing-data impact: client presentation and existing
+  action invocation only; none.
+- Migration, compatibility reader, fixtures, and rollback: no migration or
+  compatibility reader is required; TaskDrawer regressions cover focused and
+  full-record paths; code-only revert.
+
+#### Rendered pending-spec evidence, 2026-08-12
+
+- The TaskDrawer suite passes with 56 tests. A pending `spec_review` task now
+  renders `Approve spec`, `Request changes`, a concise outcome, and one
+  `Read full task record` escape hatch with no tab strip or handoff packet.
+- A revision request posts the existing typed `resume` action with
+  `revisionTarget: 'spec'`; detailed acceptance/proof inspection tests now
+  deliberately request `?detail=full` instead of treating it as normal review
+  content.
+- `pnpm typecheck` passes. Installed-app and geometry evidence remain required
+  before this finding can be closed.
+
+#### Installed pending-spec evidence, 2026-08-12
+
+- After `pnpm build`, `pnpm dev:install`, and a service restart,
+  `/api/stale-server` reported `stale:false` from package
+  `0.13.2-1786558432-40301`.
+- From the real Looma + Knit focused Work route, `Review spec` opened
+  `task-import-1rpbo8n?tab=spec` with the short task key, one decision, two
+  executable choices, and `Read full task record`. The review drawer had zero
+  top-level tabs; its body was 406 characters at `960x720` rather than the
+  legacy packet. The explicit full-record link opened the retained legacy
+  seven-tab record at `?detail=full&tab=spec`.
+- Geometry proof: document width equaled viewport width at `1280x720`,
+  `960x720`, and `390x844`. On mobile the drawer measured 359px inside the
+  390px viewport; both approval choices remained visible without horizontal
+  overflow.
+- Approval click proof: the real confirmation modal appeared, then the active
+  project correctly routed the required migration to
+  `/overview?repair=migration`. The `Migrate project` modal named one required
+  migration and exposed `Apply required migration`; the former raw migration
+  error was absent. The migration was intentionally not applied to Looma +
+  Knit during this audit.
+- Final packaged visual check: the drawer title is now one ellipsized line
+  (17px client height at the default desktop viewport), while the focused body
+  exposes only `Request changes`, `Approve spec`, and `Read full task record`.
+
+### New finding: repair modal is correct, but the Overview behind it is still noisy
+
+The required-migration recovery action is now executable and understandable,
+but the underlying Overview still shows `10 specs are ready for your review
+before work can continue`, `Open item`, and `View work` alongside the modal.
+The count is not itself an executable decision, and it competes with the one
+repair action. When the migration modal is open, the recovery decision must
+own the route; after it closes, Overview needs the same shared focused action
+model as Work rather than parallel generic prompts.
+
+### New finding: installed-service handoff can require a second start
+
+After two consecutive `pnpm dev:install` runs, the first immediate
+`guildhall stop && guildhall start` tried to spawn the now-deleted previous
+packaged runtime and raised `ENOENT`; the new `~/.guildhall/app/current`
+pointer was already correct, and a second `guildhall start` then launched the
+new package successfully. The final running service reported `stale:false`
+from `0.13.2-1786558711-51755`. Audit the installer/launcher handoff for an
+atomic runtime transition; do not make operators retry a normal restart.
