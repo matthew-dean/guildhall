@@ -56687,3 +56687,52 @@ and exposes `Approve spec` before the reading material. The old bottom approval
 card was deleted. A rendered regression asserts the button precedes the Spec
 heading and invokes the supplied approval action. Installed-app proof and the
 migration-repair outcome are still required.
+
+### Repair: approval migration failures enter the shared repair flow
+
+Task approval no longer leaves the owner on a raw required-migration error.
+The drawer hands that typed failure to Router, which navigates to the scoped
+Overview repair intent; ProjectView consumes that intent by opening its existing
+migration modal. Typecheck passes. Add a rendered and installed-app approval
+proof before considering the full recovery flow complete.
+
+#### Contract Touch Decision: approval repair handoff
+
+- Work id: `flow-audit-approval-migration-repair`.
+- Touched contracts: none; the drawer continues to consume the existing task
+  action error payload and the project view continues to consume the existing
+  migration-status endpoint.
+- Considered but not touched: task action response schema, migration schema,
+  project summary/action model, and persisted task state.
+- Required follow-up and proof: drawer typed-error regression, repair-intent
+  modal regression, typecheck, production build, and installed-app modal proof.
+- Apply/revert behavior: client-only routing change; reverting restores the
+  previous raw-error presentation and does not alter project data.
+
+#### Schema Migration Decision: approval repair handoff
+
+- Persisted schema touched: none.
+- Change class and existing-data impact: client error routing only; none.
+- Migration, compatibility reader, fixtures, and rollback: no migration or
+  compatibility reader required; test fixtures cover the typed error; code-only
+  revert.
+
+Installed-app evidence, 2026-08-12: after `pnpm build`, `pnpm dev:install`,
+and a local-service restart, `/api/stale-server` reported `stale:false` from
+the current packaged build. Visiting
+`/projects/looma-knit/overview?repair=migration` opened the real `Migrate
+project` modal and named its one required migration, affected scope, and
+`Apply required migration` action. The mutation itself was intentionally not
+applied to the active Looma + Knit project during this audit. The drawer's
+typed-error regression and the repair-intent modal regression both pass.
+
+### Live finding: Work still fails the one-minute owner job
+
+Installed Looma + Knit Work at
+`/projects/looma-knit/work?task=task-import-1rpbo8n` rendered a filter strip,
+ten task rows, duplicate title/description text, a full inspector, and a
+separate recent-progress message. It also claimed `17 current tasks when you
+resume` while the project is working. This is not a layout polish issue:
+replace the route with a focused owner-decision surface and an explicitly
+entered queue. Do not retain the filters, table, inspector, or duplicate
+progress report as the default route merely by compressing them.

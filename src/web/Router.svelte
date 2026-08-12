@@ -35,6 +35,11 @@
     }
   }
 
+  function repairDrawerMigration() {
+    if (route.kind !== 'project' || !route.projectId) return
+    nav(`${currentProjectHref('/overview', route.projectId)}?repair=migration`)
+  }
+
   async function loadRouteSurface(kind: typeof route.kind, hasDrawer: boolean): Promise<void> {
     if (kind === 'projects' && !ProjectsHome) ProjectsHome = (await import('./surfaces/ProjectsHome.svelte')).default
     if (kind === 'fleet-inbox' && !FleetNeedsYou) FleetNeedsYou = (await import('./surfaces/FleetNeedsYou.svelte')).default
@@ -58,7 +63,7 @@
 {:else if route.kind === 'project'}
   {#if ProjectView}<ProjectView initialView={route.view} initialSub={route.sub} projectId={route.projectId} />{/if}
   {#if route.drawerTaskId && TaskDrawer}
-    <TaskDrawer taskId={route.drawerTaskId} projectId={route.projectId} routeHref={path.href} onClose={closeDrawer} />
+    <TaskDrawer taskId={route.drawerTaskId} projectId={route.projectId} routeHref={path.href} onClose={closeDrawer} onMigrationRequired={repairDrawerMigration} />
   {/if}
 {:else if route.kind === 'setup'}
   <div class="route-document-scroll">

@@ -68,9 +68,10 @@
     projectId?: string | null
     routeHref?: string
     onClose: () => void
+    onMigrationRequired?: () => void
   }
 
-  let { taskId, projectId = null, routeHref = '', onClose }: Props = $props()
+  let { taskId, projectId = null, routeHref = '', onClose, onMigrationRequired }: Props = $props()
 
   let payload = $state<DrawerPayload | null>(null)
   let taskExtras = $state<TaskExtrasState>({})
@@ -378,7 +379,12 @@
       )
       if (!res.ok) {
         const b = await res.json().catch(() => ({}))
-        error = b.error ?? `HTTP ${res.status}`
+        const message = b.error ?? `HTTP ${res.status}`
+        if (/Run required Guildhall migration/i.test(message)) {
+          onMigrationRequired?.()
+          return false
+        }
+        error = message
         return false
       }
       await load()

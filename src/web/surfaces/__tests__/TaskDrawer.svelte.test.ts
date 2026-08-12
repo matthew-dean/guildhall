@@ -1838,7 +1838,7 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Spec draft awaiting approval')
+    await screen.findByText('Approve this spec?')
     expect(screen.queryByText(/waiting in Thread/i)).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
     await userEvent.click(screen.getByRole('button', { name: /^approve$/i }))
@@ -1846,6 +1846,41 @@ describe('TaskDrawer', () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/approve-spec'))).toBe(true)
     })
+  })
+
+  it('hands a required migration to the shared project repair flow instead of rendering the raw error', async () => {
+    openDrawerOn('spec')
+    const onMigrationRequired = vi.fn()
+    const payload = drawerPayload()
+    payload.task.status = 'spec_review'
+    payload.threadTurns = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/approve-spec')) {
+        return json(
+          { error: 'Run required Guildhall migration 0.13.27/acceptance-command-proof-path-reconciliation before starting this project.' },
+          { status: 409 },
+        )
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+      onMigrationRequired,
+    })
+
+    await screen.findByText('Approve this spec?')
+    await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^approve$/i }))
+
+    await waitFor(() => expect(onMigrationRequired).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText(/Run required Guildhall migration/i)).toBeNull()
   })
 
   it('shows stale acceptance proof state on the Spec tab', async () => {

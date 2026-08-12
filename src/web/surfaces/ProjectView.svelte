@@ -609,6 +609,13 @@
     migrationModalOpen = false
   }
 
+  $effect(() => {
+    path.href
+    if (typeof window === 'undefined') return
+    if (new URL(window.location.href).searchParams.get('repair') !== 'migration') return
+    void openMigrationModal()
+  })
+
   async function applyRequiredMigration(): Promise<void> {
     const migration = primaryRequiredMigration
     if (!migration) return

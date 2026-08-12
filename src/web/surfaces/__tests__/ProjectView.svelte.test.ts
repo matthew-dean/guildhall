@@ -734,6 +734,17 @@ describe('ProjectView', () => {
     expect(screen.getByText('Move task questions into owner-input bounded chat')).toBeInTheDocument()
   })
 
+  it('opens the shared migration repair modal when a task action routes back with repair intent', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/overview?repair=migration')
+    path.value = '/projects/looma-knit/overview'
+    path.href = '/projects/looma-knit/overview?repair=migration'
+
+    await renderProjectView('overview')
+
+    await screen.findByRole('dialog', { name: /migrate project/i })
+    expect(screen.queryByText(/Run required Guildhall migration/i)).toBeNull()
+  })
+
   it('keeps the migration modal blocking until apply and refreshes finish', async () => {
     const user = userEvent.setup()
     const migrationBlocked = detail({
