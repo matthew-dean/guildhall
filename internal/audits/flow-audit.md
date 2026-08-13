@@ -58538,3 +58538,39 @@ the shared current action for an individual project.
   reorder cannot select Beta for the owner. Remaining live check: reproduce
   any delayed reselection against Looma + Knit only if it still occurs after
   the installed-app refresh; no user project was mutated for this replay.
+
+### Repair: A spec review is a task decision, not a Thread destination
+
+- [x] User job: when the shared project state says a specific spec needs
+  approval, every entry surface must take the owner directly to that one
+  `Approve spec` / `Request changes` decision. Thread must not duplicate the
+  review as a dense list and inspector merely because it has a historical turn
+  for the task.
+- Finding, 2026-08-12: the shared task action labels a `spec_review` as
+  `Review in Thread`; the Thread simplification then deliberately declines to
+  show its compact project decision because the same task has a thread chain.
+  That circular routing recreates the tab-hunting workflow the focused task
+  view already removed.
+- Contract Touch Decision: change the shared project-action route and label
+  for `spec_review` task actions and `owner_review_required` readiness from a
+  task-thread query to the existing focused task route. Thread will recognize
+  that route as a direct handoff and render the shared action once. Considered
+  but unchanged: review state transitions, approval API, task payload,
+  task-detail semantics, Thread history data, migration repair route, and
+  persisted schemas. Schema Migration Decision: none. Required proof: action
+  model coverage and Thread replay agree on direct task routing; focused task
+  replay still starts at the approval decision. Apply/revert: restore the
+  thread href helper; no stored workflow data changes.
+- Evidence, 2026-08-12: project-action coverage passes 39/39: both the
+  owner-review readiness action and the focused `spec_review` task now use
+  `/task/<id>` and say `Review spec`. ThreadTab coverage passes 124/124,
+  including a represented spec review that shows one direct task decision
+  rather than the Thread list and inspector. The existing rendered browser
+  replay `spec review starts at one decision without a tab hunt` passes. A
+  fresh `pnpm build`, `pnpm dev:install`, Looma + Knit stop/start, and
+  `/api/stale-server` check confirm the installed artifact is current
+  (`stale:false`); `pnpm typecheck`, `pnpm lint:contracts`, and
+  `git diff --check` pass. Narrative Harness currently has no live
+  `spec_review` task and Looma + Knit is guarded by a required migration, so
+  this decision was not applied against either user project merely to create
+  a demo state.

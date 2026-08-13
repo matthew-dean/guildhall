@@ -712,7 +712,7 @@ describe('buildProjectActionModel', () => {
       label: 'Continue drafted spec work',
       detail: '2 specs are waiting for review before work can start. Start with "Continue drafted spec work".',
       buttonLabel: 'Review next spec',
-      href: '/thread?thread=task%3Atask-spec-a',
+      href: '/task/task-spec-a',
       tone: 'warn',
     })
     expect(specReview.runControl).toMatchObject({
@@ -740,7 +740,7 @@ describe('buildProjectActionModel', () => {
       label: 'Review a spec',
       taskLabel: 'Continue drafted spec work',
       buttonLabel: 'Review next spec',
-      href: '/work?task=task-spec-a',
+      href: '/task/task-spec-a',
       tone: 'warn',
       code: 'owner_review_required',
       taskId: 'task-spec-a',
@@ -1315,8 +1315,8 @@ describe('buildProjectActionModel', () => {
     expect(model.ownerInput.active).toBe(false)
     expect(model.primaryAction).toMatchObject({
       source: 'task',
-      buttonLabel: 'Review in Thread',
-      href: '/thread?thread=task%3Atask-import-9s8tkc',
+      buttonLabel: 'Review spec',
+      href: '/task/task-import-9s8tkc',
     })
     expect(model.secondaryActions.some(action => /answer in thread/i.test(action.label))).toBe(false)
   })
@@ -1430,7 +1430,7 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction?.label).not.toMatch(/answer/i)
   })
 
-  it('links spec-review task actions to the specific Thread chain', () => {
+  it('links spec-review task actions to the focused task decision', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },
       inbox: { items: [] },
@@ -1447,8 +1447,8 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'task',
-      buttonLabel: 'Review in Thread',
-      href: '/thread?thread=task%3Atask-spec-a',
+      buttonLabel: 'Review spec',
+      href: '/task/task-spec-a',
     })
   })
 

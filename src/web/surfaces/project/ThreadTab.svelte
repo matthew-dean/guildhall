@@ -1536,7 +1536,12 @@
       chain.turns.some(turn => 'taskId' in turn && turn.taskId === ownerAction.taskId),
     ),
   )
-  const showProjectDecisionFirst = $derived(Boolean(ownerAction && !ownerActionHasThread && !projectActivityVisible))
+  const ownerActionDirectTaskRoute = $derived(Boolean(
+    ownerAction?.taskId && ownerAction.href && /(?:^|\/)task\//.test(ownerAction.href),
+  ))
+  const showProjectDecisionFirst = $derived(Boolean(
+    ownerAction && !projectActivityVisible && (!ownerActionHasThread || ownerActionDirectTaskRoute),
+  ))
   // Thread is for a response, not a second work queue. When the shared action
   // says Guildhall can resume a represented task, leave its history out of the
   // default view and send the owner to the one work item instead.

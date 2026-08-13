@@ -855,6 +855,35 @@ describe('ThreadTab', () => {
     expect(selectedThread().queryByText('This old active turn must not replace the review decision.')).toBeNull()
   })
 
+  it('hands a represented spec review directly to its focused task decision', async () => {
+    const focusedReview = specReviewTurn('task-review-first', {
+      taskTitle: 'Review the focused spec',
+      spec: '## Summary\nApprove this spec before work continues.',
+    })
+    installFetchFakes([focusedReview], 'spec-task-review-first', {
+      actionModel: {
+        primaryAction: {
+          label: 'Review a spec',
+          taskLabel: 'Review the focused spec',
+          taskId: 'task-review-first',
+          buttonLabel: 'Review spec',
+          href: '/task/task-review-first',
+          tone: 'warn',
+          code: 'owner_review_required',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'What needs your attention' })
+    expect(screen.getByText('Review the focused spec')).toBeTruthy()
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Review spec' }))
+    expect(path.href).toBe('/projects/looma-knit/task/task-review-first')
+  })
+
   it('does not replace an unrepresented owner decision with stale Thread activity', async () => {
     installFetchFakes([
       workerTurn({

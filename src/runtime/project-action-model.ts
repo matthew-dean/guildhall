@@ -408,11 +408,14 @@ function ownerInputDetail(detail: string | null | undefined): string {
 
 function ownerInputFrom(readiness: ProjectActionStartReadiness | null | undefined, turn: ProjectActionThreadTurn | null): ProjectOwnerInputModel {
   if (readiness?.code === 'owner_input_required') {
+    const focusedSpecReview = readiness.focusKind === 'spec_review' && readiness.focusTaskId
     return {
       active: true,
       label: startReadinessActionLabel(readiness),
       detail: ownerInputDetail(turn?.question?.prompt ?? readiness.message),
-      href: readiness.actionHref ?? (turn ? threadHref(turn) : '/thread'),
+      href: focusedSpecReview
+        ? taskHrefForTask(readiness.focusTaskId)
+        : readiness.actionHref ?? (turn ? threadHref(turn) : '/thread'),
     }
   }
   if (!turn || !isOwnerQuestionTurn(turn)) {
@@ -563,19 +566,20 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
       : currentBriefIntent
         ? `Current brief: ${currentBriefIntent}`
         : task.description,
-    buttonLabel: task.status === 'spec_review' ? 'Review in Thread' : 'Open Work',
-    href: task.status === 'spec_review' ? threadHrefForTask(task.id) : workHrefForTask(task.id),
+    buttonLabel: task.status === 'spec_review' ? 'Review spec' : 'Open Work',
+    href: task.status === 'spec_review' ? taskHrefForTask(task.id) : workHrefForTask(task.id),
     tone: cleanup || blocked || task.status === 'spec_review' ? 'warn' : running ? 'running' : 'accent',
     taskId: task.id,
   }
 }
 
-function threadHrefForTask(taskId: string | undefined): string {
-  return taskId ? `/thread?thread=${encodeURIComponent(`task:${taskId}`)}` : '/thread'
+function taskHrefForTask(taskId: string | undefined): string {
+  return taskId ? `/task/${encodeURIComponent(taskId)}` : '/work'
 }
 
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
   const ownerReview = readiness.code === 'owner_review_required'
+  const focusedSpecReview = ownerReview || readiness.focusKind === 'spec_review'
   const runnableWork = readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
   const label = ownerReview
     ? 'Review a spec'
@@ -594,7 +598,9 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     ...(taskLabel ? { taskLabel } : {}),
     detail,
     buttonLabel: startReadinessButtonLabel(readiness),
-    href: readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
+    href: focusedSpecReview && readiness.focusTaskId
+      ? taskHrefForTask(readiness.focusTaskId)
+      : readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
     tone: readiness.code === 'required_migration_pending'
       ? 'danger'
       : readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
@@ -718,7 +724,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   }
   if (startReadiness && !startReadiness.canStart && startReadiness.code !== 'all_terminal') {
     candidates.push(
-      startReadiness.code === 'owner_input_required' && ownerInput.href
+      startReadiness.code === 'owner_input_required' && ownerInput.href && startReadiness.focusKind !== 'spec_review'
         ? {
             ...startReadinessAction(startReadiness),
             detail: ownerInputDetail(activeTurn?.question?.prompt ?? startReadiness.message),
