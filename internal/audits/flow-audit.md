@@ -58358,3 +58358,9 @@ the shared current action for an individual project.
   test never took it and waited for deleted `.work-list-stack` markup. This is
   insufficient evidence for the goal's migration and cross-route agreement
   requirements.
+- Follow-up replay: applying the visible `Apply required migration` action
+  reports `Migration complete.`, yet returns to the same `Project update
+  required` gate after the modal closes. This is a shared project-refresh /
+  migration-status defect, not a test issue. Do not weaken the rendered audit
+  until the authoritative post-apply summary clears the gate or names the next
+  required update.
