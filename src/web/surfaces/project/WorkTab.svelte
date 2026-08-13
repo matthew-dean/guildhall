@@ -951,7 +951,7 @@
               <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
               <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
                 {setupInboxItem?.kind === 'required_migration'
-                  ? 'Migrate project'
+                  ? 'Review project update'
                   : setupInboxItem?.kind === 'workspace_import_pending' || setupInboxItem?.kind === 'import_draft_queue'
                     ? 'Review import'
                     : 'Open setup'}

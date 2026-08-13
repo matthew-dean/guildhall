@@ -1518,7 +1518,7 @@ describe('WorkTab', () => {
     })
 
     expect(screen.getByText('Move project state into the new layout before Guildhall can update it.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /migrate project/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /review project update/i })).toBeInTheDocument()
     expect(screen.queryByText(/No tasks yet.*New request/i)).not.toBeInTheDocument()
   })
 

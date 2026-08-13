@@ -985,7 +985,7 @@
     runStopSummary?.stopReason === 'awaiting_human'
       ? primaryAction?.buttonLabel ?? startReadinessActionLabel(startReadiness)
       : runStopSummary?.stopReason === 'required_migration_pending'
-        ? 'Migrate project'
+        ? 'Review project update'
       : runStopSummary?.stopReason === 'blocked_only'
         ? 'Open Overview'
         : null,
@@ -1505,7 +1505,7 @@
                   : runControlPauses
                   ? (pausedBlockedControl ? 'Pause project processing' : runMode === 'one_task' ? 'Pause one-step run' : 'Pause')
                   : requiredMigrationBlocked
-                  ? 'Migrate project'
+                  ? 'Review project update'
                   : (startDisabledReason ?? runButtonIdleLabel)
               }
               title={
@@ -1514,7 +1514,7 @@
                 : runControlPauses
                   ? (pausedBlockedControl ? 'Pause Guildhall on this project' : runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause the run')
                   : requiredMigrationBlocked
-                  ? 'Migrate project'
+                  ? 'Review project update'
                   : (startDisabledReason ?? runButtonIdleLabel)
               }
             >
