@@ -25,6 +25,35 @@ async function expectMapScopeDisclosure(
   ).toBeVisible()
 }
 
+async function applyRequiredProjectUpdates(page: import('@playwright/test').Page): Promise<void> {
+  const gate = page.getByRole('region', { name: 'Project update required' })
+  const workList = page.getByRole('heading', { name: 'Work list' })
+  await expect(gate.or(workList)).toBeVisible()
+  if (await workList.isVisible()) return
+
+  await page.getByRole('button', { name: 'Review project update' }).click()
+  const modal = page.getByRole('dialog', { name: 'Migrate project' })
+  await expect(modal).toBeVisible()
+
+  for (let applied = 0; applied < 8; applied += 1) {
+    const apply = modal.getByRole('button', { name: 'Apply required updates' })
+    await expect(apply).toBeEnabled()
+    await apply.click()
+
+    const complete = modal.getByText('Migration complete.', { exact: true })
+    const continuing = modal.getByText('Update applied. Another project update is required.', { exact: true })
+    await expect(complete.or(continuing)).toBeVisible()
+    if (await complete.isVisible()) {
+      await modal.getByRole('contentinfo').getByRole('button', { name: 'Close' }).click()
+      await expect(modal).toHaveCount(0)
+      return
+    }
+    await expect(modal.getByText('Project update applied', { exact: true })).toBeVisible()
+  }
+
+  throw new Error('Expected the project update sequence to complete within eight migrations.')
+}
+
 const projectSurfaceRoutes = [
   {
     name: 'global needs-you',
@@ -424,30 +453,34 @@ test('flow audit protocol reconciles user job, visible state, and layout evidenc
 
   await page.setViewportSize({ width: 1114, height: 692 })
   await page.goto('/projects/narrative-harness/work')
+  await applyRequiredProjectUpdates(page)
+  await expect(page.getByRole('region', { name: 'Current work' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Open task' })).toBeVisible()
   await expectNoClippedContent(page, {
-    containerSelector: '.gh-ui-compat-card:has(.work-list-stack)',
-    itemSelector: '.work-list-row',
-    horizontalScrollSelector: '.work-list-scroll',
+    containerSelector: 'section.work-focus',
+    itemSelector: 'section.work-focus button',
   })
 
   await page.setViewportSize({ width: 900, height: 692 })
   await page.reload()
+  await expect(page.getByRole('region', { name: 'Current work' })).toBeVisible()
   await expectNoClippedContent(page, {
-    containerSelector: '.gh-ui-compat-card:has(.work-list-stack)',
-    itemSelector: '.work-list-row',
-    horizontalScrollSelector: '.work-list-scroll',
+    containerSelector: 'section.work-focus',
+    itemSelector: 'section.work-focus button',
   })
 
   await page.setViewportSize({ width: 390, height: 844 })
   await page.reload()
+  await expect(page.getByRole('region', { name: 'Current work' })).toBeVisible()
   await expectNoClippedContent(page, {
-    containerSelector: '.gh-ui-compat-card:has(.work-list-stack)',
-    itemSelector: '.work-list-row',
-    horizontalScrollSelector: '.work-list-scroll',
+    containerSelector: 'section.work-focus',
+    itemSelector: 'section.work-focus button',
   })
 
-  const state = await expectProjectFlowStateAgreement(page, 'narrative-harness')
+  const state = await readProjectFlowState(page, 'narrative-harness')
   expect(state.visibleTotal).toBeGreaterThan(0)
+  expect(state.focusTaskTitle).toBeTruthy()
+  await expect(page.getByRole('region', { name: 'Current work' })).toContainText(state.focusTaskTitle!)
   if (state.startCanStart) {
     expect(state.focusTaskId ?? state.firstRunnableId).not.toBeNull()
   }

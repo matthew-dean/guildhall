@@ -608,7 +608,7 @@
       const res = await projectFetch('/api/project/migrations/apply', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ includePrompt: true, migrationId: migration.id }),
+        body: JSON.stringify({ includeRequired: true }),
       }, activeProjectId)
       const body = (await res.json().catch(() => ({}))) as {
         error?: string
@@ -724,9 +724,10 @@
   const allTerminalStart = $derived(startReadiness?.code === 'all_terminal')
   const requiredMigrationBlocked = $derived(startReadiness?.code === 'required_migration_pending')
   const primaryRequiredMigration = $derived<ProjectMigrationStatusItem | null>(migrationStatus?.blocked?.[0] ?? null)
+  const migrationSequenceContinues = $derived(Boolean(migrationAppliedMessage && primaryRequiredMigration))
   const migrationProgressLabel = $derived.by(() => {
     switch (migrationApplyStage) {
-      case 'applying': return 'Applying migration'
+      case 'applying': return 'Applying required updates'
       case 'refreshing-project': return 'Refreshing project state'
       case 'refreshing-inbox': return 'Refreshing Needs You'
       case 'checking-status': return 'Checking remaining migrations'
@@ -1913,10 +1914,10 @@
         </ol>
       {:else if migrationAppliedMessage}
         <NoticeBand
-          tone="ok"
+          tone={migrationSequenceContinues ? 'neutral' : 'ok'}
           role="status"
           density="compact"
-          label="Migration complete"
+          label={migrationSequenceContinues ? 'Project update applied' : 'Migration complete'}
           title={migrationAppliedMessage}
         />
       {/if}
@@ -1952,7 +1953,7 @@
         onclick={() => { void applyRequiredMigration() }}
       >
         <Icon name="refresh-cw" size={16} />
-        {migrationApplyBusy ? 'Applying migration...' : 'Apply required migration'}
+        {migrationApplyBusy ? 'Applying updates...' : 'Apply required updates'}
       </Button>
     {/snippet}
   </Modal>

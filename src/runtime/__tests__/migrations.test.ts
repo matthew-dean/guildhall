@@ -4013,6 +4013,9 @@ describe('applyProjectMigrations', () => {
 
     expect(result.applied.some(item => item.id === '0.8.0/provider-config-globalization')).toBe(true)
     expect(result.skipped.some(item => item.id === '0.8.0/project-state-layout')).toBe(true)
+
+    const repair = await applyProjectMigrations({ projectRoot, includeRequired: true })
+    expect(repair.applied.some(item => item.id === '0.8.0/project-state-layout')).toBe(true)
   })
 
   it('applies selected prompt migrations and records them in the ledger', async () => {

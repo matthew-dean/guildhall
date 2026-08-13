@@ -58345,7 +58345,7 @@ the shared current action for an individual project.
 
 ### Finding: The rendered flow audit is gated before it audits the flow
 
-- [ ] The isolated Narrative Harness fixture requires a project migration, so
+- [x] The isolated Narrative Harness fixture requires a project migration, so
   the rendered under-one-minute Work test times out looking for a Work list.
   Its current assertion suite still describes the removed dense Work console
   instead of exercising the visible migration repair, then the concise Work
@@ -58358,9 +58358,40 @@ the shared current action for an individual project.
   test never took it and waited for deleted `.work-list-stack` markup. This is
   insufficient evidence for the goal's migration and cross-route agreement
   requirements.
-- Follow-up replay: applying the visible `Apply required migration` action
-  reports `Migration complete.`, yet returns to the same `Project update
-  required` gate after the modal closes. This is a shared project-refresh /
-  migration-status defect, not a test issue. Do not weaken the rendered audit
-  until the authoritative post-apply summary clears the gate or names the next
-  required update.
+- Follow-up replay, 2026-08-12: the previous one-at-a-time control required
+  more than eight owner clicks in the isolated fixture. The repair now applies
+  the explicit required set in one action and suppresses a persisted migration
+  gate when live migration status is clear. The rendered audit then reaches
+  the focused Current work handoff instead of the deleted dense Work list.
+
+### Repair: One explicit repair action clears the required-update set
+
+- [x] User job: when a project cannot run because Guildhall needs repairs, the
+  owner should understand that one project update is required, explicitly
+  approve it once, and either enter Work or see the single remaining repair.
+  A sequence of internally numbered migrations must not become a sequence of
+  owner decisions or clicks.
+- Contract Touch Decision: extend the project-migration apply command with an
+  explicit `includeRequired` approval and use it for the visible repair action.
+  Clear a persisted required-migration readiness record once the live migration
+  status says the required set is gone, before rebuilding the shared action
+  model. Considered but not touched: migration definitions, ledger format,
+  migration ordering, manual migrations, project/task schema, and run
+  readiness rules other than removing this obsolete persisted gate.
+  Schema Migration Decision: none; this changes command execution selection,
+  not persisted data. Required proof: unit coverage proves the command applies
+  required migrations only when explicitly approved; rendered replay proves
+  the Narrative Harness repair is one visible owner action and reaches Work.
+  Apply/revert: remove the request flag and the UI returns to the former
+  one-at-a-time flow without changing migration history.
+- Evidence, 2026-08-12: ProjectView coverage passes 68/68, including an
+  explicit `includeRequired` request, truthful next-update copy, and the
+  still-enabled follow-up action if a migration remains. The focused migration
+  selection assertion in `migrations.test.ts` passes: automatic migrations do
+  not apply required prompt work by default, but explicit
+  `includeRequired:true` does. The complete migrations suite currently has
+  three unrelated pre-existing failures in proof-path reconciliation fixtures;
+  they are not hidden by this repair. The rendered Narrative Harness flow
+  audit passes in Chromium: it approves the repair once, reaches Current work,
+  checks API focus/title agreement, and verifies no clipping at 1114x692,
+  900x692, and 390x844.

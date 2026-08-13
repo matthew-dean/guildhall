@@ -5961,11 +5961,12 @@ export async function getProjectMigrationStatus(input: { projectRoot: string; on
 
 function shouldApplyMigration(
   migration: ProjectMigrationDefinition,
-  input: { includePrompt?: boolean; only?: string[] },
+  input: { includePrompt?: boolean; includeRequired?: boolean; only?: string[] },
 ): boolean {
   if (migration.safety === 'manual') return false
   if (input.only?.includes(migration.id)) return true
   if (input.only && input.only.length > 0) return false
+  if (migration.requirement === 'required' || migration.safety === 'required') return input.includeRequired === true
   if (migration.safety === 'automatic') return true
   return input.includePrompt === true && migration.safety === 'prompt'
 }
@@ -5980,6 +5981,7 @@ async function appendLedgerRecord(projectRoot: string, record: MigrationLedgerRe
 export async function applyProjectMigrations(input: {
   projectRoot: string
   includePrompt?: boolean
+  includeRequired?: boolean
   only?: string[]
   appVersion?: string
   now?: () => Date

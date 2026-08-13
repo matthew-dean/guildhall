@@ -471,7 +471,7 @@ describe('project re-intake endpoints', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ groupIds: ['evidence-work-graph'] }),
     }))
-    expect(apply.status).toBe(200)
+    expect(apply.status, await apply.clone().text()).toBe(200)
     const tasks = await readTasks(tmpDir)
     expect(tasks.find(task => task.id === 'task-039')).toMatchObject({
       title: 'Build AlertDialog',
@@ -968,7 +968,7 @@ describe('POST /api/project/start', () => {
     const apply = await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ includePrompt: true, migrationId: '0.8.0/project-state-layout' }),
+      body: JSON.stringify({ includeRequired: true, migrationId: '0.8.0/project-state-layout' }),
     }))
     expect(apply.status).toBe(200)
     const applyBody = await apply.json() as Record<string, any>
@@ -978,6 +978,11 @@ describe('POST /api/project/start', () => {
     const after = await app.fetch(new Request(scoped('/api/project/migrations')))
     const afterBody = await after.json() as Record<string, any>
     expect(afterBody.blocked).toEqual([])
+
+    const repairedProject = await app.fetch(new Request(scoped('/api/project?surface=work')))
+    expect(repairedProject.status).toBe(200)
+    const repairedProjectBody = await repairedProject.json() as { startReadiness?: { code?: string } }
+    expect(repairedProjectBody.startReadiness?.code).not.toBe('required_migration_pending')
   })
 
   it('leaves the inbox empty until the saved attention projection is materialized', async () => {

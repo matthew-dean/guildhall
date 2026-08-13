@@ -8016,11 +8016,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // execution. Compact project reads must expose that exact gate first so a
     // visible Review/Resume command cannot lead to an inevitable 409.
     const requiredMigrationBlocker = await startBlockerForRequiredMigrations(project.path)
+    // The saved projection can still carry yesterday's migration gate after
+    // the repair endpoint has cleared the live required set. Never let that
+    // stale persisted blocker recreate a completed repair in every surface.
+    const persistedStartReadiness = !requiredMigrationBlocker && summary.startReadiness?.code === 'required_migration_pending'
+      ? undefined
+      : summary.startReadiness
     const responseStartReadiness = requiredMigrationBlocker ?? repositoryFollowupStartReadinessFromReleaseReadiness(
       compactReleaseReadiness,
       detailResponseTasks as Array<Record<string, unknown>>,
-      summary.startReadiness,
-    ) ?? summary.startReadiness
+      persistedStartReadiness,
+    ) ?? persistedStartReadiness
     const responseActionModel = responseStartReadiness !== summary.startReadiness
       ? buildProjectActionModel({
           startReadiness: responseStartReadiness,
@@ -9541,6 +9547,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       const body = await c.req.json().catch(() => ({})) as {
         includePrompt?: boolean
+        includeRequired?: boolean
         migrationId?: string
       }
       // Capture the currently open migration records before applying them so
@@ -9554,6 +9561,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const result = await applyProjectMigrations({
         projectRoot: project.path,
         includePrompt: body.includePrompt === true,
+        includeRequired: body.includeRequired === true,
         ...(body.migrationId ? { only: [body.migrationId] } : {}),
       })
       if (result.applied.length > 0) {

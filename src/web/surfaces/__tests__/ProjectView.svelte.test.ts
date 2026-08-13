@@ -774,8 +774,7 @@ describe('ProjectView', () => {
       if (url.pathname === '/api/project/migrations/apply') {
         expect(init?.method).toBe('POST')
         expect(JSON.parse(String(init?.body))).toMatchObject({
-          includePrompt: true,
-          migrationId: '0.8.0/project-state-layout',
+          includeRequired: true,
         })
         return json({
           ok: true,
@@ -815,7 +814,7 @@ describe('ProjectView', () => {
     expect(screen.queryByText('memory/')).not.toBeInTheDocument()
     expect(screen.queryByText('.guildhall/')).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /apply required migration/i }))
+    await user.click(screen.getByRole('button', { name: /apply required updates/i }))
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -824,7 +823,10 @@ describe('ProjectView', () => {
       )
     })
     expect(await screen.findByText('Update applied. Another project update is required.')).toBeInTheDocument()
+    expect(screen.getByText('Project update applied', { exact: true })).toBeInTheDocument()
+    expect(screen.queryByText('Migration complete', { exact: true })).toBeNull()
     expect(screen.getByText('Move task questions into owner-input bounded chat')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /apply required updates/i })).toBeEnabled()
   })
 
   it('uses one migration control outside Overview instead of replaying a stale stop notice', async () => {
@@ -928,9 +930,9 @@ describe('ProjectView', () => {
 
     await user.click(screen.getByRole('button', { name: /update project/i }))
     await screen.findByRole('dialog', { name: /migrate project/i })
-    await user.click(screen.getByRole('button', { name: /apply required migration/i }))
+    await user.click(screen.getByRole('button', { name: /apply required updates/i }))
 
-    expect(await screen.findByText('Applying migration')).toBeInTheDocument()
+    expect(await screen.findByText('Applying required updates')).toBeInTheDocument()
     expect(screen.getByText('Do not stop Guildhall until this finishes.')).toBeInTheDocument()
     expect(screen.queryByText('Migration complete.')).toBeNull()
     expect(screen.getAllByRole('button', { name: 'Close' }).every(button => button.hasAttribute('disabled'))).toBe(true)
