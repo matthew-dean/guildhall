@@ -58234,3 +58234,22 @@ the shared current action for an individual project.
   `stale:false`; the 1280x720 Activity route opens directly to reverse-
   chronological history, has no duplicate current-status block or horizontal
   overflow, and resolves the raw `task-091` event reference to its task title.
+
+### Installed replay: Work selection remains the user's choice
+
+- [x] In the action-driven Work list, show only the current scoped items and
+  let a deliberate item selection remain selected through the live refresh that
+  follows route navigation. The inspector must expose a single next step rather
+  than a second control dashboard.
+- Contract Touch Decision: no new contract change. This records installed
+  proof for the existing route-authoritative selection behavior. Considered but
+  unchanged: task ordering, route format, action ranking, task state, and run
+  mutation. Schema Migration Decision: none.
+- Evidence, 2026-08-12: after the fresh installed restart above, Narrative
+  Harness `/work?view=queue` at 1280x720 showed four current items with stable
+  `NAR-*` keys and no filter/control dashboard. Selecting `NAR-092`, waiting
+  through the live refresh, and opening its non-mutating inspector preserved
+  `task=task-092`, kept that row active, displayed one `Open task` action, and
+  had no horizontal overflow. Opening the task record showed one project-level
+  handoff, `Open Work`, back to the shared ready-work decision; no mutation was
+  invoked.
