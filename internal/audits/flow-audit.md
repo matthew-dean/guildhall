@@ -58342,3 +58342,19 @@ the shared current action for an individual project.
   one action, retains only the explicit `1 more decision` link, and has no
   horizontal overflow. In particular, Looma's raw multi-file task title is not
   shown. No user-project mutation was invoked.
+
+### Finding: The rendered flow audit is gated before it audits the flow
+
+- [ ] The isolated Narrative Harness fixture requires a project migration, so
+  the rendered under-one-minute Work test times out looking for a Work list.
+  Its current assertion suite still describes the removed dense Work console
+  instead of exercising the visible migration repair, then the concise Work
+  flow. Rebuild this proof around the owner path rather than bypassing the
+  gate or retaining obsolete layout expectations.
+- Evidence, 2026-08-12: `pnpm exec playwright test
+  tests/rendered-ui/project-flow.spec.ts --grep "flow audit protocol"` failed
+  after 30 seconds on the fixture's `Project update required` screen. The
+  visible screen correctly gave one `Review project update` action, but the
+  test never took it and waited for deleted `.work-list-stack` markup. This is
+  insufficient evidence for the goal's migration and cross-route agreement
+  requirements.
