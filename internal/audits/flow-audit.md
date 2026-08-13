@@ -58185,3 +58185,18 @@ the shared current action for an individual project.
   message and the approval command still available. `pnpm typecheck` and
   `git diff --check` pass. Installed replay remains pending because Looma's
   current required project update intentionally gates its task approvals.
+
+### Repair: Release agrees when ready work needs no owner attention
+
+- [x] Label a release action with shared `ready_work` as `Ready to continue`,
+  not `What needs your attention`.
+- Contract Touch Decision: touched only Release's presentation of the existing
+  shared action code. Considered but unchanged: release verdict, release
+  readiness, task routing, action ranking, and shipping mutation. Schema
+  Migration Decision: none.
+- Evidence, 2026-08-12: focused ReleaseTab coverage passes 29/29 with a
+  ready-work regression. `pnpm typecheck` and `pnpm build` pass. After a fresh
+  installed restart with `/api/stale-server` `stale:false`, Narrative Harness
+  Release at 1280x720 showed its milestone, `5/9 done`, `Ready to continue`,
+  `NAR-091`, `Open Work`, and one optional `Inspect release details` action in
+  the first viewport with no horizontal overflow.

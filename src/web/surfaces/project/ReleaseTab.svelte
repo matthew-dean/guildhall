@@ -416,6 +416,7 @@
   const ownerAction = $derived(projectDetail?.actionModel?.primaryAction ?? null)
   const ownerActionTaskKey = $derived(ownerAction?.taskId ? taskDisplayKey(ownerAction.taskId, [], activeProjectId) : null)
   const hasOwnerAction = $derived(Boolean(ownerAction?.href && ownerAction?.buttonLabel))
+  const ownerActionHeading = $derived(ownerAction?.code === 'ready_work' ? 'Ready to continue' : 'What needs your attention')
 
   const sectionCopy = $derived(
     section === 'criteria'
@@ -529,7 +530,7 @@
         >
           <div class="release-action">
             <div>
-              <p class="release-action-label">{hasOwnerAction ? 'What needs your attention' : 'Release status'}</p>
+              <p class="release-action-label">{hasOwnerAction ? ownerActionHeading : 'Release status'}</p>
               <h3>{hasOwnerAction ? ownerAction?.label : verdictTitle}</h3>
               {#if ownerAction?.taskLabel}
                 <p class="release-action-task" title={ownerAction.taskLabel}>

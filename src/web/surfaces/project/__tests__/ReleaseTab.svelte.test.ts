@@ -138,6 +138,38 @@ describe('ReleaseTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?task=task-review-first')
   })
 
+  it('does not call ready work owner attention on the release route', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/project/spine')) return json({ spine: null })
+      return json({
+        ...readyPayload,
+        release: { id: 'stage-2', label: 'Stage 2', state: 'active' },
+      })
+    }))
+
+    render(ReleaseTab, {
+      props: {
+        projectDetail: {
+          actionModel: {
+            primaryAction: {
+              label: 'Work ready to resume',
+              taskId: 'task-ready',
+              taskLabel: 'Continue the selected task.',
+              buttonLabel: 'Open Work',
+              href: '/work?task=task-ready',
+              tone: 'accent',
+              code: 'ready_work',
+            },
+          },
+        },
+      },
+    })
+
+    expect(await screen.findByText('Ready to continue')).toBeTruthy()
+    expect(screen.queryByText('What needs your attention')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeTruthy()
+  })
+
   it('ignores stale release and spine responses after the active project changes', async () => {
     let resolveOldRelease!: (response: Response) => void
     let resolveOldSpine!: (response: Response) => void
