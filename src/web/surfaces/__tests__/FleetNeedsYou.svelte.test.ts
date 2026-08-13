@@ -61,6 +61,9 @@ describe('FleetNeedsYou', () => {
     await screen.findByText('Fair Labor License')
     expect(screen.getByText('Review imported notes')).toBeTruthy()
     expect(screen.getByText('Provider warning')).toBeTruthy()
+    const summary = screen.getByLabelText('Needs-you summary')
+    expect(summary.textContent).toContain('2 projects need a decision.')
+    expect(summary.textContent).not.toContain('total item')
     expect(screen.queryByRole('button', { name: /^queue$/i })).toBeNull()
     expect(screen.queryByText('/repo/looma-knit')).toBeNull()
 

@@ -102,7 +102,6 @@
     }
   }
 
-  const totalItems = $derived(groups.reduce((sum, group) => sum + group.items.length, 0))
   const projectCount = $derived(groups.filter(group => group.items.length > 0).length)
 
   setTimeout(() => {
@@ -145,7 +144,7 @@
     </div>
   {:else}
     <section class="summary" aria-label="Needs-you summary">
-      {projectCount} project{projectCount === 1 ? '' : 's'} need a decision · {totalItems} total item{totalItems === 1 ? '' : 's'}
+      {projectCount} project{projectCount === 1 ? '' : 's'} need a decision.
     </section>
 
     <div class="groups">

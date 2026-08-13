@@ -57,7 +57,7 @@ function ownerActionItem(project: FleetAttentionProject): FleetAttentionItem | n
   const primaryRequiresOwner = action?.tone === 'warn' || action?.tone === 'danger'
   if (!primaryRequiresOwner && !ownerInput?.active) return null
 
-  const label = action?.taskLabel?.trim() || action?.label?.trim() || ownerInput?.label?.trim() || 'Project needs your decision'
+  const label = action?.label?.trim() || action?.taskLabel?.trim() || ownerInput?.label?.trim() || 'Project needs your decision'
   const detail = action?.detail?.trim() || action?.label?.trim() || ownerInput?.detail?.trim() || 'Open the project to continue.'
   return {
     id: `project-action:${project.id}:${action?.code ?? 'owner-input'}:${action?.taskId ?? ''}`,

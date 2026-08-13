@@ -66,6 +66,23 @@ describe('fleet attention summary', () => {
     })])
   })
 
+  it('uses the shared decision label before a raw task title', () => {
+    const groups = buildFleetAttentionGroups([project({
+      actionModel: {
+        primaryAction: {
+          code: 'owner_review_required',
+          tone: 'warn',
+          label: 'Review a spec',
+          taskLabel: 'Keep docs/component-roadmap.md synchronized as migration status changes.',
+          buttonLabel: 'Review next spec',
+          href: '/work?task=task-014',
+        },
+      },
+    })])
+
+    expect(groups[0]?.items[0]).toMatchObject({ title: 'Review a spec', buttonLabel: 'Review next spec' })
+  })
+
   it('keeps saved setup attention when the project has no current action', () => {
     const commerce = project({ id: 'commerce-project', fleetAttention: {
       freshness: 'current',

@@ -58324,3 +58324,21 @@ the shared current action for an individual project.
   Looma + Knit `guildhall stop && guildhall start` completed with exit status
   zero; `/api/stale-server` immediately reported the new installed artifact
   and `stale:false`. The service remains running at `http://localhost:7777`.
+
+### Repair: Fleet queue shows choices, not inert totals
+
+- [x] Keep the one-current-decision-per-project queue, remove its aggregate
+  item total, and prefer the shared decision label over a copied raw task
+  title. Additional decisions remain reachable only through a project's
+  explicit `more decisions` link.
+- Contract Touch Decision: Fleet Needs You presentation only. Considered but
+  unchanged: canonical fleet attention ranking, project count, API response,
+  routing, and task state. Schema Migration Decision: none.
+- Evidence, 2026-08-12: focused fleet attention and Fleet Needs You coverage
+  passes 9/9; `pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and
+  `pnpm dev:install` pass. After a fresh installed restart with
+  `/api/stale-server` reporting `stale:false`, the 1280px fleet queue reads
+  `4 projects need a decision`, shows each project's shared decision label and
+  one action, retains only the explicit `1 more decision` link, and has no
+  horizontal overflow. In particular, Looma's raw multi-file task title is not
+  shown. No user-project mutation was invoked.
