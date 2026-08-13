@@ -186,7 +186,7 @@ help_summary: |
 - [x] Keep the intake history attached to the materialized task in Thread.
 - [x] Add an idempotent owner-approved release-creation boundary with explicit
   task membership, then select the created release.
-- [ ] Make shipped Overview offer a calm `Start next release` action.
+- [x] Make shipped Overview offer a calm `Start next release` action.
 - [ ] Make project summary state distinguish a shipped historical release from
   newly active unscoped shaping work.
 - [ ] Replace the repetitive two-question-per-domain closeout with progressive

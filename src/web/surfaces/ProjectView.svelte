@@ -1762,6 +1762,7 @@
                   {inboxError}
                   {activeProjectId}
                   onMigrate={openMigrationModal}
+                  onStartNextRelease={newTask}
                 />
               {/await}
             {/if}

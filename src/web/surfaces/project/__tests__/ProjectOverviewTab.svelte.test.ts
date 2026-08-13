@@ -144,7 +144,8 @@ describe('ProjectOverviewTab owner decision', () => {
     expect(onMigrate).toHaveBeenCalledTimes(1)
   })
 
-  it('ends a shipped release without inventing more owner work', () => {
+  it('ends a shipped release without inventing urgency but can start the next release', async () => {
+    const onStartNextRelease = vi.fn()
     render(ProjectOverviewTab, {
       detail: detail({
         releaseReadiness: {
@@ -154,11 +155,14 @@ describe('ProjectOverviewTab owner decision', () => {
       }) as any,
       projectTicker: ticker,
       activeProjectId: 'looma-knit',
+      onStartNextRelease,
     })
 
     expect(screen.getByRole('heading', { name: 'Current release' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Shipped' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Review spec' })).not.toBeInTheDocument()
     expect(screen.getByText(/There is nothing you need to do here\./)).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Start next release' }))
+    expect(onStartNextRelease).toHaveBeenCalledTimes(1)
   })
 })

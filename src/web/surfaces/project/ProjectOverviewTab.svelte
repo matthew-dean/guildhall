@@ -12,6 +12,7 @@
     detail: ProjectDetail
     activeProjectId?: string | null
     onMigrate?: () => void | Promise<void>
+    onStartNextRelease?: () => void
   }
 
   type DecisionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
@@ -20,6 +21,7 @@
     detail,
     activeProjectId = null,
     onMigrate,
+    onStartNextRelease,
   }: Props = $props()
 
   const displayPath = $derived(formatUserPath(detail.path))
@@ -145,6 +147,10 @@
             {/if}
             {nextAction.button}
           </Button>
+        </div>
+      {:else}
+        <div class="decision-actions">
+          <Button variant="secondary" onclick={onStartNextRelease}>Start next release</Button>
         </div>
       {/if}
     </div>
