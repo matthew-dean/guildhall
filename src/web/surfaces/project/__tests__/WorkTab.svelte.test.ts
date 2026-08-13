@@ -329,6 +329,27 @@ describe('WorkTab', () => {
     expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Gamma task')
   })
 
+  it('does not replace an owner-selected work item when a refresh reorders the list', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue')
+    path.value = '/projects/looma-knit/work?view=queue'
+    const alpha = task({ id: 'task-alpha', title: 'Alpha task', status: 'ready' })
+    const beta = task({ id: 'task-beta', title: 'Beta task', status: 'ready' })
+    const rendered = render(WorkTab, { props: { detail: detail([alpha, beta]) } })
+
+    await userEvent.click(await screen.findByRole('button', { name: /inspect work alpha task/i }))
+    expect(path.href).toBe('/projects/looma-knit/work?view=queue&task=task-alpha')
+    expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Alpha task')
+
+    await rendered.rerender({ detail: detail([beta, { ...alpha, updatedAt: '2026-05-19T11:00:00.000Z' }]) })
+
+    await waitFor(() => {
+      expect(path.href).toBe('/projects/looma-knit/work?view=queue&task=task-alpha')
+      expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Alpha task')
+      expect(screen.getByRole('button', { name: /inspect work alpha task/i })).toHaveAttribute('aria-current', 'true')
+      expect(screen.getByRole('button', { name: /inspect work beta task/i })).not.toHaveAttribute('aria-current', 'true')
+    })
+  })
+
   it('opens the routed work item from the task query and shows the matching work slice', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-smoke-test')
     path.value = '/projects/looma-knit/work?task=task-smoke-test'

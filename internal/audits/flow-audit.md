@@ -58518,3 +58518,23 @@ the shared current action for an individual project.
   mutating the active Narrative Harness project. The stock rendered fixture
   deliberately starts in paused/spec-review state, so it cannot truthfully
   provide that replay today.
+
+### Audit: Work selection survives a refresh without choosing for the owner
+
+- [x] User job: in the Work list, after selecting an item, the owner must
+  remain on that exact item while Guildhall refreshes or reorders data. A
+  refresh may update the row but must never choose a different task or make
+  the list visibly jump to a new selection.
+- Contract Touch Decision: none. This audit covers route-owned selection and
+  presentational refresh behavior only; task ordering, task state, summary
+  ranking, persistence, and selection-route schema are unchanged. Required
+  proof: a rendered rerender reverses task order after a click and retains the
+  original selected inspector and `?task=` route. Apply/revert: test-only
+  unless the regression reveals a writer that changes selection.
+- Evidence, 2026-08-12: WorkTab coverage passes 51/51, including a queue
+  replay where the owner selects Alpha, the refresh reverses Alpha and Beta,
+  and Alpha remains the sole `aria-current` row, the selected inspector, and
+  the `?task=task-alpha` route. This establishes that a presentational data
+  reorder cannot select Beta for the owner. Remaining live check: reproduce
+  any delayed reselection against Looma + Knit only if it still occurs after
+  the installed-app refresh; no user project was mutated for this replay.
