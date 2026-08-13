@@ -58691,3 +58691,31 @@ the shared current action for an individual project.
   restart, the installed service reports `stale:false`; live Home at 1280px
   has no horizontal overflow and the Narrative Harness card says `Work is
   ready to resume.` exactly once.
+
+### Repair: Needs You only shows owner decisions, never the project archive
+
+- [x] User job: opening `Needs you` answers one question immediately: is a
+  decision waiting for me? When none is waiting, the owner sees that answer
+  and one route back to current work, then leaves. Historical migrations,
+  optional cleanup, and already-verified checklists must not become an
+  unbounded pseudo-inbox.
+- Finding, 2026-08-12: live Narrative Harness `Needs you` stated no alerts
+  were waiting, then rendered an optional nudge and 50 long history cards
+  (with more hidden behind the server). This is exactly the wall-of-text and
+  false-urgency failure the product must stop producing.
+- Contract Touch Decision: `NeedsYouTab` will keep active owner decisions as
+  its only default content and remove optional/history inventories from the
+  route's product surface. Considered but unchanged: inbox classification,
+  action routing, history persistence/API payload, review state, project
+  summary, and schemas. Schema Migration Decision: none. Required proof:
+  rendered regression with active decisions and inactive history; installed
+  Narrative Harness route contains no historical migration/checklist cards.
+  Apply/revert: restore the historical inventory sections if this dedicated
+  decision surface is later replaced with a separate, opt-in audit tool.
+- Evidence, 2026-08-12: `InboxTab.svelte.test.ts` passes 11/11, including
+  active owner decisions, resolved history, and optional-cleanup exclusions.
+  `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `pnpm dev:install`
+  pass. After a fresh Looma + Knit restart, the installed service reports
+  `stale:false`; the live Narrative Harness route now contains only `Nothing
+  needs your decision` and `Open current work`, with no optional nudge,
+  migration/history archive, or horizontal overflow at 1280px.

@@ -42,7 +42,7 @@ describe('InboxTab', () => {
     cleanup()
   })
 
-  it('loads alert-owned needs-you data, links Threads for conversations, and shows optional nudges separately', async () => {
+  it('shows only owner decisions and omits optional cleanup from Needs you', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/project/inbox') {
@@ -83,20 +83,14 @@ describe('InboxTab', () => {
     render(InboxTab)
 
     await screen.findByText('Verify bootstrap')
-    expect(screen.getByText('Active conversations now live in Threads.')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open Threads' })).toHaveAttribute('href', '/projects/looma-knit/thread')
-    expect(screen.getByText('Project alerts')).toBeInTheDocument()
-    expect(screen.getByText('Optional nudges')).toBeInTheDocument()
-    expect(screen.getByText('Fill acceptance criteria')).toBeInTheDocument()
-    expect(screen.getByText(/Safe defaults are active/)).toBeInTheDocument()
-    expect(screen.getByText(/Review them only if you want to tune autonomy, recovery, or review strictness/)).toBeInTheDocument()
+    expect(screen.getByText('Your decisions')).toBeInTheDocument()
+    expect(screen.queryByText('Optional nudges')).not.toBeInTheDocument()
+    expect(screen.queryByText('Fill acceptance criteria')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Safe defaults are active/)).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: 'Verify bootstrap' }))
     expect(path.value).toBe('/projects/looma-knit/settings/ready')
 
-    path.value = '/projects/looma-knit/notifications'
-    await userEvent.click(screen.getByRole('button', { name: 'Fill acceptance criteria' }))
-    expect(window.location.pathname + window.location.search).toBe('/projects/looma-knit/task/task-migration?tab=spec')
   })
 
   it('lets safe agent-handled inbox items run autonomously and refreshes afterward', async () => {
@@ -222,7 +216,7 @@ describe('InboxTab', () => {
     expect(screen.getByText('Delivery step · Import review flow')).toBeInTheDocument()
   })
 
-  it('counts the visible history rows instead of only actionable rows', async () => {
+  it('does not render completed history on the decision surface', async () => {
     render(InboxTab, {
       items: [
         {
@@ -269,12 +263,13 @@ describe('InboxTab', () => {
       loaded: true,
     })
 
-    expect(screen.getByText('(3 items)')).toBeInTheDocument()
-    expect(screen.getByText('Migrated')).toBeInTheDocument()
-    expect(screen.getByText('Recent history')).toBeInTheDocument()
+    expect(screen.getByText('Verify bootstrap')).toBeInTheDocument()
+    expect(screen.queryByText('Migrated')).not.toBeInTheDocument()
+    expect(screen.queryByText('Recent history')).not.toBeInTheDocument()
+    expect(screen.queryByText('Levers')).not.toBeInTheDocument()
   })
 
-  it('does not claim the whole project is unblocked when only optional inbox rows remain', async () => {
+  it('returns the owner to current work when only optional inbox rows remain', async () => {
     render(InboxTab, {
       items: [
         {
@@ -290,11 +285,12 @@ describe('InboxTab', () => {
       loaded: true,
     })
 
-    expect(screen.getByText('No project alerts are waiting here. The remaining items are optional cleanup or recent history.')).toBeInTheDocument()
-    expect(screen.queryByText(/Nothing is blocked right now/i)).not.toBeInTheDocument()
+    expect(screen.getByText('Nothing needs your decision')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open current work' })).toHaveAttribute('href', '/projects/looma-knit/work')
+    expect(screen.queryByText('Levers')).not.toBeInTheDocument()
   })
 
-  it('uses compact utility-panel groups instead of the old wide inbox table', async () => {
+  it('uses compact owner-decision rows instead of the old inbox archive', async () => {
     const items = [
       {
         id: 'import',
@@ -323,9 +319,10 @@ describe('InboxTab', () => {
       loaded: true,
     })
 
-    expect(container.querySelectorAll('.utility-panel')).not.toHaveLength(0)
-    expect(screen.getByText('Project alerts')).toBeInTheDocument()
-    expect(screen.getByText('Recent history')).toBeInTheDocument()
+    expect(container.querySelectorAll('.inbox-row')).toHaveLength(1)
+    expect(screen.getByText('Your decisions')).toBeInTheDocument()
+    expect(screen.queryByText('Recent history')).not.toBeInTheDocument()
+    expect(screen.queryByText('Required migration')).not.toBeInTheDocument()
     expect(screen.getByText('Review import →')).toBeInTheDocument()
   })
 
@@ -367,12 +364,13 @@ describe('InboxTab', () => {
     expect(screen.getByText('Let Guildhall inspect the repo')).toBeInTheDocument()
   })
 
-  it('shows an empty caught-up state when no inbox items remain', async () => {
+  it('shows a quick return to work when no owner decisions remain', async () => {
     render(InboxTab, {
       items: [],
       loaded: true,
     })
 
-    expect(screen.getByText('All caught up — nothing is waiting on you right now.')).toBeInTheDocument()
+    expect(screen.getByText('Nothing needs your decision')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open current work' })).toBeInTheDocument()
   })
 })
