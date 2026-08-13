@@ -58909,3 +58909,27 @@ the shared current action for an individual project.
   Settings is one 1280x720 viewport containing only `Settings` and its seven
   named destinations. It does not load the Ready/bootstrap or Local runtime
   report until the owner enters that specific section; browser logs are empty.
+
+### Repair: The shared current-work packet names the current task
+
+- [x] User job: when Guildhall says work is ready, every owner surface names
+  both the stable work key and the actual task title. A generic readiness label
+  describes state; it must never replace the identity of the work to resume.
+- Finding, 2026-08-12: live Narrative Harness `/api/project` correctly
+  returned `task-091` with title `Present draft review evaluation and
+  provenance`, but its shared `startReadiness.focusTaskTitle` and action-model
+  task label both said `Work ready to resume`. Overview therefore made an
+  owner read a generic status twice instead of showing the task itself.
+- Contract Touch Decision: canonicalize a response readiness focus title from
+  the task in that same compact response snapshot before rebuilding the shared
+  action model. Considered but not touched: readiness ranking, task state,
+  persisted project summary, release scope, task routing, and schemas. Schema
+  Migration Decision: none. Required proof: the API, Overview, Work, Thread,
+  and Release retain the same task id/title pair. Apply/revert: read-model
+  correction only; no task data changes.
+- Evidence, 2026-08-12: `pnpm typecheck` and the read-boundary regression
+  pass. After `pnpm build`, `pnpm dev:install`, and restart, the installed
+  Narrative Harness service reported `stale:false`. Its API and Overview,
+  Work, Thread, and Release routes all show `NAR-091` paired with `Present
+  draft review evaluation and provenance` at 1280x720, with no browser errors
+  or horizontal overflow.

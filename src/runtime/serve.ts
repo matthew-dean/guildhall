@@ -5824,6 +5824,21 @@ function repositoryFollowupStartReadinessFromReleaseReadiness(
   }
 }
 
+function canonicalizeStartReadinessTaskTitle<T extends {
+  focusTaskId?: string
+  focusTaskTitle?: string
+} | null | undefined>(
+  readiness: T,
+  tasks: Array<Record<string, unknown>>,
+): T {
+  const taskId = readiness?.focusTaskId?.trim()
+  if (!taskId) return readiness
+  const task = tasks.find(candidate => candidate.id === taskId)
+  const title = typeof task?.title === 'string' ? task.title.trim() : ''
+  if (!title || title === readiness?.focusTaskTitle) return readiness
+  return { ...readiness, focusTaskTitle: title } as T
+}
+
 function repositoryFollowupShellMessage(state: string | undefined, count: number): string {
   if (count > 1) return `Release blocked by ${count} repository issues.`
   switch (state) {
@@ -8022,11 +8037,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const persistedStartReadiness = !requiredMigrationBlocker && summary.startReadiness?.code === 'required_migration_pending'
       ? undefined
       : summary.startReadiness
+    const canonicalPersistedStartReadiness = canonicalizeStartReadinessTaskTitle(
+      persistedStartReadiness,
+      detailResponseTasks as Array<Record<string, unknown>>,
+    )
     const responseStartReadiness = requiredMigrationBlocker ?? repositoryFollowupStartReadinessFromReleaseReadiness(
       compactReleaseReadiness,
       detailResponseTasks as Array<Record<string, unknown>>,
-      persistedStartReadiness,
-    ) ?? persistedStartReadiness
+      canonicalPersistedStartReadiness,
+    ) ?? canonicalPersistedStartReadiness
     const responseActionModel = responseStartReadiness !== summary.startReadiness
       ? buildProjectActionModel({
           startReadiness: responseStartReadiness,

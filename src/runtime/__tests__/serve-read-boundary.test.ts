@@ -14,6 +14,7 @@ import {
   projectStatePath,
   promoteProjectStateDatabaseAuthority,
   replaceProjectStateDatabaseAttentionRecords,
+  updateProjectStateDatabaseSummary,
   upsertTaskRuntimeState,
   writeProjectStateJsonAsync,
   writeProjectStateTextAsync,
@@ -25,6 +26,7 @@ import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import { writeProjectSummaryProjection } from '../project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from '../project-orientation-snapshot.js'
 import { refreshProjectDeliveryReadProjection } from '../delivery-read-projection.js'
+import { applyProjectMigrations } from '../migrations.js'
 import * as projectStateBoundary from '../project-state-boundary.js'
 
 /**
@@ -739,6 +741,35 @@ describe('GET route read boundaries', () => {
     expect(boundedDetailReadiness).toEqual(serviceProject.startReadiness)
     expect(body.startReadiness.focusTaskTitle).toBe('A task with a read-time ownership mismatch')
     expect(body.actionModel).toEqual(serviceProject.actionModel)
+  })
+
+  it('canonicalizes ready-work identity from the task snapshot before sharing it with owner surfaces', async () => {
+    await applyProjectMigrations({ projectRoot: tmpDir, includeRequired: true })
+    const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
+    updateProjectStateDatabaseSummary(tasksPath, summary => ({
+      ...summary,
+      startReadiness: {
+        ...(summary.startReadiness ?? {}),
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-boundary',
+        focusTaskTitle: 'Work ready to resume',
+      },
+    }))
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project?surface=overview&compact=true')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(body.startReadiness).toMatchObject({
+      focusTaskId: 'task-boundary',
+      focusTaskTitle: 'A task with a read-time ownership mismatch',
+    })
+    expect(body.actionModel.primaryAction).toMatchObject({
+      taskId: 'task-boundary',
+      taskLabel: 'A task with a read-time ownership mismatch',
+    })
   })
 
   it('keeps the structural projection usable after a dynamic task overlay write', async () => {
