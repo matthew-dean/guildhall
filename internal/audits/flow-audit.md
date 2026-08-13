@@ -58719,3 +58719,23 @@ the shared current action for an individual project.
   `stale:false`; the live Narrative Harness route now contains only `Nothing
   needs your decision` and `Open current work`, with no optional nudge,
   migration/history archive, or horizontal overflow at 1280px.
+
+### Finding: The rendered matrix still certifies removed dashboards
+
+- [ ] User job: the rendered UI matrix must prove the owner can orient and act
+  on the current product, not force the product back toward removed dashboards
+  by asserting legacy headings, tab bars, counters, and archive rows.
+- Evidence, 2026-08-12: `pnpm test:ui` completed with 14 failures. Several
+  assert intentionally removed surfaces (`Do this next`, `Coordinator
+  timeline`, `Tasks done`, work-list controls, and legacy project-card grid).
+  Others leak migration state between shared fixture replays, so an expected
+  required-migration response becomes an order-dependent `200`. The direct
+  spec-review replay also hit its fixture migration gate before it could test
+  approval. This is a test-contract failure; the current installed live
+  replays above remain green.
+- Contract Touch Decision: rebuild the rendered matrix around the one-minute
+  owner jobs and isolated fixture state. Considered but unchanged: production
+  route semantics, action model, migrations, task state, and schemas. Schema
+  Migration Decision: none. Required proof: the revised matrix checks one
+  decision/action or an explicit no-action return per route, protects the
+  direct approval and repair gates, and runs without cross-test fixture state.
