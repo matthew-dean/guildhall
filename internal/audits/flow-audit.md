@@ -58217,3 +58217,20 @@ the shared current action for an individual project.
   Settings in the rail, with milestone/progress/current task/`Open Work` in the
   first viewport and no horizontal overflow. Its actions menu deliberately
   offered `Release details` and `Project activity`; no task mutation was run.
+
+### Repair: Activity is history, not a second live dashboard
+
+- [x] Remove Activity's duplicate current-project/status/action block. Show the
+  reverse-chronological, owner-readable event history immediately; retain
+  technical events and older-page loading only as explicit follow-ups.
+- Contract Touch Decision: touched Timeline presentation only. Considered but
+  unchanged: event retrieval, sort order, pagination, task routing, action
+  ranking, and run state. Schema Migration Decision: none.
+- Evidence, 2026-08-12: TimelineTab coverage passes 9/9, including
+  newest-first ordering, visible loaded-update result, concise task identities
+  in runtime event text, and the absence of the duplicate `Open Work` status
+  block. `pnpm typecheck`, `pnpm build`, and `pnpm dev:install` pass. With the
+  installed app running against Narrative Harness, `/api/stale-server` reports
+  `stale:false`; the 1280x720 Activity route opens directly to reverse-
+  chronological history, has no duplicate current-status block or horizontal
+  overflow, and resolves the raw `task-091` event reference to its task title.

@@ -36,8 +36,7 @@ describe('TimelineTab', () => {
     ).toBeTruthy()
   })
 
-  it('puts the shared current action ahead of collapsed activity and diagnostics', async () => {
-    const user = userEvent.setup()
+  it('shows activity directly without restating the shared current action', () => {
     render(TimelineTab, {
       props: {
         detail: {
@@ -69,16 +68,13 @@ describe('TimelineTab', () => {
       },
     })
 
-    expect(screen.getByLabelText('Current project status').textContent).toContain('Work ready to resume')
-    expect(screen.getByLabelText('Current project status').textContent).toContain('Current item: Keep the current flow coherent')
     const history = screen.getByText('Activity history').closest('details') as HTMLDetailsElement
-    expect(history.open).toBe(false)
+    expect(history.open).toBe(true)
     const diagnostics = screen.getByText('Technical event details').closest('details') as HTMLDetailsElement
     expect(diagnostics.open).toBe(false)
-
-    await user.click(screen.getByRole('button', { name: 'Open Work' }))
-    expect(path.href).toBe('/projects/looma-knit/work?task=task-a')
-    expect(path.state).toEqual({ backgroundPath: '/projects/looma-knit/timeline' })
+    expect(screen.queryByLabelText('Current project status')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Open Work' })).toBeNull()
+    expect(screen.getByText('Builder started Task A')).toBeTruthy()
   })
 
   it('renders recent events newest-first and opens task events in the drawer route', async () => {
@@ -123,6 +119,32 @@ describe('TimelineTab', () => {
 
     expect(path.value).toBe('/projects/looma-knit/task/task-a')
     expect(path.state).toEqual({ backgroundPath: '/projects/looma-knit/timeline' })
+  })
+
+  it('uses concise project task keys in runtime event messages', () => {
+    render(TimelineTab, {
+      props: {
+        detail: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          path: '/repo/narrative-harness',
+          tasks: [],
+          recentEvents: [
+            {
+              at: '2026-05-19T15:00:00.000Z',
+              event: {
+                type: 'supervisor_stopped',
+                reason: 'one_task',
+                message: 'stopAfterOneTask reached task task-091 (agent-error).',
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    expect(screen.getByText(/NAR-091/)).toBeTruthy()
+    expect(screen.queryByText(/task-091/)).toBeNull()
   })
 
   it('appends retained pages in reverse chronological order and reports what loaded', async () => {

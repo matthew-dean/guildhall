@@ -3,11 +3,11 @@
   the top so the user sees new events without scrolling.
 -->
 <script lang="ts">
-  import Button from '../../lib/Button.svelte'
   import Card from '../../lib/ui-compat/Card.svelte'
   import { onEvent, summarizeEvent, eventTaskId, eventCssClass } from '../../lib/events.js'
+  import { humanizeRuntimeText, taskTitleMap } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
-  import { currentTaskHref, projectActionHref } from '../../lib/project-routes.js'
+  import { currentTaskHref } from '../../lib/project-routes.js'
   import type { ProjectActivityHistoryPage, ProjectDetail, EventEnvelope } from '../../lib/types.js'
 
   interface Props {
@@ -109,12 +109,6 @@
     if (id) nav(currentTaskHref(id), { backgroundPath: path.value })
   }
 
-  function openCurrentAction(): void {
-    const href = detail.actionModel?.primaryAction?.href
-    if (!href) return
-    nav(projectActionHref(href, detail.id), { backgroundPath: path.value })
-  }
-
   function isProviderHealthEvent(ev: EventEnvelope): boolean {
     return (ev.event?.type ?? '') === 'provider_health_changed'
   }
@@ -154,6 +148,10 @@
     ].join('|')
   }
 
+  function eventText(ev: EventEnvelope): string {
+    return humanizeRuntimeText(summarizeEvent(ev), taskTitleMap(detail.tasks ?? []), detail.id)
+  }
+
   function dedupeEvents(input: EventEnvelope[]): EventEnvelope[] {
     const seen = new Set<string>()
     const out: EventEnvelope[] = []
@@ -186,47 +184,10 @@
   const operatorEvents = $derived(dedupeEvents(events.filter(ev => !isProviderHealthEvent(ev) && !isRawTraceEvent(ev) && !isEmptyModelEvent(ev))))
   const recentHistoryEvents = $derived(operatorEvents.filter(ev => !isDiagnosticEvent(ev)).slice(0, 5))
   const diagnosticEvents = $derived(operatorEvents.filter(isDiagnosticEvent))
-  const currentAction = $derived(detail.actionModel?.primaryAction ?? null)
-  const currentStatus = $derived.by(() => {
-    if (currentAction) {
-      return {
-        title: currentAction.label ?? 'Work needs your attention',
-        detail: currentAction.taskLabel
-          ? `Current item: ${currentAction.taskLabel}`
-          : currentAction.detail ?? 'Open the current work to continue.',
-        buttonLabel: currentAction.buttonLabel ?? 'Open Work',
-      }
-    }
-    if (detail.run?.status === 'running' || detail.run?.status === 'stopping') {
-      return {
-        title: detail.run.status === 'stopping' ? 'Stopping work' : 'Work in progress',
-        detail: 'Guildhall is working on the current project.',
-        buttonLabel: null,
-      }
-    }
-    return {
-      title: 'Nothing needs your attention',
-      detail: 'There is no project decision waiting right now.',
-      buttonLabel: null,
-    }
-  })
 </script>
 
 <Card title="Project activity">
-  <section class="timeline-status" aria-label="Current project status">
-    <p class="timeline-status-label">Current status</p>
-    <div class="timeline-status-main">
-      <div>
-        <h2>{currentStatus.title}</h2>
-        <p>{currentStatus.detail}</p>
-      </div>
-      {#if currentAction && currentStatus.buttonLabel}
-        <Button variant="primary" size="sm" onclick={openCurrentAction}>{currentStatus.buttonLabel}</Button>
-      {/if}
-    </div>
-  </section>
-
-  <details class="timeline-history">
+  <details class="timeline-history" open>
     <summary>Activity history</summary>
     <div class="timeline-history-body">
       {#if historyLoading && events.length === 0}
@@ -240,7 +201,7 @@
       {:else}
         <div class="feed">
           {#each recentHistoryEvents as ev, i (i)}
-            {@const text = summarizeEvent(ev)}
+            {@const text = eventText(ev)}
             {#if text}
               {@const tid = eventTaskId(ev)}
               {@const cls = eventCssClass(ev)}
@@ -264,7 +225,7 @@
           <summary>Technical event details</summary>
           <div class="feed">
             {#each diagnosticEvents as ev, i (`diagnostic-${i}`)}
-              {@const text = summarizeEvent(ev)}
+              {@const text = eventText(ev)}
               {#if text}
                 <div class="ev ev-{eventCssClass(ev)}">
                   <span class="ts">{(ev.at ?? '').slice(11, 19)}</span>
@@ -299,36 +260,8 @@
     margin: 0 0 var(--s-3);
     font-size: var(--gh-type-size-meta);
   }
-  .timeline-status {
-    display: grid;
-    gap: var(--s-2);
-  }
-  .timeline-status-label {
-    margin: 0;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-    font-weight: 700;
-    text-transform: uppercase;
-  }
-  .timeline-status-main {
-    display: flex;
-    align-items: start;
-    justify-content: space-between;
-    gap: var(--s-3);
-  }
-  .timeline-status h2,
-  .timeline-status p {
-    margin: 0;
-  }
-  .timeline-status h2 {
-    font-size: var(--gh-type-size-heading-sm);
-  }
-  .timeline-status-main > div {
-    display: grid;
-    gap: var(--s-1);
-  }
   .timeline-history {
-    margin-top: var(--s-4);
+    margin: 0;
   }
   .timeline-history > summary,
   .timeline-diagnostics > summary {
