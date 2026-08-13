@@ -58137,6 +58137,21 @@ the shared current action for an individual project.
   showed `Ready to continue`, no false-attention heading, and no horizontal
   overflow at 1280x720.
 
+### Open finding: Fleet proof review must resolve to a completable decision
+
+- [ ] The installed `Review proof` queue action opened Narrative Harness
+  `task-087`, a finished task with no reconciliation control. Its full record
+  said `No response needed` while showing a failed automatic merge caused by a
+  Git `index.lock`; the only available command was unrelated `Open Work` for
+  ready `task-091`. This is not a copy problem: fleet attention, task detail,
+  and the shared action model disagree about the owner's actual next decision.
+- Required follow-up: trace the `proof_reconciliation` fleet item through its
+  action route and task-detail action projection; either expose the typed proof
+  repair on the selected task or stop emitting it as an owner-action item. Do
+  not redirect it to generic ready work or hide the failed merge diagnostic as
+  a cosmetic fix. Include API, queue, task drawer, full record, and project
+  action-model agreement proof before resolving.
+
 ### Repair: Failed spec approval keeps its decision surface
 
 - [x] Keep an approval modal open until its approval mutation succeeds; render
