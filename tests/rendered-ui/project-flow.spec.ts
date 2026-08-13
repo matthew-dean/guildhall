@@ -516,6 +516,15 @@ test('settings subroutes keep focused panels in the project shell', async ({ pag
   }
 })
 
+test('default settings is a chooser, not a readiness report', async ({ page }) => {
+  await page.goto('/projects/looma-knit/settings')
+
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Settings sections' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Ready to start?' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Local runtime' })).toHaveCount(0)
+})
+
 test('task drawer direct route renders tabs and closes to the overview background', async ({ page }) => {
   await page.goto('/projects/looma-knit/task/task-workspace-import?tab=spec')
 

@@ -58883,3 +58883,29 @@ the shared current action for an individual project.
   current-work Overview; neither exposes `Project facts`, `Project activity`,
   raw event rows, or a load-older control. Both fit the 1280x720 viewport with
   no horizontal overflow and no browser warning/error.
+
+### Repair: Settings opens as a chooser, not a configuration report
+
+- [x] User job: entering Settings gives the owner a small set of named
+  configuration destinations. It does not make them parse bootstrap history,
+  runtime probes, mounts, provider state, and verification commands unless
+  they deliberately open the relevant setting.
+- Finding, 2026-08-12: the installed default Settings route stacked its
+  seven-section navigation above the entire Ready panel, including bootstrap
+  status, container runtime diagnostics, folder mounts, and historical
+  verification commands. That is a technical report on an otherwise simple
+  settings entry route.
+- Contract Touch Decision: make `/settings` a settings chooser; detailed
+  panels require an explicit section route. Considered but not touched:
+  settings APIs, identity state, bootstrap/run behavior, migrations, provider
+  configuration, runtime checks, persistence, and schemas. Schema Migration
+  Decision: none. Required proof: default settings has no bootstrap/runtime
+  report; a chosen settings section keeps its existing focused behavior.
+  Apply/revert: presentation-route default only.
+- Evidence, 2026-08-12: `pnpm typecheck`, ProjectView and SettingsTab coverage
+  (79/79), the rendered owner-path matrix (34/34), `pnpm lint:contracts`, and
+  `git diff --check` pass. After a fresh build/install and service restart,
+  `/api/stale-server` reported `stale:false`. Installed Narrative Harness
+  Settings is one 1280x720 viewport containing only `Settings` and its seven
+  named destinations. It does not load the Ready/bootstrap or Local runtime
+  report until the owner enters that specific section; browser logs are empty.

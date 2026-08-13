@@ -321,6 +321,18 @@ describe('SettingsTab', () => {
     expect(path.value).toBe('/projects/looma-knit/map')
   })
 
+  it('opens Settings as a chooser instead of a readiness report', async () => {
+    installFetch()
+    render(SettingsTab)
+
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ready' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Providers' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Ready to start?' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Local runtime' })).not.toBeInTheDocument()
+  })
+
   it('shows initialization guidance before project setup is complete', async () => {
     installFetch({ initialized: false })
     render(SettingsTab, { subView: 'ready' })
