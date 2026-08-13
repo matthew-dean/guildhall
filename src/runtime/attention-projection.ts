@@ -47,6 +47,14 @@ export interface AttentionReleaseTruth {
     ownerBlocked: number
     proofBlocked: number
   }
+  /**
+   * The primary action already selected by the shared project summary. This
+   * keeps a durable attention record from becoming a competing task picker.
+   */
+  primaryAction?: {
+    code?: string
+    taskId?: string
+  } | null
 }
 
 export interface AttentionSetupTruth {
@@ -76,8 +84,11 @@ export function attentionItemsForReleaseTruth<T extends Pick<InboxItem, 'kind'>>
   const setupCurrentItems = setupTruth?.state === 'ready'
     ? items.filter(item => item.kind !== 'setup_pending')
     : [...items]
-  if (!currentScopeIsComplete(truth)) return setupCurrentItems
-  return setupCurrentItems.filter(item => item.kind === 'required_migration' || item.kind === 'bootstrap_missing')
+  const currentDecisionItems = truth?.primaryAction?.code && truth.primaryAction.code !== 'proof_evidence_missing'
+    ? setupCurrentItems.filter(item => item.kind !== 'proof_reconciliation')
+    : setupCurrentItems
+  if (!currentScopeIsComplete(truth)) return currentDecisionItems
+  return currentDecisionItems.filter(item => item.kind === 'required_migration' || item.kind === 'bootstrap_missing')
 }
 
 /**

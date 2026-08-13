@@ -58139,18 +58139,38 @@ the shared current action for an individual project.
 
 ### Open finding: Fleet proof review must resolve to a completable decision
 
-- [ ] The installed `Review proof` queue action opened Narrative Harness
+- [x] The installed `Review proof` queue action previously opened Narrative Harness
   `task-087`, a finished task with no reconciliation control. Its full record
   said `No response needed` while showing a failed automatic merge caused by a
   Git `index.lock`; the only available command was unrelated `Open Work` for
   ready `task-091`. This is not a copy problem: fleet attention, task detail,
   and the shared action model disagree about the owner's actual next decision.
-- Required follow-up: trace the `proof_reconciliation` fleet item through its
-  action route and task-detail action projection; either expose the typed proof
-  repair on the selected task or stop emitting it as an owner-action item. Do
-  not redirect it to generic ready work or hide the failed merge diagnostic as
-  a cosmetic fix. Include API, queue, task drawer, full record, and project
-  action-model agreement proof before resolving.
+- Repair: proof-reconciliation inbox records now route through Work rather than
+  a terminal Spec record. More importantly, the shared attention projection
+  consumes the already-ranked primary action: stale proof debt is suppressed
+  from current owner attention whenever another action is current; it remains
+  in release/history context. The fleet reads that same projection rule, so a
+  cached fleet row cannot revive a finished-task action after this runtime
+  change.
+- Contract Touch Decision: touched the shared attention projection's bounded
+  release truth with the primary action code/task ID, the canonical proof
+  recovery route, and fleet's use of that same projection rule. Considered but
+  unchanged: proof-health detection, recovery mutation, selected-scope ranking,
+  task status, durable attention-record shape, and task-drawer actions.
+  Schema Migration Decision: none; existing records are interpreted through the
+  compatibility reader and no persisted shape or required migration changes.
+- Evidence, 2026-08-12: focused inbox and attention-projection coverage passes
+  50/50, including a durable proof record suppressed by `ready_work` and kept
+  when `proof_evidence_missing` is the shared decision. `pnpm typecheck`,
+  `pnpm build`, and `git diff --check` pass. After `pnpm dev:install`, a fresh
+  `guildhall stop` / `guildhall start` for Looma + Knit reported
+  `/api/stale-server` `stale:false`. Both installed fleet and project Inbox
+  excluded Narrative Harness's finished `task-087` proof record; the canonical
+  project response named `task-091` `ready_work`. Browser replay at 1280x720
+  showed no Narrative Harness row in Needs You, then showed `Stage 2: Local
+  Desktop Harness MVP is ready to continue`, `5 of 9 complete`, `NAR-091`, and
+  `Resume this work item` in the first Work viewport with no horizontal
+  overflow. No user-project mutation was invoked.
 
 ### Repair: Failed spec approval keeps its decision surface
 

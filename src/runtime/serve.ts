@@ -931,6 +931,24 @@ function fleetAttentionProjection(records: readonly AttentionRecord[]): NonNulla
   }
 }
 
+/**
+ * Attention is a consumer of the shared decision, never a second chooser of
+ * which task a person should open. Keep this small compatibility projection at
+ * the runtime boundary so project Inbox and fleet cards receive the same fact.
+ */
+function attentionTruthWithPrimaryAction(
+  releaseTruth: AttentionReleaseTruth | null | undefined,
+  action: ProjectActionModel['primaryAction'] | null | undefined,
+): AttentionReleaseTruth | null {
+  if (!releaseTruth) return null
+  return {
+    ...releaseTruth,
+    primaryAction: action
+      ? { code: action.code, taskId: action.taskId }
+      : null,
+  }
+}
+
 function humanizeGeneratedProjectName(name: string): string {
   const raw = name.trim()
   if (!raw) return 'Project'
@@ -2243,7 +2261,12 @@ function formatServerTiming(metrics: Array<{ name: string; startedAt: number; en
       blockers: { bootstrap: false, workspaceImport: false },
     }
   }
-  const releaseTruth = input.releaseTruth ?? readProjectSummaryForProjectAtBoundary(input.projectPath)?.releaseSummary ?? null
+  const savedSummary = readProjectSummaryForProjectAtBoundary(input.projectPath)
+  const savedReleaseTruth = savedSummary?.releaseSummary ?? null
+  const releaseTruth = input.releaseTruth ?? attentionTruthWithPrimaryAction(
+    savedReleaseTruth,
+    savedSummary?.actionModel?.primaryAction,
+  )
   const computedItems = attentionItemsForReleaseTruth([
     ...await buildProjectMigrationAdvisories(input.projectPath),
     ...buildProjectUnderstandingAdvisories(input.projectPath),
@@ -2540,7 +2563,10 @@ async function refreshProjectProjections(
             const attention = readSavedAttentionSurface(
               resolved.path,
               resolved.initializationNeeded,
-              currentSummary?.releaseSummary ?? null,
+              attentionTruthWithPrimaryAction(
+                currentSummary?.releaseSummary ?? null,
+                currentSummary?.actionModel?.primaryAction,
+              ),
               fleetSummary.actionModel?.setup ?? null,
             )
             return attention.freshness === 'current'
@@ -3115,6 +3141,18 @@ function readFleetProjectSummaries(
           }
         }
       }
+      if (summary.fleetAttention) {
+        const items = attentionItemsForReleaseTruth(
+          summary.fleetAttention.items,
+          attentionTruthWithPrimaryAction(summary.releaseSummary ?? null, summary.actionModel?.primaryAction),
+          summary.actionModel?.setup ?? null,
+        )
+        summary.fleetAttention = {
+          ...summary.fleetAttention,
+          items,
+          total: items.length,
+        }
+      }
 
       // Registration owns identity and presentation metadata. The saved fleet
       // row owns project state; no request-time project database read is allowed
@@ -3167,7 +3205,7 @@ function publishFleetSummaryFromSavedState(
   const attention = readSavedAttentionSurface(
     entry.path,
     resolved.initializationNeeded,
-    shell?.releaseSummary ?? null,
+    attentionTruthWithPrimaryAction(shell?.releaseSummary ?? null, basePayload.actionModel?.primaryAction),
     basePayload.actionModel?.setup ?? null,
   )
   const payload = compactFleetSummaryPayload({
@@ -7977,7 +8015,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
           records: surfaceState?.attentionRecords ?? null,
           watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
           projectRevision: surfaceState?.projectRevision ?? null,
-          releaseTruth: projection.releaseSummary,
+          releaseTruth: attentionTruthWithPrimaryAction(
+            projection.releaseSummary,
+            summary.actionModel?.primaryAction,
+          ),
           setupTruth: summary.actionModel?.setup ?? null,
         })
       : null
@@ -13932,7 +13973,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         records: surfaceState?.attentionRecords ?? null,
         watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
         projectRevision: surfaceState?.projectRevision ?? null,
-        releaseTruth: surfaceState?.summary?.releaseSummary ?? null,
+        releaseTruth: attentionTruthWithPrimaryAction(
+          surfaceState?.summary?.releaseSummary ?? null,
+          resolvedSummary?.actionModel?.primaryAction,
+        ),
         setupTruth: resolvedSummary?.actionModel?.setup ?? null,
       }))
     } catch (err) {

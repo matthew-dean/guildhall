@@ -511,7 +511,11 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       taskId: first.id,
       title: 'Review stale proof records',
       detail: `${countLabel}. Start with "${first.title}" and reconcile the task evidence or reopen the work.`,
-      actionHref: '/task/' + encodeURIComponent(first.id) + '?tab=spec',
+      // Completed proof debt is actionable only through Work, where the
+      // selected proof task is reopened before its verification is run. A
+      // terminal task record has no owner action and must never be the target
+      // of an inbox decision.
+      actionHref: '/work?task=' + encodeURIComponent(first.id),
       count: proofMissing.length,
       signals: proofMissing.map(task => `task:${task.id}`),
       dismissEndpoint: '/api/project/attention/dismiss?id=proof-reconciliation%3Adone-with-unmet-proof',

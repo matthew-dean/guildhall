@@ -225,6 +225,38 @@ describe('attention projection', () => {
     ])
   })
 
+  it('does not let saved proof debt compete with the shared current decision', () => {
+    const proofDebt: InboxItem = {
+      kind: 'proof_reconciliation',
+      severity: 'medium',
+      taskId: 'task-finished',
+      title: 'Review stale proof records',
+      detail: 'An older task still needs proof reconciliation.',
+      actionHref: '/work?task=task-finished',
+      count: 1,
+      signals: ['task:task-finished'],
+      dismissEndpoint: '/api/project/attention/dismiss?id=proof-reconciliation%3Atask-finished',
+    }
+    const activeRelease = {
+      state: 'active' as const,
+      counts: { unfinished: 1, blocked: 0, ownerBlocked: 0, proofBlocked: 1 },
+    }
+
+    expect(attentionItemsForReleaseTruth([
+      proofDebt,
+    ], {
+      ...activeRelease,
+      primaryAction: { code: 'ready_work', taskId: 'task-runnable' },
+    })).toEqual([])
+
+    expect(attentionItemsForReleaseTruth([
+      proofDebt,
+    ], {
+      ...activeRelease,
+      primaryAction: { code: 'proof_evidence_missing', taskId: 'task-finished' },
+    })).toEqual([proofDebt])
+  })
+
   it('keeps completed setup attention in history when shared setup is ready', () => {
     const surface = readSavedAttentionSurfaceFromBoundary({
       initializationNeeded: false,

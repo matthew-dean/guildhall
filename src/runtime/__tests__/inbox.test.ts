@@ -438,7 +438,7 @@ describe('buildInbox', () => {
       severity: 'medium',
       taskId: 'task-stale-proof',
       title: 'Review stale proof records',
-      actionHref: '/task/task-stale-proof?tab=spec',
+      actionHref: '/work?task=task-stale-proof',
       count: 1,
     })
     expect(hit.detail).toContain('Draft chapter in author voice')
