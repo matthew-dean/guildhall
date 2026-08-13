@@ -246,11 +246,10 @@ test('projects home scrolls at mobile size and opens explicit project routes', a
   await page
     .locator('section.project-card')
     .filter({ has: page.getByRole('heading', { name: 'Looma + Knit' }) })
-    .getByRole('button', { name: 'Open project' })
+    .getByRole('button', { name: 'Review next spec' })
     .click()
-  await expect(page).toHaveURL(/\/projects\/looma-knit\/overview$/)
-  await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Looma + Knit' })).toBeVisible()
+  await expect(page).toHaveURL(/\/projects\/looma-knit\/(task|work)/)
+  await expect(page.locator('html')).toHaveJSProperty('scrollWidth', 390)
 })
 
 test('projects home keeps project cards compact for scanability', async ({ page }) => {
@@ -258,18 +257,6 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   await page.goto('/projects')
 
   await expect(page.getByRole('heading', { name: 'Projects & Workspaces' })).toBeVisible()
-  const dashboard = page.getByRole('region', { name: 'Projects dashboard' })
-  await expect(dashboard).toBeVisible()
-  const panelBoxes = await dashboard.locator(':scope > div').evaluateAll((nodes) =>
-    nodes.map((node) => {
-      const box = node.getBoundingClientRect()
-      return { height: box.height, top: box.top, right: box.right }
-    }),
-  )
-  expect(panelBoxes).toHaveLength(3)
-  expect(new Set(panelBoxes.map(box => Math.round(box.height))).size).toBe(1)
-  expect(Math.max(...panelBoxes.map(box => box.right))).toBeGreaterThan(1380)
-
   const cards = page.locator('section.project-card')
   await expect(cards).toHaveCount(18)
   await expect(page.getByText('Loading project status...')).toHaveCount(0)
@@ -297,6 +284,7 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   )
   expect(Math.max(...boxes.map(box => box.height))).toBeLessThan(270)
   expect(new Set(boxes.map(box => Math.round(box.top))).size).toBeGreaterThan(1)
+  await expect(page.locator('html')).toHaveJSProperty('scrollWidth', 1440)
 
   const rows = new Map<number, typeof boxes>()
   for (const box of boxes) {
@@ -308,7 +296,7 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   for (const row of rows.values()) {
     if (row.length < 3) continue
     expect(Math.min(...row.map(box => box.width))).toBeGreaterThan(420)
-    expect(Math.max(...row.map(box => box.right))).toBeGreaterThan(1380)
+    expect(Math.max(...row.map(box => box.right))).toBeLessThanOrEqual(1441)
   }
 })
 

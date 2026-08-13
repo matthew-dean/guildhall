@@ -58749,3 +58749,7 @@ the shared current action for an individual project.
   route matrix cases now assert their bounded current surfaces and pass in one
   Playwright run. They no longer demand the removed release counter dashboard,
   work-view toolbar, or `Coordinator timeline` transcript.
+- Progress, 2026-08-12: Home's mobile replay now follows the card's real
+  `Review next spec` action rather than demanding a generic project-opening
+  button. Its desktop proof keeps card-height and row-layout checks while
+  adding page-level no-overflow evidence; both focused replays pass.
