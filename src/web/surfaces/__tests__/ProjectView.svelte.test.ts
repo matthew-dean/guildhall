@@ -8,6 +8,19 @@ import { path } from '../../lib/nav.svelte.js'
 import { project } from '../../lib/project.svelte.js'
 import type { ProjectDetail, ProjectView as ProjectViewName } from '../../lib/types.js'
 
+const eventSubscribers = vi.hoisted(() => new Set<(event: { event?: { type?: string } }) => void>())
+
+vi.mock('../../lib/events.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../lib/events.js')>()
+  return {
+    ...actual,
+    onEvent(listener: (event: { event?: { type?: string } }) => void) {
+      eventSubscribers.add(listener)
+      return () => eventSubscribers.delete(listener)
+    },
+  }
+})
+
 const now = '2026-05-19T15:00:00.000Z'
 
 function task(overrides: Record<string, unknown> = {}) {
@@ -396,6 +409,7 @@ describe('ProjectView', () => {
 
   afterEach(() => {
     cleanup()
+    eventSubscribers.clear()
     vi.restoreAllMocks()
     project.detail = null
     project.error = null
@@ -502,6 +516,29 @@ describe('ProjectView', () => {
       expect(screen.getByText('Work inventory task')).toBeInTheDocument()
     })
     expect(screen.queryByText('Overview ordering task')).not.toBeInTheDocument()
+  })
+
+  it('keeps the Work inventory projection when a supervisor event refreshes the project', async () => {
+    const projectPayload = detail({
+      tasks: [task({ id: 'task-work-only', title: 'Work inventory task' })],
+      taskPayload: { surface: 'work', kind: 'project_work_inventory' },
+    } as Partial<ProjectDetail>)
+    const fetchMock = installFetchFakes(projectPayload)
+
+    await renderProjectView('work', null, 'looma-knit', projectPayload)
+    fetchMock.mockClear()
+
+    for (const listener of eventSubscribers) {
+      listener({ event: { type: 'supervisor_stopped' } })
+    }
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/project?surface=work&compact=true&inventoryLimit=40&inventoryOffset=0&projectId=looma-knit',
+        { cache: 'no-store' },
+      )
+    })
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain('/api/project?compact=true&projectId=looma-knit')
   })
 
   it('renders Release readiness when the broad project payload is still loading', async () => {

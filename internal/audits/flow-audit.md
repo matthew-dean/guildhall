@@ -59151,3 +59151,36 @@ the shared current action for an individual project.
   mobile). No horizontal overflow, browser error, raw `index.lock` error, or
   runtime-context dump appears on that decision route. The button was not
   invoked because it would create a real pull request.
+
+### Repair: Live refresh retains the open work surface
+
+- [x] User job: while browsing a Work list, the visible count and rows stay
+  stable as live project events arrive. A background refresh may update task
+  state, but it must not replace the list with a smaller Overview projection
+  and restore it seconds later.
+- Finding, 2026-08-12: Narrative Harness `/work?view=queue` repeatedly changed
+  from four current items to one, then back to four on the five-second surface
+  refresh. The authoritative Work API consistently returned the same 40-item
+  inventory and four current rows. A `supervisor_*` event called the compact
+  project refresh without the active `surface=work` and overwrote that
+  inventory with an Overview-sized response.
+- Contract Touch Decision: route all ProjectView-triggered live, run-lifecycle,
+  and post-migration refreshes through the current surface and selected-task
+  parameters already owned by the project store. Considered but not touched:
+  task ordering, selection persistence, project summary schema, API shape,
+  SSE event schema, and persistence. Schema Migration Decision: none. Required
+  proof: a supervisor event on Work requests the Work payload and a live browser
+  list stays stable across the refresh interval. Apply/revert: read routing
+  only; no task data is changed.
+- Evidence, 2026-08-12: `pnpm exec vitest run
+  src/web/surfaces/__tests__/ProjectView.svelte.test.ts` passed (70 tests),
+  including the supervisor-event regression: the refresh requests
+  `surface=work` with the current inventory parameters and never the default
+  compact response. `pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`,
+  `pnpm build`, and `pnpm dev:install` passed. After `guildhall stop &&
+  guildhall start` in Looma + Knit, `/api/stale-server` reported `stale:false`
+  on the installed build. In the actual Narrative Harness Work route, 28
+  desktop samples over seven seconds stayed at four current items/four rows,
+  with no error or horizontal overflow. Selecting NAR-091 remained on its task
+  URL through a second six-second sample run. At 390x844, 24 samples again
+  stayed at four rows with no clipped buttons, error, or horizontal overflow.

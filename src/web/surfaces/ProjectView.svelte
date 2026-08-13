@@ -248,10 +248,14 @@
     void project.refresh(routeProjectId, projectDetailSurface, routeFocusedTaskId)
   })
 
+  function refreshVisibleProject(): Promise<ProjectDetail | null> {
+    return project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)
+  }
+
   $effect(() => {
     if (refreshHandle) clearInterval(refreshHandle)
     refreshHandle = setInterval(() => {
-      void project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)
+      void refreshVisibleProject()
     }, 5000)
     return () => {
       if (refreshHandle) {
@@ -400,7 +404,7 @@
   $effect(() => {
     const off = onEvent(ev => {
       const t = ev.event?.type ?? ''
-      if (t.startsWith('supervisor_') || t === 'provider_health_changed') void project.refresh(activeProjectId)
+      if (t.startsWith('supervisor_') || t === 'provider_health_changed') void refreshVisibleProject()
     })
     return off
   })
@@ -532,13 +536,13 @@
         optimisticRunStatus = null
         return
       }
-      setTimeout(() => void project.refresh(activeProjectId), 300)
+      setTimeout(() => void refreshVisibleProject(), 300)
       setTimeout(() => {
-        void project.refresh(activeProjectId)
+        void refreshVisibleProject()
         void loadInbox()
       }, 1500)
       setTimeout(() => {
-        void project.refresh(activeProjectId)
+        void refreshVisibleProject()
         void loadInbox()
       }, 3200)
     } finally {
@@ -562,7 +566,7 @@
         optimisticRunStatus = null
         return
       }
-      setTimeout(() => void project.refresh(activeProjectId), 300)
+      setTimeout(() => void refreshVisibleProject(), 300)
     } finally {
       busy = false
     }
@@ -628,7 +632,7 @@
       migrationStatus = body.status ?? null
       migrationApplyResult = body.result ?? null
       migrationApplyStage = 'refreshing-project'
-      await project.refresh(activeProjectId)
+      await refreshVisibleProject()
       migrationApplyStage = 'refreshing-inbox'
       await loadInbox()
       if (!body.status) {
