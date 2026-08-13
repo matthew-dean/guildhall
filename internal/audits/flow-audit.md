@@ -58739,3 +58739,9 @@ the shared current action for an individual project.
   Migration Decision: none. Required proof: the revised matrix checks one
   decision/action or an explicit no-action return per route, protects the
   direct approval and repair gates, and runs without cross-test fixture state.
+- Progress, 2026-08-12: the direct spec-review replay now isolates the
+  approval state from fixture migration state and passes in Playwright. Its
+  migration helper also follows the current `Review project update` /
+  `Apply required updates` controls for replays that intentionally exercise
+  updates. The remaining matrix cases still need their legacy dashboard
+  contracts replaced rather than skipped.

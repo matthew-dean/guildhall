@@ -206,6 +206,21 @@ test.afterAll(async () => {
 })
 
 test('spec review starts at one decision without a tab hunt', async ({ page }) => {
+  await page.route('**/api/project?*', async route => {
+    if (!route.request().url().includes('projectId=narrative-harness')) {
+      await route.continue()
+      return
+    }
+    const response = await route.fetch()
+    const body = await response.json()
+    await route.fulfill({
+      response,
+      json: {
+        ...body,
+        startReadiness: { ...body.startReadiness, canStart: true, code: 'ready_work' },
+      },
+    })
+  })
   await page.goto('/projects/narrative-harness/task/coherence-reviewer-mvp', { waitUntil: 'domcontentloaded' })
 
   await expect(page.getByRole('heading', { name: 'Approve this spec?' })).toBeVisible()
@@ -218,6 +233,7 @@ test('spec review starts at one decision without a tab hunt', async ({ page }) =
   await page.getByRole('button', { name: 'Approve spec' }).click()
   await expect(page.getByRole('dialog', { name: 'Approve spec' })).toBeVisible()
   await expect(page.getByRole('dialog', { name: 'Approve spec' }).getByRole('button', { name: 'Approve' })).toBeVisible()
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
 })
 
 test('owner input is a response surface, not a Thread dashboard', async ({ page }) => {
@@ -300,19 +316,19 @@ async function apiResultsForTarget(request: any, target: typeof auditReplayTarge
 
 async function applyRequiredMigrations(page: any) {
   for (let index = 0; index < 6; index += 1) {
-    if (await page.getByText('Needs migration').count() === 0) return
-    const visibleMigrateButton = page.locator('button').filter({ hasText: 'Migrate' }).first()
-    const hasVisibleMigrate = await visibleMigrateButton.count() > 0
-    const migrateButton = hasVisibleMigrate
-      ? visibleMigrateButton
-      : page.getByRole('button', { name: 'Migrate project' }).first()
-    if (!hasVisibleMigrate && !(await migrateButton.isEnabled())) return
-    await expect(migrateButton).toBeEnabled()
-    await migrateButton.click()
     await expect(page.getByRole('dialog', { name: 'Migrate project' })).toBeVisible()
-    await page.getByRole('button', { name: 'Apply required migration' }).click()
-    await expect(page.getByText('Migration applied.')).toBeVisible()
-    await page.getByRole('dialog', { name: 'Migrate project' }).getByRole('button', { name: 'Close' }).last().click()
+      .catch(async () => {
+        const review = page.getByRole('button', { name: 'Review project update' })
+        if (!(await review.isVisible().catch(() => false))) return
+        await review.click()
+        await expect(page.getByRole('dialog', { name: 'Migrate project' })).toBeVisible()
+      })
+
+    const modal = page.getByRole('dialog', { name: 'Migrate project' })
+    if (!(await modal.isVisible().catch(() => false))) return
+    await modal.getByRole('button', { name: 'Apply required updates' }).click()
+    await expect(modal.getByRole('heading', { name: /^Migration (complete|applied)\.?$/ }).first()).toBeVisible()
+    await modal.getByRole('button', { name: 'Close' }).last().click()
   }
 }
 
