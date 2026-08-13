@@ -862,9 +862,10 @@ describe('ProjectView', () => {
 
     await renderProjectView('work', null, 'looma-knit', projectPayload)
 
-    expect(screen.getAllByRole('button', { name: /migrate project/i })).toHaveLength(1)
-    expect(screen.queryByRole('link', { name: /migrate project/i })).toBeNull()
-    expect(screen.getByRole('alert', { name: 'Project update required' })).toHaveTextContent('Update this project before working.')
+    expect(await screen.findAllByRole('button', { name: /review project update/i })).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: 'One update is needed' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Project update required')).toHaveTextContent('Guildhall needs to update this project before work can continue.')
+    expect(screen.queryByRole('alert', { name: 'Project update required' })).toBeNull()
     expect(screen.queryByText('Run the required project update before working.')).toBeNull()
     expect(screen.queryByRole('toolbar', { name: /work view controls/i })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Work list' })).toBeNull()

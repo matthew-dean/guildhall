@@ -58080,6 +58080,25 @@ the shared current action for an individual project.
   complete` progress, and `Resume this work item` visible without scrolling or
   horizontal overflow. No owner-attention heading was present.
 
+### Repair: Migration-gated Work remains a usable repair flow
+
+- [x] Replace the empty migration-gated Work and Planner bodies, duplicate
+  shell alert, and duplicate top-bar migration control with one focused project
+  update surface that explains the gate and opens the existing review/apply
+  modal.
+- Contract Touch Decision: touched the project-shell presentation and its
+  existing migration-modal entry point only. Considered but unchanged:
+  migration detection, persisted migration status, apply endpoint, task state,
+  action ranking, and run controls. Schema Migration Decision: none.
+- Evidence, 2026-08-12: `ProjectView` coverage passes 67/67; it asserts the
+  gated Work route has exactly one `Review project update` control, the clear
+  gate heading, no shell alert, and no hidden Work controls or task rows.
+  `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `git diff --check`
+  pass. After a fresh `pnpm dev:install`, Looma's installed 1280x720 Work
+  route had one visible decision and no horizontal overflow. Its one button
+  opened the existing review modal, which named the required migration and its
+  typed safety summary. The apply mutation was intentionally not invoked.
+
 ### Repair: Failed spec approval keeps its decision surface
 
 - [x] Keep an approval modal open until its approval mutation succeeds; render

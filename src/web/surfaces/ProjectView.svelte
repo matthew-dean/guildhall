@@ -52,6 +52,7 @@
   const loadSettingsTab = () => import('./project/SettingsTab.svelte')
   const loadProjectMapTab = () => import('./project/ProjectMapTab.svelte')
   const loadProjectStructurePanel = () => import('./project/structure/ProjectStructurePanel.svelte')
+  const loadProjectUpdateGate = () => import('./project/ProjectUpdateGate.svelte')
 
   interface ShellAttentionNotice {
     id: string
@@ -1026,21 +1027,6 @@
     // the surface that can actually explain and complete it.
     if (!detail || selectedReleaseShipped || currentView === 'overview') return []
     const notices: ShellAttentionNotice[] = []
-    if (requiredMigrationBlocked) {
-      notices.push({
-        id: 'required-migration',
-        code: 'required_migration_pending',
-        reason: 'project_update_required',
-        message: 'Update this project before working.',
-        href: null,
-        priority: 10,
-        tone: 'attention',
-        role: 'alert',
-        ariaLabel: 'Project update required',
-        actionHref: null,
-        actionLabel: null,
-      })
-    }
     if (!routeOwnsPrimaryDecision && startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
       notices.push({
         id: 'start-readiness',
@@ -1174,10 +1160,9 @@
   )
   const showRunButton = $derived(
     !selectedReleaseShipped &&
-      // Overview owns a required project update in its decision card. Showing
-      // the same command in the shell turns one required action into two
-      // competing controls before the user can read why it matters.
-      (!requiredMigrationBlocked || currentView !== 'overview') &&
+      // A migration-gated route owns its one repair action in the content area.
+      // The shell must not turn it into a second competing command.
+      !requiredMigrationBlocked &&
       (
         runStatus === 'running' ||
         runStatus === 'stopping' ||
@@ -1785,7 +1770,16 @@
               <WorkspaceImportTab />
             {/await}
           {:else if currentView === 'work'}
-            {#if !requiredMigrationBlocked}
+            {#if requiredMigrationBlocked}
+              {#await loadProjectUpdateGate()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project update...</p>
+                </div>
+              {:then module}
+                {@const ProjectUpdateGate = module.default}
+                <ProjectUpdateGate onReview={openMigrationModal} />
+              {/await}
+            {:else}
               {#await loadWorkTab()}
                 <div class="page-centered page-centered-inline">
                   <p class="muted">Loading project...</p>
@@ -1796,7 +1790,16 @@
               {/await}
             {/if}
           {:else if currentView === 'planner'}
-            {#if !requiredMigrationBlocked}
+            {#if requiredMigrationBlocked}
+              {#await loadProjectUpdateGate()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project update...</p>
+                </div>
+              {:then module}
+                {@const ProjectUpdateGate = module.default}
+                <ProjectUpdateGate onReview={openMigrationModal} />
+              {/await}
+            {:else}
               {#await loadWorkTab()}
                 <div class="page-centered page-centered-inline">
                   <p class="muted">Loading project...</p>
