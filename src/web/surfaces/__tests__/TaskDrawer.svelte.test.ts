@@ -2072,6 +2072,41 @@ describe('TaskDrawer', () => {
     await waitFor(() => expect(path.href).toContain('?detail=full&tab=overview'))
   })
 
+  it('preempts focused spec approval when a required project update is already known', async () => {
+    openDrawerOn('spec')
+    const onMigrationRequired = vi.fn()
+    const blockedProject = {
+      ...projectDetail(),
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Guildhall needs to update this project before work can continue.',
+      },
+    }
+    project.detail = blockedProject
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(blockedProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+      onMigrationRequired,
+    })
+
+    await waitFor(() => expect(onMigrationRequired).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
+    expect(screen.getByText('Opening project update...')).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/approve-spec'))).toBe(false)
+  })
+
   it('hands a required migration to the shared project repair flow instead of rendering the raw error', async () => {
     openDrawerOn('spec')
     const onMigrationRequired = vi.fn()

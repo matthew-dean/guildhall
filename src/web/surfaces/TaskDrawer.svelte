@@ -771,7 +771,14 @@
       ? project.detail.startReadiness
       : null,
   )
+  const requiredProjectUpdateBeforeSpecReview = $derived(
+    focusedSpecReview && projectStartBlocker?.code === 'required_migration_pending',
+  )
   const projectStartBlockerMessage = $derived(projectStartBlocker?.message ?? null)
+  $effect(() => {
+    if (!requiredProjectUpdateBeforeSpecReview) return
+    onMigrationRequired?.()
+  })
   const canRunTaskDirectly = $derived(
     !projectStartBlocker &&
     !isTerminalRunTask &&
@@ -1223,7 +1230,9 @@
           {/each}
         </section>
       {/if}
-      {#if focusedSpecReview && task}
+      {#if requiredProjectUpdateBeforeSpecReview}
+        <p class="loading">Opening project update...</p>
+      {:else if focusedSpecReview && task}
         <SpecReviewDecision
           {busy}
           onApprove={handleApproveSpec}

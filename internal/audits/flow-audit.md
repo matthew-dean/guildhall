@@ -58635,3 +58635,34 @@ the shared current action for an individual project.
   build/install and Looma + Knit restart, the installed service reports
   `stale:false`; live Home now names Looma + Knit's selected document-review
   task beside `Review next spec`, with no `10 specs` count shown.
+
+### Repair: A known project update preempts spec approval before the click
+
+- [x] User job: when a Home review link targets a spec but Guildhall already
+  knows the project must be updated first, the owner goes directly to the one
+  project-update repair route. They must never be offered an `Approve spec`
+  action that is guaranteed to reject and only then reveal the update.
+- Finding, 2026-08-12: live Looma + Knit Home correctly named and linked the
+  selected review, but opening that direct task route over a known required
+  update still displayed `Approve spec` and `Request changes`. The previous
+  repair only caught the migration response after approval, so the drawer and
+  ProjectView were disagreeing about the same shared start blocker.
+- Contract Touch Decision: TaskDrawer will consume the existing typed
+  `required_migration_pending` start blocker and invoke the existing
+  project-task repair route before a focused spec decision is presented.
+  Considered but unchanged: migration selection/application, approval API,
+  task state, action model, repair route format, persistence, and schemas.
+  Schema Migration Decision: none. Required proof: focused drawer regression
+  proves the existing repair callback occurs from initial known state; live
+  direct Looma route lands on its repair gate without an approval action.
+  Apply/revert: remove the preflight navigation; the earlier response-time
+  recovery remains as a fallback.
+- Evidence, 2026-08-12: `TaskDrawer.svelte.test.ts` passes 62/62, including
+  the initial-state preflight regression which proves no approval request can
+  be made. `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and
+  `pnpm dev:install` pass. After a fresh Looma + Knit restart, the installed
+  service reports `stale:false`; the real direct route now redirects to
+  `/projects/looma-knit/work?view=queue&task=task-import-1rpbo8n&repair=migration`.
+  At 1280px it shows one `Apply required updates` decision, has no horizontal
+  overflow, and contains no `Approve spec` control. No project data was
+  changed during this read-only replay.
