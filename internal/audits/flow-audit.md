@@ -58306,3 +58306,21 @@ the shared current action for an individual project.
   Harness Overview then shows its milestone, `5 of 9 complete`, NAR-091, and
   one `Open Work` decision in the first viewport. No user-project mutation was
   invoked.
+
+### Repair: `guildhall start` reports a real cold start
+
+- [x] Keep the launcher waiting through launchd's replacement window and the
+  initial registered-project refresh, so a successful background boot is never
+  reported as a readiness timeout.
+- Contract Touch Decision: touched only the CLI readiness wait duration.
+  Considered but unchanged: launch-agent ownership, service state format,
+  listener readiness, refresh scheduling, project data, and all user-project
+  mutations. Schema Migration Decision: none. Required proof: a fresh installed
+  `guildhall stop && guildhall start` exits successfully and reports a current
+  service at `/api/stale-server`. Apply/revert: adjusts only the bounded wait
+  before the existing start command returns.
+- Evidence, 2026-08-12: `cli.test.ts` passes 32/32, `pnpm typecheck`, `pnpm
+  build`, `pnpm dev:install`, and `git diff --check` pass. A fresh installed
+  Looma + Knit `guildhall stop && guildhall start` completed with exit status
+  zero; `/api/stale-server` immediately reported the new installed artifact
+  and `stale:false`. The service remains running at `http://localhost:7777`.

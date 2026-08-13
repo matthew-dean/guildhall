@@ -984,7 +984,10 @@ function singleModelAssignment(model: string) {
 export async function waitForServiceReady(
   port = DEFAULT_DASHBOARD_PORT,
   home = homedir(),
-  attempts = 40,
+  // launchd may hold the previous process through its termination window, and
+  // a cold registered-project refresh can take another half minute before the
+  // replacement publishes its service state.
+  attempts = 400,
 ): Promise<ServiceRuntimeState> {
   for (let attempt = 0; attempt < attempts; attempt++) {
     const state = await discoverServiceRuntimeState(port, home)
