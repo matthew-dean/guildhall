@@ -52,7 +52,7 @@ describe('focused Work flow', () => {
       actionModel: { primaryAction: { taskId: review.id, label: 'Review the acceptance contract', detail: 'Approve the spec so this work can continue.', buttonLabel: 'Review spec', href: `/work?task=${review.id}`, tone: 'warn' } },
     }) } })
 
-    expect(await screen.findByRole('heading', { name: 'Current work' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Current work', level: 1 })).toBeInTheDocument()
     expect(screen.getByText('Stage 1: Release hardening')).toBeInTheDocument()
     expect(screen.getByText('LOO-142')).toBeInTheDocument()
     expect(screen.getByText('Approve the spec so this work can continue.')).toBeInTheDocument()
@@ -99,6 +99,21 @@ describe('focused Work flow', () => {
     }) })
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Keep this selected' })).toBeInTheDocument())
     expect(screen.queryByRole('heading', { name: 'Do not replace selection' })).toBeNull()
+  })
+
+  it('keeps an active selected work item focused after its pending action clears', async () => {
+    const active = reviewTask({ id: 'task-active', displayKey: 'LOO-145', title: 'Keep the live handoff focused', status: 'review' })
+    setRoute(`/projects/looma-knit/work?task=${active.id}`)
+    render(WorkTab, { props: { detail: projectDetail([active], {
+      run: { status: 'running', mode: 'one_task' },
+      actionModel: { primaryAction: null },
+      startReadiness: { canStart: true, code: 'ready_work' },
+    }) } })
+
+    expect(await screen.findByRole('heading', { name: 'Current work', level: 1 })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Keep the live handoff focused' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Work list' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open task' })).toBeInTheDocument()
   })
 
   it('only exposes the legacy inventory after an explicit Browse work action', async () => {

@@ -315,6 +315,10 @@
     return Boolean(
       actionTaskId ||
       readinessTaskId ||
+      // Starting the focused work clears its pending action. Keep the active
+      // route in the same concise handoff instead of dropping the owner into
+      // the inventory dashboard mid-flow.
+      (projectRunActive && routeTaskId) ||
       selectedReleaseShipped,
     )
   })

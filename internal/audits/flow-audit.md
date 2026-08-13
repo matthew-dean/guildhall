@@ -59054,3 +59054,29 @@ the shared current action for an individual project.
   button opens the project overview with the `Migrate project` dialog and
   visible `Apply required updates` command at 1280x720, with no horizontal
   overflow or browser warning/error.
+
+### Repair: Starting focused work must not reveal the legacy dashboard
+
+- [x] User job: an owner opens the one work item Guildhall has chosen, starts
+  it, and remains oriented to that item. The full work inventory appears only
+  after choosing `Browse work`, never as a delayed side effect of the start.
+- Finding, 2026-08-12: Narrative Harness opened as a concise ready-work
+  handoff, then starting `NAR-091` cleared the pending primary action and
+  silently replaced that handoff with filters, list, inspector, duplicate task
+  content, and recent-progress inventory. The route still selected NAR-091;
+  the presentation had simply stopped recognizing the active handoff.
+- Contract Touch Decision: focused Work remains active when the project is
+  running and the route carries a selected task id. This is route/run state,
+  not a route-local task ranking; it does not make arbitrary stopped task URLs
+  look owner-selected. Considered but not touched: task state, action ranking,
+  run lifecycle, selected-task persistence, Work inventory, APIs, and schemas.
+  Schema Migration Decision: none. Required proof: focused Work regression
+  and installed ready-work entry proof. Apply/revert: remove the active-route
+  condition; no persisted state changes.
+- Evidence, 2026-08-12: focused Work suite passes 6/6 and `pnpm typecheck`
+  and `git diff --check` pass. After a fresh build/install and Looma + Knit
+  restart, `/api/stale-server` reports `stale:false`; Narrative Harness is
+  returned to a stopped ready-work state with `NAR-091` as its one direct
+  action. Browser proof of the active post-start state is represented by the
+  deterministic focused-run regression and will be repeated in the next
+  interactive run without leaving background work active.
