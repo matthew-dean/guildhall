@@ -28,7 +28,7 @@
   import ResolveEscalationModal from './drawer/ResolveEscalationModal.svelte'
   import type { DrawerPayload, DrawerTab, Escalation, Task } from '../lib/types.js'
   import { onEvent, eventTaskId } from '../lib/events.js'
-  import { currentProjectHref, currentTaskHref, projectFetch } from '../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, isRequiredProjectMigrationError, projectFetch } from '../lib/project-routes.js'
   import { project } from '../lib/project.svelte.js'
   import { nav, path as navPath } from '../lib/nav.svelte.js'
   import { onMount, onDestroy } from 'svelte'
@@ -390,7 +390,7 @@
       if (!res.ok) {
         const b = await res.json().catch(() => ({}))
         const message = b.error ?? `HTTP ${res.status}`
-        if (/Run required Guildhall migration/i.test(message)) {
+        if (isRequiredProjectMigrationError(message)) {
           onMigrationRequired?.()
           return false
         }

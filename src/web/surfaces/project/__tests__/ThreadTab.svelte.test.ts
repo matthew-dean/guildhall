@@ -3412,6 +3412,28 @@ describe('ThreadTab', () => {
     })
   })
 
+  it('takes a required project update from spec approval to the selected task repair flow', async () => {
+    installFetchFakes([specReviewTurn('task-link-controls')], 'spec-task-link-controls', {
+      approveSpecResponse: json(
+        { error: 'Run required Guildhall migration 0.13.27/acceptance-command-proof-path-reconciliation before starting this project.' },
+        { status: 409 },
+      ),
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('button', { name: /view spec/i })
+    await userEvent.click(screen.getByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /approve spec/i }))
+
+    await waitFor(() => {
+      expect(path.href).toBe('/projects/looma-knit/work?view=queue&task=task-link-controls&repair=migration')
+      expect(screen.queryByText(/Run required Guildhall migration/i)).toBeNull()
+      expect(screen.queryByRole('dialog', { name: /approve spec/i })).toBeNull()
+    })
+  })
+
   it('does not offer spec approval while the backing task is still being shaped', async () => {
     installFetchFakes([
       specReviewTurn('task-link-controls', {

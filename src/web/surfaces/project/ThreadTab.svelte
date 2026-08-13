@@ -47,7 +47,15 @@
   import { escalationPrimaryAction, escalationUserGuidance } from '../../lib/escalation-labels.js'
   import { briefDoneWhenForReaders, briefScopeForReaders } from '../../lib/brief-display.js'
   import { nav, path } from '../../lib/nav.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
+  import {
+    currentProjectHref,
+    currentProjectId,
+    currentTaskHref,
+    isRequiredProjectMigrationError,
+    projectActionHref,
+    projectFetch,
+    projectTaskRepairHref,
+  } from '../../lib/project-routes.js'
   import {
     hasIncompleteTaskChecklist,
     isImportedDraftShaping,
@@ -1878,6 +1886,16 @@
       const r = await scopedProjectFetch(endpoint, { method: 'POST' })
       const j = await r.json().catch(() => ({})) as { error?: string }
       if (!r.ok || j.error) {
+        if (isRequiredProjectMigrationError(j.error)) {
+          const projectId = explicitProjectId ?? currentProjectId()
+          if (projectId) {
+            documentPreview = null
+            nav(projectTaskRepairHref(projectId, turn.taskId))
+            return false
+          }
+          replyErrors = { ...replyErrors, [turn.id]: 'Open this project\'s work view to apply its required update.' }
+          return false
+        }
         replyErrors = { ...replyErrors, [turn.id]: j.error ?? `HTTP ${r.status}` }
         return false
       }

@@ -50,6 +50,14 @@ export function projectTaskRepairHref(projectId: string, taskId: string): string
   return `${projectHref(projectId, '/work')}?${params}`
 }
 
+/**
+ * A project update is a recoverable routing condition, not approval feedback.
+ * Keep its recognition shared so every approval surface reaches the same repair.
+ */
+export function isRequiredProjectMigrationError(message?: string | null): boolean {
+  return /^Run required Guildhall migration\b/i.test(message?.trim() ?? '')
+}
+
 export function currentProjectHref(suffix = '/thread', explicitProjectId?: string | null): string {
   const projectId = normalizedProjectId(explicitProjectId) ?? currentProjectId()
   if (!projectId) return '/projects'

@@ -58457,3 +58457,35 @@ the shared current action for an individual project.
   It has no tabs or latest-handoff record in the focused screen; clicking the
   visible primary action opens the `Approve spec` confirmation with its final
   `Approve` control. This proof performs no task-state mutation.
+
+### Repair: Every spec approval hands project updates to one repair flow
+
+- [x] User job: regardless of whether the owner approves a spec from the
+  focused Work detail or the Thread document preview, a required project
+  update must replace the raw internal error with the same one-action repair
+  and return them to the task they were reviewing.
+- Finding, 2026-08-12: TaskDrawer already hands this condition to the shared
+  repair route, but ThreadTab still rendered `Run required Guildhall
+  migration ...` inside its approval dialog. Two visible approval paths were
+  therefore disagreeing about the same recoverable project state.
+- Contract Touch Decision: add one shared recognition helper for the typed
+  server error text and use the existing project-task repair route from the
+  Thread approval handler. Considered but unchanged: migration selection,
+  task state, approval endpoint semantics, project summary/action ranking,
+  migration ledger, and persisted schemas. Schema Migration Decision: none;
+  routing an existing recoverable error does not persist data. Required proof:
+  Thread replay proves approval leaves the raw error behind and targets the
+  selected task's repair URL; existing TaskDrawer regression confirms the
+  other entry point uses the same rule. Apply/revert: remove the common helper
+  and navigation branch; the approval protocol and stored state are unchanged.
+- Evidence, 2026-08-12: ThreadTab coverage passes 123/123, including an
+  approval response carrying the real required-migration message. The preview
+  closes, no raw internal message is rendered, and navigation targets
+  `/projects/looma-knit/work?view=queue&task=task-link-controls&repair=migration`.
+  TaskDrawer coverage passes 61/61 against the same shared recognition helper;
+  project-route coverage passes 7/7. `pnpm typecheck` and
+  `pnpm lint:contracts` pass. After a fresh build/install and Looma + Knit
+  restart, the real repair URL is current (`stale:false`) and at 1280x720 has
+  no page overflow: the update gate is 1176px wide and its 520px dialog fits
+  fully in the viewport. The isolated Narrative Harness flow audit also passes
+  at 1114x692, 900x692, and 390x844 with no clipped current-work action.
