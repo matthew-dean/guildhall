@@ -354,6 +354,16 @@
     if (focusedWork?.status === 'blocked') return 'Open this work to resolve what is blocking it.'
     return 'Open this work to take the next step.'
   })
+  const focusedCardTitle = $derived.by(() => {
+    if (focusedWork && isFocusedRunnableWork(focusedWork)) return 'Ready to continue'
+    if (focusedWork && (effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger')) {
+      return 'What needs your attention'
+    }
+    return 'Current work'
+  })
+  const primaryActionCardTitle = $derived(
+    detail.actionModel?.primaryAction?.code === 'ready_work' ? 'Ready to continue' : 'What needs your attention',
+  )
 
   function openTask(task: Task): void {
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
@@ -781,7 +791,7 @@
     </header>
 
     {#if focusedWork}
-      <Card title="What needs your attention" titleTag="h2" tone={effectiveStatusTone(focusedWork) === 'danger' ? 'danger' : effectiveStatusTone(focusedWork) === 'warn' ? 'warn' : 'accent'} variant="callout" railStrength="strong">
+      <Card title={focusedCardTitle} titleTag="h2" tone={effectiveStatusTone(focusedWork) === 'danger' ? 'danger' : effectiveStatusTone(focusedWork) === 'warn' ? 'warn' : 'accent'} variant="callout" railStrength="strong">
         <div class="work-focus-decision">
           <div class="work-focus-copy">
             <div class="work-focus-meta">
@@ -806,7 +816,7 @@
         {/if}
       </Card>
     {:else if detail.actionModel?.primaryAction}
-      <Card title="What needs your attention" titleTag="h2" tone="accent" variant="callout" railStrength="strong">
+      <Card title={primaryActionCardTitle} titleTag="h2" tone="accent" variant="callout" railStrength="strong">
         <div class="work-focus-decision">
           <div class="work-focus-copy">
             <h2>{detail.actionModel.primaryAction.label ?? 'Continue project work'}</h2>

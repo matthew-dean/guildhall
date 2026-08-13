@@ -73,6 +73,18 @@ describe('focused Work flow', () => {
     expect(path.href).toBe('/projects/looma-knit/task/task-review-contract?tab=spec')
   })
 
+  it('does not frame ready work as an owner-attention problem', async () => {
+    const ready = reviewTask({ id: 'task-ready', displayKey: 'LOO-143', title: 'Resume the prepared work', status: 'ready' })
+    setRoute(`/projects/looma-knit/work?task=${ready.id}`)
+    render(WorkTab, { props: { detail: projectDetail([ready], {
+      actionModel: { primaryAction: { taskId: ready.id, code: 'ready_work', buttonLabel: 'Open Work', href: `/work?task=${ready.id}` } },
+    }) } })
+
+    expect(await screen.findByRole('heading', { name: 'Ready to continue' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'What needs your attention' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
+  })
+
   it('keeps the shared focused work item selected through a later refresh', async () => {
     const selected = reviewTask({ id: 'task-selected', displayKey: 'LOO-143', title: 'Keep this selected' })
     const other = reviewTask({ id: 'task-other', displayKey: 'LOO-144', title: 'Do not replace selection' })

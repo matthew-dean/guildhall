@@ -58064,6 +58064,22 @@ the shared current action for an individual project.
   opened `task-091`. The former generic first click is no longer required to
   reach a pending decision.
 
+### Repair: Focused Work distinguishes ready work from owner attention
+
+- [x] Label a focused `ready_work` handoff `Ready to continue`, reserving
+  `What needs your attention` for warning and danger decisions.
+- Contract Touch Decision: Work consumes only the existing shared primary
+  action code and task status to choose its section label. Considered but
+  unchanged: action ranking, task mutation, task status, run controls, and
+  route selection. Schema Migration Decision: none.
+- Evidence, 2026-08-12: focused Work coverage passes 5/5, including the ready
+  handoff assertion; `pnpm typecheck` and `git diff --check` pass. After a
+  fresh `pnpm build` and `pnpm dev:install`, the installed service reported
+  `stale:false`. At the 1280x720 Narrative Harness focused-work route,
+  `task-091` appeared as `Ready to continue`, with its milestone, `5 of 9
+  complete` progress, and `Resume this work item` visible without scrolling or
+  horizontal overflow. No owner-attention heading was present.
+
 ### Repair: Failed spec approval keeps its decision surface
 
 - [x] Keep an approval modal open until its approval mutation succeeds; render
