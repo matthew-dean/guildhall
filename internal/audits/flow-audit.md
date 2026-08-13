@@ -58489,3 +58489,32 @@ the shared current action for an individual project.
   no page overflow: the update gate is 1176px wide and its 520px dialog fits
   fully in the viewport. The isolated Narrative Harness flow audit also passes
   at 1114x692, 900x692, and 390x844 with no clipped current-work action.
+
+### Repair: Thread-ready handoff names the milestone and progress
+
+- [ ] User job: landing on Thread when Guildhall has work ready must answer
+  three things without reopening a transcript: the current milestone, the
+  work item that will resume, and how much of that milestone is complete.
+  The owner should then take the one visible `Open Work` action or leave.
+- Finding, 2026-08-12: real Narrative Harness correctly reduced Thread to
+  `No response needed` and `Open Work`, but it omitted both the Stage 2 name
+  and `5 of 9 complete`. The action was compact but not sufficiently oriented.
+- Contract Touch Decision: none. Thread will display existing fields from the
+  shared action model and project orientation spine only; the runtime summary,
+  release calculation, task routing, persistence, and schemas are unchanged.
+  Required proof: Thread unit replay verifies the focused task, selected scope,
+  completion ratio, and one route action; installed browser proof confirms the
+  card remains compact and unclipped. Apply/revert: remove the presentation
+  line; no operational or stored data changes.
+- Evidence so far, 2026-08-12: ThreadTab coverage passes 123/123. Its
+  ready-work replay verifies there is no Thread list, selected thread, or
+  active dock, while the card names the focused work and
+  `Stage 2: Local Desktop Harness MVP · 5 of 9 complete` before its sole
+  `Open Work` action. `pnpm typecheck`, `pnpm lint:contracts`, and the fresh
+  build/install pass. In the real installed Narrative Harness screen at
+  1280x720, those four elements are visible and the page has no horizontal
+  overflow. Remaining evidence: add an isolated rendered ready-work fixture
+  that can replay the same compact state at narrow desktop and mobile without
+  mutating the active Narrative Harness project. The stock rendered fixture
+  deliberately starts in paused/spec-review state, so it cannot truthfully
+  provide that replay today.

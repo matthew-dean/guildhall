@@ -1549,6 +1549,22 @@
     runStatus !== 'running' &&
     runStatus !== 'stopping',
   ))
+  const readyWorkOrientation = $derived(orientationSpine ?? project.detail?.orientationSpine ?? null)
+  const readyWorkScopeLabel = $derived(
+    readyWorkOrientation?.summary?.selectedScopeLabel
+      ?? readyWorkOrientation?.selectedRelease?.label
+      ?? null,
+  )
+  const readyWorkProgress = $derived(readyWorkOrientation?.summary?.progress ?? null)
+  const readyWorkContext = $derived.by(() => {
+    const scope = readyWorkScopeLabel?.trim() || null
+    const done = readyWorkProgress?.done
+    const total = readyWorkProgress?.total
+    const progress = Number.isFinite(done) && Number.isFinite(total) && (total ?? 0) > 0
+      ? `${done} of ${total} complete`
+      : null
+    return [scope, progress].filter((part): part is string => Boolean(part)).join(' · ') || null
+  })
   const compactListView = $derived(compactThreadMode && compactPane === 'list')
   const compactDetailView = $derived(compactThreadMode && compactPane === 'detail')
   const activeOwnerInputQuestions = $derived(
@@ -3763,6 +3779,12 @@
           <div class="thread-project-decision">
             <div>
               <h3>{ownerAction?.label ?? 'Work is ready to continue'}</h3>
+              {#if ownerAction?.taskLabel}
+                <p class="thread-project-decision-task">{ownerAction.taskLabel}</p>
+              {/if}
+              {#if readyWorkContext}
+                <p>{readyWorkContext}</p>
+              {/if}
               {#if ownerAction?.detail}
                 <p>{ownerAction.detail}</p>
               {/if}

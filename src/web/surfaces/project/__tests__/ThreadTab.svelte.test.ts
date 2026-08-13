@@ -904,11 +904,19 @@ describe('ThreadTab', () => {
         primaryAction: {
           label: 'Resume the focused work',
           taskId: 'task-ready-work',
+          taskLabel: 'Resume the focused work',
           detail: 'Guildhall can continue this work item.',
           buttonLabel: 'Open work',
           href: '/work?task=task-ready-work',
           tone: 'accent',
           code: 'ready_work',
+        },
+      },
+      orientationSpine: {
+        selectedRelease: { label: 'Stage 2: Local Desktop Harness MVP' },
+        summary: {
+          selectedScopeLabel: 'Stage 2: Local Desktop Harness MVP',
+          progress: { done: 5, total: 9 },
         },
       },
     })
@@ -919,6 +927,8 @@ describe('ThreadTab', () => {
     expect(screen.queryByLabelText('Thread list')).toBeNull()
     expect(screen.queryByLabelText('Selected thread')).toBeNull()
     expect(screen.queryByLabelText('Active thread dock')).toBeNull()
+    expect(screen.getByText('Stage 2: Local Desktop Harness MVP · 5 of 9 complete')).toBeTruthy()
+    expect(screen.getAllByText('Resume the focused work').length).toBeGreaterThanOrEqual(2)
     await userEvent.click(screen.getByRole('button', { name: 'Open work' }))
     expect(path.href).toBe('/projects/looma-knit/work?task=task-ready-work')
   })
