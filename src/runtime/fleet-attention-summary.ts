@@ -125,11 +125,9 @@ export function buildFleetAttentionGroups<TProject extends FleetAttentionProject
 export function summarizeFleetAttention<TProject extends FleetAttentionProject>(projects: readonly TProject[]): {
   projectCount: number
   totalItems: number
-  groups: FleetAttentionGroup<TProject>[]
 } {
   const groups = buildFleetAttentionGroups(projects)
   return {
-    groups,
     projectCount: groups.filter(group => group.items.length > 0).length,
     totalItems: groups.reduce((sum, group) => sum + group.items.length, 0),
   }

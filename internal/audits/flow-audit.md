@@ -58283,3 +58283,26 @@ the shared current action for an individual project.
   horizontal overflow. Its four rows are the same four projects, Narrative
   Harness and t-minus-t do not leak stale ready-work import urgency, and no
   mutation was invoked.
+
+### Repair: Project cards are entry points, not control decks
+
+- [x] Give each project card exactly one non-mutating path into its current
+  work. Remove direct start/resume/pause controls and filesystem paths from the
+  global card grid; processing controls remain explicit inside the selected
+  project where their impact is explained.
+- Contract Touch Decision: touched Projects-home and ProjectCard presentation
+  plus unused global run-control handlers. Considered but not touched: project
+  run APIs, project-level pause/resume controls, action ranking, project card
+  summary data, and persisted state. Schema Migration Decision: none. Required
+  proof: card surface tests and an installed replay show one action per card,
+  no direct processing mutation, and the existing project-level Pause control
+  remains covered. Apply/revert: presentation-only removal of home mutations.
+- Evidence, 2026-08-12: focused project-home, project-view, and fleet-summary
+  coverage passes 92/92. `pnpm typecheck`, `pnpm lint:contracts`, and `git
+  diff --check` pass. After `pnpm dev:install` and a fresh Looma + Knit service
+  start, `/api/stale-server` reports `stale:false`. The installed 1280x720
+  chooser has one button on every project card, no direct `Resume` or `Pause`
+  button, no displayed repository path, and no horizontal overflow. Narrative
+  Harness Overview then shows its milestone, `5 of 9 complete`, NAR-091, and
+  one `Open Work` decision in the first viewport. No user-project mutation was
+  invoked.

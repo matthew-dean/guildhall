@@ -17,7 +17,6 @@
   let loading = $state(true)
   let error = $state<string | null>(null)
   let busyId = $state<string | null>(null)
-  let optimisticRuns = $state<Record<string, boolean>>({})
   let refreshHandle: ReturnType<typeof setTimeout> | null = null
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
   let refreshInFlight = false
@@ -104,52 +103,8 @@
     }, delay)
   }
 
-  async function openProject(projectId: string, href?: string | null): Promise<void> {
-    busyId = projectId
-    try {
-      nav(href ?? projectHref(projectId, '/overview'))
-    } finally {
-      busyId = null
-    }
-  }
-
-  async function startProject(projectId: string): Promise<void> {
-    busyId = projectId
-    optimisticRuns = { ...optimisticRuns, [projectId]: true }
-    try {
-      const response = await fetch(`/api/project/start?projectId=${encodeURIComponent(projectId)}`, { method: 'POST' })
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}))
-        throw new Error(payload?.error ?? `Unable to resume project (${response.status})`)
-      }
-      await refresh()
-    } catch (err) {
-      error = requestErrorMessage(err)
-      const next = { ...optimisticRuns }
-      delete next[projectId]
-      optimisticRuns = next
-    } finally {
-      busyId = null
-    }
-  }
-
-  async function stopProject(projectId: string): Promise<void> {
-    busyId = projectId
-    const next = { ...optimisticRuns }
-    delete next[projectId]
-    optimisticRuns = next
-    try {
-      const response = await fetch(`/api/project/stop?projectId=${encodeURIComponent(projectId)}`, { method: 'POST' })
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}))
-        throw new Error(payload?.error ?? `Unable to pause project (${response.status})`)
-      }
-      await refresh()
-    } catch (err) {
-      error = requestErrorMessage(err)
-    } finally {
-      busyId = null
-    }
+  function openProject(projectId: string, href?: string | null): void {
+    nav(href ?? projectHref(projectId, '/overview'))
   }
 
   async function attachProject(): Promise<void> {
@@ -314,11 +269,7 @@
         {#each cards as card (card.id)}
           <ProjectCard
             summary={card}
-            busy={busyId === card.id}
-            optimisticRunning={Boolean(optimisticRuns[card.id])}
             onOpen={openProject}
-            onStart={startProject}
-            onStop={stopProject}
           />
         {/each}
       </div>

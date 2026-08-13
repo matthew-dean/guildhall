@@ -67,7 +67,7 @@ describe('fleet attention summary', () => {
   })
 
   it('keeps saved setup attention when the project has no current action', () => {
-    const summary = summarizeFleetAttention([project({ id: 'commerce-project', fleetAttention: {
+    const commerce = project({ id: 'commerce-project', fleetAttention: {
       freshness: 'current',
       total: 1,
       items: [{
@@ -80,9 +80,10 @@ describe('fleet attention summary', () => {
         actionHref: '/thread',
         stepId: 'direction',
       }],
-    } })])
+    } })
+    const summary = summarizeFleetAttention([commerce])
 
-    expect(summary).toMatchObject({ projectCount: 1, totalItems: 1 })
-    expect(summary.groups[0]?.items[0]).toMatchObject({ kind: 'setup_pending', title: 'Give the project direction' })
+    expect(summary).toEqual({ projectCount: 1, totalItems: 1 })
+    expect(buildFleetAttentionGroups([commerce])[0]?.items[0]).toMatchObject({ kind: 'setup_pending', title: 'Give the project direction' })
   })
 })

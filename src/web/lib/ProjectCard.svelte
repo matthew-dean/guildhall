@@ -1,8 +1,6 @@
 <script lang="ts">
   import Activity from 'lucide-svelte/icons/activity'
   import FolderOpen from 'lucide-svelte/icons/folder-open'
-  import PauseCircle from 'lucide-svelte/icons/circle-pause'
-  import Sparkles from 'lucide-svelte/icons/sparkles'
   import ActionBar from './ActionBar.svelte'
   import Button from './Button.svelte'
   import Card from './ui-compat/Card.svelte'
@@ -12,25 +10,17 @@
 
   interface Props {
     summary: ProjectCardSummary
-    busy?: boolean
-    optimisticRunning?: boolean
     onOpen?: (id: string, href?: string | null) => void
-    onStart?: (id: string) => void
-    onStop?: (id: string) => void
   }
 
   let {
     summary,
-    busy = false,
-    optimisticRunning = false,
     onOpen,
-    onStart,
-    onStop,
   }: Props = $props()
 
-  const effectiveRunning = $derived(summary.canStop || optimisticRunning)
+  const effectiveRunning = $derived(summary.canStop)
 
-  const displayStatusLabel = $derived(optimisticRunning ? 'Starting' : summary.statusLabel)
+  const displayStatusLabel = $derived(summary.statusLabel)
   const statusTitle = $derived(summary.projectCheckIn?.needed
     ? summary.projectCheckIn.detail ?? 'Answer the first project questions so current project context can be used.'
     : `Project status: ${displayStatusLabel}`)
@@ -61,7 +51,6 @@
     <div class="stack">
       <div class="title-block">
         <h3>{summary.name}</h3>
-        <p class="path">{summary.path}</p>
       </div>
 
       {#if summary.statusLoading}
@@ -82,21 +71,10 @@
 
     </div>
     <ActionBar className="project-card-actions">
-      <Button variant="secondary" size="sm" disabled={busy || !summary.canOpen} title={openTitle} onclick={() => onOpen?.(summary.id, summary.openHref)}>
+      <Button variant="secondary" size="sm" disabled={!summary.canOpen} title={openTitle} onclick={() => onOpen?.(summary.id, summary.openHref)}>
         <FolderOpen size={14} />
         {summary.actionLabel}
       </Button>
-      {#if summary.canStart && !effectiveRunning}
-        <Button variant="agent" size="sm" disabled={busy} title={`${summary.runActionLabel}: let Guildhall advance ${summary.name}`} onclick={() => onStart?.(summary.id)}>
-          <Sparkles size={14} />
-          {summary.runActionLabel}
-        </Button>
-      {:else if effectiveRunning}
-        <Button variant="secondary" size="sm" disabled={busy} title={`Pause Guildhall on ${summary.name}`} onclick={() => onStop?.(summary.id)}>
-          <PauseCircle size={14} />
-          Pause
-        </Button>
-      {/if}
     </ActionBar>
   </div>
 </Card>
@@ -166,14 +144,6 @@
   }
   .title-block {
     min-width: 0;
-  }
-  .path {
-    margin: var(--s-1) 0 0;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .loading-state {
     display: grid;

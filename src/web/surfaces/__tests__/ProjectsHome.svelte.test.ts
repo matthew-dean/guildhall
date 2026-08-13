@@ -435,7 +435,7 @@ describe('ProjectsHome', () => {
     expect(screen.getAllByRole('button', { name: /open project/i })).toHaveLength(2)
   })
 
-  it('keeps project cards to current state and real commands', async () => {
+  it('keeps project cards to current state and one entry action', async () => {
     const fetchMock = vi.fn(async () => json(servicePayload))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -450,38 +450,22 @@ describe('ProjectsHome', () => {
     expect(card.querySelector('[aria-label="Project task summary"]')).toBeNull()
     expect(card.querySelector('[aria-label^="Recent task activity"]')).toBeNull()
     expect(screen.getAllByRole('button', { name: /open project/i })).toHaveLength(2)
-    expect(screen.getByRole('button', { name: /^resume$/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^pause$/i })).toBeNull()
+    expect(card.querySelector('.path')).toBeNull()
   })
 
-  it('resumes and pauses projects with project ids in the endpoint', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url.startsWith('/api/project/start')) {
-        expect(url).toContain('projectId=fair-labor-license')
-        expect(init?.method).toBe('POST')
-        return json({ ok: true })
-      }
-      if (url.startsWith('/api/project/stop')) {
-        expect(url).toContain('projectId=looma-knit')
-        expect(init?.method).toBe('POST')
-        return json({ ok: true })
-      }
-      return json(servicePayload)
-    })
+  it('does not start or pause processing from the project chooser', async () => {
+    const fetchMock = vi.fn(async () => json(servicePayload))
     vi.stubGlobal('fetch', fetchMock)
 
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    const startButton = screen.getByRole('button', { name: /^resume$/i })
-    expect(startButton.classList.contains('v-agent')).toBe(true)
-    await userEvent.click(startButton)
-    await userEvent.click(screen.getAllByRole('button', { name: /pause/i })[0]!)
-
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/start'))).toBe(true)
-      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/stop'))).toBe(true)
-    })
+    expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^pause$/i })).toBeNull()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/start'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/stop'))).toBe(false)
   })
 
   it('shows empty-state and attach flow without trapping the user', async () => {
@@ -544,28 +528,6 @@ describe('ProjectsHome', () => {
 
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2))
     expect(getCachedService()).toBe(cachedAfterInitialLoad)
-  })
-
-  it('surfaces resume and pause failures on the projects page', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url.startsWith('/api/project/start')) {
-        return json({ error: 'model unavailable' }, { status: 409 })
-      }
-      if (url.startsWith('/api/project/stop')) {
-        return json({ error: 'pause failed' }, { status: 500 })
-      }
-      return json(servicePayload)
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(ProjectsHome)
-    await screen.findByText('Fair Labor License')
-
-    await userEvent.click(screen.getByRole('button', { name: /^resume$/i }))
-    await screen.findByText('model unavailable')
-    await userEvent.click(screen.getByRole('button', { name: /pause/i }))
-    await screen.findByText('pause failed')
   })
 
   it('handles cancelled attach without navigating away from the projects list', async () => {
