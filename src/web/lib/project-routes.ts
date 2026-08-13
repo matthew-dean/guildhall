@@ -86,6 +86,11 @@ export function projectActionHref(href: string, explicitProjectId?: string | nul
     const taskId = url.pathname.slice('/task/'.length)
     return taskId ? `${projectTaskHref(projectId, decodeURIComponent(taskId))}${url.search}${url.hash}` : href
   }
+  if (url.pathname === '/migrations' || url.pathname.startsWith('/migrations/')) {
+    const repair = new URLSearchParams(url.search)
+    repair.set('repair', 'migration')
+    return `${projectHref(projectId, '/overview')}?${repair.toString()}${url.hash}`
+  }
   const projectSurface =
     url.pathname === '/overview' ||
     url.pathname.startsWith('/overview/') ||

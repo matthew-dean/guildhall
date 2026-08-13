@@ -3595,6 +3595,54 @@ describe('GET /api/service', () => {
     expect(project?.startReadiness).toBeDefined()
   })
 
+  it('publishes a required migration as the fleet action before a saved work decision', async () => {
+    registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [{
+        id: 'task-review',
+        title: 'Review the prepared spec',
+        description: 'The owner needs to review this spec.',
+        domain: 'runtime',
+        projectPath: tmpDir,
+        status: 'spec_review',
+        priority: 'normal',
+        references: [],
+        sourceClaims: [],
+        acceptanceCriteria: [],
+        outOfScope: [],
+        dependsOn: [],
+        notes: [],
+        createdAt: '2026-07-14T12:00:00.000Z',
+        updatedAt: '2026-07-14T12:00:00.000Z',
+      }],
+    })
+    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
+    const service = buildServeApp({ projectPath: tmpDir })
+    await service.refreshProjectProjections(tmpDir)
+
+    const fleet = await service.app.fetch(new Request('http://localhost/api/service/projects'))
+    expect(fleet.status).toBe(200)
+    const fleetBody = await fleet.json() as { projects?: Array<Record<string, any>> }
+    const project = fleetBody.projects?.find(item => item.id === PROJECT_ID)
+    expect(project).toMatchObject({
+      startReadiness: { code: 'required_migration_pending', actionHref: '/migrations' },
+      actionModel: {
+        primaryAction: { code: 'required_migration_pending', buttonLabel: 'Review project update' },
+        runControl: { label: 'Migrate', startEnabled: false },
+      },
+    })
+
+    const detail = await service.app.fetch(new Request(scoped('/api/project?surface=work')))
+    expect(detail.status).toBe(200)
+    const detailBody = await detail.json() as Record<string, any>
+    expect(detailBody.actionModel).toMatchObject({
+      primaryAction: { code: 'required_migration_pending', buttonLabel: 'Review project update' },
+    })
+  })
+
   it('serves a current per-project summary without entering full service reconstruction', async () => {
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
     const queue = {

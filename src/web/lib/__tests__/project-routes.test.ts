@@ -118,6 +118,7 @@ describe('project-routes', () => {
     expect(projectActionHref('/workspace-import')).toBe('/projects/looma-knit/workspace-import')
     expect(projectActionHref('/settings/advanced')).toBe('/projects/looma-knit/settings/advanced')
     expect(projectActionHref('/task/task-003')).toBe('/projects/looma-knit/task/task-003')
+    expect(projectActionHref('/migrations')).toBe('/projects/looma-knit/overview?repair=migration')
     expect(projectActionHref('/providers')).toBe('/providers')
     expect(projectActionHref('/projects/fair-labor-license/thread')).toBe('/projects/fair-labor-license/thread')
   })

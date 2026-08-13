@@ -181,4 +181,25 @@ describe('FleetNeedsYou', () => {
     expect(await screen.findByRole('button', { name: 'Start setup' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Open' })).toBeNull()
   })
+
+  it('routes a required project update into the shared repair flow', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      groups: [{
+        project: { id: 'looma-knit', path: '/repo/looma-knit', name: 'Looma + Knit' },
+        items: [{
+          kind: 'required_migration',
+          severity: 'high',
+          title: 'Required migration',
+          detail: 'Apply the project update before reviewing work.',
+          actionHref: '/migrations',
+        }],
+        error: null,
+      }],
+    })))
+
+    render(FleetNeedsYou)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Migrate' }))
+    expect(path.href).toBe('/projects/looma-knit/overview?repair=migration')
+  })
 })

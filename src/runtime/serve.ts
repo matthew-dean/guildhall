@@ -2557,6 +2557,16 @@ async function refreshProjectProjections(
         resolved,
         options.supervisor.get(resolved.id),
       )
+      // Required migrations are a hard entry gate, not project-detail-only
+      // diagnostics. Put the same gate into the saved fleet projection so a
+      // card action never opens a project only to reveal an unavoidable
+      // precondition after the click.
+      const migrationGate = withRequiredMigrationFleetAction({
+        actionModel: fleetSummary.actionModel,
+        startReadiness: fleetSummary.startReadiness,
+        runStatus: fleetSummary.run?.status,
+        blocker: await startBlockerForRequiredMigrations(resolved.path),
+      })
       const savedAttention = fleetAttentionItems
         ? fleetAttentionProjection(fleetAttentionItems)
         : (() => {
@@ -2576,9 +2586,10 @@ async function refreshProjectProjections(
           })()
       const compactFleetSummary = compactFleetSummaryPayload({
         ...fleetSummary,
+        startReadiness: migrationGate.startReadiness,
         fleetAttention: savedAttention,
         actionModel: buildFleetAttentionActionModel({
-          stored: fleetSummary.actionModel,
+          stored: migrationGate.actionModel,
           items: savedAttention.items,
           runStatus: fleetSummary.run?.status,
         }),
@@ -3184,10 +3195,10 @@ function readFleetProjectSummaries(
   })
 }
 
-function publishFleetSummaryFromSavedState(
+async function publishFleetSummaryFromSavedState(
   entry: { id: string; path: string; name?: string; tags?: string[] },
   run?: ReturnType<OrchestratorSupervisor['list']>[number],
-): void {
+): Promise<void> {
   const resolved = resolveProject(entry.path)
   if (resolved.initializationNeeded) {
     publishFleetSummaryProjection({
@@ -3222,11 +3233,18 @@ function publishFleetSummaryFromSavedState(
   const fleetAttention = attention.freshness === 'current'
     ? fleetAttentionProjection(attention.items)
     : { items: [], total: 0, freshness: 'missing' as const }
+  const migrationGate = withRequiredMigrationFleetAction({
+    actionModel: basePayload.actionModel,
+    startReadiness: basePayload.startReadiness,
+    runStatus: basePayload.run?.status,
+    blocker: await startBlockerForRequiredMigrations(entry.path),
+  })
   const payload = compactFleetSummaryPayload({
     ...basePayload,
+    startReadiness: migrationGate.startReadiness,
     fleetAttention,
     actionModel: buildFleetAttentionActionModel({
-      stored: basePayload.actionModel,
+      stored: migrationGate.actionModel,
       items: fleetAttention.items,
       runStatus: basePayload.run?.status,
     }),
@@ -3322,6 +3340,42 @@ async function startBlockerForRequiredMigrations(projectPath: string): Promise<{
       ? `Run required Guildhall migration ${first.id} before starting this project.`
       : 'Run required Guildhall migrations before starting this project.',
     actionHref: '/migrations',
+  }
+}
+
+function withRequiredMigrationFleetAction(input: {
+  actionModel?: ProjectActionModel | null
+  startReadiness?: ServiceProjectSummary['startReadiness'] | null
+  runStatus?: string | null
+  blocker: Awaited<ReturnType<typeof startBlockerForRequiredMigrations>>
+}): {
+  actionModel?: ProjectActionModel | null
+  startReadiness?: ServiceProjectSummary['startReadiness'] | null
+} {
+  if (!input.blocker) {
+    return {
+      actionModel: input.actionModel,
+      startReadiness: input.startReadiness,
+    }
+  }
+  const migrationAction = buildProjectActionModel({
+    startReadiness: input.blocker,
+    tasks: [],
+    runStatus: input.runStatus ?? 'stopped',
+  })
+  if (!migrationAction.primaryAction) {
+    return {
+      actionModel: input.actionModel,
+      startReadiness: input.blocker,
+    }
+  }
+  return {
+    startReadiness: input.blocker,
+    actionModel: {
+      ...(input.actionModel ?? migrationAction),
+      primaryAction: migrationAction.primaryAction,
+      runControl: migrationAction.runControl,
+    },
   }
 }
 
@@ -20136,7 +20190,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
         // slow project must not leave the rest of the fleet in "loading".
         for (const entry of entries) {
           try {
-            publishFleetSummaryFromSavedState(entry, supervisor.get(entry.id))
+            await publishFleetSummaryFromSavedState(entry, supervisor.get(entry.id))
           } catch (error) {
             console.warn(`[guildhall serve] Could not hydrate fleet summary for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`)
           }

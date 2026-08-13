@@ -59024,3 +59024,33 @@ the shared current action for an individual project.
   `Needs you` marker, the short brief form, collapsed `Setup details`, and
   `Save`: no Thread-list duplicate and no fake Resume/Start control. The same
   decision route at 390x844 has no horizontal overflow or browser warning/error.
+
+### Repair: Fleet actions cannot skip a required project update
+
+- [x] User job: when a global decision card names an action, following it
+  opens that action. A required project update comes before downstream review
+  or work; the owner never has to discover the precondition after navigating.
+- Finding, 2026-08-12: Looma + Knit advertised `Review next spec` from the
+  saved fleet projection, but its project route correctly preempted the task
+  with `Required migration`. The button therefore led to a different action
+  than its label promised.
+- Contract Touch Decision: during the asynchronous fleet projection refresh,
+  resolve the existing required-migration entry gate and replace both saved
+  `startReadiness` and the shared action model's primary/run-control fields
+  when it is present. This reuses the established migration/start-readiness
+  contract and keeps fleet reads bounded to their saved payload. Considered
+  but not touched: request-time fleet reads, migration persistence, migration
+  application, task ordering, route redirects, and schemas. Schema Migration
+  Decision: none; the existing compact projection is rewritten on refresh.
+  Required proof: a fleet integration regression and an installed global
+  decision click. Apply/revert: remove the refresh-time preemption; no project
+  data is modified.
+- Evidence, 2026-08-12: fleet migration, project-route, and global-needs-you
+  routing regressions pass; `pnpm typecheck`, `pnpm lint:contracts`, and
+  `git diff --check` pass, and the full rendered UI matrix passes 45/45. After
+  a fresh build/install and Looma + Knit restart, `/api/stale-server` reports
+  `stale:false`. Installed `Needs you`
+  shows `Required migration / Review project update` for Looma + Knit; its
+  button opens the project overview with the `Migrate project` dialog and
+  visible `Apply required updates` command at 1280x720, with no horizontal
+  overflow or browser warning/error.

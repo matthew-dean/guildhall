@@ -4,7 +4,7 @@
   import Button from '../lib/Button.svelte'
   import ProjectsShell from '../lib/layout/ProjectsShell.svelte'
   import { nav } from '../lib/nav.svelte.js'
-  import { projectHref } from '../lib/project-routes.js'
+  import { projectActionHref, projectHref } from '../lib/project-routes.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { ServiceProjectSummary } from '../lib/types.js'
 
@@ -81,7 +81,7 @@
 
   function goToItem(projectId: string, item: InboxItem): void {
     if (item.actionHref) {
-      nav(projectHref(projectId, item.actionHref))
+      nav(projectActionHref(item.actionHref, projectId))
       return
     }
     goToProjectInbox(projectId)
