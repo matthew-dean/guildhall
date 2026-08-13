@@ -989,7 +989,7 @@ const projects = [
           id: 'headless-mvp',
           label: 'Headless MVP',
           kind: 'release',
-          state: 'active',
+          state: 'shipped',
           source: 'release_plan',
           nodeIds: ['work:current-done'],
           deferredNodeIds: ['work:later-ready'],

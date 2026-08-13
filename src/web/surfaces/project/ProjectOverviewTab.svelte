@@ -51,7 +51,9 @@
         taskLabel: primary.taskLabel?.trim() || null,
         taskId: primary.taskId?.trim() || null,
         detail: migration ? 'Guildhall needs to update this project before it can run.' : primary.detail ?? '',
-        button: migration ? 'Update project' : primary.buttonLabel ?? 'Open work',
+        // The action model owns this label. Overview only supplies the
+        // migration modal as the destination for that same action.
+        button: primary.buttonLabel ?? 'Open work',
         href: primary.href ?? '/work',
         tone: decisionTone(primary.tone),
         migration,

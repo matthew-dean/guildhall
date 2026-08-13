@@ -8035,6 +8035,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           runStatus: run?.status ?? 'stopped',
           runMode: run?.mode,
           availability: overviewState?.availability ?? surfaceState?.availability ?? undefined,
+          releaseLifecycleState: isRecord(compactReleaseReadiness.release) && compactReleaseReadiness.release.state === 'shipped'
+            ? 'shipped'
+            : projection.releaseSummary.release?.state,
         })
       : summary.actionModel
     let sharedReleaseCounts = isRecord(compactReleaseReadiness) && isRecord(compactReleaseReadiness.releaseCounts)
