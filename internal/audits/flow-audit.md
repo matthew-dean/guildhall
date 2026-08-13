@@ -58666,3 +58666,28 @@ the shared current action for an individual project.
   At 1280px it shows one `Apply required updates` decision, has no horizontal
   overflow, and contains no `Approve spec` control. No project data was
   changed during this read-only replay.
+
+### Repair: Home never repeats an action as a fake task title
+
+- [x] User job: from the project list, an owner can scan one sentence per
+  project and immediately understand the next decision. A project card must
+  not echo a generic action label as though it were a task title, producing
+  nonsense such as `Work ready to resume is ready to resume.`
+- Finding, 2026-08-12: the live Narrative Harness card rendered that exact
+  duplicated sentence. Its shared ready-work action had no meaningful task
+  label, but the Home presentation treated the action label as one and added a
+  second ready-to-resume suffix.
+- Contract Touch Decision: `project-summary` will distinguish a specific task
+  label from the action's generic label and use the generic stable sentence
+  when they match. Considered but unchanged: action ranking, service payload,
+  individual task rendering, route ownership, persistence, and schemas.
+  Schema Migration Decision: none. Required proof: summary regression covers
+  the missing/same-label case; the installed Home card says `Work is ready to
+  resume.` exactly once. Apply/revert: restore the previous home-only copy
+  rule.
+- Evidence, 2026-08-12: `project-summary.test.ts` passes 24/24, including the
+  equal generic-label regression. `pnpm typecheck`, `pnpm lint:contracts`,
+  `pnpm build`, and `pnpm dev:install` pass. After a fresh Looma + Knit
+  restart, the installed service reports `stale:false`; live Home at 1280px
+  has no horizontal overflow and the Narrative Harness card says `Work is
+  ready to resume.` exactly once.

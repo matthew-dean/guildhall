@@ -168,8 +168,10 @@ function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummar
     return `${primaryAction.taskLabel} is ready for review.`
   }
   if (primaryAction?.code === 'ready_work') {
-    return primaryAction.taskLabel
-      ? `${primaryAction.taskLabel} is ready to resume.`
+    const taskLabel = primaryAction.taskLabel?.trim()
+    const actionLabel = primaryAction.label?.trim()
+    return taskLabel && taskLabel !== actionLabel
+      ? `${taskLabel} is ready to resume.`
       : 'Work is ready to resume.'
   }
   if (primaryAction) {

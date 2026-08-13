@@ -283,6 +283,37 @@ describe('summarizeProjects', () => {
     })
   })
 
+  it('does not repeat a generic ready-work action as a task title', () => {
+    const service: ServiceDetail = {
+      projects: [{
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/work/narrative-harness',
+        taskCounts: { total: 9, active: 0, draftReview: 0, blocked: 0, done: 5, shelved: 0 },
+        run: { status: 'stopped' },
+        actionModel: {
+          primaryAction: {
+            label: 'Work ready to resume',
+            taskLabel: 'Work ready to resume',
+            buttonLabel: 'Open Work',
+            href: '/work?task=task-091',
+            tone: 'accent',
+            code: 'ready_work',
+          },
+          secondaryActions: [],
+          ownerInput: { active: false },
+          runControl: { label: 'Resume', startEnabled: true, pauseEnabled: true },
+        },
+      }],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      activityLabel: 'Work is ready to resume.',
+      actionLabel: 'Open Work',
+      openHref: '/work?task=task-091',
+    })
+  })
+
   it('uses visible work progress for project-card counts when available', () => {
     const service: ServiceDetail = {
       projects: [
