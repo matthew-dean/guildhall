@@ -298,7 +298,7 @@ function workHrefForTask(taskId: string | undefined): string {
 }
 
 function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): string {
-  if (readiness.code === 'required_migration_pending') return 'Migrate project'
+  if (readiness.code === 'required_migration_pending') return 'Review project update'
   if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
   if (readiness.code === 'owner_review_required') {
     return readiness.count && readiness.count > 1 ? 'Review next spec' : 'Review spec'

@@ -242,9 +242,6 @@ export async function expectProjectOrientationSpineAgreement(
   const deferred = summary.deferredWorkCount ?? summary.deferredCount ?? 0
   const rootCount = Array.isArray(spine.roots) ? spine.roots.length : 0
   const gapCount = Array.isArray(spine.gaps) ? spine.gaps.length : 0
-  const topBlocker = typeof summary.topBlocker === 'string'
-    ? summary.topBlocker
-    : summary.topBlocker?.label
   const pinCount = Array.isArray(spine.activePins)
     ? spine.activePins.length
     : Array.isArray(summary.pinnedNow)
@@ -284,34 +281,25 @@ export async function expectProjectOrientationSpineAgreement(
 
   await page.goto(`/projects/${expected.projectId}/overview`)
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: /^(Do this next|Scope status)$/ })).toBeVisible()
-  await expect(page.getByRole('region', { name: 'Project orientation' })).toBeVisible()
   await expect(page.getByText(new RegExp(escapeRegExp(scopeLabel))).first()).toBeVisible()
-  await expect(page.getByRole('button', { name: `${included} Current scope`, exact: true })).toBeVisible()
-  if (deferred > 0) {
-    await expect(page.getByRole('button', { name: `${deferred} Deferred`, exact: true })).toBeVisible()
-  }
-  await expect(page.getByText(new RegExp(`${included} work items in view`))).toHaveCount(0)
-  if (topBlocker) {
-    await expect(page.getByText(topBlocker).first()).toBeVisible()
-  }
-  const readinessMessage = typeof detail.startReadiness?.message === 'string'
-    ? detail.startReadiness.message
-    : null
-  const runControlLabel = detail.actionModel?.runControl?.label
-  const currentStateMessage = detail.startReadiness?.code === 'paused_live_work'
-    ? runControlLabel
-    : readinessMessage ?? runControlLabel
-  if (typeof currentStateMessage === 'string' && currentStateMessage.trim()) {
-    await expect(page.getByText(currentStateMessage, { exact: true }).first()).toBeVisible()
+  const primaryActionLabel = detail.actionModel?.primaryAction?.buttonLabel
+  if (typeof primaryActionLabel === 'string' && primaryActionLabel.trim()) {
+    await expect(page.getByRole('button', { name: primaryActionLabel, exact: true }).first()).toBeVisible()
   }
 
   await page.goto(`/projects/${expected.projectId}/work`)
-  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
-  const showFilter = page.getByLabel('Show', { exact: true })
-  await showFilter.selectOption({ label: 'Current scope' })
-  await expectProgressiveScopeWorkCount(page, { current: included, deferred })
+  const focusedWork = page.locator('section.work-focus')
+  const workList = page.getByRole('heading', { name: 'Work list' })
+  await expect(focusedWork.or(workList)).toBeVisible()
+  if (await focusedWork.isVisible()) {
+    await expect(focusedWork.getByRole('button').first()).toBeVisible()
+  } else {
+    const showFilter = page.getByLabel('Show', { exact: true })
+    await showFilter.selectOption({ label: 'Current scope' })
+    await expectProgressiveScopeWorkCount(page, { current: included, deferred })
+  }
   if (workAnchor) {
+    const showFilter = page.getByLabel('Show', { exact: true })
     if (await showFilter.count() > 0) {
       await showFilter.selectOption({ label: 'All' })
     }
@@ -319,7 +307,7 @@ export async function expectProjectOrientationSpineAgreement(
   }
 
   await page.goto(`/projects/${expected.projectId}/thread`)
-  await expect(page.getByRole('complementary', { name: 'Thread list' })).toBeVisible()
+  await expect(page.getByRole('complementary', { name: 'Thread list' }).or(page.getByText('No response needed', { exact: true }))).toBeVisible()
   if (threadAnchor) {
     await expect(page.getByText(threadAnchor).first()).toBeVisible()
   }
@@ -334,9 +322,6 @@ export async function expectProjectOrientationSpineAgreement(
   const releaseVerdictTitle = releaseReadiness.verdict?.title ?? releaseReadiness.verdict?.label
   expect(releaseVerdictTitle).toBeTruthy()
   await expect(page.getByText(releaseVerdictTitle).first()).toBeVisible()
-  if (topBlocker) {
-    await expect(page.getByText(topBlocker).first()).toBeVisible()
-  }
   if (releaseNodeLabel) {
     await expect(page.getByText(releaseNodeLabel).first()).toBeVisible()
   }

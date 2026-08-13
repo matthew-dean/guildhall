@@ -812,7 +812,7 @@ describe('buildProjectActionModel', () => {
       source: 'start_readiness',
       label: 'Required migration',
       detail: 'Run the required Guildhall migration before starting this project.',
-      buttonLabel: 'Migrate project',
+      buttonLabel: 'Review project update',
       href: '/migrations',
       tone: 'danger',
     })

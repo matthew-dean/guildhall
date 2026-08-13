@@ -58753,3 +58753,11 @@ the shared current action for an individual project.
   `Review next spec` action rather than demanding a generic project-opening
   button. Its desktop proof keeps card-height and row-layout checks while
   adding page-level no-overflow evidence; both focused replays pass.
+
+### Repair: The shared migration action names its executable step
+
+- [x] User job: when a project needs an update, every surface says `Review
+  project update` before opening the explanation and explicit apply command.
+- Finding and fix, 2026-08-12: the shared action model said `Migrate project`
+  while the actual gate correctly offered `Review project update`. The model
+  now owns the latter label; its focused runtime coverage passes 39/39.
