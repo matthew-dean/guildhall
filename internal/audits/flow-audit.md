@@ -58253,3 +58253,33 @@ the shared current action for an individual project.
   had no horizontal overflow. Opening the task record showed one project-level
   handoff, `Open Work`, back to the shared ready-work decision; no mutation was
   invoked.
+
+### Repair: Fleet urgency uses the current decision
+
+- [x] Replace the competing home-card heuristic and saved-attention ranking
+  with one fleet owner-decision projection. A project with shared `ready_work`
+  must not appear in `Needs you` because it has an older import advisory; a
+  shared warning/danger decision must appear even when it has no durable inbox
+  record. Projects with no shared decision may surface their saved setup
+  attention.
+- Contract Touch Decision: touch the bounded fleet attention API projection and
+  service-summary count consumed by the Projects header. Considered but not
+  touched: project action ranking, persisted attention records, project Inbox,
+  task state, and mutation endpoints. Schema Migration Decision: none; this is
+  a read-model compatibility change with no persisted shape change. Required
+  proof: API and surface assertions demonstrate that the header count and
+  grouped fleet rows describe the same projects, and an installed replay shows
+  no stale ready-work urgency. Apply/revert: replace only the fleet read
+  projection; removing it restores the previous read behavior without data
+  migration.
+- Evidence, 2026-08-12: focused fleet-attention summary, Fleet Needs You, and
+  Projects Home coverage passes 30/30. This includes suppression of a retained
+  import advisory behind shared `ready_work`, promotion of a shared review
+  action, exact shared count consumption, and an explicit `Start setup` label.
+  The fleet read-model isolation suite also passes 8/8. `pnpm typecheck` and
+  `pnpm lint:contracts` pass. After `pnpm dev:install`, the installed server
+  reports `stale:false`; at 1280x720 Projects says `Needs you 4 projects` and
+  Needs You says `4 projects need a decision · 5 total items`, with no
+  horizontal overflow. Its four rows are the same four projects, Narrative
+  Harness and t-minus-t do not leak stale ready-work import urgency, and no
+  mutation was invoked.

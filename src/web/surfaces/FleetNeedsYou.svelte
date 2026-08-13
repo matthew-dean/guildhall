@@ -32,10 +32,13 @@
   }
 
   function itemVerb(item: InboxItem): string {
+    if (item.buttonLabel) return item.buttonLabel
     switch (item.kind) {
+      case 'project_action': return 'Open project'
       case 'required_migration': return 'Migrate'
       case 'project_understanding': return 'Reconcile'
       case 'workspace_import_pending': return 'Review import'
+      case 'setup_pending': return 'Start setup'
       case 'proof_reconciliation': return 'Review proof'
       case 'import_draft_queue': return 'Review draft'
       case 'contract_result_review': return 'Review result'

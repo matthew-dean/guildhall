@@ -134,4 +134,48 @@ describe('FleetNeedsYou', () => {
     expect(screen.getByText('Block menu')).toBeTruthy()
     expect(screen.getByText('1 more decision')).toBeTruthy()
   })
+
+  it('uses the shared action button label for a projected owner decision', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      groups: [{
+        project: { id: 'looma-knit', path: '/repo/looma-knit', name: 'Looma + Knit' },
+        items: [{
+          kind: 'project_action',
+          severity: 'medium',
+          title: 'Review the release spec',
+          detail: 'Approve the spec before work can continue.',
+          taskId: 'task-014',
+          actionHref: '/work?task=task-014',
+          buttonLabel: 'Review spec',
+        }],
+        error: null,
+      }],
+    })))
+
+    render(FleetNeedsYou)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Review spec' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-014')
+  })
+
+  it('names the setup action instead of presenting a vague open control', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      groups: [{
+        project: { id: 'commerce-project', path: '/repo/commerce-project', name: 'Commerce project' },
+        items: [{
+          kind: 'setup_pending',
+          severity: 'medium',
+          title: 'Give the project direction',
+          detail: 'Start with a short brief.',
+          actionHref: '/thread',
+        }],
+        error: null,
+      }],
+    })))
+
+    render(FleetNeedsYou)
+
+    expect(await screen.findByRole('button', { name: 'Start setup' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Open' })).toBeNull()
+  })
 })

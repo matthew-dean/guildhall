@@ -246,6 +246,18 @@ describe('ProjectsHome', () => {
     expect(await screen.findByRole('button', { name: /needs you 2/i })).toBeTruthy()
   })
 
+  it('uses the shared fleet attention count instead of re-counting card urgency', async () => {
+    const fetchMock = vi.fn(async () => json({
+      ...servicePayload,
+      fleetAttention: { projectCount: 4, totalItems: 5 },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+
+    expect(await screen.findByRole('button', { name: /needs you 4/i })).toBeTruthy()
+  })
+
   it('does not duplicate identical status and maturity chips on paused cards', async () => {
     const fetchMock = vi.fn(async () => json({
       ...servicePayload,

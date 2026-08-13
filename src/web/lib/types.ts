@@ -1814,6 +1814,10 @@ export interface ServiceDetail {
   partial?: boolean
   defaultProviderStatus?: ProviderStatus | null
   projects?: ServiceProjectSummary[]
+  fleetAttention?: {
+    projectCount: number
+    totalItems: number
+  }
 }
 
 export interface EventInner {

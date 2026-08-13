@@ -358,6 +358,7 @@ import {
   buildInboxBlockers,
   isAttentionOwnedInboxItem,
 } from './inbox.js'
+import { buildFleetAttentionGroups, summarizeFleetAttention } from './fleet-attention-summary.js'
 import {
   findOwnerInputRequestBySource,
   listOwnerInputRequests,
@@ -7289,6 +7290,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       pid: process.pid,
       defaultProviderStatus: buildGlobalDefaultProviderStatus(),
       projects,
+      fleetAttention: summarizeFleetAttention(projects),
     })
   })
 
@@ -7304,6 +7306,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         partial: true,
         defaultProviderStatus: buildGlobalDefaultProviderStatus(),
         projects,
+        fleetAttention: summarizeFleetAttention(projects),
       })
     }
     if (!detailRequested) {
@@ -7313,6 +7316,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         partial: true,
         defaultProviderStatus: buildGlobalDefaultProviderStatus(),
         projects,
+        fleetAttention: summarizeFleetAttention(projects),
       })
     }
 
@@ -7339,6 +7343,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       omitted: ['task inventory', 'Thread', 'Git Story', 'repository diagnostics'],
       defaultProviderStatus: buildGlobalDefaultProviderStatus(),
       projects: detailedProjects,
+      fleetAttention: summarizeFleetAttention(detailedProjects),
     })
 
   })
@@ -7347,33 +7352,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const registeredProjects = getRegisteredProjects()
     const runsById = new Map(supervisor.list().map(run => [run.workspaceId, run]))
     const projectSummaries = readFleetProjectSummaries(registeredProjects, runsById)
-    const projectById = new Map(projectSummaries.map(project => [project.id, project]))
-    const groups = registeredProjects.map(entry => {
-      const project = projectById.get(entry.id) ?? unavailableFleetProjectSummary(entry)
-      const attention = project.fleetAttention
-      if (project.initializationNeeded) {
-        return { project, items: [], error: null, topWaitingThread: null }
-      }
-      if (project.summaryFreshness !== 'current' || attention?.freshness !== 'current') {
-        return {
-          project,
-          items: [],
-          error: project.projectStatusError ?? 'Saved fleet attention is not available yet. Background refresh will populate it.',
-          topWaitingThread: null,
-        }
-      }
-      return {
-        project,
-        items: attention.items
-          .filter(record => record.status === 'open')
-          .filter(isAttentionOwnedInboxItem)
-          .filter(item => item.severity !== 'low'),
-        error: null,
-        // The fleet surface only renders the bounded attention projection.
-        // Thread and project inbox remain explicit project routes.
-        topWaitingThread: null,
-      }
-    })
+    const groups = buildFleetAttentionGroups(projectSummaries).map(group => ({
+      ...group,
+      // The fleet surface only renders the bounded attention projection.
+      // Thread and project inbox remain explicit project routes.
+      topWaitingThread: null,
+    }))
     const visibleGroups = groups.filter(group => group.items.length > 0 || group.error || group.topWaitingThread)
     const topWaitingThread = visibleGroups
       .map(group => group.topWaitingThread ? { project: group.project, turn: group.topWaitingThread } : null)

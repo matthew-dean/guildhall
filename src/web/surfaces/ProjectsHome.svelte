@@ -213,7 +213,9 @@
   })
 
   const cards = $derived(projectSummaryCache.summarize(service))
-  const needsYouCount = $derived(cards.filter(card => card.needsAttention).length)
+  // The service returns this from the same bounded projection as /needs-you.
+  // Card-local status remains presentation only; it must not re-count urgency.
+  const needsYouCount = $derived(service?.fleetAttention?.projectCount ?? cards.filter(card => card.needsAttention).length)
   const defaultProviderStatus = $derived(service?.defaultProviderStatus ?? null)
   const defaultProviderWarning = $derived(defaultProviderStatus?.warnings?.[0] ?? null)
   const defaultProviderLabel = $derived(defaultProviderStatus?.preferredProviderLabel ?? defaultProviderStatus?.activeProviderLabel ?? 'Providers')
