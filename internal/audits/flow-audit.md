@@ -59184,3 +59184,5 @@ the shared current action for an individual project.
   with no error or horizontal overflow. Selecting NAR-091 remained on its task
   URL through a second six-second sample run. At 390x844, 24 samples again
   stayed at four rows with no clipped buttons, error, or horizontal overflow.
+  The full rendered owner-flow suite, `pnpm test:ui`, also passed 45/45 after
+  this repair.
