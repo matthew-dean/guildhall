@@ -27,6 +27,7 @@
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
+  import { taskDisplayKey } from '../lib/identifier-labels.js'
   import { isWorkerRunnableStatus } from '../lib/task-state.js'
   import { activeEscalations } from '../lib/escalation.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
@@ -1131,6 +1132,16 @@
   const awaitingApprovalCount = $derived(
     taskList.filter(t => (t as { status?: string }).status === 'spec_review').length,
   )
+  const repairReturnTask = $derived.by(() => {
+    const href = path.href?.trim()
+    if (!href) return null
+    const taskId = new URL(href, 'http://localhost').searchParams.get('task')
+    const task = taskId ? taskList.find(candidate => candidate.id === taskId) : null
+    if (!task) return null
+    return {
+      displayKey: taskDisplayKey(task, taskList, activeProjectId),
+    }
+  })
 
   const startDisabledReason = $derived(
     actionRunControl?.startEnabled === false
@@ -1789,7 +1800,7 @@
                 </div>
               {:then module}
                 {@const ProjectUpdateGate = module.default}
-                <ProjectUpdateGate onReview={openMigrationModal} />
+                <ProjectUpdateGate onReview={openMigrationModal} returnTo={repairReturnTask} />
               {/await}
             {:else}
               {#await loadWorkTab()}
@@ -1809,7 +1820,7 @@
                 </div>
               {:then module}
                 {@const ProjectUpdateGate = module.default}
-                <ProjectUpdateGate onReview={openMigrationModal} />
+                <ProjectUpdateGate onReview={openMigrationModal} returnTo={repairReturnTask} />
               {/await}
             {:else}
               {#await loadWorkTab()}

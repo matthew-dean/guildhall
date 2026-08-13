@@ -78,6 +78,14 @@ describe('project-routes', () => {
     expect(currentProjectHref('/settings/ready', 'font-something')).toBe('/projects/font-something/settings/ready')
   })
 
+  it('returns a required repair to the work item that triggered it', async () => {
+    const { projectTaskRepairHref } = await import('../project-routes.js')
+
+    expect(projectTaskRepairHref('looma-knit', 'task-import-1rpbo8n')).toBe(
+      '/projects/looma-knit/work?view=queue&task=task-import-1rpbo8n&repair=migration',
+    )
+  })
+
   it('falls back to Projects Home when no URL or explicit project id is available', async () => {
     Object.defineProperty(globalThis, 'window', {
       value: {

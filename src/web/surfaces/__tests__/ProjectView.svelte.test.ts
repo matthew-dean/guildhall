@@ -874,6 +874,31 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Knit: add link editor controls')).toBeNull()
   })
 
+  it('keeps the interrupted work item visible at a required project update', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue&task=task-link-editor&repair=migration')
+    path.value = '/projects/looma-knit/work'
+    path.href = '/projects/looma-knit/work?view=queue&task=task-link-editor&repair=migration'
+    const migrationBlocked = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run the required project update before working.',
+        actionHref: '/migrations',
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(migrationBlocked)
+
+    await renderProjectView('work', null, 'looma-knit', migrationBlocked)
+
+    expect(screen.getByLabelText('Project update required')).toHaveTextContent('Review paused · LOO-E6YU7J')
+    expect(screen.getByLabelText('Project update required')).toHaveTextContent(
+      'Review the update, then apply it to return to this work item.',
+    )
+    expect(screen.getByLabelText('Project update required')).not.toHaveTextContent('task-link-editor')
+    expect(screen.getByLabelText('Project update required')).not.toHaveTextContent('Knit: add link editor controls')
+    expect(screen.getAllByRole('button', { name: /review project update/i })).toHaveLength(1)
+  })
+
   it('opens the shared migration repair modal when a task action routes back with repair intent', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/overview?repair=migration')
     path.value = '/projects/looma-knit/overview'

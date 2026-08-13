@@ -4,16 +4,21 @@
 
   interface Props {
     onReview: () => void | Promise<void>
+    returnTo?: { displayKey: string } | null
   }
 
-  let { onReview }: Props = $props()
+  let { onReview, returnTo = null }: Props = $props()
 </script>
 
 <section class="project-update-gate" aria-label="Project update required">
   <div class="project-update-copy">
-    <p class="eyebrow">Project update</p>
+    <p class="eyebrow">{returnTo ? `Review paused · ${returnTo.displayKey}` : 'Project update'}</p>
     <h1>One update is needed</h1>
-    <p>Guildhall needs to update this project before work can continue. Review the update, then apply it when you are ready.</p>
+    {#if returnTo}
+      <p>Review the update, then apply it to return to this work item.</p>
+    {:else}
+      <p>Guildhall needs to update this project before work can continue. Review the update, then apply it when you are ready.</p>
+    {/if}
   </div>
   <Button variant="human" onclick={() => void onReview()}>
     <Icon name="refresh-cw" size={16} />

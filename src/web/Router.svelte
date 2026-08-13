@@ -7,7 +7,7 @@
   import { path, nav } from './lib/nav.svelte.js'
   import { connectStream, disconnectStream } from './lib/events.js'
   import { parseRoute } from './lib/router.js'
-  import { currentProjectHref } from './lib/project-routes.js'
+  import { currentProjectHref, projectTaskRepairHref } from './lib/project-routes.js'
 
   type LazyComponent = any
 
@@ -36,8 +36,8 @@
   }
 
   function repairDrawerMigration() {
-    if (route.kind !== 'project' || !route.projectId) return
-    nav(`${currentProjectHref('/overview', route.projectId)}?repair=migration`)
+    if (route.kind !== 'project' || !route.projectId || !route.drawerTaskId) return
+    nav(projectTaskRepairHref(route.projectId, route.drawerTaskId))
   }
 
   async function loadRouteSurface(kind: typeof route.kind, hasDrawer: boolean): Promise<void> {

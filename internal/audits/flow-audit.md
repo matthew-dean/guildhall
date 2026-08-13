@@ -58395,3 +58395,46 @@ the shared current action for an individual project.
   audit passes in Chromium: it approves the repair once, reaches Current work,
   checks API focus/title agreement, and verifies no clipping at 1114x692,
   900x692, and 390x844.
+
+### Repair: Task handoff source remains buildable
+
+- [x] User job: opening the current work item must load the same executable
+  handoff that Work advertised. Verify the current source and installed flow
+  build before the task-detail audit continues.
+- Contract Touch Decision: none. This is a build and interaction audit; task
+  state, task-detail payloads, action selection, and mutations are unchanged.
+  Schema Migration Decision: none. Required proof: TaskDrawer coverage and a
+  production build pass before the task-detail flow audit continues.
+- Evidence, 2026-08-12: TaskDrawer coverage passes 61/61 and `pnpm build`
+  passes. In the fresh installed Narrative Harness app, the shared current-work
+  handoff names Stage 2, `5 of 9 complete`, and NAR-091 with only `Resume this
+  work item` and `Browse work`; browsing then selecting NAR-091 preserves the
+  selected row and exposes its one executable control. No project mutation was
+  invoked.
+
+### Repair: Required update returns to the interrupted work item
+
+- [x] User job: when an approval reveals that Guildhall needs a project update,
+  the owner can apply that one update and return to the exact selected work
+  item. The repair screen must not make the owner rediscover why they arrived.
+- Finding, 2026-08-12: installed Looma + Knit correctly reduced the old raw
+  approval error to one `Review project update` action, but the route discarded
+  the selected spec-review task. The update gate therefore had no visible
+  connection to the approval the owner had just tried to make.
+- Contract Touch Decision: touch project-scoped route construction only.
+  Considered but unchanged: migration state, task state, action ranking,
+  approval mutation, project summary, and task-detail payload. Schema
+  Migration Decision: none. Required proof: route construction returns to the
+  selected Work item with repair intent; installed replay confirms the repair
+  gate and the preserved return target. Apply/revert: remove the route helper
+  to restore the former generic Overview redirect; no persisted data changes.
+- Evidence, 2026-08-12: route and ProjectView coverage passes 76/76, including
+  the compact task marker and the absence of the raw id/title at the repair
+  gate. TaskDrawer coverage passes 61/61; `pnpm typecheck`,
+  `pnpm lint:contracts`, and `git diff --check` pass. On the fresh installed
+  Looma + Knit service, the exact repair URL preserves
+  `work?view=queue&task=task-import-1rpbo8n&repair=migration`, opens the one
+  repair modal, and identifies the interruption as `Review paused ·
+  LOO-EBUYE7`. There is no horizontal overflow at 1114x692, 900x692, or
+  390x844. The required migration was deliberately not applied to the user's
+  project during this replay.

@@ -41,6 +41,15 @@ export function projectTaskHref(projectId: string, taskId: string): string {
   return `/projects/${encodeURIComponent(projectId)}/task/${encodeURIComponent(taskId)}`
 }
 
+/**
+ * A required project repair must return an owner to the work item that
+ * triggered it. Repair is an interruption, not a second navigation task.
+ */
+export function projectTaskRepairHref(projectId: string, taskId: string): string {
+  const params = new URLSearchParams({ view: 'queue', task: taskId, repair: 'migration' })
+  return `${projectHref(projectId, '/work')}?${params}`
+}
+
 export function currentProjectHref(suffix = '/thread', explicitProjectId?: string | null): string {
   const projectId = normalizedProjectId(explicitProjectId) ?? currentProjectId()
   if (!projectId) return '/projects'
