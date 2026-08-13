@@ -59080,3 +59080,28 @@ the shared current action for an individual project.
   action. Browser proof of the active post-start state is represented by the
   deterministic focused-run regression and will be repeated in the next
   interactive run without leaving background work active.
+
+### Repair: Pause only represents active processing
+
+- [x] User job: a project with a pending approval or repository follow-up
+  shows the relevant review action. `Pause` appears only while Guildhall is
+  actually processing that project, and it stops that processing.
+- Finding, 2026-08-12: Font Something's live approval screen exposed `Pause`
+  even though its authoritative project read had `run: null`. The shared action
+  model treated a stopped start gate as pause-capable, and the shell converted
+  that false capability into a red command.
+- Contract Touch Decision: make `pauseEnabled` true only for a running
+  execution, and make the shell derive pause presentation solely from live
+  `running`/`stopping` status. Considered but not touched: readiness ranking,
+  approval state, repository follow-up behavior, run lifecycle, task state,
+  and schemas. Schema Migration Decision: none. Required proof: action-model
+  and shell regressions plus installed review-route/API agreement. Apply/revert:
+  remove the execution-only pause constraint; no persisted state changes.
+- Evidence, 2026-08-12: action-model and ProjectView suites pass 109/109;
+  `pnpm typecheck`, `pnpm lint:contracts`, and `git diff --check` pass. After
+  a fresh build/install and Looma + Knit restart, `/api/stale-server` reports
+  `stale:false`; Font Something's authoritative read has `run: null` and
+  `pauseEnabled: false`, while its installed spec-review screen has no Pause
+  control and has visible Review spec, Request changes, and Approve spec
+  controls. The same route has no horizontal overflow or browser warning/error
+  at 1280x720 and 390x844; Approve spec is 214px from the mobile viewport top.

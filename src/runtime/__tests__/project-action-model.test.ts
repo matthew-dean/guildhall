@@ -667,7 +667,7 @@ describe('buildProjectActionModel', () => {
     expect(repositoryFollowup.runControl).toMatchObject({
       label: 'Repo follow-up',
       startEnabled: false,
-      pauseEnabled: true,
+      pauseEnabled: false,
     })
 
     const sourceConflict = buildProjectActionModel({

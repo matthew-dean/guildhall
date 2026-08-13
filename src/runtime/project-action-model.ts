@@ -818,7 +818,10 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
           ? 'Waiting on answer'
           : runControlLabel(startReadiness, running, stopping),
       startEnabled: availabilityPaused || running || (!stopping && (startReadiness?.canStart !== false || blockedButRunnable) && !setupBlocksStart),
-      pauseEnabled: !availabilityPaused && !stopping && !setupBlocksStart,
+      // Pause is an execution command, never a generic red treatment for a
+      // blocked project. A stopped project has a next action, not something
+      // to pause.
+      pauseEnabled: running,
       disabledReason,
       href: startReadiness?.actionHref ?? setup.href,
     },

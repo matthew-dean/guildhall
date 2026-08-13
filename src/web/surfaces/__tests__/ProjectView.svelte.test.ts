@@ -1754,8 +1754,7 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('status', { name: 'Project refresh warning' })).not.toBeInTheDocument()
   })
 
-  it('keeps repository follow-up separate from the project Pause command', async () => {
-    const user = userEvent.setup()
+  it('does not render a Pause command for a stopped repository follow-up', async () => {
     const blocked = detail({
       run: { status: 'stopped', mode: 'continuous' },
       availability: { status: 'active', pausedAt: null, resumedAt: null },
@@ -1779,7 +1778,7 @@ describe('ProjectView', () => {
         runControl: {
           label: 'Repo follow-up',
           startEnabled: false,
-          pauseEnabled: true,
+          pauseEnabled: false,
           disabledReason: 'Release blocked by uncommitted changes.',
           href: '/release',
         },
@@ -1791,11 +1790,6 @@ describe('ProjectView', () => {
       if (url.pathname === '/api/project') return json(blocked)
       if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
       if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
-      if (url.pathname === '/api/project/stop') {
-        expect(url.searchParams.get('projectId')).toBe('looma-knit')
-        expect(init?.method).toBe('POST')
-        return json({ ok: true, status: 'stopping' })
-      }
       return json({})
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -1804,16 +1798,8 @@ describe('ProjectView', () => {
 
     expect(screen.queryByRole('alert', { name: 'Needs you' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Open release' })).toBeInTheDocument()
-    const pauseButton = screen.getByRole('button', { name: 'Pause project processing' })
-    expect(pauseButton).toHaveTextContent('Pause')
-    expect(pauseButton).toHaveClass('v-danger')
+    expect(screen.queryByRole('button', { name: /^pause/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /repo follow-up/i })).not.toBeInTheDocument()
-
-    await user.click(pauseButton)
-
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/stop'))).toBe(true)
-    })
   })
 
   it('labels a running one-task pass as Pause 1 and pauses the scoped project run', async () => {

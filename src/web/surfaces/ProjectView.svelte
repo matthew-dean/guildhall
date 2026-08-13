@@ -1194,16 +1194,7 @@
   )
   const runControlPauses = $derived(
     runStatus === 'running' ||
-      runStatus === 'stopping' ||
-      (
-        !availabilityPaused &&
-        actionRunControl?.pauseEnabled === true &&
-        actionRunControl?.startEnabled === false &&
-        !requiredMigrationBlocked
-      ),
-  )
-  const pausedBlockedControl = $derived(
-    runControlPauses && runStatus !== 'running' && runStatus !== 'stopping',
+      runStatus === 'stopping',
   )
   const runButtonIdleLabel = $derived(
     actionRunControl?.label && actionRunControl.startEnabled === false
@@ -1517,7 +1508,7 @@
                 runStatus === 'stopping'
                   ? 'Pausing'
                   : runControlPauses
-                  ? (pausedBlockedControl ? 'Pause project processing' : runMode === 'one_task' ? 'Pause one-step run' : 'Pause')
+                  ? (runMode === 'one_task' ? 'Pause one-step run' : 'Pause')
                   : requiredMigrationBlocked
                   ? 'Review project update'
                   : (startDisabledReason ?? runButtonIdleLabel)
@@ -1526,7 +1517,7 @@
                 runStatus === 'stopping'
                   ? 'Pausing the run'
                 : runControlPauses
-                  ? (pausedBlockedControl ? 'Pause Guildhall on this project' : runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause the run')
+                  ? (runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause the run')
                   : requiredMigrationBlocked
                   ? 'Review project update'
                   : (startDisabledReason ?? runButtonIdleLabel)
@@ -1534,7 +1525,7 @@
             >
               <Icon name={runControlPauses ? 'pause' : requiredMigrationBlocked ? 'refresh-cw' : 'sparkles'} size={16} />
               {#if !topbarLabelsCollapsed}
-                {runStatus === 'stopping' ? 'Pausing...' : runControlPauses ? (pausedBlockedControl ? 'Pause' : runMode === 'one_task' ? 'Pause 1' : 'Pause') : runButtonIdleLabel}
+                {runStatus === 'stopping' ? 'Pausing...' : runControlPauses ? (runMode === 'one_task' ? 'Pause 1' : 'Pause') : runButtonIdleLabel}
               {/if}
             </Button>
           {/if}
