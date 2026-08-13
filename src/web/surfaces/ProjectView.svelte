@@ -630,7 +630,10 @@
         await loadMigrationStatus()
       }
       migrationApplyStage = 'complete'
-      migrationAppliedMessage = 'Migration complete.'
+      const remaining = (body.status ?? migrationStatus)?.blocked?.length ?? 0
+      migrationAppliedMessage = remaining > 0
+        ? 'Update applied. Another project update is required.'
+        : 'Migration complete.'
     } catch (err) {
       migrationError = err instanceof Error ? err.message : String(err)
       migrationApplyStage = 'idle'

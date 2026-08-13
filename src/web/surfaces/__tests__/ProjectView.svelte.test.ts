@@ -823,7 +823,7 @@ describe('ProjectView', () => {
         expect.objectContaining({ method: 'POST' }),
       )
     })
-    expect(await screen.findByText('Migration complete.')).toBeInTheDocument()
+    expect(await screen.findByText('Update applied. Another project update is required.')).toBeInTheDocument()
     expect(screen.getByText('Move task questions into owner-input bounded chat')).toBeInTheDocument()
   })
 
