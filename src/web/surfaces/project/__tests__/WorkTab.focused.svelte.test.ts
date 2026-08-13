@@ -127,4 +127,32 @@ describe('focused Work flow', () => {
     expect(path.href).toBe('/projects/looma-knit/work?view=queue')
     expect(await screen.findByRole('heading', { name: 'Work list' })).toBeInTheDocument()
   })
+
+  it('shows the current release slice when Browse work follows a focused handoff', async () => {
+    const user = userEvent.setup()
+    const focused = reviewTask({ id: 'task-focused', displayKey: 'LOO-146', title: 'Focused review', status: 'review' })
+    const next = reviewTask({ id: 'task-next', displayKey: 'LOO-147', title: 'Next release work', status: 'ready' })
+    setRoute(`/projects/looma-knit/work?task=${focused.id}`)
+    const rendered = render(WorkTab, { props: { detail: projectDetail([focused], {
+      actionModel: { primaryAction: { taskId: focused.id, href: `/work?task=${focused.id}` } },
+    }) } })
+
+    await screen.findByRole('heading', { name: 'Focused review' })
+    await rendered.rerender({ detail: projectDetail([focused, next], {
+      actionModel: { primaryAction: { taskId: focused.id, href: `/work?task=${focused.id}` } },
+      orientationSpine: {
+        summary: { headline: 'Stage 1: Release hardening' },
+        scopeRows: [
+          { taskId: focused.id, scope: 'included' },
+          { taskId: next.id, scope: 'included' },
+        ],
+      },
+    }) })
+
+    await user.click(screen.getByRole('button', { name: 'Browse work' }))
+
+    expect(await screen.findByText('2 current items')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect work Focused review' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect work Next release work' })).toBeInTheDocument()
+  })
 })

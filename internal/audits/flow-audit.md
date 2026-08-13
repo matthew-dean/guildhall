@@ -59186,3 +59186,35 @@ the shared current action for an individual project.
   stayed at four rows with no clipped buttons, error, or horizontal overflow.
   The full rendered owner-flow suite, `pnpm test:ui`, also passed 45/45 after
   this repair.
+
+### Repair: Browse work refreshes after leaving a focused handoff
+
+- [x] User job: after choosing `Browse work` from the one-item current-work
+  handoff, the owner sees the actual Work inventory immediately. Browsing
+  cannot retain an obsolete focused-task payload and masquerade as a one-item
+  list.
+- Finding, 2026-08-12: the focused Narrative Harness handoff correctly showed
+  NAR-091. Clicking `Browse work` changed the URL to `?view=queue`, but the
+  page continued to show only that task for seven seconds while the
+  authoritative unfiltered Work API returned the full inventory. ProjectView
+  watched `path.value` (pathname) for route refreshes; query-only navigation
+  updates `path.href`, so removing `?task=` never requested a new Work payload.
+- Contract Touch Decision: make ProjectView's focused-task derivation and
+  route refresh effect depend on the full route href, while retaining the
+  existing Work surface/inventory contract. Considered but not touched: task
+  filtering, Work selection, task ordering, API payload shape, navigation
+  history, persistence, and schemas. Schema Migration Decision: none. Required
+  proof: a focused-to-queue query transition sends a new Work request without
+  `task`, and the installed Browse work flow reveals the complete current Work
+  slice without a delayed change. Apply/revert: route-read reactivity only; no
+  task data changes.
+- Evidence, 2026-08-12: ProjectView and focused Work coverage pass 78/78,
+  including a query-only focused-to-queue refresh and a focused handoff that
+  receives the complete current-release slice before Browse is pressed.
+  `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `pnpm dev:install`
+  pass. After a Looma + Knit restart, `/api/stale-server` reports `stale:false`.
+  In the actual installed owner flow (`Projects` -> Narrative Harness `Open
+  Work` -> `Browse work`), the queue immediately renders four current items:
+  NAR-091 through NAR-094. The route has no browser error or horizontal
+  overflow at 1280x720. The full rendered owner-flow suite, `pnpm test:ui`,
+  passed 45/45 after this repair.

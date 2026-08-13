@@ -163,7 +163,7 @@
     return false
   })
   const routeFocusedTaskId = $derived.by(() => {
-    path.value
+    path.href
     if (currentView !== 'work' || typeof window === 'undefined') return null
     const params = new URL(window.location.href).searchParams
     return params.get('task') ?? params.get('work') ?? null
@@ -244,7 +244,7 @@
   })
 
   $effect(() => {
-    path.value
+    path.href
     void project.refresh(routeProjectId, projectDetailSurface, routeFocusedTaskId)
   })
 

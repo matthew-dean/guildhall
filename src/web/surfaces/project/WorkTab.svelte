@@ -673,6 +673,12 @@
   }
 
   function browseWork(): void {
+    // Focused mode may have selected a narrower review/queued filter. Browsing
+    // is an explicit request for the current release slice, not that old view.
+    workFilterUserSelected = false
+    workFilter = 'current'
+    partFilter = 'all'
+    selectedWorkId = null
     nav(currentProjectHref('/work?view=queue', detail.id))
   }
 

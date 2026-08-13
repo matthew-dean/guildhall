@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/svelt
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProjectView from '../ProjectView.svelte'
-import { path } from '../../lib/nav.svelte.js'
+import { nav, path } from '../../lib/nav.svelte.js'
 import { project } from '../../lib/project.svelte.js'
 import type { ProjectDetail, ProjectView as ProjectViewName } from '../../lib/types.js'
 
@@ -539,6 +539,33 @@ describe('ProjectView', () => {
       )
     })
     expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain('/api/project?compact=true&projectId=looma-knit')
+  })
+
+  it('refreshes the Work inventory when browsing removes a focused task query', async () => {
+    const fetchMock = installFetchFakes(detail({
+      taskPayload: { surface: 'work', kind: 'project_work_inventory' },
+    } as Partial<ProjectDetail>))
+    nav('/projects/looma-knit/work?task=task-link-editor')
+
+    await renderProjectView('work')
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => {
+        const url = new URL(String(input), 'http://localhost')
+        return url.pathname === '/api/project' && url.searchParams.get('task') === 'task-link-editor'
+      })).toBe(true)
+    })
+    fetchMock.mockClear()
+
+    nav('/projects/looma-knit/work?view=queue')
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => {
+        const url = new URL(String(input), 'http://localhost')
+        return url.pathname === '/api/project' &&
+          url.searchParams.get('surface') === 'work' &&
+          url.searchParams.get('task') === null
+      })).toBe(true)
+    })
   })
 
   it('renders Release readiness when the broad project payload is still loading', async () => {
