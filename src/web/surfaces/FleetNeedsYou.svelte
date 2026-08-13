@@ -1,15 +1,11 @@
 <script lang="ts">
-  import AlertTriangle from 'lucide-svelte/icons/triangle-alert'
   import CheckCircle2 from 'lucide-svelte/icons/check-circle-2'
-  import FolderOpen from 'lucide-svelte/icons/folder-open'
-  import Inbox from 'lucide-svelte/icons/inbox'
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
-  import Card from '../lib/ui-compat/Card.svelte'
   import ProjectsShell from '../lib/layout/ProjectsShell.svelte'
   import { nav } from '../lib/nav.svelte.js'
   import { projectHref } from '../lib/project-routes.js'
-  import { inboxItemKey, type InboxItem } from '../lib/inbox-item-key.js'
+  import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { ServiceProjectSummary } from '../lib/types.js'
 
   type ProjectInboxGroup = {
@@ -76,10 +72,6 @@
     }
   }
 
-  function goToProject(projectId: string): void {
-    nav(projectHref(projectId, '/thread'))
-  }
-
   function goToProjectInbox(projectId: string): void {
     nav(projectHref(projectId, '/overview/inbox'))
   }
@@ -126,7 +118,7 @@
     <header class="hero">
       <div>
         <h1>Needs you</h1>
-        <p class="lede">Project alerts and durable follow-ups grouped by project.</p>
+        <p class="lede">One current decision per project.</p>
       </div>
       <ActionBar>
         <Button variant="secondary" onclick={() => nav('/')}>Projects</Button>
@@ -150,50 +142,33 @@
     </div>
   {:else}
     <section class="summary" aria-label="Needs-you summary">
-      <span><Inbox size={16} /> {totalItems} item{totalItems === 1 ? '' : 's'}</span>
-      <span><FolderOpen size={16} /> {projectCount} project{projectCount === 1 ? '' : 's'} need you</span>
+      {projectCount} project{projectCount === 1 ? '' : 's'} need a decision · {totalItems} total item{totalItems === 1 ? '' : 's'}
     </section>
 
     <div class="groups">
       {#each groups as group (group.project.id)}
-        <Card tone={group.error ? 'warn' : 'accent'} className="fleet-inbox-group">
-          <div class="group-head">
-            <div>
-              <h2>{group.project.name}</h2>
-              <p>{group.project.path}</p>
-            </div>
-            <ActionBar className="group-actions">
-              <Button variant="secondary" size="sm" onclick={() => goToProjectInbox(group.project.id)}>
-                Queue
-              </Button>
-              <Button variant="secondary" size="sm" onclick={() => goToProject(group.project.id)}>
-                Project
-              </Button>
-            </ActionBar>
+        {@const currentItem = group.items[0]}
+        {@const remainingItemCount = Math.max(0, group.items.length - 1)}
+        <section class="group" aria-labelledby={`needs-you-${group.project.id}`}>
+          <div class="group-copy">
+            <h2 id={`needs-you-${group.project.id}`}>{group.project.name}</h2>
+            {#if group.error}
+              <p class="group-error">Couldn’t load this project’s current decision.</p>
+            {:else if currentItem}
+              <p class="current-item">{currentItem.title}</p>
+              {#if remainingItemCount > 0}
+                <button type="button" class="more-items" onclick={() => goToProjectInbox(group.project.id)}>
+                  {remainingItemCount} more decision{remainingItemCount === 1 ? '' : 's'}
+                </button>
+              {/if}
+            {/if}
           </div>
-
           {#if group.error}
-            <div class="group-error">
-              <AlertTriangle size={16} />
-              <span>{group.error}</span>
-            </div>
-          {:else}
-            <ul class="items">
-              {#each group.items as item, itemIndex (`${inboxItemKey(item)}:${itemIndex}`)}
-                <li>
-                  <button type="button" class="item" onclick={() => goToItem(group.project.id, item)}>
-                    <span class="severity severity-{item.severity}" aria-hidden="true"></span>
-                    <span class="item-body">
-                      <strong>{item.title}</strong>
-                      <span>{item.detail}</span>
-                    </span>
-                    <span class="item-verb">{itemVerb(item)}</span>
-                  </button>
-                </li>
-              {/each}
-            </ul>
+            <Button variant="secondary" size="sm" onclick={() => goToProjectInbox(group.project.id)}>Open project</Button>
+          {:else if currentItem}
+            <Button variant="primary" size="sm" onclick={() => goToItem(group.project.id, currentItem)}>{itemVerb(currentItem)}</Button>
           {/if}
-        </Card>
+        </section>
       {/each}
     </div>
   {/if}
@@ -217,8 +192,7 @@
     font-size: var(--gh-type-size-caption);
   }
   .notice,
-  .empty,
-  .summary {
+  .empty {
     border: 1px solid var(--glass-border);
     border-radius: var(--r-2);
     background: var(--glass-bg);
@@ -232,8 +206,7 @@
   .notice.warn {
     border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
   }
-  .empty.clear,
-  .summary {
+  .empty.clear {
     display: flex;
     align-items: center;
     gap: var(--s-2);
@@ -242,139 +215,60 @@
     margin: 0;
   }
   .summary {
-    padding: var(--s-2) var(--s-3);
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
-  }
-  .summary span {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--s-1);
+    padding-bottom: var(--s-1);
   }
   .groups {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
   }
-  :global(section.fleet-inbox-group) {
-    padding: var(--s-3);
-  }
-  .group-head {
+  .group {
     display: flex;
+    align-items: center;
     justify-content: space-between;
-    gap: var(--s-3);
-    align-items: start;
-    margin-bottom: var(--s-3);
+    gap: var(--s-4);
+    min-width: 0;
+    padding: var(--s-3) 0;
+    border-bottom: 1px solid var(--border);
   }
-  .group-head h2 {
+  .group-copy {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+  .group h2 {
     margin: 0;
     font-size: var(--gh-type-size-panel-title);
     line-height: var(--gh-type-line-height-tight);
   }
-  .group-head p {
-    margin: var(--s-1) 0 0;
+  .current-item,
+  .group-error {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
-  }
-  .items {
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
-    margin: 0;
-    padding: 0;
-  }
-  .item {
-    width: 100%;
-    display: grid;
-    grid-template-columns: 8px minmax(0, 78ch) auto;
-    align-items: center;
-    gap: var(--s-3);
-    padding: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, var(--bg-raised) 82%, transparent);
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-  .item:hover,
-  .item:focus-visible {
-    border-color: var(--border-strong);
-    background: var(--bg-elevated);
-  }
-  .severity {
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-  }
-  .severity-high {
-    background: var(--danger);
-  }
-  .severity-medium {
-    background: var(--warn);
-  }
-  .severity-low {
-    background: var(--text-muted);
-  }
-  .item-body {
-    min-width: 0;
-    max-width: 78ch;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .item-body strong {
-    color: var(--text);
-    font-weight: var(--gh-type-weight-strong);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .item-body span {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
     line-height: var(--gh-type-line-height-body);
-  }
-  .item-verb {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 1.9rem;
-    padding: 0 var(--s-2);
-    border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--border));
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-    color: var(--text);
-    font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-strong);
-    white-space: nowrap;
-  }
-  :global(.group-actions .btn) {
-    opacity: 0.78;
+    margin: 0;
   }
   .group-error {
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
     color: var(--warn);
+  }
+  .more-items {
+    appearance: none;
+    align-self: start;
+    background: none;
+    border: 0;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: var(--gh-type-size-meta);
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
   @media (max-width: 720px) {
     .hero,
-    .group-head {
+    .group {
       align-items: stretch;
       flex-direction: column;
-    }
-    .item {
-      grid-template-columns: 8px minmax(0, 1fr);
-    }
-    .item-verb {
-      grid-column: 2;
     }
   }
 </style>

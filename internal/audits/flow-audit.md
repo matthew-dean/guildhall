@@ -58099,6 +58099,27 @@ the shared current action for an individual project.
   opened the existing review modal, which named the required migration and its
   typed safety summary. The apply mutation was intentionally not invoked.
 
+### Repair: Global Needs You is a decision queue, not five dashboards
+
+- [x] Show the API-ranked current decision for each project and defer any
+  remaining project decisions to that project's queue. Remove project paths,
+  category pills, nested cards, duplicate project navigation, and full detail
+  prose from the global owner-facing list.
+- Contract Touch Decision: touched only the fleet-queue presentation while
+  preserving canonical `/api/fleet/attention` order and item action routes.
+  Considered but unchanged: fleet attention ranking, inbox persistence, project
+  state, action-model contracts, and item mutation. Schema Migration Decision:
+  none.
+- Evidence, 2026-08-12: focused Fleet Needs You coverage passes 3/3. It proves
+  actions still route with the right project ID, no per-project inbox fetch is
+  introduced, and a repeated queue shows one current decision plus an explicit
+  `1 more decision` disclosure. `pnpm typecheck` and `git diff --check` pass.
+  After a fresh installed app restart with `/api/stale-server` reporting
+  `stale:false`, the 1280x720 queue showed five simple project rows, one action
+  each, no project paths, and no horizontal overflow. At 900x720 it retained
+  all five actions without clipping. Narrative Harness's visible `Review proof`
+  action opened its exact `task-087` review route.
+
 ### Repair: Failed spec approval keeps its decision surface
 
 - [x] Keep an approval modal open until its approval mutation succeeds; render

@@ -61,10 +61,10 @@ describe('FleetNeedsYou', () => {
     await screen.findByText('Fair Labor License')
     expect(screen.getByText('Review imported notes')).toBeTruthy()
     expect(screen.getByText('Provider warning')).toBeTruthy()
-    expect(screen.getAllByRole('button', { name: /^queue$/i })).toHaveLength(2)
-    expect(screen.queryByRole('button', { name: /project needs you/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^queue$/i })).toBeNull()
+    expect(screen.queryByText('/repo/looma-knit')).toBeNull()
 
-    await userEvent.click(screen.getByText('Review imported notes'))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Review import' })[0])
 
     expect(path.value).toBe('/projects/looma-knit/workspace-import')
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -97,7 +97,7 @@ describe('FleetNeedsYou', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/project/inbox'))).toBe(false)
   })
 
-  it('renders repeated inbox rows without crashing the fleet queue', async () => {
+  it('shows only the current API-ranked decision and defers the rest to the project queue', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       expect(url.pathname).toBe('/api/fleet/attention')
@@ -131,6 +131,7 @@ describe('FleetNeedsYou', () => {
     render(FleetNeedsYou)
 
     await screen.findByText('Looma + Knit')
-    expect(screen.getAllByText('Block menu')).toHaveLength(2)
+    expect(screen.getByText('Block menu')).toBeTruthy()
+    expect(screen.getByText('1 more decision')).toBeTruthy()
   })
 })
