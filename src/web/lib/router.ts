@@ -106,8 +106,10 @@ export function parseRoute(p: string, state: unknown = null): Route {
     if (normalized === '/coordinators')
       return { kind: 'project', projectId, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/planner') return { kind: 'project', projectId, view: 'planner', sub: null, drawerTaskId: null, backgroundPath: null }
-    if (normalized === '/facts') return { kind: 'project', projectId, view: 'facts', sub: null, drawerTaskId: null, backgroundPath: null }
-    if (normalized === '/timeline') return { kind: 'project', projectId, view: 'timeline', sub: null, drawerTaskId: null, backgroundPath: null }
+    // These legacy reports did not provide an owner decision. Keep bookmarks
+    // useful by sending them to the compact route that does.
+    if (normalized === '/facts') return { kind: 'project', projectId, view: 'map', sub: null, drawerTaskId: null, backgroundPath: null }
+    if (normalized === '/timeline') return { kind: 'project', projectId, view: 'overview', sub: null, drawerTaskId: null, backgroundPath: null }
     return { kind: 'project', projectId, view: 'overview', sub: null, drawerTaskId: null, backgroundPath: null }
   }
   return { kind: 'projects' }

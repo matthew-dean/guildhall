@@ -53,8 +53,8 @@ describe('parseRoute', () => {
     })
     expect(parseRoute('/projects/looma-knit/planner')).toMatchObject({ view: 'planner' })
     expect(parseRoute('/projects/looma-knit/map')).toMatchObject({ view: 'map' })
-    expect(parseRoute('/projects/looma-knit/facts')).toMatchObject({ view: 'facts' })
-    expect(parseRoute('/projects/looma-knit/timeline')).toMatchObject({ view: 'timeline' })
+    expect(parseRoute('/projects/looma-knit/facts')).toMatchObject({ view: 'map' })
+    expect(parseRoute('/projects/looma-knit/timeline')).toMatchObject({ view: 'overview' })
     expect(parseRoute('/projects/looma-knit/not-real')).toMatchObject({ view: 'overview' })
   })
 

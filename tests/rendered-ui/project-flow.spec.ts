@@ -149,10 +149,10 @@ const projectSurfaceRoutes = [
     },
   },
   {
-    name: 'timeline',
+    name: 'legacy activity link opens overview',
     path: '/projects/api-broker/timeline',
     assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: 'Project activity' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
       await expect(page.getByTitle('API Broker')).toBeVisible()
     },
   },

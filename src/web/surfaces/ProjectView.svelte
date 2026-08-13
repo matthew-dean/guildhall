@@ -47,8 +47,6 @@
   const loadWorkTab = () => import('./project/WorkTab.svelte')
   const loadWorkspaceImportTab = () => import('./project/WorkspaceImportTab.svelte')
   const loadProjectAttachFlow = () => import('./project/ProjectAttachFlow.svelte')
-  const loadFactsTab = () => import('./project/FactsTab.svelte')
-  const loadTimelineTab = () => import('./project/TimelineTab.svelte')
   const loadReleaseTab = () => import('./project/ReleaseTab.svelte')
   const loadSettingsTab = () => import('./project/SettingsTab.svelte')
   const loadProjectMapTab = () => import('./project/ProjectMapTab.svelte')
@@ -85,7 +83,13 @@
 
   const props = $props<Props>()
 
-  const currentView = $derived<ProjectView>(props.initialView ?? 'overview')
+  const currentView = $derived<ProjectView>(
+    props.initialView === 'facts'
+      ? 'map'
+      : props.initialView === 'timeline'
+        ? 'overview'
+        : props.initialView ?? 'overview',
+  )
   const currentSub = $derived<string | null>(props.initialSub ?? null)
   const routeProjectId = $derived(props.projectId?.trim() || null)
   const activeProjectId = $derived(routeProjectId)
@@ -427,7 +431,6 @@
         { id: 'overview', label: 'Overview', path: currentProjectHref('/overview', activeProjectId) },
         { id: 'inbox', label: 'Needs you', path: currentProjectHref('/overview/inbox', activeProjectId) },
         { id: 'map', label: 'Map', path: currentProjectHref('/map', activeProjectId) },
-        { id: 'facts', label: 'Facts', path: currentProjectHref('/facts', activeProjectId) },
       ],
     },
     ...(threadIsCurrentDecision ? [{ id: 'thread' as const, label: 'Threads', icon: 'sparkles' as const, suffix: '/thread' }] : []),
@@ -471,7 +474,6 @@
     if (sectionId === 'project') {
       if (currentView === 'overview') return currentSub === 'inbox' ? subId === 'inbox' : subId === 'overview'
       if (currentView === 'map' || currentView === 'structure') return subId === 'map'
-      if (currentView === 'facts') return subId === 'facts'
     }
 
     if (sectionId === 'work' && currentView === 'work') {
@@ -1572,14 +1574,6 @@
                     <Icon name="check-circle-2" size={16} />
                     <span>Release details</span>
                   </button>
-                  <button
-                    type="button"
-                    class="actions-menu-item"
-                    onclick={() => { closeActionsMenu(); go(currentProjectHref('/timeline', activeProjectId)) }}
-                  >
-                    <Icon name="clock" size={16} />
-                    <span>Project activity</span>
-                  </button>
                 </div>
               {/if}
             </div>
@@ -1836,15 +1830,6 @@
                 <WorkTab {detail} mode="board" />
               {/await}
             {/if}
-          {:else if currentView === 'facts'}
-            {#await loadFactsTab()}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {:then module}
-              {@const FactsTab = module.default}
-              <FactsTab />
-            {/await}
           {:else if currentView === 'map'}
             {#await loadProjectMapTab()}
               <div class="page-centered page-centered-inline">
@@ -1870,15 +1855,6 @@
                 activeProjectId={activeProjectId}
                 onReleaseSelected={() => project.refresh(activeProjectId, 'map')}
               />
-            {/await}
-          {:else if currentView === 'timeline'}
-            {#await loadTimelineTab()}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {:then module}
-              {@const TimelineTab = module.default}
-              <TimelineTab {detail} />
             {/await}
           {:else if currentView === 'release'}
             {#await loadReleaseTab()}

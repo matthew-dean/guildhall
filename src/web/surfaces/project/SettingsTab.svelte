@@ -143,13 +143,11 @@
         <p>Project context is available from the compact Map when you need it.</p>
       </NoticeBand>
     {:else if intelligenceMoved}
-      <NoticeBand tone="neutral" role="note" label="Project intelligence" title="Specialist review moved out of Settings" density="compact">
+      <NoticeBand tone="neutral" role="note" label="Project map" title="Project context moved out of Settings" density="compact">
         {#snippet actions()}
-          <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref(subView === 'facts' ? '/facts' : '/thread'))}>
-            {subView === 'facts' ? 'Open Facts' : 'Open Threads'}
-          </Button>
+          <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/map'))}>Open Map</Button>
         {/snippet}
-        <p>Facts, memory, and re-intake review no longer live inside Settings.</p>
+        <p>Project context is available from the compact Map when you need it.</p>
       </NoticeBand>
     {:else if section === 'providers'}
       <ProjectProvidersSection />

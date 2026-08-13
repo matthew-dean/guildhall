@@ -451,11 +451,11 @@ describe('ProjectView', () => {
     ['work', 'Knit: add link editor controls'],
     ['planner', 'Knit: add link editor controls'],
     ['map', 'Project map'],
-    ['timeline', 'Project activity'],
+    ['timeline', 'What needs your attention'],
     ['release', 'Scope readiness'],
     ['settings', 'Settings'],
     ['workspace-import', 'Review existing project work'],
-    ['facts', 'Project facts'],
+    ['facts', 'Project map'],
   ] as Array<[ProjectViewName, string]>)('renders the %s project surface from the project shell', async (view, expectedText) => {
     await renderProjectView(view)
 
@@ -1723,7 +1723,7 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'New thread' })).toBeInTheDocument()
   })
 
-  it('moves release and activity follow-ups out of the primary rail', async () => {
+  it('keeps release details as the only action-menu follow-up', async () => {
     const user = userEvent.setup()
     await renderProjectView('overview')
 
@@ -1733,7 +1733,7 @@ describe('ProjectView', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open actions menu' }))
     expect(screen.getByRole('button', { name: 'Release details' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Project activity' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Project activity' })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Release details' }))
     expect(path.value).toBe('/projects/looma-knit/release')
@@ -2143,8 +2143,8 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Project' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Facts' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Map' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Facts' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Work' })).toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Threads' })).not.toBeInTheDocument()
@@ -2154,14 +2154,15 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Project graph')).not.toBeInTheDocument()
   })
 
-  it('keeps project children visible for any Project child route', async () => {
+  it('routes legacy Facts to Map without restoring Facts navigation', async () => {
     await renderProjectView('facts')
     const rail = screen.getByRole('complementary', { name: 'Project navigation' })
     await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
 
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Facts' })).toHaveClass('active')
+    expect(within(rail).getByRole('button', { name: 'Map' })).toHaveClass('active')
+    expect(within(rail).queryByRole('button', { name: 'Facts' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Queue' })).not.toBeInTheDocument()
   })

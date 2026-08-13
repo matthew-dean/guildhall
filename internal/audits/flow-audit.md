@@ -58855,3 +58855,31 @@ the shared current action for an individual project.
   1280x720 viewport: project name, selected milestone, `5/9 work items
   complete`, `Open Work`, and optional map inspection. There is no Structure
   navigation control, no horizontal overflow, and no console warning/error.
+
+### Repair: Facts and activity history are not project destinations
+
+- [x] User job: a legacy bookmark must return the owner to a live decision or
+  compact orientation. A project-facts inventory and raw coordinator event log
+  are neither, so they cannot remain routes that look like normal project work.
+- Finding, 2026-08-12: Narrative Harness `/facts` exposed package commands,
+  filesystem identity, old verification metadata, internal routing, and design
+  configuration with no immediate decision. `/timeline` exposed raw start/stop
+  and agent-error lines plus a `Show earlier updates` control. Both are
+  information dumps that make a human parse internal operations rather than
+  act; the timeline also reproduces the reported inert older-activity control.
+- Contract Touch Decision: remove Facts from project navigation and project
+  activity from the action menu. Legacy `/facts` will render the compact Map;
+  legacy `/timeline` will render the normal Overview handoff. Considered but
+  not touched: facts and activity APIs, retained event history, runtime
+  telemetry, project schemas, and agent diagnostics. Schema Migration
+  Decision: none. Required proof: legacy paths expose a decision/orientation
+  surface with no raw facts/activity controls. Apply/revert: route composition
+  only; the retained engineering data is unchanged.
+- Evidence, 2026-08-12: `pnpm typecheck`, focused router/ProjectView/Settings
+  coverage (83/83), the rendered route matrix (33/33), `pnpm lint:contracts`,
+  and `git diff --check` pass. After a fresh build/install and service restart,
+  `/api/stale-server` reported `stale:false`. On the installed Narrative
+  Harness service, `/facts` shows the compact Map and `/timeline` shows the
+  current-work Overview; neither exposes `Project facts`, `Project activity`,
+  raw event rows, or a load-older control. Both fit the 1280x720 viewport with
+  no horizontal overflow and no browser warning/error.
