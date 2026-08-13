@@ -3341,6 +3341,14 @@
     if (!current || !isDockableTurn(current)) return null
     return current
   })
+  // A direct owner question is the Thread route's only job. Keep its existing
+  // response controls, but remove the surrounding list and transcript.
+  const showOwnerInputFocus = $derived(Boolean(
+    ownerAction?.code === 'owner_input_required' &&
+    !projectActivityVisible &&
+    activeDockTurn &&
+    (activeDockTurn.kind === 'agent_question' || activeDockTurn.kind === 'pressure_test_question' || activeDockTurn.kind === 'bounded_chat'),
+  ))
 
   const historyTurns = $derived.by(() => {
     if (!selectedChain) return []
@@ -3813,8 +3821,12 @@
             <Button variant="ghost" size="sm" onclick={() => (projectActivityVisible = false)}>Back to project decision</Button>
           </Row>
         {/if}
-        <div class="thread-columns" class:thread-columns-compact={compactThreadMode}>
-          {#if !compactThreadMode || compactPane === 'list'}
+        <div
+          class="thread-columns"
+          class:thread-columns-compact={compactThreadMode}
+          class:thread-columns-owner-input={showOwnerInputFocus}
+        >
+          {#if !showOwnerInputFocus && (!compactThreadMode || compactPane === 'list')}
           <aside
             class="thread-index"
             aria-label="Thread list"
@@ -3859,14 +3871,16 @@
           <section
             class="thread-detail"
             aria-label="Selected thread"
+            class:thread-detail-owner-input-focus={showOwnerInputFocus}
             bind:this={detailScrollEl}
             onscroll={handleDetailScroll}
             in:fly|local={{ x: compactThreadMode ? 26 : 0, duration: 180, opacity: 0.16 }}
             out:fly|local={{ x: compactThreadMode ? 20 : 0, duration: 160, opacity: 0.12 }}
           >
             <div class="thread-detail-scroll-wrap">
-              <div class="thread-detail-scroll" aria-label="Thread history">
+              <div class="thread-detail-scroll" aria-label={showOwnerInputFocus ? 'Owner response' : 'Thread history'}>
                 <div class="thread-detail-flow" class:thread-detail-flow-single={centerSingleComposerlessCard}>
+                  {#if !showOwnerInputFocus}
                   <div class="thread-list" class:thread-list-single={centerSingleComposerlessCard}>
                     <Stack gap="3">
                       {#each historyRenderItems as historyItem (historyItem.id)}
@@ -5384,8 +5398,9 @@
                       {/each}
                     </Stack>
                   </div>
+                  {/if}
 
-                {#if caughtUp}
+                {#if caughtUp && !showOwnerInputFocus}
                   <p class="muted caught-up">
                     {#if operationSummary.needsYou > 0}
                       Needs your input before work can continue.
@@ -6260,6 +6275,10 @@
   .thread-columns.thread-columns-compact {
     grid-template-columns: minmax(0, 1fr);
   }
+  .thread-columns.thread-columns-owner-input {
+    grid-template-columns: minmax(0, 48rem);
+    justify-content: center;
+  }
   .thread-index {
     position: relative;
     min-height: 0;
@@ -6362,6 +6381,9 @@
   .thread-detail-flow-single {
     justify-content: center;
     padding-block: var(--gh-space-5);
+  }
+  .thread-detail-owner-input-focus {
+    padding-top: var(--gh-space-4);
   }
   .thread-detail-header {
     display: grid;

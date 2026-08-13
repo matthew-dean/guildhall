@@ -58574,3 +58574,34 @@ the shared current action for an individual project.
   `spec_review` task and Looma + Knit is guarded by a required migration, so
   this decision was not applied against either user project merely to create
   a demo state.
+
+### Repair: An owner question is an answer surface, not a Thread dashboard
+
+- [x] User job: when Guildhall needs one answer, the owner lands on that
+  question and its response control. The page must not make them choose the
+  same question from a list, scan prior history, or interpret an activity
+  panel before they can answer.
+- Finding, 2026-08-12: the direct owner-input route still retained the Thread
+  index, historical transcript, caught-up status text, active dock, and in
+  some cases a footer composer. The actual question was present, but it had to
+  compete with the whole Thread product surface. This fails the under-a-minute
+  owner job even when the response itself is correctly wired.
+- Contract Touch Decision: Thread will use the existing shared
+  `owner_input_required` action solely as a presentation boundary. It will
+  hide the redundant index/history/status treatment while the selected active
+  owner-response turn supplies the existing answer controls. Considered but
+  unchanged: question selection, response endpoints, Thread history,
+  navigation, task state, action ranking, and persisted schemas. Schema
+  Migration Decision: none. Required proof: a focused owner-question replay
+  keeps its answer control and route while omitting the list/history; normal
+  browsed Thread remains unchanged. Apply/revert: presentation-only; remove
+  the focus condition to restore the old Thread dashboard.
+- Evidence, 2026-08-12: ThreadTab coverage passes 125/125, including an
+  active owner choice alongside an old completed thread. The direct route
+  retains the choice controls while omitting the Thread history and visible
+  index. The rendered browser replay `owner input is a response surface, not
+  a Thread dashboard` passes at `1280x720` and `390x844`: it injects only the
+  typed shared `owner_input_required` action and one bounded-chat question,
+  then proves the response control is visible, the list/history are absent,
+  and page width does not overflow. This is an isolated replay; it does not
+  answer or alter a user project.

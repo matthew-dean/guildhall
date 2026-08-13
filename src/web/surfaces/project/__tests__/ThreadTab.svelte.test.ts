@@ -962,6 +962,47 @@ describe('ThreadTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?task=task-ready-work')
   })
 
+  it('shows a direct owner question without the Thread list or history', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'old-draft',
+        taskId: 'task-old-draft',
+        taskTitle: 'Old completed context',
+        status: 'done',
+      }),
+      questionTurn(
+        'question-owner-choice',
+        'owner-choice',
+        'Which outcome should this project optimize for?',
+        ['Faster review', 'Broader coverage'],
+      ),
+    ], 'question-owner-choice', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Answer a project question',
+          taskId: 'task-link-controls',
+          taskLabel: 'Knit: add link editor controls',
+          buttonLabel: 'Answer question',
+          href: '/thread?thread=task%3Atask-link-controls',
+          tone: 'warn',
+          code: 'owner_input_required',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findAllByText('Which outcome should this project optimize for?')
+    await waitFor(() => {
+      expect(document.querySelector('.thread-columns-owner-input .thread-index')?.hasAttribute('inert')).toBe(true)
+    })
+    expect(screen.queryByLabelText('Thread history')).toBeNull()
+    expect(document.querySelector('.thread-detail-owner-input-focus .thread-list')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Faster review' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Broader coverage' })).toBeTruthy()
+  })
+
   it('opens a routed bounded-chat prompt directly on compact Thread even when many threads exist', async () => {
     installViewportMatchMedia(640)
     installBrowserFakes('/projects/looma-knit/thread?thread=bc-new-thread-1')

@@ -220,6 +220,75 @@ test('spec review starts at one decision without a tab hunt', async ({ page }) =
   await expect(page.getByRole('dialog', { name: 'Approve spec' }).getByRole('button', { name: 'Approve' })).toBeVisible()
 })
 
+test('owner input is a response surface, not a Thread dashboard', async ({ page }) => {
+  const presentOwnerQuestion = async (route: any) => {
+    const url = route.request().url()
+    if (
+      !url.includes('projectId=jess') ||
+      (!url.includes('/api/project?') && !url.includes('/api/project/thread?'))
+    ) {
+      await route.continue()
+      return
+    }
+    const response = await route.fetch()
+    const body = await response.json()
+    const actionModel = body?.actionModel ?? {}
+    const ownerQuestion = {
+      kind: 'bounded_chat',
+      id: 'bounded-chat:bc-owner-question:release-scope',
+      at: fixtureNow,
+      persona: 'intake',
+      status: 'active',
+      phase: 'intake',
+      sessionId: 'bc-owner-question',
+      subObjectiveId: 'release-scope',
+      targetTitle: 'Jess',
+      domainTitle: 'Release scope',
+      question: {
+        id: 'release-scope',
+        prompt: 'Which outcome should this release optimize for?',
+        why: 'This decides the next work slice.',
+        choices: ['Faster review', 'Broader coverage'],
+        evidence: [],
+      },
+      answerEndpoint: '/api/project/bounded-chat/bc-owner-question/answer',
+    }
+    await route.fulfill({
+      response,
+      json: {
+        ...body,
+        actionModel: {
+          ...actionModel,
+          primaryAction: {
+            ...(actionModel.primaryAction ?? {}),
+            label: 'Answer a project question',
+            buttonLabel: 'Answer question',
+            href: '/thread?thread=task%3Abc-jess-structural_review-8c11fc652d-2026-06-04T00-44-08-860Z',
+            tone: 'warn',
+            code: 'owner_input_required',
+          },
+        },
+        ...(url.includes('/api/project/thread?')
+          ? { turns: [ownerQuestion], activeTurnId: 'bounded-chat:bc-owner-question' }
+          : {}),
+      },
+    })
+  }
+  await page.route('**/api/project**', presentOwnerQuestion)
+
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await page.goto('/projects/jess/thread?thread=bc-owner-question')
+
+    await expect(page.getByLabel('Owner response')).toBeVisible()
+    await expect(page.getByRole('complementary', { name: 'Thread list' })).toHaveCount(0)
+    await expect(page.locator('.thread-detail-owner-input-focus .thread-list')).toHaveCount(0)
+    await expect(page.getByText('Which outcome should this release optimize for?').first()).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Faster review' })).toBeVisible()
+    await expect(page.locator('html')).toHaveJSProperty('scrollWidth', viewport.width)
+  }
+})
+
 async function apiResultsForTarget(request: any, target: typeof auditReplayTargets[number]) {
   const results = []
   for (const check of routeApiChecks(target)) {
