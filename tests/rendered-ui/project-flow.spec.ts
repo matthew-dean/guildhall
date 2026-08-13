@@ -99,8 +99,7 @@ const projectSurfaceRoutes = [
     path: '/projects/fair-labor-license/release',
     assertions: async (page) => {
       await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
-      await expect(page.getByText('Tasks done', { exact: true })).toBeVisible()
-      await expect(page.getByText('Open checks', { exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Inspect release details' })).toBeVisible()
     },
   },
   {
@@ -151,9 +150,9 @@ const projectSurfaceRoutes = [
     name: 'native mobile work',
     path: '/projects/mobile-kit/work?view=columns',
     assertions: async (page) => {
-      await expect(page.getByRole('toolbar', { name: 'Work view controls' })).toBeVisible()
-      await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
-      await expect(page.getByRole('button', { name: 'Columns' })).toHaveCount(0)
+      await expect(page.getByRole('region', { name: 'Project update required' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'One update is needed' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Review project update' })).toBeVisible()
       await expect(page.getByTitle('Mobile Kit')).toBeVisible()
     },
   },
@@ -170,7 +169,7 @@ const projectSurfaceRoutes = [
     name: 'timeline',
     path: '/projects/api-broker/timeline',
     assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: 'Coordinator timeline' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Project activity' })).toBeVisible()
       await expect(page.getByTitle('API Broker')).toBeVisible()
     },
   },

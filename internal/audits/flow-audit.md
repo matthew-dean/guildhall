@@ -58745,3 +58745,7 @@ the shared current action for an individual project.
   `Apply required updates` controls for replays that intentionally exercise
   updates. The remaining matrix cases still need their legacy dashboard
   contracts replaced rather than skipped.
+- Progress, 2026-08-12: the release, update-gated mobile Work, and Timeline
+  route matrix cases now assert their bounded current surfaces and pass in one
+  Playwright run. They no longer demand the removed release counter dashboard,
+  work-view toolbar, or `Coordinator timeline` transcript.
