@@ -232,6 +232,7 @@ describe('summarizeProjects', () => {
           message: 'Restructure project service shell',
         },
         actionLabel: 'Open project',
+        openHref: null,
         runActionLabel: 'Pause',
         canOpen: true,
         canStart: false,
@@ -240,6 +241,46 @@ describe('summarizeProjects', () => {
         needsAttention: true,
       },
     ])
+  })
+
+  it('names the focused spec review instead of repeating its readiness count', () => {
+    const service: ServiceDetail = {
+      projects: [{
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/work/looma-knit',
+        taskCounts: { total: 16, active: 0, draftReview: 0, blocked: 0, done: 6, shelved: 0 },
+        run: { status: 'stopped' },
+        startReadiness: {
+          canStart: false,
+          code: 'owner_review_required',
+          message: '10 specs are ready for your review before work can continue.',
+          focusTaskId: 'task-review-menu',
+          focusKind: 'spec_review',
+          count: 10,
+        },
+        actionModel: {
+          primaryAction: {
+            label: 'Review a spec',
+            taskId: 'task-review-menu',
+            taskLabel: 'LOO-EBUYE7 Shape the focused review flow',
+            buttonLabel: 'Review spec',
+            href: '/task/task-review-menu',
+            tone: 'warn',
+            code: 'owner_review_required',
+          },
+          secondaryActions: [],
+          ownerInput: { active: false },
+          runControl: null,
+        },
+      }],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      activityLabel: 'LOO-EBUYE7 Shape the focused review flow is ready for review.',
+      actionLabel: 'Review spec',
+      openHref: '/task/task-review-menu',
+    })
   })
 
   it('uses visible work progress for project-card counts when available', () => {

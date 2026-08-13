@@ -58605,3 +58605,33 @@ the shared current action for an individual project.
   then proves the response control is visible, the list/history are absent,
   and page width does not overflow. This is an isolated replay; it does not
   answer or alter a user project.
+
+### Repair: Home names the selected review, never its queue count
+
+- [x] User job: on Projects Home, a project that needs a spec decision names
+  the one spec Guildhall selected and offers its matching review control. The
+  owner must not decode a count of other pending specs before they can act.
+- Finding, 2026-08-12: live Looma + Knit Home still said `10 specs are ready
+  for your review before work can continue` while its button already targeted
+  one selected spec. The card summary prioritized raw `startReadiness.message`
+  above the shared primary action, contradicting the single-action model and
+  repeating the exact inert-count failure reported by the owner.
+- Contract Touch Decision: change only the home card's derived activity line
+  to consume the existing `actionModel.primaryAction` before raw readiness
+  prose. It will use the selected task label where available and retain raw
+  readiness only when no shared action exists. Home will also pass that
+  existing action through the shared project-route scoper so a relative
+  `/task/<id>` cannot lose its owning project. Considered but unchanged:
+  action ranking, readiness computation, task selection, fleet counts,
+  persistence, and API schemas. Schema Migration Decision: none.
+  Required proof: summary and home regressions show a selected review title
+  and shared review href without the count prose; installed Home reflects the
+  same. Apply/revert: presentation-only priority restoration.
+- Evidence, 2026-08-12: project-summary coverage passes 23/23 and Home
+  coverage passes 22/22. The focused Home replay proves the card says
+  `LOO-EBUYE7 Shape the focused review flow is ready for review.`, omits
+  the raw `10 specs` readiness message, and scopes `/task/task-review-menu`
+  to `/projects/looma-knit/task/task-review-menu` when clicked. After a fresh
+  build/install and Looma + Knit restart, the installed service reports
+  `stale:false`; live Home now names Looma + Knit's selected document-review
+  task beside `Review next spec`, with no `10 specs` count shown.

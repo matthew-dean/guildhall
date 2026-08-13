@@ -9,7 +9,7 @@
   import ProjectsShell from '../lib/layout/ProjectsShell.svelte'
   import ProjectCard from '../lib/ProjectCard.svelte'
   import { createProjectSummaryCache, mergeServiceProjectSummaries } from '../lib/project-summary.js'
-  import { projectHref } from '../lib/project-routes.js'
+  import { projectActionHref, projectHref } from '../lib/project-routes.js'
   import { getCachedService, setCachedService } from '../lib/service-cache.js'
   import type { ServiceDetail } from '../lib/types.js'
 
@@ -104,7 +104,7 @@
   }
 
   function openProject(projectId: string, href?: string | null): void {
-    nav(href ?? projectHref(projectId, '/overview'))
+    nav(href ? projectActionHref(href, projectId) : projectHref(projectId, '/overview'))
   }
 
   async function attachProject(): Promise<void> {

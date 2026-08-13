@@ -163,18 +163,22 @@ function statusLabel(project: ServiceProjectSummary, counts: ProjectCardSummary[
 function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
   if (project.projectStatusError) return project.projectStatusError
   if (project.initializationNeeded) return 'Needs first-time Guildhall setup.'
+  const primaryAction = project.actionModel?.primaryAction
+  if (primaryAction?.code === 'owner_review_required' && primaryAction.taskLabel) {
+    return `${primaryAction.taskLabel} is ready for review.`
+  }
+  if (primaryAction?.code === 'ready_work') {
+    return primaryAction.taskLabel
+      ? `${primaryAction.taskLabel} is ready to resume.`
+      : 'Work is ready to resume.'
+  }
+  if (primaryAction) {
+    return primaryAction.detail ?? primaryAction.label
+  }
   if (project.startReadiness?.canStart === false && project.startReadiness.message) {
     return project.startReadiness.message
   }
   if (project.projectCheckIn?.needed) return `${project.projectCheckIn.title ?? 'Project check-in needed'}.`
-  if (project.actionModel?.primaryAction?.code === 'ready_work') {
-    return project.actionModel.primaryAction.taskLabel
-      ? `${project.actionModel.primaryAction.taskLabel} is ready to resume.`
-      : 'Work is ready to resume.'
-  }
-  if (project.actionModel?.primaryAction) {
-    return project.actionModel.primaryAction.detail ?? project.actionModel.primaryAction.label
-  }
   const running = (project.run?.status ?? 'stopped') === 'running'
   const oneTaskRun = running && project.run?.mode === 'one_task'
   if (oneTaskRun) return 'Advancing one task.'
