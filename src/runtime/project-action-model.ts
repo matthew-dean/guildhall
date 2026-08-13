@@ -460,7 +460,7 @@ function inboxButtonLabel(item: ProjectActionInboxItem): string {
     case 'workspace_import_pending': return 'Review import'
     case 'proof_reconciliation': return 'Review proof'
     case 'bootstrap_missing': return 'Open readiness checks'
-    case 'setup_pending': return 'Open setup'
+    case 'setup_pending': return 'Start setup'
     case 'import_draft_queue': return item.taskId === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'
     case 'required_migration': return 'Migrate project'
     case 'lever_questions': return 'Open advanced'
@@ -825,6 +825,38 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     ownerInput,
     setup,
     ...(workSummary ? { workSummary } : {}),
+  }
+}
+
+/**
+ * A fleet card may have saved owner attention before its compact project
+ * summary has a primary action. Promote that already-prioritized attention
+ * through the same action-model builder used by every project surface.
+ */
+export function buildFleetAttentionActionModel(input: {
+  stored?: ProjectActionModel | null
+  items?: ProjectActionInboxItem[]
+  runStatus?: string | null
+}): ProjectActionModel | null {
+  if (input.stored) return input.stored
+  const items = input.items ?? []
+  if (items.length === 0) return null
+  const model = buildProjectActionModel({
+    inbox: { items },
+    tasks: [],
+    runStatus: input.runStatus,
+  })
+  if (!model.primaryAction) return null
+  if (input.runStatus === 'running' || input.runStatus === 'stopping') return model
+  return {
+    ...model,
+    runControl: {
+      label: model.primaryAction.buttonLabel,
+      startEnabled: false,
+      pauseEnabled: false,
+      disabledReason: model.primaryAction.detail,
+      href: model.primaryAction.href,
+    },
   }
 }
 

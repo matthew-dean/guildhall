@@ -416,6 +416,38 @@ describe('summarizeProjects', () => {
     expect(summarizeProjects(service)[0]?.taskActivity.bars).toHaveLength(18)
   })
 
+  it('shows a saved owner-attention action as needs-you instead of ready', () => {
+    const service: ServiceDetail = {
+      projects: [{
+        id: 'commerce',
+        name: 'Commerce',
+        path: '/work/commerce',
+        taskCounts: { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+        actionModel: {
+          primaryAction: {
+            source: 'inbox',
+            label: 'Give the project direction',
+            buttonLabel: 'Start setup',
+            href: '/thread',
+            tone: 'warn',
+          },
+          secondaryActions: [],
+          runControl: { label: 'Start', startEnabled: true },
+          ownerInput: { active: false },
+          setup: { state: 'fresh_intake_needed', freshIntakeNeeded: true },
+        },
+      }],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      statusLabel: 'Needs you',
+      activityLabel: 'Give the project direction',
+      actionLabel: 'Start setup',
+      openHref: '/thread',
+      needsAttention: true,
+    })
+  })
+
   it('prioritizes project questions in card summaries without saying deep intake', () => {
     const service: ServiceDetail = {
       projects: [

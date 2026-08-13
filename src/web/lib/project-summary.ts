@@ -106,7 +106,11 @@ function actionModelStage(project: ServiceProjectSummary): string | null {
   const actionModel = project.actionModel
   if (!actionModel) return null
   if (actionModel.ownerInput?.active) return 'Needs you'
-  const code = actionModel.primaryAction?.code ?? project.startReadiness?.code
+  const primaryAction = actionModel.primaryAction
+  if (primaryAction?.source === 'inbox' && (primaryAction.tone === 'warn' || primaryAction.tone === 'danger')) {
+    return 'Needs you'
+  }
+  const code = primaryAction?.code ?? project.startReadiness?.code
   if (code === 'all_terminal') return 'Scope done'
   if (code === 'required_migration_pending') return 'Needs migration'
   if (code === 'no_provider' || code === 'no_loaded_model' || code === 'model_unavailable' || code === 'provider_unavailable') {

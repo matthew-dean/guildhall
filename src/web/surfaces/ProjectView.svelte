@@ -694,6 +694,14 @@
   const focusedRunnablePrimaryAction = $derived(
     primaryAction?.code === 'ready_work' && Boolean(primaryAction.taskId),
   )
+  const primaryActionOwnsAttention = $derived(
+    Boolean(
+      primaryAction &&
+      primaryAction.source === 'inbox' &&
+      primaryAction.inboxKind === 'setup_pending' &&
+      actionRunControl?.startEnabled === false,
+    ),
+  )
   // Both fields are projections of the selected release. Older compact reads
   // may omit `decision`, so lifecycle truth must not depend on that optional
   // presentation field and resurrect stale owner urgency after shipment.
@@ -1172,6 +1180,7 @@
   )
   const showRunButton = $derived(
     !selectedReleaseShipped &&
+      !primaryActionOwnsAttention &&
       // A migration-gated route owns its one repair action in the content area.
       // The shell must not turn it into a second competing command.
       !requiredMigrationBlocked &&

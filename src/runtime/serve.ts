@@ -413,7 +413,7 @@ import {
   runRuntimeBackendSetupAction,
   type RuntimeBackendSetupDetector,
 } from './runtime-backend-setup.js'
-import { applyRunStatusToStartReadiness, buildProjectActionModel, projectTaskActionHref, resolveProjectActionModel, type ProjectActionModel } from './project-action-model.js'
+import { applyRunStatusToStartReadiness, buildFleetAttentionActionModel, buildProjectActionModel, projectTaskActionHref, resolveProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { NodeGitDriver } from './git-driver.js'
 import {
   GitStoryClosureState,
@@ -2577,6 +2577,11 @@ async function refreshProjectProjections(
       const compactFleetSummary = compactFleetSummaryPayload({
         ...fleetSummary,
         fleetAttention: savedAttention,
+        actionModel: buildFleetAttentionActionModel({
+          stored: fleetSummary.actionModel,
+          items: savedAttention.items,
+          runStatus: fleetSummary.run?.status,
+        }),
       })
       publishFleetSummaryProjection({
         projectId: resolved.id,
@@ -3153,6 +3158,11 @@ function readFleetProjectSummaries(
           items,
           total: items.length,
         }
+        summary.actionModel = buildFleetAttentionActionModel({
+          stored: summary.actionModel,
+          items,
+          runStatus: summary.run?.status,
+        })
       }
 
       // Registration owns identity and presentation metadata. The saved fleet
@@ -3209,11 +3219,17 @@ function publishFleetSummaryFromSavedState(
     attentionTruthWithPrimaryAction(shell?.releaseSummary ?? null, basePayload.actionModel?.primaryAction),
     basePayload.actionModel?.setup ?? null,
   )
+  const fleetAttention = attention.freshness === 'current'
+    ? fleetAttentionProjection(attention.items)
+    : { items: [], total: 0, freshness: 'missing' as const }
   const payload = compactFleetSummaryPayload({
     ...basePayload,
-    fleetAttention: attention.freshness === 'current'
-      ? fleetAttentionProjection(attention.items)
-      : { items: [], total: 0, freshness: 'missing' as const },
+    fleetAttention,
+    actionModel: buildFleetAttentionActionModel({
+      stored: basePayload.actionModel,
+      items: fleetAttention.items,
+      runStatus: basePayload.run?.status,
+    }),
   })
   publishFleetSummaryProjection({
     projectId: entry.id,
@@ -8008,19 +8024,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ? task => compactTaskForWorkSurface(task, { includeDefinitions: input.includeDetailSections })
           : compactTaskForProjectSummary)
       .filter((task): task is Record<string, unknown> => Boolean(task))
-      const detailInbox = input.includeDetailSections
-      ? readSavedAttentionSurfaceFromBoundary({
-          initializationNeeded: project.initializationNeeded,
-          records: surfaceState?.attentionRecords ?? null,
-          watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
-          projectRevision: surfaceState?.projectRevision ?? null,
-          releaseTruth: attentionTruthWithPrimaryAction(
-            projection.releaseSummary,
-            summary.actionModel?.primaryAction,
-          ),
-          setupTruth: summary.actionModel?.setup ?? null,
-        })
-      : null
+    const savedAttention = readSavedAttentionSurfaceFromBoundary({
+      initializationNeeded: project.initializationNeeded,
+      records: surfaceState?.attentionRecords ?? null,
+      watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
+      projectRevision: surfaceState?.projectRevision ?? null,
+      releaseTruth: attentionTruthWithPrimaryAction(
+        projection.releaseSummary,
+        summary.actionModel?.primaryAction,
+      ),
+      setupTruth: summary.actionModel?.setup ?? null,
+    })
+    const detailInbox = input.includeDetailSections ? savedAttention : null
     const detailMemoryHealth = input.includeDetailSections
       ? overviewState?.memoryHealth?.payload ?? surfaceState?.memoryHealth?.payload ?? null
       : null
@@ -8057,8 +8072,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
           releaseLifecycleState: isRecord(compactReleaseReadiness.release) && compactReleaseReadiness.release.state === 'shipped'
             ? 'shipped'
             : projection.releaseSummary.release?.state,
-        })
+      })
       : summary.actionModel
+    const cachedFleetActionModel = responseActionModel
+      ? null
+      : readFleetProjectSummaries([{
+          id: project.id,
+          path: project.path,
+          name: project.config?.name ?? project.id,
+          tags: project.config?.tags ?? [],
+          initializationNeeded: false,
+        }], new Map(run ? [[project.id, run]] : [])).at(0)?.actionModel ?? null
+    const sharedResponseActionModel = buildFleetAttentionActionModel({
+      stored: responseActionModel ?? cachedFleetActionModel,
+      items: savedAttention.freshness === 'current' ? savedAttention.items : [],
+      runStatus: run?.status ?? 'stopped',
+    })
     let sharedReleaseCounts = isRecord(compactReleaseReadiness) && isRecord(compactReleaseReadiness.releaseCounts)
       ? compactReleaseReadiness.releaseCounts as {
           total: number
@@ -8176,7 +8205,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ...(releaseSummary ? { releaseSummary } : {}),
       releaseReadiness: compactReleaseReadiness,
       startReadiness: responseStartReadiness,
-      actionModel: responseActionModel,
+      actionModel: sharedResponseActionModel,
       orientationSpine,
       ...(!input.includeDetailSections ? {
         detailPayload: {

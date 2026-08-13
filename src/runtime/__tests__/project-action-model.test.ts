@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyRunStatusToStartReadiness, buildProjectActionModel, isFocusedOwnerInputTaskReview, projectTaskActionHref, resolveProjectActionModel } from '../project-action-model.js'
+import { applyRunStatusToStartReadiness, buildFleetAttentionActionModel, buildProjectActionModel, isFocusedOwnerInputTaskReview, projectTaskActionHref, resolveProjectActionModel } from '../project-action-model.js'
 
 describe('applyRunStatusToStartReadiness', () => {
   it('does not leave a saved paused action visible while a run is active', () => {
@@ -20,6 +20,41 @@ describe('applyRunStatusToStartReadiness', () => {
 })
 
 describe('buildProjectActionModel', () => {
+  it('promotes saved fleet attention only when no project action exists', () => {
+    const attentionAction = buildFleetAttentionActionModel({
+      items: [{
+        kind: 'setup_pending',
+        severity: 'medium',
+        title: 'Give the project direction',
+        detail: 'Start with a short brief you can edit.',
+        actionHref: '/thread',
+      }],
+    })
+
+    expect(attentionAction?.primaryAction).toMatchObject({
+      source: 'inbox',
+      label: 'Give the project direction',
+      buttonLabel: 'Start setup',
+      href: '/thread',
+      tone: 'warn',
+    })
+    expect(attentionAction?.runControl).toMatchObject({
+      label: 'Start setup',
+      startEnabled: false,
+      pauseEnabled: false,
+      href: '/thread',
+    })
+
+    const stored = buildProjectActionModel({
+      startReadiness: { canStart: true, code: 'ready_work', focusTaskId: 'task-1' },
+      tasks: [{ id: 'task-1', title: 'Continue current work', status: 'ready' }],
+    })
+    expect(buildFleetAttentionActionModel({
+      stored,
+      items: [{ kind: 'setup_pending', severity: 'medium', title: 'Ignored', detail: 'Ignored', actionHref: '/thread' }],
+    })).toBe(stored)
+  })
+
   it('uses one owner-input review predicate across task routing and setup state', () => {
     expect(isFocusedOwnerInputTaskReview({
       code: 'owner_input_required',

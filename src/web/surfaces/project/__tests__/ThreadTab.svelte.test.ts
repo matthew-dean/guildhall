@@ -1136,7 +1136,8 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findByPlaceholderText('What should Guildhall know?')
-    expect(screen.getByRole('button', { name: /Give the project direction/i })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /Give the project direction/i })).toBeTruthy()
+    expect(screen.queryByRole('complementary', { name: 'Thread list' })).toBeNull()
     const detail = within(document.querySelector('.thread-detail') as HTMLElement)
     expect(detail.getByText('Give the project direction')).toBeTruthy()
     expect(detail.queryByText('Name this project')).toBeNull()
@@ -2165,7 +2166,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab, { projectId: 'font-something' })
 
-    await screen.findByText('Current setup context')
+    await screen.findByText('Setup details')
     expect(screen.getByText(/current snapshot from local files/i)).toBeTruthy()
     expect(screen.getByText('Coordinator areas: Design.')).toBeTruthy()
     expect(screen.getByText(/saved direction is the durable plan input/i)).toBeTruthy()
@@ -2302,7 +2303,7 @@ describe('ThreadTab', () => {
     expect(path.value).toBe('/projects/looma-knit/thread')
   })
 
-  it('labels active skippable project check-in as optional instead of now', async () => {
+  it('focuses a lone active setup decision without an optional duplicate', async () => {
     installFetchFakes(
       [
         setupTurn({
@@ -2323,11 +2324,12 @@ describe('ThreadTab', () => {
     markProjectPaused()
     render(ThreadTab)
 
-    await screen.findByRole('button', { name: /Run project check-in/i })
+    await screen.findByRole('button', { name: /Start project check-in/i })
     const detail = selectedThread()
-    expect(detail.getAllByText('optional').length).toBeGreaterThan(0)
-    expect(detail.queryByText('now')).toBeNull()
-    expect(document.querySelector('[data-turn-id="setup:project-check-in"] .tone-warn')).toBeNull()
+    expect(detail.getAllByText('Needs you').length).toBeGreaterThan(0)
+    expect(detail.queryByText('optional')).toBeNull()
+    expect(screen.queryByRole('complementary', { name: 'Thread list' })).toBeNull()
+    expect(document.querySelector('[data-turn-id="setup:project-check-in"] .tone-warn')).toBeTruthy()
   })
 
   it('explains bootstrap failures with the first useful command output line', async () => {

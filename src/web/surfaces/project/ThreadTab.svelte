@@ -1241,7 +1241,10 @@
           ? 'Paused'
           : 'Ready'
     }
-    if (t.kind === 'setup_step') return t.status === 'done' || t.skippable ? null : 'Needs you'
+    if (t.kind === 'setup_step') {
+      if (t.status === 'done') return null
+      return t.status === 'active' || !t.skippable ? 'Needs you' : null
+    }
     if (t.kind === 'pressure_test_question' || t.kind === 'bounded_chat') return t.status === 'done' ? null : 'Needs you'
     if (t.kind === 'escalation') {
       if (t.status === 'done') return null
@@ -3349,6 +3352,9 @@
     activeDockTurn &&
     (activeDockTurn.kind === 'agent_question' || activeDockTurn.kind === 'pressure_test_question' || activeDockTurn.kind === 'bounded_chat'),
   ))
+  const showSingleSetupFocus = $derived(Boolean(
+    threadChains.length === 1 && threadChains[0]?.currentTurn?.kind === 'setup_step',
+  ))
 
   const historyTurns = $derived.by(() => {
     if (!selectedChain) return []
@@ -3824,9 +3830,9 @@
         <div
           class="thread-columns"
           class:thread-columns-compact={compactThreadMode}
-          class:thread-columns-owner-input={showOwnerInputFocus}
+          class:thread-columns-owner-input={showOwnerInputFocus || showSingleSetupFocus}
         >
-          {#if !showOwnerInputFocus && (!compactThreadMode || compactPane === 'list')}
+          {#if !showOwnerInputFocus && !showSingleSetupFocus && (!compactThreadMode || compactPane === 'list')}
           <aside
             class="thread-index"
             aria-label="Thread list"
@@ -3871,7 +3877,7 @@
           <section
             class="thread-detail"
             aria-label="Selected thread"
-            class:thread-detail-owner-input-focus={showOwnerInputFocus}
+            class:thread-detail-owner-input-focus={showOwnerInputFocus || showSingleSetupFocus}
             bind:this={detailScrollEl}
             onscroll={handleDetailScroll}
             in:fly|local={{ x: compactThreadMode ? 26 : 0, duration: 180, opacity: 0.16 }}
@@ -4125,15 +4131,15 @@
                 {:else if t.kind === 'setup_step'}
                   <div class="setup-title">
                     <h3 class="prompt"><Markdown source={setupStepTitle(t)} inline /></h3>
-                    {#if t.skippable && !showStatusChip(t)}
+                    {#if t.skippable && !showStatusChip(t) && ownershipLabel(t) !== 'Needs you'}
                       <Chip label="optional" tone="neutral" />
                     {/if}
                   </div>
                   <p class="why">{setupStepWhy(t)}</p>
-                  {#if t.status === 'active'}
+                    {#if t.status === 'active'}
                     {#if t.contextSummary}
-                      <UtilityPanel className="setup-context" tone="neutral" ariaLabel="Current setup context">
-                        <strong>Current setup context</strong>
+                      <details class="setup-context">
+                        <summary>Setup details</summary>
                         <p>{t.contextSummary.intro}</p>
                         <ul>
                           {#each t.contextSummary.facts as fact}
@@ -4141,7 +4147,7 @@
                           {/each}
                         </ul>
                         <p>{t.contextSummary.uncertainty}</p>
-                      </UtilityPanel>
+                      </details>
                     {/if}
                     {#if t.affordance === 'link' && t.actionHref}
                       <Row justify="end" gap="2">
@@ -7146,22 +7152,23 @@
   :global(.runtime-state-row) {
     gap: var(--gh-space-2);
   }
-  :global(.setup-context) {
+  .setup-context {
     display: grid;
     gap: var(--gh-space-2);
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
   }
-  :global(.setup-context) strong {
+  .setup-context summary {
     color: var(--text);
     font-size: var(--gh-type-size-meta);
     font-weight: var(--gh-type-weight-medium);
+    cursor: pointer;
   }
-  :global(.setup-context) p {
+  .setup-context p {
     margin: 0;
   }
-  :global(.setup-context) ul {
+  .setup-context ul {
     display: grid;
     gap: var(--gh-space-1);
     margin: 0;

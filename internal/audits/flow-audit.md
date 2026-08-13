@@ -58986,3 +58986,41 @@ the shared current action for an individual project.
   has a single state/action/current-work packet per card at 1280x720 and
   390x844, with no console warning/error or horizontal overflow; each measured
   activity line is 17px high, including deliberately long task titles.
+
+### Repair: Saved fleet attention is a shared primary action
+
+- [x] User job: when a project has no task-derived action but does have a
+  current owner decision, `/projects` and `Needs you` name the same decision
+  and offer the same destination. Neither surface may claim that the project
+  is ready just because its task inventory is empty.
+- Finding, 2026-08-12: Commerce project appeared as `Ready / No task activity
+  yet / Open project` on the chooser, while the same saved attention snapshot
+  made `Needs you` say `Give the project direction / Start setup`. The action
+  model was absent from the compact fleet record, so each surface told a
+  different story.
+- Contract Touch Decision: add a shared runtime fallback that promotes the
+  already-prioritized saved attention item through `buildProjectActionModel`
+  only when the compact summary has no action model; persist it in the fleet
+  summary and apply the same compatibility repair when reading older fleet
+  rows. The project-read boundary consumes that same cached fleet action when
+  its direct compact response has none, so opening the project cannot lose the
+  decision the chooser just named. A saved `setup_pending` action suppresses
+  the unrelated top-shell run control; the Thread surface presents one setup
+  decision and keeps coordinator inventory behind collapsed setup details.
+  Considered but not touched: inbox ordering, attention persistence,
+  task/action ranking when an action already exists, task state, routes,
+  project schemas, and database schema.
+  Schema Migration Decision: no persisted schema shape changes; old rows are
+  upgraded at the read boundary and rewritten by the normal projection refresh.
+  Required proof: action-model and card-summary regressions, plus installed
+  card/Needs You agreement. Apply/revert: remove the fallback; retained
+  attention records remain intact.
+- Evidence, 2026-08-12: focused action-model, project-summary, ProjectView,
+  and Thread suites pass 259/259; `pnpm typecheck`, `pnpm lint:contracts`, and
+  `git diff --check` pass. The full rendered UI matrix passes 45/45. After a
+  fresh build/install and Looma + Knit restart, `/api/stale-server` reports
+  `stale:false`; the installed Commerce card shows `Needs you / Give the
+  project direction / Start setup`. Following it at 1280x720 yields one
+  `Needs you` marker, the short brief form, collapsed `Setup details`, and
+  `Save`: no Thread-list duplicate and no fake Resume/Start control. The same
+  decision route at 390x844 has no horizontal overflow or browser warning/error.
