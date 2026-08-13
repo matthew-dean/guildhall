@@ -111,6 +111,8 @@ describe('ProjectOverviewTab owner decision', () => {
       activeProjectId: 'narrative-harness',
     })
 
+    expect(screen.getByRole('heading', { name: 'Ready to continue' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'What needs your attention' })).toBeNull()
     expect(screen.getByRole('heading', { name: 'Work ready to resume' })).toBeInTheDocument()
     expect(screen.getByText('NAR-091')).toBeInTheDocument()
     expect(screen.getByText('Present draft review evaluation and provenance')).toBeInTheDocument()

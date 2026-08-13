@@ -58120,6 +58120,23 @@ the shared current action for an individual project.
   all five actions without clipping. Narrative Harness's visible `Review proof`
   action opened its exact `task-087` review route.
 
+### Repair: Overview does not invent urgency for ready work
+
+- [x] Label an Overview decision with action code `ready_work` `Ready to
+  continue`, preserving `What needs your attention` for actual owner-facing
+  blockers and reviews.
+- Contract Touch Decision: touched only Overview's presentation of the existing
+  shared primary action. Considered but unchanged: action ranking, task routing,
+  selected drawer identity, release counts, and task state. Schema Migration
+  Decision: none.
+- Evidence, 2026-08-12: Project Overview focused coverage passes 6/6,
+  including ready-work heading and false-attention regression assertions.
+  `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `git diff --check`
+  pass. After a fresh installed restart, `/api/stale-server` reported
+  `stale:false`; the Narrative Harness route opened from the global proof queue
+  showed `Ready to continue`, no false-attention heading, and no horizontal
+  overflow at 1280x720.
+
 ### Repair: Failed spec approval keeps its decision surface
 
 - [x] Keep an approval modal open until its approval mutation succeeds; render

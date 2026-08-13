@@ -84,6 +84,11 @@
     }
   })
   const nextActionTaskKey = $derived(nextAction.taskId ? taskDisplayKey(nextAction.taskId, [], activeProjectId) : null)
+  const decisionTitle = $derived.by(() => {
+    if (releaseShipped) return releaseTitle
+    if (detail.actionModel?.primaryAction?.code === 'ready_work') return 'Ready to continue'
+    return 'What needs your attention'
+  })
 
   function go(href: string): void {
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
@@ -100,7 +105,7 @@
   </header>
 
   <Card
-    title={releaseShipped ? releaseTitle : 'What needs your attention'}
+    title={decisionTitle}
     titleTag="h2"
     tone={releaseShipped ? 'ok' : nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : 'accent'}
     variant="callout"
