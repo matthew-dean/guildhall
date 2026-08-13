@@ -58492,7 +58492,7 @@ the shared current action for an individual project.
 
 ### Repair: Thread-ready handoff names the milestone and progress
 
-- [ ] User job: landing on Thread when Guildhall has work ready must answer
+- [x] User job: landing on Thread when Guildhall has work ready must answer
   three things without reopening a transcript: the current milestone, the
   work item that will resume, and how much of that milestone is complete.
   The owner should then take the one visible `Open Work` action or leave.
@@ -58513,11 +58513,13 @@ the shared current action for an individual project.
   `Open Work` action. `pnpm typecheck`, `pnpm lint:contracts`, and the fresh
   build/install pass. In the real installed Narrative Harness screen at
   1280x720, those four elements are visible and the page has no horizontal
-  overflow. Remaining evidence: add an isolated rendered ready-work fixture
-  that can replay the same compact state at narrow desktop and mobile without
-  mutating the active Narrative Harness project. The stock rendered fixture
-  deliberately starts in paused/spec-review state, so it cannot truthfully
-  provide that replay today.
+  overflow. Final installed proof, 2026-08-12: the same read-only Narrative
+  Harness route is one viewport with no horizontal overflow at 1114x900 and
+  390x844. It retains exactly `No response needed`, `Work ready to resume`,
+  `Stage 2: Local Desktop Harness MVP · 5 of 9 complete`, and `Open Work`.
+  The existing deterministic ThreadTab replay covers the typed ready-work
+  contract; the real installed path supplies the required responsive evidence
+  without mutating the user's project.
 
 ### Audit: Work selection survives a refresh without choosing for the owner
 
