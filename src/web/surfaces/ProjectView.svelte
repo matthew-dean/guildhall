@@ -408,6 +408,9 @@
   const needsMeta = $derived(
     (project.detail?.coordinatorCount ?? project.detail?.config?.coordinators?.length ?? 0) === 0,
   )
+  const threadIsCurrentDecision = $derived(
+    currentView === 'thread' || project.detail?.actionModel?.ownerInput?.active === true,
+  )
   const entries = $derived<NavEntry[]>([
     {
       id: 'project',
@@ -422,7 +425,7 @@
         { id: 'structure', label: 'Structure', path: currentProjectHref('/structure', activeProjectId) },
       ],
     },
-    { id: 'thread', label: 'Threads', icon: 'sparkles', suffix: '/thread' },
+    ...(threadIsCurrentDecision ? [{ id: 'thread' as const, label: 'Threads', icon: 'sparkles' as const, suffix: '/thread' }] : []),
     {
       id: 'work',
       label: 'Work',
@@ -431,17 +434,6 @@
       subs: [
         { id: 'queue', label: 'Queue', path: currentProjectHref('/work?view=list', activeProjectId) },
         { id: 'board', label: 'Board', path: currentProjectHref('/work?view=board', activeProjectId) },
-      ],
-    },
-    { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
-    {
-      id: 'release',
-      label: 'Release',
-      icon: 'check-circle-2',
-      suffix: '/release',
-      subs: [
-        { id: 'verdict', label: 'Summary', path: currentProjectHref('/release', activeProjectId) },
-        { id: 'criteria', label: 'Checks', path: currentProjectHref('/release/criteria', activeProjectId) },
       ],
     },
   ])
@@ -1554,6 +1546,22 @@
                       <span>Advance one task</span>
                     </button>
                   {/if}
+                  <button
+                    type="button"
+                    class="actions-menu-item"
+                    onclick={() => { closeActionsMenu(); go(currentProjectHref('/release', activeProjectId)) }}
+                  >
+                    <Icon name="check-circle-2" size={16} />
+                    <span>Release details</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="actions-menu-item"
+                    onclick={() => { closeActionsMenu(); go(currentProjectHref('/timeline', activeProjectId)) }}
+                  >
+                    <Icon name="clock" size={16} />
+                    <span>Project activity</span>
+                  </button>
                 </div>
               {/if}
             </div>

@@ -58200,3 +58200,20 @@ the shared current action for an individual project.
   Release at 1280x720 showed its milestone, `5/9 done`, `Ready to continue`,
   `NAR-091`, `Open Work`, and one optional `Inspect release details` action in
   the first viewport with no horizontal overflow.
+
+### Repair: Project navigation defaults to decisions, not reports
+
+- [x] Keep only `Project` and `Work` in the default rail. Show `Threads` only
+  when it is the current owner decision or the active route. Move Release and
+  activity to named actions-menu follow-ups; their direct routes remain intact.
+- Contract Touch Decision: touched project navigation presentation only.
+  Considered but unchanged: route availability, routing, release state,
+  timeline data, Thread state, action ranking, and task/run mutations. Schema
+  Migration Decision: none.
+- Evidence, 2026-08-12: ProjectView coverage passes 68/68, including the
+  default-rail and follow-up-menu regressions; `pnpm typecheck` and `pnpm
+  build` pass. After a fresh installed restart with `/api/stale-server`
+  `stale:false`, Narrative Harness at 1280x720 showed only Project, Work, and
+  Settings in the rail, with milestone/progress/current task/`Open Work` in the
+  first viewport and no horizontal overflow. Its actions menu deliberately
+  offered `Release details` and `Project activity`; no task mutation was run.

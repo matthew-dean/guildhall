@@ -1696,6 +1696,22 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'New thread' })).toBeInTheDocument()
   })
 
+  it('moves release and activity follow-ups out of the primary rail', async () => {
+    const user = userEvent.setup()
+    await renderProjectView('overview')
+
+    const rail = screen.getByRole('complementary', { name: 'Project navigation' })
+    expect(within(rail).queryByRole('button', { name: 'Release' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Timeline' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Open actions menu' }))
+    expect(screen.getByRole('button', { name: 'Release details' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Project activity' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Release details' }))
+    expect(path.value).toBe('/projects/looma-knit/release')
+  })
+
   it('keeps the last good project view visible when a refresh returns 503', async () => {
     const user = userEvent.setup()
     await renderProjectView('overview')
@@ -2075,16 +2091,16 @@ describe('ProjectView', () => {
     window.removeEventListener('guildhall:thread-show-list', threadBackSpy)
   })
 
-  it('keeps collapsed rail navigation accessible by name', async () => {
+  it('keeps only current-decision routes in the collapsed rail', async () => {
     await renderProjectView('work')
     const rail = screen.getByRole('complementary', { name: 'Project navigation' })
 
     expect(within(rail).getByRole('button', { name: 'Project' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Threads' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Work' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Release' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Threads' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Timeline' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Release' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Queue' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Board' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Overview' })).not.toBeInTheDocument()
@@ -2102,10 +2118,10 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Facts' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Threads' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Work' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Release' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Threads' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Timeline' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Release' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Inbox' })).not.toBeInTheDocument()
     expect(screen.queryByText('Project graph')).not.toBeInTheDocument()
   })
@@ -2122,13 +2138,13 @@ describe('ProjectView', () => {
     expect(within(rail).queryByRole('button', { name: 'Queue' })).not.toBeInTheDocument()
   })
 
-  it('shows only the active section children for Work and Release routes', async () => {
+  it('keeps release checks out of primary navigation while preserving Work choices', async () => {
     await renderProjectView('release', 'criteria')
     let rail = screen.getByRole('complementary', { name: 'Project navigation' })
     await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
 
-    expect(within(rail).getByRole('button', { name: 'Summary' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Checks' })).toHaveClass('active')
+    expect(within(rail).queryByRole('button', { name: 'Summary' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Checks' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Overview' })).not.toBeInTheDocument()
 
     cleanup()
