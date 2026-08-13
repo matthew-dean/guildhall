@@ -205,6 +205,21 @@ test.afterAll(async () => {
   }
 })
 
+test('spec review starts at one decision without a tab hunt', async ({ page }) => {
+  await page.goto('/projects/narrative-harness/task/coherence-reviewer-mvp', { waitUntil: 'domcontentloaded' })
+
+  await expect(page.getByRole('heading', { name: 'Approve this spec?' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Approve spec' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Request changes' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Read full task record' })).toBeVisible()
+  await expect(page.getByRole('tab')).toHaveCount(0)
+  await expect(page.getByText('Latest handoff packet')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Approve spec' }).click()
+  await expect(page.getByRole('dialog', { name: 'Approve spec' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Approve spec' }).getByRole('button', { name: 'Approve' })).toBeVisible()
+})
+
 async function apiResultsForTarget(request: any, target: typeof auditReplayTargets[number]) {
   const results = []
   for (const check of routeApiChecks(target)) {

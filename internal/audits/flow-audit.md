@@ -58438,3 +58438,22 @@ the shared current action for an individual project.
   LOO-EBUYE7`. There is no horizontal overflow at 1114x692, 900x692, or
   390x844. The required migration was deliberately not applied to the user's
   project during this replay.
+
+### Repair: Spec approval begins at the decision
+
+- [x] User job: when the owner opens a spec awaiting review, the first task
+  screen immediately offers `Approve spec` or `Request changes`; they never
+  have to find a tab, scroll a full record, or interpret an action-less task
+  inspector first.
+- Contract Touch Decision: none. This is a rendered interaction audit of the
+  focused spec-review presentation. Considered but unchanged: task state,
+  approval mutation, full-record route, migration state, and task payload.
+  Schema Migration Decision: none. Required proof: an isolated spec-review
+  task opens directly at its visible decision and hides tabs and record detail
+  by default. Apply/revert: test-only proof; no runtime behavior or persisted
+  data changes.
+- Evidence, 2026-08-12: isolated rendered replay opens an actual Narrative
+  Harness `spec_review` task directly at `Approve spec` / `Request changes`.
+  It has no tabs or latest-handoff record in the focused screen; clicking the
+  visible primary action opens the `Approve spec` confirmation with its final
+  `Approve` control. This proof performs no task-state mutation.
