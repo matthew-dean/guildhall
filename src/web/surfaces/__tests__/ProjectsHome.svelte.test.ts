@@ -231,7 +231,7 @@ describe('ProjectsHome', () => {
 
     render(ProjectsHome)
 
-    expect(await screen.findByText('LOO-EBUYE7 Shape the focused review flow is ready for review.')).toBeTruthy()
+    expect(await screen.findByText('LOO-EBUYE7 Shape the focused review flow')).toBeTruthy()
     expect(screen.queryByText('10 specs are ready for your review before work can continue.')).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: 'Review spec' }))
     expect(path.value).toBe('/projects/looma-knit/task/task-review-menu')
@@ -457,7 +457,8 @@ describe('ProjectsHome', () => {
     await screen.findByText('Commerce')
 
     expect(screen.getByLabelText('Project status: Needs you')).toBeTruthy()
-    expect(screen.getByText('Shape the first spec before Guildhall creates work.')).toBeTruthy()
+    expect(screen.getByText('Answer in Thread')).toBeTruthy()
+    expect(screen.queryByText('Shape the first spec before Guildhall creates work.')).toBeNull()
     expect(screen.queryByText('No task activity yet.')).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: 'Open Thread' }))
     expect(path.value).toBe('/projects/commerce/thread')

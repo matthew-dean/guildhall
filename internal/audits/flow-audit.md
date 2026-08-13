@@ -58958,3 +58958,31 @@ the shared current action for an individual project.
   repository finding, with no clear-check ledger, design-system record, or
   task-state tally. The same route has no horizontal overflow or errors at
   390x844.
+
+### Repair: Project cards name the work, not the state twice
+
+- [x] User job: on `/projects`, an owner scans a project once and can choose
+  where to go. Each card supplies a state chip, one current-work or decision
+  label, and one direct action; it does not make the owner read a second
+  editorial sentence that merely restates the state.
+- Finding, 2026-08-12: cards turned shared actions into report-like sentences
+  such as `TASK title is ready for review.` and `Work ready to resume is ready
+  to resume.` The status chip and action button already communicated those
+  states, while the extra clause made the chooser taller and harder to scan.
+- Contract Touch Decision: derive card activity from the existing shared
+  primary action's task label when it has one, otherwise from its action label;
+  retain the stable `Work is ready to resume.` fallback only when no task is
+  available. The card clamps that one line with the complete value retained in
+  its title attribute. Considered but not touched: action ranking, readiness,
+  project/task state, routes, service payloads, persistence, and schemas.
+  Schema Migration Decision: none. Required proof: summary and Home rendering
+  regressions cover review, ready-work, and zero-task owner-input cases; the
+  browser matrix rejects multi-line card activity. Apply/revert: a read-model
+  presentation change only.
+- Evidence, 2026-08-12: `project-summary.test.ts` and
+  `ProjectsHome.svelte.test.ts` pass 46/46, `pnpm typecheck` passes, and the
+  full rendered UI matrix passes. After a fresh build/install and Looma + Knit
+  restart, `/api/stale-server` reports `stale:false`. Installed `/projects`
+  has a single state/action/current-work packet per card at 1280x720 and
+  390x844, with no console warning/error or horizontal overflow; each measured
+  activity line is 17px high, including deliberately long task titles.

@@ -248,6 +248,11 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   expect(new Set(boxes.map(box => Math.round(box.top))).size).toBeGreaterThan(1)
   await expect(page.locator('html')).toHaveJSProperty('scrollWidth', 1440)
 
+  const activityHeights = await cards.locator('.activity').evaluateAll((nodes) =>
+    nodes.map(node => node.getBoundingClientRect().height),
+  )
+  expect(Math.max(...activityHeights)).toBeLessThan(28)
+
   const rows = new Map<number, typeof boxes>()
   for (const box of boxes) {
     const top = Math.round(box.top)

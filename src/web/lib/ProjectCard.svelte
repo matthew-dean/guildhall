@@ -65,7 +65,7 @@
       {:else}
         <p class="activity">
           <Activity size={14} />
-          <span>{summary.activityLabel}</span>
+          <span title={summary.activityLabel}>{summary.activityLabel}</span>
         </p>
       {/if}
 
@@ -180,6 +180,13 @@
     gap: var(--s-2);
     color: var(--text);
     font-weight: var(--gh-type-weight-strong);
+    min-width: 0;
+  }
+  .activity span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .activity :global(svg) {
     color: var(--accent-2);

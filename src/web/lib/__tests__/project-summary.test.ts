@@ -277,7 +277,7 @@ describe('summarizeProjects', () => {
     }
 
     expect(summarizeProjects(service)[0]).toMatchObject({
-      activityLabel: 'LOO-EBUYE7 Shape the focused review flow is ready for review.',
+      activityLabel: 'LOO-EBUYE7 Shape the focused review flow',
       actionLabel: 'Review spec',
       openHref: '/task/task-review-menu',
     })

@@ -165,17 +165,17 @@ function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummar
   if (project.initializationNeeded) return 'Needs first-time Guildhall setup.'
   const primaryAction = project.actionModel?.primaryAction
   if (primaryAction?.code === 'owner_review_required' && primaryAction.taskLabel) {
-    return `${primaryAction.taskLabel} is ready for review.`
+    return primaryAction.taskLabel
   }
   if (primaryAction?.code === 'ready_work') {
     const taskLabel = primaryAction.taskLabel?.trim()
     const actionLabel = primaryAction.label?.trim()
     return taskLabel && taskLabel !== actionLabel
-      ? `${taskLabel} is ready to resume.`
+      ? taskLabel
       : 'Work is ready to resume.'
   }
   if (primaryAction) {
-    return primaryAction.detail ?? primaryAction.label
+    return primaryAction.taskLabel ?? primaryAction.label
   }
   if (project.startReadiness?.canStart === false && project.startReadiness.message) {
     return project.startReadiness.message
