@@ -58933,3 +58933,28 @@ the shared current action for an individual project.
   Work, Thread, and Release routes all show `NAR-091` paired with `Present
   draft review evaluation and provenance` at 1280x720, with no browser errors
   or horizontal overflow.
+
+### Repair: Release details show exceptions, not a check ledger
+
+- [x] User job: after deliberately opening release details, an owner sees only
+  unfinished checks and can open the affected task without expanding another
+  row. Clear checks, task-state totals, and unrelated setup diagnostics do not
+  consume the decision surface.
+- Finding, 2026-08-12: Narrative Harness `Inspect release details` opened a
+  ledger of clear rows, an unrelated design-system record, a task-state tally,
+  and closed exception rows. The one real proof and repository problem was
+  present, but neither was the page's visual focus.
+- Contract Touch Decision: filter the existing release-check categories to
+  unresolved items at the Release presentation boundary and render their
+  existing task routes directly. Considered but not touched: readiness,
+  release verdicts, action ranking, task/repository state, APIs, persistence,
+  and schemas. Schema Migration Decision: none. Required proof: exception
+  tasks are visible without disclosure; clear/tally content is absent.
+- Evidence, 2026-08-12: ReleaseTab coverage passes 29/29, the rendered
+  owner-path matrix passes 45/45, and `pnpm typecheck` passes. After a fresh
+  build/install and restart, `/api/stale-server` reported `stale:false`.
+  Installed Narrative Harness release checks fit at 1280x720 with no horizontal
+  overflow or browser errors: four visible proof-task routes and one visible
+  repository finding, with no clear-check ledger, design-system record, or
+  task-state tally. The same route has no horizontal overflow or errors at
+  390x844.

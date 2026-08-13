@@ -1,8 +1,8 @@
 <!--
   Release readiness view. Primary/secondary/overflow IA:
     · Primary: single verdict band — shared status treatment + one-line reason.
-    · Secondary: criteria list, one row per check, expandable into task links.
-    · Overflow: compact release counts and task-state tally.
+    · Secondary: only unresolved release exceptions, each with its task route.
+    · Overflow: no success ledger or task-state tally; the Work route owns inventory.
 -->
 <script lang="ts">
   import FrameCard from '../../../../packages/ui/src/components/FrameCard.svelte'
@@ -253,7 +253,6 @@
     key: string
     label: string
     items: ReleaseItem[]
-    clearLabel: string
   }
 
   const criteria = $derived<Criterion[]>(
@@ -263,61 +262,40 @@
             key: 'escalations',
             label: 'Open escalations',
             items: data.openEscalations,
-            clearLabel: 'No open escalations.',
           },
           {
             key: 'incomplete-briefs',
             label: 'Incomplete briefs',
             items: data.incompleteBriefs ?? [],
-            clearLabel: 'No incomplete briefs.',
           },
           {
             key: 'briefs',
             label: 'Unapproved briefs',
             items: data.unapprovedBriefs,
-            clearLabel: 'All briefs approved.',
           },
           {
             key: 'specs',
             label: 'Specs awaiting approval',
             items: data.unapprovedSpecs,
-            clearLabel: 'No specs awaiting approval.',
           },
           {
             key: 'proof',
             label: 'Proof evidence',
             items: data.proofMissingDoneTasks ?? [],
-            clearLabel: 'Completed work has proof evidence.',
           },
           {
             key: 'shelved',
             label: 'Shelved tasks',
             items: data.shelvedUnclaimed,
-            clearLabel: 'No shelved tasks.',
           },
           {
             key: 'blocked',
             label: 'Agent-blocked tasks',
             items: data.blockedByAgent,
-            clearLabel: 'No agent-blocked tasks.',
           },
         ]
       : [],
   )
-
-  const dsLabel = $derived(() => {
-    if (!data?.checksLoaded) return { label: 'details not loaded', tone: 'neutral' as const, clear: true }
-    const ds = data?.designSystem
-    if (!ds) return { label: 'not captured', tone: 'warn' as const, clear: false }
-    if (!ds.drafted) return { label: ds.label ?? 'not captured', tone: 'warn' as const, clear: false }
-    if (ds.source === 'repo') {
-      return { label: ds.label ?? 'detected in repo', tone: 'ok' as const, clear: true }
-    }
-    if (ds.approved) {
-      return { label: ds.label ?? `approved · rev ${ds.revision ?? 0}`, tone: 'ok' as const, clear: true }
-    }
-    return { label: ds.label ?? `draft · rev ${ds.revision ?? 0}`, tone: 'warn' as const, clear: false }
-  })
 
   function normalizedGitStoryState(state: string | undefined): string {
     return String(state ?? '').trim().toLowerCase()
@@ -387,25 +365,9 @@
     return out
   }
 
-  function statusLabel(status: string): string {
-    switch (status) {
-      case 'exploring': return 'Being shaped'
-      case 'import_draft': return 'Imported drafts'
-      case 'gate_check': return 'Gate checks'
-      case 'spec_review': return 'Spec review'
-      case 'in_progress': return 'In progress'
-      case 'pending_pr': return 'Pending PR'
-      case 'ready': return 'Ready'
-      case 'blocked': return 'Blocked'
-      case 'done': return 'Done'
-      case 'shelved': return 'Shelved'
-      default: return status.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-    }
-  }
-
   const gitStoryBlockers = $derived(dedupeGitBlockers(data?.gitStory?.blockers ?? []))
   const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
-  const designSystemBlockingCount = $derived(data?.totals.designSystemBlockingCount ?? (dsLabel().clear ? 0 : 1))
+  const openCriteria = $derived(criteria.filter(criterion => criterion.items.length > 0))
   const hasNamedRelease = $derived(Boolean(data?.release?.label ?? projectSummary?.release?.label))
   const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Scope readiness')
 
@@ -420,9 +382,9 @@
 
   const sectionCopy = $derived(
     section === 'criteria'
-        ? {
+      ? {
           title: hasNamedRelease ? 'Release checks' : 'Scope checks',
-          description: 'Inspect only when you need the underlying checks.',
+          description: '',
         }
       : {
           title: releaseShipped ? 'Release shipped' : readinessTitle,
@@ -566,71 +528,50 @@
       <FrameCard class="criteria-card">
         {#snippet header()}
           <SectionHeader
-            title="Criteria"
-            description="Each row stays compact until you need the task-level detail."
+            title="Release exceptions"
+            description="Only checks with work left are shown here."
             headingTag="h3"
             density="dense"
           />
         {/snippet}
 
-        <ul class="criteria">
-          {#each criteria as c (c.key)}
-            {@const clear = c.items.length === 0}
-            <li class="crit-row">
-              <details class="crit-det" open={false}>
-                <summary class="crit-summary" aria-disabled={clear}>
+        {#if openCriteria.length === 0 && gitStoryBlockers.length === 0}
+          <p class="muted">No release exceptions.</p>
+        {:else}
+          <ul class="criteria">
+            {#each openCriteria as c (c.key)}
+              <li class="crit-row">
+                <div class="crit-summary">
                   <span class="crit-copy">
                     <span class="crit-label">{c.label}</span>
-                    <span class="crit-detail">{clear ? c.clearLabel : `${c.items.length} task${c.items.length === 1 ? '' : 's'} still open.`}</span>
+                    <span class="crit-detail">{c.items.length} task{c.items.length === 1 ? '' : 's'} still open.</span>
                   </span>
-                  <StatusPill
-                    label={clear ? 'clear' : `${c.items.length} open`}
-                    tone={clear ? 'ok' : 'warn'}
-                  />
-                </summary>
+                  <StatusPill label={`${c.items.length} open`} tone="warn" />
+                </div>
+                <ul class="crit-items">
+                  {#each c.items as it, i (i)}
+                    <li>
+                      <button type="button" class="link" onclick={() => openTask(idOf(it))}>
+                        {titleOf(it)}
+                      </button>
+                      {#if extraOf(it)}
+                        <span class="muted">{extraOf(it)}</span>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </li>
+            {/each}
 
-                {#if !clear}
-                  <ul class="crit-items">
-                    {#each c.items as it, i (i)}
-                      <li>
-                        <button type="button" class="link" onclick={() => openTask(idOf(it))}>
-                          {titleOf(it)}
-                        </button>
-                        {#if extraOf(it)}
-                          <span class="muted">{extraOf(it)}</span>
-                        {/if}
-                      </li>
-                    {/each}
-                  </ul>
-                {/if}
-              </details>
-            </li>
-          {/each}
-
-          <li class="crit-row">
-            <div class="crit-summary crit-static">
-              <span class="crit-copy">
-                <span class="crit-label">Design system</span>
-                <span class="crit-detail">How the applicable design rules are chosen.</span>
-              </span>
-              <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
-            </div>
-          </li>
-          <li class="crit-row">
-            <details class="crit-det" open={false}>
-              <summary class="crit-summary" aria-disabled={gitStoryBlockers.length === 0}>
-                <span class="crit-copy">
-                  <span class="crit-label">Repository follow-up</span>
-                  <span class="crit-detail">
-                    {gitStoryBlockers.length === 0 ? 'No repository follow-ups.' : `${gitStoryBlockers.length} repository follow-up${gitStoryBlockers.length === 1 ? '' : 's'}.`}
+            {#if gitStoryBlockers.length > 0}
+              <li class="crit-row">
+                <div class="crit-summary">
+                  <span class="crit-copy">
+                    <span class="crit-label">Repository follow-up</span>
+                    <span class="crit-detail">{gitStoryBlockers.length} repository follow-up{gitStoryBlockers.length === 1 ? '' : 's'}.</span>
                   </span>
-                </span>
-                <StatusPill
-                  label={gitStoryBlockers.length === 0 ? 'clear' : `${gitStoryBlockers.length} open`}
-                  tone={gitStoryBlockers.length === 0 ? 'ok' : 'warn'}
-                />
-              </summary>
-              {#if gitStoryBlockers.length > 0}
+                  <StatusPill label={`${gitStoryBlockers.length} open`} tone="warn" />
+                </div>
                 {#if gitStoryBlockers.length > visibleGitStoryBlockers.length}
                   <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} repository follow-ups.</p>
                 {/if}
@@ -649,39 +590,9 @@
                     </li>
                   {/each}
                 </ul>
-              {/if}
-            </details>
-          </li>
-        </ul>
-      </FrameCard>
-
-      <FrameCard padding="compact" class="tally-card">
-        {#snippet header()}
-          <SectionHeader
-            title="Task-state tally"
-            description="Status distribution across the current project backlog."
-            headingTag="h3"
-            density="dense"
-          >
-            {#snippet meta()}
-              <StatusPill label={taskDoneLabel} tone="neutral" />
-            {/snippet}
-          </SectionHeader>
-        {/snippet}
-
-        {#if statusRows.length === 0}
-          <p class="muted">No tasks yet.</p>
-        {:else}
-          <table class="tally">
-            <tbody>
-              {#each statusRows as [k, v] (k)}
-                <tr>
-                  <td>{statusLabel(k)}</td>
-                  <td>{v}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+              </li>
+            {/if}
+          </ul>
         {/if}
       </FrameCard>
     {/if}
@@ -695,8 +606,7 @@
     container-type: inline-size;
   }
 
-  :global(.criteria-card),
-  :global(.tally-card) {
+  :global(.criteria-card) {
     min-inline-size: 0;
   }
 
@@ -824,26 +734,12 @@
     border-top: none;
   }
 
-  .crit-det {
-    width: 100%;
-  }
-
   .crit-summary {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--gh-space-3);
     align-items: center;
-    list-style: none;
-    cursor: pointer;
     padding: var(--gh-space-3) 0;
-  }
-
-  .crit-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .crit-static {
-    cursor: default;
   }
 
   .crit-copy {
@@ -912,21 +808,6 @@
 
   .notice-link:hover {
     background: color-mix(in srgb, var(--gh-color-feedback-warn) 14%, transparent);
-  }
-
-  .tally {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: var(--gh-type-size-body);
-  }
-
-  .tally td {
-    padding: var(--gh-space-2) 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .tally tbody tr:first-child td {
-    border-top: none;
   }
 
   @media (max-width: 720px) {

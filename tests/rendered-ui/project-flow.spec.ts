@@ -90,8 +90,8 @@ const projectSurfaceRoutes = [
     path: '/projects/looma-knit/release/criteria',
     assertions: async (page) => {
       await expect(page.getByRole('heading', { name: /^(Release|Scope) checks$/ })).toBeVisible()
-      await expect(page.getByRole('heading', { name: 'Criteria' })).toBeVisible()
-      await expect(page.getByRole('heading', { name: 'Task-state tally' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Release exceptions' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Task-state tally' })).toHaveCount(0)
     },
   },
   {
@@ -125,7 +125,8 @@ const projectSurfaceRoutes = [
     path: '/projects/pipeline-ops/release/criteria',
     assertions: async (page) => {
       await expect(page.getByRole('heading', { name: /^(Release|Scope) checks$/ })).toBeVisible()
-      await expect(page.getByRole('heading', { name: 'Task-state tally' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Release exceptions' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Task-state tally' })).toHaveCount(0)
       await expect(page.getByTitle('Pipeline Ops')).toBeVisible()
     },
   },

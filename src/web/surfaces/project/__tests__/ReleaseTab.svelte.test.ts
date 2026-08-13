@@ -344,7 +344,7 @@ describe('ReleaseTab', () => {
     expect(screen.queryByText('Stage 2 is in progress.')).toBeNull()
   })
 
-  it('renders criteria blockers and the task-state tally', async () => {
+  it('renders only open release exceptions with their task routes visible', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -373,10 +373,9 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('Choose project scope')).toBeTruthy()
     expect(screen.getByText('Waiting on user decision')).toBeTruthy()
     expect(screen.getByText('Approve editor spec')).toBeTruthy()
-    expect(screen.getByText('draft · rev 2')).toBeTruthy()
-    expect(screen.getByText('Task-state tally')).toBeTruthy()
-    expect(screen.getAllByText('Blocked').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('2')).toBeTruthy()
+    expect(screen.queryByText('draft · rev 2')).toBeNull()
+    expect(screen.queryByText('Task-state tally')).toBeNull()
+    expect(screen.queryByText('No open escalations.')).toBeNull()
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith('/api/project/release-readiness?live=true')
@@ -603,7 +602,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    await screen.findByText('Criteria')
+    await screen.findByText('Release exceptions')
     expect(screen.queryByText('Release blockers')).toBeNull()
     expect(screen.getByText('1 repository follow-up.')).toBeTruthy()
     expect(screen.getAllByText('Repository follow-up').length).toBeGreaterThanOrEqual(1)
