@@ -218,6 +218,10 @@
     if (id) nav(currentTaskHref(id, activeProjectId))
   }
 
+  function openGitDecision(taskId: string) {
+    if (taskId) nav(`${currentTaskHref(taskId, activeProjectId)}?detail=full&tab=provenance`)
+  }
+
   async function shipRelease() {
     const releaseId = data?.release?.id
     if (!releaseId || closeBusy) return
@@ -580,7 +584,7 @@
                     {@const copy = gitBlockerCopy(blocker)}
                     <li>
                       {#if blocker.taskId}
-                        <button type="button" class="link" onclick={() => openTask(blocker.taskId ?? '')}>
+                        <button type="button" class="link" onclick={() => openGitDecision(blocker.taskId ?? '')}>
                           {copy.label}
                         </button>
                       {:else}

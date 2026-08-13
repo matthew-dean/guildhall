@@ -59105,3 +59105,49 @@ the shared current action for an individual project.
   control and has visible Review spec, Request changes, and Approve spec
   controls. The same route has no horizontal overflow or browser warning/error
   at 1280x720 and 390x844; Approve spec is 214px from the mobile viewport top.
+
+### Repair: Repository exceptions lead to an executable decision
+
+- [x] User job: when release details says an exception needs attention, the
+  owner can resolve that exception from its destination. A completed task whose
+  old worktree no longer exists must not create a repository exception or send
+  the owner into an unrelated task record.
+- Finding, 2026-08-12: Narrative Harness release details displayed `Could not
+  inspect this checkout.` for completed `NAR-087`. The project checkout is
+  clean and pushed, but the task retained a deleted `worktreePath` string and
+  a historical `mergeRecord.result: skipped`. The Git Story projection treated
+  that string as a live worktree, emitted an `unknown` blocker, and linked the
+  owner to a task record with no repository recovery command. The task's
+  missing proof is a separate real exception and already owns the one valid
+  recovery route; it does not restore a deleted repository landing surface.
+  Live inspection refined this finding: `NAR-087` also has an existing clean
+  task branch with unmerged commits and no upstream. That is a real landing
+  decision, but the `skipped` marker incorrectly classified the successfully
+  inspected branch as `unknown`, making Release claim the checkout could not
+  be inspected. The first repaired route then exposed an old raw `index.lock`
+  failure and large runtime-context dumps beneath the valid branch decision,
+  proving that even deliberate full-record navigation must not default to
+  forensic history. The generic terminal-outcome banner also repeated that raw
+  historical failure above the decision and must yield to the repository route.
+- Contract Touch Decision: repair the shared Git Story eligibility predicate
+  to use the existing-worktree fact, not stale persisted path text, before a
+  skipped merge can become a live follow-up. A missing proof remains in the
+  task/proof exception category and must not duplicate itself as repository
+  work. Considered but not touched: task completion/proof state, merge-record
+  persistence, release membership, task routing, and schemas. Schema Migration
+  Decision: none; old records are interpreted correctly at read time. Required
+  proof: a deleted worktree produces no Git Story blocker while a real existing
+  worktree, conflict, override, or pending PR remains actionable. Apply/revert:
+  read-model-only; no task record is mutated.
+- Evidence, 2026-08-12: focused Git Story, release-readiness, ReleaseTab,
+  TaskDrawer, and drawer-tab suites pass; `pnpm typecheck`,
+  `pnpm lint:contracts`, `git diff --check`, `pnpm build`, and
+  `pnpm dev:install` pass. After the Looma + Knit restart,
+  `/api/stale-server` reported `stale:false`. The installed Narrative Harness
+  release API reports the real `no_upstream` branch blocker for `NAR-087`, not
+  an inspection failure. At 1280x720 and 390x844, Release shows four proof
+  exceptions plus one `A branch needs a sharing decision` exception; one click
+  reaches that task's visible `Open pull request` action (217px desktop, 238px
+  mobile). No horizontal overflow, browser error, raw `index.lock` error, or
+  runtime-context dump appears on that decision route. The button was not
+  invoked because it would create a real pull request.

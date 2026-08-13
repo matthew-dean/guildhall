@@ -1859,6 +1859,51 @@ describe('GET /api/project/release-readiness', () => {
     await execFileP('git', ['worktree', 'remove', '--force', taskWorktreePath], { cwd: tmpDir })
   })
 
+  it('does not surface a deleted worktree as a repository follow-up after proven skipped completion', async () => {
+    const deletedWorktreePath = path.join(tmpDir, '..', `${path.basename(tmpDir)}-deleted-worktree`)
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Historical worktree task',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          ...modeledScriptProof(),
+          worktreePath: deletedWorktreePath,
+          mergeRecord: {
+            fromBranch: 'guildhall/task-current',
+            strategy: 'ff_only_local',
+            result: 'skipped',
+            toBranch: 'main',
+            detail: 'The former task worktree was cleaned up after completion.',
+          },
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness?live=true')))
+    const body = await res.json() as any
+
+    expect(body.diagnostics.totals.gitStoryBlockingCount).toBe(0)
+    expect(body.diagnostics.gitStory.blockers).toEqual([])
+    expect(body.diagnostics.gitStory.snapshots.some((snapshot: any) => snapshot.taskId === 'task-current')).toBe(false)
+  })
+
   it('blocks release readiness on proof-missing completed work without counting reserved import scaffolding', async () => {
     const missingProofPath = {
       path: 'artifacts/fixture-run.md',

@@ -933,6 +933,6 @@ describe('ReleaseTab', () => {
     await screen.findByText('Scope checks')
     await userEvent.click(screen.getByRole('button', { name: 'A branch needs a sharing decision.' }))
 
-    expect(path.value).toBe('/projects/looma-knit/task/task-import-1y7kmp6')
+    expect(path.value).toBe('/projects/looma-knit/task/task-import-1y7kmp6?detail=full&tab=provenance')
   })
 })

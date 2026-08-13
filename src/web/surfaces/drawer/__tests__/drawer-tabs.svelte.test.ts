@@ -518,6 +518,27 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText('Task: 400 chars')).toBeInTheDocument()
   })
 
+  it('puts an unshared task branch decision before provenance details', async () => {
+    const onOpenPullRequest = vi.fn()
+    render(ProvenanceTab, {
+      task: task({
+        gitStory: {
+          state: 'no_upstream',
+          repoRoot: '/tmp/guildhall/task-link-editor',
+          inspectedPath: '/tmp/guildhall/task-link-editor',
+          reason: 'guildhall/task-link-editor has no upstream branch.',
+          nextAction: 'Set an upstream branch or open a PR for this branch.',
+          inspectedAt: now,
+        },
+      }),
+      onOpenPullRequest,
+    })
+
+    expect(screen.getByText('Branch needs a decision')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Open pull request' }))
+    expect(onOpenPullRequest).toHaveBeenCalledOnce()
+  })
+
   it('renders revision history, gate failures, and open versus resolved escalations', () => {
     render(HistoryTab, { task: task() })
 

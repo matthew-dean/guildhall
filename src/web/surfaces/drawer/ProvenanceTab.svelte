@@ -4,6 +4,7 @@
 -->
 <script lang="ts">
   import Stack from '../../lib/Stack.svelte'
+  import Button from '../../lib/Button.svelte'
   import Card from '../../lib/ui-compat/Card.svelte'
   import DefinitionList from '../../lib/DefinitionList.svelte'
   import Byline from '../../lib/Byline.svelte'
@@ -18,9 +19,11 @@
     task: Task
     contextDebug?: ContextDebugRecord[]
     gitStoryLoaded?: boolean
+    busy?: boolean
+    onOpenPullRequest?: () => void
   }
 
-  let { task, contextDebug = [], gitStoryLoaded = false }: Props = $props()
+  let { task, contextDebug = [], gitStoryLoaded = false, busy = false, onOpenPullRequest = () => {} }: Props = $props()
 
   const lines = $derived<Array<readonly [string, string | null]>>([
     ['Origination', task.origination ? labelForIdentifier('agent', task.origination).label : 'Human'],
@@ -68,11 +71,24 @@
 </script>
 
 <Stack gap="4">
+  {#if task.gitStory?.state === 'no_upstream'}
+    <Card title="Branch needs a decision" tone="warn">
+      <Stack gap="3">
+        <p>This task branch has work that is not shared yet.</p>
+        <div>
+          <Button variant="primary" size="sm" disabled={busy} onclick={onOpenPullRequest}>
+            {busy ? 'Opening pull request...' : 'Open pull request'}
+          </Button>
+        </div>
+      </Stack>
+    </Card>
+  {/if}
+
   <Card title="Provenance trail">
     <DefinitionList items={lines} />
   </Card>
 
-  {#if task.terminalSummary || task.mergeRecord}
+  {#if (task.terminalSummary || task.mergeRecord) && task.gitStory?.state !== 'no_upstream'}
     <Card title="Terminal outcome" tone={task.status === 'pending_pr' ? 'warn' : 'default'}>
       <Stack gap="3">
         {#if task.terminalSummary?.headline}

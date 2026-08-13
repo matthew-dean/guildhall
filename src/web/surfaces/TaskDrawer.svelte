@@ -214,6 +214,15 @@
     return new URLSearchParams(search).get('detail') === 'full'
   }
 
+  function requestedDiagnosticContext(href: string): boolean {
+    const queryStart = href.indexOf('?')
+    const hashStart = href.indexOf('#', queryStart)
+    const search = queryStart >= 0
+      ? href.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart)
+      : (typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, ''))
+    return new URLSearchParams(search).get('diagnostics') === 'context'
+  }
+
   const BASE_TABS = [
     { id: 'overview', label: 'Overview' },
     { id: 'spec', label: 'Spec' },
@@ -338,6 +347,29 @@
         loadedExtras = new Set([...loadedExtras, 'git-story'])
       }
       loadingExtras = new Set([...loadingExtras].filter(value => value !== 'git-story'))
+    }
+  }
+
+  async function openGitPullRequest(): Promise<void> {
+    busy = true
+    try {
+      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(taskId)}/git-story/open-pr`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const body = await res.json().catch(() => ({})) as { error?: string; url?: string }
+      if (!res.ok) {
+        error = body.error ?? `HTTP ${res.status}`
+        return
+      }
+      await load()
+      await project.refresh(scopedProjectId())
+      toast.success(body.url ? 'Pull request opened.' : 'Pull request requested.')
+    } catch (err) {
+      error = friendlyFetchError(err)
+    } finally {
+      busy = false
     }
   }
 
@@ -671,6 +703,7 @@
     return next
   })
   const fullRecordRequested = $derived(requestedFullRecord(routeHref || navPath.href || currentBrowserHref()))
+  const diagnosticContextRequested = $derived(requestedDiagnosticContext(routeHref || navPath.href || currentBrowserHref()))
   const focusedSpecReview = $derived(task?.status === 'spec_review' && !fullRecordRequested)
   const projectPrimaryAction = $derived(project.detail?.actionModel?.primaryAction ?? null)
   const projectDecisionElsewhere = $derived(Boolean(
@@ -811,6 +844,9 @@
     if (!task) return null
     // An unrelated task record must not compete with the project's owner decision.
     if (projectDecisionElsewhere) return null
+    // A direct repository-decision route owns the task's next move. Historical
+    // merge failures belong in diagnostics, not above the actionable branch card.
+    if (fullRecordRequested && activeTab === 'provenance' && task.gitStory?.state === 'no_upstream') return null
     if (task.status === 'shelved') {
       return {
         tone: 'warn',
@@ -963,7 +999,7 @@
       void loadTaskExtras('context')
     }
     if (activeTab === 'provenance') {
-      void loadTaskExtras('context')
+      if (diagnosticContextRequested) void loadTaskExtras('context')
       void loadTaskGitStory()
     }
   })
@@ -1318,6 +1354,8 @@
             {task}
             contextDebug={taskExtras.contextDebug ?? []}
             gitStoryLoaded={loadedExtras.has('git-story')}
+            {busy}
+            onOpenPullRequest={openGitPullRequest}
           />
         {/if}
       {/if}

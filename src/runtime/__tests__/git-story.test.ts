@@ -124,10 +124,20 @@ describe('classifyGitStoryState', () => {
       mergeRecordResult: 'reconciled',
     })).toBe('merged')
   })
+
+  it('keeps an inspectable skipped task branch in its real repository state', () => {
+    expect(classifyGitStoryState({
+      changedCount: 0,
+      untrackedCount: 0,
+      ahead: 0,
+      hasUpstream: false,
+      mergeRecordResult: 'skipped',
+    })).toBe('no_upstream')
+  })
 })
 
 describe('gitStoryFollowupIsActive', () => {
-  it('treats a skipped landing as historical after proven task completion', () => {
+  it('treats a skipped landing as historical after its worktree is gone', () => {
     expect(gitStoryFollowupIsActive({
       status: 'done',
       mergeRecordResult: 'skipped',
@@ -136,13 +146,13 @@ describe('gitStoryFollowupIsActive', () => {
     })).toBe(false)
   })
 
-  it('keeps a skipped landing active without durable completion proof', () => {
+  it('does not turn missing proof into a repository follow-up', () => {
     expect(gitStoryFollowupIsActive({
       status: 'done',
       mergeRecordResult: 'skipped',
       hasCompletionProof: false,
       hasTaskWorktree: false,
-    })).toBe(true)
+    })).toBe(false)
   })
 
   it('keeps real task worktrees and conflicts actionable', () => {

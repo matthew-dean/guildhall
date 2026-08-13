@@ -4483,12 +4483,15 @@ function taskGitStoryOverride(task: Record<string, unknown>): {
   }
 }
 
-function taskHasExplicitGitStoryFollowup(task: Record<string, unknown>): boolean {
+function taskHasExplicitGitStoryFollowup(
+  task: Record<string, unknown>,
+  workspace?: { worktreePath?: string },
+): boolean {
   const mergeRecord =
     task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
       ? task.mergeRecord as { result?: string }
       : undefined
-  const hasTaskWorktree = typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
+  const hasTaskWorktree = taskExistingWorktreePath(task, workspace) !== null
   return gitStoryFollowupIsActive({
     status: typeof task.status === 'string' ? task.status : undefined,
     mergeRecordResult: mergeRecord?.result,
@@ -4503,7 +4506,7 @@ function taskNeedsTaskGitStory(
   workspace?: { worktreePath?: string },
   childProject?: unknown,
 ): boolean {
-  const hasExplicitFollowup = taskHasExplicitGitStoryFollowup(task)
+  const hasExplicitFollowup = taskHasExplicitGitStoryFollowup(task, workspace)
   const runtime = task.runtime && typeof task.runtime === 'object' && !Array.isArray(task.runtime)
     ? task.runtime as Record<string, unknown>
     : null
@@ -4511,8 +4514,7 @@ function taskNeedsTaskGitStory(
     (task.proofRecovery && typeof task.proofRecovery === 'object' && !Array.isArray(task.proofRecovery)) ||
     (runtime?.proofRecovery && typeof runtime.proofRecovery === 'object' && !Array.isArray(runtime.proofRecovery)),
   )
-  const hasTaskWorktree = typeof workspace?.worktreePath === 'string' ||
-    typeof task.worktreePath === 'string'
+  const hasTaskWorktree = taskExistingWorktreePath(task, workspace) !== null
   if (taskHasRecordedCompletionProof(task as Task) && !hasExplicitFollowup && !hasActiveProofRecovery) return false
   return Boolean(childProject) ||
     hasTaskWorktree ||
