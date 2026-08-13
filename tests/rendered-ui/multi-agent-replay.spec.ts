@@ -201,7 +201,12 @@ test.afterAll(async () => {
     const originalTasks = originalTaskFiles.get(projectId)
     if (originalTasks === null) {
       await rm(projectPath, { recursive: true, force: true })
+      continue
     }
+    if (originalTasks === undefined) continue
+    const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+    await writeFile(tasksPath, originalTasks, 'utf8')
+    await writeFile(join(projectSystemStateDir(projectPath), 'TASKS.json'), originalTasks, 'utf8')
   }
 })
 
@@ -314,24 +319,6 @@ async function apiResultsForTarget(request: any, target: typeof auditReplayTarge
   return results
 }
 
-async function applyRequiredMigrations(page: any) {
-  for (let index = 0; index < 6; index += 1) {
-    await expect(page.getByRole('dialog', { name: 'Migrate project' })).toBeVisible()
-      .catch(async () => {
-        const review = page.getByRole('button', { name: 'Review project update' })
-        if (!(await review.isVisible().catch(() => false))) return
-        await review.click()
-        await expect(page.getByRole('dialog', { name: 'Migrate project' })).toBeVisible()
-      })
-
-    const modal = page.getByRole('dialog', { name: 'Migrate project' })
-    if (!(await modal.isVisible().catch(() => false))) return
-    await modal.getByRole('button', { name: 'Apply required updates' }).click()
-    await expect(modal.getByRole('heading', { name: /^Migration (complete|applied)\.?$/ }).first()).toBeVisible()
-    await modal.getByRole('button', { name: 'Close' }).last().click()
-  }
-}
-
 async function hasVisibleRouteProof(page: any, label: string) {
   const textMatch = page.getByText(label, { exact: false }).first()
   if (await textMatch.isVisible().catch(() => false)) return true
@@ -343,7 +330,6 @@ for (const target of auditReplayTargets) {
   test(`${target.name} replay target stays browser-capable`, async ({ page, request, baseURL }) => {
     const url = new URL(target.path, baseURL).toString()
     await page.goto(target.path, { waitUntil: 'domcontentloaded' })
-    await applyRequiredMigrations(page)
     const navigation = await page.goto(target.path, { waitUntil: 'domcontentloaded' })
       .then(() => ({ ok: true }))
       .catch(error => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))

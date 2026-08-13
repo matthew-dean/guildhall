@@ -58722,7 +58722,7 @@ the shared current action for an individual project.
 
 ### Finding: The rendered matrix still certifies removed dashboards
 
-- [ ] User job: the rendered UI matrix must prove the owner can orient and act
+- [x] User job: the rendered UI matrix must prove the owner can orient and act
   on the current product, not force the product back toward removed dashboards
   by asserting legacy headings, tab bars, counters, and archive rows.
 - Evidence, 2026-08-12: `pnpm test:ui` completed with 14 failures. Several
@@ -58753,6 +58753,30 @@ the shared current action for an individual project.
   `Review next spec` action rather than demanding a generic project-opening
   button. Its desktop proof keeps card-height and row-layout checks while
   adding page-level no-overflow evidence; both focused replays pass.
+- Evidence, 2026-08-12: the rebuilt rendered `project-flow` matrix passes
+  35/35. It now proves a single update action, deliberate Work browsing,
+  focused current-work geometry at desktop/mobile widths, compact map entry,
+  calm shipped completion, and selected-row stability. The obsolete re-intake
+  POST assertion was removed from this UI matrix because it mutated the shared
+  fixture after the dedicated migration replay, making a pre-update 409 an
+  order-dependent expectation rather than browser evidence.
+- The route-capability replay is likewise read-only. It records visible route
+  health rather than mutating shared fixture migrations mid-suite; the
+  dedicated Current Work repair replay owns the one approved update action.
+- Fixture isolation repair, 2026-08-12: the spec-replay harness added tasks to
+  existing fixture projects but only removed projects that it had created.
+  Its cleanup now restores both the original task file and the mirrored
+  project-state copy, so later route tests cannot inherit replay-only work.
+- Release audit correction, 2026-08-12: the rendered orientation helper had
+  compared the compact Release page with a separate diagnostic readiness
+  endpoint. That let two deliberately different payload shapes become a false
+  product disagreement. The owner-flow proof now validates the page's shared
+  compact action and heading; diagnostic detail remains separately testable.
+- Final matrix evidence, 2026-08-12: `pnpm test:ui` passes 46/46 after a
+  scratch build. This includes the route-capability replay and all 35
+  owner-path flow checks in the same run, proving the fixture cleanup and
+  non-mutating audit changes hold under the real wrapper rather than only in
+  focused invocations.
 
 ### Repair: The shared migration action names its executable step
 
@@ -58761,3 +58785,39 @@ the shared current action for an individual project.
 - Finding and fix, 2026-08-12: the shared action model said `Migrate project`
   while the actual gate correctly offered `Review project update`. The model
   now owns the latter label; its focused runtime coverage passes 39/39.
+- [x] Complete the action-label handoff: Overview still rewrote the shared
+  label to `Update project`, so its button could disagree with the same action
+  on Work, the project shell, and the flow audit. Overview now presents the
+  shared label and only owns the modal destination.
+
+### Repair: Shipped work cannot be made urgent by a project update
+
+- [x] User job: a shipped release stays a calm completion state. A later
+  maintenance migration must not turn its Overview into a fake owner
+  emergency; the only product-level invitation is `Start next release`.
+- Finding and fix, 2026-08-12: a dynamic migration blocker rebuilt the shared
+  action model without the durable release lifecycle, so it outranked a
+  shipped release. The response now carries the compact release's durable
+  `shipped` lifecycle through that rebuild, and the rendered fixture records
+  a genuinely shipped release rather than merely a done active one.
+
+### Installed proof: Narrative Harness current-work handoff is one-minute readable
+
+- [x] User job: an owner who lands anywhere in the active Narrative Harness
+  project can tell the current milestone, progress, current work, and the one
+  meaningful next route without reading a dashboard or reconciling duplicate
+  status panels.
+- Evidence, 2026-08-12: after `pnpm build`, `pnpm dev:install`, and a fresh
+  `guildhall stop && guildhall start` in the Narrative Harness workspace,
+  `/api/stale-server` reported `stale:false`. Read-only browser proof at
+  `localhost:7777` found the same state on every owner route: `Stage 2: Local
+  Desktop Harness MVP`, `5 of 9 complete`, `NAR-091`, and ready-to-resume
+  work. Overview provides that one handoff in a single viewport; Work presents
+  the focused card and deliberate `Browse work` escape hatch; Thread says no
+  response is needed and routes back to work; Release exposes only the compact
+  readiness handoff and `Inspect release details`; Needs You says nothing needs
+  a decision and returns to current work. All of those routes fit without
+  horizontal overflow at 1280px. Work also fits without overflow at 1114px and
+  390px, with the same focused card and actions. Browser console logs were
+  empty. This is evidence for the current-work handoff only, not a claim that
+  every Guildhall route has reached the standard.

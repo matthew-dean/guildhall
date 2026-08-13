@@ -1,35 +1,18 @@
-import { expect, test, type Locator } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 import {
   defineFlowUserJob,
   expectProjectFlowStateAgreement,
   expectProjectOrientationSpineAgreement,
   expectNoClippedContent,
-  expectProgressiveScopeWorkCount,
   readProjectFlowState,
 } from './flow-audit-assertions'
-
-async function expectMapScopeDisclosure(
-  projectMap: Locator,
-  expected: { label: string; included: number; boundaries: number; deferred: number },
-): Promise<void> {
-  const escapedLabel = expected.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const summaryPattern = new RegExp(
-    `^${escapedLabel} has 0/${expected.included} executable work items complete across ${expected.boundaries} product boundaries, with \\d+ later work items\\.$`,
-  )
-  const summary = projectMap.getByText(summaryPattern)
-  await expect(summary).toBeVisible()
-  const deferred = Number((await summary.textContent())?.match(/with (\d+) later work items\.$/)?.[1])
-  expect(deferred).toBe(expected.deferred)
-  await expect(
-    projectMap.getByText(`${expected.boundaries} product boundaries · ${deferred} later work items`, { exact: false }).first(),
-  ).toBeVisible()
-}
 
 async function applyRequiredProjectUpdates(page: import('@playwright/test').Page): Promise<void> {
   const gate = page.getByRole('region', { name: 'Project update required' })
   const workList = page.getByRole('heading', { name: 'Work list' })
-  await expect(gate.or(workList)).toBeVisible()
-  if (await workList.isVisible()) return
+  const currentWork = page.getByRole('region', { name: 'Current work' })
+  await expect(gate.or(workList).or(currentWork)).toBeVisible()
+  if (await workList.isVisible() || await currentWork.isVisible()) return
 
   await page.getByRole('button', { name: 'Review project update' }).click()
   const modal = page.getByRole('dialog', { name: 'Migrate project' })
@@ -347,88 +330,37 @@ test('pinned project rail reserves layout width at medium desktop sizes', async 
   expect(expandedMain!.x).toBeGreaterThanOrEqual(expandedRail!.width - 1)
 })
 
-test('work view switcher keeps list as default and board as the secondary surface', async ({ page }) => {
+test('a required project update preempts the work dashboard with one clear action', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 820 })
   await page.goto('/projects/looma-knit/work?view=columns')
 
-  await expect(page.getByRole('toolbar', { name: 'Work view controls' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'List', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByRole('button', { name: 'Columns' })).toHaveCount(0)
-  await expect(page.getByRole('combobox', { name: 'Show', exact: true })).toBeVisible()
-  await expect(page.getByLabel('Work hierarchy columns')).toHaveCount(0)
-
-  await page.getByRole('button', { name: /Inspect work/ }).first().click()
-  await expect(page.getByLabel('Selected work inspector')).toBeVisible()
-
-  await page.getByRole('button', { name: 'Board', exact: true }).click()
-  await expect(page).toHaveURL(/\/projects\/looma-knit\/work\?view=board$/)
-  await expect(page.getByText('Next focus')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Board', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByRole('button', { name: 'Columns' })).toHaveCount(0)
-  await expect(page.getByRole('combobox', { name: 'Show', exact: true })).toBeVisible()
+  const updateGate = page.getByRole('region', { name: 'Project update required' })
+  await expect(updateGate).toBeVisible()
+  await expect(updateGate.getByRole('button', { name: 'Review project update' })).toBeVisible()
+  await expect(page.getByRole('toolbar', { name: 'Work view controls' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Work list' })).toHaveCount(0)
+  await expectNoClippedContent(page, {
+    containerSelector: '[aria-label="Project update required"]',
+    itemSelector: '[aria-label="Project update required"] button',
+  })
 })
 
-test('work list columns fit normal split-screen widths and scroll only when genuinely narrow', async ({ page }) => {
+test('browsing work is deliberate and remains readable at split-screen widths', async ({ page }) => {
   await page.setViewportSize({ width: 1114, height: 692 })
   await page.goto('/projects/narrative-harness/work')
+  await applyRequiredProjectUpdates(page)
 
+  await page.getByRole('button', { name: 'Browse work' }).click()
+  await expect(page).toHaveURL(/\/projects\/narrative-harness\/work\?view=queue$/)
   await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
-  const normalMetrics = await page.locator('.work-list-stack').evaluate((stack) => {
-    const scrollRegion = stack.parentElement
-    const card = stack.closest('.gh-ui-compat-card')
-    if (!scrollRegion || !card) return null
-    const scrollStyle = getComputedStyle(scrollRegion)
-    const scrollBox = scrollRegion.getBoundingClientRect()
-    const cardBox = card.getBoundingClientRect()
-    const rowBoxes = Array.from(stack.querySelectorAll('.work-list-row')).map(row => row.getBoundingClientRect())
-    return {
-      scrollClass: scrollRegion.className,
-      scrollAriaLabel: scrollRegion.getAttribute('aria-label'),
-      overflowX: scrollStyle.overflowX,
-      scrollRight: scrollBox.right,
-      cardRight: cardBox.right,
-      stackScrollWidth: stack.scrollWidth,
-      scrollClientWidth: scrollRegion.clientWidth,
-      rowMaxRight: Math.max(...rowBoxes.map(box => box.right)),
-    }
-  })
-
-  expect(normalMetrics).not.toBeNull()
-  expect(normalMetrics!.scrollClass).toContain('work-list-scroll')
-  expect(normalMetrics!.scrollAriaLabel).toBe('Scrollable work list columns')
-  expect(['auto', 'scroll']).toContain(normalMetrics!.overflowX)
-  expect(normalMetrics!.scrollRight).toBeLessThanOrEqual(normalMetrics!.cardRight + 1)
-  expect(normalMetrics!.stackScrollWidth).toBeLessThanOrEqual(normalMetrics!.scrollClientWidth + 1)
-  expect(normalMetrics!.rowMaxRight).toBeLessThanOrEqual(normalMetrics!.cardRight + 1)
+  await expect(page.locator('.work-list-row').first()).toBeVisible()
+  expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(1115)
 
   await page.setViewportSize({ width: 900, height: 692 })
   await page.reload()
   await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
-  const narrowMetrics = await page.locator('.work-list-stack').evaluate((stack) => {
-    const scrollRegion = stack.parentElement
-    const card = stack.closest('.gh-ui-compat-card')
-    if (!scrollRegion || !card) return null
-    const scrollStyle = getComputedStyle(scrollRegion)
-    const scrollBox = scrollRegion.getBoundingClientRect()
-    const cardBox = card.getBoundingClientRect()
-    return {
-      scrollClass: scrollRegion.className,
-      scrollAriaLabel: scrollRegion.getAttribute('aria-label'),
-      overflowX: scrollStyle.overflowX,
-      scrollRight: scrollBox.right,
-      cardRight: cardBox.right,
-      stackScrollWidth: stack.scrollWidth,
-      scrollClientWidth: scrollRegion.clientWidth,
-    }
-  })
-
-  expect(narrowMetrics).not.toBeNull()
-  expect(narrowMetrics!.scrollClass).toContain('work-list-scroll')
-  expect(narrowMetrics!.scrollAriaLabel).toBe('Scrollable work list columns')
-  expect(['auto', 'scroll']).toContain(narrowMetrics!.overflowX)
-  expect(narrowMetrics!.scrollRight).toBeLessThanOrEqual(narrowMetrics!.cardRight + 1)
-  expect(narrowMetrics!.stackScrollWidth).toBeGreaterThan(narrowMetrics!.scrollClientWidth)
+  await expect(page.locator('.work-list-row').first()).toBeVisible()
+  expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(901)
 })
 
 test('flow audit protocol reconciles user job, visible state, and layout evidence', async ({ page }) => {
@@ -494,192 +426,53 @@ test('project orientation spine agrees across overview, work, thread, release, a
   })
 })
 
-test('Narrative Harness overview and map show the documented current release scope', async ({ page }) => {
-  const response = await page.request.get('/api/project?projectId=narrative-harness')
-  expect(response.ok()).toBe(true)
-  const detail = await response.json()
-  const summary = detail.orientationSpine?.summary ?? {}
-  const included = summary.includedWorkCount
-  const deferred = summary.deferredWorkCount
-  const pausedTask = 'Shape fixture and expected-record ground truth'
+test('project map gives a compact orientation and keeps detail behind inspection', async ({ page }) => {
+  for (const projectId of ['narrative-harness', 'looma-knit']) {
+    const response = await page.request.get(`/api/project?projectId=${projectId}&surface=map`)
+    expect(response.ok()).toBe(true)
+    const detail = await response.json()
+    const scopeLabel = detail.orientationSpine?.summary?.selectedScopeLabel
+      ?? detail.orientationSpine?.scope?.label
+    expect(scopeLabel).toBeTruthy()
 
-  expect(summary.selectedReleaseLabel).toBe('Stage 1: Fixture And Evaluation Harness')
-  expect(included).toBe(6)
-  expect(deferred).toBeGreaterThanOrEqual(8)
-  expect(detail.startReadiness).toMatchObject({
-    canStart: true,
-    code: 'paused_live_work',
-    focusKind: 'paused_work',
-  })
-  expect(detail.startReadiness?.message).toContain(pausedTask)
-  expect(detail.actionModel?.runControl).toMatchObject({
-    label: 'Resume',
-  })
-  expect(summary.topBlocker).toBeNull()
-  expect(detail.orientationSpine?.release?.blockers ?? []).toEqual([])
-
-  await page.goto('/projects/narrative-harness/overview')
-  await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
-  await expect(page.getByText('Stage 1: Fixture And Evaluation Harness').first()).toBeVisible()
-  await expect(page.getByRole('button', { name: `${included} Current scope`, exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: `${deferred} Deferred`, exact: true })).toBeVisible()
-  await expect(page.getByText(`${included} work items in view`)).toHaveCount(0)
-  await expect(page.getByText(pausedTask).first()).toBeVisible()
-  await expect(page.getByText('Resume', { exact: true }).first()).toBeVisible()
-  await expect(page.getByText(/specs are waiting for review before work can start/i)).toHaveCount(0)
-  await expect(page.getByText(/needs a clearer brief|need fuller briefs|brief cleanup/i)).toHaveCount(0)
-  await expect(page.getByText('Review stale proof records')).toHaveCount(0)
-  await expect(page.getByText('Clean up archived author voice proof')).toHaveCount(0)
-
-  await page.goto('/projects/narrative-harness/overview/inbox')
-  await expect(page.getByRole('heading', { name: 'Needs you' })).toBeVisible()
-  await expect(page.getByText('Review stale proof records')).toHaveCount(0)
-  await expect(page.getByText('Clean up archived author voice proof')).toHaveCount(0)
-
-  await page.goto('/projects/narrative-harness/map')
-  await expect(page.getByRole('heading', { name: 'Project map' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Release scope' })).toBeVisible()
-  const projectMap = page.locator('.project-map')
-  await expect(projectMap.getByText('Stage 1: Fixture And Evaluation Harness').first()).toBeVisible()
-  await expect(projectMap.getByText('Define fixture, expected-record, prototype-run, and evaluation schemas.').first()).toBeVisible()
-  await expect(projectMap.getByText('Implement a no-UI runner that builds a packet from fixture records.').first()).toBeVisible()
-  await expectMapScopeDisclosure(projectMap, {
-    label: 'Stage 1: Fixture And Evaluation Harness',
-    included,
-    boundaries: included,
-    deferred,
-  })
-  await expect(page.getByRole('heading', { name: 'Scope ledger' })).toBeVisible()
-  await expect(projectMap.getByText(pausedTask).first()).toBeVisible()
-  await expect(projectMap.getByText(/Paused .* Source: implementation-roadmap\.md/i).first()).toBeVisible()
-  await expect(projectMap.getByText(/specs are waiting for review before work can start/i)).toHaveCount(0)
-  await expect(projectMap.getByText(/needs a clearer brief|need fuller briefs|brief cleanup/i)).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: 'Source trail' })).toBeVisible()
-  await expect(projectMap.getByText('implementation-roadmap.md').first()).toBeVisible()
-
-  await page.goto('/projects/narrative-harness/work')
-  await page.getByLabel('Show', { exact: true }).selectOption({ label: 'Current scope' })
-  await expectProgressiveScopeWorkCount(page, { current: included, deferred })
-})
-
-test('Looma + Knit map shows V1 hardening as current and Looma convergence as later', async ({ page }) => {
-  await expectProjectOrientationSpineAgreement(page, {
-    projectId: 'looma-knit',
-    requireInferredPurpose: true,
-  })
-
-  const response = await page.request.get('/api/project?projectId=looma-knit')
-  expect(response.ok()).toBe(true)
-  const detail = await response.json()
-
-  expect(detail.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 1: V1 Release Hardening')
-  const included = detail.orientationSpine?.summary?.includedWorkCount
-  const deferred = detail.orientationSpine?.summary?.deferredWorkCount
-  expect(included).toBe(5)
-  expect(deferred).toBeGreaterThanOrEqual(8)
-
-  const overviewResponse = await page.request.get('/api/project?projectId=looma-knit&surface=overview')
-  expect(overviewResponse.ok()).toBe(true)
-  const overviewDetail = await overviewResponse.json()
-  if (overviewDetail.startReadiness?.canStart === false && overviewDetail.startReadiness?.message) {
-    expect(overviewDetail.orientationSpine?.summary?.nextAction).toBe(overviewDetail.startReadiness.message)
+    await page.goto(`/projects/${projectId}/map`)
+    const summary = page.getByRole('region', { name: 'Project map summary' })
+    await expect(summary).toBeVisible()
+    await expect(summary.getByText(scopeLabel, { exact: true })).toBeVisible()
+    await expect(summary.getByRole('button', { name: 'Open Work' })).toBeVisible()
+    await expect(page.locator('details').first()).toBeVisible()
   }
-
-  await page.goto('/projects/looma-knit/overview')
-  await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
-  await expect(page.getByText('Stage 1: V1 Release Hardening').first()).toBeVisible()
-  await expect(page.getByRole('button', { name: '5 Current scope', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: `${deferred} Deferred`, exact: true })).toBeVisible()
-  await expect(page.getByText('5 work items in view')).toHaveCount(0)
-
-  await page.goto('/projects/looma-knit/map')
-  await expect(page.getByRole('heading', { name: 'Project map' })).toBeVisible()
-  const projectMap = page.locator('.project-map')
-  await expect(projectMap.getByText('Stage 1: V1 Release Hardening').first()).toBeVisible()
-  await expect(projectMap.getByText('Unit tests: use-collections, use-presence, subdomain utils').first()).toBeVisible()
-  await expect(projectMap.getByText('E2E tests: login -> create page -> edit -> search flow').first()).toBeVisible()
-  await expectMapScopeDisclosure(projectMap, {
-    label: 'Stage 1: V1 Release Hardening',
-    included,
-    boundaries: included,
-    deferred,
-  })
-  await expect(projectMap.getByText('Looma Primitive Convergence').first()).toBeVisible()
-  await expect(projectMap.getByText('Looma Editor Integration').first()).toBeVisible()
-  await expect(projectMap.getByText('release-plan.md').first()).toBeVisible()
-  await expect(projectMap.getByText('PROJECT_STATE.md').first()).toBeVisible()
-
-  await page.goto('/projects/looma-knit/work')
-  await page.getByLabel('Show', { exact: true }).selectOption({ label: 'Current scope' })
-  await expectProgressiveScopeWorkCount(page, { current: included, deferred })
 })
 
-test('consumed selected release is visible as complete while later work stays deferred', async ({ page }) => {
-  const response = await page.request.get('/api/project?projectId=release-consumed')
-  expect(response.ok()).toBe(true)
-  const detail = await response.json()
-
-  expect(detail.orientationSpine?.summary?.selectedReleaseLabel).toBe('Headless MVP')
-  expect(detail.startReadiness).toMatchObject({
-    canStart: false,
-    code: 'all_terminal',
-    message: 'Headless MVP has no runnable work remaining.',
-  })
-  expect(detail.orientationSpine?.summary?.topBlocker).toBeNull()
-
+test('a shipped release ends calmly and offers only the next-release entry point', async ({ page }) => {
   await page.goto('/projects/release-consumed/overview')
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
   await expect(page.getByText('Headless MVP').first()).toBeVisible()
-  await expect(page.getByText('Headless MVP has no runnable work remaining.').first()).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Shipped' })).toBeVisible()
+  await expect(page.getByText('There is nothing you need to do here.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Start next release' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Open item' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Open Release', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Open Work' })).toHaveCount(0)
-  await expect(page.getByText('1 Deferred').first()).toBeVisible()
-  const scopeStatus = page.locator('.overview-priority-card')
-  await expect(scopeStatus).toContainText('Release is ready')
-  await expect(scopeStatus).toContainText('Headless MVP has no runnable work remaining.')
-  await expect(scopeStatus).not.toContainText('Start next release feature')
 
-  await page.goto('/projects/release-consumed/work')
-  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
-  await expect(page.getByText('Headless MVP has no runnable work remaining.').first()).toBeVisible()
-  await expect(page.getByText('Start next release feature').first()).toBeVisible()
 })
 
-test('project shell uses stopped-project language consistently across flow surfaces', async ({ page }) => {
+test('project shell keeps a required update as the sole visible work interruption', async ({ page }) => {
   await page.setViewportSize({ width: 1114, height: 692 })
-  const state = await readProjectFlowState(page, 'looma-knit')
   await page.goto('/projects/looma-knit')
 
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
-  if (state.startCanStart && state.visibleActive > 0) {
-    const resumeLabel = state.visibleActive === 1
-      ? 'Resume 1 ready work item'
-      : `Resume ${state.visibleActive} ready work items`
-    await expect(page.getByRole('button', { name: resumeLabel })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Ready to resume' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Moving now' })).toHaveCount(0)
-  }
+  expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(1115)
 
   await page.goto('/projects/looma-knit/work')
-  if (state.startCanStart && state.runnableCount > 0) {
-    await expect(page.getByRole('region', { name: 'Delivery queue' })).toContainText('Ready when resumed')
-    await expect(page.getByRole('region', { name: 'Delivery queue' })).toContainText(`${state.runnableCount} ready to resume`)
-    await expect(page.getByRole('region', { name: 'Delivery queue' })).not.toContainText('Runnable project work.')
-  }
-
-  const revsHeader = page.getByRole('button', { name: 'Revs' })
-  await expect(revsHeader).toBeVisible()
-  const revsMetrics = await revsHeader.evaluate((node) => ({
-    clientWidth: node.clientWidth,
-    scrollWidth: node.scrollWidth,
-  }))
-  expect(revsMetrics.scrollWidth).toBeLessThanOrEqual(revsMetrics.clientWidth)
+  await expect(page.getByRole('region', { name: 'Project update required' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Review project update' })).toBeVisible()
+  expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(1115)
 })
 
 test('selecting a work row does not make the passive Work list card look selected', async ({ page }) => {
   await page.setViewportSize({ width: 1114, height: 692 })
   await page.goto('/projects/narrative-harness/work')
+  await applyRequiredProjectUpdates(page)
+  await page.getByRole('button', { name: 'Browse work' }).click()
 
   await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
   const before = await page.locator('.work-list-stack').evaluate((stack) => {
@@ -755,13 +548,4 @@ test('task drawer direct route renders tabs and closes to the overview backgroun
   await page.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(page).toHaveURL(/\/projects\/looma-knit\/overview$/)
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
-})
-
-test('Narrative Harness re-intake mutation reports its migration prerequisite', async ({ page }) => {
-  const rerun = await page.request.post('/api/project/reintake/rerun?projectId=narrative-harness')
-  expect(rerun.status()).toBe(409)
-  expect(await rerun.json()).toMatchObject({
-    code: 'required_migration_pending',
-    actionHref: '/migrations',
-  })
 })
