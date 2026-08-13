@@ -678,15 +678,9 @@
     {:else if setupComplete}
       <Card title="Setup is complete">
         <Stack gap="3">
-          <p class="muted">
-            This project’s structure and starter contract map are saved. You can review the
-            graph or keep working from the overview.
-          </p>
+          <p class="muted">Your project is ready to work from.</p>
           <Row gap="2">
-            <Button variant="primary" onclick={() => nav(currentProjectHref('/structure'))}>
-              Review structure
-            </Button>
-            <Button variant="secondary" onclick={skipToDashboard}>
+            <Button variant="primary" onclick={skipToDashboard}>
               Open overview
             </Button>
           </Row>

@@ -136,11 +136,11 @@
     </Card>
 
     {#if structureMoved}
-      <NoticeBand tone="neutral" role="note" label="Project structure" title="Graph review moved out of Settings" density="compact">
+      <NoticeBand tone="neutral" role="note" label="Project map" title="Map review moved out of Settings" density="compact">
         {#snippet actions()}
-          <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/structure'))}>Open Structure</Button>
+          <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/map'))}>Open Map</Button>
         {/snippet}
-        <p>Project graph assignment and structural-map review now live in the focused Structure surface.</p>
+        <p>Project context is available from the compact Map when you need it.</p>
       </NoticeBand>
     {:else if intelligenceMoved}
       <NoticeBand tone="neutral" role="note" label="Project intelligence" title="Specialist review moved out of Settings" density="compact">

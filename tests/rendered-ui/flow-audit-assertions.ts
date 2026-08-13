@@ -304,9 +304,10 @@ export async function expectProjectOrientationSpineAgreement(
   await expect(page.getByRole('button').first()).toBeVisible()
 
   await page.goto(`/projects/${expected.projectId}/structure`)
-  await expect(page.getByRole('heading', { name: 'Structure', exact: true })).toBeVisible()
-  await expect(page.getByText(headline).first()).toBeVisible()
-  await expect(page.getByText(`${included} included · ${deferred} later`).first()).toBeVisible()
+  const mapSummary = page.getByRole('region', { name: 'Project map summary' })
+  await expect(mapSummary).toBeVisible()
+  await expect(mapSummary.getByText(scopeLabel, { exact: true })).toBeVisible()
+  await expect(mapSummary.getByRole('button', { name: 'Open Work' })).toBeVisible()
 }
 
 function escapeRegExp(value: string): string {

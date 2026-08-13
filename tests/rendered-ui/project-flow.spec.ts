@@ -70,11 +70,11 @@ const projectSurfaceRoutes = [
     },
   },
   {
-    name: 'structure',
+    name: 'legacy structure link opens map',
     path: '/projects/looma-knit/structure',
     assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: 'Structure' })).toBeVisible()
-      await expect(page.getByRole('region', { name: 'Project map' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Project map' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Project map summary' })).toBeVisible()
     },
   },
   {
@@ -112,11 +112,11 @@ const projectSurfaceRoutes = [
     },
   },
   {
-    name: 'docs-only structure',
+    name: 'docs-only legacy structure link opens map',
     path: '/projects/docs-compass/structure',
     assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: 'Structure' })).toBeVisible()
-      await expect(page.getByRole('region', { name: 'Project map' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Project map' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Project map summary' })).toBeVisible()
       await expect(page.getByTitle('Docs Compass')).toBeVisible()
     },
   },
@@ -172,28 +172,6 @@ const projectSurfaceRoutes = [
       await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
       await expect(page.locator('p').filter({ hasText: /^Current task scope$/ })).toBeVisible()
       await expect(page.getByTitle('Dirty Service')).toBeVisible()
-    },
-  },
-  {
-    name: 'consumer handoff structure',
-    path: '/projects/consumer-app/structure',
-    assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: 'Structure', exact: true })).toBeVisible()
-      await expect(page.getByText('Consumer App is waiting on Provider Library')).toBeVisible()
-      await expect(page.getByText('Consumer App needs launch-window math from Provider Library.')).toBeVisible()
-      await expect(page.getByText('This project is consumer')).toBeVisible()
-      await expect(page.getByText('1 contract')).toBeVisible()
-      await expect(page.getByText('Unrelated Indexed Project')).toHaveCount(0)
-    },
-  },
-  {
-    name: 'provider handoff structure',
-    path: '/projects/provider-library/structure',
-    assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: 'Structure', exact: true })).toBeVisible()
-      await expect(page.getByText('Consumer App is asking this project for work')).toBeVisible()
-      await expect(page.getByText('This project is provider')).toBeVisible()
-      await expect(page.getByText('1 contract')).toBeVisible()
     },
   },
   {

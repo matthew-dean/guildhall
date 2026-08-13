@@ -936,18 +936,6 @@
           {/if}
         </Card>
 
-        <Card title="Related views" titleTag="h2" padding="compact" density="dense">
-          <div class="map-actions">
-            <Button variant="secondary" onclick={() => go(currentProjectHref('/work', activeProjectId))}>
-              <Icon name="list-checks" size={16} />
-              Work
-            </Button>
-            <Button variant="secondary" onclick={() => go(currentProjectHref('/structure', activeProjectId))}>
-              <Icon name="package" size={16} />
-              Structure
-            </Button>
-          </div>
-        </Card>
       </div>
     </section>
       </div>

@@ -52,7 +52,6 @@
   const loadReleaseTab = () => import('./project/ReleaseTab.svelte')
   const loadSettingsTab = () => import('./project/SettingsTab.svelte')
   const loadProjectMapTab = () => import('./project/ProjectMapTab.svelte')
-  const loadProjectStructurePanel = () => import('./project/structure/ProjectStructurePanel.svelte')
   const loadProjectUpdateGate = () => import('./project/ProjectUpdateGate.svelte')
 
   interface ShellAttentionNotice {
@@ -138,7 +137,13 @@
     currentView === 'thread' ? 'surface-fill' : 'document',
   )
   const projectDetailSurface = $derived<'overview' | 'work' | 'map' | null>(
-    currentView === 'overview' ? 'overview' : currentView === 'work' ? 'work' : currentView === 'map' ? 'map' : null,
+    currentView === 'overview'
+      ? 'overview'
+      : currentView === 'work'
+        ? 'work'
+        : currentView === 'map' || currentView === 'structure'
+          ? 'map'
+          : null,
   )
   const surfaceDetailPending = $derived.by(() => {
     if (!project.surfaceLoading || !detail) return false
@@ -423,7 +428,6 @@
         { id: 'inbox', label: 'Needs you', path: currentProjectHref('/overview/inbox', activeProjectId) },
         { id: 'map', label: 'Map', path: currentProjectHref('/map', activeProjectId) },
         { id: 'facts', label: 'Facts', path: currentProjectHref('/facts', activeProjectId) },
-        { id: 'structure', label: 'Structure', path: currentProjectHref('/structure', activeProjectId) },
       ],
     },
     ...(threadIsCurrentDecision ? [{ id: 'thread' as const, label: 'Threads', icon: 'sparkles' as const, suffix: '/thread' }] : []),
@@ -466,9 +470,8 @@
 
     if (sectionId === 'project') {
       if (currentView === 'overview') return currentSub === 'inbox' ? subId === 'inbox' : subId === 'overview'
-      if (currentView === 'map') return subId === 'map'
+      if (currentView === 'map' || currentView === 'structure') return subId === 'map'
       if (currentView === 'facts') return subId === 'facts'
-      if (currentView === 'structure') return subId === 'structure'
     }
 
     if (sectionId === 'work' && currentView === 'work') {
@@ -1856,13 +1859,17 @@
               />
             {/await}
           {:else if currentView === 'structure'}
-            {#await loadProjectStructurePanel()}
+            {#await loadProjectMapTab()}
               <div class="page-centered page-centered-inline">
                 <p class="muted">Loading project...</p>
               </div>
             {:then module}
-              {@const ProjectStructurePanel = module.default}
-              <ProjectStructurePanel />
+              {@const ProjectMapTab = module.default}
+              <ProjectMapTab
+                {detail}
+                activeProjectId={activeProjectId}
+                onReleaseSelected={() => project.refresh(activeProjectId, 'map')}
+              />
             {/await}
           {:else if currentView === 'timeline'}
             {#await loadTimelineTab()}

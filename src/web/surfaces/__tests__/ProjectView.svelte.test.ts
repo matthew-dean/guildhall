@@ -2135,7 +2135,7 @@ describe('ProjectView', () => {
     expect(within(rail).queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
   })
 
-  it('groups project orientation under Project with Structure visible by default', async () => {
+  it('groups only owner-facing orientation under Project by default', async () => {
     await renderProjectView('overview')
     const rail = screen.getByRole('complementary', { name: 'Project navigation' })
     await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
@@ -2144,7 +2144,8 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Facts' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: 'Map' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Work' })).toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Threads' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Timeline' })).not.toBeInTheDocument()
@@ -2161,7 +2162,7 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Facts' })).toHaveClass('active')
-    expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Queue' })).not.toBeInTheDocument()
   })
 

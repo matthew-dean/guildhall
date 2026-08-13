@@ -58823,3 +58823,35 @@ the shared current action for an individual project.
   390px, with the same focused card and actions. Browser console logs were
   empty. This is evidence for the current-work handoff only, not a claim that
   every Guildhall route has reached the standard.
+
+### Repair: Remove Structure as a second owner-facing project report
+
+- [x] User job: an owner who needs orientation uses Map; an owner who needs to
+  act uses Work. They are never led to a separate `Structure` route merely to
+  read internal work-area, contract, handoff, and task-start context that does
+  not change a current choice.
+- Finding, 2026-08-12: the installed Narrative Harness `/structure` route
+  duplicated the milestone, project map, and top blocker, then added a long
+  charter paragraph, work-area inventory, zero-value contract and handoff
+  panels, and maintenance explanations. This is precisely the report-shaped
+  surface the stop-ship reset rejects.
+- Contract Touch Decision: remove Structure from the project rail and stop
+  Map, Settings, and setup completion from routing owners there. Legacy
+  `/structure` routes will render the existing compact Map surface so retained
+  bookmarks have one coherent orientation destination. Considered but not
+  touched: the structural graph store, task-start context, handoff and
+  contract data, project schemas, graph APIs, and task routing. Those remain
+  available to the runtime/agents where they are operationally relevant; they
+  are not elevated as a product route. Schema Migration Decision: none.
+  Required proof: direct legacy URLs show compact Map, project navigation has
+  no Structure entry, and setup/settings no longer advertise the report.
+  Apply/revert: presentation and route composition only; restoring the old
+  panel requires no data migration.
+- Evidence, 2026-08-12: `pnpm typecheck`, `pnpm lint:contracts`, the focused
+  ProjectView/Settings/Map component suites (89/89), and the rendered
+  owner-path matrix (33/33) pass. After a fresh build/install and service
+  restart, the installed server reported `stale:false`. A read-only visit to
+  Narrative Harness' legacy `/structure` URL renders the compact Map in one
+  1280x720 viewport: project name, selected milestone, `5/9 work items
+  complete`, `Open Work`, and optional map inspection. There is no Structure
+  navigation control, no horizontal overflow, and no console warning/error.

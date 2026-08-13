@@ -311,14 +311,14 @@ describe('SettingsTab', () => {
     project.error = null
   })
 
-  it('keeps Settings as a small shell and routes obsolete graph subviews to Structure', async () => {
+  it('keeps Settings as a small shell and routes obsolete graph subviews to Map', async () => {
     installFetch()
     render(SettingsTab, { subView: 'graph' })
 
-    expect(await screen.findByText('Graph review moved out of Settings')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Open Structure' }))
+    expect(await screen.findByText('Map review moved out of Settings')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Open Map' }))
 
-    expect(path.value).toBe('/projects/looma-knit/structure')
+    expect(path.value).toBe('/projects/looma-knit/map')
   })
 
   it('shows initialization guidance before project setup is complete', async () => {
