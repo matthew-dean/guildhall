@@ -963,15 +963,25 @@ describe('ProjectView', () => {
     expect(screen.getAllByRole('button', { name: /review project update/i })).toHaveLength(1)
   })
 
-  it('opens the shared migration repair modal when a task action routes back with repair intent', async () => {
+  it('turns an already-clear migration repair route into a direct project handoff', async () => {
+    const user = userEvent.setup()
     window.history.replaceState({}, '', '/projects/looma-knit/overview?repair=migration')
     path.value = '/projects/looma-knit/overview'
     path.href = '/projects/looma-knit/overview?repair=migration'
 
     await renderProjectView('overview')
 
-    await screen.findByRole('dialog', { name: /migrate project/i })
+    const modal = await screen.findByRole('dialog', { name: /migrate project/i })
     expect(screen.queryByText(/Run required Guildhall migration/i)).toBeNull()
+    expect(within(modal).getByText('No project update is blocking this release.')).toBeInTheDocument()
+    expect(within(modal).getByText('Guildhall checked this project. No project update is blocking this release. The project is unblocked.')).toBeInTheDocument()
+    expect(within(modal).queryByText('Migration status', { exact: true })).not.toBeInTheDocument()
+
+    await user.click(within(modal).getByRole('button', { name: 'Continue to project' }))
+    expect(path.href).toBe('/projects/looma-knit/overview')
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /migrate project/i })).not.toBeInTheDocument()
+    })
   })
 
   it('keeps the migration modal blocking until apply and refreshes finish', async () => {
@@ -1050,8 +1060,93 @@ describe('ProjectView', () => {
     }))
 
     expect(await screen.findByText('Migration complete.')).toBeInTheDocument()
+    expect(screen.getByText('Guildhall applied 1 required update. The project is unblocked.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Continue to project' })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Close' }).every(button => button.hasAttribute('disabled'))).toBe(false)
     expect(screen.queryByLabelText('Migration changed paths')).not.toBeInTheDocument()
+  })
+
+  it('continues from a completed migration into the refreshed shared owner action', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/projects/looma-knit/overview?repair=migration')
+    path.value = '/projects/looma-knit/overview'
+    path.href = '/projects/looma-knit/overview?repair=migration'
+    const migrationBlocked = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run the required project update before working.',
+        actionHref: '/migrations',
+      },
+    } as Partial<ProjectDetail>)
+    const reviewReady = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        message: 'Review the next spec before work can continue.',
+        focusKind: 'spec_review',
+        focusTaskId: 'task-link-editor',
+        actionHref: '/task/task-link-editor',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Review a spec',
+          buttonLabel: 'Review spec',
+          href: '/task/task-link-editor',
+          tone: 'attention',
+          code: 'owner_review_required',
+          taskId: 'task-link-editor',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Start', startEnabled: false, pauseEnabled: false },
+        ownerInput: { active: true },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as Partial<ProjectDetail>)
+    let migrationApplied = false
+    const fetchMock = installFetchFakes(migrationBlocked)
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return json(migrationApplied ? reviewReady : migrationBlocked)
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/migrations') {
+        return json({
+          pending: [],
+          blocked: migrationApplied
+            ? []
+            : [{
+              id: '0.8.0/project-state-layout',
+              title: 'Move legacy project memory into split project state',
+              safety: 'prompt',
+              requirement: 'required',
+            }],
+          applied: [],
+        })
+      }
+      if (url.pathname === '/api/project/migrations/apply') {
+        migrationApplied = true
+        return json({
+          ok: true,
+          result: { applied: [{ id: '0.8.0/project-state-layout', title: 'Move legacy project memory into split project state' }], skipped: [], failed: [] },
+          status: { pending: [], blocked: [], applied: [] },
+        })
+      }
+      if (url.pathname === '/api/project/spine') return json({ spine: null })
+      return json({})
+    })
+
+    await renderProjectView('overview', null, 'looma-knit', migrationBlocked)
+
+    const modal = await screen.findByRole('dialog', { name: /migrate project/i })
+    await user.click(within(modal).getByRole('button', { name: /apply required updates/i }))
+    expect(await screen.findByText('Guildhall applied 1 required update. The project is unblocked. Next: Review a spec.')).toBeInTheDocument()
+
+    await user.click(within(modal).getByRole('button', { name: 'Review spec' }))
+    expect(path.href).toBe('/projects/looma-knit/task/task-link-editor')
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /migrate project/i })).not.toBeInTheDocument()
+    })
   })
 
   it('does not present stable done-only projects as paused or needing setup attention', async () => {

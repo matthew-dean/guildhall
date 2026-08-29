@@ -59415,16 +59415,44 @@ the shared current action for an individual project.
   quickly, but its only durable outcome is a generic `Migration complete.`
   notice and a `Close` control. The owner is not told what changed, whether the
   project is now unblocked, or where the release flow resumes. The brief toast
-  is not a handoff. A completion state must explicitly confirm the update and
-  offer the typed next action once the refreshed shared project snapshot is
-  available.
-- Contract Touch Decision: preserve the migration result and the existing
-  shared `actionModel.primaryAction`; add a presentation-only completion
-  handoff that uses the refreshed action model rather than inferring release
-  state from migration text. Considered but not touched: migration execution,
-  migration order, readiness ranking, action-model selection, task status,
-  API shapes, persistence, and schemas. Schema Migration Decision: none.
-  Required proof: a successful migration visibly reports completion, clears the
-  transient repair intent when continuing, and opens the shared next action
-  when one exists. Apply/revert: client presentation/navigation only; it never
-  mutates project state after the migration endpoint succeeds.
+  is not a handoff. Installed follow-up also shows that the routed
+  `?repair=migration` query survives after an update, reopening a generic
+  `No required migrations are blocking this project.` modal on refresh. A
+  completion or already-clear repair state must explicitly say that the update
+  gate is gone, offer the typed next action from the refreshed shared project
+  snapshot, and clear the transient repair route. The first installed repair
+  also rendered the new handoff beside the old neutral migration-status banner;
+  a resolved repair must have exactly one outcome, not two competing summaries.
+#### Contract Touch Decision
+
+Preserve the migration result and the existing shared
+`actionModel.primaryAction`; add a presentation-only completion handoff that
+uses the refreshed action model rather than inferring release state from
+migration text. Considered but not touched: migration execution, migration
+order, readiness ranking, action-model selection, task status, API shapes,
+persistence, and schemas.
+
+#### Schema Migration Decision
+
+None. Required proof: a successful migration visibly reports completion, clears the
+transient repair intent when continuing or closing, and opens the shared next
+action when one exists. A routed repair intent whose status is already clear
+must also offer the same continuation. Apply/revert: client
+presentation/navigation only; it never mutates project state after the
+migration endpoint succeeds.
+
+- Evidence, 2026-08-29: `ProjectView.svelte.test.ts` passes 72/72, including
+  both a just-applied required update that refreshes into `Review spec` and an
+  already-clear `?repair=migration` route that has one handoff, no duplicated
+  migration-status banner, clears the query, and returns to the project. `pnpm
+  typecheck`, `pnpm lint:contracts`, and `pnpm build` pass. After `pnpm
+  dev:install`, a Looma + Knit restart reports `stale:false`. The installed
+  repair route presents one `Project ready` status: `No project update is
+  blocking this release`, states that the project is unblocked, and exposes
+  `Review next spec` without scrolling at desktop, 960px, and 390px. Desktop
+  page width is exactly 1280px with no horizontal overflow. A non-mutating
+  click opens `/projects/looma-knit/task/task-import-1rpbo8n`, where `Request
+  changes` and `Approve spec` are visible. The installed project is already
+  clear, so the required-migration application itself is covered by the
+  deterministic component regression rather than mutating the owner's project
+  during this audit.

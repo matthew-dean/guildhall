@@ -598,6 +598,18 @@
   function closeMigrationModal(): void {
     if (migrationApplyBusy) return
     migrationModalOpen = false
+    if (!migrationRepairIntent || typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('repair')
+    nav(`${url.pathname}${url.search}${url.hash}`)
+  }
+
+  function continueAfterMigration(): void {
+    const href = migrationCompletionAction?.href ?? currentProjectHref('/overview', activeProjectId)
+    migrationModalOpen = false
+    migrationAppliedMessage = null
+    migrationApplyResult = null
+    nav(href)
   }
 
   $effect(() => {
@@ -744,7 +756,17 @@
   const allTerminalStart = $derived(startReadiness?.code === 'all_terminal')
   const requiredMigrationBlocked = $derived(startReadiness?.code === 'required_migration_pending')
   const primaryRequiredMigration = $derived<ProjectMigrationStatusItem | null>(migrationStatus?.blocked?.[0] ?? null)
+  const migrationRepairIntent = $derived.by(() => {
+    path.href
+    if (typeof window === 'undefined') return false
+    return new URL(window.location.href).searchParams.get('repair') === 'migration'
+  })
   const migrationSequenceContinues = $derived(Boolean(migrationAppliedMessage && primaryRequiredMigration))
+  const migrationHandoffReady = $derived(
+    Boolean(migrationAppliedMessage) || Boolean(
+      migrationRepairIntent && migrationStatus && !migrationStatusLoading && !migrationError && !primaryRequiredMigration,
+    ),
+  )
   const migrationProgressLabel = $derived.by(() => {
     switch (migrationApplyStage) {
       case 'applying': return 'Applying required updates'
@@ -754,6 +776,32 @@
       case 'complete': return 'Migration complete'
       default: return null
     }
+  })
+  const migrationCompletionAction = $derived.by(() => {
+    if (!migrationHandoffReady || migrationSequenceContinues) return null
+    if (primaryAction?.href) {
+      return {
+        href: projectActionHref(primaryAction.href, activeProjectId),
+        label: primaryAction.buttonLabel ?? 'Continue',
+      }
+    }
+    return {
+      href: currentProjectHref('/overview', activeProjectId),
+      label: 'Continue to project',
+    }
+  })
+  const migrationCompletionSummary = $derived.by(() => {
+    if (!migrationHandoffReady || migrationSequenceContinues) return null
+    const applied = migrationApplyResult?.applied?.length ?? 0
+    const updateSummary = migrationAppliedMessage
+      ? applied === 1
+        ? 'Guildhall applied 1 required update.'
+        : applied > 1
+          ? `Guildhall applied ${applied} required updates.`
+          : 'Guildhall confirmed that this project is current.'
+      : 'Guildhall checked this project. No project update is blocking this release.'
+    if (primaryAction?.label) return `${updateSummary} The project is unblocked. Next: ${primaryAction.label}.`
+    return `${updateSummary} The project is unblocked.`
   })
   function orientationLabel(value: unknown): string | null {
     if (typeof value === 'string') {
@@ -1913,14 +1961,18 @@
           <li class:active={migrationApplyStage === 'refreshing-inbox'} class:done={['checking-status', 'complete'].includes(migrationApplyStage)}>Refresh Needs You</li>
           <li class:active={migrationApplyStage === 'checking-status'} class:done={migrationApplyStage === 'complete'}>Check remaining migrations</li>
         </ol>
-      {:else if migrationAppliedMessage}
+      {:else if migrationHandoffReady}
         <NoticeBand
           tone={migrationSequenceContinues ? 'neutral' : 'ok'}
           role="status"
           density="compact"
-          label={migrationSequenceContinues ? 'Project update applied' : 'Migration complete'}
-          title={migrationAppliedMessage}
-        />
+          label={migrationSequenceContinues ? 'Project update applied' : migrationAppliedMessage ? 'Migration complete' : 'Project ready'}
+          title={migrationAppliedMessage ?? 'No project update is blocking this release.'}
+        >
+          {#if !migrationSequenceContinues && migrationCompletionSummary}
+            <p>{migrationCompletionSummary}</p>
+          {/if}
+        </NoticeBand>
       {/if}
       {#if migrationStatusLoading}
         <p class="muted">Checking migrations...</p>
@@ -1934,7 +1986,7 @@
             <p>{primaryRequiredMigration.summary}</p>
           {/if}
         </div>
-      {:else if !migrationAppliedMessage}
+      {:else if !migrationHandoffReady}
         <NoticeBand
           tone="ok"
           role="status"
@@ -1948,6 +2000,12 @@
       <Button variant="secondary" disabled={migrationApplyBusy} onclick={closeMigrationModal}>
         Close
       </Button>
+      {#if migrationCompletionAction}
+        <Button variant="human" onclick={continueAfterMigration}>
+          {migrationCompletionAction.label}
+          <Icon name="arrow-right" size={16} />
+        </Button>
+      {/if}
       <Button
         variant="human"
         disabled={migrationStatusLoading || migrationApplyBusy || !primaryRequiredMigration}
