@@ -59328,3 +59328,8 @@ the shared current action for an individual project.
   opens `?view=queue&all=1`, restores the 16-row inventory and its controls,
   and still has zero overflow. The focused review queue keeps its action
   visible at 960px desktop and 390px mobile widths with zero card/page overflow.
+  A non-mutating installed replay of the first selected review row opens its
+  action-only inspector, then the task review route, where both `Approve spec`
+  and `Request changes` are visible above the fold at 1280px, 960px, and 390px
+  with zero page overflow. Approval itself was intentionally not invoked
+  against the user's active project during this presentation audit.
