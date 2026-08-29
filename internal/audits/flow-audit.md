@@ -59625,3 +59625,44 @@ only consumes it at the presentation boundary.
   task. At 1280px, 960px, and 390px, the focused route has no page horizontal
   overflow; its action remains in the mobile first viewport and no Review spec
   command is present.
+
+### Finding: Task detail must not resurrect a rejected owner decision
+
+- [ ] User job: after opening a Work item marked Spec repair, the owner sees
+  that Guildhall is repairing it and has no approval decision to make. Reading
+  the record must never convert repair work back into an approval prompt.
+- Finding, 2026-08-29: following the real Looma task LOO-X3CVCC from its
+  repaired Work handoff opens Task Drawer, which ignores the shared
+  spec_shaping handoff state and renders Approve this spec?, Request changes,
+  and Approve spec. This is the same rejected approval decision reintroduced
+  one navigation later.
+
+#### Contract Touch Decision
+
+Reuse the existing typed scope handoff state from the loaded project snapshot
+through Task Drawer and its focused, overview, current, and Spec presentations.
+When the state is spec_shaping, suppress every approve-spec entry point and
+show one explicit Guildhall-owned repair handoff. Considered but not touched:
+task status persistence, spec approval endpoint authority, scheduler
+selection, task content, and migration state. Required proof: the real
+malformed Looma task cannot display an approval command in either concise or
+full-record detail, while a valid spec_review remains approvable. Apply/revert:
+presentation consumes the existing projection only and never mutates task data.
+
+#### Schema Migration Decision
+
+None. This uses the existing project projection and introduces no persisted
+state or schema.
+
+- Evidence, 2026-08-29: focused and full-detail TaskDrawer regressions cover
+  the malformed raw spec_review record with the shared spec_shaping handoff,
+  while existing coverage retains the valid spec-review approval path. Targeted
+  UI tests passed: 129 assertions across TaskDrawer, WorkTab, and task
+  presentation. Typecheck, contract lint, and model-independence gates passed.
+  After production build, dev install, and Looma service restart, stale-server
+  reported stale:false. In the installed Looma project, opening LOO-X3CVCC
+  showed the concise repair handoff and no Approve spec or Request changes
+  command; reading the full record kept the same handoff above every detail
+  tab and still offered no approval command. At 1280px, 960px, and 390px, the
+  task detail had no page horizontal overflow; the mobile repair action remained
+  visible.

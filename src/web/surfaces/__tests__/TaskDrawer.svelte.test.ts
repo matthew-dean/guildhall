@@ -2072,6 +2072,51 @@ describe('TaskDrawer', () => {
     await waitFor(() => expect(path.href).toContain('?detail=full&tab=overview'))
   })
 
+  it('keeps a shared spec-repair task out of approval in focused and full detail', async () => {
+    const repairedProject = {
+      ...projectDetail(),
+      orientationSpine: {
+        scopeRows: [{ taskId: 'task-link-editor', scope: 'included', handoffState: 'spec_shaping' }],
+      },
+    }
+    project.detail = repairedProject
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    payload.task.openQuestions = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(repairedProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const rendered = render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    expect(await screen.findByText('Guildhall is repairing this spec')).toBeInTheDocument()
+    expect(screen.getByText('Nothing is waiting on you.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Read full task record' })).toBeInTheDocument()
+    expect(screen.queryByText('Approve this spec?')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Request changes' })).toBeNull()
+
+    openDrawerOn('spec', { fullRecord: true })
+    await rendered.rerender({
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      routeHref: path.href,
+      onClose: vi.fn(),
+    })
+
+    expect(await screen.findByText('Guildhall is repairing this spec')).toBeInTheDocument()
+    expect(screen.queryByText('Approve this spec?')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
+  })
+
   it('preempts focused spec approval when a required project update is already known', async () => {
     openDrawerOn('spec')
     const onMigrationRequired = vi.fn()

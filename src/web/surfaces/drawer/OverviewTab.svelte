@@ -22,6 +22,7 @@
     projectId?: string | null
     deliverySpine?: DeliverySpine | null
     workProgress?: TaskWorkProgressDisplay | null
+    handoffState?: string | null
     onNavigateTask?: (taskId: string) => void
     onCreateSplitChildren?: () => void
     createSplitBusy?: boolean
@@ -33,6 +34,7 @@
     projectId = null,
     deliverySpine = null,
     workProgress = null,
+    handoffState = null,
     onNavigateTask,
     onCreateSplitChildren,
     createSplitBusy = false,
@@ -49,7 +51,7 @@
   )
   const createdChildren = $derived(plannedChildren.filter((child) => child.createdTaskId))
   const taskById = $derived(new Map([task, ...tasks].filter((candidate): candidate is Task => Boolean(candidate?.id)).map(candidate => [candidate.id, candidate])))
-  const statusPresentation = $derived(taskStagePresentation(task, { tasks: [task, ...tasks] }))
+  const statusPresentation = $derived(taskStagePresentation(task, { tasks: [task, ...tasks], handoffState }))
   const deliveryBadge = $derived(deliveryProgressBadge(workProgress))
   const deliverySteps = $derived(workProgress?.deliverySteps ?? [])
   const containingWorkId = $derived(task.hierarchy?.parentId ?? null)

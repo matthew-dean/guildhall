@@ -704,11 +704,17 @@
   })
   const fullRecordRequested = $derived(requestedFullRecord(routeHref || navPath.href || currentBrowserHref()))
   const diagnosticContextRequested = $derived(requestedDiagnosticContext(routeHref || navPath.href || currentBrowserHref()))
-  const focusedSpecReview = $derived(task?.status === 'spec_review' && !fullRecordRequested)
+  const scopeHandoffState = $derived.by(() => task?.id
+    ? project.detail?.orientationSpine?.scopeRows?.find(row => row.taskId === task.id)?.handoffState
+    : null)
+  const isSpecRepair = $derived(scopeHandoffState === 'spec_shaping')
+  const focusedSpecRepair = $derived(task?.status === 'spec_review' && isSpecRepair && !fullRecordRequested)
+  const focusedSpecReview = $derived(task?.status === 'spec_review' && !isSpecRepair && !fullRecordRequested)
   const projectPrimaryAction = $derived(project.detail?.actionModel?.primaryAction ?? null)
   const projectDecisionElsewhere = $derived(Boolean(
     !fullRecordRequested &&
     !focusedSpecReview &&
+    !focusedSpecRepair &&
     task?.id &&
     projectPrimaryAction?.taskId &&
     projectPrimaryAction.taskId !== task.id,
@@ -814,6 +820,7 @@
   })
   const canRunTaskDirectly = $derived(
     !projectStartBlocker &&
+    !isSpecRepair &&
     !isTerminalRunTask &&
     !isContainingWorkTask &&
     !firstOpenEscalation &&
@@ -826,6 +833,7 @@
     task &&
     !fullRecordRequested &&
     !focusedSpecReview &&
+    !focusedSpecRepair &&
     !projectDecisionElsewhere &&
     !isWorkspaceImportTask &&
     canRunTaskDirectly &&
@@ -950,6 +958,7 @@
   })
   const stageRerun = $derived.by(() => {
     if (!task) return null
+    if (isSpecRepair) return null
     if (task.id === 'task-meta-intake' || task.id === 'task-workspace-import') return null
     if (['exploring', 'spec_review', 'ready', 'proposed'].includes(task.status ?? '')) {
       return { stage: 'spec' as const, label: 'Re-draft spec' }
@@ -1176,7 +1185,15 @@
     </Button>
   </header>
 
-  {#if payload && !focusedSpecReview && !projectDecisionElsewhere && !showFocusedRunAction}
+  {#if payload && isSpecRepair && fullRecordRequested}
+    <UtilityPanel as="section" className="drawer-spec-repair" tone="neutral" railStrength="strong" ariaLabel="Spec repair">
+      <span class="outcome-eyebrow">Guildhall is repairing this spec</span>
+      <strong>Nothing is waiting on you.</strong>
+      <span>Guildhall will bring this back for review when the spec is ready.</span>
+    </UtilityPanel>
+  {/if}
+
+  {#if payload && !focusedSpecReview && !focusedSpecRepair && !projectDecisionElsewhere && !showFocusedRunAction}
     <div class="gh-drawer-tabs">
       <Tabs
         tabs={tabs}
@@ -1268,6 +1285,15 @@
       {/if}
       {#if requiredProjectUpdateBeforeSpecReview}
         <p class="loading">Opening project update...</p>
+      {:else if focusedSpecRepair && task}
+        <UtilityPanel as="section" className="drawer-spec-repair" tone="neutral" railStrength="strong" ariaLabel="Spec repair">
+          <span class="outcome-eyebrow">Guildhall is repairing this spec</span>
+          <strong>Nothing is waiting on you.</strong>
+          <span>Guildhall will bring this back for review when the spec is ready.</span>
+          <div class="drawer-spec-repair-actions">
+            <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>Read full task record</Button>
+          </div>
+        </UtilityPanel>
       {:else if focusedSpecReview && task}
         <SpecReviewDecision
           {busy}
@@ -1299,6 +1325,7 @@
           {projectStartBlockerMessage}
           contextDebug={taskExtras.contextDebug ?? []}
           workProgress={currentWorkProgress}
+          canApproveSpec={!isSpecRepair}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onRunTask={() => runProject('start', taskId)}
@@ -1315,6 +1342,7 @@
           projectId={scopedProjectId()}
           deliverySpine={payload.deliverySpine}
           workProgress={currentWorkProgress}
+          handoffState={scopeHandoffState}
           onNavigateTask={navigateToRelatedTask}
           onCreateSplitChildren={handleCreateSplitChildren}
           createSplitBusy={splitTaskBusy}
@@ -1323,6 +1351,7 @@
         <SpecTab
           {task}
           {busy}
+          specRepair={isSpecRepair}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onPause={handleOpenHold}
@@ -1363,7 +1392,7 @@
     {/if}
   </div>
 
-  {#if payload && task && !projectDecisionElsewhere && !showFocusedRunAction}
+  {#if payload && task && !focusedSpecRepair && !projectDecisionElsewhere && !showFocusedRunAction}
     <footer class="gh-drawer-foot">
       {#if isWorkspaceImportTask}
         <div class="footer-actions-left">

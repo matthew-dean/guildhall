@@ -44,6 +44,7 @@
     projectStartBlockerMessage?: string | null
     contextDebug?: ContextDebugRecord[]
     workProgress?: TaskWorkProgressDisplay | null
+    canApproveSpec?: boolean
     onApproveBrief: () => void
     onApproveSpec: () => void
     onRunTask: () => void
@@ -65,6 +66,7 @@
     projectStartBlockerMessage = null,
     contextDebug = [],
     workProgress = null,
+    canApproveSpec = true,
     onApproveBrief,
     onApproveSpec,
     onRunTask,
@@ -470,7 +472,7 @@
             </Row>
           </Stack>
         </Card>
-      {:else if turn.kind === 'spec_review'}
+      {:else if turn.kind === 'spec_review' && canApproveSpec}
         <Card title="Needs your approval" tone="accent">
           <Stack gap="3">
             <StateSummary

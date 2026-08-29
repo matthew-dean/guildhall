@@ -32,6 +32,7 @@
   interface Props {
     task: Task
     busy?: boolean
+    specRepair?: boolean
     onApproveBrief: () => void
     onApproveSpec: () => void
     onPause: () => void
@@ -47,6 +48,7 @@
   let {
     task,
     busy = false,
+    specRepair = false,
     onApproveBrief,
     onApproveSpec,
     onPause,
@@ -114,7 +116,7 @@
       ),
   )
   const exploring = $derived(task.status === 'exploring')
-  const specApprovalPending = $derived(task.status === 'spec_review' && specText.length > 0)
+  const specApprovalPending = $derived(!specRepair && task.status === 'spec_review' && specText.length > 0)
   const specApprovalNeedsBrief = $derived(specApprovalPending && specApprovalNeedsStructuredBrief(task))
   const needsAcceptance = $derived(exploring && briefApproved && acceptance.length === 0)
 
