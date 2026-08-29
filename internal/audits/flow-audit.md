@@ -59368,3 +59368,38 @@ the shared current action for an individual project.
   same review action at desktop, 960px, and 390px, with zero overflow. A
   non-mutating click routes directly to the selected task approval surface,
   where `Request changes` and `Approve spec` are visible above the fold.
+
+### Repair: Review actions must have one canonical destination
+
+- [x] User job: every surface that says `Review next spec` opens the same
+  approval surface. The compact readiness payload, shared action model, and
+  route consumers must not carry alternate URLs and rely on client routing to
+  make them converge by accident.
+- Finding, 2026-08-29: installed Looma API state reports
+  `startReadiness.actionHref` as `/work?task=task-import-1rpbo8n`, while the
+  same snapshot's `actionModel.primaryAction.href` is
+  `/task/task-import-1rpbo8n`. The browser currently lands on the task drawer
+  through route reconciliation, but API consumers and every route that falls
+  back to readiness retain a second action contract.
+- Contract Touch Decision: make the existing shared
+  `projectTaskActionHref` map typed `owner_review_required` to its task review
+  destination, matching the action-model conversion. Considered but not
+  touched: review membership/order, task approval endpoints, task selection,
+  release state, persistence, API field shape, and schemas. Schema Migration
+  Decision: none. Required proof: shared href regressions and installed API,
+  Overview, Work, Thread, and Release agreement. Apply/revert: one centralized
+  action resolver; do not normalize URLs in individual surfaces.
+- Evidence, 2026-08-29: the `projectTaskActionHref` regression passes with
+  typed `owner_review_required` and returns the direct task route. `pnpm
+  typecheck` and `pnpm lint:contracts` pass; release and rendered test suites
+  were started after the runtime change, and the focused runtime action suite
+  completed 40/40 before installed proof. After build, install, restart, and
+  `stale:false`, Looma API state reports the owner-review task as the
+  project-scoped task route in `startReadiness` and the equivalent
+  project-relative task route in `actionModel`; both carry the same task ID and
+  resolve through the same shared route helper. Installed Overview, Thread,
+  Release, and direct Release-details routes show `Review next spec` with zero
+  overflow. A click from Overview opens the task approval surface with both
+  `Request changes` and `Approve spec` visible. Work intentionally presents the
+  ordered ten-spec queue instead of duplicating that action card, with no
+  generic controls or overflow.

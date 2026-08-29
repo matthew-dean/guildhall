@@ -33,6 +33,11 @@ export function projectTaskActionHref(
 ): string {
   const projectRoot = projectId ? `/projects/${encodeURIComponent(projectId)}` : ''
   const taskId = readiness.focusTaskId?.trim()
+  if (readiness.code === 'owner_review_required') {
+    return taskId
+      ? `${projectRoot}/task/${encodeURIComponent(taskId)}`
+      : `${projectRoot}/work`
+  }
   const reviewInThread = readiness.focusKind === 'spec_review' ||
     isFocusedOwnerInputTaskReview(readiness)
   if (reviewInThread) {

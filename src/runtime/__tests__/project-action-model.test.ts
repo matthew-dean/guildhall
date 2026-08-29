@@ -235,6 +235,13 @@ describe('buildProjectActionModel', () => {
       '/projects/narrative-harness/thread?thread=task%3Atask-087',
     )
     expect(projectTaskActionHref({
+      code: 'owner_review_required',
+      focusKind: 'owner_review',
+      focusTaskId: 'task-089',
+    }, 'narrative-harness')).toBe(
+      '/projects/narrative-harness/task/task-089',
+    )
+    expect(projectTaskActionHref({
       code: 'ready_work',
       focusKind: 'ready_work',
       focusTaskId: 'task-088',
