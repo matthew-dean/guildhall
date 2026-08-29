@@ -59666,3 +59666,28 @@ state or schema.
   tab and still offered no approval command. At 1280px, 960px, and 390px, the
   task detail had no page horizontal overflow; the mobile repair action remained
   visible.
+
+### Verification: Browse work leaves the focused handoff
+
+- [x] User job: after a project handoff points to one current item, the owner
+  can choose Browse work to leave that focused handoff and see a stable list of
+  the current release work. The route change must visibly alter the screen.
+- Initial observation, 2026-08-29: an attempted click while a task drawer was
+  still layered over the focused handoff appeared to navigate to /work without
+  changing the visible surface. This was treated as a suspect, not a repair.
+
+#### Contract Touch Decision
+
+No contract change. The route query already selects queue mode and Work owns
+the focused/list state. Considered but not touched: task status, task ordering,
+release projection, action ranking, persistence, and navigation code.
+
+#### Schema Migration Decision
+
+None. No schema or behavior change is required.
+
+- Evidence, 2026-08-29: from the installed Looma focused paused-work route,
+  Browse work changed the URL to /projects/looma-knit/work?view=queue and
+  visibly replaced the focused card with the 16-item current-release list.
+  The route remained stable after the project connected. No repair follows
+  from the initial drawer-layered observation.
