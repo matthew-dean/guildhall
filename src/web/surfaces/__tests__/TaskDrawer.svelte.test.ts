@@ -2182,6 +2182,39 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
   })
 
+  it('shows a spec-repair start failure beside the action instead of failing silently', async () => {
+    const repairedProject = {
+      ...projectDetail(),
+      orientationSpine: {
+        scopeRows: [{ taskId: 'task-link-editor', scope: 'included', handoffState: 'spec_shaping' }],
+      },
+    }
+    project.detail = repairedProject
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/start')) {
+        return json({ error: 'The configured provider is unavailable. Open Providers to fix it.' }, { status: 400 })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(repairedProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('button', { name: 'Repair spec' })
+    await userEvent.click(screen.getByRole('button', { name: 'Repair spec' }))
+
+    expect(await screen.findByText('The configured provider is unavailable. Open Providers to fix it.')).toBeInTheDocument()
+  })
+
   it('preempts focused spec approval when a required project update is already known', async () => {
     openDrawerOn('spec')
     const onMigrationRequired = vi.fn()

@@ -59899,11 +59899,13 @@ Extend the shared project action model with a typed focused execution operation
 for runnable work, including the distinct `repair_spec` operation. Scope
 projection marks non-human-blocking malformed spec review as `spec_repair` so
 all owner-facing surfaces derive the same action and never infer the condition
-from prose. Overview and focused task presentation execute that operation
-against the existing task-start endpoint; Work reuses the same operation for
-its current direct-run behavior. A focused task route suppresses its background
-project surface so the same operation cannot appear as two competing buttons.
-Considered but not touched: task status,
+from prose. The task-start endpoint must consume that same typed readiness
+decision after its narrow recovery reconciliation; it may not use raw
+`spec_review` plus legacy spec text as a second owner-review gate. Overview and
+focused task presentation execute that operation against the existing
+task-start endpoint; Work reuses the same operation for its current direct-run
+behavior. A focused task route suppresses its background project surface so
+the same operation cannot appear as two competing buttons. Considered but not touched: task status,
 spec persistence, approval semantics, scheduler policy, task ordering, and
 release membership. Required proof: the installed Looma overview and task
 route show one `Repair spec` action for this state, the action starts only the
@@ -59927,7 +59929,7 @@ facing plan text: no owner action; Guildhall refreshes the saved read model
 itself. Revert: restore the prior projection semantics and reproject again; no
 source task data is lost.
 
-- Evidence, 2026-08-29: after `0.13.102/spec-repair-action-reprojection`, the
+- Partial evidence, 2026-08-29: after `0.13.102/spec-repair-action-reprojection`, the
   installed Looma summary reports `repair_spec` for `Component implementation`.
   At `1280px`, the overview presents `Repair this spec` with one `Repair spec`
   action; the exact task route presents the same single action with no duplicate
@@ -59937,4 +59939,59 @@ source task data is lost.
   horizontal overflow was present; `/api/stale-server` reported `stale: false`.
   Action-model, overview, Work, and TaskDrawer regressions pass, including a
   checkpoint-bearing fixture that proves old recovery prose stays out of this
-  compact state.
+  compact state. Live owner proof then found the action was not executable: the
+  task start endpoint returned `no_unattended_progress` because a raw
+  `spec_review` status and legacy spec string overrode the shared
+  `spec_repair` readiness decision. This finding remains open until the exact
+  action starts the named repair or returns the same typed failure the UI
+  presents.
+
+- Evidence, 2026-08-29: installed Looma + Knit at `1280px` showed exactly one
+  compact repair/resume handoff for `Component implementation`, with no
+  horizontal overflow. Activating its visible focused action started only that
+  task; the route then showed `WORK IS UNDERWAY`, the task title, a clear
+  no-owner-action message, and one `Pause` command. The API, stored summary,
+  and CLI subsequently agreed on the same paused task after an intentional
+  pause. The start-endpoint regressions cover both malformed spec repair and a
+  genuinely owner-reviewable spec; TaskDrawer shows an inline failure instead
+  of silently leaving a clicked action unchanged.
+
+### Finding: A live run must never advertise a paused action
+
+- [x] User job: after the owner starts or repairs a focused task, every surface
+  that reports the project state says it is running until the owner actually
+  pauses it. The dashboard, `guildhall status`, and the saved action model
+  must not require the owner to decide which of two incompatible states to
+  believe.
+- Finding, 2026-08-29: live Looma proof showed the dashboard's in-memory run
+  and execution projection as `running` on `Component implementation`, while
+  `guildhall status` read the same saved summary as `paused_live_work` and
+  printed `Resume`. The execution writer updated the decision packet but left
+  the denormalized next-action and action-model entries from the prior paused
+  state intact. This is a shared compact-summary consistency defect, not a CLI
+  formatting problem.
+
+#### Contract Touch Decision
+
+Runtime execution owns running/stopping state. When it changes, refresh the
+decision packet and every compact presentation field derived from that packet:
+next action and action model. Considered but not touched: task lifecycle,
+scheduler selection, release counts, CLI rendering, and persisted schema.
+Required proof: a summary updated from paused to running has a typed `running`
+next action, an `Open Work` primary action, and no `Resume` text; after a real
+pause, all three return to the same resumable decision. Apply/revert: update
+the shared summary projection only; no task data is changed.
+
+#### Schema Migration Decision
+
+None. The existing compact summary fields are recomputed from the existing
+execution projection on every runtime change; no persisted shape changes.
+
+- Evidence, 2026-08-29: a real Looma focused start produced `running` from the
+  API, `Open Work` from the project action model, and a saved CLI next action
+  with code `running`, the same task identity, and a running message. The
+  prior failing path was reproduced in a regression: a task-progress write
+  after the supervisor start must retain that live decision rather than restore
+  `Resume`. After an intentional pause, API, action model, and CLI all return
+  to `paused_live_work` for the same task. The installed focused browser route
+  was checked at `1280px` with `scrollWidth === clientWidth`.

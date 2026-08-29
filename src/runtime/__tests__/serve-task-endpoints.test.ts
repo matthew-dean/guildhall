@@ -2418,6 +2418,20 @@ describe('POST /api/project/task/:id/start', () => {
         title: 'ContextMenu',
         status: 'spec_review',
         spec: '## Summary\nImplement ContextMenu.\n\n## Acceptance Criteria\n1. ContextMenu works.',
+        structuredSpec: structuredSpecForTest('ContextMenu'),
+        specReviewGate: {
+          authority: 'owner',
+          requestedAt: new Date().toISOString(),
+          requestedBy: 'spec-agent',
+          reason: 'spec_handoff',
+        },
+        productBrief: {
+          userJob: 'Review the ContextMenu implementation contract.',
+          successMetric: 'The owner can approve a complete ContextMenu contract.',
+          nonGoals: [],
+          authoredBy: 'spec-agent',
+          authoredAt: new Date().toISOString(),
+        },
         acceptanceCriteria: [{ id: 'ac-1', description: 'ContextMenu works.', verifiedBy: 'review' }],
       },
       {
@@ -2446,6 +2460,41 @@ describe('POST /api/project/task/:id/start', () => {
     expect(body.code).toBe('no_unattended_progress')
     expect(body.error ?? body.message).toMatch(/spec.*waiting for review/i)
     expect(starts).toHaveLength(0)
+  })
+
+  it('starts a malformed spec review through the shared repair readiness', async () => {
+    await seedTasks([{
+      id: 'task-needs-spec-repair',
+      title: 'Repair the legacy draft',
+      status: 'spec_review',
+      spec: 'Rendered Markdown is not a durable contract.',
+      structuredSpec: undefined,
+      acceptanceCriteria: [{ id: 'ac-1', description: 'The owner sees this only after repair.', verifiedBy: 'review' }],
+    }])
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const res = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-needs-spec-repair/start'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+        }),
+      )
+
+      expect(res.status, await res.text()).toBe(200)
+      await vi.waitFor(() => {
+        expect(starts.at(-1)).toMatchObject({
+          preferredTaskId: 'task-needs-spec-repair',
+          stopAfterOneTask: true,
+        })
+      })
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
   })
 
   it('does not infer recovery child work before blocking focused start for spec review', async () => {

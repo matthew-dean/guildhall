@@ -12222,18 +12222,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
             projectId: project.id,
           })
         }
-        const queueTasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
-        const scopedTask = queueTasks.find(task => task.id === body.taskId)
-        if (scopedTask?.status === 'spec_review' && typeof scopedTask.spec === 'string' && scopedTask.spec.trim().length > 0) {
-          return c.json(
-            {
-              error: 'This spec is waiting for review before work can start.',
-              code: 'no_unattended_progress',
-              actionHref: `/thread?thread=${encodeURIComponent(`task:${body.taskId}`)}`,
-            },
-            400,
-          )
-        }
       }
       // Preflight: a run with no provider is worse than no run — the
       // orchestrator boots, every tick fails, and the UI shows "Running"
@@ -12277,6 +12265,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
           })
           canonicalState = await readProjectCanonicalCurrentState(project.path)
         }
+      }
+      // The start endpoint reads the same promoted effective task record as
+      // the summary and task drawer. A raw queue row may carry legacy review
+      // text that disagrees with the typed repair boundary.
+      const requestedTask = body.taskId
+        ? (await readProjectTaskCurrentStateAtBoundary(project.path, body.taskId)).task as Task | null
+        : null
+      if (requestedTask?.status === 'spec_review' && specReviewIsReadyForOwnerApproval(requestedTask)) {
+        return c.json(
+          {
+            error: 'This spec is waiting for review before work can start.',
+            code: 'no_unattended_progress',
+            actionHref: `/task/${encodeURIComponent(requestedTask.id)}`,
+          },
+          400,
+        )
       }
       const startReadiness = await projectStartReadiness({
         projectPath: project.path,

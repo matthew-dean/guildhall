@@ -1212,6 +1212,9 @@
           </Button>
         </div>
       {/if}
+      {#if runError}
+        <span class="drawer-run-action-error">{runError}</span>
+      {/if}
     </UtilityPanel>
   {/if}
 
@@ -1336,6 +1339,9 @@
             {/if}
             <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>Read full task record</Button>
           </div>
+          {#if runError}
+            <span class="drawer-run-action-error">{runError}</span>
+          {/if}
         </UtilityPanel>
       {:else if focusedSpecReview && task}
         <SpecReviewDecision

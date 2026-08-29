@@ -52,7 +52,7 @@ import {
   type OrientationWorkspaceImportDraftContext,
   type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
-import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
+import { buildProjectActionModel, resolveProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import {
   applyProjectActionModelPrimaryAction,
   applyRuntimeExecutionToProjectDecision,
@@ -886,8 +886,11 @@ export function buildProjectSummaryProjection(
       }
     : {
         ...(decisionStart.code ? { code: decisionStart.code } : {}),
-        label: start.label,
-        message: start.message,
+        // A runtime observation wins over the saved plan's resumable label.
+        // The action model provides the visible command; this bounded field
+        // must still never say Resume while work is actually running.
+        label: decisionStart.code === 'running' || decisionStart.code === 'stopping' ? 'Start' : start.label,
+        message: decisionStart.message ?? start.message,
         ...(typeof start.count === 'number' ? { count: start.count } : {}),
         ...(decisionStart.focusTaskId ? { focusTaskId: decisionStart.focusTaskId } : {}),
         ...(decisionStart.focusTaskTitle ? { focusTaskTitle: decisionStart.focusTaskTitle } : {}),
@@ -1464,6 +1467,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   nextAction = {
     ...nextAction,
     ...(decisionStart.code ? { code: decisionStart.code } : {}),
+    ...(decisionStart.code === 'running' || decisionStart.code === 'stopping' ? { label: 'Start' as const } : {}),
     message: decisionStart.message ?? nextAction.message,
     ...(decisionStart.focusTaskId ? { focusTaskId: decisionStart.focusTaskId } : {}),
     ...(decisionStart.focusTaskTitle ? { focusTaskTitle: decisionStart.focusTaskTitle } : {}),
@@ -2503,6 +2507,28 @@ export function updateProjectSummaryProjection(
     }
     if (patch.execution && next.decision && next.execution) {
       next.decision = applyRuntimeExecutionToProjectDecision(next.decision, next.execution)
+      const startReadiness = projectDecisionStartReadiness(next.decision)
+      // `nextAction` and `actionModel` are compact presentations of the same
+      // decision. Refresh both with live execution so no saved paused action
+      // survives after the supervisor has started work.
+      next.nextAction = {
+        code: startReadiness.code,
+        // This legacy compact label has a constrained vocabulary; the shared
+        // action model below owns the visible `Open Work`/stopping command.
+        label: 'Start',
+        message: startReadiness.message ?? 'Guildhall is updating the selected work.',
+        ...(startReadiness.focusTaskId ? { focusTaskId: startReadiness.focusTaskId } : {}),
+        ...(startReadiness.focusTaskTitle ? { focusTaskTitle: startReadiness.focusTaskTitle } : {}),
+        ...(startReadiness.focusKind ? { focusKind: startReadiness.focusKind } : {}),
+        ...(typeof startReadiness.count === 'number' ? { count: startReadiness.count } : {}),
+      }
+      next.actionModel = resolveProjectActionModel({
+        stored: next.actionModel,
+        startReadiness,
+        runStatus: next.execution.status,
+        runMode: next.execution.mode,
+        releaseLifecycleState: next.releaseSummary.release?.state,
+      })
     }
     const resolvedNext = next
     if (!resolvedNext) throw new Error('Project summary update did not produce a projection.')

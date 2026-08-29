@@ -1973,8 +1973,12 @@ describe('project-summary-projection', () => {
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
     writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
       projectId: 'narrative-harness',
-      queue: queue([task('one', 'ready')]),
+      queue: queue([task('one', 'in_progress')]),
       generatedAt: now,
+    })
+    expect(readProjectSummaryProjection(tasksPath)?.nextAction).toMatchObject({
+      code: 'paused_live_work',
+      label: 'Resume',
     })
 
     const updated = updateProjectSummaryProjection(tasksPath, {
@@ -1983,6 +1987,7 @@ describe('project-summary-projection', () => {
         mode: 'continuous',
         startedAt: now,
         activeTaskId: 'one',
+        activeTaskTitle: 'one',
         updatedAt: now,
       },
       runtime: {
@@ -1999,6 +2004,24 @@ describe('project-summary-projection', () => {
       runtime: { status: 'running', health: 'healthy' },
     })
     expect(updated?.decision?.execution).toMatchObject({ state: 'running', focusTaskId: 'one' })
+    expect(updated?.nextAction).toMatchObject({
+      code: 'running',
+      label: 'Start',
+      message: 'Guildhall is working on "one".',
+    })
+    expect(updated?.actionModel?.primaryAction).toMatchObject({
+      buttonLabel: 'Open Work',
+      taskId: 'one',
+    })
+
+    // A worker writes task progress while the supervisor is live. That write
+    // must retain the live execution decision instead of restoring Resume.
+    writeProjectTaskQueue(tasksPath, queue([task('one', 'in_progress')]))
+    expect(readProjectSummaryProjection(tasksPath)?.nextAction).toMatchObject({
+      code: 'running',
+      label: 'Start',
+      message: 'Guildhall is working on "one".',
+    })
 
     const stopped = updateProjectSummaryProjection(tasksPath, {
       execution: { status: 'stopped', stoppedAt: now, updatedAt: now },
