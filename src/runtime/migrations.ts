@@ -245,6 +245,7 @@ const SPEC_REVIEW_GATE_MIGRATION_ID = '0.13.67/explicit-spec-review-gates'
 const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
 const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-authority'
 const COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID = '0.13.100/compact-spec-review-readiness'
+const ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.101/active-release-progress-reprojection'
 const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
 const DURABLE_DECISION_SNAPSHOT_MIGRATION_ID = '0.13.71/durable-decision-snapshot'
 const INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID = '0.13.72/indexed-release-summary-reprojection'
@@ -5295,6 +5296,38 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID,
+    title: 'Refresh active release progress state',
+    introducedIn: '0.13.101',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the compact release summary so resumable work is represented as active while retaining separate release blockers.',
+    async detect() {
+      // This semantic projection change must run once for every persisted
+      // current-state database; the migration ledger makes the refresh
+      // idempotent after application.
+      return {
+        needed: true,
+        affectedPaths: ['compact release summary and shared decision packet'],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The active release summary could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: 'Refreshed the active release progress state and retained its recorded blockers.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
     id: NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID,
     title: 'Align named release counts with membership',
     introducedIn: '0.13.73',
@@ -5929,6 +5962,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [SPEC_REVIEW_GATE_MIGRATION_ID]: 'migrations.test.ts: backfills only legacy spec-review gates and remains idempotent after canonical task writes',
   [DURABLE_SPEC_HANDOFF_MIGRATION_ID]: 'migrations.test.ts: settles only an approved, structurally valid spec handoff and never auto-approves it',
   [COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID]: 'migrations.test.ts: backfills compact owner-review readiness from structured task contracts and leaves task detail unchanged',
+  [ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects an existing current summary so paused work is active while release blockers remain recorded',
   [DURABLE_DECISION_SNAPSHOT_MIGRATION_ID]: 'migrations.test.ts: rebuilds a missing revision-bound decision packet from normalized state',
   [INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership',
   [NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID]: 'migrations.test.ts: aligns named release counts to selected membership when child execution rows are present',

@@ -59697,7 +59697,7 @@ None. No schema or behavior change is required.
 
 ### Finding: Active release must not contradict the current owner action
 
-- [ ] User job: when active work is paused, the owner can tell that the next
+- [x] User job: when active work is paused, the owner can tell that the next
   choice is to resume that work. Release status, work summary, and owner-input
   counts must not imply a separate blocker or hidden approval queue.
 - Finding, 2026-08-29: the installed Looma API projects one primary action,
@@ -59709,31 +59709,45 @@ None. No schema or behavior change is required.
 
 #### Contract Touch Decision
 
-Pending investigation. The shared action model, release summary, orientation
-summary, and work summary need one explicit distinction between an owner action
-that is currently executable and background readiness debt that must not block
-or be counted as owner input. Considered but not touched: task records, release
-membership, task statuses, scheduler policy, persisted approval decisions, and
-route-local presentation. Required proof: the API and all owner-facing surfaces
-agree that paused live work is the one current decision, while repair/spec debt
-is neither counted as an owner approval nor presented as a competing blocker.
-Apply/revert: to be recorded with the implementation.
+The shared action model reconciles persisted work-summary approval counts
+against current readiness, and the release projection treats paused work as
+active progress while retaining separate release blockers. Considered but not
+touched: task records, release membership, task statuses, scheduler policy,
+persisted approval decisions, and route-local presentation. Required proof: the
+API and all owner-facing surfaces agree that paused live work is the one
+current decision, while repair/spec debt is neither counted as an owner
+approval nor presented as a competing blocker. Apply/revert: reproject the
+existing compact summary through the automatic migration; source task data is
+unchanged.
 
 #### Schema Migration Decision
 
-None anticipated. The contradiction is in derived projection semantics over
-existing task and release state.
+Persisted project summary projection is refreshed by automatic migration
+0.13.101/active-release-progress-reprojection. Scope: existing SQLite summary
+and decision packet only; task records, release membership, and owner answers
+are unchanged. Change class: derived-state reprojection. Existing-data impact:
+rebuilds the current compact projection through the canonical indexed-state
+writer. Safety: automatic and repeat-safe through the migration ledger;
+required before an existing project presents the revised state. Compatibility:
+existing readers consume the same summary shape. Proof: migration and summary
+projection tests plus installed Looma restart. Owner-facing plan text: no owner
+action; Guildhall refreshes the saved release read model itself. Revert: restore
+the prior projection semantics in code and reproject again; no source task data
+is lost.
 
-- Partial evidence, 2026-08-29: ProjectActionModel now reconciles a persisted
+- Evidence, 2026-08-29: ProjectActionModel now reconciles a persisted
   work summary with the current start-readiness contract, so a paused_live_work
   action clears stale raw spec-review approval counts. Project-action-model
   regressions passed 42 assertions; typecheck, contract lint, and
   model-independence passed. After production build, dev install, and Looma
   restart, the installed API reported paused_live_work, ownerInput:false, and
-  awaitingApproval:0 with stale:false. Remaining: releaseSummary.state remains
-  blocked because it preserves background release debt; determine whether that
-  state needs a separate active-progress representation before exposing it to
-  an owner.
+  awaitingApproval:0 with stale:false. Automatic migration
+  0.13.101/active-release-progress-reprojection rebuilt Looma's persisted
+  summary without owner intervention: guildhall status --json reports release
+  state active, five retained blockers, and the same paused-work next action.
+  Project-scope and project-summary regressions passed 85 assertions. The full
+  migration suite still has three unrelated pre-existing proof-path fixture
+  failures; they are not used as evidence for this change.
 
 ### Finding: Thread must not bury the current owner action in duplicate activity
 

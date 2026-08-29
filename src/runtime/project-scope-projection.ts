@@ -1245,6 +1245,11 @@ export function summarizeProjectScopeRelease(rows: readonly ProjectScopeRow[]): 
       label: blockerLabelFor(row),
       code: blockerCodeFor(row),
     }))
+  // Release state answers whether this release can make progress now. Keep
+  // background blockers for readiness and diagnostics, but do not label the
+  // whole release blocked while an included task is actively resumable.
+  const hasActiveHandoff = included.some(row => row.handoffState === 'paused')
+  if (hasActiveHandoff) return { state: 'active', blockers }
   if (blockers.length > 0) {
     const shapingOnly = blockers.every(blocker => {
       const row = included.find(candidate => candidate.taskId === blocker.owningTaskId)

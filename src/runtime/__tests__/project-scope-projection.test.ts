@@ -226,6 +226,33 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.start).toMatchObject({ code: 'proof_evidence_missing', focusTaskId: 'task-complete' })
   })
 
+  it('keeps a release active while retaining blockers behind resumable work', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current', 'work:task-blocked'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        task({ id: 'task-current', title: 'Current work', status: 'in_progress', releaseIds: ['stage-1'] }),
+        task({ id: 'task-blocked', title: 'Later blocked work', status: 'blocked', releaseIds: ['stage-1'] }),
+      ],
+    })
+
+    expect(projection.release).toMatchObject({ state: 'active' })
+    expect(projection.release.blockers).toEqual([
+      expect.objectContaining({ owningTaskId: 'task-blocked', code: 'blocked' }),
+    ])
+  })
+
   it('uses the current release proof child instead of a shipped proof child', () => {
     const projection = buildProjectScopeProjection({
       version: 1,
