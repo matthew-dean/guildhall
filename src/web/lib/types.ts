@@ -1463,6 +1463,7 @@ export interface ProjectAvailability {
 
 export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
 export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
+export type ProjectActionOperation = 'start_focused' | 'repair_spec'
 
 export interface ProjectAction {
   source?: ProjectActionSource | string
@@ -1476,6 +1477,7 @@ export interface ProjectAction {
   code?: string
   taskId?: string
   inboxKind?: string
+  operation?: ProjectActionOperation
 }
 
 export interface ProjectActionModel {

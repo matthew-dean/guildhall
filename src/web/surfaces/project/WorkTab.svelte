@@ -737,6 +737,9 @@
   }
 
   function focusedActionLabel(task: Task): string {
+    if (detail.actionModel?.primaryAction?.operation === 'repair_spec' && detail.actionModel.primaryAction.taskId === task.id) {
+      return 'Repair spec'
+    }
     if (task.status === 'spec_review' && !hasSpecRepair(task)) return 'Review spec'
     if (task.status === 'blocked') return 'Open task'
     if (task.status === 'done' || task.status === 'pending_pr') return 'View record'

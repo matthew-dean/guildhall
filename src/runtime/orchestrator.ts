@@ -8328,6 +8328,18 @@ export class Orchestrator {
       current.updatedAt = now
       queue.lastUpdated = now
       await this.writeQueue(queue)
+      // A recovery that clears the current plan is a new lifecycle. Persist
+      // the marker after the definition write so old merge evidence cannot
+      // settle the just-reopened task on the next scheduler tick.
+      await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
+        assignedTo: 'spec-agent',
+        currentLifecycle: {
+          reopenedAt: now,
+          status: 'exploring',
+          source: 'rerun_spec',
+        },
+        updatedAt: now,
+      })
       await this.logTickProgress({
         task: current,
         agent: 'blueprint-recovery',
@@ -10919,7 +10931,7 @@ export class Orchestrator {
         queue.tasks[taskIndex] = task
       }
       const completedButActive =
-        task.status !== 'done' &&
+        task.status === 'in_progress' &&
         task.doneSummaryBundle?.status === 'done'
       const proofRecovery = runtimeStore?.tasks[task.id]?.proofRecovery
       const reopenedAt = proofRecovery?.reopenedAt ? Date.parse(proofRecovery.reopenedAt) : NaN
@@ -10983,8 +10995,10 @@ export class Orchestrator {
       }
 
       const alreadyLanded =
-        task.status !== 'done' &&
+        task.status === 'in_progress' &&
         task.mergeRecord?.result === 'merged' &&
+        !taskDoneButProofMissing({ ...task, status: 'done' }) &&
+        currentLifecycleForTask(task) === null &&
         !(
           task.doneSummaryBundle?.status === 'reopened' &&
           typeof task.doneSummaryBundle.reopenedAt === 'string' &&

@@ -1185,7 +1185,7 @@
         {/if}
       </nav>
       <h3 title={displayTaskTitle}>{displayTaskTitle}</h3>
-      {#if currentDeliveryBadge && !showFocusedRunHandoff}
+      {#if currentDeliveryBadge && !showFocusedRunHandoff && !focusedSpecRepair}
         <div class="drawer-progress-line">
           <Chip
             label={currentDeliveryBadge.label}
@@ -1202,8 +1202,16 @@
   {#if payload && isSpecRepair && fullRecordRequested}
     <UtilityPanel as="section" className="drawer-spec-repair" tone="neutral" railStrength="strong" ariaLabel="Spec repair">
       <span class="outcome-eyebrow">Guildhall is repairing this spec</span>
-      <strong>Nothing is waiting on you.</strong>
-      <span>Guildhall will bring this back for review when the spec is ready.</span>
+      <strong>{runStatus === 'running' ? 'Repair in progress.' : 'Run one repair pass.'}</strong>
+      <span>{runStatus === 'running' ? 'Guildhall will bring this back for review when the spec is ready.' : 'Guildhall needs one focused pass before this spec can be reviewed.'}</span>
+      {#if task && runStatus !== 'running' && runStatus !== 'stopping'}
+        <div class="drawer-spec-repair-actions">
+          <Button variant="agent" size="sm" disabled={runBusy} onclick={() => runProject('start', task.id)}>
+            <Icon name="sparkles" size={14} />
+            Repair spec
+          </Button>
+        </div>
+      {/if}
     </UtilityPanel>
   {/if}
 
@@ -1269,7 +1277,7 @@
           </div>
         </UtilityPanel>
       {:else}
-      {#if drawerOutcome && !activeTabOwnsEscalationDecision && !focusedSpecReview}
+      {#if drawerOutcome && !activeTabOwnsEscalationDecision && !focusedSpecReview && !focusedSpecRepair}
         <UtilityPanel
           as="section"
           className="drawer-outcome"
@@ -1317,9 +1325,15 @@
       {:else if focusedSpecRepair && task}
         <UtilityPanel as="section" className="drawer-spec-repair" tone="neutral" railStrength="strong" ariaLabel="Spec repair">
           <span class="outcome-eyebrow">Guildhall is repairing this spec</span>
-          <strong>Nothing is waiting on you.</strong>
-          <span>Guildhall will bring this back for review when the spec is ready.</span>
+          <strong>{runStatus === 'running' ? 'Repair in progress.' : 'Run one repair pass.'}</strong>
+          <span>{runStatus === 'running' ? 'Guildhall will bring this back for review when the spec is ready.' : 'Guildhall needs one focused pass before this spec can be reviewed.'}</span>
           <div class="drawer-spec-repair-actions">
+            {#if runStatus !== 'running' && runStatus !== 'stopping'}
+              <Button variant="agent" size="sm" disabled={runBusy} onclick={() => runProject('start', task.id)}>
+                <Icon name="sparkles" size={14} />
+                Repair spec
+              </Button>
+            {/if}
             <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>Read full task record</Button>
           </div>
         </UtilityPanel>

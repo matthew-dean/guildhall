@@ -61,7 +61,7 @@
 {:else if route.kind === 'fleet-inbox'}
   {#if FleetNeedsYou}<FleetNeedsYou />{/if}
 {:else if route.kind === 'project'}
-  {#if ProjectView}<ProjectView initialView={route.view} initialSub={route.sub} projectId={route.projectId} />{/if}
+  {#if ProjectView}<ProjectView initialView={route.view} initialSub={route.sub} projectId={route.projectId} drawerOpen={Boolean(route.drawerTaskId)} />{/if}
   {#if route.drawerTaskId && TaskDrawer}
     <TaskDrawer taskId={route.drawerTaskId} projectId={route.projectId} routeHref={path.href} onClose={closeDrawer} onMigrationRequired={repairDrawerMigration} />
   {/if}

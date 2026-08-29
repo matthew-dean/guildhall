@@ -59830,7 +59830,7 @@ changing any stored task/run/summary shape.
 
 ### Finding: A focused start must run the task the owner just selected
 
-- [ ] User job: after resuming a named paused work item, Guildhall either starts
+- [x] User job: after resuming a named paused work item, Guildhall either starts
   that exact work or refuses before changing the screen, with a clear recovery
   action. It must never briefly claim success, stop with an unrelated
   `all_terminal` result, and leave the owner looking at a task still labelled
@@ -59845,18 +59845,96 @@ changing any stored task/run/summary shape.
 
 #### Contract Touch Decision
 
-Pending investigation. The repair belongs at the promoted project-state
-execution boundary: a one-task start must build selection from the same current
-task projection used by start readiness and task detail, or fail before it
-creates a run. Considered but not yet touched: task lifecycle semantics,
+The repair belongs at the promoted project-state execution boundary. Landing
+reconciliation may settle historical completion only when it is still a
+worker-state row, the current task contract proves completion, and no fresh
+recovery lifecycle is active. Neither an old merge nor an old done-summary may
+override current missing proof or turn a fresh exploration into an in-memory
+terminal row after blueprint recovery. Indexed task lifecycle fields,
+including a null completion timestamp, must replace stale rich-detail values in
+the scheduler queue just as they do in the owner-facing task point. Considered
+but not touched: task lifecycle semantics,
 checkpoint recovery policy, worktree state, provider selection, task drawer
-copy, and release-scoping rules. Required proof: the real Looma start dispatches
-the selected indexed `in_progress` task, or returns an explicit typed reason
-without changing run/task state; shell, API, Work, task drawer, Thread, release,
-and status then agree.
+copy, release-scoping rules, and task persistence shape. Required proof: a real
+Looma start dispatches the selected indexed `in_progress` task, or returns an
+explicit typed reason without changing run/task state; shell, API, Work, task
+drawer, Thread, release, and status then agree.
 
 #### Schema Migration Decision
 
-Pending investigation. If the repair needs persisted reconciliation between
-indexed work items and task-detail rows, record an automatic, idempotent
-migration before writing it. Do not patch Looma's rows by hand.
+None. This corrects the runtime interpretation of existing task evidence; it
+does not change persisted schema or edit Looma's task rows. Existing projects
+pick up the corrected rule on their next run. Apply/revert: change the shared
+completion predicate; historical evidence remains intact throughout.
+
+- Evidence, 2026-08-29: a real scoped Looma run for `Component implementation`
+  dispatched the selected task and processed two focused ticks before reaching
+  the typed spec-repair handoff; it no longer stopped immediately as
+  `all_terminal` from historical merge/done evidence. The orchestrator and
+  project-state boundary regression suites cover both stale rich queue detail
+  and a fresh recovery lifecycle. The installed project summary now identifies
+  the same named task as the repair target rather than silently treating it as
+  complete. The broader running-state presentation audit remains open above.
+
+### Finding: Automatic repair work must still have one executable owner action
+
+- [x] User job: when Guildhall has detected a malformed draft and needs one
+  more automated pass, the owner can understand that this is not an approval,
+  start that exact repair from the first screen, and then see a clear running
+  or review handoff. A stopped project must never say both "ready to continue"
+  and "nothing is waiting on you" while offering only a link to another view.
+- Finding, 2026-08-29: after the real focused Looma run processed
+  `Component implementation`, the task correctly landed in `spec_review` but
+  without a usable spec payload. The shared scope projection recognized it as
+  Guildhall-owned repair work, but flattened that into `ready_work` / `Open
+  Work`. Overview then said `Ready to continue` and `Work ready to resume`,
+  while the task route said `Guildhall is repairing this spec`, `Nothing is
+  waiting on you`, and exposed no repair command. The existing Work route did
+  contain a later Resume control. That is an avoidable three-screen, mutually
+  contradictory action path.
+
+#### Contract Touch Decision
+
+Extend the shared project action model with a typed focused execution operation
+for runnable work, including the distinct `repair_spec` operation. Scope
+projection marks non-human-blocking malformed spec review as `spec_repair` so
+all owner-facing surfaces derive the same action and never infer the condition
+from prose. Overview and focused task presentation execute that operation
+against the existing task-start endpoint; Work reuses the same operation for
+its current direct-run behavior. A focused task route suppresses its background
+project surface so the same operation cannot appear as two competing buttons.
+Considered but not touched: task status,
+spec persistence, approval semantics, scheduler policy, task ordering, and
+release membership. Required proof: the installed Looma overview and task
+route show one `Repair spec` action for this state, the action starts only the
+named task, and the running/review handoff has no competing background action.
+Apply/
+revert: remove the presentation operation; no task data changes.
+
+#### Schema Migration Decision
+
+Persisted project summary projection is refreshed by automatic migration
+`0.13.102/spec-repair-action-reprojection`. Scope: existing SQLite summary and
+decision packet only; task records, specs, release membership, and owner
+answers are unchanged. Change class: derived-state reprojection. Existing-data
+impact: rebuilds the current compact projection through the canonical indexed
+writer so an old `ready_work` focus cannot hide a current `spec_repair` state.
+Safety: automatic and repeat-safe through the migration ledger; required before
+an existing project presents the revised action. Compatibility: existing readers
+consume the same start-readiness/action shape, with the new typed operation
+optional. Proof: migration, action-model, and installed Looma restart. Owner-
+facing plan text: no owner action; Guildhall refreshes the saved read model
+itself. Revert: restore the prior projection semantics and reproject again; no
+source task data is lost.
+
+- Evidence, 2026-08-29: after `0.13.102/spec-repair-action-reprojection`, the
+  installed Looma summary reports `repair_spec` for `Component implementation`.
+  At `1280px`, the overview presents `Repair this spec` with one `Repair spec`
+  action; the exact task route presents the same single action with no duplicate
+  project background. Its visible handoff is limited to the task title, `Run one
+  repair pass.`, one sentence explaining the outcome, `Repair spec`, and the
+  optional full record. No checkpoint, delivery accounting, or page-level
+  horizontal overflow was present; `/api/stale-server` reported `stale: false`.
+  Action-model, overview, Work, and TaskDrawer regressions pass, including a
+  checkpoint-bearing fixture that proves old recovery prose stays out of this
+  compact state.

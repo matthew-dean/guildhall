@@ -246,6 +246,7 @@ const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
 const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-authority'
 const COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID = '0.13.100/compact-spec-review-readiness'
 const ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.101/active-release-progress-reprojection'
+const SPEC_REPAIR_ACTION_REPROJECTION_MIGRATION_ID = '0.13.102/spec-repair-action-reprojection'
 const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
 const DURABLE_DECISION_SNAPSHOT_MIGRATION_ID = '0.13.71/durable-decision-snapshot'
 const INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID = '0.13.72/indexed-release-summary-reprojection'
@@ -5323,6 +5324,37 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
       return {
         summary: 'Refreshed the active release progress state and retained its recorded blockers.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: SPEC_REPAIR_ACTION_REPROJECTION_MIGRATION_ID,
+    title: 'Refresh focused spec-repair actions',
+    introducedIn: '0.13.102',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the shared project decision so an incomplete spec review is presented as one executable repair action instead of a generic work link.',
+    async detect() {
+      // Existing summaries may retain an older ready-work focus after the
+      // current indexed task has become a non-owner spec-repair state.
+      return {
+        needed: true,
+        affectedPaths: ['compact project decision and shared owner action'],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The focused spec-repair action could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: 'Refreshed focused spec-repair actions from the current project state.',
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },

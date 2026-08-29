@@ -146,7 +146,7 @@ export interface ProjectScopeProjection {
     label: 'Start' | 'Resume' | 'Review' | 'Configure' | 'Answer in Thread'
     focusTaskId?: string
     focusTaskTitle?: string
-    focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
+    focusKind?: 'paused_work' | 'ready_work' | 'spec_repair' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
     /** Exact selected-scope records behind an owner-review action. */
     reviewTaskIds?: string[]
     count?: number
@@ -1033,7 +1033,7 @@ export function summarizeProjectScopeStart(
       label: 'Start',
       focusTaskId: shapingWork.taskId,
       focusTaskTitle: shapingWork.title,
-      focusKind: 'ready_work',
+      focusKind: shapingWork.status === 'spec_review' ? 'spec_repair' : 'ready_work',
       message: shapingWork.status === 'spec_review'
         ? `Guildhall will repair the spec for "${shapingWork.title}" before asking for your review.`
         : shapingWork.handoffState === 'spec_shaping'

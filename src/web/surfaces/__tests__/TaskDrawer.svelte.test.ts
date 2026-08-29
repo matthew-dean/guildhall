@@ -1678,6 +1678,14 @@ describe('TaskDrawer', () => {
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'spec_review'
     payload.task.openQuestions = []
+    payload.task.latestCheckpoint = {
+      step: 1,
+      agentId: 'worker-agent',
+      intent: 'Reconcile the spec with the recorded requirements.',
+      nextPlannedAction: 'Resume from the recorded verification evidence.',
+      filesTouched: [],
+      writtenAt: '2026-08-29T00:00:00.000Z',
+    }
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.startsWith('/api/project/task/task-link-editor/hold')) {
@@ -2108,6 +2116,9 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('heading', { name: 'What will change' })).toBeNull()
     expect(screen.queryByText(/finish conditions are recorded/i)).toBeNull()
     expect(screen.getByRole('button', { name: 'Read full task record' })).toBeInTheDocument()
+    expect(screen.queryByText('Checkpoint saved')).toBeNull()
+    expect(screen.queryByText('Resume point saved.')).toBeNull()
+    expect(screen.queryByText('0/1 delivery steps')).toBeNull()
 
     await userEvent.click(screen.getByRole('button', { name: 'Request changes' }))
     await userEvent.type(
@@ -2150,7 +2161,8 @@ describe('TaskDrawer', () => {
     })
 
     expect(await screen.findByText('Guildhall is repairing this spec')).toBeInTheDocument()
-    expect(screen.getByText('Nothing is waiting on you.')).toBeInTheDocument()
+    expect(screen.getByText('Run one repair pass.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Repair spec' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Read full task record' })).toBeInTheDocument()
     expect(screen.queryByText('Approve this spec?')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
@@ -2165,6 +2177,7 @@ describe('TaskDrawer', () => {
     })
 
     expect(await screen.findByText('Guildhall is repairing this spec')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Repair spec' })).toBeInTheDocument()
     expect(screen.queryByText('Approve this spec?')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
   })

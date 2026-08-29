@@ -161,6 +161,7 @@ export interface ProjectActionScopeAuthorityRequest {
 
 export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
 export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
+export type ProjectActionOperation = 'start_focused' | 'repair_spec'
 
 export interface ProjectAction {
   source: ProjectActionSource
@@ -174,6 +175,7 @@ export interface ProjectAction {
   code?: string
   taskId?: string
   inboxKind?: string
+  operation?: ProjectActionOperation
 }
 
 export interface ProjectRunControlModel {
@@ -592,7 +594,13 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const ownerReview = readiness.code === 'owner_review_required'
   const focusedSpecReview = ownerReview || readiness.focusKind === 'spec_review'
   const runnableWork = readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
-  const label = ownerReview
+  const specRepair = readiness.focusKind === 'spec_repair'
+  const operation = readiness.canStart && readiness.focusTaskId && runnableWork
+    ? (specRepair ? 'repair_spec' : 'start_focused')
+    : undefined
+  const label = specRepair
+    ? 'Repair this spec'
+    : ownerReview
     ? 'Review a spec'
     : runnableWork
       ? (readiness.code === 'paused_live_work' ? 'Work paused' : 'Work ready to resume')
@@ -608,7 +616,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     label,
     ...(taskLabel ? { taskLabel } : {}),
     detail,
-    buttonLabel: startReadinessButtonLabel(readiness),
+    buttonLabel: specRepair ? 'Repair spec' : startReadinessButtonLabel(readiness),
     href: focusedSpecReview && readiness.focusTaskId
       ? taskHrefForTask(readiness.focusTaskId)
       : readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
@@ -619,6 +627,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
         : 'warn',
     code: readiness.code,
     ...(readiness.focusTaskId ? { taskId: readiness.focusTaskId } : {}),
+    ...(operation ? { operation } : {}),
   }
 }
 

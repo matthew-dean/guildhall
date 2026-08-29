@@ -80,6 +80,7 @@
     initialView?: ProjectView
     initialSub?: string | null
     projectId?: string | null
+    drawerOpen?: boolean
   }
 
   const props = $props<Props>()
@@ -517,7 +518,7 @@
     }
   }
 
-  async function start(mode: 'continuous' | 'one_task' = 'continuous') {
+  async function start(mode: 'continuous' | 'one_task' = 'continuous', taskId?: string) {
     busy = true
     optimisticRunStatus = 'running'
     runError = null
@@ -525,7 +526,7 @@
       const res = await projectFetch('/api/project/start', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, ...(taskId ? { taskId, scope: 'work_item' } : {}) }),
       }, activeProjectId)
       if (!res.ok) {
         try {
@@ -1745,7 +1746,9 @@
         {/each}
     {/snippet}
         <div class="body">
-          {#if !detail}
+          {#if props.drawerOpen}
+            <div class="drawer-background" aria-hidden="true"></div>
+          {:else if !detail}
             {#if currentView === 'thread'}
               {#await loadThreadTab()}
                 <div class="page-centered page-centered-inline">
@@ -1815,6 +1818,8 @@
                   {activeProjectId}
                   onMigrate={openMigrationModal}
                   onStartNextRelease={newTask}
+                  onRunTask={(taskId) => start('one_task', taskId)}
+                  busy={busy}
                 />
               {/await}
             {/if}
@@ -2402,6 +2407,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-5);
+  }
+  .drawer-background {
+    min-block-size: 100%;
   }
   .muted {
     color: var(--text-muted);

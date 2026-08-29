@@ -3557,6 +3557,10 @@ function readQueueDefinitionFromWorkItemDetails(
       ...(indexed.updatedAt !== null ? { updatedAt: indexed.updatedAt } : {}),
       ...(indexed.completedAt !== null ? { completedAt: indexed.completedAt } : {}),
     }
+    // `work_items.completed_at` owns current completion state, including an
+    // explicit null. A stale detail payload must not make the scheduler see a
+    // task as completed after the indexed row reopened it.
+    if (indexed.completedAt === null) delete current.completedAt
     const summary = summaryByTaskId.get(taskId) ?? {}
     byId.set(taskId, isRecord(summary.currentSummary)
       ? { ...current, currentSummary: summary.currentSummary }

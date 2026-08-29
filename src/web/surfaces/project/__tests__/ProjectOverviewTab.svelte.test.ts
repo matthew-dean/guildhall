@@ -120,6 +120,35 @@ describe('ProjectOverviewTab owner decision', () => {
     expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
   })
 
+  it('runs a focused spec repair directly instead of routing the owner through Work', async () => {
+    const onRunTask = vi.fn()
+    render(ProjectOverviewTab, {
+      detail: detail({
+        actionModel: {
+          ...detail().actionModel,
+          primaryAction: {
+            label: 'Repair this spec',
+            taskLabel: 'Component implementation',
+            taskId: 'task-component',
+            detail: 'Guildhall needs one focused pass before this spec can be reviewed.',
+            buttonLabel: 'Repair spec',
+            href: '/work?task=task-component',
+            tone: 'accent',
+            code: 'ready_work',
+            operation: 'repair_spec',
+          },
+        },
+      }) as any,
+      projectTicker: ticker,
+      activeProjectId: 'looma-knit',
+      onRunTask,
+    })
+
+    expect(screen.getByRole('heading', { name: 'Spec repair needed' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Repair spec' }))
+    expect(onRunTask).toHaveBeenCalledWith('task-component')
+  })
+
   it('runs the supplied repair action instead of exposing a raw migration route', async () => {
     const onMigrate = vi.fn()
     render(ProjectOverviewTab, {

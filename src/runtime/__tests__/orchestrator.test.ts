@@ -1717,6 +1717,7 @@ describe('Orchestrator.tick — idle handling', () => {
         id: 'already-landed',
         status: 'in_progress',
         assignedTo: 'worker-agent',
+        spec: undefined,
         escalations: [{
           id: 'esc-already-landed',
           taskId: 'already-landed',
@@ -1758,6 +1759,108 @@ describe('Orchestrator.tick — idle handling', () => {
     expect(task?.completedAt).toBe('2026-04-01T00:20:00.000Z')
     expect(task?.escalations.every(escalation => escalation.resolvedAt)).toBe(true)
     expect(task?.notes.some(note => note.content.includes('durable merge evidence'))).toBe(true)
+  })
+
+  it('does not let historical merge evidence close fresh exploration', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'fresh-exploration',
+        status: 'exploring',
+        mergeRecord: {
+          fromBranch: 'guildhall/task-fresh-exploration',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'merged',
+          mergedAt: '2026-04-01T00:20:00.000Z',
+          commitSha: 'abc123',
+        },
+        doneSummaryBundle: {
+          taskId: 'fresh-exploration',
+          status: 'done',
+          completedAt: '2026-04-01T00:20:00.000Z',
+          summary: {
+            journey: 'Historical work landed.',
+            decision: 'The prior lifecycle completed.',
+            evidence: 'A previous merge record exists.',
+            learningCandidates: [],
+            openResidue: 'Fresh exploration is still required.',
+          },
+          retention: {
+            transcriptPrimaryArtifact: false,
+            compactedFullTranscript: false,
+            fullEvidenceAvailable: true,
+          },
+          evidenceRefs: [],
+          createdAt: '2026-04-01T00:20:00.000Z',
+          createdBy: 'test',
+        },
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet({ spec }) })
+
+    const out = await orch.tick({ preferredTaskId: 'fresh-exploration' })
+    expect(out.kind).not.toBe('idle')
+    expect(spec.calls).toHaveLength(1)
+    expect((await readEffectiveTaskFromQueue('fresh-exploration'))?.status).toBe('exploring')
+  })
+
+  it('does not let historical merge evidence close focused work whose current proof is missing', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'merged-but-reopened',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        proofPaths: [{
+          id: 'merged-but-reopened-proof',
+          scope: { type: 'task', id: 'merged-but-reopened' },
+          title: 'Review acceptance criteria',
+          summary: 'Review the current implementation against its acceptance criteria.',
+          kind: 'review',
+          source: 'documented',
+          status: 'planned',
+          launchSteps: [],
+          expectedEvidence: [{
+            id: 'ac-1',
+            kind: 'manual',
+            description: 'Review confirms the current implementation.',
+            required: true,
+          }],
+          verificationRecords: [],
+          relatedTaskIds: ['merged-but-reopened'],
+          createdAt: '2026-04-01T00:00:00.000Z',
+          updatedAt: '2026-04-01T00:00:00.000Z',
+          createdBy: 'test',
+          updatedBy: 'test',
+        }],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'merged-but-reopened', {
+      id: 'merge-merged-but-reopened',
+      taskId: 'merged-but-reopened',
+      kind: 'merge_record',
+      recordedAt: '2026-04-01T00:20:00.000Z',
+      payload: {
+        fromBranch: 'guildhall/task-merged-but-reopened',
+        toBranch: 'main',
+        strategy: 'cherry_pick_local',
+        result: 'merged',
+        mergedAt: '2026-04-01T00:20:00.000Z',
+        commitSha: 'abc123',
+      },
+    })
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick({ preferredTaskId: 'merged-but-reopened' })
+    expect(out.kind).not.toBe('idle')
+    expect(worker.calls).toHaveLength(1)
+    const task = await readEffectiveTaskFromQueue('merged-but-reopened')
+    expect(task?.status).toBe('in_progress')
   })
 
   it('reports deferred release work when the selected scope is exhausted', async () => {
@@ -5267,6 +5370,10 @@ describe('Orchestrator.tick — routing', () => {
     expect(q.tasks[0]!.assignedTo).toBe('spec-agent')
     expect(q.tasks[0]!.spec).toBeUndefined()
     expect(q.tasks[0]!.acceptanceCriteria).toEqual([])
+    expect((q.tasks[0] as LegacyTaskView).currentLifecycle).toMatchObject({
+      status: 'exploring',
+      source: 'rerun_spec',
+    })
     expect(q.tasks[0]!.notes.at(-1)?.content).toContain('source-backed implementation contract')
   })
 

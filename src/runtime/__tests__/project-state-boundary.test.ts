@@ -1335,6 +1335,8 @@ describe('project-state-boundary', () => {
           reopenReason: 'Fresh spec pass',
         }),
       })
+      const richQueue = await readProjectTaskQueueForRichMutation(root) as { tasks: Array<Record<string, unknown>> }
+      expect(richQueue.tasks.find(task => task.id === 'task-reopen')).not.toHaveProperty('completedAt')
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

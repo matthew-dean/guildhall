@@ -13,6 +13,8 @@
     activeProjectId?: string | null
     onMigrate?: () => void | Promise<void>
     onStartNextRelease?: () => void
+    onRunTask?: (taskId: string) => void | Promise<void>
+    busy?: boolean
   }
 
   type DecisionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
@@ -22,6 +24,8 @@
     activeProjectId = null,
     onMigrate,
     onStartNextRelease,
+    onRunTask,
+    busy = false,
   }: Props = $props()
 
   const displayPath = $derived(formatUserPath(detail.path))
@@ -53,10 +57,13 @@
         detail: migration ? 'Guildhall needs to update this project before it can run.' : primary.detail ?? '',
         // The action model owns this label. Overview only supplies the
         // migration modal as the destination for that same action.
-        button: primary.buttonLabel ?? 'Open work',
+        button: primary.operation === 'start_focused'
+          ? 'Resume work'
+          : primary.buttonLabel ?? 'Open work',
         href: primary.href ?? '/work',
         tone: decisionTone(primary.tone),
         migration,
+        operation: primary.operation,
       }
     }
 
@@ -73,6 +80,7 @@
         href: readiness.actionHref ?? '/work',
         tone: migration ? 'danger' as DecisionTone : readiness.canStart ? 'accent' as DecisionTone : 'warn' as DecisionTone,
         migration,
+        operation: undefined,
       }
     }
 
@@ -85,17 +93,31 @@
       href: '/work',
       tone: 'neutral' as DecisionTone,
       migration: false,
+      operation: undefined,
     }
   })
   const nextActionTaskKey = $derived(nextAction.taskId ? taskDisplayKey(nextAction.taskId, [], activeProjectId) : null)
   const decisionTitle = $derived.by(() => {
     if (releaseShipped) return releaseTitle
+    if (detail.actionModel?.primaryAction?.operation === 'repair_spec') return 'Spec repair needed'
     if (detail.actionModel?.primaryAction?.code === 'ready_work') return 'Ready to continue'
     return 'What needs your attention'
   })
 
   function go(href: string): void {
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
+  }
+
+  function runOrOpen(): void {
+    if (nextAction.operation && nextAction.taskId && onRunTask) {
+      void onRunTask(nextAction.taskId)
+      return
+    }
+    if (nextAction.migration) {
+      void onMigrate?.()
+      return
+    }
+    go(nextAction.href)
   }
 </script>
 
@@ -142,7 +164,8 @@
         <div class="decision-actions">
           <Button
             variant={nextAction.tone === 'warn' || nextAction.tone === 'danger' ? 'human' : 'primary'}
-            onclick={() => nextAction.migration ? void onMigrate?.() : go(nextAction.href)}
+            disabled={busy}
+            onclick={runOrOpen}
           >
             {#if nextAction.migration}
               <Icon name="refresh-cw" size={16} />

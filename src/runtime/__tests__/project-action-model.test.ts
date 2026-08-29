@@ -115,9 +115,33 @@ describe('buildProjectActionModel', () => {
       buttonLabel: 'Open Work',
       href: '/work?task=task-synopsis',
       tone: 'accent',
+      operation: 'start_focused',
     })
     expect(model.primaryAction?.detail).toBeUndefined()
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
+  })
+
+  it('keeps a system-owned malformed spec as a typed focused repair operation', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        message: 'Guildhall will repair the spec for "Component implementation" before asking for your review.',
+        focusTaskId: 'task-component',
+        focusTaskTitle: 'Component implementation',
+        focusKind: 'spec_repair',
+      },
+      tasks: [{ id: 'task-component', title: 'Component implementation', status: 'spec_review' }],
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      code: 'ready_work',
+      label: 'Repair this spec',
+      taskId: 'task-component',
+      buttonLabel: 'Repair spec',
+      operation: 'repair_spec',
+    })
   })
 
   it('keeps paused work actionable when a compact refresh has no task detail', () => {
