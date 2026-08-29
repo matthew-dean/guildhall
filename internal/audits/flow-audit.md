@@ -59403,3 +59403,28 @@ the shared current action for an individual project.
   `Request changes` and `Approve spec` visible. Work intentionally presents the
   ordered ten-spec queue instead of duplicating that action card, with no
   generic controls or overflow.
+
+### Looma + Knit V1 release-drive baseline
+
+- [ ] User job: an owner resumes Looma + Knit, orients to the active V1
+  milestone and its progress, completes the one real pending decision, and
+  leaves knowing what Guildhall will do next. This must take under one minute
+  without reading a diagnostic report, hunting tabs, or interpreting internal
+  state.
+- Finding, 2026-08-29: the migration repair route opens a modal and applies
+  quickly, but its only durable outcome is a generic `Migration complete.`
+  notice and a `Close` control. The owner is not told what changed, whether the
+  project is now unblocked, or where the release flow resumes. The brief toast
+  is not a handoff. A completion state must explicitly confirm the update and
+  offer the typed next action once the refreshed shared project snapshot is
+  available.
+- Contract Touch Decision: preserve the migration result and the existing
+  shared `actionModel.primaryAction`; add a presentation-only completion
+  handoff that uses the refreshed action model rather than inferring release
+  state from migration text. Considered but not touched: migration execution,
+  migration order, readiness ranking, action-model selection, task status,
+  API shapes, persistence, and schemas. Schema Migration Decision: none.
+  Required proof: a successful migration visibly reports completion, clears the
+  transient repair intent when continuing, and opens the shared next action
+  when one exists. Apply/revert: client presentation/navigation only; it never
+  mutates project state after the migration endpoint succeeds.
