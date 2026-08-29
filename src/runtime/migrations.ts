@@ -60,7 +60,7 @@ import {
   writeProjectStateDatabaseTaskBatchMutation,
 } from '@guildhall/sessions'
 import type { ProjectStateDatabaseScopeRow } from '@guildhall/sessions'
-import { Task as TaskSchema, TaskQueue, TaskRuntimeState, type ProjectRelease, type TaskQueue as TaskQueueModel } from '@guildhall/core'
+import { Escalation as EscalationSchema, Task as TaskSchema, TaskQueue, TaskRuntimeState, type Escalation, type ProjectRelease, type TaskQueue as TaskQueueModel } from '@guildhall/core'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
@@ -75,6 +75,7 @@ import {
   migrateDatabaseTaskEvidenceHistoryToCompressed,
   migrateLegacyTaskEvidenceHistoryToDatabase,
   appendTaskEvidence,
+  readTaskEvidence,
   flushTaskEvidenceOutboxForTasksPath,
   TASK_EVIDENCE_RETENTION,
   runtimeStatePath,
@@ -113,7 +114,7 @@ import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema
 import { effectiveTaskTitle } from '@guildhall/shared'
 import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
 import type { Task } from '@guildhall/core'
-import { buildProofSetupTaskContract, isProofSetupTask, materializeProofSetupTask } from '@guildhall/tools'
+import { buildProofSetupTaskContract, isProofSetupTask, materializeProofSetupTask, raiseEscalation } from '@guildhall/tools'
 import { taskDoneButProofMissing, taskDoneButProofMissingForScope, taskHasScriptProofPath } from './proof-health.js'
 import {
   inspectEmptyMastraDatabase,
@@ -248,6 +249,7 @@ const COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID = '0.13.100/compact-spec-review
 const ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.101/active-release-progress-reprojection'
 const SPEC_REPAIR_ACTION_REPROJECTION_MIGRATION_ID = '0.13.102/spec-repair-action-reprojection'
 const COLLAPSED_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.103/collapsed-release-progress-reprojection'
+const NESTED_TASK_EVIDENCE_ROOT_REPAIR_MIGRATION_ID = '0.13.104/nested-task-evidence-root-repair'
 const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
 const DURABLE_DECISION_SNAPSHOT_MIGRATION_ID = '0.13.71/durable-decision-snapshot'
 const INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID = '0.13.72/indexed-release-summary-reprojection'
@@ -1692,6 +1694,54 @@ function inspectIndexedReleaseSummaryReprojection(projectRoot: string): {
     before,
     after,
   }
+}
+
+function sameOpenEscalation(
+  left: Escalation,
+  right: Escalation,
+): boolean {
+  return left.agentId === right.agentId &&
+    left.reason === right.reason &&
+    (left.recoveryCode ?? null) === (right.recoveryCode ?? null) &&
+    left.summary.trim() === right.summary.trim()
+}
+
+async function findNestedTaskEvidenceRootRepairs(projectRoot: string): Promise<Array<{
+  taskId: string
+  escalation: Escalation
+}>> {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return []
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+  const repairs: Array<{ taskId: string; escalation: Escalation }> = []
+
+  for (const rawTask of queue?.tasks ?? []) {
+    const parsedTask = TaskSchema.safeParse(rawTask)
+    if (!parsedTask.success) continue
+    const task = parsedTask.data
+    if (
+      task.status !== 'blocked' ||
+      !path.isAbsolute(task.projectPath) ||
+      path.resolve(task.projectPath) === path.resolve(projectRoot)
+    ) continue
+
+    const canonicalEvidence = await readTaskEvidence(projectRoot, task.id, { kind: 'escalation' })
+    const canonicalOpen = canonicalEvidence.flatMap(event => {
+      const escalation = EscalationSchema.safeParse(event.payload)
+      return escalation.success && !escalation.data.resolvedAt ? [escalation.data] : []
+    })
+    const nestedEvidence = await readTaskEvidence(task.projectPath, task.id, { kind: 'escalation' })
+    for (const event of nestedEvidence) {
+      const parsedEscalation = EscalationSchema.safeParse(event.payload)
+      if (!parsedEscalation.success || parsedEscalation.data.resolvedAt) continue
+      const escalation = parsedEscalation.data
+      if (escalation.handling === 'guildhall_recovery') continue
+      if (task.blockReason !== `${escalation.reason}: ${escalation.summary}`) continue
+      if (canonicalOpen.some(current => sameOpenEscalation(current, escalation))) continue
+      repairs.push({ taskId: task.id, escalation })
+    }
+  }
+  return repairs
 }
 
 const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
@@ -5925,6 +5975,47 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: NESTED_TASK_EVIDENCE_ROOT_REPAIR_MIGRATION_ID,
+    title: 'Repair nested task evidence ownership',
+    introducedIn: '0.13.104',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Restores an owner-required task escalation to its workspace when an older build stored it with a nested code checkout.',
+    async detect(projectRoot) {
+      const repairs = await findNestedTaskEvidenceRootRepairs(projectRoot)
+      return {
+        needed: repairs.length > 0,
+        affectedPaths: repairs.length > 0
+          ? [projectStateDatabasePath(projectRoot), `${repairs.length} owner escalation${repairs.length === 1 ? '' : 's'} awaiting workspace recovery`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const repairs = await findNestedTaskEvidenceRootRepairs(projectRoot)
+      let restored = 0
+      for (const repair of repairs) {
+        const result = await raiseEscalation({
+          tasksPath,
+          taskId: repair.taskId,
+          agentId: repair.escalation.agentId,
+          reason: repair.escalation.reason,
+          handling: repair.escalation.handling,
+          ...(repair.escalation.recoveryCode ? { recoveryCode: repair.escalation.recoveryCode } : {}),
+          summary: repair.escalation.summary,
+          ...(repair.escalation.details ? { details: repair.escalation.details } : {}),
+          ...(repair.escalation.externalChecklist ? { externalChecklist: repair.escalation.externalChecklist } : {}),
+        })
+        if (!result.success) throw new Error(`Could not restore owner escalation for ${repair.taskId}: ${result.error ?? 'unknown error'}`)
+        restored += 1
+      }
+      return {
+        summary: `Restored ${restored} owner escalation${restored === 1 ? '' : 's'} to the workspace task state.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
 ]
 
 const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
@@ -5988,6 +6079,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.12.41/task-evidence-history-authority': 'migrations.test.ts: imports bounded legacy task evidence into SQLite and removes files only after retention-aware verification',
   '0.12.42/task-evidence-history-compression': 'migrations.test.ts: moves SQLite history into compressed ledgers before emptying the aggregate database',
   [COMPLETION_SUMMARY_EVIDENCE_MIGRATION_ID]: 'workspace-importer.test.ts: preserves a durable completion timestamp after promoted task-definition compaction',
+  [NESTED_TASK_EVIDENCE_ROOT_REPAIR_MIGRATION_ID]: 'migrations.test.ts: restores a nested-checkout escalation through the canonical workspace task handle without duplicating a later retry',
   [LEGACY_LIVE_STATE_CLEANUP_MIGRATION_ID]: 'migrations.test.ts: removes legacy live-state files even when the SQLite cutover was already recorded',
   [EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID]: 'migrations.test.ts: realigns promoted summary and scope from current evidence without reading compatibility files',
   [CURRENT_STATUS_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: materializes the shared current task status rule into indexed rows',

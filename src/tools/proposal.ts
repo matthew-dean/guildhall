@@ -26,6 +26,7 @@ import path from 'node:path'
 import { Task, TaskQueue, PreRejectionCode, type Task as TaskModel } from '@guildhall/core'
 import {
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+  inferProjectRootFromSystemStatePath,
   upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 import {
@@ -225,7 +226,7 @@ export async function preRejectTask(input: PreRejectTaskInput): Promise<PreRejec
     queue.tasks[idx] = nextTask as typeof queue.tasks[number]
     queue.lastUpdated = now
     if (readProjectStateDatabaseCurrentAuthorityFromTasksPath(parsed.tasksPath) === 'database') {
-      const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : path.dirname(parsed.tasksPath)
+      const projectRoot = inferProjectRootFromSystemStatePath(parsed.tasksPath, task.projectPath)
       const pointMutation = writePromotedTaskDetailMutation(parsed.tasksPath, task.id, {
         projectId: path.basename(projectRoot),
         projectRoot,

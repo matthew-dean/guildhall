@@ -14,7 +14,7 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
-import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir, readTaskEvidence, upsertTaskRuntimeState } from '@guildhall/sessions'
+import { atomicWriteText, appendTaskEvidence, inferProjectRootFromSystemStatePath, readTaskEvidence, upsertTaskRuntimeState } from '@guildhall/sessions'
 import { buildEffectiveTask } from '@guildhall/runtime/effective-task'
 import {
   readProjectTaskQueueForMutationSync,
@@ -160,11 +160,7 @@ function persistEscalationTaskState(input: {
 }
 
 function projectRootForTaskState(tasksPath: string, task: Task): string {
-  const stateDir = path.dirname(tasksPath)
-  if (path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)) {
-    return task.projectPath
-  }
-  return inferProjectRootFromMemoryDir(stateDir)
+  return inferProjectRootFromSystemStatePath(tasksPath, task.projectPath)
 }
 
 export async function raiseEscalation(
@@ -227,6 +223,7 @@ export async function raiseEscalation(
       ...(input.externalChecklist !== undefined ? { externalChecklist: input.externalChecklist } : {}),
     }
     blockTaskForEscalation(task, input, now)
+    task.escalations = [...effectiveEscalations, escalation]
     queue.lastUpdated = now
 
     await appendTaskEvidence(projectRoot, task.id, {

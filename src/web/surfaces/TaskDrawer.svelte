@@ -710,11 +710,18 @@
   const isSpecRepair = $derived(scopeHandoffState === 'spec_shaping')
   const focusedSpecRepair = $derived(task?.status === 'spec_review' && isSpecRepair && !fullRecordRequested)
   const focusedSpecReview = $derived(task?.status === 'spec_review' && !isSpecRepair && !fullRecordRequested)
+  const openEscalations = $derived(task ? activeEscalations(task) : [])
+  const completionEscalations = $derived(task ? unresolvedCompletionEscalations(task) : [])
+  const hasCompletionEscalationHygieneWarning = $derived(completionEscalations.length > 0)
+  const firstOpenEscalation = $derived(hasCompletionEscalationHygieneWarning ? null : (openEscalations[0] ?? null))
   const projectPrimaryAction = $derived(project.detail?.actionModel?.primaryAction ?? null)
   const projectDecisionElsewhere = $derived(Boolean(
     !fullRecordRequested &&
     !focusedSpecReview &&
     !focusedSpecRepair &&
+    // This task already has the owner's concrete recovery decision. A
+    // project-level recommendation for another task must not hide it.
+    !firstOpenEscalation &&
     task?.id &&
     projectPrimaryAction?.taskId &&
     projectPrimaryAction.taskId !== task.id,
@@ -801,10 +808,6 @@
   const isShelved = $derived(task?.status === 'shelved')
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
   const hasUnansweredTaskQuestion = $derived(Boolean(task?.openQuestions?.some(question => !question.answeredAt && !question.answer)))
-  const openEscalations = $derived(task ? activeEscalations(task) : [])
-  const completionEscalations = $derived(task ? unresolvedCompletionEscalations(task) : [])
-  const hasCompletionEscalationHygieneWarning = $derived(completionEscalations.length > 0)
-  const firstOpenEscalation = $derived(hasCompletionEscalationHygieneWarning ? null : (openEscalations[0] ?? null))
   const projectStartBlocker = $derived(
     project.detail?.startReadiness?.canStart === false
       ? project.detail.startReadiness
@@ -1000,7 +1003,9 @@
     if (requested && (requested !== 'current' || hasCurrentTurns)) {
       activeTab = requested
     } else if (taskChanged) {
-      activeTab = 'overview'
+      // A direct recovery route is the first owner job for this task. Do not
+      // make the owner discover it behind an Overview tab.
+      activeTab = firstOpenEscalation && hasCurrentTurns ? 'current' : 'overview'
     }
     initializedTabForTaskId = taskId
     initializedTabForHref = href

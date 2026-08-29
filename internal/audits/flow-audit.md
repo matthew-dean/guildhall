@@ -60088,7 +60088,7 @@ state; it introduces no persisted schema or data migration.
 
 ### Finding: A bounded run that stops on a blocked task must hand the owner to that result
 
-- [ ] User job: when the owner starts one named work item and Guildhall stops
+- [x] User job: when the owner starts one named work item and Guildhall stops
   because that item needs human judgment, the next screen identifies that
   outcome and gives the owner one clear recovery choice. It must not silently
   redirect project-level attention to unrelated ready work while leaving the
@@ -60101,17 +60101,49 @@ state; it introduces no persisted schema or data migration.
   is blocking it` and `Open task`, while the project headline said `ready to
   continue` for unrelated work. The owner has no explanation of the failed run
   and no direct way to resolve or explicitly defer its escalation.
+- Root-cause evidence, 2026-08-29: the canonical Looma + Knit queue lives in
+  its registered workspace state, while the worker escalation was persisted
+  under the nested `looma` checkout. The escalation tool used a task's code
+  checkout as the evidence root even though its `TASKS.json` handle belonged to
+  the parent workspace. The parent task retained the blocked lifecycle and
+  reason but had no open escalation record, so the shared action model could
+  not offer its recovery action. This is a state-authority fault, not a missing
+  local Work-tab button.
 
 #### Contract Touch Decision
 
-Pending investigation. The stopped one-task execution result, task escalation,
-owner-input authority, and action-model ranking may all be involved. Do not
-patch the stale Work route or convert this prose into a local button. Required
-proof before repair: identify the typed execution result that should survive a
-one-task stop and make it the shared owner action until it is resolved or
-explicitly deferred.
+Work id: `looma-knit-owner-escalation-state-boundary-2026-08-29`.
+Touched contracts: a task-state handle names the registered workspace that owns
+the queue, runtime overlay, and task evidence. A child repository remains the
+execution checkout only; it cannot become the owner-facing evidence root merely
+because a task targets files there. Recovery action ranking continues to read
+the same canonical task evidence and effective task record.
+Considered but not touched: child-project execution routing, task lifecycle
+enums, action ranking policy, agent prose, and release membership.
+Required follow-up: repair orphaned child-checkout escalation evidence into the
+canonical workspace without duplicating an equivalent open recovery, then let
+the shared action model expose the existing typed owner recovery. Proof
+required: a nested-repo task writes escalation/runtime evidence to the
+workspace state; the repaired real task has one open escalation; and the
+installed Work route presents its single recovery action before unrelated ready
+work.
 
 #### Schema Migration Decision
 
-Pending investigation. Do not assume persisted task or escalation shape needs
-to change until the authoritative stopped-run contract is established.
+No task schema shape change. Migration
+`0.13.104/nested-task-evidence-root-repair` copies already-misrouted evidence
+into the existing canonical task record, allocating a fresh canonical ID only
+when a historical child-checkout ID collides. It never deletes the child
+checkout's historical file. The repair is idempotent, reports its apply result,
+and leaves the original evidence available for rollback/audit. Summary
+projection version 33 forces existing derived decision/orientation packets to
+rebuild from the repaired canonical evidence; it changes no task data shape.
+
+- [x] Installed proof, 2026-08-29: after `pnpm build`, `pnpm dev:install`,
+  restart, and a `stale:false` response, real Looma + Knit now selects
+  `Component implementation` as the shared primary action. API action model,
+  decision packet, execution focus, and orientation pin all name the same
+  `blocked_work` task. Overview has one `Open task` action; opening it leads
+  directly to the visible `Retry worker` recovery action. At 1280x720 and
+  960x720 that action remains visible with no horizontal overflow; at 390x844
+  the Overview action remains visible with no horizontal overflow.

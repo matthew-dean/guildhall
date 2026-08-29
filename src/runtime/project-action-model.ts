@@ -311,6 +311,7 @@ function workHrefForTask(taskId: string | undefined): string {
 }
 
 function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): string {
+  if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Open task'
   if (readiness.code === 'required_migration_pending') return 'Review project update'
   if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
   if (readiness.code === 'owner_review_required') {
@@ -342,6 +343,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (stopping) return 'Stopping'
   if (running) return 'Pause'
   if (!readiness || readiness.canStart) return 'Resume'
+  if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Needs recovery'
   if (readiness.code === 'required_migration_pending') return 'Migrate'
   if (isProviderReadinessCode(readiness.code)) return 'Needs provider'
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
@@ -368,6 +370,9 @@ function isProviderReadinessCode(code: string | undefined): boolean {
 }
 
 function startReadinessActionLabel(readiness: ProjectActionStartReadiness): string {
+  if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') {
+    return readiness.focusTaskTitle?.trim() || 'Blocked work'
+  }
   if (readiness.code === 'owner_review_required') {
     return readiness.focusTaskTitle?.trim() || 'Spec review pending'
   }
@@ -579,9 +584,12 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
       : currentBriefIntent
         ? `Current brief: ${currentBriefIntent}`
         : task.description,
-    buttonLabel: task.status === 'spec_review' ? 'Review spec' : 'Open Work',
-    href: task.status === 'spec_review' ? taskHrefForTask(task.id) : workHrefForTask(task.id),
+    // A blocked item is a recovery decision, not more work to browse. Send
+    // the owner straight to the task's compact recovery surface.
+    buttonLabel: task.status === 'spec_review' ? 'Review spec' : blocked ? 'Open task' : 'Open Work',
+    href: task.status === 'spec_review' || blocked ? taskHrefForTask(task.id) : workHrefForTask(task.id),
     tone: cleanup || blocked || task.status === 'spec_review' ? 'warn' : running ? 'running' : 'accent',
+    ...(blockedReason ? { code: 'blocked_work' } : {}),
     taskId: task.id,
   }
 }
@@ -595,6 +603,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const focusedSpecReview = ownerReview || readiness.focusKind === 'spec_review'
   const runnableWork = readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
   const specRepair = readiness.focusKind === 'spec_repair'
+  const blockedWork = readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work'
   const operation = readiness.canStart && readiness.focusTaskId && runnableWork
     ? (specRepair ? 'repair_spec' : 'start_focused')
     : undefined
@@ -608,7 +617,9 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const taskLabel = ownerReview || runnableWork ? readiness.focusTaskTitle?.trim() : undefined
   // The selected task is the decision. A review-queue count is operational
   // context, not an explanation that competes with that task on every surface.
-  const detail = !ownerReview && !runnableWork && readiness.message && readiness.message !== label
+  const detail = blockedWork
+    ? 'This task stopped and needs its recovery action before it can continue.'
+    : !ownerReview && !runnableWork && readiness.message && readiness.message !== label
       ? readiness.message
       : undefined
   return {
@@ -617,7 +628,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     ...(taskLabel ? { taskLabel } : {}),
     detail,
     buttonLabel: specRepair ? 'Repair spec' : startReadinessButtonLabel(readiness),
-    href: focusedSpecReview && readiness.focusTaskId
+    href: (focusedSpecReview || blockedWork) && readiness.focusTaskId
       ? taskHrefForTask(readiness.focusTaskId)
       : readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
     tone: readiness.code === 'required_migration_pending'
@@ -740,6 +751,12 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
       ? bestTaskAction(tasks.filter(task => task.id === focusedRunTaskId), runActive)
       : bestTaskAction(tasks, runActive)
   const candidates: ProjectAction[] = []
+  // Compact summary input also carries a synthetic focused row for paused
+  // live work. Only a recorded block reason is evidence that this task must
+  // outrank a resumable recommendation.
+  const taskActionIsBlocked = Boolean(taskAction?.taskId && tasks.some(task =>
+    task.id === taskAction.taskId && taskBlockedReason(task) !== null,
+  ))
 
   if (startReadiness?.code === 'all_terminal') {
     candidates.push({
@@ -765,6 +782,9 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     )
   }
   if (setupInboxAction && !runActive) candidates.push(setupInboxAction)
+  // A recorded block is a concrete owner handoff. Do not let a saved
+  // resumable-work recommendation send the owner to an unrelated task first.
+  if (taskActionIsBlocked && taskAction) candidates.push(taskAction)
   // Start readiness owns whether work is runnable. Compact summaries omit
   // brief/spec detail, so task ranking must never reinterpret a ready item as
   // blocked or incomplete merely because that detail is intentionally absent.
@@ -796,7 +816,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     })
   }
   if (scopeAction) candidates.push(scopeAction)
-  if (taskAction) candidates.push(taskAction)
+  if (taskAction && !taskActionIsBlocked) candidates.push(taskAction)
   candidates.push(...inboxActions)
   if (
     activeTurn &&
@@ -829,10 +849,13 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     })
     .slice(0, 3)
   const blockedButRunnable = startReadiness?.code === 'proof_evidence_missing'
+  const blockedWork = startReadiness?.code === 'blocked_work' || startReadiness?.focusKind === 'blocked_work'
   const disabledReason = stopping
     ? 'Pause requested. Guildhall is waiting for active work to stop.'
     : !runActive && startReadiness?.canStart === false && !blockedButRunnable
-      ? startReadiness.message
+      ? blockedWork
+        ? 'Open the blocked task to choose its recovery action.'
+        : startReadiness.message
       : !runActive && setupBlocksStart
         ? setup.detail ?? ownerInput.detail ?? 'Finish setup before starting work.'
         : undefined

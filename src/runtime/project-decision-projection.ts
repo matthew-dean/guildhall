@@ -968,13 +968,20 @@ export function applyProjectActionModelPrimaryAction(
         ? 'resume' as const
         : 'open_work' as const
   const actionTitle = action.label?.trim() || decision.execution.focusTaskTitle || taskId
-  // Start readiness owns the executable decision. Keep its refined action
-  // focus in the same packet so orientation cannot retain a downstream task.
-  const execution = action.source === 'start_readiness'
+  // The shared action model may surface a concrete blocked task after saved
+  // readiness picked unrelated resumable work. Keep every summary consumer on
+  // that same focus instead of leaving orientation on the stale task.
+  const actionOwnsExecutionFocus = action.source === 'start_readiness' || action.code === 'blocked_work'
+  const execution = actionOwnsExecutionFocus
     ? {
         ...decision.execution,
-        state: action.code === 'ready_work' ? 'runnable' as const : decision.execution.state,
+        state: action.code === 'ready_work'
+          ? 'runnable' as const
+          : action.code === 'blocked_work'
+            ? 'blocked' as const
+            : decision.execution.state,
         code: action.code ?? decision.execution.code,
+        focusKind: action.code === 'blocked_work' ? 'blocked_work' : decision.execution.focusKind,
         focusTaskId: taskId,
         focusTaskTitle: actionTitle,
         focus: { taskId, displayTitle: actionTitle },

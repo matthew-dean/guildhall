@@ -121,6 +121,68 @@ describe('buildProjectActionModel', () => {
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
+  it('puts a recorded blocked task ahead of a stale resumable-work recommendation', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-ready',
+        focusTaskTitle: 'Unrelated ready work',
+      },
+      tasks: [
+        {
+          id: 'task-ready',
+          title: 'Unrelated ready work',
+          status: 'ready',
+        },
+        {
+          id: 'task-blocked',
+          title: 'Component implementation',
+          status: 'blocked',
+          blockReason: 'human_judgment_required: Worker made no visible progress after 5 passes.',
+        },
+      ],
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      taskId: 'task-blocked',
+      label: 'Component implementation',
+      buttonLabel: 'Open task',
+      href: '/task/task-blocked',
+      code: 'blocked_work',
+    })
+    expect(model.secondaryActions).toContainEqual(expect.objectContaining({ taskId: 'task-ready' }))
+  })
+
+  it('keeps a rebuilt blocked-work decision direct and readable', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'blocked_work',
+        focusKind: 'blocked_work',
+        focusTaskId: 'task-blocked',
+        focusTaskTitle: 'Component implementation',
+        message: 'human_judgment_required: Worker made no visible progress after 5 passes.',
+      },
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Component implementation',
+      detail: 'This task stopped and needs its recovery action before it can continue.',
+      buttonLabel: 'Open task',
+      href: '/task/task-blocked',
+      code: 'blocked_work',
+    })
+    expect(model.runControl).toMatchObject({
+      label: 'Needs recovery',
+      disabledReason: 'Open the blocked task to choose its recovery action.',
+      startEnabled: false,
+    })
+  })
+
   it('keeps a system-owned malformed spec as a typed focused repair operation', () => {
     const model = buildProjectActionModel({
       startReadiness: {
@@ -1011,8 +1073,8 @@ describe('buildProjectActionModel', () => {
       source: 'task',
       label: 'Implement a no-UI runner that builds a packet from fixture records.',
       detail: "decision_required: Cannot transition task to 'review' -- guard keeps blocking despite self-critique note being persisted",
-      buttonLabel: 'Open Work',
-      href: '/work?task=runner-proof',
+      buttonLabel: 'Open task',
+      href: '/task/runner-proof',
       tone: 'warn',
       taskId: 'runner-proof',
     })
@@ -1676,7 +1738,7 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
       label: 'Implement Stage 2 reviewer',
-      buttonLabel: 'Open Work',
+      buttonLabel: 'Open task',
       tone: 'warn',
     })
     expect(model.runControl).toMatchObject({

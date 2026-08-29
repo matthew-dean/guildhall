@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
@@ -165,6 +165,33 @@ export function getProjectSystemStateDir(projectRoot: string): string {
 
 export function getProjectSystemStatePath(projectRoot: string, relativePath: string): string {
   return join(getProjectSystemStateDir(projectRoot), relativePath)
+}
+
+/**
+ * Resolve the workspace that owns a system-state handle. A task may execute
+ * inside a nested repository, but its TASKS handle belongs to the registered
+ * workspace and all task evidence must stay with that workspace.
+ */
+export function inferProjectRootFromSystemStatePath(
+  systemStatePath: string,
+  fallbackProjectRoot?: string,
+): string {
+  const stateDir = dirname(resolve(systemStatePath))
+  if (basename(stateDir) === 'project-state') {
+    try {
+      const manifest = JSON.parse(readFileSync(join(dirname(stateDir), 'allocation-manifest.json'), 'utf8')) as {
+        workspaceRoot?: unknown
+      }
+      if (typeof manifest.workspaceRoot === 'string' && isAbsolute(manifest.workspaceRoot)) {
+        return resolve(manifest.workspaceRoot)
+      }
+    } catch {
+      // Older state handles predate allocation manifests; use their supplied
+      // compatibility root below rather than guessing from the cache path.
+    }
+  }
+  if (fallbackProjectRoot && isAbsolute(fallbackProjectRoot)) return resolve(fallbackProjectRoot)
+  return inferProjectRootFromMemoryDir(stateDir)
 }
 
 export function inferProjectRootFromMemoryDir(memoryDir: string): string {

@@ -12,6 +12,7 @@ import {
   writeProjectTaskQueueWithSummary,
 } from '@guildhall/runtime/project-state-boundary'
 import { validateProductBriefGrounding } from '@guildhall/runtime/spec-quality'
+import { inferProjectRootFromSystemStatePath } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // update-product-brief: the Spec Agent's authoring surface for the product
@@ -345,7 +346,7 @@ export async function updateProductBrief(
     queue.lastUpdated = now
 
     if (readProjectStateAuthorityAtBoundary(input.tasksPath).authority === 'database') {
-      const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : path.dirname(input.tasksPath)
+      const projectRoot = inferProjectRootFromSystemStatePath(input.tasksPath, task.projectPath)
       const pointMutation = writePromotedTaskDetailMutation(input.tasksPath, task.id, {
         projectId: path.basename(projectRoot),
         projectRoot,

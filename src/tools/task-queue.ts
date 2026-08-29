@@ -35,7 +35,7 @@ import {
   appendTaskEvidence,
   flushTaskEvidenceOutboxForTasksPath,
   atomicWriteText,
-  inferProjectRootFromMemoryDir,
+  inferProjectRootFromSystemStatePath,
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
   readProjectStateDatabaseTaskEvidenceAuthorityFromTasksPath,
   readProjectStateDatabaseTaskEvidenceCurrent,
@@ -1006,11 +1006,7 @@ function projectRootForTaskState(
     ? metadata['current_task_project_path'].trim()
     : ''
   if (metadataProjectPath && path.isAbsolute(metadataProjectPath)) return metadataProjectPath
-  const stateDir = path.dirname(tasksPath)
-  if (path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)) {
-    return task.projectPath
-  }
-  return inferProjectRootFromMemoryDir(stateDir)
+  return inferProjectRootFromSystemStatePath(tasksPath, task.projectPath)
 }
 
 async function persistUpdateTaskRuntimeState(

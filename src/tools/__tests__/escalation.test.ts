@@ -116,6 +116,31 @@ afterEach(async () => {
 })
 
 describe('raiseEscalation', () => {
+  it('keeps nested-repository escalation state with the workspace task handle', async () => {
+    const nestedProjectPath = path.join(tmpDir, 'looma')
+    await fs.mkdir(nestedProjectPath, { recursive: true })
+    await fs.writeFile(
+      path.join(path.dirname(path.dirname(tasksPath)), 'allocation-manifest.json'),
+      JSON.stringify({ workspaceRoot: tmpDir }),
+      'utf8',
+    )
+    await writeSeed([seedTask({ projectPath: nestedProjectPath })])
+
+    const result = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      summary: 'Need a workspace-level owner decision',
+    })
+
+    expect(result.success).toBe(true)
+    expect(await readTaskEvidence(tmpDir, 'task-001', { kind: 'escalation' })).toHaveLength(1)
+    expect(await readTaskEvidence(nestedProjectPath, 'task-001', { kind: 'escalation' })).toEqual([])
+    expect((await readTaskRuntimeStore(tmpDir)).tasks['task-001']?.openEscalationIds).toEqual(['esc-task-001-1'])
+    expect((await readTaskRuntimeStore(nestedProjectPath)).tasks['task-001']).toBeUndefined()
+  })
+
   it('appends an escalation with a stable id', async () => {
     const result = await raiseEscalation({
       tasksPath,

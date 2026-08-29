@@ -67,9 +67,11 @@ import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 import { specReviewIsReadyForOwnerApproval } from './spec-review-ownership.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 32 as const
+// Version 33 replays derived project decisions so stored orientation and
+// action packets cannot retain a stale ready-work focus over a real blocker.
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 33 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -926,6 +928,19 @@ export function buildProjectSummaryProjection(
     runStatus: input.execution?.status ?? 'stopped',
     runMode: input.execution?.mode,
     tasks: [
+      // A blocked task carries an owner-facing recovery outcome. Preserve it
+      // in the compact action input so a stale runnable recommendation cannot
+      // hide the only concrete recovery decision.
+      ...tasks
+        .filter(task => task.status === 'blocked' || Boolean(task.blockReason?.trim()))
+        .map(task => ({
+          id: task.id,
+          title: task.title,
+          status: task.status,
+          ...(task.blockReason?.trim() ? { blockReason: task.blockReason } : {}),
+          updatedAt: task.updatedAt,
+          hierarchy: task.hierarchy,
+        })),
       ...(nextAction.focusTaskId
         ? [{
             id: nextAction.focusTaskId,
@@ -938,6 +953,27 @@ export function buildProjectSummaryProjection(
     summaryTasks: tasks,
   })
   const decision = applyProjectActionModelPrimaryAction(initialDecision, actionModel.primaryAction)
+  const decisionFocus = decision.execution.focus
+  const decisionOrientationSpine = orientationSpine && decisionFocus
+    ? {
+        ...orientationSpine,
+        summary: {
+          ...orientationSpine.summary,
+          pinnedNow: [decisionFocus.displayTitle],
+          nextAction: actionModel.primaryAction?.detail ?? decisionFocus.displayTitle,
+        },
+        activePins: [
+          ...orientationSpine.activePins.filter(pin => !pin.id.startsWith('start-focus:')),
+          {
+            id: `start-focus:${decisionFocus.taskId}`,
+            nodeId: `work:${decisionFocus.taskId}`,
+            label: decisionFocus.displayTitle,
+            kind: actionModel.primaryAction?.code === 'blocked_work' ? 'owner_input' as const : 'active_work' as const,
+            href: actionModel.primaryAction?.href ?? `/work?task=${encodeURIComponent(decisionFocus.taskId)}`,
+          },
+        ],
+      }
+    : orientationSpine
 
   return {
     version: PROJECT_SUMMARY_PROJECTION_VERSION,
@@ -977,7 +1013,7 @@ export function buildProjectSummaryProjection(
       ...(context.linkedTaskHints ? { linkedTaskHints: [...context.linkedTaskHints] } : {}),
     })),
     sourceCapabilityCatalog,
-    orientationSpine,
+    orientationSpine: decisionOrientationSpine,
     approvedPlan,
     releaseSummary,
     decision,

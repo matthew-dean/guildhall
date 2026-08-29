@@ -386,6 +386,74 @@ describe('TaskDrawer', () => {
     expect(path.value).toBe('/projects/looma-knit/task/task-review')
   })
 
+  it('lets a task with an open escalation own the compact drawer over another project decision', async () => {
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Work ready to resume',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-review',
+          tone: 'accent',
+          taskId: 'task-review',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'blocked',
+        blockReason: 'human_judgment_required: Worker made no visible progress after 5 passes.',
+        escalations: [{
+          id: 'esc-worker-stalled',
+          raisedAt: now,
+          agentId: 'worker-agent',
+          reason: 'human_judgment_required',
+          recoveryCode: 'worker_no_progress',
+          summary: 'Worker made no visible progress after 5 passes.',
+          status: 'open',
+        }],
+      },
+      threadTurns: [{
+        id: 'turn-worker-stalled',
+        kind: 'escalation',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'blocked',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        escalationId: 'esc-worker-stalled',
+        escalationAgentId: 'worker-agent',
+        escalationReason: 'human_judgment_required',
+        escalationRecoveryCode: 'worker_no_progress',
+        summary: 'Worker made no visible progress after 5 passes.',
+      }],
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Queued')
+    expect(screen.getByRole('button', { name: 'Retry worker' })).toBeInTheDocument()
+    expect(screen.queryByText('Project needs your decision first')).toBeNull()
+  })
+
   it('keeps reviewer planning metadata out of the normal task overview', async () => {
     const payload = drawerPayload({
       threadTurns: [],
