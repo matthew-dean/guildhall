@@ -59724,6 +59724,17 @@ Apply/revert: to be recorded with the implementation.
 None anticipated. The contradiction is in derived projection semantics over
 existing task and release state.
 
+- Partial evidence, 2026-08-29: ProjectActionModel now reconciles a persisted
+  work summary with the current start-readiness contract, so a paused_live_work
+  action clears stale raw spec-review approval counts. Project-action-model
+  regressions passed 42 assertions; typecheck, contract lint, and
+  model-independence passed. After production build, dev install, and Looma
+  restart, the installed API reported paused_live_work, ownerInput:false, and
+  awaitingApproval:0 with stale:false. Remaining: releaseSummary.state remains
+  blocked because it preserves background release debt; determine whether that
+  state needs a separate active-progress representation before exposing it to
+  an owner.
+
 ### Finding: Thread must not bury the current owner action in duplicate activity
 
 - [x] User job: opening Thread while work is paused immediately explains the

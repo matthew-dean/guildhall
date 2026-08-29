@@ -1660,4 +1660,62 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
     })
   })
+
+  it('does not count background spec records as owner approvals while paused work is the shared action', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Continue current work',
+        actionHref: '/work?task=task-current',
+      },
+      summaryTasks: [
+        { id: 'task-current', title: 'Continue current work', status: 'in_progress' },
+        { id: 'task-repair', title: 'Repair a malformed spec', status: 'spec_review' },
+      ],
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({ code: 'paused_live_work', taskId: 'task-current' })
+    expect(model.ownerInput).toEqual({ active: false })
+    expect(model.workSummary?.awaitingApproval).toBe(0)
+  })
+
+  it('reconciles a persisted summary when paused work replaces an old approval queue', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+        workSummary: {
+          total: 43,
+          agentActive: 0,
+          paused: 16,
+          waiting: 3,
+          reviewWaiting: 0,
+          gatesWaiting: 0,
+          shaping: 0,
+          specRevisionQueued: 0,
+          readyForWorker: 1,
+          needsSpecCleanup: 0,
+          awaitingApproval: 21,
+          done: 0,
+        },
+      },
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Continue current work',
+        actionHref: '/work?task=task-current',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({ code: 'paused_live_work', taskId: 'task-current' })
+    expect(model.workSummary?.awaitingApproval).toBe(0)
+  })
 })

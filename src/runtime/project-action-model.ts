@@ -252,6 +252,12 @@ function buildProjectWorkSummary(tasks: ProjectActionTask[], running: boolean): 
   }
 }
 
+function currentOwnerApprovalCount(readiness: ProjectActionStartReadiness | null | undefined): number {
+  return readiness?.code === 'owner_review_required'
+    ? Math.max(1, readiness.count ?? 1)
+    : 0
+}
+
 function hasApprovedProductBrief(task: ProjectActionTask): boolean {
   return typeof task.productBrief?.approvedAt === 'string' && task.productBrief.approvedAt.trim().length > 0
 }
@@ -684,7 +690,17 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const shippedTerminal = input.releaseLifecycleState === 'shipped'
   const blockingInboxItem = setupBlockingInboxItem(inboxItems)
   const setup = setupModel(startReadiness, tasks, activeTurn, blockingInboxItem)
-  const workSummary = input.summaryTasks ? buildProjectWorkSummary(input.summaryTasks, runActive) : undefined
+  const rawWorkSummary = input.summaryTasks ? buildProjectWorkSummary(input.summaryTasks, runActive) : undefined
+  // This compact summary sits beside the owner's next action. A raw
+  // spec_review status can be Guildhall-owned repair work, deferred scope, or
+  // an otherwise non-current record; only start readiness can certify that an
+  // approval is actually waiting on the owner now.
+  const workSummary = rawWorkSummary
+    ? {
+        ...rawWorkSummary,
+        awaitingApproval: currentOwnerApprovalCount(startReadiness),
+      }
+    : undefined
   if (shippedTerminal) {
     return {
       primaryAction: null,
@@ -883,6 +899,12 @@ export function resolveProjectActionModel(input: {
   releaseLifecycleState?: string | null
 }): ProjectActionModel {
   const readiness = input.startReadiness ?? null
+  const storedWorkSummary = input.stored?.workSummary
+    ? {
+        ...input.stored.workSummary,
+        awaitingApproval: currentOwnerApprovalCount(readiness),
+      }
+    : undefined
   if (input.releaseLifecycleState === 'shipped') {
     const resolved = buildProjectActionModel({
       startReadiness: readiness,
@@ -895,7 +917,7 @@ export function resolveProjectActionModel(input: {
     return {
       ...resolved,
       setup: input.stored?.setup ?? resolved.setup,
-      ...(input.stored?.workSummary ? { workSummary: input.stored.workSummary } : {}),
+      ...(storedWorkSummary ? { workSummary: storedWorkSummary } : {}),
     }
   }
   const hasResolvedReadiness = Boolean(readiness?.code)
@@ -937,5 +959,6 @@ export function resolveProjectActionModel(input: {
     // of deriving a false "fresh intake" state from an empty placeholder list.
     setup: focusedTaskReview ? resolved.setup : input.stored?.setup ?? resolved.setup,
     secondaryActions,
+    ...(storedWorkSummary ? { workSummary: storedWorkSummary } : {}),
   }
 }
