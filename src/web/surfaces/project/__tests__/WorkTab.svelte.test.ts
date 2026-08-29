@@ -420,7 +420,55 @@ describe('WorkTab', () => {
     expect(screen.queryByRole('button', { name: /inspect work answer an unrelated project question/i })).not.toBeInTheDocument()
   })
 
-  it('shows question-shaped runnable work with an action-shaped label and keeps the source question visible', async () => {
+  it('starts an owner-review Work queue with only the shared review set', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?view=queue')
+    path.value = '/projects/narrative-harness/work?view=queue'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'review-one', title: 'Review the context packet proof', status: 'spec_review' }),
+          task({ id: 'review-two', title: 'Review the world-state proof', status: 'spec_review' }),
+          task({ id: 'paused-work', title: 'A paused unrelated task', status: 'exploring' }),
+        ], {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          startReadiness: {
+            canStart: false,
+            code: 'owner_review_required',
+            focusTaskId: 'review-one',
+            count: 2,
+            reviewTaskIds: ['review-one', 'review-two'],
+            message: '2 specs are ready for your review before work can continue.',
+          },
+          actionModel: {
+            primaryAction: {
+              label: 'Review a spec',
+              taskId: 'review-one',
+              buttonLabel: 'Review next spec',
+              href: '/work?task=review-one',
+              tone: 'warn',
+              code: 'owner_review_required',
+            },
+          },
+        }),
+      },
+    })
+
+    expect(await screen.findByRole('heading', { name: 'Specs to review' })).toBeInTheDocument()
+    expect(screen.getByText('2 specs need your review')).toBeInTheDocument()
+    expect(screen.getByText(/Choose a spec to review/)).toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: /^show$/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /inspect work review the context packet proof/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work review the world-state proof/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /inspect work a paused unrelated task/i })).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show all work' }))
+    expect(await screen.findByRole('heading', { name: 'Work list' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work a paused unrelated task/i })).toBeInTheDocument()
+  })
+
+  it('uses an action-shaped label for a question-shaped focused work item', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-smoke-test')
     path.value = '/projects/looma-knit/work?task=task-smoke-test'
 
@@ -437,13 +485,9 @@ describe('WorkTab', () => {
       },
     })
 
-    const row = await screen.findByRole('button', { name: /inspect work define safe smoke-test commands/i })
-    expect(row).toHaveTextContent('Define safe smoke-test commands')
-    expect(row).not.toHaveTextContent('What commands should I run to smoke test this project without changing files?')
-    const inspector = screen.getByLabelText('Selected work inspector')
-    expect(inspector).toHaveTextContent('Define safe smoke-test commands')
-    expect(inspector).toHaveTextContent('What commands should I run to smoke test this project without changing files?')
-    expect(within(inspector).getByRole('button', { name: /running/i })).toBeDisabled()
+    expect(await screen.findByRole('heading', { name: 'Define safe smoke-test commands' })).toBeInTheDocument()
+    expect(screen.queryByText('What commands should I run to smoke test this project without changing files?')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open task' })).toBeInTheDocument()
   })
 
   it('keeps source-grounded detail in the selected inspector rather than every row', async () => {

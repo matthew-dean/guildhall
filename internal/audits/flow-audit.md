@@ -59295,3 +59295,36 @@ the shared current action for an individual project.
   reviews are now the authoritative next action.
   `pnpm test:release` also passes 310/310 after the public curl examples were
   aligned with the 0.13.1 docs release; `pnpm docs:build` passes.
+
+### Repair: Work starts with the owner review queue, not a mixed backlog
+
+- [x] User job: when the project is waiting for spec approval, opening Work
+  shows only the ordered specs that need review, why they matter, and a
+  deliberate path to the complete inventory. Paused, blocked, and unrelated
+  planning work cannot compete with the owner decision.
+- Finding, 2026-08-29: the installed Looma + Knit `/work?view=queue` route
+  renders sixteen mixed rows (paused, waiting, blocked, and ten spec reviews)
+  with only `Work list` and `16 current items` as orientation. The shared
+  start-readiness result already carries the authoritative ordered
+  `reviewTaskIds`, but Work ignores that scope and reconstructs an all-current
+  backlog at the exact point the owner needs to choose a spec.
+- Contract Touch Decision: retain review membership and ordering in the shared
+  `startReadiness.reviewTaskIds` contract. Work will consume that list directly
+  for its default review queue and will not classify tasks from local status or
+  prose. Considered but not touched: readiness ranking, task status semantics,
+  work inventory pagination, task selection, release membership, API payloads,
+  persistence, and schemas. Schema Migration Decision: none. Required proof:
+  component and rendered flows show review-only rows from shared ids, retain a
+  direct item action, and expose a deliberate all-work route without overflow.
+  Apply/revert: presentation selection only; no project state is changed.
+- Evidence, 2026-08-29: `WorkTab.svelte.test.ts` passes 52/52, including the
+  shared review-id ordering, absence of an unrelated paused row, and the
+  explicit `Show all work` transition. `pnpm typecheck`, `pnpm lint:contracts`,
+  and `pnpm test:ui` pass (45 rendered flows). After `pnpm build`,
+  `pnpm dev:install`, and a Looma + Knit restart, `/api/stale-server` reports
+  `stale:false`. The installed default Work route shows `Specs to review`,
+  `10 specs need your review`, ten rows, no generic Work controls, and no
+  paused row; both page and card horizontal overflow are zero. `Show all work`
+  opens `?view=queue&all=1`, restores the 16-row inventory and its controls,
+  and still has zero overflow. The focused review queue keeps its action
+  visible at 960px desktop and 390px mobile widths with zero card/page overflow.

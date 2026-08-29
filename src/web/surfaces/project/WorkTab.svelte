@@ -204,6 +204,13 @@
     }
   })
   const allWorkItems = $derived([...tasks, ...importDrafts])
+  const ownerReviewQueueTasks = $derived.by(() => {
+    const tasksById = new Map(allWorkItems.map(task => [task.id, task]))
+    return (detail.startReadiness?.reviewTaskIds ?? []).flatMap(taskId => {
+      const task = tasksById.get(taskId)
+      return task ? [task] : []
+    })
+  })
   const workAreasByTaskId = $derived(viewModel.workAreasByTaskId)
   const workAreaOptions = $derived(viewModel.workAreaOptions)
   const showsPlanningArtifacts = $derived(['current', 'scope', 'planning', 'open', 'all'].includes(workFilter))
@@ -327,9 +334,29 @@
     if (typeof window === 'undefined') return false
     return new URL(window.location.href).searchParams.get('view') === 'queue'
   })
-  // When a shared action already identifies the work to continue, browsing is
-  // a short selection list, not a second dashboard to configure.
-  const actionQueueMode = $derived(queueMode && Boolean(detail.actionModel?.primaryAction?.taskId))
+  const allWorkRequested = $derived.by(() => {
+    path.href
+    if (typeof window === 'undefined') return false
+    return new URL(window.location.href).searchParams.get('all') === '1'
+  })
+  // A shared action keeps the generic queue concise. Owner review is stricter:
+  // its ordered task IDs are the only rows relevant to the decision.
+  const actionQueueMode = $derived(
+    queueMode &&
+      !allWorkRequested &&
+      Boolean(detail.actionModel?.primaryAction?.taskId),
+  )
+  const ownerReviewQueueMode = $derived(
+    actionQueueMode &&
+      detail.startReadiness?.code === 'owner_review_required' &&
+      ownerReviewQueueTasks.length > 0,
+  )
+  const displayedTasks = $derived(ownerReviewQueueMode ? ownerReviewQueueTasks : sortedTasks)
+  const displayedWorkListCountLabel = $derived(
+    ownerReviewQueueMode
+      ? `${ownerReviewQueueTasks.length} ${ownerReviewQueueTasks.length === 1 ? 'spec needs' : 'specs need'} your review`
+      : workListCountLabel,
+  )
   const focusedWork = $derived.by(() => {
     path.href
     const routeTaskId = readSelectedWorkIdFromUrl()
@@ -682,6 +709,16 @@
     nav(currentProjectHref('/work?view=queue', detail.id))
   }
 
+  function browseAllWork(): void {
+    selectedWorkId = null
+    const url = new URL(window.location.href)
+    url.searchParams.set('view', 'queue')
+    url.searchParams.set('all', '1')
+    url.searchParams.delete('task')
+    url.searchParams.delete('work')
+    nav(`${url.pathname}${url.search}${url.hash}`, { backgroundPath: path.value })
+  }
+
   function openFocusedWork(task: Task): void {
     const tab = task.status === 'spec_review' ? '?tab=spec' : ''
     nav(`${currentTaskHref(task.id, detail.id)}${tab}`, { backgroundPath: path.value })
@@ -808,7 +845,7 @@
               <span>{taskDisplayKey(focusedWork, allWorkItems, detail.id)}</span>
               <Chip label={focusedStatusLabel(focusedWork)} tone={focusedStatusTone(focusedWork)} />
             </div>
-            <h2>{focusedWork.title ?? 'Untitled work'}</h2>
+            <h2>{taskDisplayLabel(focusedWork, focusedWork.id)}</h2>
             {#if focusedDecisionDetail}
               <p>{focusedDecisionDetail}</p>
             {/if}
@@ -930,10 +967,18 @@
       </UtilityPanel>
     {/if}
     <div class="work-list-inspector-layout" class:has-selection={Boolean(selectedWorkId)}>
-      <Card title="Work list" titleTag="h2">
+      <Card title={ownerReviewQueueMode ? 'Specs to review' : 'Work list'} titleTag="h2">
 
         <div class="work-list-overview">
-          <div class="work-list-count">{workListCountLabel}</div>
+          <div>
+            <div class="work-list-count">{displayedWorkListCountLabel}</div>
+            {#if ownerReviewQueueMode}
+              <p class="review-queue-detail">Choose a spec to review. Guildhall can continue after these decisions are resolved.</p>
+            {/if}
+          </div>
+          {#if ownerReviewQueueMode}
+            <Button variant="secondary" size="sm" onclick={browseAllWork}>Show all work</Button>
+          {/if}
         </div>
 
         {#if visibleImportDraftCount > 0 && nextImportDraft}
@@ -970,7 +1015,7 @@
           {:else}
             <p class="muted">No tasks yet — <strong>New thread</strong> to begin.</p>
           {/if}
-        {:else if visibleTasks.length === 0}
+        {:else if displayedTasks.length === 0}
           <UtilityPanel as="div" className="work-empty-filter" tone="neutral">
             <div>
               <strong>{emptyFilterTitle()}</strong>
@@ -985,7 +1030,7 @@
           </UtilityPanel>
         {:else}
           <CardList className="work-list-stack" ariaLabel="Work items">
-            {#each sortedTasks as task (task.id)}
+            {#each displayedTasks as task (task.id)}
               <CardListItem
                 as="button"
                 className="work-list-row"
@@ -1009,7 +1054,7 @@
               </CardListItem>
             {/each}
           </CardList>
-          {#if inventoryPage?.hasMore && workFilter === 'all'}
+          {#if !ownerReviewQueueMode && inventoryPage?.hasMore && workFilter === 'all'}
             <div class="inventory-more">
               <Button variant="secondary" size="sm" disabled={inventoryLoadBusy} onclick={() => void loadMoreWork()}>
                 {inventoryLoadBusy ? 'Loading more work' : 'Load more work'}
@@ -1144,7 +1189,17 @@
   }
   .work-list-overview {
     display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--s-3);
     margin-bottom: var(--s-3);
+  }
+  .review-queue-detail {
+    max-width: 56ch;
+    margin: var(--s-1) 0 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
   }
   .work-list-inspector-layout {
     display: grid;
@@ -1344,6 +1399,10 @@
     }
     .work-view-actions {
       justify-content: flex-start;
+    }
+    .work-list-overview {
+      align-items: stretch;
+      flex-direction: column;
     }
     :global(.draft-queue-card) {
       flex-direction: column;
