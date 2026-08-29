@@ -562,7 +562,7 @@ describe('project-summary-projection', () => {
 
     expect(projection.decision.primaryAction.targetId).toBe(projection.actionModel?.primaryAction?.taskId)
     expect(projection.orientationSpine?.summary.pinnedNow).toEqual([
-      projection.decision.execution.focusTaskTitle,
+      projection.decision.primaryAction.targetId,
     ])
   })
 

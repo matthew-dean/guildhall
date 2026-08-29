@@ -59218,3 +59218,43 @@ the shared current action for an individual project.
   NAR-091 through NAR-094. The route has no browser error or horizontal
   overflow at 1280x720. The full rendered owner-flow suite, `pnpm test:ui`,
   passed 45/45 after this repair.
+
+### Release gate repair: canonical readiness projection remains replay-safe
+
+- [x] User job: a release candidate must have one durable readiness answer that
+  can be recomputed after a legitimate task-state migration without making the
+  server or its verification suite fail. Proof totals and release membership
+  must reflect the current shared execution model rather than stale fixture
+  assumptions.
+- Finding, 2026-08-29: the current usability PR's Verify job is red. A focused
+  rerun of `serve-release-readiness.test.ts` completed 83/88 tests but exposed
+  five release-boundary regressions: inferred Narrative Harness proof fixtures
+  expect one proof path after the canonical model records two; two migration
+  fixtures replay `release.readiness` under a fixed claim id with changed
+  content; and a split-parent assertion expects the parent execution node even
+  though the selected scope correctly contains its three materialized children.
+  The archived CI run also timed out most tests under parallel load, so release
+  verification must be made deterministic before a 0.13.2 release is prepared.
+- Contract Touch Decision: writeProjectStateDatabaseSummarySnapshot now treats
+  a semantic difference in its canonical decision claims as a project-state
+  mutation, bumping the revision and rebasing those immutable claim ids before
+  writing. Touched contracts: current project revision, summary-resolution
+  snapshot, and canonical claim identity. Considered but not touched: queue
+  revision semantics, claim payload schema, migrations, API payloads, and
+  release-scope rules. Rejected: accepting mismatched claim replays or
+  downgrading the decision to cache-only metadata. Schema Migration Decision:
+  none; stored shapes are unchanged and old rows remain readable. Apply/revert:
+  write-time revision choice only, with no destructive migration.
+- Evidence, 2026-08-29: the focused release-readiness fixture set passes for
+  both changed proof contracts, the migration replay cases, and split-child
+  execution scope. pnpm test:release passes 310/310 under the same parallel
+  command used by Verify; the readiness suite completes 88/88 without timeout
+  failures. pnpm typecheck and pnpm lint:contracts pass. The release artifact
+  contract now asserts the intentional Map chunk instead of the removed
+  Structure-panel chunk. pnpm test:ui passes 45/45, including the mobile
+  Projects flow: a migration-blocked card exposes Review project update and
+  opens the named migration dialog rather than a misleading spec action.
+  After pnpm dev:install and a Looma + Knit restart, the installed 0.13.2
+  service reports stale:false. Its actual overview and Work routes show the
+  single required update, named migration, and Apply required updates action
+  without browser-console errors.

@@ -126,7 +126,7 @@ describe('release artifact contract', () => {
       'TimelineTab',
       'ReleaseTab',
       'SettingsTab',
-      'ProjectStructurePanel',
+      'ProjectMapTab',
     ]) {
       expect(projectView).not.toContain(`import ${tab} from`)
     }
@@ -134,7 +134,7 @@ describe('release artifact contract', () => {
     expect(projectView).toContain("import('./project/ThreadTab.svelte')")
     expect(projectView).toContain("import('./project/WorkTab.svelte')")
     expect(projectView).toContain("import('./project/ProjectAttachFlow.svelte')")
-    expect(projectView).toContain("import('./project/structure/ProjectStructurePanel.svelte')")
+    expect(projectView).toContain("import('./project/ProjectMapTab.svelte')")
   })
 
   it('publishes the current runtime image to GHCR with immutable and minor-line tags', () => {

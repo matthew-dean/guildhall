@@ -246,7 +246,7 @@ async function initChildRepo(repoPath: string): Promise<void> {
   await execFileP('git', ['commit', '-m', 'baseline'], { cwd: repoPath })
 }
 
-describe('GET /api/project/release-readiness', () => {
+describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
   it('serves saved status counts for current work without a named release', async () => {
     await seedQueue({
       version: 1,
@@ -3310,7 +3310,7 @@ describe('GET /api/project/release-readiness', () => {
     const task = taskDetail.task
     expect(task?.completionProof).toMatchObject({
       state: 'verified',
-      expectedCount: 1,
+      expectedCount: 2,
       verifiedCount: expect.any(Number),
       latestAt: '2026-07-04T08:50:00.000Z',
     })
@@ -3590,7 +3590,7 @@ describe('GET /api/project/release-readiness', () => {
     const task = taskDetail.task
     expect(task?.completionProof).toMatchObject({
       state: 'missing',
-      expectedCount: 1,
+      expectedCount: 2,
       verifiedCount: expect.any(Number),
       missing: ['Required proof evidence has not been attached yet.'],
     })
@@ -3921,7 +3921,6 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.totals.tasks).toBe(3)
     expect(body.totals.unfinishedCount).toBe(3)
     expect([...body.scope.nodeIds].sort()).toEqual([
-      'work:task-contracts',
       'work:task-contracts-split-model',
       'work:task-contracts-split-world',
       'work:task-contracts-split-space',

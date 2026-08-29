@@ -208,9 +208,10 @@ test('projects home scrolls at mobile size and opens explicit project routes', a
   await page
     .locator('section.project-card')
     .filter({ has: page.getByRole('heading', { name: 'Looma + Knit' }) })
-    .getByRole('button', { name: 'Review next spec' })
+    .getByRole('button', { name: 'Review project update' })
     .click()
-  await expect(page).toHaveURL(/\/projects\/looma-knit\/(task|work)/)
+  await expect(page).toHaveURL(/\/projects\/looma-knit\/overview\?repair=migration/)
+  await expect(page.getByRole('dialog', { name: 'Migrate project' })).toBeVisible()
   await expect(page.locator('html')).toHaveJSProperty('scrollWidth', 390)
 })
 

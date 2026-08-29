@@ -5515,10 +5515,14 @@ export function writeProjectStateDatabaseSummarySnapshot(
       const projectionChangesCurrentState = currentProjection
         ? currentProjectionChangesCurrentState(database, currentProjection)
         : false
-      const revision = projectionChangesCurrentState
+      const resolutionChangesCurrentState = snapshot.stateResolution
+        ? stateResolutionChangesCurrentState(database, snapshot.stateResolution, actualProjectRevision)
+        : false
+      const changesCurrentState = projectionChangesCurrentState || resolutionChangesCurrentState
+      const revision = changesCurrentState
         ? bumpRevision(database, generatedAt)
         : actualProjectRevision
-      const stateResolution = snapshot.stateResolution && projectionChangesCurrentState
+      const stateResolution = snapshot.stateResolution && changesCurrentState
         ? rebaseCanonicalStateResolutionSnapshot(snapshot.stateResolution, revision, actualRevision, generatedAt)
         : snapshot.stateResolution
       database.prepare(`
@@ -5680,6 +5684,39 @@ function currentProjectionChangesCurrentState(
   return projection.scopeRows.some(row => {
     const current = currentByTaskId.get(row.taskId)
     return !current || scopeRowKey(current) !== scopeRowKey(row)
+  })
+}
+
+/**
+ * A summary may change the shared decision even when the indexed task and
+ * scope rows did not. Canonical claims are immutable within a revision, so a
+ * changed decision must receive a new revision before its claims are written.
+ */
+function stateResolutionChangesCurrentState(
+  database: DatabaseSync,
+  snapshot: ProjectStateDatabaseStateResolutionSnapshot,
+  projectRevision: number,
+): boolean {
+  const existingRows = database.prepare(`
+    SELECT claim_id, project_revision, subject_kind, subject_id, field,
+      value_json, authority, actor, evidence_refs_json, basis_kind, basis_id,
+      supersedes_claim_id, rejection_code
+    FROM project_state_claims
+    WHERE project_revision = ?
+      AND authority = 'canonical_mutation'
+      AND actor = 'project-state-boundary'
+  `).all(projectRevision) as JsonRecord[]
+  if (existingRows.length === 0) return false
+
+  const claims = snapshot.claims.filter(claim =>
+    claim.authority === 'canonical_mutation' && claim.actor === 'project-state-boundary',
+  )
+  if (existingRows.length !== claims.length) return true
+
+  const existingById = new Map(existingRows.map(row => [String(row.claim_id ?? ''), row]))
+  return claims.some(claim => {
+    const existing = existingById.get(claim.id)
+    return !existing || !canonicalClaimReplayMatches(existing, claim)
   })
 }
 
