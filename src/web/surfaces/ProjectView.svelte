@@ -20,6 +20,7 @@
   import Tooltip from '../lib/Tooltip.svelte'
   import IntakeModal from './IntakeModal.svelte'
   import { project } from '../lib/project.svelte.js'
+  import { toast } from '../lib/toast.svelte.js'
   import { onEvent } from '../lib/events.js'
   import { path, nav } from '../lib/nav.svelte.js'
   import { currentProjectHref, projectActionHref, projectFetch } from '../lib/project-routes.js'
@@ -644,6 +645,7 @@
       migrationAppliedMessage = remaining > 0
         ? 'Update applied. Another project update is required.'
         : 'Migration complete.'
+      if (remaining === 0) toast.success('Project update complete.')
     } catch (err) {
       migrationError = err instanceof Error ? err.message : String(err)
       migrationApplyStage = 'idle'

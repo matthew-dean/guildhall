@@ -444,7 +444,13 @@ test('project shell keeps a required update as the sole visible work interruptio
   await page.setViewportSize({ width: 1114, height: 692 })
   await page.goto('/projects/looma-knit')
 
-  await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
+  const overview = page.getByRole('region', { name: 'Project overview' })
+  await expect(overview).toBeVisible()
+  await expect(overview.getByRole('button', { name: 'Review project update' })).toBeVisible()
+  await expectNoClippedContent(page, {
+    containerSelector: '.overview-decision-card',
+    itemSelector: '.overview-decision-card button',
+  })
   expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(1115)
 
   await page.goto('/projects/looma-knit/work')

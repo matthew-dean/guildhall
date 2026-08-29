@@ -117,7 +117,7 @@
     className="overview-decision-card"
   >
     <div class="decision">
-      <div>
+      <div class="decision-copy">
         <p class="decision-milestone">{releaseLabel}</p>
         {#if releaseProgress}
           <p class="decision-progress">{releaseProgress}</p>
@@ -129,8 +129,8 @@
           <h2>{nextAction.label}</h2>
           {#if nextAction.taskLabel}
             <p class="decision-task" title={nextAction.taskLabel}>
-              {#if nextActionTaskKey}<span>{nextActionTaskKey}</span>{/if}
-              {nextAction.taskLabel}
+              {#if nextActionTaskKey}<span class="decision-task-key">{nextActionTaskKey}</span>{/if}
+              <span class="decision-task-title">{nextAction.taskLabel}</span>
             </p>
           {/if}
           {#if nextAction.detail}
@@ -206,17 +206,22 @@
     display: flex;
     align-items: center;
     gap: var(--s-2);
+    min-width: 0;
     max-inline-size: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
-  .decision-task span {
+  .decision-task-key {
     flex: none;
     color: var(--gh-color-text-muted);
     font-family: var(--gh-font-mono, ui-monospace, monospace);
     font-size: var(--gh-type-size-1);
+  }
+
+  .decision-task-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .decision-progress {
@@ -229,6 +234,11 @@
     align-items: flex-end;
     justify-content: space-between;
     gap: var(--s-4);
+  }
+
+  .decision-copy {
+    min-width: 0;
+    flex: 1 1 auto;
   }
 
   .decision h2 {

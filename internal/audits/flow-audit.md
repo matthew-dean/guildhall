@@ -59258,3 +59258,40 @@ the shared current action for an individual project.
   service reports stale:false. Its actual overview and Work routes show the
   single required update, named migration, and Apply required updates action
   without browser-console errors.
+
+### Repair: Overview attention action remains visible after a project update
+
+- [x] User job: after applying a required project update, the owner can tell it
+  succeeded and can immediately take the one newly selected next action. The
+  action stays visible beside a bounded task label at every supported width.
+- Finding, 2026-08-29: Looma + Knit successfully applied its required
+  migration, then silently returned to Overview with `Review a spec` selected.
+  The authoritative project status confirms no migration remains and ten specs
+  now await review, but the long task label expanded its flex column beyond the
+  card and pushed the already-rendered `Review next spec` button off-screen.
+  The result reads as an unresolved warning with neither proof of completion
+  nor a reachable action.
+- Contract Touch Decision: keep selection, label, href, and action ownership in
+  the existing shared action model. Repair only the overview presentation
+  contract: its copy column must be shrinkable, the task title must truncate
+  inside that column, and an applied migration must publish a success notice.
+  Considered but not touched: action ranking, migration persistence, task
+  state, readiness projection, API response shape, and schemas. Schema
+  Migration Decision: none. Required proof: component action rendering, a
+  rendered narrow overview with no horizontal overflow and a visible action,
+  and installed Looma + Knit proof after a real completed update. Apply/revert:
+  view-state and layout only; no persisted project data changes.
+- Evidence, 2026-08-29: ProjectOverviewTab and ProjectView focused suites pass
+  77/77; `pnpm typecheck` and `pnpm lint:contracts` pass. The full rendered
+  suite passes 45/45, including the narrow Overview regression: the visible
+  `Review project update` button stays inside `.overview-decision-card` with no
+  horizontal overflow. After `pnpm dev:install` and a Looma + Knit restart,
+  `/api/stale-server` reports `stale:false`. The installed actual Overview
+  presents `Review next spec` fully inside its card (right edge 914px in a
+  971px viewport); the task title has `text-overflow: ellipsis` with a 570px
+  client width and 945px intrinsic width. One non-mutating click opens the
+  selected task record directly, where `Approve spec` is visible. The real
+  project status confirms the migration completed and the ten pending spec
+  reviews are now the authoritative next action.
+  `pnpm test:release` also passes 310/310 after the public curl examples were
+  aligned with the 0.13.1 docs release; `pnpm docs:build` passes.
