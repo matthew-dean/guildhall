@@ -851,6 +851,47 @@ describe('project-summary-projection', () => {
     expect(indexed?.scope).toMatchObject({ included: 2 })
   })
 
+  it('uses collapsed execution rows for owner-visible release progress', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-collapsed-release-progress-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('feature-container', 'done', {
+        releaseIds: ['release-current'],
+        hierarchy: { childIds: ['feature-work'], relation: 'contains' },
+      }),
+      task('feature-work', 'ready', {
+        releaseIds: ['release-current'],
+        hierarchy: { parentId: 'feature-container', childIds: [], relation: 'decomposes' },
+      }),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:feature-container', 'work:feature-work'],
+        deferredNodeIds: [],
+      }],
+    })
+    const regular = buildProjectSummaryProjection({
+      projectId: 'collapsed-progress',
+      queue: taskQueue,
+      generatedAt: now,
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'collapsed-progress', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+    const indexed = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'collapsed-progress',
+      generatedAt: now,
+      sourceQueueLastUpdated: now,
+    })
+
+    expect(regular.releaseSummary.counts).toMatchObject({ total: 1, done: 0 })
+    expect(indexed?.releaseSummary.counts).toMatchObject({ total: 1, done: 0 })
+  })
+
   it('keeps the indexed orientation note when a named release has later work', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-later-work-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')

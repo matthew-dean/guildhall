@@ -413,7 +413,7 @@ describe('Guildhall CLI surface', () => {
     ])
   })
 
-  it('formats project status from the saved release boundary without reopening task detail', () => {
+  it('formats project status from the shared release summary without re-counting raw membership', () => {
     const state = {
       authority: 'database' as const,
       queueRevision: 12,
@@ -499,7 +499,7 @@ describe('Guildhall CLI surface', () => {
 
     expect(status.release?.release?.state).toBe('shipped')
     expect(status.scope).toMatchObject({ included: 1, deferred: 1 })
-    expect(renderProjectStatus(status)).toContain('1/1 done / 1 deferred / 0 blocked')
+    expect(renderProjectStatus(status)).toContain('0/2 done / 7 deferred / 1 blocked')
   })
 
   it('does not expose task mutation commands in help', () => {

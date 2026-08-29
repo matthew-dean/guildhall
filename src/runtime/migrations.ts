@@ -247,6 +247,7 @@ const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-
 const COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID = '0.13.100/compact-spec-review-readiness'
 const ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.101/active-release-progress-reprojection'
 const SPEC_REPAIR_ACTION_REPROJECTION_MIGRATION_ID = '0.13.102/spec-repair-action-reprojection'
+const COLLAPSED_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.103/collapsed-release-progress-reprojection'
 const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
 const DURABLE_DECISION_SNAPSHOT_MIGRATION_ID = '0.13.71/durable-decision-snapshot'
 const INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID = '0.13.72/indexed-release-summary-reprojection'
@@ -5360,6 +5361,37 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: COLLAPSED_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID,
+    title: 'Refresh release progress from visible work items',
+    introducedIn: '0.13.103',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the shared release summary so containing tasks do not inflate the owner-visible progress total.',
+    async detect() {
+      // The corrected hierarchy rule must refresh every existing summary once;
+      // the migration ledger keeps subsequent reads and restarts idempotent.
+      return {
+        needed: true,
+        affectedPaths: ['compact release summary and shared owner progress'],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The owner-visible release progress could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: 'Refreshed release progress from the visible work items in the selected release.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
     id: NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID,
     title: 'Align named release counts with membership',
     introducedIn: '0.13.73',
@@ -5995,6 +6027,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [DURABLE_SPEC_HANDOFF_MIGRATION_ID]: 'migrations.test.ts: settles only an approved, structurally valid spec handoff and never auto-approves it',
   [COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID]: 'migrations.test.ts: backfills compact owner-review readiness from structured task contracts and leaves task detail unchanged',
   [ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects an existing current summary so paused work is active while release blockers remain recorded',
+  [COLLAPSED_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID]: 'project-summary-projection.test.ts: keeps owner-visible release totals aligned with collapsed execution rows',
   [DURABLE_DECISION_SNAPSHOT_MIGRATION_ID]: 'migrations.test.ts: rebuilds a missing revision-bound decision packet from normalized state',
   [INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership',
   [NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID]: 'migrations.test.ts: aligns named release counts to selected membership when child execution rows are present',

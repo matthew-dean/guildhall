@@ -741,37 +741,10 @@ export interface CliProjectStatus {
 }
 
 function cliReleaseSummaryFromSavedScope(state: ProjectSavedReleaseReadModel): ProjectSummaryReleaseSummary | null {
-  const summary = state.summary?.releaseSummary
-  if (!summary) return null
-  const scope = state.scope
-  if (!scope || scope.nodeIds.length === 0 || state.scopeRows.length === 0) return summary
-  const releaseTaskIds = new Set(
-    scope.nodeIds
-      .map(nodeId => nodeId.replace(/^work:/, '').trim())
-      .filter(Boolean),
-  )
-  if (releaseTaskIds.size === 0) return summary
-  const releaseRows = state.scopeRows.filter(row => releaseTaskIds.has(row.taskId))
-  const done = releaseRows.filter(row => row.handoffState === 'done').length
-  return {
-    ...summary,
-    counts: {
-      total: releaseTaskIds.size,
-      done,
-      unfinished: Math.max(0, releaseTaskIds.size - done),
-      ready: releaseRows.filter(row => row.handoffState === 'ready').length,
-      active: releaseRows.filter(row => row.handoffState === 'paused' || row.handoffState === 'review').length,
-      blocked: releaseRows.filter(row => row.blocksRelease).length,
-      deferred: scope.deferredNodeIds.length,
-      ownerBlocked: releaseRows.filter(row => row.humanBlocking).length,
-      proofBlocked: releaseRows.filter(row => row.proofBlocked).length,
-    },
-    taskStatusCounts: releaseRows.reduce<Record<string, number>>((counts, row) => {
-      const status = row.handoffState || 'unknown'
-      counts[status] = (counts[status] ?? 0) + 1
-      return counts
-    }, {}),
-  }
+  // Status is an owner-facing compact surface. The shared saved summary has
+  // already decided whether hierarchy containers count toward progress; CLI
+  // must not reopen raw membership and produce a competing total.
+  return state.summary?.releaseSummary ?? null
 }
 
 /**

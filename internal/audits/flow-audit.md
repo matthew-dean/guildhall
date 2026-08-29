@@ -59995,3 +59995,48 @@ execution projection on every runtime change; no persisted shape changes.
   `Resume`. After an intentional pause, API, action model, and CLI all return
   to `paused_live_work` for the same task. The installed focused browser route
   was checked at `1280px` with `scrollWidth === clientWidth`.
+
+### Finding: Milestone progress must have one owner-visible total
+
+- [x] User job: when an owner opens Looma + Knit, the V1 milestone progress
+  total is the same in Overview, Work, Release, API, and `guildhall status`.
+  Internal parent/container membership must not create a second number that
+  makes progress look contradictory.
+- Finding, 2026-08-29: installed Overview, Work, and Release all report the
+  shared compact release total as `0 of 16 complete`, while `guildhall status`
+  independently re-counts raw release `nodeIds` and reports `0/17`. The extra
+  record is a containing task omitted from the executable owner-progress view.
+  The CLI is reopening scope membership after the saved summary has already
+  made the product decision, violating the summary-state ownership boundary.
+
+#### Contract Touch Decision
+
+The shared `releaseSummary` is the sole owner-facing release-progress contract,
+and it must count the same collapsed execution rows as Overview/Work. CLI
+status forwards that summary; it must not reconstruct totals from raw scope
+membership. A summary rebuild must likewise not restore parent/container rows
+to the total after a task mutation. Considered but not touched: raw release
+membership, hierarchy semantics, scheduler execution scope, task persistence,
+and release membership itself. Required proof: a fixture with a container and
+its included children yields one compact total after both initial projection
+and a task write; installed Looma API and `guildhall status` report `0/16`.
+Apply/revert: alter shared release-progress projection and CLI presentation;
+no project data changes.
+
+#### Schema Migration Decision
+
+Derived summary reprojection `0.13.103/collapsed-release-progress-reprojection`
+is automatic and required. It rebuilds the existing SQLite summary and decision
+packet through the corrected hierarchy rule; task definitions, raw release
+membership, and history are unchanged. The migration is ledger-idempotent and
+reversible by restoring the prior projection rule and reprojecting again.
+
+- Evidence, 2026-08-29: the regular and indexed summary regressions both
+  collapse a release container and its child into one owner-visible work item;
+  the CLI regression proves it forwards the saved summary rather than
+  recalculating raw membership. Installed Looma applied
+  `0.13.103/collapsed-release-progress-reprojection` through the normal
+  migration ledger. Its API release summary, Work selected counts, start scope,
+  and `guildhall status --json` now all report `0/16`, with the same paused
+  `Component implementation` action. `/api/stale-server` reported
+  `stale: false` after the installed restart.

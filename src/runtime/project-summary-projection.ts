@@ -1405,16 +1405,12 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const releaseMembershipRows = releaseMemberTaskIds.size > 0
     ? rows.filter(row => releaseMemberTaskIds.has(row.taskId))
     : selectedRelease ? rowsForReleaseMembership(rows, selectedRelease, 'nodeIds') : []
-  const releaseExecutionRows = releaseMembershipRows.length > 0
-    ? releaseMembershipRows
-    : includedRows
-      .filter(row => row.countInProjectTotals !== false)
-      .filter(row => row.hierarchyRole !== 'parent' || !includedRows.some(child =>
-        child.parentTaskId === row.taskId && child.countInProjectTotals !== false,
-      ))
-  const releaseIncluded = selectedRelease
-    ? (releaseMemberTaskIds.size || selectedReleaseTaskIds.length)
-    : releaseExecutionRows.length
+  const releaseCandidateRows = releaseMembershipRows.length > 0 ? releaseMembershipRows : includedRows
+  const releaseExecutionRows = executionScopeRows(releaseCandidateRows.map(row => ({
+    ...row,
+    parentTaskId: row.parentTaskId ?? undefined,
+  })))
+  const releaseIncluded = releaseExecutionRows.length
   const releaseDeferred = deferredRows.length
   const releaseSummary: ProjectSummaryReleaseSummary = {
     scopeMode: selectedRelease ? 'named_release' : 'unreleased',
@@ -2830,10 +2826,10 @@ function buildReleaseSummary(input: {
     : null
   const rows = input.scopeProjection.rows.filter(row => row.scope === 'included')
   const releaseRows = release ? rowsForReleaseMembership(rows, release, 'nodeIds') : []
-  const executionRows = releaseRows.length > 0 ? releaseRows : executionScopeRows(rows)
-  const included = release
-    ? releaseMembershipTaskIds(release, 'nodeIds').length
-    : executionRows.length
+  const executionRows = executionScopeRows(releaseRows.length > 0 ? releaseRows : rows)
+  // Containers remain release members for provenance, but the owner-visible
+  // progress denominator is the same collapsed execution list used by Work.
+  const included = executionRows.length
   const done = executionRows.filter(row => row.handoffState === 'done').length
   const deferred = input.scopeProjection.counts.deferred
   const releaseMetadata = release
