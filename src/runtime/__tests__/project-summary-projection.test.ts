@@ -64,6 +64,47 @@ function queue(tasks: Record<string, unknown>[], extra: Record<string, unknown> 
   })
 }
 
+function ownerReviewFields(): Record<string, unknown> {
+  return {
+    productBrief: {
+      userJob: 'Review a bounded implementation plan.',
+      successMetric: 'The task has a complete owner-reviewable contract.',
+      nonGoals: ['Do not start implementation during review.'],
+      authoredBy: 'spec-agent',
+    },
+    structuredSpec: {
+      whatThisIs: 'A bounded implementation plan.',
+      problemContext: 'The task needs an explicit completion contract.',
+      goals: ['Provide a reviewable implementation plan.'],
+      nonGoals: ['Do not start implementation during review.'],
+      proposedDesign: 'Use the existing project boundary.',
+      keyDecisions: ['Keep the scope bounded.'],
+      acceptanceCriteria: [{
+        scenario: 'Given the owner opens the review',
+        expectation: 'The completion contract is visible.',
+        verificationMode: 'review',
+      }],
+      verification: ['Review the contract before approval.'],
+      completionBoundary: {
+        productOutcome: 'The owner can approve a complete plan.',
+        whatGuildhallCanCompleteInCode: 'Record the implementation contract.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'The registered project.',
+        whatCountsAsDone: 'The complete contract is available for review.',
+        whatMustBeSplitOrBlocked: 'Split only independent work.',
+        splitPolicy: 'conditional',
+      },
+    },
+    acceptanceCriteria: [{
+      id: 'ac-1',
+      description: 'The completion contract is visible.',
+      verifiedBy: 'review',
+      met: false,
+    }],
+  }
+}
+
 describe('project-summary-projection', () => {
   let temp: string | undefined
 
@@ -179,6 +220,7 @@ describe('project-summary-projection', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'narrative-harness',
       queue: queue([task('review-me', 'spec_review', {
+        ...ownerReviewFields(),
         specReviewGate: {
           authority: 'owner',
           requestedAt: now,
@@ -230,8 +272,8 @@ describe('project-summary-projection', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'release-bounded-review',
       queue: queue([
-        task('current-review', 'spec_review', { specReviewGate: reviewGate }),
-        task('later-review', 'spec_review', { specReviewGate: reviewGate }),
+        task('current-review', 'spec_review', { ...ownerReviewFields(), specReviewGate: reviewGate }),
+        task('later-review', 'spec_review', { ...ownerReviewFields(), specReviewGate: reviewGate }),
       ], {
         selectedReleaseId: 'release-current',
         releases: [
@@ -278,6 +320,7 @@ describe('project-summary-projection', () => {
       queue: queue([
         task('architecture-gate', 'exploring'),
         task('desktop-adapter', 'spec_review', {
+          ...ownerReviewFields(),
           dependsOn: ['architecture-gate'],
           specReviewGate: {
             authority: 'owner',
@@ -316,6 +359,7 @@ describe('project-summary-projection', () => {
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
     const taskQueue = queue([
       task('owner-review', 'spec_review', {
+        ...ownerReviewFields(),
         specReviewGate: {
           authority: 'owner',
           requestedAt: now,
@@ -324,6 +368,7 @@ describe('project-summary-projection', () => {
         },
       }),
       task('coordinator-review', 'spec_review', {
+        ...ownerReviewFields(),
         specReviewGate: {
           authority: 'coordinator',
           requestedAt: now,

@@ -59456,3 +59456,129 @@ migration endpoint succeeds.
   clear, so the required-migration application itself is covered by the
   deterministic component regression rather than mutating the owner's project
   during this audit.
+
+### Finding: Invalid specs must not enter the owner-approval queue
+
+- [ ] User job: when a release pauses for a spec review, the owner can trust
+  that the displayed decision is real: the spec explains a coherent outcome,
+  its source decisions are resolved, and it has a usable completion boundary.
+  If Guildhall cannot form that record, it must route the task into explicit
+  repair or one focused clarification rather than ask the owner to approve
+  malformed work.
+- Finding, 2026-08-29: the first Looma + Knit `Review next spec` task,
+  `LOO-EBUYE7`, opens an approval card even though its full spec records the
+  unresolved owner decision `depends on what migration status you're talking
+  about? Not sure whta this was about.` and reports `Current proof evidence is
+  missing` for every criterion. The queue calls this `owner_review_required`
+  and offers `Approve spec` before showing any of that evidence. A person who
+  follows the visible action is being asked to legitimize an incoherent task.
+#### Contract Touch Decision
+
+Extend the shared typed spec-completion boundary with one derived
+`readyForOwnerApproval` decision. Summary, scope, Thread, scheduler selection,
+and fallback readiness must consume that same decision; an incomplete
+`spec_review` becomes derived `spec_shaping` work rather than an owner block.
+The compact task point carries only that typed Boolean, calculated from the
+same core boundary as rich task reads, so compact projections never reopen raw
+spec prose. Considered but not touched: generated prose wording, task-drawer
+tab layout, release ordering, approval endpoint, and the full task schema.
+Required proof: the malformed Looma task leaves the review queue and exposes a
+clear repair continuation, while a well-formed review task remains directly
+approvable. Apply/revert: shared derived readiness only; do not auto-edit,
+approve, or discard task data.
+
+#### Schema Migration Decision
+
+Additive compact-read-model migration only. The existing
+`currentSummary` JSON receives `specReviewReadyForOwnerApproval`, a Boolean
+recomputed from the authoritative task definition by an automatic migration;
+it has a fail-closed compatibility reader and no table/column change. Existing
+task records remain authoritative and are not rewritten. An incomplete
+spec-review record follows the existing normal spec-repair run path; this
+change only prevents its invalid state from being represented as a pending
+owner approval. Rollback ignores the additive field and recomputes current
+summary from task detail.
+
+- Evidence, 2026-08-29: targeted spec-ownership, project-summary,
+  project-scope, Thread, and migration tests pass (163 assertions). The
+  installed Looma + Knit project applied the automatic compact readiness repair
+  before its overview was read. Its shared summary now reports no owner review,
+  marks legacy malformed `spec_review` records as `spec_shaping`, and points
+  the owner to the paused `Component implementation` work item instead of
+  `Approve spec`.
+
+### Repair: Safe project updates must repair before they interrupt the owner
+
+- [ ] User job: when Guildhall has a safe, automatic local read-model repair,
+  opening a project or starting its work should complete that repair first. The
+  owner should arrive at the actual next decision, not a migration detour they
+  cannot evaluate or meaningfully improve.
+- Finding, 2026-08-29: after installing the compact spec-review readiness
+  repair, real Looma + Knit reports it as a blocking required migration and
+  replaces the release flow with a project-update route. The migration is
+  explicitly marked `automatic`, is an additive bounded-summary backfill, and
+  has a fail-closed reader. Requiring the owner to initiate it recreates the
+  exact opaque, fast, and confusing migration interaction this audit is meant
+  to remove.
+
+#### Contract Touch Decision
+
+Add one request-scoped, coalesced safe-migration boundary before a project API
+route consumes summary, readiness, inbox, or task state. It runs only
+definitions marked automatic via the existing migration executor and leaves
+prompt/manual definitions as visible owner decisions. Considered but not
+touched: migration definitions, application semantics, project action ranking,
+UI modal copy, task/release state, and API response shapes. Required proof: a
+safe migration is applied before the installed Looma route renders and its
+primary action reflects the repaired shared state; a prompt/manual migration
+still remains explicit. Apply/revert: the existing idempotent executor and
+ledger own writes; a failed automatic repair remains blocked and visible.
+
+#### Schema Migration Decision
+
+None. This changes when existing automatic migrations execute, not their
+stored records, schemas, or rollback behavior.
+
+- Evidence, 2026-08-29: the server regression seeds the same legacy compact
+  state and proves that one owner-facing GET converges both automatic
+  migrations, with no remaining automatic blocker. In the installed Looma +
+  Knit app, `/api/project/migrations` now has no blocked migrations and the
+  only remaining update is explicitly manual runtime setup. The restarted
+  service reports `stale:false`.
+
+### Finding: A focused paused task must own the resume decision
+
+- [ ] User job: when a project is paused on one named work item, the owner sees
+  one clear route to that item and one explicit resume command there. The
+  overview must not pair a contextual `Open Work` handoff with a second,
+  generic `Resume` command that has a different side effect.
+- Finding, 2026-08-29: the installed Looma + Knit overview accurately says
+  `Work paused` and names `Component implementation`, but the global chrome
+  also offers `Resume`. `Open Work` navigates to the focused task while
+  `Resume` starts the project immediately, leaving a fresh owner to guess
+  whether they are alternatives or a required sequence. The focused Work
+  surface already exposes the task-specific resume action, so it must own the
+  decision.
+
+#### Contract Touch Decision
+
+Keep the existing shared action model and start command unchanged. Extend the
+shell's existing focused-work presentation rule to cover the typed
+`paused_live_work` action code as well as `ready_work`, so the shared
+project-relative Work handoff is the only overview action. Considered but not
+touched: scheduler selection, start endpoint, paused-state persistence,
+project-summary API, task-drawer command, and task schema. Required proof: a
+paused focused task has no global Resume control, presents one Open Work action,
+and the focused task retains its explicit resume control. Apply/revert:
+presentation-only suppression of duplicate shell chrome.
+
+#### Schema Migration Decision
+
+None. No stored state or schema changes.
+
+- Evidence, 2026-08-29: `ProjectView.svelte.test.ts` passes 73/73, including
+  both ready and paused focused-work cases. Installed Looma + Knit renders
+  only `Open Work` on the overview at 1280px, 960px, and 390px; each viewport
+  has no page or nested horizontal overflow and keeps the action in the first
+  viewport. The owner path reaches focused Work and then the task drawer's
+  visible `Resume only this work item` command without starting live work.

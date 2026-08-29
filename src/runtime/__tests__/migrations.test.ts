@@ -182,6 +182,104 @@ describe('getProjectMigrationStatus', () => {
     })).applied).toEqual([])
   })
 
+  it('backfills compact owner-review readiness from structured contracts without rewriting task detail', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const reviewedAt = '2026-07-23T00:00:00.000Z'
+    const structuredSpec = {
+      whatThisIs: 'A bounded review fixture.',
+      problemContext: 'The compact projection needs one typed approval fact.',
+      goals: ['Present a complete review contract.'],
+      nonGoals: ['Do not approve incomplete work.'],
+      proposedDesign: 'Use the durable task contract.',
+      keyDecisions: ['Keep compact reads typed.'],
+      acceptanceCriteria: [{
+        scenario: 'Given an owner opens the review',
+        expectation: 'The complete contract is available.',
+        verificationMode: 'review',
+      }],
+      verification: ['Review the durable contract.'],
+      completionBoundary: {
+        productOutcome: 'The owner can approve a complete spec.',
+        whatGuildhallCanCompleteInCode: 'Record the implementation contract.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'The local test process.',
+        whatCountsAsDone: 'The complete contract is available for review.',
+        whatMustBeSplitOrBlocked: 'Split only independent work.',
+        splitPolicy: 'conditional',
+      },
+    }
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-07-23T00:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      tasks: [
+        {
+          id: 'task-valid-review',
+          title: 'Valid review',
+          status: 'spec_review',
+          releaseIds: ['release-1'],
+          specReviewGate: { authority: 'owner', requestedAt: reviewedAt, requestedBy: 'spec-agent', reason: 'spec_handoff' },
+          productBrief: { userJob: 'Review the bounded plan.', successMetric: 'The complete contract is visible.', nonGoals: [], authoredBy: 'spec-agent' },
+          structuredSpec,
+          acceptanceCriteria: [{ id: 'ac-1', description: 'The complete contract is visible.', verifiedBy: 'review', source: 'inferred', met: false }],
+        },
+        {
+          id: 'task-invalid-review',
+          title: 'Invalid review',
+          status: 'spec_review',
+          releaseIds: ['release-1'],
+          specReviewGate: { authority: 'owner', requestedAt: reviewedAt, requestedBy: 'legacy', reason: 'spec_handoff' },
+          spec: 'Rendered Markdown is not a durable contract.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'The owner sees this only after repair.', verifiedBy: 'review', source: 'inferred', met: false }],
+        },
+      ],
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-valid-review', 'work:task-invalid-review'],
+        deferredNodeIds: [],
+      }],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    const rows = database.prepare('SELECT id, summary_json FROM work_items WHERE id IN (?, ?)').all(
+      'task-valid-review',
+      'task-invalid-review',
+    ) as { id: string; summary_json: string }[]
+    for (const row of rows) {
+      const summary = JSON.parse(row.summary_json) as { currentSummary?: Record<string, unknown> }
+      delete summary.currentSummary?.specReviewReadyForOwnerApproval
+      database.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?').run(JSON.stringify(summary), row.id)
+    }
+    database.close()
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.100/compact-spec-review-readiness'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.100/compact-spec-review-readiness'])
+    const inventory = readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })
+    expect(inventory?.tasks.find(task => task.id === 'task-valid-review')?.currentSummary).toMatchObject({
+      specReviewReadyForOwnerApproval: true,
+    })
+    expect(inventory?.tasks.find(task => task.id === 'task-invalid-review')?.currentSummary).toMatchObject({
+      specReviewReadyForOwnerApproval: false,
+    })
+    const invalidDetail = readProjectStateDatabaseQueueDefinition(tasksPath)?.tasks.find(task => task.id === 'task-invalid-review')
+    expect(invalidDetail).toMatchObject({ status: 'spec_review' })
+    expect(invalidDetail).not.toHaveProperty('structuredSpec')
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.100/compact-spec-review-readiness'],
+    })).applied).toEqual([])
+  })
+
   it('settles an approved durable spec handoff without approving the spec', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     const structuredSpec = {

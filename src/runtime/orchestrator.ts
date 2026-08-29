@@ -216,7 +216,7 @@ import {
   type LandingStrategy,
 } from './merge-dispatcher.js'
 import { workSubtreeIds } from './work-hierarchy.js'
-import { requestSpecReview, specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { requestSpecReview, specReviewIsReadyForOwnerApproval } from './spec-review-ownership.js'
 import { applyRunAutomationPolicy as applyRunAutomationLeverPolicy } from './run-automation.js'
 import {
   atomicWriteText,
@@ -1949,7 +1949,7 @@ function shouldContinueSelectedTaskClosure(
   ) return false
   if (
     outcome.afterStatus === 'spec_review' &&
-    specReviewRequiresOwnerApproval(tasks.find(task => task.id === outcome.taskId) ?? { id: outcome.taskId })
+    specReviewIsReadyForOwnerApproval(tasks.find(task => task.id === outcome.taskId) ?? { id: outcome.taskId })
   ) {
     return false
   }

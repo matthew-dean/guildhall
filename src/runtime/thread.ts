@@ -41,7 +41,7 @@ import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessio
 import { projectTaskStateExistsSync, readProjectTaskQueueSync } from './project-state-boundary.js'
 import type { GitStorySnapshot } from './git-story.js'
 import { userFacingText } from './user-facing-text.js'
-import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { specReviewIsReadyForOwnerApproval } from './spec-review-ownership.js'
 import { taskShapingBlockers, type TaskShapingBlocker } from '@guildhall/shared'
 
 // ---------------------------------------------------------------------------
@@ -2114,7 +2114,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     // Spec review
     const shouldSurfaceSpecReview =
       (taskStatus === 'spec_review' || (taskStatus === 'exploring' && hasSpecDraft)) &&
-      specReviewRequiresOwnerApproval(t) &&
+      (taskId === META_INTAKE_TASK_ID || specReviewIsReadyForOwnerApproval(t)) &&
       shapingBlockers.length === 0 &&
       dependencyBlockers.length === 0
     if (shouldSurfaceSpecReview && !hasUnansweredQuestions) {

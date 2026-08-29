@@ -352,7 +352,7 @@ import {
 import { importedTaskNeedsBriefShaping, importedTaskNeedsSourceRecovery, normalizeImportedDraftTask } from './import-drafts.js'
 import { taskShapingBlockers, buildReleaseCompletionSummary, buildReleaseVerdictSummary, ownerInputObjectiveLabel } from '@guildhall/shared'
 import { selectedReleaseScopeForQueue, selectedTaskScopeForQueue } from './orchestrator-picker.js'
-import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { specReviewIsReadyForOwnerApproval } from './spec-review-ownership.js'
 import {
   buildInbox,
   buildInboxBlockers,
@@ -7169,6 +7169,41 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   const supervisor = opts.supervisor ?? new OrchestratorSupervisor()
   const runtimeSupervisor = opts.runtimeSupervisor ?? new ProjectRuntimeSupervisor()
+  const automaticMigrationRepairs = new Map<string, Promise<void>>()
+  const applyAutomaticProjectMigrations = async (projectRoot: string): Promise<void> => {
+    const key = resolve(projectRoot)
+    const existing = automaticMigrationRepairs.get(key)
+    if (existing) return existing
+    const repair = (async () => {
+      let previousOpenIds: string | null = null
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const status = await getProjectMigrationStatus({ projectRoot: key })
+        const automaticMigrationIds = [...status.pending, ...status.blocked]
+          .filter(migration => migration.safety === 'automatic')
+          .map(migration => migration.id)
+          .sort()
+        if (automaticMigrationIds.length === 0) return
+
+        const openIds = automaticMigrationIds.join(',')
+        if (openIds === previousOpenIds) {
+          throw new Error(`Automatic project migrations did not settle: ${openIds}.`)
+        }
+        previousOpenIds = openIds
+
+        const result = await applyProjectMigrations({ projectRoot: key, only: automaticMigrationIds })
+        if (result.failed.length > 0) {
+          throw new Error(`Automatic project migration failed: ${result.failed.map(migration => migration.id).join(', ')}.`)
+        }
+      }
+      throw new Error('Automatic project migrations exceeded the repair convergence limit.')
+    })()
+    automaticMigrationRepairs.set(key, repair)
+    try {
+      await repair
+    } finally {
+      if (automaticMigrationRepairs.get(key) === repair) automaticMigrationRepairs.delete(key)
+    }
+  }
   const runtimeBackendSetup = opts.runtimeBackendSetup ?? detectRuntimeBackendSetup
   const devServerManager = opts.devServerManager ?? new DevServerManager({ runtimeSupervisor })
   const app = new Hono()
@@ -7246,6 +7281,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const resolvedPath = resolveProjectPathForRequest(c)
     if (!resolvedPath) {
       return c.json({ error: 'Unknown project id for this local Guildhall service.' }, 404)
+    }
+    try {
+      await applyAutomaticProjectMigrations(resolvedPath)
+    } catch {
+      // The normal migration gate below remains the owner-facing failure path.
+      // A safe repair must never hide a real failure behind a transport error.
     }
     if (
       c.req.path.startsWith('/api/project') &&
@@ -11757,8 +11798,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const title = typeof (task as { title?: unknown }).title === 'string' && (task as { title: string }).title.trim()
           ? (task as { title: string }).title.trim()
           : null
-        const hasSpecDraft = typeof (task as { spec?: unknown }).spec === 'string' && (task as { spec: string }).spec.trim().length > 0
-        if (taskId && (selectedReleaseScope || hasSpecDraft || specReviewRequiresOwnerApproval({ id: taskId }))) {
+        if (taskId && specReviewIsReadyForOwnerApproval(task)) {
           waitingForApproval += 1
           if (!firstWaitingSpecTaskId) {
             firstWaitingSpecTaskId = taskId

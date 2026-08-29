@@ -65,7 +65,7 @@ import {
 } from './project-decision-projection.js'
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
-import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { specReviewIsReadyForOwnerApproval } from './spec-review-ownership.js'
 
 export const PROJECT_SUMMARY_PROJECTION_VERSION = 32 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
@@ -463,7 +463,7 @@ function ownerReviewForScope(
     .filter(row => row.scope === 'included' && !row.dependencyBlocked)
     .flatMap(row => {
       const task = tasksById.get(row.taskId)
-      return task?.status === 'spec_review' && specReviewRequiresOwnerApproval(task) ? [task] : []
+      return task?.status === 'spec_review' && specReviewIsReadyForOwnerApproval(task) ? [task] : []
     })
   const next = pending[0]
   return {
@@ -1070,6 +1070,7 @@ function indexedTaskForScopeProjection(task: ProjectStateDatabaseTask): Task {
     ...(task.status === 'spec_review' && specReviewAuthority
       ? { specReviewGate: { authority: specReviewAuthority } }
       : {}),
+    ...(Object.keys(currentSummary).length > 0 ? { currentSummary } : {}),
     ...(record.spec === 'present' ? { spec: 'indexed-present' } : {}),
     ...(acceptanceCriteriaCount > 0
       ? { acceptanceCriteria: Array.from({ length: acceptanceCriteriaCount }, (_, index) => ({

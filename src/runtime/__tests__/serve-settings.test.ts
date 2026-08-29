@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import {
@@ -24,6 +25,7 @@ import {
   getProjectLocalHistoryDir,
   getProjectSystemStatePath,
   getProjectTranscriptPath,
+  projectStateDatabasePath,
   readProjectStateDatabaseMetadata,
   readProjectStateDatabaseQueueDefinition,
   readProjectStateJsonAsync,
@@ -936,6 +938,73 @@ describe('GET/POST /api/project/local-config', () => {
 })
 
 describe('POST /api/project/start', () => {
+  it('repairs a safe required compact migration before an owner-facing project read', async () => {
+    const reviewedAt = '2026-08-29T12:00:00.000Z'
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: reviewedAt,
+      selectedReleaseId: 'release-1',
+      tasks: [{
+        id: 'task-needs-spec-repair',
+        title: 'Repair the legacy spec before review',
+        status: 'spec_review',
+        releaseIds: ['release-1'],
+        spec: 'Legacy rendered Markdown is not an approval contract.',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Guildhall repairs the durable spec before asking the owner to review.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        }],
+      }],
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-needs-spec-repair'],
+        deferredNodeIds: [],
+      }],
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(tmpDir))
+    const row = database.prepare('SELECT summary_json FROM work_items WHERE id = ?').get('task-needs-spec-repair') as { summary_json: string }
+    const summary = JSON.parse(row.summary_json) as { currentSummary?: Record<string, unknown> }
+    summary.currentSummary = {
+      ...summary.currentSummary,
+      // Legacy review rows default to owner authority. This is the compact
+      // authority produced by an earlier version before readiness existed.
+      specReviewAuthority: 'owner',
+    }
+    delete summary.currentSummary?.specReviewReadyForOwnerApproval
+    database.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?').run(
+      JSON.stringify(summary),
+      'task-needs-spec-repair',
+    )
+    database.close()
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const migrations = await app.fetch(new Request(scoped('/api/project/migrations')))
+    expect(migrations.status).toBe(200)
+    const migrationsBody = await migrations.json() as Record<string, any>
+    expect(migrationsBody.blocked.map((item: { id: string }) => item.id)).not.toContain('0.13.69/compact-spec-review-authority')
+    expect(migrationsBody.blocked.map((item: { id: string }) => item.id)).not.toContain('0.13.100/compact-spec-review-readiness')
+    expect(migrationsBody.applied.map((item: { id: string }) => item.id)).toContain('0.13.69/compact-spec-review-authority')
+    expect(migrationsBody.applied.map((item: { id: string }) => item.id)).toContain('0.13.100/compact-spec-review-readiness')
+
+    const repaired = new DatabaseSync(projectStateDatabasePath(tmpDir), { readOnly: true })
+    const repairedRow = repaired.prepare('SELECT summary_json FROM work_items WHERE id = ?').get('task-needs-spec-repair') as { summary_json: string }
+    repaired.close()
+    expect(JSON.parse(repairedRow.summary_json)).toMatchObject({
+      currentSummary: {
+        specReviewAuthority: 'owner',
+        specReviewReadyForOwnerApproval: false,
+      },
+    })
+  })
+
   it('blocks project start when required migrations are pending', async () => {
     await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
     await fs.writeFile(path.join(tmpDir, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')

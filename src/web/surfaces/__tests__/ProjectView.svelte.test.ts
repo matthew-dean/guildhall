@@ -1675,11 +1675,13 @@ describe('ProjectView', () => {
     expect(topbar).not.toHaveTextContent('Provider')
   })
 
-  it('keeps generic Resume out of project chrome when focused work owns the next action', async () => {
+  it.each(['ready_work', 'paused_live_work'] as const)(
+    'keeps generic Resume out of project chrome when focused %s work owns the next action',
+    async code => {
     const readyWork = detail({
       startReadiness: {
         canStart: true,
-        code: 'ready_work',
+        code,
         message: 'Knit: add link editor controls is ready to continue review.',
         actionHref: '/work?task=task-link-editor',
         focusTaskId: 'task-link-editor',
@@ -1689,7 +1691,7 @@ describe('ProjectView', () => {
       actionModel: {
         primaryAction: {
           source: 'start_readiness',
-          code: 'ready_work',
+          code,
           taskId: 'task-link-editor',
           label: 'Work ready to resume',
           taskLabel: 'Knit: add link editor controls',
@@ -1715,7 +1717,8 @@ describe('ProjectView', () => {
     expect(topbar).not.toBeNull()
     expect(topbar).not.toHaveTextContent('Resume')
     expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
-  })
+    },
+  )
 
   it('labels owner-input recovery blockers without saying answer', async () => {
     const recoveryDetail = detail({

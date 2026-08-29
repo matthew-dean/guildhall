@@ -2,7 +2,7 @@ import { explicitTaskStructuralIdentity, type ProjectRelease, type Task, type Ta
 import { taskDisplayLabel } from '@guildhall/shared'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 import { META_INTAKE_TASK_ID, WORKSPACE_IMPORT_TASK_ID } from './project-reserved-task-ids.js'
-import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { specReviewIsReadyForOwnerApproval, specReviewNeedsRepair } from './spec-review-ownership.js'
 import { effectiveTaskStatus } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
@@ -773,7 +773,9 @@ function handoffStateForTask(
   if (status === 'done' || status === 'pending_pr') return 'done'
   if (status === 'in_progress') return 'paused'
   if (status === 'review' || status === 'gate_check') return 'review'
-  if (status === 'spec_review') return 'spec_review'
+  if (status === 'spec_review') {
+    return specReviewNeedsRepair(task) ? 'spec_shaping' : 'spec_review'
+  }
   if (status === 'exploring' && productBriefRequiresOwnerApproval(task) && !hasSpecDraft(task)) {
     return 'brief_cleanup'
   }
@@ -889,7 +891,7 @@ function humanBlockingFor(task: Task, handoffState: ProjectScopeHandoffState, sc
   if (handoffState === 'not_shaped' && (task.status === 'exploring' || task.status === 'import_draft')) return false
   if (handoffState === 'not_shaped') return true
   if (handoffState === 'brief_cleanup' || handoffState === 'blocked') return true
-  return handoffState === 'spec_review' && specReviewRequiresOwnerApproval(task)
+  return handoffState === 'spec_review' && specReviewIsReadyForOwnerApproval(task)
 }
 
 function blockerSummaryForTask(task: Task): string {
@@ -1020,8 +1022,10 @@ export function summarizeProjectScopeStart(
   // An exploring task is already in Guildhall's shaping lane. Let Start run
   // that agent work before unrelated ready work. It is the live continuation
   // of the selected scope, not merely another candidate in a task ranking.
-  const shapingWork = included.find(row => !row.dependencyBlocked && row.status === 'exploring' &&
-    (row.handoffState === 'spec_shaping' || row.handoffState === 'not_shaped'))
+  const shapingWork = included.find(row => !row.dependencyBlocked && (
+    row.handoffState === 'spec_shaping' ||
+    (row.status === 'exploring' && row.handoffState === 'not_shaped')
+  ))
   if (shapingWork) {
     return {
       canStart: true,
@@ -1030,8 +1034,10 @@ export function summarizeProjectScopeStart(
       focusTaskId: shapingWork.taskId,
       focusTaskTitle: shapingWork.title,
       focusKind: 'ready_work',
-      message: shapingWork.handoffState === 'spec_shaping'
-        ? `Guildhall is shaping a source-backed spec for "${shapingWork.title}".`
+      message: shapingWork.status === 'spec_review'
+        ? `Guildhall will repair the spec for "${shapingWork.title}" before asking for your review.`
+        : shapingWork.handoffState === 'spec_shaping'
+          ? `Guildhall is shaping a source-backed spec for "${shapingWork.title}".`
         : `Guildhall is shaping "${shapingWork.title}" from the visible project sources.`,
       actionHref: `/work?task=${encodeURIComponent(shapingWork.taskId)}`,
     }

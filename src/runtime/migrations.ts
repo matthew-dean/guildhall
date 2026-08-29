@@ -244,6 +244,7 @@ const RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID = '0.13.66/release-membership-sna
 const SPEC_REVIEW_GATE_MIGRATION_ID = '0.13.67/explicit-spec-review-gates'
 const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
 const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-authority'
+const COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID = '0.13.100/compact-spec-review-readiness'
 const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
 const DURABLE_DECISION_SNAPSHOT_MIGRATION_ID = '0.13.71/durable-decision-snapshot'
 const INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID = '0.13.72/indexed-release-summary-reprojection'
@@ -366,6 +367,31 @@ function compactSpecReviewAuthorityNeedsMigration(projectRoot: string): boolean 
     savedCount !== ownerReviewTasks.length ||
     savedTaskId !== (ownerReviewTasks[0]?.id ?? null) ||
     (ownerReviewTasks.length > 0 && decisionReview?.state !== 'required')
+}
+
+function compactSpecReviewReadinessNeedsMigration(projectRoot: string): boolean {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return false
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+  const inventory = readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })
+  if (!queue || !inventory) return false
+  const expectedByTaskId = new Map(
+    queue.tasks
+      .filter(task => task.status === 'spec_review')
+      .map(task => {
+        const summary = projectStateDatabaseTaskSummary(task).currentSummary
+        const ready = isRecord(summary) && typeof summary.specReviewReadyForOwnerApproval === 'boolean'
+          ? summary.specReviewReadyForOwnerApproval
+          : false
+        return [String(task.id), ready] as const
+      }),
+  )
+  return inventory.tasks.some(task => {
+    const expected = expectedByTaskId.get(task.id)
+    if (expected === undefined) return false
+    const currentSummary = isRecord(task.currentSummary) ? task.currentSummary : null
+    return currentSummary?.specReviewReadyForOwnerApproval !== expected
+  })
 }
 
 function migrateProofSetupTaskKind(task: Task): boolean {
@@ -5123,6 +5149,47 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID,
+    title: 'Materialize compact spec review readiness',
+    introducedIn: '0.13.100',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Backfills the typed ready-for-owner-approval fact for spec reviews, so compact project views cannot ask for approval before the durable spec contract is complete.',
+    async detect(projectRoot) {
+      const needed = compactSpecReviewReadinessNeedsMigration(projectRoot)
+      return {
+        needed,
+        affectedPaths: needed
+          ? [projectStateDatabasePath(projectRoot), 'compact spec-review readiness points and shared summary']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped compact spec-review readiness backfill because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const summaries = queue.tasks.map(task => ({
+        taskId: String(task.id),
+        summary: projectStateDatabaseTaskSummary(task),
+      }))
+      const rewritten = rewriteProjectStateDatabaseTaskSummaries(projectRoot, summaries)
+      const projection = backfillProjectSummaryProjection(tasksPath, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+      })
+      return {
+        summary: `Materialized compact review readiness for ${rewritten.updatedCount} task point${rewritten.updatedCount === 1 ? '' : 's'} and refreshed the shared project decision (${projection.decision.primaryAction.kind}).`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
     id: ATOMIC_DECISION_FOCUS_MIGRATION_ID,
     title: 'Rebuild project decisions with atomic focus references',
     introducedIn: '0.13.70',
@@ -5861,6 +5928,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [PROOF_VERIFICATION_EVIDENCE_AUTHORITY_MIGRATION_ID]: 'migrations.test.ts: moves historical proof-path verification records into typed evidence and leaves a second application unchanged',
   [SPEC_REVIEW_GATE_MIGRATION_ID]: 'migrations.test.ts: backfills only legacy spec-review gates and remains idempotent after canonical task writes',
   [DURABLE_SPEC_HANDOFF_MIGRATION_ID]: 'migrations.test.ts: settles only an approved, structurally valid spec handoff and never auto-approves it',
+  [COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID]: 'migrations.test.ts: backfills compact owner-review readiness from structured task contracts and leaves task detail unchanged',
   [DURABLE_DECISION_SNAPSHOT_MIGRATION_ID]: 'migrations.test.ts: rebuilds a missing revision-bound decision packet from normalized state',
   [INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership',
   [NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID]: 'migrations.test.ts: aligns named release counts to selected membership when child execution rows are present',

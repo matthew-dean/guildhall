@@ -1,4 +1,4 @@
-import { StructuredSpec, type ProductBrief, type Task } from '@guildhall/core'
+import { assessSpecCompletionBoundary, StructuredSpec, type ProductBrief, type Task } from '@guildhall/core'
 
 export interface SpecQualityResult {
   ok: boolean
@@ -395,20 +395,19 @@ export function validateSpecCompletionBoundary(task: Pick<Task,
   // Rendered Markdown is intentionally not a live compatibility reader.
   // Durable planning state must already have been migrated or authored as a
   // structured contract before any runtime path can validate or execute it.
-  const structured = StructuredSpec.safeParse(task.structuredSpec)
-  if (!structured.success) {
+  const assessment = assessSpecCompletionBoundary(task)
+  if (!assessment.structuredSpecValid) {
     errors.push('Structured spec is missing or invalid. Durable planning state must be authored through structuredSpec; rendered Markdown is display-only.')
   }
 
-  const brief = task.productBrief
-  if (!brief?.userJob?.trim() || !brief?.successMetric?.trim()) {
+  if (!assessment.briefComplete) {
     errors.push('Product brief must name the user/project job and observable success metric.')
   }
 
-  if (!Array.isArray(task.acceptanceCriteria) || task.acceptanceCriteria.length === 0) {
+  if (!assessment.acceptanceCriteriaPresent) {
     errors.push('At least one acceptance criterion is required before approval.')
   }
-  if (structured.success && structured.data.acceptanceCriteria.length === 0) {
+  if (assessment.structuredSpecValid && !assessment.structuredAcceptanceCriteriaPresent) {
     errors.push('Structured spec must contain at least one acceptance criterion.')
   }
 

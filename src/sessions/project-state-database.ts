@@ -3,7 +3,7 @@ import { gzipSync, gunzipSync } from 'node:zlib'
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-import { assertShippedReleaseMutation, compactTaskEvidenceEvent, compactTaskEvidencePayload, TaskEvidenceEvent } from '@guildhall/core'
+import { assessSpecCompletionBoundary, assertShippedReleaseMutation, compactTaskEvidenceEvent, compactTaskEvidencePayload, TaskEvidenceEvent } from '@guildhall/core'
 import type { TaskEvidenceEvent as TaskEvidenceEventRecord } from '@guildhall/core'
 import { ownerInputObjectiveLabel, summarizeCurrentProof, taskExecutionBlocker } from '@guildhall/shared'
 import { stableJson } from '@guildhall/persistence'
@@ -3740,7 +3740,14 @@ function workItemSummary(task: JsonRecord): JsonRecord {
     ...(executionBlocker ? { executionBlocker } : {}),
     ...(taskReadiness ? { taskReadiness } : {}),
     ...(sizePlanAction ? { sizePlanAction } : {}),
-    ...(specReviewAuthority ? { specReviewAuthority } : {}),
+    ...(specReviewAuthority ? {
+      specReviewAuthority,
+      specReviewReadyForOwnerApproval: assessSpecCompletionBoundary({
+        structuredSpec: task.structuredSpec,
+        productBrief: brief,
+        acceptanceCriteria,
+      }).ok,
+    } : {}),
   }
   return summary
 }

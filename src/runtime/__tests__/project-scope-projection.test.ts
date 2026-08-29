@@ -50,6 +50,47 @@ function queue(tasks: Task[]): TaskQueue {
   }
 }
 
+function ownerReviewFields(): Partial<Task> {
+  return {
+    productBrief: {
+      userJob: 'Review a bounded implementation plan.',
+      successMetric: 'The task has a complete owner-reviewable contract.',
+      nonGoals: ['Do not start implementation during review.'],
+      authoredBy: 'spec-agent',
+    },
+    structuredSpec: {
+      whatThisIs: 'A bounded implementation plan.',
+      problemContext: 'The task needs an explicit completion contract.',
+      goals: ['Provide a reviewable implementation plan.'],
+      nonGoals: ['Do not start implementation during review.'],
+      proposedDesign: 'Use the existing project boundary.',
+      keyDecisions: ['Keep the scope bounded.'],
+      acceptanceCriteria: [{
+        scenario: 'Given the owner opens the review',
+        expectation: 'The completion contract is visible.',
+        verificationMode: 'review',
+      }],
+      verification: ['Review the contract before approval.'],
+      completionBoundary: {
+        productOutcome: 'The owner can approve a complete plan.',
+        whatGuildhallCanCompleteInCode: 'Record the implementation contract.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'The registered project.',
+        whatCountsAsDone: 'The complete contract is available for review.',
+        whatMustBeSplitOrBlocked: 'Split only independent work.',
+        splitPolicy: 'conditional',
+      },
+    },
+    acceptanceCriteria: [{
+      id: 'ac-1',
+      description: 'The completion contract is visible.',
+      verifiedBy: 'review',
+      met: false,
+    }],
+  }
+}
+
 describe('buildProjectScopeProjection', () => {
   it('focuses the runnable dependency before blocked downstream shaping', () => {
     const projection = buildProjectScopeProjection({
@@ -452,6 +493,7 @@ describe('buildProjectScopeProjection', () => {
           id: 'task-087',
           title: 'Define typed desktop harness adapter',
           status: 'spec_review',
+          ...ownerReviewFields(),
           dependsOn: ['task-086'],
           spec: 'Define the typed adapter.',
           acceptanceCriteria: [{ id: 'ac-1', description: 'Typed adapter exists.', verifiedBy: 'review', met: false }],
@@ -512,6 +554,7 @@ describe('buildProjectScopeProjection', () => {
           id: 'task-086',
           title: 'Prove packaged Tauri sidecar',
           status: 'spec_review',
+          ...ownerReviewFields(),
           productBrief: approvedBrief,
           spec: 'Prove the package.',
           acceptanceCriteria: [{ id: 'ac-1', description: 'Package proof exists.', verifiedBy: 'review', met: false }],
@@ -521,6 +564,7 @@ describe('buildProjectScopeProjection', () => {
           id: 'task-087',
           title: 'Define typed desktop harness adapter',
           status: 'spec_review',
+          ...ownerReviewFields(),
           dependsOn: ['task-086'],
           productBrief: approvedBrief,
           spec: 'Define the adapter.',
@@ -786,6 +830,7 @@ describe('buildProjectScopeProjection', () => {
           id: 'spec-review-task',
           title: 'Spec review release work',
           status: 'spec_review',
+          ...ownerReviewFields(),
           releaseIds: [],
           spec: 'Review this spec.',
           acceptanceCriteria: [{ id: 'AC-1', description: 'Spec is reviewed.', verifiedBy: 'review', met: false }],
@@ -839,6 +884,7 @@ describe('buildProjectScopeProjection', () => {
       id: 'release-parent-split-review-proof',
       title: 'Review proof packet',
       status: 'spec_review',
+      ...ownerReviewFields(),
       hierarchy: { parentId: 'release-parent', childIds: [], relation: 'decomposes', order: 0 },
     })
     const derived = deriveReleaseContainersFromTaskMembership([parent, child])
@@ -1031,6 +1077,7 @@ describe('buildProjectScopeProjection', () => {
         id: 'task-contracts',
         title: 'Define fixture contracts.',
         status: 'spec_review',
+        ...ownerReviewFields(),
         spec: 'Fixture contract spec.',
         acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is parseable.', verifiedBy: 'automated', met: false }],
       }),

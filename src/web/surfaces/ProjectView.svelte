@@ -710,7 +710,8 @@
   // A runnable work item has its own explicit command in focused Work. Keeping
   // a generic Resume beside it creates two competing answers to one decision.
   const focusedRunnablePrimaryAction = $derived(
-    primaryAction?.code === 'ready_work' && Boolean(primaryAction.taskId),
+    (primaryAction?.code === 'ready_work' || primaryAction?.code === 'paused_live_work') &&
+      Boolean(primaryAction.taskId),
   )
   const primaryActionOwnsAttention = $derived(
     Boolean(
