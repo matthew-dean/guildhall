@@ -165,6 +165,12 @@
       .map(row => [row.taskId, row.scope] as const)
     return new Map(entries)
   })
+  const handoffStateByTaskId = $derived.by(() => {
+    const entries = selectedScopeRows
+      .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
+      .map(row => [row.taskId, row.handoffState] as const)
+    return new Map(entries)
+  })
   const proofMissingCount = $derived(proofMissingTaskIds.size || (detail.startReadiness?.code === 'proof_evidence_missing' ? detail.startReadiness.count ?? 0 : 0))
   const deliveryPrimitiveBlockers = $derived.by(() => {
     return deliveryQueue?.blocked
@@ -380,6 +386,7 @@
     if (focusedWork && isFocusedRunnableWork(focusedWork)) return null
     const sharedDetail = detail.actionModel?.primaryAction?.detail?.trim()
     if (sharedDetail) return sharedDetail
+    if (focusedWork && hasSpecRepair(focusedWork)) return 'Guildhall needs to repair this spec before it can ask you to review it.'
     if (focusedWork?.status === 'spec_review') return 'Review this spec so Guildhall can continue.'
     if (focusedWork?.status === 'exploring') return 'Review the brief before Guildhall starts this work.'
     if (focusedWork?.status === 'blocked') return 'Open this work to resolve what is blocking it.'
@@ -629,7 +636,12 @@
       tasks,
       focusTaskId: detail.startReadiness?.focusTaskId,
       focusKind: detail.startReadiness?.focusKind,
+      handoffState: handoffStateByTaskId.get(task.id),
     })
+  }
+
+  function hasSpecRepair(task: Task): boolean {
+    return handoffStateByTaskId.get(task.id) === 'spec_shaping'
   }
 
   type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
@@ -720,12 +732,12 @@
   }
 
   function openFocusedWork(task: Task): void {
-    const tab = task.status === 'spec_review' ? '?tab=spec' : ''
+    const tab = task.status === 'spec_review' && !hasSpecRepair(task) ? '?tab=spec' : ''
     nav(`${currentTaskHref(task.id, detail.id)}${tab}`, { backgroundPath: path.value })
   }
 
   function focusedActionLabel(task: Task): string {
-    if (task.status === 'spec_review') return 'Review spec'
+    if (task.status === 'spec_review' && !hasSpecRepair(task)) return 'Review spec'
     if (task.status === 'blocked') return 'Open task'
     if (task.status === 'done' || task.status === 'pending_pr') return 'View record'
     if (isFocusedRunnableWork(task)) return 'Resume this work item'
@@ -1075,6 +1087,7 @@
           runBusyTaskId={runWorkBusyId}
           runActiveTaskId={effectiveRunActiveId}
           proofMissingTaskIds={[...proofMissingTaskIds]}
+          {handoffStateByTaskId}
           runError={runWorkError}
           actionOnly={queueMode}
           {readyWorkTaskId}

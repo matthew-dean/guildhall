@@ -50,6 +50,9 @@ export interface TaskPresentationOptions {
   tasks?: TaskDependencyLite[]
   focusTaskId?: string | null
   focusKind?: string | null
+  // Project scope is the authoritative workflow handoff. A compact task
+  // status can remain `spec_review` while Guildhall repairs an invalid spec.
+  handoffState?: string | null
 }
 
 function taskId(input: TaskPresentationInput): string | undefined {
@@ -120,6 +123,7 @@ export function taskStagePresentation(
   if (agentName === 'worker-agent') return { key: 'working', label: 'Working', tone: 'running' }
   if (agentName === 'reviewer-agent') return { key: 'review', label: 'Review', tone: 'running' }
   if (agentName === 'gate-checker-agent') return { key: 'gates', label: 'Gates', tone: 'running' }
+  if (options.handoffState === 'spec_shaping') return { key: 'spec_shaping', label: 'Spec repair', tone: 'neutral' }
   if (hasOpenQuestion(input)) return { key: 'needs_you', label: 'Needs you', tone: 'warn' }
   if (input.requestKind === 'project_question') return { key: 'needs_you', label: 'Needs you', tone: 'warn' }
   if (taskId(input) === 'task-meta-intake') return { key: 'setup', label: 'Setup', tone: 'warn' }

@@ -20,12 +20,14 @@
     runBusyTaskId?: string | null
     runActiveTaskId?: string | null
     proofMissingTaskIds?: readonly string[]
+    handoffStateByTaskId?: ReadonlyMap<string, string | undefined>
     runError?: string | null
     actionOnly?: boolean
     readyWorkTaskId?: string | null
   }
 
   type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
+  const emptyHandoffStateByTaskId = new Map<string, string | undefined>()
 
   let {
     tasks,
@@ -36,6 +38,7 @@
     runBusyTaskId = null,
     runActiveTaskId = null,
     proofMissingTaskIds = [],
+    handoffStateByTaskId = emptyHandoffStateByTaskId,
     runError = null,
     actionOnly = false,
     readyWorkTaskId = null,
@@ -180,11 +183,11 @@
   }
 
   function taskStatusLabel(task: Task): string {
-    return taskStagePresentation(task, { tasks }).label
+    return taskStagePresentation(task, { tasks, handoffState: handoffStateByTaskId.get(task.id) }).label
   }
 
   function taskStatusTone(task: Task): ChipTone {
-    return chipTone(taskStagePresentation(task, { tasks }).tone)
+    return chipTone(taskStagePresentation(task, { tasks, handoffState: handoffStateByTaskId.get(task.id) }).tone)
   }
 
   function chipTone(tone: TaskPresentationTone): ChipTone {
@@ -196,7 +199,7 @@
   }
 
   function openButtonLabel(task: Task): string {
-    if (task.status === 'spec_review') return 'Review spec'
+    if (task.status === 'spec_review' && handoffStateByTaskId.get(task.id) !== 'spec_shaping') return 'Review spec'
     if (task.status === 'import_draft') return 'Review task brief'
     return 'Open task'
   }

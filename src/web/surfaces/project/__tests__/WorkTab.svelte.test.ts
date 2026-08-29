@@ -468,6 +468,50 @@ describe('WorkTab', () => {
     expect(screen.getByRole('button', { name: /inspect work a paused unrelated task/i })).toBeInTheDocument()
   })
 
+  it('keeps spec repair out of owner review presentation and actions', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue&all=1')
+    path.value = '/projects/looma-knit/work?view=queue&all=1'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'repair-spec', title: 'Repair the legacy spec', status: 'spec_review' }),
+          task({ id: 'review-spec', title: 'Review the complete spec', status: 'spec_review' }),
+        ], {
+          startReadiness: {
+            canStart: false,
+            code: 'owner_review_required',
+            focusTaskId: 'review-spec',
+            count: 1,
+            reviewTaskIds: ['review-spec'],
+            message: 'One spec is ready for your review.',
+          },
+          orientationSpine: {
+            scopeRows: [
+              { taskId: 'repair-spec', scope: 'included', handoffState: 'spec_shaping' },
+              { taskId: 'review-spec', scope: 'included', handoffState: 'spec_review' },
+            ],
+          },
+        }),
+      },
+    })
+
+    const repairRow = await screen.findByRole('button', { name: /inspect work repair the legacy spec/i })
+    expect(repairRow).toHaveTextContent('Spec repair')
+    expect(screen.getByRole('button', { name: /inspect work review the complete spec/i })).toHaveTextContent('Review spec')
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'review')
+    expect(screen.queryByRole('button', { name: /inspect work repair the legacy spec/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /inspect work review the complete spec/i })).toBeInTheDocument()
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'current')
+    await userEvent.click(screen.getByRole('button', { name: /inspect work repair the legacy spec/i }))
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(within(inspector).getByText('Spec repair')).toBeInTheDocument()
+    expect(within(inspector).getByRole('button', { name: 'Open task' })).toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: 'Review spec' })).toBeNull()
+  })
+
   it('uses an action-shaped label for a question-shaped focused work item', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-smoke-test')
     path.value = '/projects/looma-knit/work?task=task-smoke-test'

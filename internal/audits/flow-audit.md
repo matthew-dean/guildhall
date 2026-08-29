@@ -59582,3 +59582,46 @@ None. No stored state or schema changes.
   has no page or nested horizontal overflow and keeps the action in the first
   viewport. The owner path reaches focused Work and then the task drawer's
   visible `Resume only this work item` command without starting live work.
+
+### Finding: Work lists must not relabel repair work as an owner review
+
+- [ ] User job: when an owner opens the Work list after the overview has
+  oriented them, each row uses the same actionable state as the project
+  decision. An item Guildhall must repair is visibly repair work; it never
+  looks like an approval awaiting the owner.
+- Finding, 2026-08-29: installed Looma + Knit overview and API agree that
+  malformed legacy spec-review tasks are not owner reviews. Yet `/work?view=queue`
+  renders ten of those raw `spec_review` rows as `Review spec`, including
+  `LOO-EBUYE7`. The owner is again told to approve work that the shared
+  readiness model has already ruled invalid. The Work list is deriving its
+  label from raw status instead of the canonical scope handoff state.
+
+#### Contract Touch Decision
+
+Reuse the existing typed `orientationSpine.scopeRows[].handoffState` from the
+shared scope projection at the Work presentation boundary. It must control the
+row chip, Review filter, focused handoff, and selected-item command, rather
+than letting raw `task.status` recreate an owner-review state. Considered but
+not touched: task status, spec approval authority, scheduler selection,
+release ordering, raw task title, and list sorting. Required proof: an invalid
+`spec_review` row says it is being repaired while a valid owner review remains
+`Review spec` on the same list. Apply/revert: existing read-model presentation
+only; no task mutation.
+
+#### Schema Migration Decision
+
+None. The state already exists in the shared scope projection and API; this
+only consumes it at the presentation boundary.
+
+- Evidence, 2026-08-29: focused WorkTab and task-presentation regressions pass
+  (66 assertions), including a list that mixes an invalid raw spec_review /
+  spec_shaping task with a valid owner review: only the valid row is available
+  from Review, while the invalid row reads Spec repair and offers Open task,
+  not Review spec. pnpm typecheck, pnpm lint:contracts, and pnpm
+  model:independence pass. After pnpm build, pnpm dev:install, and a Looma +
+  Knit service restart, /api/stale-server reports stale:false. The actual
+  malformed Looma task LOO-X3CVCC renders as SPEC REPAIR, explains that
+  Guildhall must repair it before requesting review, and provides only Open
+  task. At 1280px, 960px, and 390px, the focused route has no page horizontal
+  overflow; its action remains in the mobile first viewport and no Review spec
+  command is present.
