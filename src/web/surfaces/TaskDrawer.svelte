@@ -836,9 +836,23 @@
     !focusedSpecRepair &&
     !projectDecisionElsewhere &&
     !isWorkspaceImportTask &&
+    runStatus !== 'running' &&
+    runStatus !== 'stopping' &&
     canRunTaskDirectly &&
     projectPrimaryAction?.taskId === task.id,
   ))
+  // A focused task that has actually started owns this surface too. The owner
+  // needs confirmation and an exit ramp, not the task's implementation record.
+  const showFocusedRunningState = $derived(Boolean(
+    task &&
+    !fullRecordRequested &&
+    !focusedSpecReview &&
+    !focusedSpecRepair &&
+    !projectDecisionElsewhere &&
+    runStatus === 'running' &&
+    task.status === 'in_progress',
+  ))
+  const showFocusedRunHandoff = $derived(showFocusedRunAction || showFocusedRunningState)
   const canResumeHold = $derived(!projectStartBlocker && isHeld && !firstOpenEscalation)
   const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
   const firstOpenEscalationGuidance = $derived(escalationUserGuidance(firstOpenEscalation))
@@ -1171,7 +1185,7 @@
         {/if}
       </nav>
       <h3 title={displayTaskTitle}>{displayTaskTitle}</h3>
-      {#if currentDeliveryBadge}
+      {#if currentDeliveryBadge && !showFocusedRunHandoff}
         <div class="drawer-progress-line">
           <Chip
             label={currentDeliveryBadge.label}
@@ -1193,7 +1207,7 @@
     </UtilityPanel>
   {/if}
 
-  {#if payload && !focusedSpecReview && !focusedSpecRepair && !projectDecisionElsewhere && !showFocusedRunAction}
+  {#if payload && !focusedSpecReview && !focusedSpecRepair && !projectDecisionElsewhere && !showFocusedRunHandoff}
     <div class="gh-drawer-tabs">
       <Tabs
         tabs={tabs}
@@ -1236,6 +1250,21 @@
               <Icon name="sparkles" size={14} />
               Resume only this work item
             </Button>
+            <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View task details</Button>
+          </div>
+        </UtilityPanel>
+      {:else if showFocusedRunningState && task}
+        <UtilityPanel
+          as="section"
+          className="drawer-run-action"
+          tone="accent"
+          railStrength="strong"
+          ariaLabel="Current work is running"
+        >
+          <span class="outcome-eyebrow">Work is underway</span>
+          <strong>Guildhall is working on {displayTaskTitle}.</strong>
+          <span class="drawer-run-action-copy">Nothing is waiting on you right now. Guildhall will return when it needs a decision or reaches a result.</span>
+          <div class="drawer-run-action-actions">
             <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View task details</Button>
           </div>
         </UtilityPanel>
@@ -1392,7 +1421,7 @@
     {/if}
   </div>
 
-  {#if payload && task && !focusedSpecRepair && !projectDecisionElsewhere && !showFocusedRunAction}
+  {#if payload && task && !focusedSpecRepair && !projectDecisionElsewhere && !showFocusedRunHandoff}
     <footer class="gh-drawer-foot">
       {#if isWorkspaceImportTask}
         <div class="footer-actions-left">

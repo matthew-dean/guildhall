@@ -59786,3 +59786,77 @@ existing activity and task records.
   Work paused, Component implementation, Stage 1 progress, and Open Work with
   no Thread list or detail transcript. At 1280px, 960px, and 390px, the action
   was visible and there was no page-level horizontal overflow.
+
+### Finding: Starting focused work must confirm the outcome, not expose the task internals
+
+- [ ] User job: after choosing to resume the single current work item, the owner
+  immediately knows that work has started, what Guildhall is doing next, and how
+  to pause it. They do not have to parse a task record or decide between another
+  duplicate resume action and unrelated task metadata.
+- Finding, 2026-08-29: in the installed Looma + Knit project, choosing `Resume
+  only this work item` correctly starts the run, but then replaces the concise
+  handoff with a task drawer containing duplicate `Overview` labels, a raw
+  checkpoint instruction, task description, implementation metadata, task links,
+  delivery-step accounting, and a second `Resume only this work item` command.
+  The owner can see `Pause` in the shell, but Guildhall never plainly confirms
+  that it started the selected work or states the next expected outcome. This
+  breaks the one-minute test immediately after the primary action succeeds.
+
+#### Contract Touch Decision
+
+The focused run action and task-drawer presentation contract own the immediate
+post-start state: a task begun through the owner-facing focused handoff exposes
+a typed running confirmation, while full task records remain deliberately
+optional. Considered but not touched in this presentation repair: run lifecycle
+persistence, scheduler selection, task status, checkpoint persistence, delivery
+step schema, and route-local CSS. Required proof: a genuinely running Looma item
+leaves one first-viewport confirmation with the shell Pause command; internal
+record detail is absent until explicitly requested. The conflicting scheduler
+state discovered in the live run is a separate shared execution-boundary repair,
+not a reason for this surface to present another Resume command.
+
+#### Schema Migration Decision
+
+Pending investigation. No persisted-schema change is assumed; record one before
+changing any stored task/run/summary shape.
+
+- Evidence, 2026-08-29: TaskDrawer regression coverage passes 64 assertions.
+  A focused `in_progress` task with a running one-task run now renders only
+  `Work is underway`, the selected title, the expected next outcome, and the
+  optional `View task details` route. It renders no tabs, task links, delivery
+  accounting, or second Resume command. Production build passes. Installed
+  proof remains blocked on the scheduler repair below: the real owner start
+  stopped after one tick while the visible task remained `in_progress`.
+
+### Finding: A focused start must run the task the owner just selected
+
+- [ ] User job: after resuming a named paused work item, Guildhall either starts
+  that exact work or refuses before changing the screen, with a clear recovery
+  action. It must never briefly claim success, stop with an unrelated
+  `all_terminal` result, and leave the owner looking at a task still labelled
+  working/paused.
+- Finding, 2026-08-29: the real Looma `Component implementation` start accepted
+  the scoped one-task command and created a run, then stopped 699ms later with
+  `No actionable tasks remain: 1 done`. No model call occurred. The authoritative
+  task detail and indexed work item still say `in_progress`, while the shared
+  start-readiness/action model says `paused_live_work`. The scheduler's queue
+  selection therefore disagrees with both the owner-facing state and the indexed
+  task state.
+
+#### Contract Touch Decision
+
+Pending investigation. The repair belongs at the promoted project-state
+execution boundary: a one-task start must build selection from the same current
+task projection used by start readiness and task detail, or fail before it
+creates a run. Considered but not yet touched: task lifecycle semantics,
+checkpoint recovery policy, worktree state, provider selection, task drawer
+copy, and release-scoping rules. Required proof: the real Looma start dispatches
+the selected indexed `in_progress` task, or returns an explicit typed reason
+without changing run/task state; shell, API, Work, task drawer, Thread, release,
+and status then agree.
+
+#### Schema Migration Decision
+
+Pending investigation. If the repair needs persisted reconciliation between
+indexed work items and task-detail rows, record an automatic, idempotent
+migration before writing it. Do not patch Looma's rows by hand.

@@ -291,6 +291,58 @@ describe('TaskDrawer', () => {
     })
   })
 
+  it('confirms focused work is underway without dumping the task record', async () => {
+    project.detail = {
+      ...projectDetail(),
+      run: { status: 'running', mode: 'one_task' },
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          label: 'Resume the link editor work',
+          detail: 'This is the next runnable work item.',
+          buttonLabel: 'Resume work',
+          href: '/work?task=task-link-editor',
+          tone: 'accent',
+          taskId: 'task-link-editor',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Pause', startEnabled: false },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({
+      runStatus: 'running',
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'in_progress',
+        openQuestions: [],
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Guildhall is working on Knit: add link editor controls.')
+    expect(screen.getByText('Nothing is waiting on you right now. Guildhall will return when it needs a decision or reaches a result.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View task details' })).toBeInTheDocument()
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.queryByText('Task links')).not.toBeInTheDocument()
+    expect(screen.queryByText('Delivery steps')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume only this work item' })).not.toBeInTheDocument()
+  })
+
   it('routes an unrelated task to the project decision instead of dumping its full record', async () => {
     const user = userEvent.setup()
     project.detail = {
