@@ -59689,5 +59689,8 @@ None. No schema or behavior change is required.
 - Evidence, 2026-08-29: from the installed Looma focused paused-work route,
   Browse work changed the URL to /projects/looma-knit/work?view=queue and
   visibly replaced the focused card with the 16-item current-release list.
-  The route remained stable after the project connected. No repair follows
-  from the initial drawer-layered observation.
+  The route remained stable after the project connected. Selecting the first
+  item updated the route to its task ID and retained that selected item after a
+  2.2-second refresh window; it did not jump to another row. The selected
+  preview exposed one Resume action. No repair follows from the initial
+  drawer-layered observation.
