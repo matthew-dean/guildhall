@@ -1545,18 +1545,24 @@
   const showProjectDecisionFirst = $derived(Boolean(
     ownerAction && !projectActivityVisible && (!ownerActionHasThread || ownerActionDirectTaskRoute),
   ))
+  const resumableWorkAction = $derived(
+    ownerAction?.code === 'ready_work' || ownerAction?.code === 'paused_live_work',
+  )
   // Thread is for a response, not a second work queue. When the shared action
-  // says Guildhall can resume a represented task, leave its history out of the
-  // default view and send the owner to the one work item instead.
+  // says a represented task can resume, leave its history out of the default
+  // view and send the owner to the one work item instead.
   const showReadyWorkSummary = $derived(Boolean(
     ownerAction &&
     ownerActionHasThread &&
     !showProjectDecisionFirst &&
     !projectActivityVisible &&
-    ownerAction.code === 'ready_work' &&
+    resumableWorkAction &&
     runStatus !== 'running' &&
     runStatus !== 'stopping',
   ))
+  const workHandoffTitle = $derived(
+    ownerAction?.code === 'paused_live_work' ? 'Current work' : 'No response needed',
+  )
   const readyWorkOrientation = $derived(orientationSpine ?? project.detail?.orientationSpine ?? null)
   const readyWorkScopeLabel = $derived(
     readyWorkOrientation?.summary?.selectedScopeLabel
@@ -3794,7 +3800,7 @@
           </div>
         </Card>
       {:else if showReadyWorkSummary}
-        <Card title="No response needed" titleTag="h2" tone="accent" variant="callout" railStrength="strong">
+        <Card title={workHandoffTitle} titleTag="h2" tone="accent" variant="callout" railStrength="strong">
           <div class="thread-project-decision">
             <div>
               <h3>{ownerAction?.label ?? 'Work is ready to continue'}</h3>

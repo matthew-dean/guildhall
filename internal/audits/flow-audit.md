@@ -59694,3 +59694,70 @@ None. No schema or behavior change is required.
   2.2-second refresh window; it did not jump to another row. The selected
   preview exposed one Resume action. No repair follows from the initial
   drawer-layered observation.
+
+### Finding: Active release must not contradict the current owner action
+
+- [ ] User job: when active work is paused, the owner can tell that the next
+  choice is to resume that work. Release status, work summary, and owner-input
+  counts must not imply a separate blocker or hidden approval queue.
+- Finding, 2026-08-29: the installed Looma API projects one primary action,
+  Work paused / Resume, with ownerInput.active false. The same response says
+  the active release is blocked, reports 21 awaiting approvals in workSummary,
+  and has a release count with ownerBlocked 1, while the selected release has
+  only 16 items and the orientation headline says it is ready to continue.
+  These surfaces are describing incompatible priorities for the same release.
+
+#### Contract Touch Decision
+
+Pending investigation. The shared action model, release summary, orientation
+summary, and work summary need one explicit distinction between an owner action
+that is currently executable and background readiness debt that must not block
+or be counted as owner input. Considered but not touched: task records, release
+membership, task statuses, scheduler policy, persisted approval decisions, and
+route-local presentation. Required proof: the API and all owner-facing surfaces
+agree that paused live work is the one current decision, while repair/spec debt
+is neither counted as an owner approval nor presented as a competing blocker.
+Apply/revert: to be recorded with the implementation.
+
+#### Schema Migration Decision
+
+None anticipated. The contradiction is in derived projection semantics over
+existing task and release state.
+
+### Finding: Thread must not bury the current owner action in duplicate activity
+
+- [x] User job: opening Thread while work is paused immediately explains the
+  paused item and presents the one Resume action. Past activity is optional
+  context, not a competing second work surface.
+- Finding, 2026-08-29: the installed Looma Thread begins with Component
+  implementation paused, but then renders a long stack of historical and
+  duplicated shaping entries before the only Resume work control appears near
+  the bottom. Several entries say READY while also saying their brief is not
+  ready. The page forces the owner to read unrelated history and reconcile
+  contradictory labels before taking the same action already known elsewhere.
+
+#### Contract Touch Decision
+
+Reused the shared action model and current task state to make Thread's
+owner-facing top level a single handoff for both ready_work and paused_live_work.
+Activity remains available only when no resumable current-work action owns the
+route. Considered but not touched: task lifecycle state, activity persistence,
+run history, task titles, scheduler policy, and route-local action ranking.
+Required proof: the real paused Looma Thread shows the current action in its
+first viewport and no duplicated or stale activity can change its meaning.
+Apply/revert: presentation derives from the existing shared action only and
+does not mutate project state.
+
+#### Schema Migration Decision
+
+None anticipated. This is a shared projection and presentation boundary over
+existing activity and task records.
+
+- Evidence, 2026-08-29: ThreadTab regression coverage passed 126 assertions,
+  including a paused_live_work action whose represented thread would otherwise
+  render history. Typecheck, contract lint, and model-independence gates passed.
+  After production build, dev install, and Looma service restart, stale-server
+  reported stale:false. The installed Looma Thread now renders Current work,
+  Work paused, Component implementation, Stage 1 progress, and Open Work with
+  no Thread list or detail transcript. At 1280px, 960px, and 390px, the action
+  was visible and there was no page-level horizontal overflow.

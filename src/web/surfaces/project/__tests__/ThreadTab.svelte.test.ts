@@ -962,6 +962,48 @@ describe('ThreadTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?task=task-ready-work')
   })
 
+  it('keeps a paused-work Thread to the current work handoff instead of its activity history', async () => {
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-paused-work',
+        taskId: 'task-paused-work',
+        taskTitle: 'Continue the focused work',
+        summary: 'This activity belongs in Work, not the default Thread view.',
+      }),
+    ], 'worker-paused-work', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Work paused',
+          taskId: 'task-paused-work',
+          taskLabel: 'Continue the focused work',
+          detail: 'Resume continues from this work item.',
+          buttonLabel: 'Open work',
+          href: '/work?task=task-paused-work',
+          tone: 'accent',
+          code: 'paused_live_work',
+        },
+      },
+      orientationSpine: {
+        selectedRelease: { label: 'Stage 1: V1 Release Hardening' },
+        summary: {
+          selectedScopeLabel: 'Stage 1: V1 Release Hardening',
+          progress: { done: 0, total: 16 },
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'Current work' })
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+    expect(screen.queryByLabelText('Active thread dock')).toBeNull()
+    expect(screen.getByText('Stage 1: V1 Release Hardening · 0 of 16 complete')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Open work' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-paused-work')
+  })
+
   it('shows a direct owner question without the Thread list or history', async () => {
     installFetchFakes([
       importedDraftTurn({
