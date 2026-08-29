@@ -218,6 +218,10 @@
     if (id) nav(currentTaskHref(id, activeProjectId))
   }
 
+  function openOwnerAction() {
+    if (ownerAction?.href) nav(projectActionHref(ownerAction.href, activeProjectId))
+  }
+
   function openGitDecision(taskId: string) {
     if (taskId) nav(`${currentTaskHref(taskId, activeProjectId)}?detail=full&tab=provenance`)
   }
@@ -510,7 +514,7 @@
               {#if hasOwnerAction}
                 <Button
                   variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'}
-                  onclick={() => nav(projectActionHref(ownerAction?.href ?? '/work', activeProjectId))}
+                  onclick={openOwnerAction}
                 >
                   {ownerAction?.buttonLabel}
                 </Button>
@@ -519,16 +523,46 @@
                   {closeBusy ? 'Shipping…' : 'Ship release'}
                 </Button>
               {/if}
-              <Button variant="ghost" size="sm" onclick={() => nav(currentProjectHref('/release/criteria', activeProjectId))}>
-                Inspect release details
-              </Button>
+              {#if !hasOwnerAction}
+                <Button variant="ghost" size="sm" onclick={() => nav(currentProjectHref('/release/criteria', activeProjectId))}>
+                  Inspect release details
+                </Button>
+              {/if}
             </div>
           </div>
         </FrameCard>
       {/if}
     {/if}
 
-    {#if section === 'criteria'}
+    {#if section === 'criteria' && hasOwnerAction}
+      <FrameCard
+        tone={ownerAction?.tone === 'danger' ? 'danger' : ownerAction?.tone === 'warn' ? 'warn' : 'neutral'}
+        padding="compact"
+        class="release-action-card"
+      >
+        <div class="release-action">
+          <div>
+            <p class="release-action-label">Release is waiting on this</p>
+            <h3>{ownerAction?.label}</h3>
+            {#if ownerAction?.taskLabel}
+              <p class="release-action-task" title={ownerAction.taskLabel}>
+                {#if ownerActionTaskKey}<span>{ownerActionTaskKey}</span>{/if}
+                {ownerAction.taskLabel}
+              </p>
+            {/if}
+            <p>{ownerAction?.detail ?? 'Resolve this decision before reviewing other release checks.'}</p>
+          </div>
+          <div class="release-action-controls">
+            <Button
+              variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'}
+              onclick={openOwnerAction}
+            >
+              {ownerAction?.buttonLabel}
+            </Button>
+          </div>
+        </div>
+      </FrameCard>
+    {:else if section === 'criteria'}
       <FrameCard class="criteria-card">
         {#snippet header()}
           <SectionHeader

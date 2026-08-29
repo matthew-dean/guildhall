@@ -59333,3 +59333,38 @@ the shared current action for an individual project.
   and `Request changes` are visible above the fold at 1280px, 960px, and 390px
   with zero page overflow. Approval itself was intentionally not invoked
   against the user's active project during this presentation audit.
+
+### Repair: Release details must not compete with the current owner decision
+
+- [x] User job: when a release is waiting for an owner review, Release either
+  takes the owner directly to that review or repeats the same executable action.
+  It does not lead them into a release-wide exception report that makes every
+  future concern look equally urgent.
+- Finding, 2026-08-29: Looma + Knit Release correctly presents `Review next
+  spec`, but its `Inspect release details` button opens `/release/criteria`.
+  That route renders eighteen rows spanning ten duplicate spec approvals,
+  incomplete briefs, a stopped-agent escalation, and repository follow-up.
+  Several rows have no executable control and none outranks the current review.
+  This is the previously reported actionless wall of text under a new heading.
+- Contract Touch Decision: preserve the shared `actionModel.primaryAction` as
+  the owner-action authority and preserve release-readiness data for cases that
+  have no current owner action. The release view will use the shared action to
+  suppress its competing detail entry and make a direct `/release/criteria`
+  visit action-only while an owner decision is active. Considered but not
+  touched: readiness ranking, release-check categories, task/repository state,
+  API shapes, persistence, and schemas. Schema Migration Decision: none.
+  Required proof: component and installed Looma routes show one matching review
+  action, do not render the exception report while that action is active, and
+  preserve the exception report where no owner action exists. Apply/revert:
+  presentation and route behavior only; no release state is altered.
+- Evidence, 2026-08-29: `ReleaseTab.svelte.test.ts` passes 30/30, including
+  a direct `/release/criteria` visit with an active shared review action: it
+  renders the review action and suppresses both `Release exceptions` and a
+  later brief. The existing exception cases without an owner action remain
+  covered. `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm test:ui` pass
+  (45 rendered flows). After build, install, restart, and `stale:false`, the
+  installed Looma Release landing has `Review next spec`, no `Inspect release
+  details` control, and no overflow. Its direct criteria URL repeats only the
+  same review action at desktop, 960px, and 390px, with zero overflow. A
+  non-mutating click routes directly to the selected task approval surface,
+  where `Request changes` and `Approve spec` are visible above the fold.

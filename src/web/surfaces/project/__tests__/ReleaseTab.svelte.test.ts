@@ -138,6 +138,48 @@ describe('ReleaseTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?task=task-review-first')
   })
 
+  it('keeps release details focused on the shared owner action instead of listing competing exceptions', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/project/spine')) return json({ spine: null })
+      return json({
+        ...readyPayload,
+        release: { id: 'stage-1', label: 'Stage 1', state: 'active' },
+        unapprovedSpecs: [{ id: 'task-review-first', title: 'Review the first spec' }],
+        incompleteBriefs: [{ id: 'task-later', title: 'A later brief' }],
+      })
+    }))
+    window.history.replaceState({}, '', '/projects/looma-knit/release/criteria')
+    path.value = '/projects/looma-knit/release/criteria'
+
+    render(ReleaseTab, {
+      props: {
+        activeProjectId: 'looma-knit',
+        subView: 'criteria',
+        projectDetail: {
+          actionModel: {
+            primaryAction: {
+              label: 'Review a spec',
+              taskId: 'task-review-first',
+              taskLabel: 'Review the first spec before work can continue.',
+              detail: 'One spec is ready for your review.',
+              buttonLabel: 'Review next spec',
+              href: '/work?task=task-review-first',
+              tone: 'warn',
+            },
+          },
+        },
+      },
+    })
+
+    expect(await screen.findByText('Release is waiting on this')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Review next spec' })).toBeTruthy()
+    expect(screen.queryByText('Release exceptions')).toBeNull()
+    expect(screen.queryByText('A later brief')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Review next spec' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-review-first')
+  })
+
   it('does not call ready work owner attention on the release route', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes('/api/project/spine')) return json({ spine: null })
@@ -933,6 +975,6 @@ describe('ReleaseTab', () => {
     await screen.findByText('Scope checks')
     await userEvent.click(screen.getByRole('button', { name: 'A branch needs a sharing decision.' }))
 
-    expect(path.value).toBe('/projects/looma-knit/task/task-import-1y7kmp6?detail=full&tab=provenance')
+    expect(path.href).toBe('/projects/looma-knit/task/task-import-1y7kmp6?detail=full&tab=provenance')
   })
 })
