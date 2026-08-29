@@ -60040,3 +60040,78 @@ reversible by restoring the prior projection rule and reprojecting again.
   and `guildhall status --json` now all report `0/16`, with the same paused
   `Component implementation` action. `/api/stale-server` reported
   `stale: false` after the installed restart.
+
+### Finding: Live execution must outrank resumable readiness in every owner surface
+
+- [ ] User job: after the owner presses `Resume work`, they can immediately
+  tell that Guildhall is working, what item it is working on, and that the one
+  available control is Pause. Neither Overview nor Work may also describe that
+  same release as merely ready to continue, and after a deliberate pause the
+  label must say paused rather than silently retaining `WORKING`.
+- Finding, 2026-08-29: the installed Looma Overview correctly turned its one
+  `Resume work` action into `Guildhall is running "Component implementation"`
+  and `Open Work`. Opening Work then rendered `STAGE 1: V1 RELEASE HARDENING
+  IS READY TO CONTINUE.` above a `WORKING` Component implementation card. After
+  Pause completed, the shell changed to `Resume` but the card still said
+  `WORKING`. A live run and a resumable decision are competing state claims;
+  this forces the owner to infer whether the command actually took effect.
+
+#### Contract Touch Decision
+
+The shared projection-surface response owns live execution precedence. A
+running or stopping supervisor state must override saved readiness in the
+orientation headline, next-action copy, and action model before Overview,
+Work, Thread, or project chrome render it. The focused Work status must take
+the same run state when it describes the focused task. Considered but not
+touched: task lifecycle persistence, scheduler selection, release membership,
+historical activity, and task-detail content. Required proof: one real Looma
+resume produces only running/paused language appropriate to the live state
+across Overview and Work, with exactly one Pause or Resume control. Apply/
+revert: adjust the shared runtime projection and focused status presentation;
+no task or run data is rewritten.
+
+#### Schema Migration Decision
+
+None. This changes the live precedence of existing supervisor and summary
+state; it introduces no persisted schema or data migration.
+
+- Partial evidence, 2026-08-29: focused Work regressions cover a running
+  selected task with no duplicate `Open task` control and a paused focused task
+  with a direct `Resume this work item` control. After a production build,
+  install, and fresh Looma restart (`stale:false`), the installed 1280px route
+  read `STAGE 1: V1 RELEASE HARDENING IS PAUSED`, `Work paused`, `PAUSED`, and
+  one `Resume this work item` action. Starting it then read `IS UNDERWAY`,
+  `Work is underway`, `WORKING`, the exact task title, and only the shell
+  `Pause` plus optional Browse work. During stop it accurately changed to
+  `IS PAUSING` before the run settled. The remaining terminal handoff failure
+  is recorded below.
+
+### Finding: A bounded run that stops on a blocked task must hand the owner to that result
+
+- [ ] User job: when the owner starts one named work item and Guildhall stops
+  because that item needs human judgment, the next screen identifies that
+  outcome and gives the owner one clear recovery choice. It must not silently
+  redirect project-level attention to unrelated ready work while leaving the
+  owner on a stale task route.
+- Finding, 2026-08-29: the real Looma focused run for `Component
+  implementation` stopped after two ticks and marked that task `blocked` with
+  `human_judgment_required: Worker made no visible progress after 5 passes.`
+  The saved project action immediately selected a different ready task instead.
+  The still-open task route therefore displayed `Open this work to resolve what
+  is blocking it` and `Open task`, while the project headline said `ready to
+  continue` for unrelated work. The owner has no explanation of the failed run
+  and no direct way to resolve or explicitly defer its escalation.
+
+#### Contract Touch Decision
+
+Pending investigation. The stopped one-task execution result, task escalation,
+owner-input authority, and action-model ranking may all be involved. Do not
+patch the stale Work route or convert this prose into a local button. Required
+proof before repair: identify the typed execution result that should survive a
+one-task stop and make it the shared owner action until it is resolved or
+explicitly deferred.
+
+#### Schema Migration Decision
+
+Pending investigation. Do not assume persisted task or escalation shape needs
+to change until the authoritative stopped-run contract is established.

@@ -393,6 +393,8 @@
     return 'Open this work to take the next step.'
   })
   const focusedCardTitle = $derived.by(() => {
+    if (focusedWork && isFocusedWorkRunning(focusedWork)) return 'Work is underway'
+    if (focusedWork && detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === focusedWork.id) return 'Work paused'
     if (focusedWork && isFocusedRunnableWork(focusedWork)) return 'Ready to continue'
     if (focusedWork && (effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger')) {
       return 'What needs your attention'
@@ -748,15 +750,27 @@
   }
 
   function isFocusedRunnableWork(task: Task): boolean {
-    return detail.actionModel?.primaryAction?.code === 'ready_work' &&
-      detail.actionModel.primaryAction.taskId === task.id
+    const action = detail.actionModel?.primaryAction
+    if (action?.taskId !== task.id) return false
+    // Older saved ready-work actions predate the explicit operation field;
+    // their typed code remains a safe executable compatibility contract.
+    return action.code === 'ready_work' ||
+      (action.code === 'paused_live_work' && action.operation === 'start_focused')
+  }
+
+  function isFocusedWorkRunning(task: Task): boolean {
+    return projectRunActive && (detail.startReadiness?.focusTaskId ?? readSelectedWorkIdFromUrl()) === task.id
   }
 
   function focusedStatusLabel(task: Task): string {
+    if (isFocusedWorkRunning(task)) return 'Working'
+    if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'Paused'
     return isFocusedRunnableWork(task) ? 'Ready' : effectiveStatusLabel(task)
   }
 
   function focusedStatusTone(task: Task): ChipTone {
+    if (isFocusedWorkRunning(task)) return 'running'
+    if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
     return isFocusedRunnableWork(task) ? 'ok' : effectiveStatusTone(task)
   }
 
@@ -865,13 +879,15 @@
               <p>{focusedDecisionDetail}</p>
             {/if}
           </div>
-          <Button
-            variant={effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger' ? 'human' : 'primary'}
-            disabled={runWorkBusyId === focusedWork.id || runWorkActiveId === focusedWork.id}
-            onclick={() => isFocusedRunnableWork(focusedWork) ? void runWorkItem(focusedWork.id) : openFocusedWork(focusedWork)}
-          >
-            {focusedActionLabel(focusedWork)}
-          </Button>
+          {#if !isFocusedWorkRunning(focusedWork)}
+            <Button
+              variant={effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger' ? 'human' : 'primary'}
+              disabled={runWorkBusyId === focusedWork.id || runWorkActiveId === focusedWork.id}
+              onclick={() => isFocusedRunnableWork(focusedWork) ? void runWorkItem(focusedWork.id) : openFocusedWork(focusedWork)}
+            >
+              {focusedActionLabel(focusedWork)}
+            </Button>
+          {/if}
         </div>
         {#if runWorkError}
           <p class="work-focus-error" role="alert">{runWorkError}</p>

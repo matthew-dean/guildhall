@@ -111,9 +111,32 @@ describe('focused Work flow', () => {
     }) } })
 
     expect(await screen.findByRole('heading', { name: 'Current work', level: 1 })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Work is underway' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Keep the live handoff focused' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Work list' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Open task' })).toBeInTheDocument()
+    expect(screen.getByText('Working')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull()
+  })
+
+  it('keeps paused focused work resumable instead of burying its control in task detail', async () => {
+    const paused = reviewTask({ id: 'task-paused', displayKey: 'LOO-146', title: 'Resume this exact work', status: 'in_progress' })
+    setRoute(`/projects/looma-knit/work?task=${paused.id}`)
+    render(WorkTab, { props: { detail: projectDetail([paused], {
+      startReadiness: { canStart: true, code: 'paused_live_work', focusTaskId: paused.id, focusTaskTitle: paused.title, focusKind: 'paused_work' },
+      actionModel: {
+        primaryAction: {
+          taskId: paused.id,
+          code: 'paused_live_work',
+          operation: 'start_focused',
+          href: `/work?task=${paused.id}`,
+        },
+      },
+    }) } })
+
+    expect(await screen.findByRole('heading', { name: 'Work paused' })).toBeInTheDocument()
+    expect(screen.getByText('Paused')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull()
   })
 
   it('only exposes the legacy inventory after an explicit Browse work action', async () => {

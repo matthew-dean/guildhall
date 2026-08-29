@@ -5923,6 +5923,13 @@ function repositoryFollowupShellMessage(state: string | undefined, count: number
   }
 }
 
+function ownerOrientationExecutionHeadline(scopeLabel: string, readiness: { code?: string } | null | undefined): string | null {
+  if (readiness?.code === 'running') return `${scopeLabel} is underway.`
+  if (readiness?.code === 'stopping') return `${scopeLabel} is pausing.`
+  if (readiness?.code === 'paused_live_work') return `${scopeLabel} is paused.`
+  return null
+}
+
 function buildOverviewOrientationPreviewSpine(input: {
   projectId: string
   rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string }
@@ -6110,6 +6117,7 @@ function buildOverviewOrientationPreviewSpine(input: {
   const terminalCompleteMessage = hasExplicitRelease && start?.code === 'all_terminal'
   const firstBlocker = projection.release.blockers[0]
   const proofMissing = projection.counts.proofBlocked > 0 || start?.code === 'proof_evidence_missing'
+  const executionHeadline = ownerOrientationExecutionHeadline(displayScopeLabel, start)
   const topBlocker = start?.canStart === true
     ? null
     : firstBlocker?.label ?? (
@@ -6121,7 +6129,8 @@ function buildOverviewOrientationPreviewSpine(input: {
           : projection.start.message
         )
       )
-  const headline = noReleaseTerminal
+  const headline = executionHeadline
+    ?? (noReleaseTerminal
     ? `${displayScopeLabel} is in progress.`
     : proofMissing
       ? `${displayScopeLabel} is waiting on proof.`
@@ -6135,7 +6144,7 @@ function buildOverviewOrientationPreviewSpine(input: {
         ? `${displayScopeLabel} is being shaped.`
         : projection.start.canStart
           ? `${displayScopeLabel} is ready to continue.`
-          : `${displayScopeLabel} is being mapped.`
+          : `${displayScopeLabel} is being mapped.`)
   const sourceHealth = input.sourceSpine
     ? sourceHealthForCompactOrientationSpine(input.sourceSpine as unknown as Record<string, unknown>)
     : {
@@ -8220,11 +8229,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const selectedScopeLabel = typeof orientationSummaryRecord.selectedScopeLabel === 'string'
         ? orientationSummaryRecord.selectedScopeLabel
         : 'Current scope'
+      const executionHeadline = ownerOrientationExecutionHeadline(selectedScopeLabel, responseStartReadiness)
       orientationSpine = {
         ...orientationSpine,
         summary: {
           ...orientationSummaryRecord,
-          ...(responseStartReadiness?.canStart ? {
+          ...(executionHeadline ? {
+            headline: executionHeadline,
+            topBlocker: null,
+          } : responseStartReadiness?.canStart ? {
             headline: `${selectedScopeLabel} is ready to continue.`,
             topBlocker: null,
           } : {}),
