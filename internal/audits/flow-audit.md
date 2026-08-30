@@ -62932,3 +62932,28 @@ consistently before deriving compact surface output.
   (including the isolated `compact project does not mutate durable project
   state` case). This repair did not modify that write boundary; the targeted
   owner-action regression and all type/build/model-independence gates pass.
+
+### Finding: Focused Work must not offer empty browsing
+
+- [ ] User job: when Work is focused on the only current task and that task is
+  already running, the owner sees the current handoff and the global `Pause`
+  control. Guildhall does not add `Browse work` merely to reveal no additional
+  current work.
+- Live finding, 2026-08-30: t-minus-t's focused Work route showed one running
+  `TMI-004` card, `0 of 1 complete`, and a secondary `Browse work` button.
+  The other three records were shelved, so browsing did not support a current
+  decision and added an unexplained choice to the default surface.
+
+#### Contract Touch Decision
+
+Work id: `focused-work-empty-browse-2026-08-30`. Touched contract: focused
+Work's local presentation eligibility for the optional inventory escape hatch.
+The shared decision/action model, task eligibility, release scope, runtime
+state, and routing contract remain authoritative and unchanged. Required proof:
+the only-current-task focused route omits `Browse work`; a focused route with
+another eligible current task retains the explicit inventory escape hatch.
+Apply/revert: presentation-only.
+
+#### Schema Migration Decision
+
+No persisted-schema change.

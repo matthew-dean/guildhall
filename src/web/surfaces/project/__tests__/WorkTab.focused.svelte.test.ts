@@ -213,16 +213,14 @@ describe('focused Work flow', () => {
     expect(screen.queryByRole('button', { name: 'Resume work' })).toBeNull()
   })
 
-  it('only exposes the legacy inventory after an explicit Browse work action', async () => {
-    const user = userEvent.setup()
+  it('does not offer browsing when the focused handoff is the only current work', async () => {
     const review = reviewTask()
     render(WorkTab, { props: { detail: projectDetail([review], {
       startReadiness: { canStart: false, focusTaskId: review.id, focusKind: 'spec_review' },
     }) } })
 
-    await user.click(await screen.findByRole('button', { name: 'Browse work' }))
-    expect(path.href).toBe('/projects/looma-knit/work?view=queue')
-    expect(await screen.findByRole('heading', { name: 'Work list' })).toBeInTheDocument()
+    expect(await screen.findByRole('region', { name: 'Current work' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Browse work' })).toBeNull()
   })
 
   it('shows the current release slice when Browse work follows a focused handoff', async () => {

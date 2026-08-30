@@ -377,6 +377,14 @@
   const currentReleaseTasks = $derived(
     sortedTasks.filter(task => task.id !== focusedQueueWork?.id),
   )
+  const hasAdditionalCurrentReleaseWork = $derived.by(() => {
+    if (!focusedWork) return false
+    return allWorkItems.some(task => {
+      if (task.id === focusedWork.id) return false
+      const scope = scopeByTaskId.get(task.id)
+      return scope === undefined || scope === 'included'
+    })
+  })
   const displayedTasks = $derived(
     ownerReviewQueueMode
       ? ownerReviewQueueTasks
@@ -967,7 +975,6 @@
             <h2>Shipped</h2>
             <p>This release is complete. There is nothing you need to do here.</p>
           </div>
-          <Button variant="secondary" onclick={browseWork}>Browse work</Button>
         </div>
       </Card>
     {:else}
@@ -977,12 +984,11 @@
             <h2>Nothing needs your attention</h2>
             <p>Guildhall has no owner decision waiting right now.</p>
           </div>
-          <Button variant="secondary" onclick={browseWork}>Browse work</Button>
         </div>
       </Card>
     {/if}
 
-    {#if focusedWork}
+    {#if hasAdditionalCurrentReleaseWork}
       <div class="work-focus-footer">
         <Button variant="secondary" onclick={browseWork}>Browse work</Button>
       </div>
