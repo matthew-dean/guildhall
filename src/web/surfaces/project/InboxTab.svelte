@@ -21,6 +21,7 @@
     error?: string | null
     refresh?: (() => Promise<void>) | null
     primaryAction?: ProjectAction | null
+    onRunTask?: (taskId: string) => void | Promise<void>
     onRunRepositoryAction?: (taskId: string, operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>) => void | Promise<void>
     busy?: boolean
   }
@@ -31,6 +32,7 @@
     error: suppliedError = null,
     refresh = null,
     primaryAction = null,
+    onRunTask,
     onRunRepositoryAction,
     busy = false,
   }: Props = $props()
@@ -263,10 +265,21 @@
     return null
   }
 
+  function taskOperation(action: ProjectAction | null): Extract<ProjectActionOperation, 'start_focused' | 'repair_spec'> | null {
+    if (action?.operation === 'start_focused' || action?.operation === 'repair_spec') return action.operation
+    return null
+  }
+
   function runPrimaryRepositoryAction(): void {
     const operation = repositoryOperation(primaryAction)
     if (!operation || !primaryAction?.taskId || !onRunRepositoryAction) return
     void onRunRepositoryAction(primaryAction.taskId, operation)
+  }
+
+  function runPrimaryTaskAction(): void {
+    const operation = taskOperation(primaryAction)
+    if (!operation || !primaryAction?.taskId || !onRunTask) return
+    void onRunTask(primaryAction.taskId)
   }
 </script>
 
@@ -303,6 +316,15 @@
               class="threads-link threads-action"
               disabled={busy}
               onclick={runPrimaryRepositoryAction}
+            >
+              {primaryAction.buttonLabel ?? 'Continue'}
+            </button>
+          {:else if taskOperation(primaryAction) && primaryAction.taskId && onRunTask}
+            <button
+              type="button"
+              class="threads-link threads-action"
+              disabled={busy}
+              onclick={runPrimaryTaskAction}
             >
               {primaryAction.buttonLabel ?? 'Continue'}
             </button>

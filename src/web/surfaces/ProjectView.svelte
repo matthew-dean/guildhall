@@ -785,14 +785,16 @@ import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigra
   const startReadiness = $derived(detail?.startReadiness ?? null)
   const primaryAction = $derived(detail?.actionModel?.primaryAction ?? null)
   const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
-  // A focused work item or blocked recovery has its own direct command in the
-  // content area. The shell must not offer a second, generic run control.
+  // A focused work item, recovery, or repository handoff has its own direct
+  // command in the content area. The shell must not offer a second generic
+  // run control, especially a disabled status-shaped button.
   const directTaskPrimaryAction = $derived(
     (primaryAction?.code === 'ready_work' ||
       primaryAction?.code === 'paused_live_work' ||
       primaryAction?.code === 'review_retry' ||
       primaryAction?.code === 'worker_recovery' ||
-      primaryAction?.code === 'blocked_work') &&
+      primaryAction?.code === 'blocked_work' ||
+      primaryAction?.code === 'repository_followup_required') &&
       Boolean(primaryAction.taskId),
   )
   const primaryActionOwnsAttention = $derived(
@@ -1855,7 +1857,7 @@ import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigra
                 </div>
               {:then module}
                 {@const NeedsYouTab = module.default}
-                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} onRunRepositoryAction={runRepositoryAction} {busy} />
+                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} onRunTask={(taskId) => start('one_task', taskId)} onRunRepositoryAction={runRepositoryAction} {busy} />
               {/await}
             {:else}
               {#await loadProjectOverviewTab()}
@@ -1885,7 +1887,7 @@ import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigra
               </div>
             {:then module}
               {@const ThreadTab = module.default}
-              <ThreadTab projectId={activeProjectId} />
+              <ThreadTab projectId={activeProjectId} onRunRepositoryAction={runRepositoryAction} {busy} />
             {/await}
           {:else if currentView === 'inbox'}
             {#await loadNeedsYouTab()}
@@ -1894,7 +1896,7 @@ import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigra
               </div>
             {:then module}
               {@const NeedsYouTab = module.default}
-              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} onRunRepositoryAction={runRepositoryAction} {busy} />
+              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} onRunTask={(taskId) => start('one_task', taskId)} onRunRepositoryAction={runRepositoryAction} {busy} />
             {/await}
           {:else if currentView === 'workspace-import'}
             {#await loadWorkspaceImportTab()}

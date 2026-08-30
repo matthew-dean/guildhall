@@ -1005,6 +1005,82 @@ describe('ThreadTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?task=task-paused-work')
   })
 
+  it('retries a focused review from Thread instead of opening its activity history', async () => {
+    const { calls } = installFetchFakes([
+      workerTurn({
+        id: 'review-retry',
+        taskId: 'task-091',
+        taskTitle: 'Present draft review evaluation and provenance',
+        taskStatus: 'review',
+        summary: 'The saved change is intact.',
+      }),
+    ], 'review-retry', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Automated review needs retry',
+          taskId: 'task-091',
+          taskLabel: 'Present draft review evaluation and provenance',
+          detail: 'The saved change is intact; retry review starts that check again.',
+          buttonLabel: 'Retry review',
+          href: '/work?task=task-091',
+          tone: 'warn',
+          code: 'review_retry',
+          operation: 'start_focused',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'No response needed' })
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry review' }))
+
+    await waitFor(() => {
+      expect(calls.some(call => (
+        call.url.startsWith('/api/project/task/task-091/start') &&
+        call.body?.mode === 'one_task' &&
+        call.body?.scope === 'work_item'
+      ))).toBe(true)
+    })
+    expect(path.href).toBe('/projects/looma-knit/thread')
+  })
+
+  it('opens a repository pull request from Thread instead of reopening Release', async () => {
+    const onRunRepositoryAction = vi.fn()
+    installFetchFakes([
+      workerTurn({
+        id: 'unrelated-history',
+        taskId: 'task-history',
+        taskTitle: 'Older task history',
+      }),
+    ], 'unrelated-history', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Pull request is ready to open',
+          taskId: 'task-004',
+          taskLabel: 'Open supported documents as TypeScript',
+          detail: 'The completed branch is shared.',
+          buttonLabel: 'Open pull request',
+          href: '/release',
+          tone: 'warn',
+          code: 'repository_followup_required',
+          operation: 'open_pull_request',
+        },
+      },
+    })
+
+    render(ThreadTab, { onRunRepositoryAction })
+
+    await screen.findByRole('heading', { name: 'What needs your attention' })
+    await userEvent.click(screen.getByRole('button', { name: 'Open pull request' }))
+
+    expect(onRunRepositoryAction).toHaveBeenCalledWith('task-004', 'open_pull_request')
+    expect(path.href).toBe('/projects/looma-knit/thread')
+  })
+
   it('uses shared current-scope counts instead of folding deferred work into the Thread handoff', async () => {
     installFetchFakes([
       workerTurn({

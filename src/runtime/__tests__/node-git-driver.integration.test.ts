@@ -334,6 +334,30 @@ describe('NodeGitDriver.push', () => {
 })
 
 describe('NodeGitDriver.cherryPickBranch', () => {
+  it('removes a stale index lock and retries the failed Git command before landing task work', async () => {
+    const driver = new NodeGitDriver()
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'stale-index-lock')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-stale-index-lock',
+      baseBranch: 'main',
+    })
+    await fs.writeFile(path.join(worktreePath, 'landed.txt'), 'landed\n', 'utf8')
+    await git(worktreePath, ['add', 'landed.txt'])
+    await git(worktreePath, ['commit', '-q', '-m', 'task work'])
+
+    const lockPath = path.join(repoRoot, '.git', 'index.lock')
+    await fs.writeFile(lockPath, '', 'utf8')
+    const staleAt = new Date(Date.now() - 60_000)
+    await fs.utimes(lockPath, staleAt, staleAt)
+
+    const result = await driver.cherryPickBranch(repoRoot, 'guildhall/task-stale-index-lock', 'main')
+
+    expect(result.ok).toBe(true)
+    await expect(fs.readFile(path.join(repoRoot, 'landed.txt'), 'utf8')).resolves.toBe('landed\n')
+    await expect(fs.stat(lockPath)).rejects.toThrow()
+  })
+
   it('lands the remaining task delta when owner checkout paths already match the branch target', async () => {
     const driver = new NodeGitDriver()
     await fs.writeFile(path.join(repoRoot, 'package-lock.json'), '{"lock":true}\n', 'utf8')

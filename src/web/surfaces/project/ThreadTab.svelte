@@ -66,11 +66,13 @@
   import { taskStagePresentation } from '../../lib/task-presentation.js'
   import { project } from '../../lib/project.svelte.js'
   import { humanizeRuntimeText } from '../../lib/identifier-labels.js'
-  import type { Escalation, GitStorySnapshot, ProjectDetail, ProjectRuntimeSummary, TaskRoutingContext } from '../../lib/types.js'
+  import type { Escalation, GitStorySnapshot, ProjectActionOperation, ProjectDetail, ProjectRuntimeSummary, TaskRoutingContext } from '../../lib/types.js'
   import { toast } from '../../lib/toast.svelte.js'
 
   interface Props {
     projectId?: string | null
+    onRunRepositoryAction?: (taskId: string, operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>) => void | Promise<void>
+    busy?: boolean
   }
 
   const props = $props<Props>()
@@ -1546,7 +1548,7 @@
     ownerAction && !projectActivityVisible && (!ownerActionHasThread || ownerActionDirectTaskRoute),
   ))
   const resumableWorkAction = $derived(
-    ownerAction?.code === 'ready_work' || ownerAction?.code === 'paused_live_work' || ownerAction?.code === 'worker_recovery',
+    ownerAction?.code === 'ready_work' || ownerAction?.code === 'paused_live_work' || ownerAction?.code === 'worker_recovery' || ownerAction?.code === 'review_retry',
   )
   // Thread is for a response, not a second work queue. When the shared action
   // says a represented task can resume, leave its history out of the default
@@ -3331,7 +3333,27 @@
     })
   }
 
-  function openProjectDecision(): void {
+  async function openProjectDecision(): Promise<void> {
+    if (
+      (ownerAction?.operation === 'push_branch' || ownerAction?.operation === 'open_pull_request') &&
+      ownerAction.taskId &&
+      props.onRunRepositoryAction
+    ) {
+      runBusy = true
+      try {
+        await props.onRunRepositoryAction(ownerAction.taskId, ownerAction.operation)
+      } finally {
+        runBusy = false
+      }
+      return
+    }
+    if (
+      (ownerAction?.operation === 'start_focused' || ownerAction?.operation === 'repair_spec') &&
+      ownerAction.taskId
+    ) {
+      await startTaskRun(ownerAction.taskId)
+      return
+    }
     if (!ownerAction?.href) return
     nav(projectActionHref(ownerAction.href, explicitProjectId), { backgroundPath: path.value })
   }
@@ -3816,7 +3838,7 @@
               {/if}
             </div>
             <Row justify="end" wrap>
-              <Button variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'} onclick={openProjectDecision}>
+              <Button variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'} disabled={runBusy || props.busy} onclick={() => void openProjectDecision()}>
                 {ownerAction?.buttonLabel ?? 'Continue'}
               </Button>
             </Row>
@@ -3838,7 +3860,7 @@
               {/if}
             </div>
             <Row justify="end" wrap>
-              <Button variant="primary" onclick={openProjectDecision}>{ownerAction?.buttonLabel ?? 'Open work'}</Button>
+              <Button variant="primary" disabled={runBusy || props.busy} onclick={() => void openProjectDecision()}>{ownerAction?.buttonLabel ?? 'Open work'}</Button>
             </Row>
           </div>
         </Card>

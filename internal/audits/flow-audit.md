@@ -63622,3 +63622,109 @@ action model.
   request` button and no horizontal overflow. The button was not clicked:
   opening a GitHub pull request is an external owner action that requires
   confirmation at the moment of execution.
+
+### Finding: A direct repository handoff must own the shell action
+
+- [x] User job: when the owner can open a pull request now, the project shell
+  shows that one command. It does not also show a disabled `Repo follow-up`
+  control that describes the same state without performing anything.
+- Live finding, 2026-08-30: at desktop width, t-minus-t rendered an inert
+  `Repo follow-up` control beside its direct `Open pull request` command. The
+  duplicate made the real handoff look optional and repeated the status-shaped
+  action pattern the flow audit is meant to remove.
+
+#### Contract Touch Decision
+
+Work id: `repository-handoff-owns-shell-action-2026-08-30`. Touched contract:
+the project shell's existing decision about when a content-level primary action
+owns the run-control slot. Repository handoffs with a task-bound direct action
+now use that same rule. Considered but not touched: action ranking, repository
+operation endpoints, task state, release readiness, and persisted contracts.
+Required proof: a repository PR action renders once and the top shell does not
+render its disabled generic control. Apply/revert: shared presentation decision
+only.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- Focused `ProjectView` unit coverage passed. Installed t-minus-t replay at
+  900px after build/install, restart, and `stale:false` showed one `Open pull
+  request` action, no duplicate `Repo follow-up`, and no page-level overflow.
+
+### Finding: Every owner surface must execute the typed focused action
+
+- [x] User job: after Guildhall identifies a retryable review, the owner can
+  retry it from Inbox, Work, or Thread. None of those screens may turn the
+  action into a second navigation step or a dense activity transcript.
+- Live finding, 2026-08-30: Narrative Harness Inbox exposed `Retry review` as
+  a link to Work, while Thread showed an old activity list with `Resume review`
+  instead of the shared retry decision. The shared action model already named
+  the task and `start_focused` operation; the two surfaces ignored it.
+
+#### Contract Touch Decision
+
+Work id: `focused-action-executes-across-owner-surfaces-2026-08-30`. Touched
+contracts: the existing typed `ProjectAction.operation` consumer callbacks in
+Inbox and Thread. `start_focused` and `repair_spec` now use the same direct
+task-run behavior already used on Overview and Release; Thread also delegates
+repository operations to the project-shell callback rather than inventing an
+endpoint. Considered but not touched: action ranking, task persistence, run
+endpoints, repository endpoints, task state, and release readiness. Required
+proof: a focused review produces one direct button in each route and starts
+the specified task without navigation. Apply/revert: presentation dispatch
+only.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- Focused `ProjectView`, Inbox, and Thread unit coverage passed. Installed
+  t-minus-t showed its one direct repository handoff. Installed Narrative
+  Harness showed one focused review action in Overview and Inbox without a
+  second navigation step or page-level overflow at desktop and 390px widths.
+
+### Finding: An internal landing failure must not strand review work
+
+- [x] User job: when Guildhall has the saved implementation but still needs a
+  review decision, it shows one executable review retry. It never labels the
+  task "Needs recovery" without a recovery action.
+- Live finding, 2026-08-30: after the owner retried Narrative Harness
+  `NAR-091`, the task stopped as blocked with no recovery code or action. Its
+  Git Story separately reported that the task commit was already on `main`.
+  The prior landing had failed on a stale Git `index.lock`. Historical review
+  records remained visible, but the authoritative completion lifecycle was
+  explicitly `reopened`, so those old approvals could not complete the
+  current task. The old runtime left those truths as a contradictory display
+  state instead of returning the task to its review lane.
+
+#### Contract Touch Decision
+
+Work id: `stale-landing-review-recovery-2026-08-30`. Touched contracts: the
+Git driver's stale-index-lock retry behavior and the orchestrator's typed
+blocked-to-review recovery for an otherwise-landed task whose current review
+or completion lifecycle remains unresolved. Considered but not touched:
+task/routing presentation, release ranking, acceptance-criterion schema, Git
+history, and owner action copy. Required proof: a stale lock is pruned and
+the Git command retried; a blocked skipped-landing task with missing approval
+or reopened completion becomes `review` with reviewer ownership. Apply/revert:
+this restores the existing review state-machine path; it never marks stale or
+reopened proof as complete.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing `mergeRecord`, review evidence, and task
+lifecycle fields are reconciled through their current contracts.
+
+#### Validation
+
+- Focused stale-blocker, orchestrator, and Git-driver regression coverage
+  passed. Installed Narrative Harness replay after build/install, restart,
+  and `stale:false` changed `task-091` from `blocked` to `review` with
+  `reviewer-agent` ownership and zero blocked tasks. Overview and Inbox showed
+  one `Resume review` action, no `Needs recovery` label, and no page-level
+  overflow at desktop and 390px widths.

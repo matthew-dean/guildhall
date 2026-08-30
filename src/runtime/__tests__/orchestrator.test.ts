@@ -5083,7 +5083,7 @@ describe('Orchestrator.tick — routing', () => {
 
   it('routes review tasks to the reviewer agent', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'review' })])
-    const reviewer = stubAgent('reviewer-agent')
+    const reviewer = stubAgent('reviewer-agent', undefined, 'review pending')
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ reviewer }),
@@ -15822,6 +15822,54 @@ describe('Orchestrator.run — full loops', () => {
 
     expect(gitDriver.state.removedWorktrees).toEqual([])
     expect((await readQueue()).tasks[0]?.worktreePath).toBe(worktreePath)
+  })
+
+  it('returns a landed blocked task with missing review approval to the review lane', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-missing-review')
+    await writeQueue([
+      mkTask({
+        id: 'task-missing-review',
+        status: 'blocked',
+        worktreePath,
+        branchName: 'guildhall/task-missing-review',
+        baseBranch: 'main',
+        acceptanceCriteria: [{
+          id: 'ac-review',
+          description: 'A reviewer approves the saved implementation.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        mergeRecord: {
+          fromBranch: 'guildhall/task-missing-review',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'skipped',
+          mergedAt: '2026-08-30T14:32:16.611Z',
+          detail: 'stale Git index lock interrupted the prior landing attempt',
+        },
+        notes: [{
+          agentId: 'coordinator',
+          role: 'git-story',
+          content: 'Guildhall recorded the prior landing attempt.',
+          timestamp: '2026-08-30T14:32:16.611Z',
+        }],
+      }),
+    ])
+
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    await orch.tick()
+
+    const task = (await readQueue()).tasks[0]!
+    expect(['review', 'gate_check']).toContain(task.status)
+    expect(task.blockReason).toBeUndefined()
+    expect(task.notes.some((note) => note.content.includes('Returned the task to review instead of leaving a recovery blocker'))).toBe(true)
+    expect(reviewer.calls).toHaveLength(1)
   })
 
   it('lands completed active rows from done-summary evidence instead of rerunning the worker', async () => {

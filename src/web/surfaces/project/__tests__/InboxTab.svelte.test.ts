@@ -319,6 +319,28 @@ describe('InboxTab', () => {
     expect(screen.queryByRole('link', { name: 'Open pull request' })).not.toBeInTheDocument()
   })
 
+  it('runs a focused review from the current Inbox action instead of reopening Work', async () => {
+    const onRunTask = vi.fn()
+    render(InboxTab, {
+      items: [],
+      loaded: true,
+      primaryAction: {
+        taskId: 'task-091',
+        ownerHeading: 'Automated review needs retry',
+        detail: 'The saved change is intact; retry the focused review.',
+        buttonLabel: 'Retry review',
+        href: '/work?task=task-091',
+        operation: 'start_focused',
+      },
+      onRunTask,
+    })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry review' }))
+
+    expect(onRunTask).toHaveBeenCalledWith('task-091')
+    expect(screen.queryByRole('link', { name: 'Retry review' })).not.toBeInTheDocument()
+  })
+
   it('uses compact owner-decision rows instead of the old inbox archive', async () => {
     const items = [
       {

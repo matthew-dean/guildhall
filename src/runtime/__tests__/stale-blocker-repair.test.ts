@@ -22,7 +22,7 @@ import {
   repairStaleBlockersForProjectWithRuntime,
   repairStaleBlockersInQueue,
 } from '../stale-blocker-repair.js'
-import { readProjectTaskQueueForMutationSync } from '../project-state-boundary.js'
+import { readProjectTaskQueueForMutationSync, readProjectTaskQueueForRichMutation } from '../project-state-boundary.js'
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -60,6 +60,38 @@ function queue(tasks: Task[]): TaskQueue {
 }
 
 describe('repairStaleBlockersInQueue', () => {
+  it('returns skipped landing work with missing review approval to review', () => {
+    const q = queue([
+      task({
+        id: 'task-missing-review',
+        acceptanceCriteria: [{
+          id: 'ac-review',
+          description: 'A reviewer approves the saved implementation.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        mergeRecord: {
+          fromBranch: 'guildhall/task-missing-review',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'skipped',
+          mergedAt: '2026-08-30T14:32:16.611Z',
+        },
+      }),
+    ])
+
+    const result = repairStaleBlockersInQueue(q, '2026-08-30T15:00:00.000Z')
+
+    expect(result.repairs).toEqual([{
+      taskId: 'task-missing-review',
+      previousStatus: 'blocked',
+      nextStatus: 'review',
+      reason: 'missing_review_after_skipped_landing',
+    }])
+    expect(q.tasks[0]).toMatchObject({ status: 'review', assignedTo: 'reviewer-agent' })
+    expect(q.tasks[0]?.blockReason).toBeUndefined()
+  })
+
   it('reopens stale cross-task guardrail blockers before they reach the UI', () => {
     const q = queue([
       task({
@@ -366,6 +398,97 @@ describe('repairStaleBlockersInQueue', () => {
     })
 
     rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  it('returns promoted skipped landing work to review when its current review evidence is missing approval', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'guildhall-stale-promoted-landing-review-'))
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    try {
+      writeProjectStateDatabaseSnapshot(tasksPath, {
+        queue: queue([
+          task({
+            id: 'task-promoted-landing-review',
+            acceptanceCriteria: [{
+              id: 'ac-review',
+              description: 'A reviewer approves the saved implementation.',
+              verifiedBy: 'review',
+              met: true,
+            }],
+            proofPaths: [{
+              id: 'task-promoted-landing-review-review-proof',
+              kind: 'review',
+              expectedEvidence: [{ id: 'ac-review', kind: 'manual', required: true }],
+            }],
+          }),
+        ]),
+        summary: { generatedAt: '2026-08-30T14:00:00.000Z', freshness: 'current' },
+        projectRoot,
+      })
+      promoteProjectStateDatabaseAuthority(projectRoot)
+      await appendTaskEvidence(projectRoot, 'task-promoted-landing-review', {
+        id: 'merge-skipped',
+        kind: 'merge_record',
+        recordedAt: '2026-08-30T14:32:16.611Z',
+        payload: {
+          fromBranch: 'guildhall/task-promoted-landing-review',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'skipped',
+          mergedAt: '2026-08-30T14:32:16.611Z',
+        },
+      })
+
+      const result = await repairStaleBlockersForProjectWithRuntime(projectRoot)
+      const current = await readProjectTaskQueueForRichMutation(projectRoot) as { tasks: Task[] }
+
+      expect(result.repairs).toEqual([{
+        taskId: 'task-promoted-landing-review',
+        previousStatus: 'blocked',
+        nextStatus: 'review',
+        reason: 'missing_review_after_skipped_landing',
+      }])
+      expect(current.tasks[0]).toMatchObject({ status: 'review', assignedTo: 'reviewer-agent' })
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('returns reopened completion after skipped landing to review despite historical approval', () => {
+    const q = queue([
+      task({
+        id: 'task-reopened-review',
+        acceptanceCriteria: [{
+          id: 'ac-review',
+          description: 'A reviewer approves the saved implementation.',
+          verifiedBy: 'review',
+          met: true,
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          acceptedCriteriaIds: ['ac-review'],
+          reviewerPath: 'deterministic',
+          reason: 'Historical approval.',
+          failingSignals: [],
+          recordedAt: '2026-08-30T14:32:08.754Z',
+        }],
+        mergeRecord: {
+          fromBranch: 'guildhall/task-reopened-review',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'skipped',
+          mergedAt: '2026-08-30T14:32:16.611Z',
+        },
+        doneSummaryBundle: { status: 'reopened' } as Task['doneSummaryBundle'],
+      }),
+    ])
+
+    const result = repairStaleBlockersInQueue(q, '2026-08-30T15:00:00.000Z')
+
+    expect(result.repairs).toContainEqual(expect.objectContaining({
+      taskId: 'task-reopened-review',
+      reason: 'missing_review_after_skipped_landing',
+    }))
+    expect(q.tasks[0]).toMatchObject({ status: 'review', assignedTo: 'reviewer-agent' })
   })
 
   it('keeps repaired research-spike tasks in shaping even when stale spec text exists', () => {

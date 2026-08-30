@@ -45,6 +45,18 @@ async function execGh(args: readonly string[], opts: { cwd: string; maxBuffer?: 
   return await execFileP(GH_BIN, [...args], opts)
 }
 
+async function execGitRecoveringStaleIndexLock(
+  args: readonly string[],
+  opts: { cwd: string; maxBuffer?: number },
+): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await execGit(args, opts)
+  } catch (err) {
+    if (!await pruneStaleGitIndexLockFromError(errorDetail(err))) throw err
+    return await execGit(args, opts)
+  }
+}
+
 function errorDetail(err: unknown): string {
   if (err && typeof err === 'object') {
     const message = err instanceof Error ? err.message : String(err)
@@ -800,8 +812,8 @@ export class NodeGitDriver implements GitDriver {
   ): Promise<MergeResult> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
     try {
-      await execGit(['checkout', baseBranch], { cwd: gitRoot })
-      const { stdout } = await execGit(['rev-list', '--reverse', `${baseBranch}..${branch}`],
+      await execGitRecoveringStaleIndexLock(['checkout', baseBranch], { cwd: gitRoot })
+      const { stdout } = await execGitRecoveringStaleIndexLock(['rev-list', '--reverse', `${baseBranch}..${branch}`],
         { cwd: gitRoot },
       )
       const commits = stdout
@@ -809,13 +821,13 @@ export class NodeGitDriver implements GitDriver {
         .map((line) => line.trim())
         .filter(Boolean)
       if (commits.length === 0) {
-        const { stdout: head } = await execGit(['rev-parse', 'HEAD'], {
+        const { stdout: head } = await execGitRecoveringStaleIndexLock(['rev-parse', 'HEAD'], {
           cwd: gitRoot,
         })
         return { ok: true, commitSha: head.trim() }
       }
 
-      const { stdout: changedStdout } = await execGit(['diff', '--name-only', '-z', `${baseBranch}..${branch}`],
+      const { stdout: changedStdout } = await execGitRecoveringStaleIndexLock(['diff', '--name-only', '-z', `${baseBranch}..${branch}`],
         { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
       )
       const candidatePaths = changedStdout
@@ -830,23 +842,23 @@ export class NodeGitDriver implements GitDriver {
 
       if (meaningfulPaths.length > 0) {
         const diffArgs = ['diff', '--binary', `${baseBranch}..${branch}`, '--', ...meaningfulPaths]
-        const { stdout: patch } = await execGit(diffArgs, {
+        const { stdout: patch } = await execGitRecoveringStaleIndexLock(diffArgs, {
           cwd: gitRoot,
           maxBuffer: 50 * 1024 * 1024,
         })
         const patchPath = path.join(gitRoot, '.git', 'guildhall-cherry-pick.patch')
         await fs.writeFile(patchPath, patch, 'utf8')
         try {
-          await execGit(['apply', '--check', patchPath], { cwd: gitRoot })
-          await execGit(['apply', '--index', patchPath], { cwd: gitRoot })
+          await execGitRecoveringStaleIndexLock(['apply', '--check', patchPath], { cwd: gitRoot })
+          await execGitRecoveringStaleIndexLock(['apply', '--index', patchPath], { cwd: gitRoot })
         } finally {
           await fs.rm(patchPath, { force: true })
         }
-        await execGit(['commit', '--no-verify', '-m', `Guildhall: land ${branch}`],
+        await execGitRecoveringStaleIndexLock(['commit', '--no-verify', '-m', `Guildhall: land ${branch}`],
           { cwd: gitRoot },
         )
       }
-      const { stdout: head } = await execGit(['rev-parse', 'HEAD'], {
+      const { stdout: head } = await execGitRecoveringStaleIndexLock(['rev-parse', 'HEAD'], {
         cwd: gitRoot,
       })
       return { ok: true, commitSha: head.trim() }

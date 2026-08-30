@@ -2207,6 +2207,54 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('button', { name: /repo follow-up/i })).not.toBeInTheDocument()
   })
 
+  it('keeps a repository pull-request handoff as the only owner action', async () => {
+    const blocked = detail({
+      run: { status: 'stopped', mode: 'continuous' },
+      availability: { status: 'active', pausedAt: null, resumedAt: null },
+      providerStatus: null,
+      startReadiness: {
+        canStart: false,
+        code: 'repository_followup_required',
+        message: 'Pull request is ready to open.',
+        actionHref: '/release',
+        focusKind: 'repository_followup',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          taskId: 'task-004',
+          label: 'Pull request is ready to open.',
+          buttonLabel: 'Open pull request',
+          href: '/release',
+          tone: 'warn',
+          code: 'repository_followup_required',
+          operation: 'open_pull_request',
+        },
+        runControl: {
+          label: 'Repo follow-up',
+          startEnabled: false,
+          pauseEnabled: false,
+          disabledReason: 'Pull request is ready to open.',
+          href: '/release',
+        },
+      },
+      recentEvents: [],
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return json(blocked)
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renderProjectView('overview', null, 'looma-knit', blocked)
+
+    expect(screen.getByRole('button', { name: 'Open pull request' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /repo follow-up/i })).not.toBeInTheDocument()
+  })
+
   it('labels a running one-task pass as Pause 1 and pauses the scoped project run', async () => {
     const user = userEvent.setup()
     const running = detail({

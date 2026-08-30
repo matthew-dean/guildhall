@@ -434,7 +434,10 @@ import {
 } from './git-story-policy.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { hasUsableBlueprint } from './task-plan-recovery.js'
-import { repairCompletionProofCriteriaForProjectWithEvidence } from './stale-blocker-repair.js'
+import {
+  repairCompletionProofCriteriaForProjectWithEvidence,
+  repairStaleBlockersForProjectWithRuntime,
+} from './stale-blocker-repair.js'
 import {
   buildCoordinatorProjectPathMap,
   resolveTaskProjectPath,
@@ -2393,6 +2396,13 @@ async function refreshProjectProjections(
     const threadOnly = domains.size > 0 && [...domains].every(domain => domain === 'thread')
     const attentionOnly = eventDomains.size > 0 && [...eventDomains].every(domain => domain === 'reconciliation')
     const attentionAlreadyProjected = eventDomains.size > 0 && [...eventDomains].every(domain => domain === 'attention')
+    if (!threadOnly) {
+      const staleBlockerRepair = await repairStaleBlockersForProjectWithRuntime(resolved.path)
+      if (staleBlockerRepair.changed) {
+        domains.add('queue')
+        domains.add('task-runtime')
+      }
+    }
     const shouldRefreshRepositories = databaseAuthority && !threadOnly && !attentionOnly && (
       domains.has('repository') ||
       domains.has('diagnostics')
@@ -20368,6 +20378,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
                 entry.path,
                 summary?.releaseSummary ?? null,
               ),
+              blockedTaskCount: summary?.counts?.blocked,
             })
           } catch {
             // An unreadable boundary is itself a repair candidate. Keep the

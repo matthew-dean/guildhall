@@ -22,6 +22,7 @@ describe('project projection refresh scheduler', () => {
     [{ authority: 'database', summaryFreshness: 'stale' }, true],
     [{ authority: 'database', summaryFreshness: 'missing' }, true],
     [{ authority: 'legacy', summaryFreshness: 'current' }, true],
+    [{ authority: 'database', summaryFreshness: 'current', blockedTaskCount: 1 }, true],
   ] as const)('refreshes startup only when the saved boundary needs it', (input, expected) => {
     expect(shouldRefreshProjectAtStartup(input)).toBe(expected)
   })

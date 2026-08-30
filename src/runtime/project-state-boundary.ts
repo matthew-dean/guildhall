@@ -507,10 +507,11 @@ export const FORBIDDEN_PROJECT_TASK_FIELDS = [
   'evidence',
 ] as const
 
-// Runtime-owned fields may appear on an effective task read but never belong
-// to a persisted task definition. Keep this list at the current-state boundary
-// so every read/mutate/write flow carries exactly the same envelope.
-const TaskRuntimeOverlayFieldNames = [
+// Effective-task fields may appear on a rich current-state read but never
+// belong to a persisted task definition. Keep this list at the mutation
+// boundary so repair decisions see the same state as product surfaces while
+// the writer routes runtime and evidence fields back through their owners.
+const TaskEffectiveMutationFieldNames = [
   'assignedTo',
   'revisionCount',
   'retryWindow',
@@ -522,6 +523,14 @@ const TaskRuntimeOverlayFieldNames = [
   'shelveReason',
   'openEscalationIds',
   'openIssueIds',
+  'notes',
+  'gateResults',
+  'reviewVerdicts',
+  'adjudications',
+  'escalations',
+  'agentIssues',
+  'mergeRecord',
+  'doneSummaryBundle',
 ] as const
 
 export type ForbiddenProjectTaskField = typeof FORBIDDEN_PROJECT_TASK_FIELDS[number]
@@ -836,9 +845,11 @@ export function preserveRuntimeOverlayOnTaskQueueParse(raw: unknown, queue: Task
     const runtime = rawTask.runtime && typeof rawTask.runtime === 'object' && !Array.isArray(rawTask.runtime)
       ? rawTask.runtime as Record<string, unknown>
       : rawTask
-    const fields = Object.fromEntries(TaskRuntimeOverlayFieldNames.flatMap(field => (
-      Object.prototype.hasOwnProperty.call(runtime, field) ? [[field, runtime[field]]] : []
-    )))
+    const fields = Object.fromEntries(TaskEffectiveMutationFieldNames.flatMap(field => {
+      if (Object.prototype.hasOwnProperty.call(runtime, field)) return [[field, runtime[field]]]
+      if (Object.prototype.hasOwnProperty.call(rawTask, field)) return [[field, rawTask[field]]]
+      return []
+    }))
     return [[rawTask.id, fields] as const]
   }))
   return bindProjectTaskQueueMutationToken({
