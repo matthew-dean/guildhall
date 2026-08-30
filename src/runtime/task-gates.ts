@@ -143,6 +143,26 @@ export type InvalidAutomatedAcceptanceCommand = {
   reason: string
 }
 
+export type MissingAutomatedAcceptanceCommand = {
+  criterionId: string
+  description: string
+}
+
+/**
+ * `automated` is a typed shell-command verifier. Do not let a task enter an
+ * execution lane when it has promised automated proof but omitted the command
+ * that could produce it.
+ */
+export function findAutomatedAcceptanceCriteriaMissingCommands(
+  task: Pick<Task, 'acceptanceCriteria'>,
+): readonly MissingAutomatedAcceptanceCommand[] {
+  return (task.acceptanceCriteria ?? []).flatMap((criterion) => {
+    if (criterion.verifiedBy !== 'automated') return []
+    if (typeof criterion.command === 'string' && criterion.command.trim().length > 0) return []
+    return [{ criterionId: criterion.id, description: criterion.description }]
+  })
+}
+
 /** Keep acceptance gates on the project side of the Guildhall boundary. */
 export function findInvalidAutomatedAcceptanceCommands(input: {
   task: Pick<Task, 'acceptanceCriteria'>

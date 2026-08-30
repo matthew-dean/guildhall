@@ -143,6 +143,7 @@ import {
 import { projectStateWriteLockHeld, withProjectStateWriteLock } from '@guildhall/sessions'
 import {
   effectiveBootstrapGateCommands,
+  findAutomatedAcceptanceCriteriaMissingCommands,
   findInvalidAutomatedAcceptanceCommands,
   normalizeAutomatedAcceptanceCriterionCommands,
   normalizeRunRecordJsonSelectionCommand,
@@ -8469,7 +8470,8 @@ export class Orchestrator {
       projectPath,
       allowMissingPackageScripts: task.status === 'ready' || task.status === 'in_progress',
     })
-    if (invalid.length === 0) return null
+    const missing = findAutomatedAcceptanceCriteriaMissingCommands(task)
+    if (invalid.length === 0 && missing.length === 0) return null
 
     const beforeStatus = task.status
     return await this.withQueueWriteLock(async () => {
@@ -8488,13 +8490,15 @@ export class Orchestrator {
         projectPath: currentProjectPath,
         allowMissingPackageScripts: current.status === 'ready' || current.status === 'in_progress',
       })
-      if (currentInvalid.length === 0) return null
+      const currentMissing = findAutomatedAcceptanceCriteriaMissingCommands(current)
+      if (currentInvalid.length === 0 && currentMissing.length === 0) return null
 
       const now = this.now()
       const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
       const recoveryReason = [
-        'Guildhall rejected the saved acceptance proof contract because it is not a bounded project proof.',
+        'Guildhall rejected the saved acceptance proof contract before implementation could be retried.',
         ...currentInvalid.map((issue) => `- ${issue.criterionId}: ${issue.command} — ${issue.reason}`),
+        ...currentMissing.map((issue) => `- ${issue.criterionId}: no executable command is attached to its automated criterion (${issue.description}).`),
         're-intake the visible project scripts before another spec can become executable; this is an internal plan defect, not owner input.',
       ].join('\n')
       for (const issue of currentInvalid) {
@@ -8525,7 +8529,10 @@ export class Orchestrator {
         task: current,
         event: 'recover_to_exploring',
         actor: 'acceptance-command-recovery',
-        evidenceRefs: currentInvalid.map((issue) => `criterion:${issue.criterionId}`),
+        evidenceRefs: [
+          ...currentInvalid.map((issue) => `criterion:${issue.criterionId}`),
+          ...currentMissing.map((issue) => `criterion:${issue.criterionId}`),
+        ],
         now,
       })
       current.assignedTo = 'spec-agent'
@@ -8536,11 +8543,11 @@ export class Orchestrator {
       await this.writeQueue(queue)
       await upsertTaskRuntimeState(projectRoot, current.id, {
         assignedTo: 'spec-agent',
-                proofRecovery: {
-                  reopenedAt: now,
-                  kind: 'proof',
-                  reason: recoveryReason,
-                },
+        proofRecovery: {
+          reopenedAt: now,
+          kind: 'proof',
+          reason: recoveryReason,
+        },
         updatedAt: now,
       })
       await this.logTickProgress({
@@ -8549,7 +8556,9 @@ export class Orchestrator {
         beforeStatus,
         afterStatus: 'exploring',
         transitioned: true,
-        note: 'reopened shaping after rejecting non-project acceptance command',
+        note: currentInvalid.length > 0
+          ? 'reopened shaping after rejecting a non-project acceptance command'
+          : 'reopened shaping because automated acceptance criteria lack commands',
       })
       return {
         kind: 'processed',

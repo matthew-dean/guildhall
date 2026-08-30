@@ -6,6 +6,7 @@ import {
   resolveEffectiveTaskBootstrapBlock,
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
+  findAutomatedAcceptanceCriteriaMissingCommands,
   findInvalidAutomatedAcceptanceCommands,
   resolveEffectiveTaskProjectPath,
   normalizeAutomatedAcceptanceCriterionCommands,
@@ -162,6 +163,20 @@ describe('resolveEffectiveTaskProjectPath', () => {
         },
       ),
     ).toBe(loomaPath)
+  })
+})
+
+describe('findAutomatedAcceptanceCriteriaMissingCommands', () => {
+  it('identifies only automated criteria without an executable command', () => {
+    expect(findAutomatedAcceptanceCriteriaMissingCommands({
+      acceptanceCriteria: [
+        { id: 'ac-build', description: 'Build passes.', verifiedBy: 'automated', met: false },
+        { id: 'ac-test', description: 'Tests pass.', verifiedBy: 'automated', command: 'pnpm test', met: false },
+        { id: 'ac-review', description: 'Review approves.', verifiedBy: 'review', met: false },
+      ],
+    } as any)).toEqual([
+      { criterionId: 'ac-build', description: 'Build passes.' },
+    ])
   })
 })
 

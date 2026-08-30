@@ -63046,3 +63046,44 @@ Apply/revert: presentation-only.
 #### Schema Migration Decision
 
 No persisted-schema change.
+
+### Finding: A missing typed proof contract must trigger autonomous shaping, never blind implementation retries
+
+- [ ] User job: when a real task has implementation work but its automated
+  acceptance criteria cannot yet be settled from typed command or provider
+  evidence, Guildhall identifies the contract gap, repairs it through its
+  shaping path, and tells the owner what is happening. It must not repeatedly
+  send the same implementation back to a worker or offer an unexplained
+  `Resume work` loop.
+- Live finding, 2026-08-30: t-minus-t `TMI-004` repeatedly reached approving
+  review, then the gate checker returned it to `in_progress` with a generic
+  missing-proof note. The task had four `automated` acceptance criteria with
+  no typed command or provider proof, while its sole review proof covered only
+  `ac-5` through `ac-7`. Its worker's prose claimed local commands passed, but
+  no typed gate evidence existed. Re-running the worker could not create the
+  missing contract, and pausing the run replaced the reason with generic
+  `Progress is saved. Resume continues this task from its current workspace.`
+
+#### Contract Touch Decision
+
+Work id: `missing-proof-contract-routes-to-autonomous-shaping-2026-08-30`.
+Touched contracts: task proof-health classification, coordinator completion
+recovery routing, and the shared owner-action summary for a task awaiting
+system proof-contract repair. An automated criterion without a linked typed
+proof source is a structured task-contract gap, not a worker revision. The
+coordinator must route it to its existing shaping authority and show that
+concrete system activity rather than a resume loop. Considered but not touched:
+review-verdict schema, provider prose, task-status enum, owner-input lifecycle,
+command execution, release membership, and existing manual/review proof paths.
+Required proof: an approving task with an unlinked automated criterion does not
+increment worker revision count or dispatch a worker; it is routed to shaping;
+once typed proof is attached and recorded, normal completion settles; the
+installed t-minus-t owner surface explains the repair rather than offering
+blind resume. Apply/revert: runtime routing and shared action projection only.
+
+#### Schema Migration Decision
+
+No persisted-schema change is planned. Existing acceptance criteria already
+carry `verifiedBy` and optional command/provider ownership. Legacy and newly
+saved malformed contracts remain readable; runtime detects the missing typed
+relationship and repairs the task through normal shaping before execution.

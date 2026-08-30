@@ -7993,6 +7993,51 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(task.notes.at(-1)?.content).toContain('re-intake the visible project scripts')
   })
 
+  it('returns missing automated acceptance commands to shaping before retrying the worker', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'missing-acceptance-command',
+        status: 'gate_check',
+        projectPath: tmpDir,
+        assignedTo: 'gate-checker-agent',
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The focused project proof passes.',
+          verifiedBy: 'automated',
+          met: true,
+        }],
+      }),
+    ])
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run without a typed automated proof command')
+    })
+    const worker = stubAgent('worker-agent', async () => {
+      throw new Error('worker should not retry implementation before proof shaping')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker, worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'missing-acceptance-command',
+      beforeStatus: 'gate_check',
+      afterStatus: 'exploring',
+      agent: 'acceptance-command-recovery',
+    })
+    expect(gateChecker.calls).toHaveLength(0)
+    expect(worker.calls).toHaveLength(0)
+    const task = (await readQueue()).tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBe('spec-agent')
+    expect(task.acceptanceCriteria).toEqual([])
+    expect(task.notes.at(-1)?.content).toContain('no executable command is attached')
+  })
+
   it('hands a failed proof-recovery command to the worker instead of retrying it forever', async () => {
     const projectPath = path.join(tmpDir, 'proof-recovery-worker-handoff')
     await fs.mkdir(projectPath, { recursive: true })
