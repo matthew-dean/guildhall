@@ -3806,7 +3806,8 @@
               {/if}
               {#if ownerAction?.taskLabel}
                 <p class="thread-project-decision-task">{ownerAction.taskLabel}</p>
-              {:else if ownerAction?.detail}
+              {/if}
+              {#if ownerAction?.detail}
                 <p>{ownerAction.detail}</p>
               {/if}
             </div>

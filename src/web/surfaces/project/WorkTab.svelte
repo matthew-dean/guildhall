@@ -409,7 +409,6 @@
     return `${counts.done ?? 0} of ${counts.total} complete`
   })
   const focusedDecisionDetail = $derived.by(() => {
-    if (focusedWork && isFocusedRunnableWork(focusedWork)) return null
     const sharedDetail = detail.actionModel?.primaryAction?.detail?.trim()
     if (sharedDetail) return sharedDetail
     if (focusedWork && hasSpecRepair(focusedWork)) return 'Guildhall needs to repair this spec before it can ask you to review it.'
@@ -1059,6 +1058,9 @@
             <Chip label={focusedStatusLabel(focusedQueueWork)} tone={focusedStatusTone(focusedQueueWork)} />
           </div>
           <strong>{taskDisplayLabel(focusedQueueWork, focusedQueueWork.id)}</strong>
+          {#if detail.actionModel?.primaryAction?.detail}
+            <p>{detail.actionModel.primaryAction.detail}</p>
+          {/if}
         </div>
         <Button
           variant="primary"

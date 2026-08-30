@@ -1819,7 +1819,7 @@
                 </div>
               {:then module}
                 {@const NeedsYouTab = module.default}
-                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} />
               {/await}
             {:else}
               {#await loadProjectOverviewTab()}
@@ -1857,7 +1857,7 @@
               </div>
             {:then module}
               {@const NeedsYouTab = module.default}
-              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} />
             {/await}
           {:else if currentView === 'workspace-import'}
             {#await loadWorkspaceImportTab()}

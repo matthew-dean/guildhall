@@ -283,10 +283,16 @@ describe('InboxTab', () => {
         },
       ] as any,
       loaded: true,
+      primaryAction: {
+        detail: 'Progress is saved. Resume continues this task from its current workspace.',
+        buttonLabel: 'Resume work',
+        href: '/work?task=task-paused-work',
+      },
     })
 
     expect(screen.getByText('Nothing needs your decision')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open current work' })).toHaveAttribute('href', '/projects/looma-knit/work')
+    expect(screen.getByText('Progress is saved. Resume continues this task from its current workspace.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Resume work' })).toHaveAttribute('href', '/projects/looma-knit/work?task=task-paused-work')
     expect(screen.queryByText('Levers')).not.toBeInTheDocument()
   })
 
@@ -364,13 +370,14 @@ describe('InboxTab', () => {
     expect(screen.getByText('Let Guildhall inspect the repo')).toBeInTheDocument()
   })
 
-  it('shows a quick return to work when no owner decisions remain', async () => {
+  it('stays quiet when no owner decisions or current action remain', async () => {
     render(InboxTab, {
       items: [],
       loaded: true,
     })
 
     expect(screen.getByText('Nothing needs your decision')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open current work' })).toBeInTheDocument()
+    expect(screen.getByText('Guildhall has no action waiting on you.')).toBeInTheDocument()
+    expect(screen.queryByRole('link')).toBeNull()
   })
 })

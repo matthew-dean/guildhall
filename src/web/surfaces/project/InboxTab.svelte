@@ -12,6 +12,7 @@
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
+  import type { ProjectAction } from '../../lib/types.js'
 
   interface Props {
     items?: InboxItem[]
@@ -19,6 +20,7 @@
     loaded?: boolean
     error?: string | null
     refresh?: (() => Promise<void>) | null
+    primaryAction?: ProjectAction | null
   }
 
   let {
@@ -26,6 +28,7 @@
     loaded: suppliedLoaded = false,
     error: suppliedError = null,
     refresh = null,
+    primaryAction = null,
   }: Props = $props()
 
   let localItems = $state<InboxItem[]>([])
@@ -269,8 +272,14 @@
       <Icon name="check-circle-2" size={24} />
       <div>
         <strong>Nothing needs your decision</strong>
-        <p>Guildhall can continue from current work.</p>
-        <a class="threads-link" href={projectActionHref('/work')}>Open current work</a>
+        {#if primaryAction?.detail}
+          <p>{primaryAction.detail}</p>
+        {:else}
+          <p>Guildhall has no action waiting on you.</p>
+        {/if}
+        {#if primaryAction?.href}
+          <a class="threads-link" href={projectActionHref(primaryAction.href)}>{primaryAction.buttonLabel ?? 'Open current work'}</a>
+        {/if}
       </div>
     </UtilityPanel>
   {:else}

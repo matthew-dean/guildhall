@@ -1000,6 +1000,7 @@ describe('ThreadTab', () => {
     expect(screen.queryByLabelText('Selected thread')).toBeNull()
     expect(screen.queryByLabelText('Active thread dock')).toBeNull()
     expect(screen.getByText('Stage 1: V1 Release Hardening · 0 of 16 complete')).toBeTruthy()
+    expect(screen.getByText('Resume continues from this work item.')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Open work' }))
     expect(path.href).toBe('/projects/looma-knit/work?task=task-paused-work')
   })

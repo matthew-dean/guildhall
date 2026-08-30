@@ -61633,3 +61633,52 @@ paused work with and without a dirty-turn-limit recovery counter.
   is saved. Resume continues this task from its current workspace.` The
   shared start-readiness and decision packet both report
   `progressState: partial_work_saved`.
+
+### Finding: Every owner route must present the shared action explanation
+
+- [x] User job: after a bounded worker pass preserves scoped progress, an
+  owner sees the same concise explanation and executable next step whether
+  they arrive through Overview, Work, Thread, Release, or Inbox. No route may
+  turn saved progress into an unexplained generic continuation.
+- Finding, 2026-08-30: the live Looma + Knit project summary, Overview, and
+  Release correctly state `Progress is saved. Resume continues this task from
+  its current workspace.` Work and Thread expose only a bare `Resume work`
+  control, while Inbox says `Guildhall can continue from current work` with an
+  `Open current work` link. All four routes consume the same
+  `paused_live_work` action for `LOO-1CWL9M`; the omitted or rewritten detail
+  makes the owner reconstruct why the visible action matters.
+
+#### Contract Touch Decision
+
+Work id: `shared-owner-action-detail-2026-08-30`. Touched contract: the shared
+owner-action presentation packet. An action's typed `detail`, `buttonLabel`,
+and destination travel together through every owner surface; a route may omit
+the entire non-primary action, but may not substitute generic continuation
+copy or relabel the action locally. Considered but not touched: task status,
+start-readiness selection, action ranking, release state, inbox ranking,
+worker recovery persistence, and navigation routing. Required proof: the
+installed paused Looma + Knit state has one identical saved-progress
+explanation and `Resume work` action across Overview, Work, Thread, Release,
+and Inbox, with no page-level overflow. Apply/revert: presentation reuse only;
+the action-model remains the single authority.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This repairs consumption of the existing cached
+action-model field and leaves all task, decision, and runtime data unchanged.
+
+#### Validation
+
+- Focused rendered coverage: `pnpm exec vitest run
+  src/web/surfaces/project/__tests__/WorkTab.focused.svelte.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts --reporter=dot`
+  passed 148 tests. It covers the focused Work card, Thread decision card, and
+  Inbox empty state consuming the exact shared action detail and label.
+- Installed-app proof after `pnpm build`, `pnpm dev:install`, `guildhall stop`,
+  and `guildhall start`: `/api/stale-server` reports `stale:false`. Fresh
+  Looma + Knit visits to Overview, Work, Thread, Release, and Inbox all show
+  `Progress is saved. Resume continues this task from its current workspace.`
+  with a visible `Resume work` action. At 1280px, 1024px, and 390px every
+  route's page width equals its viewport width; the action remains visible
+  without scrolling through diagnostic content.

@@ -128,6 +128,7 @@ describe('focused Work flow', () => {
           taskId: paused.id,
           code: 'paused_live_work',
           operation: 'start_focused',
+          detail: 'Progress is saved. Resume continues this task from its current workspace.',
           href: `/work?task=${paused.id}`,
         },
       },
@@ -135,6 +136,7 @@ describe('focused Work flow', () => {
 
     expect(await screen.findByRole('heading', { name: 'Work paused' })).toBeInTheDocument()
     expect(screen.getByText('Paused')).toBeInTheDocument()
+    expect(screen.getByText('Progress is saved. Resume continues this task from its current workspace.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Resume work' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull()
   })
@@ -191,7 +193,15 @@ describe('focused Work flow', () => {
     setRoute(`/projects/looma-knit/work?task=${paused.id}`)
     render(WorkTab, { props: { detail: projectDetail([paused, ...upcoming], {
       startReadiness: { canStart: true, code: 'paused_live_work', focusTaskId: paused.id, focusTaskTitle: paused.title, focusKind: 'paused_work' },
-      actionModel: { primaryAction: { taskId: paused.id, code: 'paused_live_work', operation: 'start_focused', href: `/work?task=${paused.id}` } },
+      actionModel: {
+        primaryAction: {
+          taskId: paused.id,
+          code: 'paused_live_work',
+          operation: 'start_focused',
+          detail: 'Progress is saved. Resume continues this task from its current workspace.',
+          href: `/work?task=${paused.id}`,
+        },
+      },
       orientationSpine: {
         summary: { headline: 'Stage 1: Release hardening' },
         scopeRows: [paused, ...upcoming].map(task => ({ taskId: task.id, scope: 'included' })),
@@ -201,6 +211,7 @@ describe('focused Work flow', () => {
     await user.click(await screen.findByRole('button', { name: 'Browse work' }))
 
     expect(await screen.findByRole('heading', { name: 'Up next' })).toBeInTheDocument()
+    expect(screen.getByText('Progress is saved. Resume continues this task from its current workspace.')).toBeInTheDocument()
     expect(screen.getByText('5 other current items')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inspect work Upcoming release task 1' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inspect work Upcoming release task 3' })).toBeInTheDocument()
