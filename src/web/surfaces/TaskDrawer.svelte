@@ -1371,8 +1371,13 @@
         <UtilityPanel as="section" className="drawer-project-decision" tone="warn" railStrength="strong" ariaLabel="Project decision">
           <span class="outcome-eyebrow">Project needs your decision first</span>
           <strong>{projectPrimaryAction.label}</strong>
+          {#if projectPrimaryAction.taskLabel}
+            <span class="drawer-project-decision-task" title={projectPrimaryAction.taskLabel}>
+              {projectPrimaryAction.taskLabel}
+            </span>
+          {/if}
           {#if projectPrimaryAction.detail}
-            <span>{projectPrimaryAction.detail}</span>
+            <span class="drawer-project-decision-detail">{projectPrimaryAction.detail}</span>
           {/if}
           <div class="drawer-project-decision-actions">
             <Button variant="primary" size="sm" onclick={openProjectDecision}>{projectPrimaryAction.buttonLabel}</Button>
@@ -1919,6 +1924,21 @@
   :global(.drawer-project-decision) {
     display: grid;
     gap: var(--s-3);
+  }
+  .drawer-project-decision-task {
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .drawer-project-decision-detail {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-relaxed);
   }
   :global(.drawer-run-action) {
     display: grid;

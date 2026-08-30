@@ -351,6 +351,7 @@ describe('TaskDrawer', () => {
         primaryAction: {
           source: 'task',
           label: 'Review the release spec',
+          taskLabel: 'Approve the documented release boundary for the current milestone.',
           detail: 'A spec needs approval before work can continue.',
           buttonLabel: 'Review next spec',
           href: '/work?task=task-review',
@@ -379,6 +380,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Project needs your decision first')
+    expect(screen.getByText('Approve the documented release boundary for the current milestone.')).toBeInTheDocument()
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(screen.queryByText('Task size')).not.toBeInTheDocument()
     expect(screen.queryByText('Checkpoint saved')).not.toBeInTheDocument()
