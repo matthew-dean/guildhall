@@ -62236,3 +62236,62 @@ removes any task-worktree content.
   remains on its already-persisted no-progress retry state. Guildhall did not
   invent another destructive worker attempt merely to manufacture a lost-edit
   display case.
+
+### Finding: Starting named work must not erase its identity
+
+- [x] User job: after the owner starts one visible task, every project surface
+  keeps that task's key and title visible with the one available running
+  control. The owner must never see anonymous project-level activity for work
+  they selected by name.
+- Live finding, 2026-08-30: acting as the owner, started Narrative Harness
+  `task-091` (`Present draft review evaluation and provenance`) as one-task
+  work. Thread identified `inflight:task-091`, but the compact project response
+  reduced the same run to `running` with no focused task and the generic
+  `Guildhall is running the selected work.` message. This is a shared runtime
+  projection disagreement, not a route-local presentation problem. The
+  reviewer-only first pass later failed honestly because its aggregate approval
+  omitted required structured target ids; that review-contract failure is
+  separate from the lost live identity.
+
+#### Contract Touch Decision
+
+Work id: `named-start-preserves-live-focus-2026-08-30`. Touched contracts: the
+supervisor start packet, its typed execution projection, and the shared project
+decision/action projection. A named start seeds the already-existing typed
+`activeTaskId` and `activeTaskTitle` before worker lifecycle events arrive;
+every response derives its running focus from that same execution fact.
+Considered but not touched: task status, review-contract validation, provider
+prose, route-local action ranking, release scope, and task definitions.
+Required proof: immediately after a named start, the compact project response,
+shared action model, activity, and Thread agree on the task id/title and offer
+only the running control; stopping or terminal lifecycle events clear that
+focus. Apply/revert: no task mutation occurs; reverting simply restores the
+old anonymous pre-lifecycle running window.
+
+#### Schema Migration Decision
+
+No persisted-schema change. `execution.activeTaskId` and
+`execution.activeTaskTitle` are existing optional fields in the derived summary
+projection. This repair supplies those fields earlier from the typed named-start
+input rather than adding a record shape or migration.
+
+#### Validation
+
+- `src/runtime/__tests__/serve-supervisor.test.ts` verifies a named start
+  persists its focus before the first worker lifecycle event and clears that
+  transient focus when the run stops. It passed 13 tests.
+- `src/runtime/__tests__/serve-task-endpoints.test.ts -t 'lets a specifically
+  requested shaping task start inside the selected scope'` verifies the named
+  task endpoint forwards the same typed id/title to the supervisor. It passed.
+  The full endpoint file has a pre-existing stale-decision fixture failure;
+  this focused regression and the supervisor suite are green.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and the focused shared
+  decision/action suites passed.
+- Installed Narrative Harness proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false` with zero startup errors. The owner started `task-091` and the
+  immediate compact project response, activity response, shared action model,
+  and Thread all named `task-091` / `Present draft review evaluation and
+  provenance`; the one running control was `Pause`. The owner then stopped the
+  probe. Its existing reviewer-contract failure remained truthful and the
+  Narrative Harness checkout stayed clean.

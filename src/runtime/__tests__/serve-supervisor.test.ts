@@ -62,7 +62,22 @@ describe('OrchestratorSupervisor', () => {
       })
       promoteProjectStateDatabaseAuthority(workspacePath)
 
-      const run = supervisor.start({ workspaceId: 'active-task-project', workspacePath })
+      const run = supervisor.start({
+        workspaceId: 'active-task-project',
+        workspacePath,
+        initialActiveTask: {
+          id: 'task-live',
+          title: 'Prove live execution identity',
+        },
+      })
+      // A named owner start stays oriented before a worker emits its first
+      // lifecycle event.
+      expect(supervisor.get('active-task-project')?.activeTaskId).toBe('task-live')
+      expect(readProjectSummaryProjection(tasksPath)?.execution).toMatchObject({
+        status: 'running',
+        activeTaskId: 'task-live',
+        activeTaskTitle: 'Prove live execution identity',
+      })
       letWorkerStartContinue()
       await new Promise(resolve => setTimeout(resolve, 0))
       expect(supervisor.get('active-task-project')?.activeTaskId).toBe('task-live')

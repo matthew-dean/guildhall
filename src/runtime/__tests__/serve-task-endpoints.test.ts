@@ -2960,6 +2960,11 @@ describe('POST /api/project/task/:id/start', () => {
           stopAfterOneTask: true,
         })
       })
+      expect(supervisor.get(projectId)).toMatchObject({
+        status: 'running',
+        activeTaskId: 'task-model-proof',
+        activeTaskTitle: 'Define drafting model proof',
+      })
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }

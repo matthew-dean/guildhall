@@ -711,6 +711,12 @@ export class OrchestratorSupervisor {
     workspacePath: string
     stopAfterOneTask?: boolean
     preferredTaskId?: string
+    /**
+     * A named owner start is already a typed execution focus before the first
+     * worker event arrives. This matters for review-only passes that do not
+     * emit an `agent_started` event for the selected task.
+     */
+    initialActiveTask?: { id: string; title?: string }
     providerStatus?: ProviderRunStatus
     providerHealthKey?: string
     providerOverride?: string
@@ -735,6 +741,14 @@ export class OrchestratorSupervisor {
       processRegistry: new ProcessRegistry(),
       workspacePath: opts.workspacePath,
       mode: opts.stopAfterOneTask ? 'one_task' : 'continuous',
+      ...(opts.initialActiveTask?.id.trim()
+        ? {
+            activeTaskId: opts.initialActiveTask.id.trim(),
+            ...(opts.initialActiveTask.title?.trim()
+              ? { activeTaskTitle: opts.initialActiveTask.title.trim() }
+              : {}),
+          }
+        : {}),
       ...(opts.providerStatus ? { providerStatus: opts.providerStatus } : {}),
       ...(opts.providerHealthKey ? { providerHealthKey: opts.providerHealthKey } : {}),
     }
@@ -807,6 +821,10 @@ export class OrchestratorSupervisor {
         run.stopSummary = result
         run.status = 'stopped'
         run.stoppedAt = new Date().toISOString()
+        // The task's saved decision owns any post-run recovery. A completed
+        // supervisor must not leave its transient live-focus packet behind.
+        delete run.activeTaskId
+        delete run.activeTaskTitle
         recordAndEmit({
           type: 'supervisor_stopped',
           reason: result.stopReason,
@@ -816,6 +834,8 @@ export class OrchestratorSupervisor {
         run.status = 'error'
         run.error = err instanceof Error ? err.message : String(err)
         run.stoppedAt = new Date().toISOString()
+        delete run.activeTaskId
+        delete run.activeTaskTitle
         recordAndEmit({ type: 'supervisor_error', message: run.error })
       }
     })()

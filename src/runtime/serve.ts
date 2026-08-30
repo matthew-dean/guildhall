@@ -12666,6 +12666,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         workspacePath: project.path,
         ...(stopAfterOneTask ? { stopAfterOneTask: true } : {}),
         ...(body.taskId ? { preferredTaskId: body.taskId } : {}),
+        ...(body.taskId && requestedTask
+          ? {
+              initialActiveTask: {
+                id: requestedTask.id,
+                ...(requestedTask.title?.trim() ? { title: requestedTask.title.trim() } : {}),
+              },
+            }
+          : {}),
         providerStatus,
         ...(activeHealthKey ? { providerHealthKey: activeHealthKey } : {}),
         providerOverride: effectiveProvider,
