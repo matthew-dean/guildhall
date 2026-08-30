@@ -254,20 +254,32 @@
     return project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)
   }
 
-  async function reconcileRunState(refreshInbox = false): Promise<void> {
-    await refreshVisibleProject()
+  async function reconcileRunState(refreshInbox = false): Promise<ProjectDetail | null> {
+    const refreshed = await refreshVisibleProject()
     // A one-task pass can begin and finish before the first scheduled refresh.
     // Once that authoritative refresh succeeds, its run state is the only one
     // chrome should render instead of the temporary start prediction.
     if (!project.error) optimisticRunStatus = null
     if (refreshInbox) await loadInbox()
+    return refreshed
   }
 
   function scheduleStartedRunReconciliation(mode: 'continuous' | 'one_task'): void {
-    const checkpoints = mode === 'one_task'
-      ? [300, 700, 1200, 1800, 3200]
-      : [300, 1500, 3200]
-    for (const delay of checkpoints) {
+    if (mode === 'one_task') {
+      let attemptsRemaining = 4
+      const poll = async (): Promise<void> => {
+        const refreshed = await reconcileRunState()
+        if (project.error || refreshed?.run?.status !== 'running' || attemptsRemaining === 0) {
+          void loadInbox()
+          return
+        }
+        attemptsRemaining -= 1
+        setTimeout(() => void poll(), 200)
+      }
+      setTimeout(() => void poll(), 300)
+      return
+    }
+    for (const delay of [300, 1500, 3200]) {
       setTimeout(() => void reconcileRunState(delay >= 1500), delay)
     }
   }
