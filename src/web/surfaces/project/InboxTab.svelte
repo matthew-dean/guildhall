@@ -259,7 +259,13 @@
   <header class="head">
     <h2>Needs you</h2>
   </header>
-  <p class="summary">Only decisions that need you appear here.</p>
+  <p class="summary">
+    {#if priorityItems.length === 0 && primaryAction}
+      No separate Inbox decisions are waiting.
+    {:else}
+      Only decisions that need you appear here.
+    {/if}
+  </p>
 
   {#if error}
     <UtilityPanel tone="warn">
@@ -268,17 +274,20 @@
   {:else if !loaded}
     <p class="muted">Loading...</p>
   {:else if priorityItems.length === 0}
-    <UtilityPanel className="empty" tone="ok">
+    <UtilityPanel className="empty" tone={primaryAction ? 'accent' : 'ok'}>
       <Icon name="check-circle-2" size={24} />
       <div>
-        <strong>Nothing needs your decision</strong>
-        {#if primaryAction?.detail}
-          <p>{primaryAction.detail}</p>
+        {#if primaryAction}
+          <strong>{primaryAction.ownerHeading ?? primaryAction.label ?? 'Current project action'}</strong>
+          {#if primaryAction.detail}
+            <p>{primaryAction.detail}</p>
+          {/if}
+          {#if primaryAction.href}
+            <a class="threads-link" href={projectActionHref(primaryAction.href)}>{primaryAction.buttonLabel ?? 'Open current work'}</a>
+          {/if}
         {:else}
+          <strong>Nothing needs your decision</strong>
           <p>Guildhall has no action waiting on you.</p>
-        {/if}
-        {#if primaryAction?.href}
-          <a class="threads-link" href={projectActionHref(primaryAction.href)}>{primaryAction.buttonLabel ?? 'Open current work'}</a>
         {/if}
       </div>
     </UtilityPanel>

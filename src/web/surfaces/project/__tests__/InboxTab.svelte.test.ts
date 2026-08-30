@@ -290,7 +290,8 @@ describe('InboxTab', () => {
       },
     })
 
-    expect(screen.getByText('Nothing needs your decision')).toBeInTheDocument()
+    expect(screen.getByText('No separate Inbox decisions are waiting.')).toBeInTheDocument()
+    expect(screen.getByText('Current project action')).toBeInTheDocument()
     expect(screen.getByText('Progress is saved. Resume continues this task from its current workspace.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Resume work' })).toHaveAttribute('href', '/projects/looma-knit/work?task=task-paused-work')
     expect(screen.queryByText('Levers')).not.toBeInTheDocument()

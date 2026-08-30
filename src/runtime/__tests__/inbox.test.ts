@@ -149,12 +149,11 @@ describe('buildInbox', () => {
       'proof_reconciliation',
       'import_draft_queue',
       'contract_result_review',
-      'lever_questions',
       'spec_fill_pending',
     ])
 
     expect(isAttentionOwnedInboxItem({ kind: 'workspace_import_pending' } as InboxItem)).toBe(true)
-    expect(isAttentionOwnedInboxItem({ kind: 'lever_questions' } as InboxItem)).toBe(true)
+    expect(isAttentionOwnedInboxItem({ kind: 'lever_questions' } as InboxItem)).toBe(false)
   })
 
   it('empty state: complete bootstrap, no tasks, no workspace signals, no default levers → no items', async () => {

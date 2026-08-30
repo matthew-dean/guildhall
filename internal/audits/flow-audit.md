@@ -62022,6 +62022,20 @@ stored data change.
 
 No persisted-schema change.
 
+#### Validation
+
+- `InboxTab.svelte.test.ts` passes 11 tests. Its no-separate-decisions case
+  proves the panel says `No separate Inbox decisions are waiting`, names the
+  current project action, and preserves its direct route; the truly actionless
+  case retains `Nothing needs your decision`.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false` with zero errors. At 1114px, Needs you read `No separate Inbox
+  decisions are waiting` and then showed the actual `Worker needs a fresh
+  pass` / `Retry worker` action without horizontal overflow.
+
 ### Finding: Automatic repair must not leave Thread stale
 
 - [x] User job: after Guildhall safely repairs a project during a normal read,
@@ -62475,3 +62489,57 @@ reader remain the authority.
   longer appeared. A separate, explicitly dismissible project-discovery
   advisory remains for independent review and is not presented as the current
   work action.
+
+### Finding: System-default settings are not owner Inbox work
+
+- [ ] User job: the Inbox contains only decisions that change or unblock the
+  current project. Passive configuration defaults stay discoverable in Settings
+  without competing with the project’s one actionable work handoff.
+- Live finding, 2026-08-30: after t-minus-t’s actual import housekeeping was
+  resolved, Inbox still said `Your decisions 1` for `20 levers at system
+  defaults`. Those defaults neither blocked `TMI-004` nor required a current
+  choice, while the page explicitly promised only decisions that needed the
+  owner.
+
+#### Contract Touch Decision
+
+Work id: `settings-defaults-out-of-owner-inbox-2026-08-30`. Touched contracts:
+the attention-owned Inbox kind filter. `lever_questions` remains a typed
+settings summary but is no longer treated as a project-owner interruption.
+Considered but not touched: lever persistence, settings navigation, default
+count calculation, Inbox ranking for real decisions, and task/action state.
+Required proof: a project with system-default levers receives no owner Inbox
+item while the settings surface retains the configuration. Apply/revert:
+presentation routing only; reverting restores non-blocking policy noise to
+owner attention.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Settings records are unchanged.
+
+### Finding: An empty Inbox must not deny the visible current action
+
+- [ ] User job: when no separate Inbox decisions remain but the project still
+  has a current owner action, the owner can distinguish those facts instantly.
+  The page must name the active action and expose it, not claim no decision is
+  needed while presenting a command.
+- Live finding, 2026-08-30: after t-minus-t Inbox was correctly cleared of
+  stale reminders, the empty panel said `Nothing needs your decision` while
+  displaying the current `Retry worker` action and its recovery explanation.
+  This made the page contradict itself at the exact point it was meant to be
+  most calming.
+
+#### Contract Touch Decision
+
+Work id: `inbox-empty-state-names-current-action-2026-08-30`. Touched
+contracts: Inbox empty-state presentation of the existing shared primary
+action. Considered but not touched: Inbox eligibility, action ranking, task
+state, start readiness, action operation, and persisted data. Required proof:
+no-inbox plus a primary action says there are no separate Inbox decisions, then
+names and links the current action; a genuinely actionless project still says
+nothing needs a decision. Apply/revert: presentation only; reverting restores
+the contradiction.
+
+#### Schema Migration Decision
+
+No persisted-schema change.

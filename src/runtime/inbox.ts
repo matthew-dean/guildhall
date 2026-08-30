@@ -91,7 +91,6 @@ export const ATTENTION_OWNED_INBOX_KINDS = [
   'proof_reconciliation',
   'import_draft_queue',
   'contract_result_review',
-  'lever_questions',
   'spec_fill_pending',
 ] as const satisfies readonly InboxItem['kind'][]
 
