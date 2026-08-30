@@ -12859,6 +12859,119 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
+  it('does not promote a claimed-only review checkpoint when its task worktree has no diff or branch commit', async () => {
+    const worktreePath = path.join(tmpDir, 'missing-checkpoint-handoff')
+    await fs.mkdir(worktreePath, { recursive: true })
+    const task = mkTask({
+      id: 'missing-review-surface',
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      worktreePath,
+      branchName: 'guildhall/task-missing-review-surface',
+      baseBranch: 'main',
+      spec: VALID_SPEC,
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        description: 'The implementation is ready for review.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+    })
+    await writeQueue([task])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: task.id,
+      agentId: 'worker-agent',
+      intent: 'Claimed implementation handoff.',
+      nextPlannedAction: 'Hand the implementation to review.',
+      nextActionKind: 'review_handoff',
+      filesTouched: ['packages/extension/README.md'],
+      resumeContext: {
+        verification: [{
+          command: 'pnpm test:extension',
+          passed: true,
+          observedAt: '2026-08-30T12:55:05.285Z',
+        }],
+      },
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await (orch as unknown as {
+      maybePromoteExistingWorkerReviewProof(input: {
+        task: typeof task
+        beforeStatus: TaskStatus
+        activeWorktreePath: string
+      }): Promise<unknown>
+    }).maybePromoteExistingWorkerReviewProof({
+      task,
+      beforeStatus: 'in_progress',
+      activeWorktreePath: worktreePath,
+    })
+
+    expect(out).toBeNull()
+    const saved = (await readQueue()).tasks.find(candidate => candidate.id === task.id)
+    expect(saved?.status).toBe('in_progress')
+    expect(saved?.assignedTo).toBe('worker-agent')
+    expect(saved?.notes.some(note => note.role === 'self-critique')).toBe(false)
+  })
+
+  it('returns a stale review handoff with no implementation surface to the worker before fan-out', async () => {
+    const worktreePath = path.join(tmpDir, 'stale-review-handoff')
+    await fs.mkdir(worktreePath, { recursive: true })
+    const task = mkTask({
+      id: 'stale-review-surface',
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+      worktreePath,
+      branchName: 'guildhall/task-stale-review-surface',
+      baseBranch: 'main',
+      spec: VALID_SPEC,
+      notes: [{
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        ...withMachineSelfCritique(
+          '**Self-critique:**\n\nThe implementation is ready for review.',
+          { changedFiles: ['packages/extension/README.md'] },
+        ),
+        timestamp: '2026-08-30T12:55:05.285Z',
+      }],
+    })
+    await writeQueue([task])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await (orch as unknown as {
+      recoverStaleReviewHandoff(task: Task): Promise<unknown>
+    }).recoverStaleReviewHandoff(task)
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-remediation',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+      transitioned: true,
+    })
+    const saved = (await readQueue()).tasks.find(candidate => candidate.id === task.id)
+    expect(saved?.status).toBe('in_progress')
+    expect(saved?.assignedTo).toBe('worker-agent')
+    expect(saved?.notes.at(-1)).toMatchObject({
+      agentId: 'coordinator',
+      role: 'worker-progress-review',
+      structured: {
+        event: 'worker_self_critique_rejected',
+        reason: 'review_implementation_surface_missing',
+      },
+    })
+  })
+
   it('reruns every automated command after a task enters a new lifecycle', async () => {
     const projectPath = tmpDir
     await fs.writeFile(path.join(projectPath, 'package.json'), JSON.stringify({

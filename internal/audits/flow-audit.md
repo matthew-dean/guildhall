@@ -63306,3 +63306,64 @@ model operation enum and task ID.
   work`, `TMI-004`, and `Resume work`. One click remained on the Release route
   and changed the shared state to `Work is underway`, the same named task, and
   `Open Work`; horizontal layout remained within the 1280px viewport.
+
+### Finding: Review cannot begin from a claimed diff that no longer exists
+
+- [x] User job: when Guildhall says work is ready for review, there is a
+  durable implementation surface for reviewers to inspect. If a saved
+  checkpoint names changed files but the task worktree and task branch contain
+  no corresponding change, Guildhall repairs the stale handoff itself instead
+  of offering the owner another `Resume review` loop.
+- Live finding, 2026-08-30: t-minus-t `TMI-004` entered `review` from a
+  review-handoff checkpoint that named `packages/extension/tsconfig.json` and
+  `packages/extension/README.md`, even though its managed task worktree was
+  clean and its task branch pointed at the same commit as `origin/main`. The
+  generated review packet truthfully said `No changed files recorded`, then
+  reviewer fan-out repeatedly failed its structured contract for review-owned
+  targets. The owner surface still offered `Resume review`, although neither a
+  fresh owner decision nor reviewable work existed.
+
+#### Contract Touch Decision
+
+Work id: `durable-review-surface-before-owner-review-2026-08-30`. Touched
+contracts: worker-to-review recovery eligibility, checkpoint-backed
+self-critique synthesis, reviewer-fanout recovery routing, and the shared
+owner action that follows an invalid review handoff. A checkpoint's claimed
+file list is descriptive evidence only; automatic review promotion requires a
+current task-worktree diff or a task-branch commit beyond its declared base.
+When that surface is absent, Guildhall must return the task to autonomous
+implementation recovery with a typed stale-handoff reason, rather than asking
+the owner to retry a reviewer action. Considered but not touched: task status
+enum, provider prose, reviewer criteria ownership, checkpoint storage shape,
+git history, release membership, and owner-input lifecycle. Required proof:
+a clean worktree plus checkpoint claims never enters review; a real dirty or
+task-branch-committed change still does; an existing stale review task is
+recovered before a reviewer retry and yields a truthful system-progress state
+instead of `Resume review`. Apply/revert: runtime transition and shared
+decision authority only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Historical checkpoints and review packets remain
+readable, but recovery rechecks their implementation surface against the
+current managed worktree and task branch before making a lifecycle decision.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts
+  --testNamePattern "committed passing review-handoff checkpoint|claimed-only
+  review checkpoint|stale review handoff with no implementation surface"
+  --reporter=dot` passed (3 tests). It preserves valid committed recovery,
+  rejects claimed-only checkpoint promotion, and returns a stale review packet
+  to the worker before reviewer fan-out.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm build`,
+  `pnpm dev:install`, `guildhall stop`, and `guildhall start`,
+  `/api/stale-server` returned `stale:false`. The live `task-004` state was
+  `review` with a clean managed worktree and a task branch equal to its base.
+  One owner `Resume review` start request moved it to `in_progress` with no
+  blockers and a shared `running` action saying Guildhall was working on the
+  named task. The live worker then began task-scoped edits in the managed
+  worktree. No reviewer fan-out was retried and no owner action was required
+  to diagnose or repair the stale handoff.

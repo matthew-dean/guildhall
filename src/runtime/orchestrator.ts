@@ -5586,6 +5586,17 @@ export class Orchestrator {
           this.hasDurableWorkerHandoffEvidence(successfulAgentMetadata, task.id) &&
           checkpointTouchedFiles.length > 0 &&
           checkpointHasRecordedPassingVerification(checkpointVerification)
+        const hasCommittedTaskWorkAfter =
+          beforeStatus === 'in_progress' &&
+          await this.taskWorktreeHasCommittedProgress(taskAfter)
+        const hasDurableImplementationSurface =
+          beforeStatus === 'in_progress' &&
+          (hasDirtyLikelyTargetProgress || hasDirtyWorktreeAfter || hasCommittedTaskWorkAfter)
+        // A checkpoint can describe implementation progress, but it cannot
+        // replace it. Reviewer recovery needs a current diff or task-branch
+        // commit to inspect, otherwise it creates a retry loop over a claim.
+        const hasRecoverableCheckpointProgress =
+          hasCheckpointScopedVerifiedProgress && hasDurableImplementationSurface
         const checkpointNextAction =
           beforeStatus === 'in_progress'
             ? normalizedWorkerCheckpointNextAction(
@@ -5615,14 +5626,14 @@ export class Orchestrator {
           dirtyTaskFilesAfter.length === 0 &&
           !hasDirtyWorktreeAfter &&
           !hasDirtyLikelyTargetProgress &&
-          !hasCheckpointScopedVerifiedProgress &&
+          !hasRecoverableCheckpointProgress &&
           workerAddedSelfCritiqueSince(task, taskAfter, agent.name)
         const canAutoPromoteReviewFromCheckpointHandoff =
           agent.name === 'worker-agent' &&
           beforeStatus === 'in_progress' &&
           afterStatus === 'in_progress' &&
           !transitioned &&
-          hasCheckpointScopedVerifiedProgress &&
+          hasRecoverableCheckpointProgress &&
           checkpointNextActionKind === 'review_handoff'
         if (
           canAutoPromoteReviewFromCheckpointHandoff &&
@@ -5655,7 +5666,7 @@ export class Orchestrator {
           workerAddedSelfCritiqueSince(task, taskAfter, agent.name) &&
           hasWorkerTurnEvidence &&
           this.hasReviewProofPacket(taskAfter) &&
-          (hasDirtyLikelyTargetProgress || hasDirtyWorktreeAfter || hasCheckpointScopedVerifiedProgress)
+          hasDurableImplementationSurface
         if (
           (canAutoPromoteReviewFromCheckpointHandoff && this.hasReviewProofPacket(taskAfter)) ||
           canAutoPromoteReviewFromFreshHandoff
@@ -5733,7 +5744,7 @@ export class Orchestrator {
           (
             (hasDirtyWorktreeAfter && (!hasFailedCheckpointVerification || hasWorkerTurnEvidence)) ||
             hasDirtyLikelyTargetProgress ||
-            hasCheckpointScopedVerifiedProgress
+            hasRecoverableCheckpointProgress
           )
         ) {
           const recoveryReason = hasDirtyWorktreeAfter
@@ -5766,7 +5777,7 @@ export class Orchestrator {
           (workerFalseCompletionNarration || noDurableWorkerProgressSignal) &&
           (!hasDirtyWorktreeAfter || dirtyFilesMatchExistingCheckpoint || (hasFailedCheckpointVerification && !hasWorkerTurnEvidence)) &&
           (!hasDirtyLikelyTargetProgress || dirtyFilesMatchExistingCheckpoint) &&
-          !hasCheckpointScopedVerifiedProgress
+          !hasRecoverableCheckpointProgress
         if (repeatedWorkerNoProgress) {
           const attempts = ((await this.readWorkerRecovery(task.id)).noProgressAttempts ?? 0) + 1
           if (attempts >= WORKER_NO_PROGRESS_ESCALATION_AFTER) {
@@ -9289,6 +9300,9 @@ export class Orchestrator {
     const reviewerMode = await this.resolveReviewerMode(task.domain)
     if (reviewerMode === 'deterministic_only') return null
 
+    const staleHandoffRecovery = await this.recoverStaleReviewHandoff(task)
+    if (staleHandoffRecovery) return staleHandoffRecovery
+
     const designSystem = await loadDesignSystem(this.opts.config.memoryDir).catch(
       () => undefined,
     )
@@ -9656,6 +9670,80 @@ export class Orchestrator {
         transitioned: true,
         note: `fan-out revise (dissenters: ${aggregate.dissenting.map((d) => d.guildSlug).join(', ')})`,
         revisionCount: t.revisionCount,
+      } as TickOutcome
+    })
+  }
+
+  /**
+   * Recover review packets that describe a diff which no longer exists. A
+   * checkpoint is useful recovery evidence, but cannot make absent work
+   * reviewable or turn reviewer retry into an owner action.
+   */
+  private async recoverStaleReviewHandoff(task: Task): Promise<TickOutcome | null> {
+    if (task.status !== 'review' || !this.hasReviewProofPacket(task)) return null
+
+    const hasCommittedTaskWork = await this.taskWorktreeHasCommittedProgress(task)
+    const worktreePath = task.worktreePath?.trim()
+    const hasTaskWorktreeChanges =
+      Boolean(worktreePath) &&
+      !(await this.gitDriver.isClean(resolveRuntimePath(worktreePath!)))
+    if (hasTaskWorktreeChanges || hasCommittedTaskWork) return null
+
+    return await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const current = queue.tasks.find((candidate) => candidate.id === task.id)
+      if (!current || current.status !== 'review' || !this.hasReviewProofPacket(current)) return null
+
+      const currentHasCommittedWork = await this.taskWorktreeHasCommittedProgress(current)
+      const currentWorktreePath = current.worktreePath?.trim()
+      const currentHasWorktreeChanges =
+        Boolean(currentWorktreePath) &&
+        !(await this.gitDriver.isClean(resolveRuntimePath(currentWorktreePath!)))
+      if (currentHasWorktreeChanges || currentHasCommittedWork) return null
+
+      const now = this.now()
+      transitionTaskStatus({
+        task: current,
+        event: 'revise',
+        actor: 'stale-review-handoff-recovery',
+        evidenceRefs: ['task:review-handoff:implementation-surface-missing'],
+        now,
+      })
+      ensureWorkerOwnership(current)
+      current.notes.push({
+        agentId: 'coordinator',
+        role: 'worker-progress-review',
+        structured: {
+          event: 'worker_self_critique_rejected',
+          reason: 'review_implementation_surface_missing',
+        },
+        content:
+          'Guildhall reopened this review handoff because its checkpoint named changed files, but the managed task worktree and task branch no longer contain reviewable implementation work. The worker must restore or recreate the scoped change before another review is requested.',
+        timestamp: now,
+      })
+      current.updatedAt = now
+      queue.lastUpdated = now
+      await this.writeQueue(queue)
+      await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
+        assignedTo: 'worker-agent',
+        updatedAt: now,
+      })
+      await this.logTickProgress({
+        task: current,
+        agent: 'coordinator-remediation',
+        beforeStatus: 'review',
+        afterStatus: 'in_progress',
+        transitioned: true,
+        note: 'review handoff claimed files that are absent from the task worktree and branch',
+      })
+      return {
+        kind: 'processed',
+        taskId: current.id,
+        agent: 'coordinator-remediation',
+        beforeStatus: 'review',
+        afterStatus: 'in_progress',
+        transitioned: true,
+        revisionCount: current.revisionCount,
       } as TickOutcome
     })
   }
@@ -12256,7 +12344,7 @@ export class Orchestrator {
       ...this.checkpointTouchedFilesFromTaskNotes(input.task),
       ...(checkpoint?.filesTouched ?? []),
     ])
-    if (!hasTaskWorktreeChanges && !hasCommittedTaskWork && checkpointTouchedFiles.length === 0) return null
+    if (!hasTaskWorktreeChanges && !hasCommittedTaskWork) return null
 
     const now = this.now()
     const queue = await this.readQueue()
