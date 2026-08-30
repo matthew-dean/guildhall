@@ -6,6 +6,7 @@ import {
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseProjectionState,
+  readProjectStateDatabaseReadBundle,
   readProjectStateDatabaseQueue,
   readProjectStateDatabaseReleaseMembership,
   readProjectStateDatabaseReleaseMembershipState,
@@ -67,11 +68,11 @@ import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 import { specReviewIsReadyForOwnerApproval } from './spec-review-ownership.js'
 
-// Version 33 replays derived project decisions so stored orientation and
-// action packets cannot retain a stale ready-work focus over a real blocker.
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 33 as const
+// Version 34 refreshes paused-work actions from normalized runtime overlays so
+// a saved partial worker pass is visible without an owner-triggered repair.
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 34 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -204,6 +205,7 @@ export interface ProjectSummaryProjection {
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: string
+    progressState?: 'partial_work_saved'
   }
   blockers: Array<{
     id: string
@@ -525,6 +527,8 @@ export interface ProjectSummaryProjectionInput {
   queue: TaskQueueModel
   /** Current overlay/evidence facts used for derived counts and readiness. */
   projectionTasks?: TaskQueueModel['tasks']
+  /** Normalized mutable task state captured with this summary revision. */
+  taskRuntimes?: readonly ProjectStateDatabaseTaskRuntime[]
   generatedAt?: string
   taskQueueMtimeMs?: number | null
   workspaceGoalsMtimeMs?: number | null
@@ -823,10 +827,14 @@ export function buildProjectSummaryProjection(
     generatedAt,
   })
   const ownerReview = input.ownerReview ?? ownerReviewForScope(scopeProjection.rows, tasks, generatedAt)
-  const start = applyOwnerInputToStartReadiness(
+  const scopedStart = applyOwnerInputToStartReadiness(
     applyOwnerReviewToStartReadiness(scopeProjection.start, ownerReview),
     input.ownerInput,
   )
+  const start = {
+    ...scopedStart,
+    ...savedPartialWorkProgressState(scopedStart, tasks, input.taskRuntimes),
+  }
   const orientationSpine = compactProjectOrientationSpineForMap(buildProjectOrientationSpine({
     projectId: input.projectId ?? '',
     now: generatedAt,
@@ -897,6 +905,7 @@ export function buildProjectSummaryProjection(
         ...(decisionStart.focusTaskId ? { focusTaskId: decisionStart.focusTaskId } : {}),
         ...(decisionStart.focusTaskTitle ? { focusTaskTitle: decisionStart.focusTaskTitle } : {}),
         ...(decisionStart.focusKind ? { focusKind: decisionStart.focusKind } : {}),
+        ...(decisionStart.progressState ? { progressState: decisionStart.progressState } : {}),
       }
   const startReadiness = {
     ...decisionStart,
@@ -1205,6 +1214,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+function savedPartialWorkProgressState(
+  start: Pick<ProjectScopeProjection['start'], 'code' | 'focusTaskId'>,
+  tasks: readonly { id: string; status?: string | null }[],
+  taskRuntimes: readonly ProjectStateDatabaseTaskRuntime[] | null | undefined,
+): { progressState: 'partial_work_saved' } | Record<string, never> {
+  if (start.code !== 'paused_live_work' || !start.focusTaskId) return {}
+  const focusedTask = tasks.find(task => task.id === start.focusTaskId)
+  if (focusedTask?.status !== 'in_progress') return {}
+  const runtime = taskRuntimes?.find(candidate => candidate.taskId === start.focusTaskId)
+  const recovery = isRecord(runtime?.payload) && isRecord(runtime.payload.workerRecovery)
+    ? runtime.payload.workerRecovery
+    : null
+  return typeof recovery?.dirtyTimeoutRetries === 'number' && recovery.dirtyTimeoutRetries > 0
+    ? { progressState: 'partial_work_saved' }
+    : {}
+}
+
 function indexedStartReadiness(
   rows: readonly IndexedSummaryScopeRow[],
   releases: readonly Record<string, unknown>[],
@@ -1303,9 +1329,14 @@ export function buildProjectSummaryProjectionFromIndexedState(
     scopeRowOverrides?: readonly (ProjectStateDatabaseScopeRow | null)[]
   },
 ): ProjectSummaryProjection | null {
-  const current = readProjectStateDatabaseProjectionState<ProjectSummaryProjection>(tasksPath, {
+  const indexedRead = readProjectStateDatabaseReadBundle<ProjectSummaryProjection>(tasksPath, {
     includeDefinitions: false,
+    includeProjection: true,
+    includeRepositories: true,
+    includeDiagnostics: true,
+    includeTaskOverlays: true,
   })
+  const current = indexedRead?.projection
   if (!current?.summary) return null
   const base = current.summary.payload
   const baseSource = base.source && typeof base.source === 'object' && !Array.isArray(base.source)
@@ -1396,13 +1427,17 @@ export function buildProjectSummaryProjectionFromIndexedState(
   )
   // A question is a direct decision request. Keep its precedence over an
   // available review identical to the shared decision packet.
-  const start = applyOwnerInputToStartReadiness(
+  const scopedStart = applyOwnerInputToStartReadiness(
     applyOwnerReviewToStartReadiness(
       indexedStartReadiness(rows, releases, selectedReleaseId, tasks),
       ownerReview,
     ),
     base.ownerInput,
   )
+  const start = {
+    ...scopedStart,
+    ...savedPartialWorkProgressState(scopedStart, tasks, indexedRead?.taskOverlays?.runtime),
+  }
   let nextAction: ProjectSummaryProjection['nextAction'] = {
     ...(start.code ? { code: start.code } : {}),
     label: start.label,
@@ -1411,6 +1446,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
     ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
     ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+    ...(start.progressState ? { progressState: start.progressState } : {}),
   }
   const selectedReleaseRow = releases.find(release => release.id === selectedReleaseId) ?? null
   // The saved summary is the current release read model. Preserve its
@@ -1504,6 +1540,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     ...(decisionStart.focusTaskId ? { focusTaskId: decisionStart.focusTaskId } : {}),
     ...(decisionStart.focusTaskTitle ? { focusTaskTitle: decisionStart.focusTaskTitle } : {}),
     ...(decisionStart.focusKind ? { focusKind: decisionStart.focusKind } : {}),
+    ...(decisionStart.progressState ? { progressState: decisionStart.progressState } : {}),
     ...(typeof decisionStart.count === 'number' ? { count: decisionStart.count } : {}),
     ...(ownerReview?.taskIds.length ? { reviewTaskIds: [...ownerReview.taskIds] } : {}),
   }
@@ -1527,6 +1564,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
       ...(nextAction.focusTaskId ? { focusTaskId: nextAction.focusTaskId } : {}),
       ...(nextAction.focusTaskTitle ? { focusTaskTitle: nextAction.focusTaskTitle } : {}),
       ...(nextAction.focusKind ? { focusKind: nextAction.focusKind } : {}),
+      ...(nextAction.progressState ? { progressState: nextAction.progressState } : {}),
       ...(nextAction.count ? { count: nextAction.count } : {}),
       executionScope: selectedRelease
         ? {
@@ -2287,6 +2325,8 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
     compatibilityExport?: 'full' | 'compact'
     /** The shared boundary already removed evidence/runtime-owned fields. */
     taskDefinitionsAlreadySanitized?: boolean
+    /** Normalized mutable task state captured with this queue projection. */
+    taskRuntimes?: readonly ProjectStateDatabaseTaskRuntime[]
   },
 ): PreparedProjectSummaryProjection {
   // This writer is the single compatibility boundary for queue-shaped input.
@@ -2301,6 +2341,12 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
       }
     : normalizedQueue
   const parsed = TaskQueue.safeParse(validationQueue)
+  // A normal promoted-project refresh receives task definitions separately
+  // from their mutable overlays. Use the same normalized store unless this
+  // atomic write already carries the post-mutation overlays explicitly.
+  const taskRuntimes = input.taskRuntimes ?? (databaseAuthority
+    ? readProjectStateDatabaseReadBundle(tasksPath, { includeTaskOverlays: true })?.taskOverlays?.runtime
+    : undefined)
   const sourceMtimeMs = taskQueueMtimeMs(tasksPath)
   const goalsMtimeMs = workspaceGoalsMtimeMs(tasksPath)
   const approvedPlan = readApprovedPlan(tasksPath)
@@ -2327,6 +2373,7 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
         approvedPlan,
         currentStateAuthority: databaseAuthority ? 'database' : 'legacy',
         projectionTasks,
+        taskRuntimes,
         ...supplemental,
         documentedStructure: input.documentedStructure ?? supplemental.documentedStructure,
         sourceCapabilities: input.sourceCapabilities ?? readProjectStateDatabaseSourceCapabilities(tasksPath),
@@ -2552,6 +2599,7 @@ export function updateProjectSummaryProjection(
         ...(startReadiness.focusTaskId ? { focusTaskId: startReadiness.focusTaskId } : {}),
         ...(startReadiness.focusTaskTitle ? { focusTaskTitle: startReadiness.focusTaskTitle } : {}),
         ...(startReadiness.focusKind ? { focusKind: startReadiness.focusKind } : {}),
+        ...(startReadiness.progressState ? { progressState: startReadiness.progressState } : {}),
         ...(typeof startReadiness.count === 'number' ? { count: startReadiness.count } : {}),
       }
       next.actionModel = resolveProjectActionModel({

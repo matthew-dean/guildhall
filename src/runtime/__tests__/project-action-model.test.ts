@@ -1640,7 +1640,7 @@ describe('buildProjectActionModel', () => {
     })
   })
 
-  it('keeps paused live work resumable and pinned to the active task', () => {
+  it('keeps paused live work resumable through the shared project decision', () => {
     const model = buildProjectActionModel({
       startReadiness: {
         canStart: true,
@@ -1667,9 +1667,9 @@ describe('buildProjectActionModel', () => {
     })
 
     expect(model.primaryAction).toMatchObject({
-      source: 'task',
-      label: 'Define fixture contracts',
-      buttonLabel: 'Open Work',
+      source: 'start_readiness',
+      label: 'Work paused',
+      buttonLabel: 'Resume work',
       href: '/work?task=contract-task',
       tone: 'accent',
       taskId: 'contract-task',
@@ -1779,6 +1779,27 @@ describe('buildProjectActionModel', () => {
     })
     expect(model.ownerInput).toEqual({ active: false })
     expect(model.workSummary?.awaitingApproval).toBe(0)
+  })
+
+  it('explains when a paused task has saved partial work for its next resume', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Continue current work',
+        actionHref: '/work?task=task-current',
+        progressState: 'partial_work_saved',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'paused_live_work',
+      taskId: 'task-current',
+      buttonLabel: 'Resume work',
+      detail: 'Progress is saved. Resume continues this task from its current workspace.',
+    })
   })
 
   it('reconciles a persisted summary when paused work replaces an old approval queue', () => {

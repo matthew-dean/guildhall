@@ -251,7 +251,7 @@ describe('TaskDrawer', () => {
         primaryAction: {
           source: 'task',
           label: 'Resume the link editor work',
-          detail: 'This is the next runnable work item.',
+          detail: 'Progress is saved. Resume continues this task from its current workspace.',
           buttonLabel: 'Resume work',
           href: '/work?task=task-link-editor',
           tone: 'accent',
@@ -286,6 +286,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByRole('button', { name: 'Resume work' })
+    expect(screen.getByText('Progress is saved. Resume continues this task from its current workspace.')).toBeInTheDocument()
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(screen.queryByText('Task size')).not.toBeInTheDocument()
     expect(screen.queryByText('Add the link editing controls to the selected text menu.')).not.toBeInTheDocument()

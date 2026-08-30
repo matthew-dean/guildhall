@@ -1300,7 +1300,7 @@
           ariaLabel="Current task action"
         >
           <span class="outcome-eyebrow">{projectPrimaryAction?.ownerHeading ?? 'Ready to continue'}</span>
-          <span class="drawer-run-action-copy">Guildhall can continue this work item.</span>
+          <span class="drawer-run-action-copy">{projectPrimaryAction?.detail ?? 'Guildhall can continue this work item.'}</span>
           {#if runError}
             <span class="drawer-run-action-error">{runError}</span>
           {/if}

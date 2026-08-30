@@ -150,6 +150,8 @@ export interface ProjectScopeProjection {
     /** Exact selected-scope records behind an owner-review action. */
     reviewTaskIds?: string[]
     count?: number
+    /** A bounded worker pass saved scoped work that the next resume will continue. */
+    progressState?: 'partial_work_saved'
     message: string
     actionHref: string
     executionScope?: {

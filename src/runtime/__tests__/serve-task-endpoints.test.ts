@@ -526,6 +526,31 @@ describe('GET /api/project/task/:id', () => {
     expect(taskBody.actionModel?.primaryAction).toEqual(projectBody.actionModel?.primaryAction)
   })
 
+  it('explains saved partial work through both the project and task API actions', async () => {
+    await seedTask('task-1')
+    await upsertTaskRuntimeState(tmpDir, 'task-1', {
+      workerRecovery: { dirtyTimeoutRetries: 1 },
+      updatedAt: new Date().toISOString(),
+    })
+    await refreshCanonicalSummary()
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const [projectResponse, taskResponse] = await Promise.all([
+      app.fetch(new Request(projectUrl('/api/project'))),
+      app.fetch(new Request(projectUrl('/api/project/task/task-1'))),
+    ])
+    const projectBody = await projectResponse.json() as Record<string, any>
+    const taskBody = await taskResponse.json() as Record<string, any>
+
+    expect(projectBody.actionModel?.primaryAction).toMatchObject({
+      code: 'paused_live_work',
+      taskId: 'task-1',
+      buttonLabel: 'Resume work',
+      detail: 'Progress is saved. Resume continues this task from its current workspace.',
+    })
+    expect(taskBody.actionModel?.primaryAction).toEqual(projectBody.actionModel?.primaryAction)
+  })
+
   it('keeps task detail inspectable but exposes no action when the shared decision is stale', async () => {
     await seedTask('task-1')
     const database = new DatabaseSync(projectStateDatabasePath(tmpDir))

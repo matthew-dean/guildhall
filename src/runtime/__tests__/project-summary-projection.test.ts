@@ -2047,6 +2047,30 @@ describe('project-summary-projection', () => {
     expect(readProjectSummaryProjection(tasksPath)).toMatchObject({ freshness: 'stale' })
   })
 
+  it('makes a worker timeout with saved partial work visible in the shared resume action', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-saved-work-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const projection = writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 'narrative-harness',
+      queue: queue([task('one', 'in_progress')]),
+      taskRuntimes: [{
+        taskId: 'one',
+        payload: { workerRecovery: { dirtyTimeoutRetries: 1 } },
+      }],
+      generatedAt: now,
+    })
+
+    expect(projection.decision?.execution).toMatchObject({
+      state: 'paused',
+      code: 'paused_live_work',
+      progressState: 'partial_work_saved',
+    })
+    expect(projection.actionModel?.primaryAction).toMatchObject({
+      buttonLabel: 'Resume work',
+      detail: 'Progress is saved. Resume continues this task from its current workspace.',
+    })
+  })
+
   it('persists compact execution and runtime state without replacing task facts', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-supplemental-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')

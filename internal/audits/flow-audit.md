@@ -61575,3 +61575,61 @@ project action data.
   flow passes at 1114px, 900px, and 390px, keeps the shared action visible and
   unclipped, and confirms no `Open task` button is rendered for the already
   open focus task.
+
+### Finding: A resumed worker pass must make saved progress visible
+
+- [x] User job: after Guildhall runs the current task and stops at a bounded
+  turn limit, the owner can immediately tell whether useful work was saved,
+  what will happen on resume, and whether a decision is required. The owner
+  must not have to open task history, inspect a worktree, or infer that from
+  an unchanged paused status.
+- Finding, 2026-08-30: acting as the Looma + Knit owner, a one-tick resume of
+  `LOO-1CWL9M` preserved a scoped 38-line change to
+  `docs/component-system.md` after the worker turn budget ended. Its typed
+  runtime state records `workerRecovery.dirtyTimeoutRetries: 1`, but Overview,
+  Work, and task detail return the same generic `Work paused` / `Resume work`
+  card as before the run. The owner cannot see the meaningful progress or know
+  that Resume continues the saved task workspace.
+
+#### Contract Touch Decision
+
+Work id: `saved-partial-work-action-state-2026-08-30`. Touched contracts:
+the derived project start-readiness, decision, and action-model presentation
+packets gain one typed saved-progress state for a focused paused task. Its
+source is the existing runtime recovery counter written only after Guildhall
+has verified a dirty scoped worktree on a worker turn-limit recovery. The
+state changes explanation only: the selected task, action destination,
+operation, ranking, lifecycle, and run dispatch remain unchanged. Considered
+but not touched: worker prompt prose, task status storage, git-worktree
+inspection at read time, acceptance proof, and release membership. Required
+proof: project API, Work, Overview, Thread, and task detail agree on the same
+`Resume work` action with a concise saved-progress explanation; a clean paused
+task still has the ordinary resume explanation.
+
+#### Schema Migration Decision
+
+Persisted schema touched: optional derived saved-progress field in the current
+project summary/decision JSON. Scope: backward-compatible read-model
+extension. Existing summaries lack the field and read as no saved progress;
+the derived-summary version advances so the next installed startup refresh
+writes it from the already-persisted task runtime recovery counter. No
+migration is required before run, no task or
+evidence data is moved, and revert simply ignores the optional presentation
+field while retaining the source runtime record. Required fixtures: current
+paused work with and without a dirty-turn-limit recovery counter.
+
+- [x] Projection and API proof, 2026-08-30: a normalized task runtime with
+  `workerRecovery.dirtyTimeoutRetries: 1` derives
+  `progressState: partial_work_saved` only for its focused paused task. The
+  shared action model keeps `Resume work` as the command and explains that
+  progress is saved and Resume continues from the current workspace. Focused
+  summary, action-model, decision, task-detail API, and drawer regressions
+  pass; a project response and direct task response return the same action.
+- [x] Installed Looma + Knit proof, 2026-08-30: after `pnpm build`,
+  `pnpm dev:install`, `guildhall stop`, and `guildhall start`,
+  `/api/stale-server` reported `stale:false`. The startup summary refresh
+  automatically updated the paused focused task: project and direct task
+  responses return byte-identical `Resume work` actions, both with `Progress
+  is saved. Resume continues this task from its current workspace.` The
+  shared start-readiness and decision packet both report
+  `progressState: partial_work_saved`.

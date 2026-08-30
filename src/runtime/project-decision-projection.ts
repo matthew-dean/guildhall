@@ -688,6 +688,7 @@ export interface ProjectDecisionExecution {
   /** Exact selected-scope records behind an owner-review decision. */
   reviewTaskIds?: string[]
   count?: number
+  progressState?: 'partial_work_saved'
   message?: string
 }
 
@@ -727,7 +728,7 @@ export interface ProjectDecisionProjectionInput {
   projectRevision?: number | null
   queueRevision?: number | null
   generatedAt: string
-  start: Pick<ProjectScopeProjection['start'], 'canStart' | 'code' | 'focusTaskId' | 'focusTaskTitle' | 'focusKind' | 'reviewTaskIds' | 'count' | 'message'>
+  start: Pick<ProjectScopeProjection['start'], 'canStart' | 'code' | 'focusTaskId' | 'focusTaskTitle' | 'focusKind' | 'reviewTaskIds' | 'count' | 'progressState' | 'message'>
   release: {
     scopeMode: 'named_release' | 'unreleased' | 'unavailable'
     state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
@@ -812,6 +813,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionE
       ...(start.focusKind ? { focusKind: start.focusKind } : {}),
       ...(start.reviewTaskIds?.length ? { reviewTaskIds: [...start.reviewTaskIds] } : {}),
       ...(typeof start.count === 'number' ? { count: start.count } : {}),
+      ...(start.progressState ? { progressState: start.progressState } : {}),
       ...(start.message ? { message: start.message } : {}),
     }
   }
@@ -824,6 +826,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionE
       ...(start.focusKind ? { focusKind: start.focusKind } : {}),
       ...(start.reviewTaskIds?.length ? { reviewTaskIds: [...start.reviewTaskIds] } : {}),
       ...(typeof start.count === 'number' ? { count: start.count } : {}),
+      ...(start.progressState ? { progressState: start.progressState } : {}),
       ...(start.message ? { message: start.message } : {}),
     }
   }
@@ -853,6 +856,7 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
   focusKind?: string
   reviewTaskIds?: string[]
   count?: number
+  progressState?: 'partial_work_saved'
 } {
   const focus = decision.execution.focus
   const code = decision.execution.focusKind === 'brief_cleanup' &&
@@ -870,6 +874,7 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
     ...(decision.execution.focusKind ? { focusKind: decision.execution.focusKind } : {}),
     ...(decision.execution.reviewTaskIds?.length ? { reviewTaskIds: [...decision.execution.reviewTaskIds] } : {}),
     ...(typeof decision.execution.count === 'number' ? { count: decision.execution.count } : {}),
+    ...(decision.execution.progressState ? { progressState: decision.execution.progressState } : {}),
   }
 }
 

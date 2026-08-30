@@ -9,6 +9,7 @@ export interface ProjectActionStartReadiness {
   focusTaskTitle?: string
   focusKind?: string
   count?: number
+  progressState?: 'partial_work_saved'
   executionScope?: {
     id: string
     label: string
@@ -651,6 +652,8 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   // context, not an explanation that competes with that task on every surface.
   const detail = blockedWork
     ? 'This task stopped and needs its recovery action before it can continue.'
+    : readiness.progressState === 'partial_work_saved'
+      ? 'Progress is saved. Resume continues this task from its current workspace.'
     : !ownerReview && !runnableWork && readiness.message && readiness.message !== label
       ? readiness.message
       : undefined
@@ -822,7 +825,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   // blocked or incomplete merely because that detail is intentionally absent.
   if (
     startReadiness?.canStart &&
-    (startReadiness.code === 'ready_work' || (startReadiness.code === 'paused_live_work' && !taskAction))
+    (startReadiness.code === 'ready_work' || startReadiness.code === 'paused_live_work')
   ) {
     candidates.push(startReadinessAction(startReadiness))
   }
