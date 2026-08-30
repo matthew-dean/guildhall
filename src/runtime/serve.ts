@@ -2126,7 +2126,8 @@ async function repairWeakRecoverySpecReviewTask(projectPath: string, requestedTa
     if (taskIndex < 0) return false
     const task = queue.tasks[taskIndex]
     if (!task) return false
-    queue.tasks[taskIndex] = TaskSchema.parse(await buildEffectiveTask(projectPath, task, { evidence: 'full' }))
+    const currentTask = (await readProjectTaskCurrentStateAtBoundary(projectPath, requestedTaskId)).task
+    queue.tasks[taskIndex] = TaskSchema.parse(currentTask ?? await buildEffectiveTask(projectPath, task, { evidence: 'full' }))
     const repaired = repairWeakRecoverySpecReviewSeedInQueue(queue, {
       taskId: requestedTaskId,
       now,
@@ -2138,7 +2139,7 @@ async function repairWeakRecoverySpecReviewTask(projectPath: string, requestedTa
       projectId: basename(projectPath),
       projectRoot: projectPath,
       mutate: current => {
-        for (const key of ['spec', 'acceptanceCriteria', 'productBrief', 'workUnitAnalysis', 'references', 'releaseIds']) {
+        for (const key of ['spec', 'structuredSpec', 'acceptanceCriteria', 'productBrief', 'workUnitAnalysis', 'references', 'releaseIds']) {
           if (key in repairedTask) current[key] = (repairedTask as unknown as Record<string, unknown>)[key]
           else delete current[key]
         }

@@ -60401,17 +60401,25 @@ write operation; persisted task and product-brief shapes are unchanged.
 
 #### Contract Touch Decision
 
-Pending investigation. The start-time repair selector and promoted mutation
-must use the same authoritative effective task detail as task rendering, and
-must atomically preserve or update every planning-contract field including
-`structuredSpec`. Considered but not touched yet: evidence merging order,
-queue/index synchronization, product-brief authoring, UI wording, and review
-approval. Required proof: a current structured task displayed by the API cannot
-be classified as weak by `/start`, and a legitimate recovery writes the full
-typed contract atomically.
+Work id: `looma-knit-start-repair-current-task-boundary-2026-08-30`.
+Touched contracts: the start-time repair selector must load the same promoted
+current task boundary the route already uses for later readiness checks, before
+it decides whether a recovery seed may replace anything. A legitimate promoted
+repair write must include `structuredSpec` along with the rest of the planning
+contract. Considered but not touched: evidence merging order, queue/index
+synchronization, product-brief authoring, UI wording, and review approval.
+Required proof: a current structured task displayed by the API cannot be
+classified as weak by `/start`, and a legitimate recovery writes the full typed
+contract atomically.
 
 #### Schema Migration Decision
 
-Pending investigation. Existing task and promoted-detail stores may be
-sufficient; do not introduce a new field before tracing their authority and
-merge order.
+No schema migration. The promoted current-task store and `structuredSpec`
+already exist; this aligns which authority the start-time repair reads and the
+existing fields it writes.
+
+- [x] Focused regression proof, 2026-08-30: the start endpoint's spec-repair
+  coverage passes after its database-authoritative repair path reads the
+  promoted current task boundary and includes `structuredSpec` in promoted
+  writes. `pnpm typecheck` and `pnpm lint:contracts` pass. Installed replay of
+  this final boundary correction remains required before closing the finding.
