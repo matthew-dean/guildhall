@@ -360,6 +360,8 @@ export interface BuildThreadOptions {
   runStatus?: string | undefined
   /** Typed supervisor focus. A live Thread must use this exact task instead of guessing from turn order. */
   activeTaskId?: string | undefined
+  /** Typed persisted focus for interrupted work, retained after a restart. */
+  pausedTaskId?: string | undefined
   /** Recent supervisor events, used only for live "agent is currently busy" hints. */
   recentEvents?: Array<{
     at?: string | undefined
@@ -2405,23 +2407,27 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     pendingTaskReview.phase = pendingTaskReview.kind === 'spec_review' ? 'spec' : 'intake'
   }
 
-  // The supervisor's task identity is the execution authority. While it is
-  // live, Thread must foreground that same task rather than a setup card or a
-  // locally ranked task row. A genuine owner question/review still wins, as
-  // execution should not hide an action that needs the owner first.
+  // The shared execution decision is the focus authority. A live supervisor
+  // takes precedence, while a persisted paused decision keeps interrupted work
+  // visible after restart instead of falling back to setup.
   const activeTaskId = opts.activeTaskId?.trim()
-  const activeRunTurn = activeTaskId && runIsActive
-    ? turns.find(turn => turn.kind === 'inflight' && turn.taskId === activeTaskId)
+  const pausedTaskId = opts.pausedTaskId?.trim()
+  const focusTaskId = activeTaskId || pausedTaskId
+  const focusedExecutionTurn = focusTaskId && (runIsActive || pausedTaskId)
+    ? turns.find(turn => turn.kind === 'inflight' && turn.taskId === focusTaskId)
     : undefined
   const hasCurrentOwnerDecision = turns.some(turn =>
     turn.status === 'active' && turn.kind !== 'setup_step' && isHumanOwnedActiveTurn(turn),
   )
-  if (activeRunTurn && !hasCurrentOwnerDecision) {
+  if (focusedExecutionTurn && !hasCurrentOwnerDecision) {
     for (const turn of turns) {
       if (turn.kind === 'setup_step' && turn.status === 'active') turn.status = 'pending'
     }
-    activeRunTurn.status = 'active'
-    activeRunTurn.phase = 'inflight'
+    focusedExecutionTurn.status = 'active'
+    focusedExecutionTurn.phase = pausedTaskId ? 'ready' : 'inflight'
+    if (pausedTaskId && focusedExecutionTurn.kind === 'inflight') {
+      focusedExecutionTurn.summary = 'Work is paused. Resume work when you are ready.'
+    }
   }
 
   const hasHumanOwnedActiveTurn = turns.some(isHumanOwnedActiveTurn)

@@ -61977,3 +61977,84 @@ stored data change.
 #### Schema Migration Decision
 
 No persisted-schema change.
+
+### Finding: Automatic repair must not leave Thread stale
+
+- [x] User job: after Guildhall safely repairs a project during a normal read,
+  the owner sees one current Thread and one current action model, not a stale
+  transcript left behind by the repair.
+- Finding, 2026-08-30: the request-scoped automatic migration path advanced
+  the project revision but did not rebuild the current Thread projection. The
+  same request then rendered a stale row. A bounded Thread hydration also
+  omitted the typed structured spec needed to display a valid spec review.
+
+#### Contract Touch Decision
+
+Work id: `automatic-repair-keeps-thread-current-2026-08-30`. Touched
+contracts: automatic migration request handling, project-projection refresh
+ordering, and the bounded Thread task read shape. A repair refreshes an
+already-persisted Thread only after every project-state writer has settled;
+an ordinary read with no saved Thread remains missing and never manufactures a
+transcript. Thread carries the typed structured-spec and review-gate fields
+needed by the typed spec-review boundary. Considered but not touched: task
+status, migration semantics, route-local freshness rules, model prose, and
+full task-definition reads. Required proof: a safe repair makes an existing
+Thread current, a missing row remains missing, and a valid rich spec review
+appears from the bounded projection. Apply/revert: no migration data changes;
+revert restores the previous refresh timing and read shape.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repaired migration path already writes the
+authoritative state; this change only repopulates derived projections at the
+resulting revision.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/current-thread-refresh.test.ts
+  --reporter=dot` covers ordinary missing Thread, automatic-repair freshness,
+  typed rich spec review, and a non-queue repair revision.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed. `pnpm build` also passed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false`; `/api/project/thread` reported `current` freshness.
+
+### Finding: Paused work must remain Thread's focus after restart
+
+- [x] User job: when work is paused, the same task named by `Resume work`
+  remains current in Thread after a server restart; setup cannot reclaim the
+  active position.
+- Finding, 2026-08-30: the installed t-minus-t service correctly named
+  `task-004` as paused work in the shared action model, but Thread fell back to
+  `setup:direction` because the transient supervisor identity disappeared.
+
+#### Contract Touch Decision
+
+Work id: `paused-work-thread-focus-after-restart-2026-08-30`. Touched
+contracts: the bounded current-Thread refresh input, Thread focus selection,
+and the projection scheduler's read of the shared decision packet. A paused
+execution's typed `focusTaskId` becomes the Thread focus only when the shared
+decision state is `paused`; Thread presents that turn as paused rather than
+live work. Considered but not touched: supervisor runtime state, task status,
+action ranking, release readiness, and setup wizard state. Required proof: a
+server restart leaves the same task active in the action model and Thread.
+Apply/revert: no persisted schema or task data changes; reversion restores the
+old setup fallback.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The persisted decision packet already owns the
+paused focus; this repair carries that existing typed fact into Thread.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/thread.test.ts
+  src/runtime/__tests__/current-thread-refresh.test.ts --reporter=dot` passed
+  85 tests, including the paused-after-restart Thread focus.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` passed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, the shared action model named
+  `task-004` / `Resume work`; Thread was `current` with active
+  `inflight:task-004` and `Work is paused. Resume work when you are ready.`

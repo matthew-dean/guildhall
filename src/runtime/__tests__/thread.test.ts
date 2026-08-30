@@ -1927,6 +1927,44 @@ describe('buildThread', () => {
     expect(thread.turns.find(turn => turn.id === 'setup:direction')).toMatchObject({ status: 'pending' })
   })
 
+  it('keeps paused work focused after the live supervisor has stopped', () => {
+    const projectPath = '/tmp/guildhall-thread-paused-focus'
+    const thread = buildCurrentThread({
+      projectPath,
+      snapshot: {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: '2026-08-30T08:00:00.000Z' },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      },
+      tasks: [taskRecord({
+        id: 'task-paused',
+        title: 'Resume the focused work item',
+        status: 'in_progress',
+      })],
+      runStatus: 'stopped',
+      pausedTaskId: 'task-paused',
+      recentEvents: [],
+    })
+
+    expect(thread.activeTurnId).toBe('inflight:task-paused')
+    expect(thread.turns.find(turn => turn.id === 'inflight:task-paused')).toMatchObject({
+      status: 'active',
+      phase: 'ready',
+      summary: 'Work is paused. Resume work when you are ready.',
+    })
+    expect(thread.turns.find(turn => turn.id === 'setup:direction')).toMatchObject({ status: 'pending' })
+  })
+
   it('keeps source-recovery tasks in shaping even when a draft spec exists', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

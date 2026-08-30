@@ -147,16 +147,18 @@ describe('current Thread projection refresh', () => {
     ))
     const body = await response.json() as { turns?: unknown[]; currentThreadFreshness?: string }
     expect(response.status).toBe(200)
-    expect(body.turns).toEqual((stored?.payload as { turns: unknown[] }).turns)
+    const refreshed = readProjectStateDatabaseCurrentThread(projectRoot)
+    expect(refreshed?.sourceRevision).toBe(String(readProjectStateDatabaseMetadata(projectRoot)?.revision))
+    expect(body.turns).toEqual((refreshed?.payload as { turns: unknown[] }).turns)
     expect(body.currentThreadFreshness).toBe('current')
 
     const history = readProjectStateDatabaseThreadHistoryPage(projectRoot, { offset: 0, limit: 10 })
     expect(history).toMatchObject({
       total: expect.any(Number),
-      sourceRevision: String(sourceRevision),
-      sourceQueueRevision: stored?.sourceQueueRevision,
+      sourceRevision: refreshed?.sourceRevision,
+      sourceQueueRevision: refreshed?.sourceQueueRevision,
     })
-    await fs.rm(getProjectSystemStatePath(projectRoot, 'TASKS.json'))
+    await fs.rm(getProjectSystemStatePath(projectRoot, 'TASKS.json'), { force: true })
     const historyResponse = await app.fetch(new Request(
       'http://localhost/api/project/thread/history?projectId=current-thread-test&limit=10',
     ))
@@ -256,6 +258,29 @@ describe('current Thread projection refresh', () => {
         createdAt: '2026-07-15T00:01:00.000Z',
       },
       spec: '## Summary\n\nThe selected Thread task keeps its rich fields.',
+      structuredSpec: {
+        whatThisIs: 'A bounded Thread review detail.',
+        problemContext: 'The selected task needs its reviewable fields.',
+        goals: ['Keep selected task detail visible in Thread.'],
+        nonGoals: ['Do not load the whole queue.'],
+        proposedDesign: 'Read only the selected task definition.',
+        keyDecisions: ['Use the bounded current Thread projection.'],
+        acceptanceCriteria: [{
+          scenario: 'Given a selected task, when Thread opens',
+          expectation: 'Then its review detail stays visible.',
+          verificationMode: 'review',
+        }],
+        verification: ['Review the selected Thread turn.'],
+        completionBoundary: {
+          productOutcome: 'The selected task is reviewable in Thread.',
+          whatGuildhallCanCompleteInCode: 'The bounded Thread projection.',
+          externalDependencies: 'None.',
+          ownerOnlySetup: 'None.',
+          verificationEnvironment: 'The local Thread route.',
+          whatCountsAsDone: 'Thread presents the selected task for review.',
+          whatMustBeSplitOrBlocked: 'Whole-queue detail remains out of scope.',
+        },
+      },
       acceptanceCriteria: [{
         id: 'ac-rich-thread',
         description: 'The current Thread keeps the selected task detail.',
@@ -359,7 +384,7 @@ describe('current Thread projection refresh', () => {
     ]))
   })
 
-  it('marks the current Thread stale when a non-queue project revision advances', async () => {
+  it('refreshes an existing Thread when automatic repair advances a non-queue project revision', async () => {
     const queue: TaskQueue = {
       version: 1,
       lastUpdated: '2026-07-15T00:00:00.000Z',
@@ -370,20 +395,26 @@ describe('current Thread projection refresh', () => {
       projectRoot,
     })
     await refreshCurrentThreadProjection(projectRoot, { runStatus: 'stopped', recentEvents: [] })
+    const { app } = buildServeApp({ projectPath: projectRoot })
+    await app.fetch(new Request(
+      'http://localhost/api/project/thread?projectId=current-thread-test',
+    ))
     upsertProjectStateDatabaseTaskRuntime(projectRoot, {
       taskId: 'task-current-thread',
       updatedAt: '2026-07-15T00:01:00.000Z',
-      payload: { status: 'in_progress' },
+      payload: {
+        taskId: 'task-current-thread',
+        updatedAt: '2026-07-15T00:01:00.000Z',
+      },
     })
 
-    const { app } = buildServeApp({ projectPath: projectRoot })
     const response = await app.fetch(new Request(
       'http://localhost/api/project/thread?projectId=current-thread-test',
     ))
     const body = await response.json() as { currentThreadFreshness?: string }
 
     expect(response.status).toBe(200)
-    expect(body.currentThreadFreshness).toBe('stale')
+    expect(body.currentThreadFreshness).toBe('current')
   })
 
   it('does not publish current after the source advances during the write', async () => {

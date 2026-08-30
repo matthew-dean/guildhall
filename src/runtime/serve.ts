@@ -27,6 +27,7 @@ import {
   writeProjectStateDatabaseMemoryHealth,
   writeProjectStateDatabaseReleaseSelectionMutation,
   replaceProjectStateDatabaseRepositories,
+  readProjectStateDatabaseSummary,
   registerProjectCacheWorkspace,
   readProjectStateDatabaseSourceCapabilities,
   emitProjectSummaryInvalidation,
@@ -2401,9 +2402,11 @@ async function refreshProjectProjections(
     try {
       if (threadOnly) {
         const run = options.supervisor.get(resolved.id)
+        const pausedTaskId = pausedThreadFocusTaskId(tasksPath)
         const projection = await refreshCurrentThreadProjection(resolved.path, {
           runStatus: run?.status ?? 'stopped',
           ...(run?.activeTaskId ? { activeTaskId: run.activeTaskId } : {}),
+          ...(pausedTaskId ? { pausedTaskId } : {}),
           recentEvents: options.supervisor.recent(resolved.id, undefined, resolved.path),
         })
         if (!projection) throw new Error('Current Thread projection source changed during refresh')
@@ -2533,16 +2536,6 @@ async function refreshProjectProjections(
       const shouldRefreshDiagnostics = databaseAuthority && (
         [...domains].some(domain => diagnosticDomains.has(domain))
       )
-      // Keep the current Thread projection independent from the attention
-      // projection. A repair or stale-input failure in one read model must not
-      // leave the other model missing and make the UI look empty.
-      const run = options.supervisor.get(resolved.id)
-      const threadProjection = await refreshCurrentThreadProjection(resolved.path, {
-        runStatus: run?.status ?? 'stopped',
-        ...(run?.activeTaskId ? { activeTaskId: run.activeTaskId } : {}),
-        recentEvents: options.supervisor.recent(resolved.id, undefined, resolved.path),
-      })
-      if (!threadProjection) throw new Error('Current Thread projection source changed during refresh')
       if (!attentionAlreadyProjected) {
         const attentionSnapshot = await buildProjectInboxSnapshot({
           projectPath: resolved.path,
@@ -2556,6 +2549,18 @@ async function refreshProjectProjections(
       if (shouldRefreshDiagnostics && options.refreshDiagnostic) {
         await options.refreshDiagnostic(resolved.path)
       }
+      // Thread is written after every other project projection. Attention and
+      // diagnostics can advance the shared project revision; publishing Thread
+      // before them would immediately make its row stale on the same request.
+      const run = options.supervisor.get(resolved.id)
+      const pausedTaskId = pausedThreadFocusTaskId(tasksPath)
+      const threadProjection = await refreshCurrentThreadProjection(resolved.path, {
+        runStatus: run?.status ?? 'stopped',
+        ...(run?.activeTaskId ? { activeTaskId: run.activeTaskId } : {}),
+        ...(pausedTaskId ? { pausedTaskId } : {}),
+        recentEvents: options.supervisor.recent(resolved.id, undefined, resolved.path),
+      })
+      if (!threadProjection) throw new Error('Current Thread projection source changed during refresh')
       // The machine fleet is a consumer of the same saved project summary,
       // never a second summarizer. Publish only after the project projections
       // above have committed so fleet cards point at the completed revision.
@@ -2625,7 +2630,16 @@ async function refreshProjectProjections(
       failClaimedJobs(error)
       throw error
     }
-  }
+}
+
+function pausedThreadFocusTaskId(tasksPath: string): string | undefined {
+  const decision = readProjectStateDatabaseSummary<ProjectSummaryProjection>(tasksPath, {
+    includeOrientation: false,
+  })?.payload.decision
+  if (decision?.execution.state !== 'paused') return undefined
+  const taskId = decision.execution.focus?.taskId ?? decision.execution.focusTaskId
+  return typeof taskId === 'string' && taskId.trim() ? taskId.trim() : undefined
+}
 
 async function activeAttentionHistory(projectPath: string, history: readonly AttentionRecord[]): Promise<AttentionRecord[]> {
   const tasksPath = projectTasksPath(projectPath)
@@ -7193,12 +7207,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   const supervisor = opts.supervisor ?? new OrchestratorSupervisor()
   const runtimeSupervisor = opts.runtimeSupervisor ?? new ProjectRuntimeSupervisor()
-  const automaticMigrationRepairs = new Map<string, Promise<void>>()
-  const applyAutomaticProjectMigrations = async (projectRoot: string): Promise<void> => {
+  const automaticMigrationRepairs = new Map<string, Promise<boolean>>()
+  const applyAutomaticProjectMigrations = async (projectRoot: string): Promise<boolean> => {
     const key = resolve(projectRoot)
     const existing = automaticMigrationRepairs.get(key)
     if (existing) return existing
     const repair = (async () => {
+      let applied = false
       let previousOpenIds: string | null = null
       for (let attempt = 0; attempt < 8; attempt += 1) {
         const status = await getProjectMigrationStatus({ projectRoot: key })
@@ -7206,7 +7221,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           .filter(migration => migration.safety === 'automatic')
           .map(migration => migration.id)
           .sort()
-        if (automaticMigrationIds.length === 0) return
+        if (automaticMigrationIds.length === 0) return applied
 
         const openIds = automaticMigrationIds.join(',')
         if (openIds === previousOpenIds) {
@@ -7218,12 +7233,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (result.failed.length > 0) {
           throw new Error(`Automatic project migration failed: ${result.failed.map(migration => migration.id).join(', ')}.`)
         }
+        applied ||= result.applied.length > 0
       }
       throw new Error('Automatic project migrations exceeded the repair convergence limit.')
     })()
     automaticMigrationRepairs.set(key, repair)
     try {
-      await repair
+      return await repair
     } finally {
       if (automaticMigrationRepairs.get(key) === repair) automaticMigrationRepairs.delete(key)
     }
@@ -7307,7 +7323,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({ error: 'Unknown project id for this local Guildhall service.' }, 404)
     }
     try {
-      await applyAutomaticProjectMigrations(resolvedPath)
+      const hadCurrentThread = Boolean(
+        readProjectSurfaceStateAtBoundary(resolvedPath, { includeThread: true })?.thread?.thread,
+      )
+      const beforeAutomaticRepairRevision = readProjectStateAuthorityAtBoundary(projectTasksPath(resolvedPath)).projectRevision
+      const appliedMigrations = await applyAutomaticProjectMigrations(resolvedPath)
+      const afterAutomaticRepairRevision = readProjectStateAuthorityAtBoundary(projectTasksPath(resolvedPath)).projectRevision
+      if (hadCurrentThread && (appliedMigrations || afterAutomaticRepairRevision !== beforeAutomaticRepairRevision)) {
+        await refreshProjectProjectionsForApp(resolvedPath)
+      }
     } catch {
       // The normal migration gate below remains the owner-facing failure path.
       // A safe repair must never hide a real failure behind a transport error.
