@@ -60725,6 +60725,92 @@ show a migration only when the authoritative API exposes that same action.
 Pending investigation. No persisted schema change is implied by the observed
 projection flicker.
 
+### Finding: Work and the task drawer must not infer an owner approval from `spec_review` alone
+
+- [ ] User job: following `Review spec` opens one calm decision with both
+  `Approve` and `Request changes`. A task that Guildhall still owns for
+  recovery must never look like an owner approval, and an old task URL cannot
+  displace the current shared project action.
+- Finding, 2026-08-30: after the final visible repair, Work locally rendered
+  `Review spec` for grouped accordion behavior and routed there. Its
+  revision-matched task response instead had a coordinator-owned recovery gate
+  and the shared project action was a different `Repair spec` task. The drawer
+  then rendered an `Approve spec` card from raw `spec_review` status alongside
+  an unrelated worker escalation, while hiding `Request changes` and dumping
+  the full mechanical spec below the fold. This is a direct reintroduction of
+  the false-review and wall-of-text failures.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-owner-review-authority-and-review-surface-2026-08-30`.
+Touched contracts: Work focus chooses the current typed shared action or
+readiness focus before a route task id; a mismatched route cannot synthesize
+its own next action from task status. TaskDrawer and SpecTab expose approval
+only when `specReviewGate.authority` grants it to the owner. A valid focused
+owner review uses the compact shared `SpecReviewDecision`, which contains both
+approval outcomes; the full record is an explicit secondary path. Considered
+but not touched: task status persistence, recovery-gate lifecycle, escalation
+persistence, task ranking, and spec content schema. Required proof: a
+coordinator-owned `spec_review` task cannot render approval; Work redirects a
+mismatched focused route to the shared task; an owner gate renders both choices
+without the raw spec body or recovery card.
+
+#### Schema Migration Decision
+
+No schema migration. `specReviewGate.authority`, action task id, and action
+operation already express the ownership contract; this removes client views
+that ignored them.
+
+- [x] Regression and installed proof, 2026-08-30: WorkTab coverage proves a
+  stale coordinator-owned route cannot override the shared repair action;
+  TaskDrawer coverage proves coordinator recovery never renders approval from
+  either focused or full Spec presentation, while a valid owner gate renders
+  only `Request changes` and `Approve spec` without stale escalation clutter.
+  After install/restart with `stale:false`, Looma Work opened an old grouped-
+  accordion route but showed the current `EditorBlockMenu` repair instead.
+  That repair advanced to one implementation-ready task with `Resume this work
+  item`. The old direct full-record route had no approval command.
+
+### Finding: Work must preserve orientation while its current decision refreshes
+
+- [ ] User job: after taking the visible repair action, the owner sees that it
+  started, then sees the next decision or result. A transient refresh cannot
+  replace the entire decision surface with generic loading copy.
+- Finding, 2026-08-30: twice after a focused Work repair, the screen replaced
+  the action card with `Project summary ready` followed by a broad project
+  description and `Loading the selected view...` for several seconds. The
+  owner could not tell whether the repair ran, whether it completed, or what
+  would happen next until a later refresh restored the Work card.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-work-refresh-orientation-2026-08-30`.
+Touched contracts: the ProjectView surface-detail-loading boundary. A current
+owner decision must remain oriented while its more detailed work inventory
+refreshes, unless the shared project summary itself is unavailable. The
+interim state uses the typed project run state to say whether work is underway
+or the last pass completed, without reusing broad project-summary prose.
+Considered but not touched: repair execution, task ranking, project summary
+contents, and run persistence. Required proof: the installed Work route
+retains a truthful running/result handoff through a post-repair inventory
+refresh instead of replacing it with generic loading.
+
+#### Schema Migration Decision
+
+Pending investigation. No persisted schema change is implied by a transient
+surface-loading presentation.
+
+- [ ] Regression proof: ProjectView coverage proves the Work transition does
+  not reuse broad project-summary copy while it waits for the correct work
+  inventory. Installed post-repair refresh proof remains open because the
+  current Looma action is now real implementation work and the flow audit does
+  not start delivery merely to force a spinner.
+- [x] Installed handoff proof, 2026-08-30: after install/restart with
+  `stale:false`, Looma Work presented the current ContextMenu implementation
+  task with one `Resume this work item` action at desktop, 1024x800, and
+  390x844. The action was above the fold in each viewport and no page-level
+  horizontal overflow occurred.
+
 ### Finding: Global run chrome must reconcile a completed focused pass
 
 - [ ] User job: after the owner runs one focused repair, the global command
