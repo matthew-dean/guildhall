@@ -63049,7 +63049,7 @@ No persisted-schema change.
 
 ### Finding: A missing typed proof contract must trigger autonomous shaping, never blind implementation retries
 
-- [ ] User job: when a real task has implementation work but its automated
+- [x] User job: when a real task has implementation work but its automated
   acceptance criteria cannot yet be settled from typed command or provider
   evidence, Guildhall identifies the contract gap, repairs it through its
   shaping path, and tells the owner what is happening. It must not repeatedly
@@ -63087,3 +63087,58 @@ No persisted-schema change is planned. Existing acceptance criteria already
 carry `verifiedBy` and optional command/provider ownership. Legacy and newly
 saved malformed contracts remain readable; runtime detects the missing typed
 relationship and repairs the task through normal shaping before execution.
+
+### Finding: Live work must never be hidden behind a phantom owner handoff
+
+- [x] User job: when Guildhall is actively shaping or executing a task, the
+  owner sees that work is underway and can open or pause it. A planning state
+  may replace that live state only when there is a real, visible owner question
+  or review with an executable action.
+- Live finding, 2026-08-30: after the TMI-004 proof-contract recovery began,
+  Work correctly showed `Work is underway`, while the shared project decision
+  and CLI simultaneously reported `blocked`, `owner_input_required`, and a
+  drafted brief to review. The task had no open question and no owner review.
+  That planning-only brief state could not be acted on, but it was allowed to
+  eclipse the live spec-agent run.
+
+#### Contract Touch Decision
+
+Work id: `live-work-requires-typed-owner-handoff-2026-08-30`. Touched
+contracts: runtime-to-decision overlay and the shared primary-action/readiness
+projection. A blocked plan state now takes precedence over a live supervisor
+only when the already-projected owner-input or owner-review contract says an
+actual handoff is required. Considered but not touched: brief schema,
+brief-approval policy, task status, worker scheduling, and route-local UI
+copy. Required proof: a live task with only a planning brief reports `running`
+and `Open Work`; a live task with a typed open owner request still reports the
+owner action. Apply/revert: one shared decision-overlay rule; all surfaces and
+CLI inherit the same result.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This uses the existing typed owner-input and
+owner-review projection as the authority for whether a handoff exists.
+
+#### Validation
+
+- Focused proof-contract regressions passed: the complete
+  `task-gates.test.ts` and `project-decision-projection.test.ts` files; the
+  missing-automated-command recovery case; and the worker review-promotion
+  case with explicit commands. `pnpm typecheck`, `pnpm lint:contracts`,
+  `pnpm model:independence`, and `pnpm build` passed.
+- Known baseline outside this repair: the full `orchestrator.test.ts` file
+  currently has 12 failures, dominated by fixture worktrees that the newer
+  ownership guard deliberately refuses to delete. It also includes the older
+  nested-path hard-gate fixture, which does not dispatch its gate checker even
+  after its automated criterion receives a valid `pnpm test` command. This
+  repair does not alter task-worktree deletion or hard-gate routing; leave
+  those failures for the broader orchestrator baseline recovery.
+- Installed local proof, 2026-08-30: after `pnpm dev:install`, `guildhall
+  stop`, and `guildhall start` in t-minus-t, `/api/stale-server` reported
+  `stale:false`. Resuming real `TMI-004` sent its malformed automated-proof
+  contract to spec shaping instead of another worker retry. Its actual spec
+  review was then the single Overview action, `Review spec`, and led directly
+  to visible `Approve spec` / `Request changes` controls. A delegated-owner
+  approval produced one `Start work` action; starting it produced `Work is
+  underway` and `Pause`. The API decision, action model, Work UI, and
+  `guildhall status` all agreed on `running`, `task-004`, and no blockers.
