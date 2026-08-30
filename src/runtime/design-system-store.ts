@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises'
-import path from 'node:path'
+import { dirname } from 'node:path'
 import yaml from 'js-yaml'
 import { DesignSystem, DESIGN_SYSTEM_FILE } from '@guildhall/core'
-import { getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { projectScopedStatePath } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Design-system storage
@@ -18,11 +18,7 @@ import { getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guild
 // ---------------------------------------------------------------------------
 
 export function designSystemPath(memoryDir: string): string {
-  const base = path.basename(path.resolve(memoryDir))
-  if (base === '.guildhall' || base === 'memory') {
-    return getProjectSystemStatePath(inferProjectRootFromMemoryDir(memoryDir), DESIGN_SYSTEM_FILE)
-  }
-  return path.join(memoryDir, DESIGN_SYSTEM_FILE)
+  return projectScopedStatePath(memoryDir, DESIGN_SYSTEM_FILE)
 }
 
 /**
@@ -51,7 +47,7 @@ export async function saveDesignSystem(
   const p = designSystemPath(memoryDir)
   const tmp = `${p}.tmp`
   const validated = DesignSystem.parse(ds)
-  await fs.mkdir(path.dirname(p), { recursive: true })
+  await fs.mkdir(dirname(p), { recursive: true })
   await fs.writeFile(tmp, yaml.dump(validated, { noRefs: true, lineWidth: 100 }), 'utf-8')
   await fs.rename(tmp, p)
 }

@@ -17,10 +17,11 @@ import {
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
   writeProjectStateDatabaseDiagnosticProjection,
+  writeProjectStateDatabaseSummarySnapshot,
   writeProjectStateJsonAsync,
   writeProjectStateTextAsync,
 } from '@guildhall/sessions'
-import { buildServeApp } from '../serve.js'
+import { buildServeApp, countDistinctOwnerBlockingTasks } from '../serve.js'
 import { buildEffectiveTasks, legacyEvidenceFromTask, legacyRuntimeFromTask, legacyWorkspaceFromTask } from '../effective-task.js'
 import { applyProjectMigrations, getProjectMigrationStatus } from '../migrations.js'
 import { projectSummaryScopeRowsForQueue, writeProjectSummaryProjection, writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
@@ -247,6 +248,13 @@ async function initChildRepo(repoPath: string): Promise<void> {
 }
 
 describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
+  it('counts disjoint projection and live owner blockers by task identity', () => {
+    expect(countDistinctOwnerBlockingTasks(
+      new Set(['task:projection-owner']),
+      new Set(['task:live-escalation']),
+    )).toBe(2)
+  })
+
   it('serves saved status counts for current work without a named release', async () => {
     await seedQueue({
       version: 1,
@@ -2454,7 +2462,7 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
     for (const body of [project, map]) {
       expect(body.orientationSpine?.activePins?.[0]).toMatchObject({
         nodeId: 'work:task-import-e2e',
-        kind: 'owner_input',
+        kind: 'active_work',
         label: 'E2E tests: login -> create page -> edit -> search flow',
       })
     }
@@ -4704,16 +4712,15 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
         status: 'done',
       }),
     ])
-    expect(spineBody.summaryFreshness).toBe('stale')
-    expect(spineBody.requiresRefresh).toBe(true)
+    expect(spineBody.summaryFreshness).toBe('current')
+    expect(spineBody.requiresRefresh).toBeUndefined()
     expect(compactReadiness).toMatchObject({
-      summaryFreshness: 'stale',
-      requiresRefresh: true,
+      summaryFreshness: 'current',
       ready: false,
       release: { id: 'headless-mvp' },
       scope: { id: 'headless-mvp' },
     })
-    expect(compactReadiness).not.toHaveProperty('releaseCounts')
+    expect(compactReadiness).toHaveProperty('releaseCounts')
   })
 
   it('returns a compact project spine for overview previews without changing the full map spine', async () => {
@@ -5074,6 +5081,20 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
         blockReason: 'OAuth client secrets need external setup before Guildhall can verify this work.',
       }),
     ])
+    const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
+    const savedProjection = readProjectStateDatabaseProjectionState(tasksPath)
+    expect(savedProjection?.summary?.payload).toBeTruthy()
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: savedProjection!.summary!.payload,
+      scopeRows: savedProjection!.scopeRows.map(row => row.taskId === 'task-oauth'
+        ? {
+            ...row,
+            handoffState: 'spec_review',
+            blocksRelease: true,
+            blockerSummary: 'Stale projected blocker detail.',
+          }
+        : row),
+    })
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
     await commitAndPush('settle external setup blocker')
@@ -5089,7 +5110,49 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
         reason: 'OAuth client secrets need external setup before Guildhall can verify this work.',
       },
     ])
+    expect(body.releaseBlockers).toContainEqual(expect.objectContaining({
+      id: 'task-oauth',
+      code: 'blocked',
+      label: 'OAuth client secrets need external setup before Guildhall can verify this work.',
+    }))
     expect(body.totals.humanBlockingCount).toBe(1)
+  })
+
+  it('prunes a saved blocker when current task state is no longer blocking', async () => {
+    await seed([
+      makeTask({
+        id: 'task-currently-ready',
+        title: 'Current ready work',
+        status: 'ready',
+        spec: 'Implement the current ready work.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Ready work is implemented.', verifiedBy: 'test', met: false }],
+      }),
+    ])
+    const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
+    const savedProjection = readProjectStateDatabaseProjectionState(tasksPath)
+    expect(savedProjection?.summary?.payload).toBeTruthy()
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: savedProjection!.summary!.payload,
+      scopeRows: savedProjection!.scopeRows.map(row => row.taskId === 'task-currently-ready'
+        ? {
+            ...row,
+            handoffState: 'spec_review',
+            blocksStart: true,
+            blocksRelease: true,
+            humanBlocking: true,
+            blockerSummary: 'Stale review blocker.',
+          }
+        : row),
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('current ready state supersedes saved blocker')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.releaseBlockers.map((blocker: any) => blocker.id)).not.toContain('task-currently-ready')
+    expect(body.totals.humanBlockingCount).toBe(0)
   })
 
   it('does not count terminal or reserved workspace-import briefs as human blockers', async () => {
@@ -5517,8 +5580,9 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
 
   it('reports the design-system approval state', async () => {
     // Draft a DS via the endpoint, then check before/after approval.
+    await seed([])
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await app.fetch(new Request(projectUrl('/api/project/design-system'), {
+    const draftResponse = await app.fetch(new Request(projectUrl('/api/project/design-system'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -5531,6 +5595,9 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
         authoredBy: 'human',
       }),
     }))
+    expect(draftResponse.ok).toBe(true)
+    const draftBody = await draftResponse.json()
+    expect(draftBody).toMatchObject({ ok: true, revision: 1 })
     let res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     let body = await res.json() as any
     expect(body.diagnostics.designSystem.drafted).toBe(true)

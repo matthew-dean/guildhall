@@ -3479,6 +3479,14 @@ type ReleaseBlockerSummary = {
   taskId?: string
 }
 
+export function countDistinctOwnerBlockingTasks(...keyGroups: Iterable<string>[]): number {
+  const keys = new Set<string>()
+  for (const group of keyGroups) {
+    for (const key of group) keys.add(key)
+  }
+  return keys.size
+}
+
 function summarizeScopedReleaseWork(
   tasks: Task[],
   scope: OrientationScope | null | undefined,
@@ -3528,12 +3536,10 @@ function summarizeScopedReleaseWork(
     return proofRecovery?.kind === 'proof' && task.recoveryCode !== 'max_revisions_actionable'
   }
   const tasksById = new Map(tasks.map(task => [task.id, task]))
-  const scopeProjection = options.scopeRows
-    ? null
-    : buildProjectScopeProjection(
-        { tasks, releases: [] },
-        { selectedScope: scope as ProjectScope | null | undefined },
-      )
+  const liveScopeProjection = buildProjectScopeProjection(
+    { tasks, releases: [] },
+    { selectedScope: scope as ProjectScope | null | undefined },
+  )
   const persistedScopeRows: ProjectScopeRow[] | null = options.scopeRows
       ? options.scopeRows.map(row => {
         const task = tasksById.get(row.taskId)
@@ -3561,7 +3567,7 @@ function summarizeScopedReleaseWork(
         })
       })
     : null
-  const currentScopeRows = persistedScopeRows ?? scopeProjection!.rows
+  const currentScopeRows = persistedScopeRows ?? liveScopeProjection.rows
   // The shared scope projection is the only authority for current-scope
   // membership and hierarchy suppression. Do not re-derive a second scoped
   // task list here; that was how rich release detail drifted from the saved
@@ -3724,45 +3730,27 @@ function summarizeScopedReleaseWork(
   for (const spec of unapprovedSpecs) humanBlockingKeys.add(`task:${spec.id}`)
   for (const blocked of blockedByAgent) humanBlockingKeys.add(`task:${blocked.id}`)
 
-  const projectionReleaseBlockers = persistedScopeRows
-    ? executionScopeRows(currentScopeRows)
-      .filter(row => row.scope === 'included' && row.blocksRelease && row.countInProjectTotals !== false)
-      .filter(row => !terminalStatuses.has(effectiveReleaseStatus(tasksById.get(row.taskId)!)))
-      .map(row => {
-        const task = tasksById.get(row.taskId)
-        return {
-          id: row.taskId,
-          title: task?.title ?? row.taskId,
-          code: row.proofBlocked
-            ? 'proof_evidence_missing'
-            : row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped'
-              ? 'imported_scope_shaping'
-              : row.handoffState === 'spec_review'
-                ? 'spec_review_required'
-                : row.handoffState === 'blocked'
-                  ? 'blocked'
-                  : 'attention',
-          label: row.blockerSummary?.trim() || taskBlockerSummary(task!) || `${task?.title ?? row.taskId} blocks release readiness.`,
-        }
-      })
-    : scopeProjection!.release.blockers
-      .filter((blocker) => {
-        const task = blocker.owningTaskId ? tasksById.get(blocker.owningTaskId) : null
-        return !task || !terminalStatuses.has(effectiveReleaseStatus(task))
-      })
-      .map(blocker => {
-        const task = blocker.owningTaskId ? tasksById.get(blocker.owningTaskId) : null
-        return {
-          id: blocker.id,
-          title: task?.title ?? blocker.id,
-          label: blocker.label,
-          ...(blocker.code ? { code: blocker.code } : {}),
-        }
-      })
-  const projectionOwnerBlockingCount = executionScopeRows(currentScopeRows)
+  const releaseTaskIds = new Set(executionScopeRows(currentScopeRows)
     .filter(row => row.scope === 'included' && row.countInProjectTotals !== false)
+    .map(row => row.taskId))
+  const projectionOwnerBlockingKeys = new Set(executionScopeRows(liveScopeProjection.rows)
+    .filter(row => releaseTaskIds.has(row.taskId))
     .filter(projectScopeRowNeedsOwnerInput)
-    .length
+    .map(row => `task:${row.taskId}`))
+  const releaseBlockers = new Map(liveScopeProjection.release.blockers
+    .filter(blocker => releaseTaskIds.has(blocker.owningTaskId ?? blocker.id))
+    .map(blocker => {
+      const task = blocker.owningTaskId ? tasksById.get(blocker.owningTaskId) : null
+      return [blocker.id, {
+        id: blocker.id,
+        title: task?.title ?? blocker.id,
+        label: blocker.label,
+        ...(blocker.code ? { code: blocker.code } : {}),
+      }] as const
+    }))
+  for (const blocker of releaseBlockersById.values()) {
+    if (releaseTaskIds.has(blocker.id)) releaseBlockers.set(blocker.id, blocker)
+  }
 
   return {
     statusCounts,
@@ -3773,8 +3761,11 @@ function summarizeScopedReleaseWork(
     shelvedUnclaimed,
     blockedByAgent,
     proofMissingDoneTasks,
-    releaseBlockers: projectionReleaseBlockers.length > 0 ? projectionReleaseBlockers : [...releaseBlockersById.values()],
-    humanBlockingCount: Math.max(projectionOwnerBlockingCount, humanBlockingKeys.size),
+    // Persisted scope rows establish membership and execution collapsing, but
+    // current tasks re-derive blocker existence. Live detail then wins any ID
+    // collision so saved flags cannot keep a resolved task blocked.
+    releaseBlockers: [...releaseBlockers.values()],
+    humanBlockingCount: countDistinctOwnerBlockingTasks(projectionOwnerBlockingKeys, humanBlockingKeys),
     unfinishedCount,
     scopedTasks,
     gitStoryTasks: scopedTasks,
