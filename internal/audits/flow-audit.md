@@ -62174,6 +62174,15 @@ does not remove or alter task worktree changes.
   the fact that Guildhall had observed unsuccessful implementation churn. The
   worker's natural-language explanation is evidence only; the repair must use
   typed worktree observations and task transitions, not model prose.
+- Repeat, 2026-08-30: after the owner explicitly chose the new `Retry worker`
+  action, the same t-minus-t worker again first changed tracked extension
+  command, package, and README files, then erased those edits. It left only an
+  untracked VS Code test suite whose command assertion no longer matched the
+  source, plus a deleted `pnpm-lock.yaml`. There was no review, proof, or
+  completion transition. The owner paused the run; the stop-time dirty check
+  then misleadingly reported `Progress is saved` because it cannot yet
+  distinguish invalid residue from a durable implementation. The owner cleared
+  those invalid leftovers rather than preserving a broken task workspace.
 - Next repair: persist a bounded typed worktree-observation sequence at worker
   tool/turn boundaries, detect changed-to-clean loss without a terminal or
   review transition, and route that fact through the existing shared recovery
