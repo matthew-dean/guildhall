@@ -402,6 +402,30 @@ describe('buildProjectActionModel', () => {
     expect(model.runControl).toMatchObject({ label: 'Resume review', startEnabled: true })
   })
 
+  it('names a reviewer-contract recovery as a retry instead of ordinary review work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'review_retry',
+        focusTaskId: 'task-review',
+        focusTaskTitle: 'Review the desktop adapter',
+        focusKind: 'review_retry',
+        actionHref: '/work?task=task-review',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'review_retry',
+      ownerHeading: 'Automated review needs retry',
+      taskId: 'task-review',
+      buttonLabel: 'Retry review',
+      detail: 'Guildhall could not complete its automated review. The saved change is intact; retry review starts that check again.',
+      operation: 'start_focused',
+    })
+    expect(model.runControl).toMatchObject({ label: 'Retry review', startEnabled: true })
+  })
+
   it('retains setup state without reopening setup urgency after a release shipped', () => {
     const model = buildProjectActionModel({
       startReadiness: {

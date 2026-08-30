@@ -173,6 +173,7 @@ export type ProjectActionOwnerHeading =
   | 'Work is underway'
   | 'Ready to start'
   | 'Review ready to continue'
+  | 'Automated review needs retry'
   | 'Release is ready'
 
 export interface ProjectAction {
@@ -197,6 +198,7 @@ function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): Pro
     case 'required_migration_pending': return 'Project update required'
     case 'paused_live_work': return 'Work paused'
     case 'worker_recovery': return 'Worker needs a fresh pass'
+    case 'review_retry': return 'Automated review needs retry'
     case 'running': return 'Work is underway'
     case 'ready_work': return 'Ready to start'
     case 'release_ready': return 'Release is ready'
@@ -342,6 +344,7 @@ function workHrefForTask(taskId: string | undefined): string {
 
 function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): string {
   if (readiness.progressState === 'worker_retry_recommended' || readiness.progressState === 'worker_edit_loss') return 'Retry worker'
+  if (readiness.focusKind === 'review_retry' || readiness.code === 'review_retry') return 'Retry review'
   if (readiness.focusKind === 'review_work') return 'Resume review'
   if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Open task'
   if (readiness.code === 'required_migration_pending') return 'Review project update'
@@ -374,6 +377,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
 function runControlLabel(readiness: ProjectActionStartReadiness | null | undefined, running: boolean, stopping: boolean): string {
   if (stopping) return 'Stopping'
   if (running) return 'Pause'
+  if (readiness?.focusKind === 'review_retry' || readiness?.code === 'review_retry') return 'Retry review'
   if (readiness?.focusKind === 'review_work') return 'Resume review'
   if (readiness?.code === 'ready_work') return 'Start'
   if (readiness?.progressState === 'worker_retry_recommended' || readiness?.progressState === 'worker_edit_loss') return 'Retry worker'
@@ -417,6 +421,7 @@ function startReadinessActionLabel(readiness: ProjectActionStartReadiness): stri
     return 'Answer in Thread'
   }
   if (readiness.code === 'ready_work') return readiness.focusTaskTitle?.trim() || readiness.message || 'Ready work'
+  if (readiness.code === 'review_retry') return readiness.focusTaskTitle?.trim() || 'Automated review needs retry'
   if (readiness.code === 'required_migration_pending') return 'Required migration'
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs shaping'
@@ -649,13 +654,14 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     readiness.code === 'worker_recovery'
   const specRepair = readiness.focusKind === 'spec_repair'
   const reviewWork = readiness.focusKind === 'review_work'
+  const reviewRetry = readiness.focusKind === 'review_retry' || readiness.code === 'review_retry'
   const blockedWork = readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work'
   const workerRetryRecommended = readiness.progressState === 'worker_retry_recommended'
   const workerEditLoss = readiness.progressState === 'worker_edit_loss'
   const pausedSavedWorkDetail = readiness.focusTaskTitle?.trim()
     ? `"${readiness.focusTaskTitle.trim()}" is paused with saved work. Resume continues the same task.`
     : 'Work is paused with saved progress. Resume continues the same task.'
-  const operation = readiness.canStart && readiness.focusTaskId && runnableWork
+  const operation = readiness.canStart && readiness.focusTaskId && (runnableWork || reviewRetry)
     ? (specRepair ? 'repair_spec' : 'start_focused')
     : undefined
   const label = workerEditLoss
@@ -664,6 +670,8 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     ? 'Worker needs a fresh pass'
     : reviewWork
     ? 'Review ready to continue'
+    : reviewRetry
+    ? 'Automated review needs retry'
     : specRepair
     ? 'Repair this spec'
     : ownerReview
@@ -671,7 +679,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     : runnableWork
       ? (readiness.code === 'paused_live_work' ? 'Work paused' : 'Work ready to start')
       : startReadinessActionLabel(readiness)
-  const taskLabel = ownerReview || runnableWork ? readiness.focusTaskTitle?.trim() : undefined
+  const taskLabel = ownerReview || runnableWork || reviewRetry ? readiness.focusTaskTitle?.trim() : undefined
   // The selected task is the decision. A review-queue count is operational
   // context, not an explanation that competes with that task on every surface.
   const detail = workerEditLoss
@@ -680,6 +688,8 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     ? 'The last two worker passes ended without a durable change. Retry starts a fresh pass using this task\'s current plan.'
     : reviewWork
     ? 'The implementation is saved. Resume review to have Guildhall check the current change.'
+    : reviewRetry
+    ? 'Guildhall could not complete its automated review. The saved change is intact; retry review starts that check again.'
     : readiness.progressState === 'partial_work_saved'
     ? pausedSavedWorkDetail
     : pausedWork
@@ -700,13 +710,14 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
       : readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
     tone: readiness.code === 'required_migration_pending'
       ? 'danger'
-      : workerRetryRecommended || workerEditLoss
+      : workerRetryRecommended || workerEditLoss || reviewRetry
         ? 'warn'
       : readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
         ? 'accent'
         : 'warn',
     code: workerRetryRecommended || workerEditLoss ? 'worker_recovery' : readiness.code,
     ...(reviewWork ? { ownerHeading: 'Review ready to continue' as const } : {}),
+    ...(reviewRetry ? { ownerHeading: 'Automated review needs retry' as const } : {}),
     ...(workerEditLoss ? { ownerHeading: 'Worker discarded its edits' as const } : {}),
     ...(readiness.focusTaskId ? { taskId: readiness.focusTaskId } : {}),
     ...(operation ? { operation } : {}),
@@ -864,7 +875,8 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     (
       startReadiness.code === 'ready_work' ||
       startReadiness.code === 'paused_live_work' ||
-      startReadiness.code === 'worker_recovery'
+      startReadiness.code === 'worker_recovery' ||
+      startReadiness.code === 'review_retry'
     )
   ) {
     candidates.push(startReadinessAction(startReadiness))

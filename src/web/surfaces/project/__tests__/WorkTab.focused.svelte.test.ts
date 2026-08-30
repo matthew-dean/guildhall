@@ -203,6 +203,34 @@ describe('focused Work flow', () => {
     expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
   })
 
+  it('starts an exhausted automated review retry instead of navigating to the same Work card', async () => {
+    const user = userEvent.setup()
+    const review = reviewTask({ id: 'task-review-retry', displayKey: 'TMT-5', title: 'Retry the saved extension review', status: 'review' })
+    setRoute(`/projects/t-minus-t/work?task=${review.id}`)
+    render(WorkTab, { props: { detail: projectDetail([review], {
+      startReadiness: { canStart: true, code: 'review_retry', focusTaskId: review.id, focusTaskTitle: review.title, focusKind: 'review_retry' },
+      actionModel: {
+        primaryAction: {
+          taskId: review.id,
+          code: 'review_retry',
+          ownerHeading: 'Automated review needs retry',
+          operation: 'start_focused',
+          detail: 'Guildhall could not complete its automated review. The saved change is intact; retry review starts that check again.',
+          buttonLabel: 'Retry review',
+          href: `/work?task=${review.id}`,
+        },
+      },
+    }) } })
+
+    await user.click(await screen.findByRole('button', { name: 'Retry review' }))
+    expect(await screen.findByRole('heading', { name: 'Starting work' })).toBeInTheDocument()
+    expect(path.href).toBe(`/projects/t-minus-t/work?task=${review.id}`)
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/project/task/${review.id}/start`),
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('makes repeated worker no-progress a visible retry instead of an ordinary pause', async () => {
     const paused = reviewTask({ id: 'task-retry', displayKey: 'TMT-4', title: 'Open supported documents as TypeScript', status: 'in_progress' })
     setRoute(`/projects/t-minus-t/work?task=${paused.id}`)

@@ -9324,20 +9324,22 @@ export class Orchestrator {
       projectSkillsEnabled: this.opts.config.skills?.projectLocal?.enabled === true,
     })
 
+    const reviewProjectPath = task.worktreePath?.trim() || task.projectPath || this.opts.config.projectPath
+    const changedFiles = await this.renderChangedFiles(task)
+    const runFanout = async (): Promise<PersonaVerdict[]> => runner({
+      task,
+      builtContext: ctx,
+      personas,
+      ...(reviewPlan ? { reviewPlan } : {}),
+      context: ctx.formatted,
+      memoryDir: this.opts.config.memoryDir,
+      projectPath: reviewProjectPath,
+      visualEvidencePaths: collectVisualEvidenceRefs(task, changedFiles.files),
+    })
+
     let verdicts: PersonaVerdict[]
     try {
-      const reviewProjectPath = task.worktreePath?.trim() || task.projectPath || this.opts.config.projectPath
-      const changedFiles = await this.renderChangedFiles(task)
-      verdicts = await runner({
-        task,
-        builtContext: ctx,
-        personas,
-        ...(reviewPlan ? { reviewPlan } : {}),
-        context: ctx.formatted,
-        memoryDir: this.opts.config.memoryDir,
-        projectPath: reviewProjectPath,
-        visualEvidencePaths: collectVisualEvidenceRefs(task, changedFiles.files),
-      })
+      verdicts = await runFanout()
     } catch (err) {
       const failureVerdicts = personas.map((persona): PersonaVerdict => ({
         guildSlug: persona.slug,
@@ -9354,6 +9356,36 @@ export class Orchestrator {
         reviewerMode,
         'reviewer fan-out failed before producing typed results (provider_unavailable)',
       )
+    }
+    // A malformed reviewer response is a Guildhall integration fault, not
+    // owner work and not worker feedback. Give a fresh reviewer invocation one
+    // bounded chance to produce its typed contract before surfacing a retry.
+    if (verdicts.length > 0 && verdicts.every((verdict) => verdict.failureCode === 'invalid_review_contract')) {
+      await this.emitBackendEvent({
+        type: 'line_complete',
+        task_id: task.id,
+        agent_name: 'reviewer-fanout',
+        message: 'Reviewer output was incomplete. Guildhall is retrying the automated review once.',
+      })
+      try {
+        verdicts = await runFanout()
+      } catch (err) {
+        const failureVerdicts = personas.map((persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'revise',
+          reasoning: '',
+          revisionItems: [],
+          rawOutput: '',
+          failureCode: 'provider_unavailable',
+        }))
+        return await this.handleReviewerFanoutFailureInline(
+          task,
+          failureVerdicts,
+          reviewerMode,
+          'reviewer retry failed before producing typed results (provider_unavailable)',
+        )
+      }
     }
     if (verdicts.length === 0) {
       const failureVerdicts = personas.map((persona): PersonaVerdict => ({

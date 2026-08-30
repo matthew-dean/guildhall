@@ -63367,3 +63367,103 @@ current managed worktree and task branch before making a lifecycle decision.
   named task. The live worker then began task-scoped edits in the managed
   worktree. No reviewer fan-out was retried and no owner action was required
   to diagnose or repair the stale handoff.
+- Follow-up owner replay, 2026-08-30: once the recovered worker produced a
+  real managed-worktree diff, Overview, Work, Thread, and Release all exposed
+  the same named `Resume review` action. The installed Release route fit at
+  1280px without horizontal overflow; one click executed `start_focused` in
+  place and changed the card to `Work is underway`, with the global `Pause`
+  control and one `Open Work` escape hatch. This distinguishes a real review
+  handoff from the earlier stale checkpoint instead of disabling review
+  recovery wholesale.
+
+### Regression: Rendered flow proof must assert the owner action the state actually permits
+
+- [x] User job: across desktop, split-screen, and mobile widths, a focused
+  Work card shows the one executable action that follows its current shared
+  state. A paused task must offer `Resume work`, not a generic action copied
+  from a different task state.
+- Observed test drift, 2026-08-30: the Narrative Harness rendered-flow audit
+  fixture intentionally starts with a paused live task and correctly showed
+  `Resume work`, while the test still required the obsolete generic `Open
+  task` label. That left the mobile proof blind to the actual owner action.
+
+#### Contract Touch Decision
+
+Work id: `rendered-owner-action-state-proof-2026-08-30`. Touched contract:
+the rendered flow-audit expectation for a paused focused task. The shared
+action model and product behavior are unchanged; the regression now validates
+the state-specific action already required by that authority. Considered but
+not touched: action ranking, task lifecycle, API shape, route implementation,
+and schema. Required proof: the one focused action is visible at 1114px,
+900px, and 390px while deliberate Work browsing remains readable. Apply/revert:
+test evidence only.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts --grep
+  "browsing work is deliberate|flow audit protocol"` passed (2 tests). It
+  checks deliberate browse behavior at split-screen widths and the current
+  focused owner action plus no clipped content at 1114px, 900px, and 390px.
+
+### Finding: Reviewer infrastructure failure must not reissue the same owner review action
+
+- [x] User job: after the owner starts a valid review handoff, Guildhall either
+  advances review or tells the owner that the review system is automatically
+  recovering. A malformed reviewer result is not product feedback and must not
+  put the unchanged `Resume review` action back on screen.
+- Live finding, 2026-08-30: t-minus-t `TMI-004` had a real dirty task-worktree
+  diff and all owner surfaces agreed on one `Resume review` action. After that
+  action, reviewer fan-out failed its typed contract for review-owned `ac-4`
+  and `ac-8` even though provider health was healthy. Guildhall returned the
+  task to `review` and offered the exact same owner action again, with no
+  explanation of the automated reviewer failure or bounded recovery.
+
+#### Contract Touch Decision
+
+Work id: `reviewer-contract-failure-autonomous-recovery-2026-08-30`. Touched
+contracts: reviewer-fanout failure classification, retry/recovery ownership,
+and the shared project action/readiness projection after a reviewer-contract
+failure. Considered but not touched: review target schema, reviewer authority,
+provider prose, task lifecycle enum, worker revisions, release membership,
+and owner-input schema. Required proof: an invalid reviewer contract cannot
+surface `Resume review` unchanged; Guildhall performs a bounded automatic
+recovery with a visible working state, preserves a real reviewable diff, and
+escalates only a genuine unavailable capability with an explanation that an
+owner can act on. Apply/revert: shared runtime/recovery authority and action
+projection only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The retry is bounded to one fresh fan-out attempt
+inside the active review run. If it still fails, the existing typed
+`ReviewVerdict.failureCode` is projected as `review_retry`; it does not change
+task status, reviewer authority, or stored task-runtime schema.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/project-decision-projection.test.ts
+  src/runtime/__tests__/reviewer-fanout-wiring.test.ts
+  src/runtime/__tests__/project-scope-projection.test.ts
+  src/runtime/__tests__/project-action-model.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.focused.svelte.test.ts` passed
+  (159 tests). The reviewer wiring test proves that an all-invalid first
+  fan-out is retried once and then advances without owner input when the
+  replacement contract is valid. Scope, decision, action, and Work tests prove
+  an exhausted invalid contract stays runnable through the shared authority and
+  executes `Retry review` in place rather than reopening the task or repeating
+  `Resume review`.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed. The recovery is selected only from typed failure codes, never from
+  reviewer prose.
+- Installed t-minus-t replay, 2026-08-30: after `pnpm build`, `pnpm
+  dev:install`, `guildhall stop`, and `guildhall start`, `/api/stale-server`
+  returned `stale:false`. The live task projected `review_retry` as a runnable
+  shared decision and showed one `Retry review` button on Work. Clicking it
+  stayed on the focused Work route, changed the global control to `Pause`, and
+  changed the card to `Work is underway` for `TMI-004`; the live API confirmed
+  `execution.status: running` and `task-004.status: gate_check`. The owner did
+  not have to rediscover the task or interpret reviewer plumbing.

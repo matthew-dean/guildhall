@@ -331,6 +331,39 @@ describe('project decision projection', () => {
     })
   })
 
+  it('keeps an executable automated-review retry runnable through the shared decision packet', () => {
+    const decision = buildProjectDecisionProjection({
+      projectRevision: 42,
+      generatedAt: '2026-08-30T20:00:00.000Z',
+      start: {
+        canStart: true,
+        code: 'review_retry',
+        focusTaskId: 'task-004',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        focusKind: 'review_retry',
+        message: 'Guildhall could not complete the automated review.',
+      },
+      release: { scopeMode: 'unreleased', release: null, state: 'active', blockers: [] },
+    })
+
+    expect(decision.execution).toMatchObject({
+      state: 'runnable',
+      code: 'review_retry',
+      focusTaskId: 'task-004',
+      focusKind: 'review_retry',
+    })
+    expect(projectDecisionStartReadiness(decision)).toMatchObject({
+      canStart: true,
+      code: 'review_retry',
+      focusTaskId: 'task-004',
+    })
+    expect(decision.primaryAction).toEqual({
+      kind: 'open_work',
+      targetId: 'task-004',
+      reasonCode: 'review_retry',
+    })
+  })
+
   it('restores the retained plan execution after a supervisor stops', () => {
     const planned = buildProjectDecisionProjection({
       projectRevision: 42,

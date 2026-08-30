@@ -20,6 +20,7 @@ export type ProjectScopeHandoffState =
   | 'ready'
   | 'paused'
   | 'review'
+  | 'review_retry'
   | 'deferred'
   | 'done'
   | 'blocked'
@@ -143,10 +144,10 @@ export interface ProjectScopeProjection {
   start: {
     canStart: boolean
     code?: string
-    label: 'Start' | 'Resume' | 'Review' | 'Configure' | 'Answer in Thread'
+    label: 'Start' | 'Resume' | 'Review' | 'Retry review' | 'Configure' | 'Answer in Thread'
     focusTaskId?: string
     focusTaskTitle?: string
-    focusKind?: 'paused_work' | 'ready_work' | 'review_work' | 'spec_repair' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
+    focusKind?: 'paused_work' | 'ready_work' | 'review_work' | 'review_retry' | 'spec_repair' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
     /** Exact selected-scope records behind an owner-review action. */
     reviewTaskIds?: string[]
     count?: number
@@ -774,7 +775,12 @@ function handoffStateForTask(
   if (status === 'blocked') return 'blocked'
   if (status === 'done' || status === 'pending_pr') return 'done'
   if (status === 'in_progress') return 'paused'
-  if (status === 'review' || status === 'gate_check') return 'review'
+  if (status === 'review') {
+    return (task.reviewVerdicts ?? []).at(-1)?.failureCode === 'invalid_review_contract'
+      ? 'review_retry'
+      : 'review'
+  }
+  if (status === 'gate_check') return 'review'
   if (status === 'spec_review') {
     return specReviewNeedsRepair(task) ? 'spec_shaping' : 'spec_review'
   }
@@ -1089,6 +1095,22 @@ export function summarizeProjectScopeStart(
       focusKind: 'ready_work',
       message: `"${specWork.title}" is ready for spec work.`,
       actionHref: `/work?task=${encodeURIComponent(specWork.taskId)}`,
+    }
+  }
+  // An exhausted automatic review retry is not ordinary review work. The
+  // owner can explicitly retry the preserved automated check, but must never
+  // be told that restarting it is simply "resuming" product work.
+  const reviewRetry = included.find(row => !row.dependencyBlocked && row.handoffState === 'review_retry')
+  if (reviewRetry) {
+    return {
+      canStart: true,
+      code: 'review_retry',
+      label: 'Retry review',
+      focusTaskId: reviewRetry.taskId,
+      focusTaskTitle: reviewRetry.title,
+      focusKind: 'review_retry',
+      message: `Guildhall could not complete the automated review for "${reviewRetry.title}". It preserved the saved change; retry review when the review service is ready.`,
+      actionHref: `/work?task=${encodeURIComponent(reviewRetry.taskId)}`,
     }
   }
   // Review work is already executable. Do not send the owner to a later task

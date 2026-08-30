@@ -359,7 +359,7 @@ test('flow audit protocol reconciles user job, visible state, and layout evidenc
   await page.goto('/projects/narrative-harness/work')
   await applyRequiredProjectUpdates(page)
   await expect(page.getByRole('region', { name: 'Current work' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Open task' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Resume work' })).toBeVisible()
   await expectNoClippedContent(page, {
     containerSelector: 'section.work-focus',
     itemSelector: 'section.work-focus button',
@@ -368,6 +368,7 @@ test('flow audit protocol reconciles user job, visible state, and layout evidenc
   await page.setViewportSize({ width: 900, height: 692 })
   await page.reload()
   await expect(page.getByRole('region', { name: 'Current work' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Resume work' })).toBeVisible()
   await expectNoClippedContent(page, {
     containerSelector: 'section.work-focus',
     itemSelector: 'section.work-focus button',
@@ -376,6 +377,7 @@ test('flow audit protocol reconciles user job, visible state, and layout evidenc
   await page.setViewportSize({ width: 390, height: 844 })
   await page.reload()
   await expect(page.getByRole('region', { name: 'Current work' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Resume work' })).toBeVisible()
   await expectNoClippedContent(page, {
     containerSelector: 'section.work-focus',
     itemSelector: 'section.work-focus button',

@@ -1389,6 +1389,40 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(task.notes.at(-1)?.content).toContain('no product finding was inferred')
   })
 
+  it('retries an invalid reviewer contract once before asking the owner to retry review', async () => {
+    await writeDesignSystem(minimalDS)
+    await writeQueue([mkTask()])
+    let attempts = 0
+    const runner: ReviewerFanoutRunner = async ({ personas }) => {
+      attempts += 1
+      return personas.map((persona): PersonaVerdict => ({
+        guildSlug: persona.slug,
+        guildName: persona.name,
+        verdict: attempts === 1 ? 'revise' : 'approve',
+        reasoning: attempts === 1 ? '' : `${persona.name} approved.`,
+        revisionItems: [],
+        rawOutput: attempts === 1 ? 'Missing structured review result.' : '**Verdict:** approve',
+        ...(attempts === 1 ? { failureCode: 'invalid_review_contract' as const } : {}),
+      }))
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
+
+    expect(await orch.tick()).toMatchObject({
+      kind: 'processed',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+    })
+    expect(attempts).toBe(2)
+    const after = (await readQueue()).tasks[0]!
+    expect(after.status).toBe('gate_check')
+    expect(after.reviewVerdicts.every((verdict) => verdict.failureCode === undefined)).toBe(true)
+  })
+
   it('raises escalation when fan-out keeps rejecting past maxRevisions', async () => {
     await writeDesignSystem(minimalDS)
     const task = mkTask({ revisionCount: 3 }) // already at maxRevisions

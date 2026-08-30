@@ -429,6 +429,9 @@
     if (focusedWork && detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === focusedWork.id) {
       return detail.actionModel.primaryAction.ownerHeading ?? 'Worker needs a fresh pass'
     }
+    if (focusedWork && detail.actionModel?.primaryAction?.code === 'review_retry' && detail.actionModel.primaryAction.taskId === focusedWork.id) {
+      return detail.actionModel.primaryAction.ownerHeading ?? 'Automated review needs retry'
+    }
     if (focusedWork && detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === focusedWork.id) {
       return detail.actionModel?.primaryAction?.ownerHeading ?? 'Review ready to continue'
     }
@@ -803,7 +806,7 @@
     // Older saved ready-work actions predate the explicit operation field;
     // their typed code remains a safe executable compatibility contract.
     return action.code === 'ready_work' ||
-      ((action.code === 'paused_live_work' || action.code === 'worker_recovery') && action.operation === 'start_focused')
+      ((action.code === 'paused_live_work' || action.code === 'worker_recovery' || action.code === 'review_retry') && action.operation === 'start_focused')
   }
 
   function isOwnerSpecReview(task: Task): boolean {
@@ -827,6 +830,7 @@
     if (isFocusedWorkRunning(task)) return 'Working'
     if (isFocusedWorkStarting(task)) return 'Starting'
     if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'Needs retry'
+    if (detail.actionModel?.primaryAction?.code === 'review_retry' && detail.actionModel.primaryAction.taskId === task.id) return 'Review retry'
     if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'Review ready'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'Paused'
     return isFocusedRunnableWork(task) ? 'Ready' : effectiveStatusLabel(task)
@@ -836,6 +840,7 @@
     if (isFocusedWorkRunning(task)) return 'running'
     if (isFocusedWorkStarting(task)) return 'accent'
     if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'warn'
+    if (detail.actionModel?.primaryAction?.code === 'review_retry' && detail.actionModel.primaryAction.taskId === task.id) return 'warn'
     if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
     return isFocusedRunnableWork(task) ? 'ok' : effectiveStatusTone(task)

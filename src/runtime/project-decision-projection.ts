@@ -804,10 +804,13 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionE
             : 'Guildhall is advancing the selected work.',
     }
   }
-  if (start.code === 'ready_work') {
+  // Scope projection owns whether a stopped focus is executable. Keep every
+  // executable recovery path runnable here instead of letting only the
+  // ordinary ready-work code survive the shared decision packet.
+  if (start.canStart) {
     return {
       state: 'runnable',
-      code: start.code,
+      code: start.code ?? 'ready_work',
       ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
       ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
       ...(start.focusKind ? { focusKind: start.focusKind } : {}),
