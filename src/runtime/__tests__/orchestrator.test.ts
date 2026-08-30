@@ -31,6 +31,7 @@ import {
 } from '@guildhall/levers'
 import { InMemoryGitDriver, NodeGitDriver } from '../git-driver.js'
 import { writeCheckpoint } from '@guildhall/tools'
+import { runBootstrap } from '../bootstrap-runner.js'
 import { appendFailureClassificationNote, classifyAgentFailure } from '../policy.js'
 import { commandEvidence, touchedFiles } from './policy-fixtures.js'
 import { readProjectLearning } from '../learning.js'
@@ -14364,10 +14365,12 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.notes.at(-1)?.role).toBe('bootstrap-failure')
   })
 
-  it('checkpoints dirty worktree bootstrap verification failures before redispatching the worker', async () => {
+  it('blocks a fresh dirty worktree when its first bootstrap fails', async () => {
     const subrepo = path.join(tmpDir, 'knit')
     const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'knit-task-a')
     await fs.mkdir(path.join(subrepo, 'web'), { recursive: true })
+    await fs.mkdir(path.dirname(worktree), { recursive: true })
+    execFileSync('git', ['worktree', 'add', '-b', 'guildhall/task-a', worktree, 'main'], { cwd: tmpDir, stdio: 'ignore' })
     await fs.mkdir(path.join(worktree, 'web', 'app', 'pages'), { recursive: true })
     await fs.writeFile(path.join(worktree, 'web', 'app', 'pages', 'settings.vue'), '<template />\n', 'utf-8')
 
@@ -14389,7 +14392,7 @@ describe('Orchestrator.run — full loops', () => {
         status: 'in_progress',
         assignedTo: 'worker-agent',
         domain: 'knit',
-        projectPath: subrepo,
+        projectPath: tmpDir,
         worktreePath: worktree,
         branchName: 'guildhall/task-a',
         baseBranch: 'main',
@@ -14400,6 +14403,12 @@ describe('Orchestrator.run — full loops', () => {
     const longFailure = `settings.vue type error ${'x'.repeat(1900)} tail-token`
     const failingGate = `node -e 'console.error(${JSON.stringify(longFailure)}); process.exit(1)'`
     const worker = stubAgent('worker-agent')
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    gitDriver.setStatusSummary(worktree, {
+      clean: false,
+      changedCount: 1,
+      samplePaths: ['web/app/pages/settings.vue'],
+    })
     const orch = new Orchestrator({
       config: baseConfig({
         projectPath: tmpDir,
@@ -14411,51 +14420,101 @@ describe('Orchestrator.run — full loops', () => {
         },
       }),
       agents: agentSet({ worker }),
-      gitDriver: new InMemoryGitDriver({ clean: false }),
+      gitDriver,
     })
 
     const out = await orch.tick()
     expect(out.kind).toBe('processed')
     if (out.kind === 'processed') {
       expect(out.beforeStatus).toBe('in_progress')
-      expect(out.afterStatus).toBe('in_progress')
-      expect(out.transitioned).toBe(false)
+      expect(out.afterStatus).toBe('blocked')
+      expect(out.transitioned).toBe(true)
     }
 
     const queue = await readQueue()
     const task = queue.tasks.find((candidate) => candidate.id === 'a')
-    expect(task?.status).toBe('in_progress')
-    expect(task?.blockReason ?? null).toBeNull()
-    expect(task?.notes.at(-1)?.role).toBe('bootstrap-verification')
-    expect(task?.notes.at(-1)?.content).toContain('tail-token')
-    expect(task?.notes.at(-1)?.content).toContain('[durable evidence excerpt bounded; raw diagnostic text is not retained]')
+    expect(task?.status).toBe('blocked')
+    expect(task?.assignedTo).toBeNull()
+    expect(task?.blockReason).toMatch(/task setup failed/i)
+    expect(task?.notes.at(-1)?.role).toBe('bootstrap-failure')
+    expect(worker.calls).toHaveLength(0)
+  })
 
-    const checkpoint = JSON.parse(
-      await fs.readFile(taskHistoryPath('a', 'checkpoint.json'), 'utf8'),
-    ) as {
-      nextPlannedAction: string
-      filesTouched: string[]
-      resumeContext?: {
-        verification?: Array<{ command: string; passed: boolean; summary?: string }>
-        safeNextMutationSurface?: string[]
-        workingHypothesis?: string
-      }
+  it('does not transfer a stale bootstrap record to a newly allocated worktree', async () => {
+    const subrepo = path.join(tmpDir, 'knit')
+    const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'knit-task-a')
+    await fs.mkdir(path.join(subrepo, 'web'), { recursive: true })
+    await fs.mkdir(path.dirname(worktree), { recursive: true })
+    execFileSync('git', ['worktree', 'add', '-b', 'guildhall/task-a', worktree, 'main'], { cwd: tmpDir, stdio: 'ignore' })
+    await fs.mkdir(path.join(worktree, 'web', 'app', 'pages'), { recursive: true })
+    await fs.writeFile(path.join(worktree, 'web', 'app', 'pages', 'settings.vue'), '<template />\n', 'utf-8')
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
     }
-    expect(checkpoint.nextPlannedAction).toContain('recorded bootstrap verification failure')
-    expect(checkpoint.filesTouched).toContain('web/app/pages/settings.vue')
-    expect(checkpoint.resumeContext?.verification).toEqual([
-      expect.objectContaining({
-        command: failingGate,
-        passed: false,
-        summary: expect.stringContaining('settings.vue type error'),
+    await saveLeverSettings({ path: agentSettingsPath, settings })
+
+    const initialBootstrap = runBootstrap({
+      projectPath: worktree,
+      memoryDir: path.join(worktree, '.guildhall'),
+      commands: ['node -e "process.exit(0)"'],
+      successGates: [],
+      timeoutMs: 30_000,
+    })
+    expect(initialBootstrap.success).toBe(true)
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        domain: 'knit',
+        projectPath: tmpDir,
+        worktreePath: worktree,
+        branchName: 'guildhall/task-a',
+        baseBranch: 'main',
+        spec: 'Implement the invite flow in `web/app/pages/settings.vue`.',
       }),
     ])
-    expect(checkpoint.resumeContext?.verification?.[0]?.summary).toContain('tail-token')
-    expect(checkpoint.resumeContext?.verification?.[0]?.summary).not.toContain('\n...')
-    expect(checkpoint.resumeContext?.safeNextMutationSurface).toContain('web/app/pages/settings.vue')
-    expect(checkpoint.resumeContext?.workingHypothesis).toContain('last authoritative verification failed')
-    expect(worker.calls[0]?.prompt).toContain('Latest authoritative verification')
-    expect(worker.calls[0]?.prompt).toContain('settings.vue type error')
+
+    const failingGate = 'node -e "console.error(\'settings.vue type error\'); process.exit(1)"'
+    const worker = stubAgent('worker-agent')
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    gitDriver.setStatusSummary(worktree, {
+      clean: false,
+      changedCount: 1,
+      samplePaths: ['web/app/pages/settings.vue'],
+    })
+    const orch = new Orchestrator({
+      config: baseConfig({
+        projectPath: tmpDir,
+        bootstrap: {
+          commands: ['node -e "process.exit(0)"'],
+          successGates: [failingGate],
+          timeoutMs: 30_000,
+          verifiedAt: '2026-05-03T00:00:00Z',
+        },
+      }),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('blocked')
+      expect(out.transitioned).toBe(true)
+    }
+
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('blocked')
+    expect(task?.notes.at(-1)?.role).toBe('bootstrap-failure')
+    expect(worker.calls).toHaveLength(0)
   })
 
   it('hands explicit task-owned bootstrap repair failures to the worker even when the task worktree is clean', async () => {

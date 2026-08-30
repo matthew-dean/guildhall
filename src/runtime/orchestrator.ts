@@ -3979,16 +3979,14 @@ export class Orchestrator {
         if (!res.success) {
           const failed = res.steps.find((s) => s.result === 'fail')
           const msg = `worktree bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` (exit ${failed?.exitCode ?? '?'})`
-          const dirtyTaskWorktree = !(await this.gitDriver.isClean(activeWorktreePath))
           const queue = await this.readQueue()
           const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
           const taskOwnsBootstrapRepair = taskExplicitlyOwnsBootstrapRepair(queuedTask ?? task)
-          if (dirtyTaskWorktree || taskOwnsBootstrapRepair) {
+          if (taskOwnsBootstrapRepair) {
             const now = this.now()
             const output = String(failed?.output ?? '').trim()
-            const handoffReason = dirtyTaskWorktree
-              ? 'The task worktree already has edits, so Guildhall is handing the failing verification back to the worker instead of blocking setup.'
-              : 'The task explicitly asks Guildhall to repair this bootstrap failure, so Guildhall is handing the failing setup proof to the worker instead of blocking before dispatch.'
+            const handoffReason =
+              'The task explicitly asks Guildhall to repair this bootstrap failure, so Guildhall is handing the failing setup proof to the worker instead of blocking before dispatch.'
             const content = [
               `${msg}. ${handoffReason}`,
               output ? `\nVerification output:\n${output}` : '',

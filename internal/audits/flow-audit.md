@@ -61432,28 +61432,61 @@ the scope-integrity reset; no owner data is transformed or lost.
 #### Contract Touch Decision
 
 Work id: `looma-knit-isolated-worktree-build-preparation-2026-08-30`.
-Contracts considered: project bootstrap, task-worktree preparation, acceptance
-command execution, and task proof classification. No contract is changed by
-this finding yet. Required follow-up: determine whether the project-declared
-bootstrap can prepare workspace package outputs before task proof, then repair
-that shared preparation boundary rather than weakening the proof or marking the
-task complete from a partial check. Required proof: a fresh isolated Looma +
-Knit worktree can run the docs build after its declared setup, while an actual
-docs build failure remains distinguishable from environment setup failure.
+Touched contracts: task-worktree bootstrap ownership and task proof
+classification. A task worktree bootstrap failure is an environment setup
+boundary by default, even when Guildhall restored an in-scope partial diff
+before retrying the task. Dirty files and a stale worktree-local bootstrap
+record do not prove that a setup failure belongs to the task. A worker receives
+a failed bootstrap only when the task explicitly owns bootstrap repair.
+Considered but not touched: task scope inference, acceptance-command
+execution, worker prompt wording, release ranking, and persisted bootstrap
+status. Required follow-up:
+repair the Looma setup contract or its underlying core build so a fresh
+workspace can produce package outputs before docs proof. Required proof: a
+fresh isolated Looma + Knit worktree surfaces its first setup failure as
+environment setup without discarding the valid docs diff, while a post-setup
+task-owned verification failure still returns to the worker.
 
 - [x] Preserve the valid task-local result without treating the baseline
   bootstrap failure as a docs regression. The docs-sync command passed and the
-  scoped naming convention is committed as Looma task-branch commit `9148dc0`.
+  scoped naming convention is committed as Looma task-branch commit `b4e61dd`.
   The attempted dependency build then failed in `@looma/core` on unresolved
   generated `../dist/esm/loader.js`, before Docusaurus evaluated the changed
   document. The task remains resumable for normal Guildhall review; no status
   was bypassed or marked complete from the partial proof.
 
+- [x] First-bootstrap classification: a scoped partial diff does not turn a
+  missing or failed worktree setup into a worker-owned code repair. Focused
+  orchestrator coverage proves that a dirty fresh sandbox blocks on setup, a
+  stale bootstrap record from an abandoned sandbox does not transfer to its
+  replacement, and an explicit task-owned bootstrap repair still reaches the
+  worker. `pnpm exec vitest run src/runtime/__tests__/orchestrator.test.ts -t
+  "bootstrap" --reporter=dot` passed 13 assertions; `pnpm typecheck` passed.
+
 #### Schema Migration Decision
 
-No schema decision yet. The likely repair is executable workspace preparation;
-record a migration decision only if the project bootstrap contract or its
-persisted evidence format changes.
+No persisted-schema migration. Bootstrap status, task runtime state, and
+checkpoint formats are unchanged. This is a runtime ownership correction over
+existing task and worktree state: failed setup becomes an environment block by
+default, while explicit bootstrap-repair tasks retain their current worker
+handoff. Any later Looma bootstrap-contract or proof-evidence-format change
+requires its own migration decision.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/orchestrator.test.ts -t
+  "bootstrap" --reporter=dot` passed 13 focused assertions, including a dirty
+  fresh sandbox, stale bootstrap evidence from an abandoned sandbox, and an
+  explicit bootstrap-repair task.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence` passed
+  (`127` model-independence tests). `pnpm build`, `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start` refreshed the installed app; its
+  stale-server API reports `stale:false`.
+- The installed Looma + Knit Overview still shows its visible saved-progress
+  detail and `Resume work` action at 1280px with no horizontal overflow. The
+  actual Looma bootstrap branch remains unexercised here because that project's
+  declared bootstrap does not run the broken full package build; the documented
+  Looma build boundary remains a separate direct-product handoff.
 
 ### Finding: Task actions must name the stage they will run
 
