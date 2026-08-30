@@ -412,7 +412,42 @@ describe('ProjectView', () => {
     eventSubscribers.clear()
     vi.restoreAllMocks()
     project.detail = null
+    project.surfaceLoading = false
     project.error = null
+  })
+
+  it('waits for the shared action packet instead of flashing a false empty Overview decision', async () => {
+    const runningPartial = detail({
+      run: { status: 'running', mode: 'continuous' },
+      orientationSpine: { summary: { headline: 'Current scope is underway.' } },
+    } as Partial<ProjectDetail>)
+    const { pendingProject } = installFetchFakesWithPendingProject(runningPartial)
+    project.detail = runningPartial
+    project.surfaceLoading = true
+    project.error = null
+
+    render(ProjectView, { initialView: 'overview', projectId: 'looma-knit' })
+
+    expect(screen.getByText('Work is underway')).toBeInTheDocument()
+    expect(screen.queryByText('Nothing needs your attention')).toBeNull()
+    pendingProject.resolve(json({
+      ...runningPartial,
+      actionModel: {
+        primaryAction: {
+          label: 'Knit: add link editor controls',
+          ownerHeading: 'Work is underway',
+          detail: 'Guildhall is running "Knit: add link editor controls".',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-link-editor',
+          tone: 'running',
+          code: 'running',
+          taskId: 'task-link-editor',
+        },
+      },
+    }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument())
+    expect(screen.queryByText('Nothing needs your attention')).toBeNull()
   })
 
   it('keeps task questions inside Thread and answers without opening the details pane', async () => {

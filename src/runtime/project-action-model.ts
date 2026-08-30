@@ -643,6 +643,7 @@ function taskHrefForTask(taskId: string | undefined): string {
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
   const ownerReview = readiness.code === 'owner_review_required'
   const focusedSpecReview = ownerReview || readiness.focusKind === 'spec_review'
+  const pausedWork = readiness.code === 'paused_live_work' || readiness.focusKind === 'paused_work'
   const runnableWork = readiness.code === 'ready_work' ||
     readiness.code === 'paused_live_work' ||
     readiness.code === 'worker_recovery'
@@ -676,10 +677,12 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     ? 'The last two worker passes ended without a durable change. Retry starts a fresh pass using this task\'s current plan.'
     : reviewWork
     ? 'The implementation is saved. Resume review to have Guildhall check the current change.'
+    : readiness.progressState === 'partial_work_saved'
+    ? 'Progress is saved. Resume continues this task from its current workspace.'
+    : pausedWork
+    ? readiness.message
     : blockedWork
     ? 'This task stopped and needs its recovery action before it can continue.'
-    : readiness.progressState === 'partial_work_saved'
-      ? 'Progress is saved. Resume continues this task from its current workspace.'
     : !ownerReview && !runnableWork && readiness.message && readiness.message !== label
       ? readiness.message
       : undefined

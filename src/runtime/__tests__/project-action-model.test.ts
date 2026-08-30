@@ -1696,6 +1696,7 @@ describe('buildProjectActionModel', () => {
       source: 'start_readiness',
       label: 'Work paused',
       buttonLabel: 'Resume work',
+      detail: '"Define fixture contracts" is paused in live work. Resume continues from that pinned task.',
       href: '/work?task=contract-task',
       tone: 'accent',
       taskId: 'contract-task',

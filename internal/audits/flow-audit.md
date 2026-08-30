@@ -62693,3 +62693,87 @@ older saved summaries retain the existing compatibility behavior until rebuilt.
   `Review ready`, and one visible `Resume review` control with no overflow at
   desktop, narrow desktop, or mobile. The owner selected it; the route then
   changed to the honest running state with the visible `Pause` control.
+
+### Finding: Overview must wait for the shared action packet, not invent an empty state
+
+- [x] User job: opening a running project's Overview never flashes a false
+  “nothing needs your attention” decision before the shared action packet
+  arrives. Until the current packet is ready, the owner sees a neutral loading
+  state; once ready, Overview shows the same running handoff as Work and
+  Thread.
+- Live finding, 2026-08-30: t-minus-t was actively running `TMI-004`. For
+  roughly three seconds after opening Overview, the route rendered `What needs
+  your attention` plus `Nothing needs your attention` and `View work`. It then
+  replaced that with `Work is underway` and `Open Work` when the action model
+  arrived. The first screen was an invented decision, not a loading state.
+
+#### Contract Touch Decision
+
+Work id: `overview-waits-for-shared-action-packet-2026-08-30`. Touched
+contract: ProjectView's readiness boundary for rendering Overview from its
+single project-store request. While an Overview surface request is in flight,
+the route must wait for the typed action model rather than allowing
+ProjectOverviewTab to synthesize its no-action fallback. Considered but not
+touched: action ranking, run state, action-model construction, overview copy,
+project-store request ordering, and persisted data. Required proof: a loading
+Overview with orientation/task data but no `actionModel` renders a neutral
+loading state; once the packet arrives it renders the shared running action;
+an actionless settled project retains its calm no-action state. Apply/revert:
+presentation readiness only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This guards an existing asynchronous read boundary.
+
+#### Validation
+
+- `ProjectView.svelte.test.ts` and `project-action-model.test.ts` pass as part
+  of the 142-test focused flow suite. The Overview test holds orientation and
+  task data without an action model, proves the neutral loading handoff is
+  visible, then proves the shared action renders once its packet arrives.
+- Installed t-minus-t proof, 2026-08-30: immediately after navigating to
+  Overview the route said `Loading project...`; after its packet settled it
+  showed `Work paused`, the one in-scope task, the concrete pause consequence,
+  and the visible `Resume work` command. It never displayed a false empty
+  decision and had no document-level horizontal overflow at the default
+  desktop viewport.
+
+### Finding: Paused work needs the actual resume consequence, not generic navigation copy
+
+- [x] User job: after deliberately pausing real project work, the owner sees
+  that the task is paused, why the visible `Resume work` command is safe, and
+  what it will continue. The focused card must not replace that handoff with a
+  generic invitation to open the task.
+- Live finding, 2026-08-30: the owner paused t-minus-t's active `TMI-004` and
+  the screen correctly changed to `Work paused` with `Resume work`, but the
+  accompanying sentence was `Open this work to take the next step.` The shared
+  paused readiness already knew the concrete continuation semantics; Focused
+  Work did not receive them through the primary action.
+
+#### Contract Touch Decision
+
+Work id: `paused-work-resume-handoff-detail-2026-08-30`. Touched contract:
+the shared primary-action detail for `paused_live_work`. The existing typed
+start-readiness message becomes the owner-facing detail for paused work;
+Focused Work continues to render it without creating a local explanation.
+Considered but not touched: pause execution, task status, saved-work
+observation, action operation, routing, and persisted data. Required proof:
+a paused task's primary action says resume continues the pinned task and the
+Focused Work card renders that exact detail with `Resume work`. Apply/revert:
+shared presentation only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing paused-work facts are reused.
+
+#### Validation
+
+- `project-action-model.test.ts` asserts a paused live task keeps the shared
+  continuation message in its primary action; the combined focused suite
+  passes 142 tests. `pnpm typecheck`, `pnpm lint:contracts`,
+  `pnpm model:independence`, and `pnpm build` pass.
+- Installed t-minus-t proof, 2026-08-30: the paused Focused Work route showed
+  `Work paused`, `TMI-004`, and `Resume work` beside the honest explanation:
+  `"Open supported documents as TypeScript" is paused in live work. Resume
+  continues from that pinned task.` Narrative Harness independently retained
+  its equivalent saved-review handoff and one visible `Resume review` action.

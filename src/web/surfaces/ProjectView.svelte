@@ -161,7 +161,13 @@
   )
   const surfaceDetailPending = $derived.by(() => {
     if (!project.surfaceLoading || !detail) return false
-    if (currentView === 'overview' || currentView === 'map') {
+    if (currentView === 'overview') {
+      // The Overview decision card may only render after the shared action
+      // packet arrives. A partial surface read otherwise looks like a settled
+      // "nothing needs you" state, then flips to the real running action.
+      return !detail.actionModel
+    }
+    if (currentView === 'map') {
       return !detail.orientationSpine && !detail.tasks
     }
     if (currentView === 'work' || currentView === 'planner') {
