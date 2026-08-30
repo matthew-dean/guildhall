@@ -3800,7 +3800,9 @@
         <Card title={ownerAction?.ownerHeading ?? 'What needs your attention'} titleTag="h2" tone={ownerAction?.tone === 'danger' ? 'danger' : ownerAction?.tone === 'warn' ? 'warn' : 'accent'} variant="callout" railStrength="strong">
           <div class="thread-project-decision">
             <div>
-              <h3>{ownerAction?.label ?? 'Project needs your decision'}</h3>
+              {#if !ownerAction?.label || ownerAction.label !== ownerAction.ownerHeading}
+                <h3>{ownerAction?.label ?? 'Project needs your decision'}</h3>
+              {/if}
               {#if ownerAction?.taskLabel}
                 <p class="thread-project-decision-task">{ownerAction.taskLabel}</p>
               {:else if ownerAction?.detail}

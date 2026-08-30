@@ -79,6 +79,28 @@ describe('ProjectOverviewTab owner decision', () => {
     expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
   })
 
+  it('does not repeat a shared paused-state heading inside the owner card', () => {
+    const paused = detail({
+      actionModel: {
+        primaryAction: {
+          code: 'paused_live_work',
+          ownerHeading: 'Work paused',
+          label: 'Work paused',
+          taskLabel: 'Continue the selected work',
+          taskId: 'task-paused',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-paused',
+          tone: 'accent',
+        },
+      },
+    })
+
+    render(ProjectOverviewTab, { detail: paused as any, projectTicker: ticker, activeProjectId: 'looma-knit' })
+
+    expect(screen.getAllByRole('heading', { name: 'Work paused' })).toHaveLength(1)
+    expect(screen.getByText('Continue the selected work')).toBeInTheDocument()
+  })
+
   it('takes the owner straight to the action selected by the shared model', async () => {
     render(ProjectOverviewTab, { detail: detail() as any, projectTicker: ticker, activeProjectId: 'looma-knit' })
 

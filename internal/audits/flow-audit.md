@@ -61050,6 +61050,16 @@ existing generic fallback until they receive a fresh project packet.
   after the import-cache repair. The browser harness timed out while navigating
   before it could return DOM or console evidence, so the API and unit proof do
   not substitute for a real owner-route replay.
+- Finding, 2026-08-30: after the canonical paused-state heading was added,
+  Overview rendered `Work paused` twice in the same decision card: once as the
+  card title and again as the action label. The same label can repeat in Thread
+  and Release. A state heading plus task and action is enough; repeat labels
+  add no orientation value.
+- [x] Regression proof, 2026-08-30: Overview, Thread, and Release now suppress
+  an action label only when it exactly duplicates the shared heading. The
+  paused Overview regression proves one `Work paused` heading remains alongside
+  the distinct task title; the owner-surface component suites and typecheck
+  pass. Installed browser proof remains grouped with the pending route replay.
 - Follow-up finding, 2026-08-30: after the owner resumed the real docs/storybook
   task, Work correctly withheld stale inventory while its focused snapshot
   refreshed, but replaced the entire page with `Guildhall is working`. The

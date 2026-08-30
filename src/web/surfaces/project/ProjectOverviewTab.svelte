@@ -101,6 +101,7 @@
     if (releaseShipped) return releaseTitle
     return detail.actionModel?.primaryAction?.ownerHeading ?? 'What needs your attention'
   })
+  const actionLabelRepeatsHeading = $derived(nextAction.label === decisionTitle)
 
   function go(href: string): void {
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
@@ -146,7 +147,9 @@
           <h2>Shipped</h2>
           <p>This release is complete. There is nothing you need to do here.</p>
         {:else}
-          <h2>{nextAction.label}</h2>
+          {#if !actionLabelRepeatsHeading}
+            <h2>{nextAction.label}</h2>
+          {/if}
           {#if nextAction.taskLabel}
             <p class="decision-task" title={nextAction.taskLabel}>
               {#if nextActionTaskKey}<span class="decision-task-key">{nextActionTaskKey}</span>{/if}
