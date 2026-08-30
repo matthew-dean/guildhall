@@ -154,7 +154,7 @@ describe('WorkTab', () => {
               taskId: 'task-paused',
               label: 'Work paused',
               detail: 'Resume the current work.',
-              buttonLabel: 'Resume this work item',
+              buttonLabel: 'Resume work',
               href: '/work?task=task-paused',
               tone: 'accent',
             },
@@ -215,7 +215,7 @@ describe('WorkTab', () => {
     expect(screen.queryByRole('button', { name: 'Review spec' })).toBeNull()
   })
 
-  it('keeps a selected ready-work action in the current queue and names the shared resume command', async () => {
+  it('names a selected queued item by its own next lifecycle stage', async () => {
     window.history.replaceState({}, '', '/projects/narrative-harness/work?view=queue')
     path.value = '/projects/narrative-harness/work'
     const readyWork = task({ id: 'task-ready-work', title: 'Continue the shared ready task', status: 'review' })
@@ -256,7 +256,7 @@ describe('WorkTab', () => {
     expect(screen.queryByRole('toolbar', { name: /work view controls/i })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /inspect work continue the shared ready task/i }))
     expect(screen.queryByRole('toolbar', { name: /work view controls/i })).toBeNull()
-    expect(within(screen.getByLabelText('Selected work inspector')).getByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
+    expect(within(screen.getByLabelText('Selected work inspector')).getByRole('button', { name: 'Continue review' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /inspect work completed scope history/i })).toBeNull()
   })
 
@@ -298,12 +298,12 @@ describe('WorkTab', () => {
       },
     })
 
-    expect(await screen.findByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Open Work' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Open task' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('Ready')).toBeInTheDocument()
     expect(screen.queryByText('Open this work to take the next step.')).not.toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Resume this work item' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Open Work' }))
     await waitFor(() => {
       expect(fetchSpy.mock.calls.some(([input]) => String(input).includes('/api/project/task/task-091/start'))).toBe(true)
     })
@@ -349,10 +349,10 @@ describe('WorkTab', () => {
 
     render(WorkTab, { props: { detail: ready } })
 
-    const resume = await screen.findByRole('button', { name: 'Resume this work item' })
+    const resume = await screen.findByRole('button', { name: 'Open Work' })
     await userEvent.click(resume)
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume this work item' })).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open Work' })).toBeEnabled())
   })
 
   it('keeps a focused ready-work start failure beside the command', async () => {
@@ -400,7 +400,7 @@ describe('WorkTab', () => {
       },
     })
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Resume this work item' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Open Work' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Guildhall could not resume this work item.')
   })
 

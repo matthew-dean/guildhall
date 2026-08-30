@@ -82,7 +82,7 @@ describe('focused Work flow', () => {
 
     expect(await screen.findByRole('heading', { name: 'Ready to continue' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'What needs your attention' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
   })
 
   it('keeps the shared focused work item selected through a later refresh', async () => {
@@ -135,7 +135,7 @@ describe('focused Work flow', () => {
 
     expect(await screen.findByRole('heading', { name: 'Work paused' })).toBeInTheDocument()
     expect(screen.getByText('Paused')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume work' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull()
   })
 
@@ -179,6 +179,39 @@ describe('focused Work flow', () => {
     expect(screen.getByRole('button', { name: 'Inspect work Next release work' })).toBeInTheDocument()
   })
 
+  it('shows a bounded next-up preview before the full current-release backlog', async () => {
+    const user = userEvent.setup()
+    const paused = reviewTask({ id: 'task-paused', displayKey: 'LOO-146', title: 'Resume the active migration', status: 'in_progress' })
+    const upcoming = Array.from({ length: 5 }, (_, index) => reviewTask({
+      id: `task-upcoming-${index + 1}`,
+      displayKey: `LOO-${150 + index}`,
+      title: `Upcoming release task ${index + 1}`,
+      status: 'review',
+    }))
+    setRoute(`/projects/looma-knit/work?task=${paused.id}`)
+    render(WorkTab, { props: { detail: projectDetail([paused, ...upcoming], {
+      startReadiness: { canStart: true, code: 'paused_live_work', focusTaskId: paused.id, focusTaskTitle: paused.title, focusKind: 'paused_work' },
+      actionModel: { primaryAction: { taskId: paused.id, code: 'paused_live_work', operation: 'start_focused', href: `/work?task=${paused.id}` } },
+      orientationSpine: {
+        summary: { headline: 'Stage 1: Release hardening' },
+        scopeRows: [paused, ...upcoming].map(task => ({ taskId: task.id, scope: 'included' })),
+      },
+    }) } })
+
+    await user.click(await screen.findByRole('button', { name: 'Browse work' }))
+
+    expect(await screen.findByRole('heading', { name: 'Up next' })).toBeInTheDocument()
+    expect(screen.getByText('5 other current items')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect work Upcoming release task 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect work Upcoming release task 3' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Inspect work Upcoming release task 4' })).toBeNull()
+    expect(screen.getByText('2 more in this milestone.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Show all 5 work items' }))
+    expect(await screen.findByRole('heading', { name: 'Work list' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect work Upcoming release task 5' })).toBeInTheDocument()
+  })
+
   it('keeps paused current work actionable and hides unrelated draft work after Browse work', async () => {
     const user = userEvent.setup()
     const paused = reviewTask({
@@ -214,7 +247,7 @@ describe('focused Work flow', () => {
     await user.click(await screen.findByRole('button', { name: 'Browse work' }))
 
     expect(await screen.findByRole('region', { name: 'Current work' })).toHaveTextContent('Paused')
-    expect(screen.getByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume work' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Draft task brief' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Inspect work Resume this exact work' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Inspect work Coordinator review' })).toHaveTextContent('Queued')

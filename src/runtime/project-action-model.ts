@@ -353,8 +353,8 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
   if (readiness.code === 'scope_source_conflict') return 'Open map'
   if (readiness.code === 'repository_followup_required') return 'Open release'
-  if (readiness.code === 'ready_work') return 'Open Work'
-  if (readiness.code === 'paused_live_work') return 'Open Work'
+  if (readiness.code === 'ready_work') return 'Start work'
+  if (readiness.code === 'paused_live_work') return 'Resume work'
   if (readiness.code === 'no_unattended_progress') {
     if (readiness.focusKind === 'blocked_work') return 'Open Work'
     if (readiness.focusKind === 'brief_cleanup') return 'Review brief'

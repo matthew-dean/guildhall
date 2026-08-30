@@ -1299,8 +1299,7 @@
           railStrength="strong"
           ariaLabel="Current task action"
         >
-          <span class="outcome-eyebrow">Ready to continue</span>
-          <strong>Resume this work item</strong>
+          <span class="outcome-eyebrow">{projectPrimaryAction?.ownerHeading ?? 'Ready to continue'}</span>
           <span class="drawer-run-action-copy">Guildhall can continue this work item.</span>
           {#if runError}
             <span class="drawer-run-action-error">{runError}</span>
@@ -1313,7 +1312,7 @@
               onclick={() => runProject('start', task.id)}
             >
               <Icon name="sparkles" size={14} />
-              Resume only this work item
+              {projectPrimaryAction?.buttonLabel ?? 'Resume work'}
             </Button>
             <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View task details</Button>
           </div>

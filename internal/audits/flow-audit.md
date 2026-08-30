@@ -61490,3 +61490,88 @@ existing task status.
   action. At the 1280px desktop view, the route has no page-level horizontal
   overflow (`scrollWidth === clientWidth`). The action was not executed during
   this proof because it would start the task's real gate run.
+
+### Finding: Browsing must not turn the current release into a wall of backlog
+
+- [x] User job: after seeing the one current action, an owner can look ahead
+  without losing orientation. They see a small, readable next-up preview; they
+  only enter the full backlog when they deliberately choose backlog management.
+- Finding, 2026-08-30: the installed Looma + Knit `Browse work` action opens
+  fifteen current-release rows at once. Although each row technically clamps
+  its title, the page still turns brief-length task names into a dense backlog
+  dump. The top action menu also offers `Advance one task` alongside the
+  already-visible current-work action, leaving two apparently competing ways
+  to start work.
+- Follow-up finding, 2026-08-30: the same live paused decision is serialized
+  by the API as `Open Work`, rendered on Overview as `Resume work`, and
+  rendered in Work as `Resume this work item`. Those controls invoke the same
+  focused run, so this is a shared action-model disagreement, not helpful
+  context-specific copy.
+
+#### Contract Touch Decision
+
+Work id: `bounded-current-release-preview-2026-08-30`. Touched contracts:
+the Work route's owner-facing information architecture and project-shell
+secondary action visibility. The shared `actionModel` remains the sole owner
+of the primary current-work action; the queue route will present a bounded
+preview derived from that model and make the full inventory a deliberate
+separate choice. The shell must hide its generic one-step command while the
+shared primary action already owns attention. Considered but not touched:
+task ordering, lifecycle status, release membership, task persistence, and run
+scheduling. Required proof: an installed paused release shows one resume
+action, a bounded upcoming-work preview, and an explicit path to the full
+inventory without conflicting run commands.
+
+#### Schema Migration Decision
+
+No persisted schema change. This only changes how existing shared summary and
+task-list data are revealed to an owner.
+
+- [x] Bounded preview proof, 2026-08-30: the focused Work, shell, Overview,
+  and action-model suites pass. In the installed Looma + Knit project after a
+  fresh build, install, restart, and `stale:false`, Browse Work shows one
+  current `Resume work` action, three readable next-up rows, `12 more in this
+  milestone`, and one deliberate `Show all 15 work items` path instead of
+  dumping the current milestone by default. The shell menu no longer repeats
+  the current run command. The focused rendered route passes at 1114px and
+  900px without page-level horizontal overflow.
+
+### Finding: Task-detail API must reuse the project action model
+
+- [x] User job: when an owner opens the task named by the current project
+  action, task detail confirms the same state and presents the same executable
+  command, rather than inventing a new priority or label.
+- Finding, 2026-08-30: after the installed action-model repair,
+  `/api/project?projectId=looma-knit` reports the paused current task as
+  `Resume work`, but `/api/project/task/task-import-gh97p0` rebuilds it as
+  `Open task`. The task drawer therefore says `What needs your attention` and
+  offers an inert-looking task-opening action for the task already open.
+
+#### Contract Touch Decision
+
+Work id: `task-detail-action-model-reuse-2026-08-30`. Touched contract:
+the detail payload's project action projection. Task-detail responses must
+reuse the same project-level action snapshot/cached computation as Overview,
+Work, and Thread; task-local metadata may add record detail but may not rerank
+or replace the owner action. Considered but not touched: task status storage,
+drawer's full-record diagnostics, route identifiers, and run dispatch.
+Required proof: the live project API and task-detail API expose identical
+primary-action code, task id, label, and button label for the paused Looma +
+Knit task, and its drawer shows `Resume work`.
+
+#### Schema Migration Decision
+
+No persisted schema change. This repairs derivation and caching of existing
+project action data.
+
+- [x] Action-model reuse proof, 2026-08-30: task-detail API regressions cover
+  both ordinary primary-action equality and the escaped stale-cache case where
+  a stored `Open task` action sits beside a typed `paused_live_work` decision.
+  Both now resolve to the shared `Resume work` action. After `pnpm build`,
+  `pnpm dev:install`, `guildhall stop`, and `guildhall start`, the installed
+  service reported `stale:false`; its Looma + Knit project and direct task
+  responses had identical primary-action objects: `paused_live_work`,
+  `task-import-gh97p0`, `Work paused`, and `Resume work`. The rendered drawer
+  flow passes at 1114px, 900px, and 390px, keeps the shared action visible and
+  unclipped, and confirms no `Open task` button is rendered for the already
+  open focus task.

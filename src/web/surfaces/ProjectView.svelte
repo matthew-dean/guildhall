@@ -1307,7 +1307,7 @@
       : 'Resume',
   )
   const showAdvanceOneTaskAction = $derived(
-    !selectedReleaseShipped && !allTerminalStart,
+    !selectedReleaseShipped && !allTerminalStart && !directTaskPrimaryAction && !primaryActionOwnsAttention,
   )
 
   function startReadinessActionLabel(readiness: StartReadiness | null | undefined): string {

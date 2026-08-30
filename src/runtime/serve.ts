@@ -14790,6 +14790,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
         sharedDecision.projectRevision === taskDetailState?.projectRevision &&
         sharedDecision.queueRevision === taskDetailState?.queueRevision
       )
+      // Task detail is only a record zoom-in. Its owner action must come from
+      // the same summary resolver as Overview, Work, and Thread; returning
+      // the persisted action cache here used stale task-local ranking even
+      // when the decision packet named a different current command.
+      const sharedProjectSummary = summarizeProjectFromProjection(
+        { id: project.id, path: project.path },
+        project,
+        run,
+        projection,
+      )
+      const sharedDetailActionModel = decisionIsCurrent
+        ? sharedProjectSummary.actionModel ?? null
+        : null
       // Selected-scope counts belong to the durable project summary. Reusing
       // the queue here made task detail recompute scope membership and disagree
       // with Overview/Map/Work/Release for the same project revision.
@@ -14815,7 +14828,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         // A drawer can outlive the page-level project cache. Carry the same
         // current action packet as this task detail's decision so its buttons
         // never navigate from an older overview response.
-        actionModel: decisionIsCurrent ? projection.actionModel ?? null : null,
+        actionModel: sharedDetailActionModel,
         task: compactTaskForInitialDrawer(selectedTask),
         relatedTasks,
         workProgress,

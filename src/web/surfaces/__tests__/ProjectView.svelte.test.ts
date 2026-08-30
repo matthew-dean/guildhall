@@ -1796,6 +1796,7 @@ describe('ProjectView', () => {
   it.each(['ready_work', 'paused_live_work'] as const)(
     'keeps generic Resume out of project chrome when focused %s work owns the next action',
     async code => {
+    const user = userEvent.setup()
     const readyWork = detail({
       startReadiness: {
         canStart: true,
@@ -1835,6 +1836,8 @@ describe('ProjectView', () => {
     expect(topbar).not.toBeNull()
     expect(topbar).not.toHaveTextContent('Resume')
     expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Open actions menu' }))
+    expect(screen.queryByRole('button', { name: 'Advance one task' })).not.toBeInTheDocument()
     },
   )
 

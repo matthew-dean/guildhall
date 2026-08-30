@@ -455,6 +455,77 @@ describe('GET /api/project/task/:id', () => {
     expect(body.detailPayload?.extrasHref).toBe('/api/project/task/task-1/extras')
   })
 
+  it('reuses the shared project action for the task named by the current decision', async () => {
+    await seedTask('task-1')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const [projectResponse, taskResponse] = await Promise.all([
+      app.fetch(new Request(projectUrl('/api/project'))),
+      app.fetch(new Request(projectUrl('/api/project/task/task-1'))),
+    ])
+
+    expect(projectResponse.status).toBe(200)
+    expect(taskResponse.status).toBe(200)
+    const projectBody = await projectResponse.json() as Record<string, any>
+    const taskBody = await taskResponse.json() as Record<string, any>
+    expect(taskBody.decision).toEqual(projectBody.decision)
+    expect(taskBody.actionModel?.primaryAction).toEqual(projectBody.actionModel?.primaryAction)
+  })
+
+  it('does not let a stale task-opening cache replace a paused project resume action', async () => {
+    await seedTask('task-1')
+    updateProjectStateDatabaseSummaryAndCurrentState(taskQueuePath(), summary => ({
+      summary: {
+        ...summary,
+        decision: {
+          ...(summary.decision as Record<string, unknown>),
+          execution: {
+            state: 'paused',
+            code: 'paused_live_work',
+            focusTaskId: 'task-1',
+            focusTaskTitle: 'Seeded task for tests',
+            focusKind: 'paused_work',
+            message: 'Seeded task for tests is paused in live work.',
+          },
+          primaryAction: {
+            kind: 'resume',
+            targetId: 'task-1',
+            reasonCode: 'paused_live_work',
+          },
+        },
+        actionModel: {
+          ...(summary.actionModel as Record<string, unknown>),
+          primaryAction: {
+            source: 'task',
+            label: 'Seeded task for tests',
+            buttonLabel: 'Open task',
+            href: '/task/task-1',
+            tone: 'warn',
+            taskId: 'task-1',
+          },
+        },
+      },
+      currentState: {
+        execution: { status: 'stopped', updatedAt: new Date().toISOString() },
+      },
+    }))
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const [projectResponse, taskResponse] = await Promise.all([
+      app.fetch(new Request(projectUrl('/api/project'))),
+      app.fetch(new Request(projectUrl('/api/project/task/task-1'))),
+    ])
+    const projectBody = await projectResponse.json() as Record<string, any>
+    const taskBody = await taskResponse.json() as Record<string, any>
+
+    expect(projectBody.actionModel?.primaryAction).toMatchObject({
+      code: 'paused_live_work',
+      taskId: 'task-1',
+      buttonLabel: 'Resume work',
+      href: `/projects/${projectId}/work?task=task-1`,
+    })
+    expect(taskBody.actionModel?.primaryAction).toEqual(projectBody.actionModel?.primaryAction)
+  })
+
   it('keeps task detail inspectable but exposes no action when the shared decision is stale', async () => {
     await seedTask('task-1')
     const database = new DatabaseSync(projectStateDatabasePath(tmpDir))

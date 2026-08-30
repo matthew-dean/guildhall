@@ -23,7 +23,7 @@
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
   import { isCompleteForWorkerHandoff, needsSourceRecoveryShaping, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
-  import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
+  import { taskRunActionLabel, taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
   import { taskDisplayLabel, taskSourceQuestion } from '@guildhall/shared'
   import type { ProjectDetail, Task } from '../../lib/types.js'
@@ -238,11 +238,6 @@
   const effectiveRunActiveId = $derived(runWorkActiveId ?? (
     projectRunActive && selectedWork && isActiveWorkTask(selectedWork) ? selectedWork.id : null
   ))
-  const readyWorkTaskId = $derived(
-    detail.actionModel?.primaryAction?.code === 'ready_work'
-      ? detail.actionModel.primaryAction.taskId ?? null
-      : null,
-  )
   const boardDetail = $derived({
     ...detail,
     tasks: visibleTasks,
@@ -346,6 +341,7 @@
     if (typeof window === 'undefined') return false
     return new URL(window.location.href).searchParams.get('all') === '1'
   })
+  const currentReleasePreviewLimit = 3
   // A shared action keeps the generic queue concise. Owner review is stricter:
   // its ordered task IDs are the only rows relevant to the decision.
   const actionQueueMode = $derived(
@@ -378,15 +374,27 @@
       ? focusedWork
       : null,
   )
+  const currentReleaseTasks = $derived(
+    sortedTasks.filter(task => task.id !== focusedQueueWork?.id),
+  )
   const displayedTasks = $derived(
-    (ownerReviewQueueMode ? ownerReviewQueueTasks : sortedTasks)
-      .filter(task => task.id !== focusedQueueWork?.id),
+    ownerReviewQueueMode
+      ? ownerReviewQueueTasks
+      : actionQueueMode
+        ? currentReleaseTasks.slice(0, currentReleasePreviewLimit)
+        : currentReleaseTasks,
+  )
+  const hiddenCurrentReleaseTaskCount = $derived(
+    actionQueueMode ? Math.max(0, currentReleaseTasks.length - displayedTasks.length) : 0,
+  )
+  const fullCurrentReleaseLabel = $derived(
+    `Show all ${currentReleaseTasks.length} ${currentReleaseTasks.length === 1 ? 'work item' : 'work items'}`,
   )
   const displayedWorkListCountLabel = $derived(
     ownerReviewQueueMode
       ? `${ownerReviewQueueTasks.length} ${ownerReviewQueueTasks.length === 1 ? 'spec needs' : 'specs need'} your review`
       : focusedQueueWork
-        ? countLabel(displayedTasks.length, 'other current item')
+        ? countLabel(currentReleaseTasks.length, 'other current item')
         : workListCountLabel,
   )
   const workMilestone = $derived(
@@ -764,7 +772,9 @@
   function focusedActionLabel(task: Task): string {
     const action = detail.actionModel?.primaryAction
     if (isFocusedRunnableWork(task)) {
-      return action?.operation === 'repair_spec' ? 'Repair spec' : 'Resume this work item'
+      return action?.operation === 'repair_spec'
+        ? 'Repair spec'
+        : action?.buttonLabel ?? taskRunActionLabel(task.status)
     }
     if (action?.taskId === task.id && action.buttonLabel) {
       return action.buttonLabel
@@ -843,7 +853,7 @@
       partFilter = 'all'
     }
     if (!workFilterUserSelected) {
-      workFilter = defaultWorkFilterForTasks()
+      workFilter = allWorkRequested ? 'all' : defaultWorkFilterForTasks()
     }
   })
 
@@ -1060,7 +1070,7 @@
       </section>
     {/if}
     <div class="work-list-inspector-layout" class:has-selection={Boolean(selectedWorkId)}>
-      <Card title={ownerReviewQueueMode ? 'Specs to review' : 'Work list'} titleTag="h2">
+      <Card title={ownerReviewQueueMode ? 'Specs to review' : actionQueueMode ? 'Up next' : 'Work list'} titleTag="h2">
 
         <div class="work-list-overview">
           <div>
@@ -1071,6 +1081,8 @@
           </div>
           {#if ownerReviewQueueMode}
             <Button variant="secondary" size="sm" onclick={browseAllWork}>Show all work</Button>
+          {:else if actionQueueMode && hiddenCurrentReleaseTaskCount > 0}
+            <Button variant="secondary" size="sm" onclick={browseAllWork}>{fullCurrentReleaseLabel}</Button>
           {/if}
         </div>
 
@@ -1147,6 +1159,11 @@
               </CardListItem>
             {/each}
           </CardList>
+          {#if actionQueueMode && hiddenCurrentReleaseTaskCount > 0}
+            <div class="inventory-more">
+              <span class="muted">{hiddenCurrentReleaseTaskCount} more in this milestone.</span>
+            </div>
+          {/if}
           {#if !ownerReviewQueueMode && inventoryPage?.hasMore && workFilter === 'all'}
             <div class="inventory-more">
               <Button variant="secondary" size="sm" disabled={inventoryLoadBusy} onclick={() => void loadMoreWork()}>
@@ -1172,7 +1189,6 @@
           {handoffStateByTaskId}
           runError={runWorkError}
           actionOnly={queueMode}
-          {readyWorkTaskId}
         />
       {/if}
     </div>

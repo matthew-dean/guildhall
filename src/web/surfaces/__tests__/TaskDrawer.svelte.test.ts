@@ -285,7 +285,7 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByRole('button', { name: 'Resume only this work item' })
+    await screen.findByRole('button', { name: 'Resume work' })
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(screen.queryByText('Task size')).not.toBeInTheDocument()
     expect(screen.queryByText('Add the link editing controls to the selected text menu.')).not.toBeInTheDocument()
@@ -2227,7 +2227,7 @@ describe('TaskDrawer', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Approve', exact: true }))
 
     expect(await screen.findByText('Ready to continue')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Resume only this work item' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument()
     expect(screen.queryByText('Approve this spec?')).toBeNull()
   })
 

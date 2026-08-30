@@ -337,13 +337,13 @@ test('browsing work is deliberate and remains readable at split-screen widths', 
 
   await page.getByRole('button', { name: 'Browse work' }).click()
   await expect(page).toHaveURL(/\/projects\/narrative-harness\/work\?view=queue$/)
-  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Up next' })).toBeVisible()
   await expect(page.locator('.work-list-row').first()).toBeVisible()
   expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(1115)
 
   await page.setViewportSize({ width: 900, height: 692 })
   await page.reload()
-  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Up next' })).toBeVisible()
   await expect(page.locator('.work-list-row').first()).toBeVisible()
   expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(901)
 })
@@ -465,7 +465,7 @@ test('selecting a work row does not make the passive Work list card look selecte
   await applyRequiredProjectUpdates(page)
   await page.getByRole('button', { name: 'Browse work' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Up next' })).toBeVisible()
   const before = await page.locator('.work-list-stack').evaluate((stack) => {
     const card = stack.closest('.gh-frame-card')
     if (!card) return null
@@ -548,4 +548,35 @@ test('task drawer direct route renders tabs and closes to the overview backgroun
   await page.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(page).toHaveURL(/\/projects\/looma-knit\/overview$/)
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
+})
+
+test('the focused task drawer repeats the shared project action instead of a stale task-opening action', async ({ page }) => {
+  await page.setViewportSize({ width: 1114, height: 692 })
+  await page.goto('/projects/narrative-harness/work')
+  await applyRequiredProjectUpdates(page)
+
+  const projectResponse = await page.request.get('/api/project?projectId=narrative-harness&detail=true')
+  expect(projectResponse.ok()).toBe(true)
+  const projectSummary = await projectResponse.json() as {
+    actionModel?: { primaryAction?: { taskId?: string; buttonLabel?: string; ownerHeading?: string; code?: string } | null }
+  }
+  const action = projectSummary.actionModel?.primaryAction
+  expect(action?.taskId).toBeTruthy()
+  expect(action?.buttonLabel).toBeTruthy()
+
+  const taskRoute = `/projects/narrative-harness/task/${encodeURIComponent(action!.taskId!)}`
+  for (const [width, height] of [[1114, 692], [900, 692], [390, 844]] as const) {
+    await page.setViewportSize({ width, height })
+    await page.goto(taskRoute)
+    const drawerAction = page.getByRole('region', { name: 'Current task action' })
+    await expect(drawerAction).toBeVisible()
+    await expect(drawerAction.getByRole('button', { name: action!.buttonLabel!, exact: true })).toBeVisible()
+    if (action?.ownerHeading) await expect(drawerAction).toContainText(action.ownerHeading)
+    await expect(drawerAction.getByRole('button', { name: 'Open task', exact: true })).toHaveCount(0)
+    await expectNoClippedContent(page, {
+      containerSelector: '[aria-label="Current task action"]',
+      itemSelector: '[aria-label="Current task action"] button',
+    })
+    expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(width + 1)
+  }
 })

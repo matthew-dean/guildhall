@@ -112,7 +112,7 @@ describe('buildProjectActionModel', () => {
       source: 'start_readiness',
       label: 'Work ready to resume',
       taskLabel: 'Build synopsis expansion',
-      buttonLabel: 'Open Work',
+      buttonLabel: 'Start work',
       href: '/work?task=task-synopsis',
       tone: 'accent',
       operation: 'start_focused',
@@ -475,7 +475,7 @@ describe('buildProjectActionModel', () => {
       source: 'start_readiness',
       label: 'Work ready to resume',
       taskLabel: 'Build synopsis expansion',
-      buttonLabel: 'Open Work',
+      buttonLabel: 'Start work',
       href: '/work?task=task-synopsis',
       tone: 'accent',
       taskId: 'task-synopsis',
@@ -639,7 +639,7 @@ describe('buildProjectActionModel', () => {
       source: 'start_readiness',
       label: 'Work ready to resume',
       taskLabel: 'Build story context',
-      buttonLabel: 'Open Work',
+      buttonLabel: 'Start work',
     })
     expect(model.primaryAction?.detail).toBeUndefined()
   })
@@ -1775,6 +1775,7 @@ describe('buildProjectActionModel', () => {
       code: 'paused_live_work',
       taskId: 'task-current',
       ownerHeading: 'Work paused',
+      buttonLabel: 'Resume work',
     })
     expect(model.ownerInput).toEqual({ active: false })
     expect(model.workSummary?.awaitingApproval).toBe(0)
