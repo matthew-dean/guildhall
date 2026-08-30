@@ -6552,10 +6552,38 @@ describe('GET /api/project/activity', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.counts.blocked).toBe(1)
     expect(body.counts.ready).toBe(1)
+    expect(body.topAction).toEqual(body.actionModel.primaryAction)
     expect(body.topAction?.taskId).toBe(body.decision?.primaryAction?.targetId)
     expect(body.actionModel.primaryAction?.taskId).toBe(body.decision?.primaryAction?.targetId)
     expect(body.summary).toMatchObject({
       taskId: body.decision?.primaryAction?.targetId,
+    })
+  })
+
+  it('keeps a worker retry verbatim across the Activity aliases', async () => {
+    await seedTask('task-retry')
+    await upsertTaskRuntimeState(tmpDir, 'task-retry', {
+      workerRecovery: { noProgressAttempts: 2 },
+      updatedAt: new Date().toISOString(),
+    })
+    await refreshCanonicalSummary()
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    const body = await res.json() as Record<string, any>
+
+    expect(res.status).toBe(200)
+    expect(body.actionModel?.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      taskId: 'task-retry',
+      buttonLabel: 'Retry worker',
+      operation: 'start_focused',
+    })
+    expect(body.topAction).toEqual(body.actionModel.primaryAction)
+    expect(body.current).toEqual(body.actionModel.primaryAction)
+    expect(body.summary).toMatchObject({
+      actionLabel: 'Retry worker',
+      taskId: 'task-retry',
     })
   })
 
@@ -6616,6 +6644,7 @@ describe('GET /api/project/activity', () => {
       runControl: { label: 'Waiting on answer', startEnabled: false },
       setup: { state: 'ready', freshIntakeNeeded: false },
     })
+    expect(body.topAction).toEqual(body.actionModel.primaryAction)
   })
 
   it('keeps live Activity and fleet on the same project decision packet', async () => {
@@ -6661,6 +6690,7 @@ describe('GET /api/project/activity', () => {
     expect(projectSummary?.workProgress?.counts.visibleTotal).toBe(1)
     expect(activity.actionModel).toEqual(projectSummary?.actionModel)
     expect(activity.decision).toEqual(projectSummary?.decision)
+    expect(activity.topAction).toEqual(activity.actionModel?.primaryAction)
     expect(activity.topAction?.taskId).toBe(activity.decision?.primaryAction?.targetId)
   })
 

@@ -2975,78 +2975,6 @@ function summarizeProjectFromProjection(
   }
 }
 
-/**
- * Activity is a compact presentation of the shared decision packet. It must
- * not revive the separately cached action model and re-rank work on a polling
- * route, especially while a coordinator is between worker turns.
- */
-function activityActionFromDecision(
-  projectId: string,
-  decision: ProjectDecisionProjection | null | undefined,
-): ProjectActionModel['primaryAction'] {
-  if (!decision || decision.primaryAction.kind === 'none') return null
-  const taskId = decision.primaryAction.targetId
-  const execution = decision.execution
-  const readiness = projectDecisionStartReadiness(decision)
-  const href = taskId
-    ? `/projects/${encodeURIComponent(projectId)}/work?task=${encodeURIComponent(taskId)}`
-    : `/projects/${encodeURIComponent(projectId)}/work`
-  const briefReview = decision.primaryAction.kind === 'answer_owner_input' &&
-    execution.focusKind === 'brief_cleanup'
-  if (briefReview || decision.primaryAction.kind === 'review_spec') {
-    return {
-      source: 'owner_input',
-      label: execution.focusTaskTitle ?? (briefReview ? 'Review task brief' : 'Review spec'),
-      ...(execution.message ? { detail: execution.message } : {}),
-      buttonLabel: briefReview ? 'Review brief' : 'Review spec',
-      href: projectTaskActionHref({
-        code: readiness.code,
-        focusKind: readiness.focusKind,
-        focusTaskId: readiness.focusTaskId ?? taskId,
-      }, projectId),
-      tone: 'warn',
-      ...(taskId ? { taskId } : {}),
-    }
-  }
-  if (decision.primaryAction.kind === 'answer_owner_input') {
-    return {
-      source: 'owner_input',
-      label: 'Answer in Thread',
-      buttonLabel: 'Open Thread',
-      href: `/projects/${encodeURIComponent(projectId)}/thread`,
-      tone: 'warn',
-    }
-  }
-  if (decision.primaryAction.kind === 'review_release') {
-    return {
-      source: 'start_readiness',
-      label: 'Release ready for review',
-      buttonLabel: 'Open release',
-      href: `/projects/${encodeURIComponent(projectId)}/map`,
-      tone: 'accent',
-    }
-  }
-  if (decision.primaryAction.kind === 'resolve_conflict') {
-    return {
-      source: 'start_readiness',
-      label: 'Project state needs reconciliation',
-      buttonLabel: 'Open project',
-      href: `/projects/${encodeURIComponent(projectId)}/overview`,
-      tone: 'warn',
-    }
-  }
-  const running = execution.state === 'running'
-  return {
-    source: 'start_readiness',
-    label: execution.focusTaskTitle ?? (running ? 'Guildhall is advancing the selected work' : 'Open selected work'),
-    ...(execution.message ? { detail: execution.message } : {}),
-    buttonLabel: decision.primaryAction.kind === 'review_proof' ? 'Review proof' : 'Open Work',
-    href,
-    tone: running ? 'running' : decision.primaryAction.kind === 'review_proof' ? 'warn' : 'accent',
-    ...(taskId ? { taskId } : {}),
-  }
-}
-
 function unavailableFleetProjectSummary(
   entry: { id: string; path: string; name?: string; tags?: string[]; initializationNeeded?: boolean },
   run?: ReturnType<OrchestratorSupervisor['list']>[number],
@@ -17761,7 +17689,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           })()
         : compactSummary?.actionModel ?? projection?.actionModel ?? null
       const projectedInFlight = projectDecisionInFlight(decision, inFlight)
-      const topAction = activityActionFromDecision(project.id, decision)
+      // Activity is an alias of the shared action model, never another
+      // decision-to-button adapter. It must preserve recovery operations.
+      const topAction = decisionActionModel?.primaryAction ?? null
       const releaseSummary = projectionIsCurrent
         ? projection?.releaseSummary ?? null
         : projection?.releaseSummary?.release

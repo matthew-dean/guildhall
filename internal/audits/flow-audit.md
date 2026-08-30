@@ -62295,3 +62295,46 @@ input rather than adding a record shape or migration.
   provenance`; the one running control was `Pause`. The owner then stopped the
   probe. Its existing reviewer-contract failure remained truthful and the
   Narrative Harness checkout stayed clean.
+
+### Finding: Activity must not rewrite the shared recovery command
+
+- [x] User job: when a project is in a typed recovery state, every owner
+  surface presents the same next command and reason. Activity may summarize
+  that command, but it cannot turn a retry into a generic navigation link.
+- Live finding, 2026-08-30: t-minus-t's canonical project response correctly
+  named `task-004` and offered `Retry worker` after two discarded worker passes.
+  Its Activity response pointed to the same task but independently rebuilt the
+  top action as `Open Work`. The task identity happened to agree, while the
+  executable owner instruction did not.
+
+#### Contract Touch Decision
+
+Work id: `activity-reuses-shared-primary-action-2026-08-30`. Touched contracts:
+the Activity response's top-action alias and the shared project action model.
+Activity exposes the shared primary action verbatim and uses no decision-to-UI
+adapter of its own. Considered but not touched: recovery state, decision
+ranking, task status, action copy, release readiness, and page components.
+Required proof: a worker-recovery response has identical Activity top action,
+summary action, and shared action-model primary action; ready, owner-review,
+and live-work actions retain their existing shared contract. Apply/revert: no
+persisted state changes; reverting restores the duplicate adapter.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This removes a duplicate presentation derivation.
+
+#### Validation
+
+- `src/runtime/__tests__/serve-task-endpoints.test.ts -t 'keeps a worker retry
+  verbatim across the Activity aliases'` passed. It proves Activity top action,
+  current action, and summary action label preserve `Retry worker` and
+  `start_focused` from the shared action model.
+- Focused project summary/action suites passed 106 tests. `pnpm typecheck`,
+  `pnpm lint:contracts`, and `pnpm build` passed. The larger endpoint file has
+  a pre-existing flaky stale-summary fixture that can refresh to `current`
+  before its stale assertion; the focused worker-recovery regression passed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false` with zero startup errors. The real `task-004` recovery state
+  exposed identical `Retry worker` primary, Activity top/current, and summary
+  actions, all with the same task id and `start_focused` operation.
