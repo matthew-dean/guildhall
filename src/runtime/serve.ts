@@ -438,6 +438,7 @@ import {
   resolveTaskProjectPath,
 } from './task-project-path.js'
 import { buildEffectiveTask, buildEffectiveTasks, effectiveTaskStatus } from './effective-task.js'
+import { checkpointBelongsToCurrentTaskLifecycle } from './current-lifecycle.js'
 import { buildDoneTaskSummaryBundle } from './done-task-summary.js'
 import { readContextDebugForTasks } from './context-observability.js'
 import { buildProjectMemoryHealthProjection } from './project-memory-health.js'
@@ -4931,6 +4932,9 @@ async function enrichTaskForServe(
   const taskId = typeof normalized.id === 'string' ? normalized.id : ''
   const memoryDir = getProjectStateDir(projectPath)
   const checkpoint = taskId ? await readCheckpoint(memoryDir, taskId) : null
+  const currentCheckpoint = checkpointBelongsToCurrentTaskLifecycle(normalized as Task, checkpoint)
+    ? checkpoint
+    : null
   const reviewerFeedbackCutoffMs = (() => {
     const cutoff = latestResolvedRetryEscalationAt(normalized as import('@guildhall/core').Task)
     const parsed = cutoff ? Date.parse(cutoff) : Number.NaN
@@ -5016,16 +5020,16 @@ async function enrichTaskForServe(
     ...(latestSelfCritique ? { latestSelfCritique } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(gitStory ? { gitStory } : {}),
-    ...(checkpoint
+    ...(currentCheckpoint
       ? {
           latestCheckpoint: {
-            step: checkpoint.step,
-            agentId: checkpoint.agentId,
-            intent: checkpoint.intent,
-            nextPlannedAction: normalizedCheckpointNextPlannedAction(normalized, checkpoint),
-            ...(checkpoint.nextActionKind ? { nextActionKind: checkpoint.nextActionKind } : {}),
-            filesTouched: checkpoint.filesTouched,
-            writtenAt: checkpoint.writtenAt,
+            step: currentCheckpoint.step,
+            agentId: currentCheckpoint.agentId,
+            intent: currentCheckpoint.intent,
+            nextPlannedAction: normalizedCheckpointNextPlannedAction(normalized, currentCheckpoint),
+            ...(currentCheckpoint.nextActionKind ? { nextActionKind: currentCheckpoint.nextActionKind } : {}),
+            filesTouched: currentCheckpoint.filesTouched,
+            writtenAt: currentCheckpoint.writtenAt,
           },
         }
       : {}),
@@ -5056,14 +5060,17 @@ async function enrichTaskForWorkSurface(
   const taskId = typeof normalized.id === 'string' ? normalized.id : ''
   const memoryDir = getProjectStateDir(projectPath)
   const checkpoint = taskId ? await readCheckpoint(memoryDir, taskId).catch(() => null) : null
-  const nextPlannedAction = normalizedCheckpointNextPlannedAction(normalized, checkpoint)
-  if (checkpoint && nextPlannedAction) {
+  const currentCheckpoint = checkpointBelongsToCurrentTaskLifecycle(normalized as Task, checkpoint)
+    ? checkpoint
+    : null
+  const nextPlannedAction = normalizedCheckpointNextPlannedAction(normalized, currentCheckpoint)
+  if (currentCheckpoint && nextPlannedAction) {
     return {
       ...normalized,
       ...buildTaskEvidenceSummary(normalized),
       latestCheckpoint: {
         nextPlannedAction,
-        ...(checkpoint?.nextActionKind ? { nextActionKind: checkpoint.nextActionKind } : {}),
+        ...(currentCheckpoint.nextActionKind ? { nextActionKind: currentCheckpoint.nextActionKind } : {}),
       },
     }
   }

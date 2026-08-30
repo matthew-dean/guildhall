@@ -60260,7 +60260,7 @@ new stored state until their authoritative read boundary is inspected.
 
 ### Finding: Active task detail must not present a historical checkpoint as current work
 
-- [ ] User job: after choosing Reframe, the owner can tell that the new
+- [x] User job: after choosing Reframe, the owner can tell that the new
   coordinator pass is underway and, if progress is shown, it is from that pass
   rather than an older worker attempt.
 - Finding, 2026-08-30: immediately after the real reframe began, the task
@@ -60271,14 +60271,60 @@ new stored state until their authoritative read boundary is inspected.
 
 #### Contract Touch Decision
 
-Pending investigation. The task detail's active-state panel must prefer typed
-current assignment/checkpoint generation over historical evidence. Considered
-but not touched: checkpoint persistence, worker event retention, task status,
-and reframe transport. Required proof: active reframe shows current task phase
-without elevating an unrelated older checkpoint.
+Work id: `looma-knit-current-checkpoint-boundary-2026-08-30`.
+Touched contracts: the shared current-task API decides whether a saved worker
+checkpoint belongs to the task's current lifecycle before ordinary drawer and
+work payloads can present it. A checkpoint written before the typed
+`currentLifecycle.reopenedAt` boundary is history, not current progress.
+Considered but not touched: checkpoint persistence, worker event retention,
+task status, reframe transport, and the deep evidence/history routes. Required
+proof: a reframed task with a pre-reframe checkpoint omits that checkpoint from
+its normal detail response; a checkpoint written in the new lifecycle remains
+available to the normal current-work surface.
 
 #### Schema Migration Decision
 
-Pending investigation. Existing checkpoint timestamps and active assignment
-may be enough to classify the stale panel; do not change persistence merely to
-hide historical activity.
+No schema migration. Existing typed `currentLifecycle.reopenedAt` and
+checkpoint `writtenAt` timestamps establish the boundary. Historical evidence
+is retained; the ordinary current-task projection will stop misrepresenting it
+as live work.
+
+- [x] Regression and installed proof, 2026-08-30: focused current-lifecycle
+  and task-endpoint coverage proves that a checkpoint written before a reframe
+  is absent from the normal task response while a current-lifecycle checkpoint
+  remains eligible. After `pnpm build`, `pnpm dev:install`, and restart, the
+  installed Looma task route reported `stale: false` and no longer rendered the
+  June checkpoint as current work.
+
+### Finding: A spec-repair action must preserve a concrete task boundary, not replace it with recovery boilerplate
+
+- [ ] User job: when Guildhall says a spec needs one repair pass, the owner can
+  trust that running it produces a more concrete, reviewable task. It may not
+  replace the visible source-backed scope with generic template language or
+  resolved agent-failure history.
+- Finding, 2026-08-30: the real Looma `Verify ui-context-menu component
+  implementation` task had a specific reframe describing the component,
+  adapters, proof command, and explicit non-goals. The installed `Repair spec`
+  action completed in one tick and overwrote it with generic text such as
+  “bounded implementation contract,” copied four resolved escalation records
+  into `keyDecisions`, and replaced concrete acceptance criteria with two
+  generic review checks. The next project action silently moved to another
+  task. This is destructive loss of owner-relevant task contract, not repair.
+
+#### Contract Touch Decision
+
+Pending investigation. The shared spec-repair lifecycle must either preserve a
+valid source-backed structured spec or construct a candidate from typed current
+source/contract fields; resolved escalations and historical checkpoints are
+evidence, never inputs to the owner-visible task contract. Considered but not
+touched yet: task persistence, reframe transport, reviewer approval, and
+worker dispatch. Required proof: a repair pass cannot reduce a valid concrete
+spec to a generic contract, and it cannot surface resolved recovery prose in
+the normal spec view.
+
+#### Schema Migration Decision
+
+Pending investigation. The existing typed structured spec, current lifecycle,
+source references, and escalation resolution state may be sufficient; do not
+add persistence until the repair writer's authority and merge behavior are
+traced.

@@ -507,6 +507,37 @@ describe('GET /api/project/task/:id', () => {
     ]))
   })
 
+  it('does not present a checkpoint from before a reframe as current task progress', async () => {
+    await seedTask('task-1', { status: 'spec_review' })
+    await upsertTaskRuntimeState(tmpDir, 'task-1', {
+      currentLifecycle: {
+        reopenedAt: '2026-08-08T12:00:00.000Z',
+        status: 'exploring',
+        source: 'rerun_spec',
+      },
+      updatedAt: '2026-08-08T12:00:00.000Z',
+    })
+    const checkpoint = await writeCheckpoint({
+      tasksPath: taskQueuePath(),
+      memoryDir,
+      taskId: 'task-1',
+      agentId: 'worker-agent',
+      intent: 'Old worker checkpoint',
+      nextPlannedAction: 'Resume the old worker pass.',
+      filesTouched: ['src/old-work.ts'],
+    })
+    expect(checkpoint.success).toBe(true)
+    if (!checkpoint.path) throw new Error('Expected checkpoint writer to return its path')
+    const persisted = JSON.parse(await fs.readFile(checkpoint.path, 'utf8')) as Record<string, unknown>
+    persisted.writtenAt = '2026-08-08T11:59:59.000Z'
+    await fs.writeFile(checkpoint.path, JSON.stringify(persisted), 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(response.status).toBe(200)
+    expect((await response.json() as Record<string, any>).task?.latestCheckpoint).toBeUndefined()
+  })
+
   it('reads a current task detail from the database queue, not TASKS.json', async () => {
     await seedCanonicalQueue({
       version: 1,
