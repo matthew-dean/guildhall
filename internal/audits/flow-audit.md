@@ -63142,3 +63142,38 @@ owner-review projection as the authority for whether a handoff exists.
   approval produced one `Start work` action; starting it produced `Work is
   underway` and `Pause`. The API decision, action model, Work UI, and
   `guildhall status` all agreed on `running`, `task-004`, and no blockers.
+
+### Finding: Shared source references must be unique before any owner surface consumes them
+
+- [ ] User job: when the owner opens a release, task record, or deliberate
+  source/provenance detail, each source appears once. Repeated internal source
+  discovery must not inflate diagnostics, payloads, or future default views.
+- Live finding, 2026-08-30: t-minus-t's live release packet contained the
+  same project and managed-worktree source paths multiple times in the shared
+  `scopeRows[0].sourceRefs` list. The compact Release view hid that raw list,
+  but the duplicate state would reappear anywhere provenance is surfaced.
+
+#### Contract Touch Decision
+
+Work id: `deduplicate-project-scope-source-refs-2026-08-30`. Touched contract:
+the shared `ProjectScopeRow.sourceRefs` projection. References retain their
+first-seen ordering and fallback task reference, but repeated strings are
+removed before the row is serialized or consumed. Considered but not touched:
+task schema, source-claim persistence, source ingestion, release selection,
+and route-local provenance rendering. Required proof: repeated task,
+claim, and Markdown references produce one ordered copy of each source while
+an empty task still receives its task fallback. Apply/revert: projection-only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing duplicate source evidence remains readable
+in task data; the shared projection normalizes it at read time.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/project-scope-projection.test.ts
+  --reporter=dot` passed (36 tests), including repeated references from task
+  metadata, source claims, and Markdown text plus the no-source fallback.
+- `pnpm typecheck` and `pnpm lint:contracts` passed. The installed t-minus-t
+  run remains active, so the install/restart replay is deliberately deferred
+  until its Guildhall-owned worktree reaches a safe handoff.
