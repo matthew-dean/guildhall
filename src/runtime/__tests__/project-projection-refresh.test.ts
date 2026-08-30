@@ -6,6 +6,8 @@ import {
   type ProjectProjectionInvalidation,
   type ProjectProjectionRefreshResult,
 } from '../project-projection-refresh.js'
+import { isExternallyLandedWorkCandidate } from '../landed-work-reconciliation.js'
+import type { Task } from '@guildhall/core'
 
 const schedulers: Array<{ dispose(): void }> = []
 
@@ -23,8 +25,23 @@ describe('project projection refresh scheduler', () => {
     [{ authority: 'database', summaryFreshness: 'missing' }, true],
     [{ authority: 'legacy', summaryFreshness: 'current' }, true],
     [{ authority: 'database', summaryFreshness: 'current', blockedTaskCount: 1 }, true],
+    [{ authority: 'database', summaryFreshness: 'current', externalLandingCandidate: true }, true],
   ] as const)('refreshes startup only when the saved boundary needs it', (input, expected) => {
     expect(shouldRefreshProjectAtStartup(input)).toBe(expected)
+  })
+
+  it('checks active landed-work candidates even before their proof is recorded', () => {
+    const task = {
+      id: 'task-direct-owner-landing',
+      status: 'in_progress',
+      worktreePath: '/tmp/task-direct-owner-landing',
+      branchName: 'guildhall/task-direct-owner-landing',
+      baseBranch: 'main',
+      acceptanceCriteria: [{ id: 'review', met: false }],
+      proofPaths: [{ kind: 'command', command: 'pnpm test' }],
+    } as Task
+
+    expect(isExternallyLandedWorkCandidate(task)).toBe(true)
   })
 
   it('coalesces a burst of writes for one project', async () => {

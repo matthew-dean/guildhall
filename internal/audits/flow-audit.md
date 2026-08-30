@@ -62024,7 +62024,7 @@ No persisted-schema change.
 
 ### Finding: Landed work without proof must advance to verification, not retry implementation
 
-- [ ] User job: when an owner or delegated owner commits and pushes a task's
+- [x] User job: when an owner or delegated owner commits and pushes a task's
   finished change directly, Guildhall detects that the task worktree HEAD is
   already contained in the project branch. The owner then sees one truthful
   next step: verify/review the landed change. Guildhall must never call the
@@ -62064,9 +62064,16 @@ Git inspection, and worker-recovery records contain the required facts.
   contained in `main` advances out of implementation with a `merged` record,
   never dispatches the worker, and preserves verification before completion.
 - `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `pnpm dev:install`
-  passed. The installed t-minus-t task remains intentionally uncompleted until
-  review and command evidence are recorded; it has not been restarted merely
-  to spend another provider turn.
+  passed.
+- Installed t-minus-t replay, 2026-08-30: startup read the canonical current
+  task state, found `task-005` worktree commit `c42a34d` contained in `main`,
+  and moved it to `review` with `reviewer-agent` ownership and a reconciled
+  `merged` record. `/api/stale-server` reported `stale:false`; Overview and
+  Thread both showed `Review ready to continue` and one visible `Resume
+  review` action. At 1100px and 390px the action was in the first viewport
+  and document width matched the viewport. No worker was started, and the
+  task remains intentionally uncompleted until its command and review evidence
+  is recorded.
 
 ### Finding: Thread puts the current owner handoff before historical turns
 

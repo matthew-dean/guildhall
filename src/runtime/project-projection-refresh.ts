@@ -26,16 +26,20 @@ export interface ProjectProjectionRefreshSchedulerOptions {
  * service availability wait for every project detail refresh defeats it. A
  * blocked task is the exception: it gets one bounded reconciliation pass so
  * an internal recovery cannot remain visible as an owner decision forever.
+ * A task with a clean isolated worktree and no landing record gets the same
+ * bounded pass so direct owner landing cannot remain visible as paused work.
  */
 export function shouldRefreshProjectAtStartup(input: {
   authority: 'database' | 'legacy'
   summaryFreshness: 'current' | 'stale' | 'missing' | 'error' | undefined
   attentionNeedsRefresh?: boolean
   blockedTaskCount?: number
+  externalLandingCandidate?: boolean
 }): boolean {
   return input.authority !== 'database' ||
     input.summaryFreshness !== 'current' ||
     input.attentionNeedsRefresh === true ||
+    input.externalLandingCandidate === true ||
     (input.blockedTaskCount ?? 0) > 0
 }
 

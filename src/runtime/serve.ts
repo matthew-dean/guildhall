@@ -419,6 +419,7 @@ import {
 } from './runtime-backend-setup.js'
 import { applyRunStatusToStartReadiness, buildFleetAttentionActionModel, buildProjectActionModel, projectTaskActionHref, resolveProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { NodeGitDriver } from './git-driver.js'
+import { isExternallyLandedWorkCandidate, reconcileExternallyLandedWorkToReview } from './landed-work-reconciliation.js'
 import {
   GitStoryClosureState,
   GitStorySnapshot,
@@ -2375,6 +2376,55 @@ async function refreshProjectRepositoryObservation(projectRoot: string): Promise
   replaceProjectStateDatabaseRepositories(projectRoot, repositories)
 }
 
+/**
+ * Startup and projection refreshes must settle already-landed work before
+ * rendering a next action. This is deterministic Git reconciliation, not an
+ * orchestrator run, so it never wakes a provider merely to correct stale UI.
+ */
+async function reconcileExternallyLandedProjectWork(
+  projectRoot: string,
+  tasksPath: string,
+): Promise<boolean> {
+  const canonicalState = await readProjectCanonicalCurrentState(projectRoot)
+  const richQueue = {
+    ...canonicalState.rawQueue,
+    tasks: canonicalState.tasks as unknown as Array<Record<string, unknown>>,
+  }
+  const parsed = TaskQueue.safeParse(richQueue)
+  if (!parsed.success) return false
+  const queue = preserveRuntimeOverlayOnTaskQueueParse(richQueue, parsed.data)
+  const settings = await loadLeverSettings({ path: defaultAgentSettingsPath(projectRoot) }).catch(() => null)
+  const landingStrategy = settings?.project.landing_strategy.position ?? 'cherry_pick_local'
+  const gitDriver = new NodeGitDriver()
+  const now = new Date().toISOString()
+  let changed = false
+  for (const task of queue.tasks) {
+    changed = (await reconcileExternallyLandedWorkToReview({
+      task,
+      projectRoot,
+      landingStrategy,
+      gitDriver,
+      now,
+    })) || changed
+  }
+  if (!changed) return false
+  queue.lastUpdated = now
+  await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, {
+    ...queue,
+    tasks: queue.tasks as unknown as Array<Record<string, unknown>>,
+  }, {
+    projectRoot,
+    expectedQueueRevision: canonicalState.queueRevision,
+    expectedProjectRevision: canonicalState.projectRevision,
+  })
+  return true
+}
+
+async function hasExternallyLandedWorkCandidate(projectRoot: string): Promise<boolean> {
+  const canonicalState = await readProjectCanonicalCurrentState(projectRoot)
+  return canonicalState.tasks.some(isExternallyLandedWorkCandidate)
+}
+
 async function refreshProjectProjections(
   projectRoot: string,
   _event: ProjectProjectionInvalidation | undefined,
@@ -2403,6 +2453,12 @@ async function refreshProjectProjections(
       if (staleBlockerRepair.changed) {
         domains.add('queue')
         domains.add('task-runtime')
+      }
+      const landedWorkRepaired = await reconcileExternallyLandedProjectWork(resolved.path, tasksPath)
+      if (landedWorkRepaired) {
+        domains.add('queue')
+        domains.add('task-runtime')
+        domains.add('thread')
       }
     }
     const shouldRefreshRepositories = databaseAuthority && !threadOnly && !attentionOnly && (
@@ -20433,27 +20489,31 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
         // Refresh in a small number of workers. Full Promise.all made startup
         // compete with itself for SQLite locks, filesystem reads, Git, and
         // memory even though no project depended on another project's refresh.
-        const pending = entries.filter(entry => {
+        const startupCandidates = await Promise.all(entries.map(async entry => {
           try {
             const resolved = resolveProject(entry.path)
-            if (resolved.initializationNeeded) return false
+            if (resolved.initializationNeeded) return { entry, shouldRefresh: false }
             const authority = readProjectStateAuthorityAtBoundary(projectTasksPath(entry.path))
             const summary = readProjectSummaryShellAtBoundary(entry.path).summary
-            return shouldRefreshProjectAtStartup({
+            return { entry, shouldRefresh: shouldRefreshProjectAtStartup({
               authority: authority.authority,
               summaryFreshness: summary?.freshness,
+              externalLandingCandidate: await hasExternallyLandedWorkCandidate(entry.path),
               attentionNeedsRefresh: attentionProjectionNeedsReleaseReconciliation(
                 entry.path,
                 summary?.releaseSummary ?? null,
               ),
               blockedTaskCount: summary?.counts?.blocked,
-            })
+            }) }
           } catch {
             // An unreadable boundary is itself a repair candidate. Keep the
             // existing refresh path responsible for surfacing the error.
-            return true
+            return { entry, shouldRefresh: true }
           }
-        })
+        }))
+        const pending = startupCandidates
+          .filter(candidate => candidate.shouldRefresh)
+          .map(candidate => candidate.entry)
         const workerCount = Math.min(2, pending.length)
         await Promise.all(Array.from({ length: workerCount }, async () => {
           while (pending.length > 0) {
