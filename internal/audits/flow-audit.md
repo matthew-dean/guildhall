@@ -63583,3 +63583,42 @@ shared owner-action model.
   button. The top bar contained only project navigation and `New thread`; it
   did not render `Resume` or a duplicate retry action, and the viewport had no
   horizontal overflow.
+
+### Finding: Inbox must execute the current repository handoff
+
+- [x] User job: when Inbox is empty except for the project-level release
+  handoff, it presents the one real action. The owner must not be sent to
+  Release merely to find and repeat the same command.
+- Live finding, 2026-08-30: t-minus-t Inbox said that its pull request was
+  ready and displayed `Open pull request` as a link to Release. Unlike
+  Overview and Release, it discarded the shared `open_pull_request` operation,
+  so its apparent call to action was another self-defeating navigation step.
+
+#### Contract Touch Decision
+
+Work id: `inbox-executes-repository-handoff-2026-08-30`. Touched contracts:
+Inbox's consumption of the existing typed `ProjectAction.operation` and the
+project-shell repository-action callback. A repository handoff with a task id
+now renders an executable button; non-repository actions retain their existing
+navigation link behavior. Considered but not touched: action ranking,
+repository state, push/PR endpoints, release readiness, Inbox item schema, and
+task persistence. Required proof: Inbox invokes the shared callback with the
+action's task id and operation instead of rendering a Release link. Apply/revert:
+Inbox presentation dispatch only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The typed operation already exists in the shared
+action model.
+
+#### Validation
+
+- `pnpm exec vitest run src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts
+  src/web/surfaces/__tests__/ProjectView.svelte.test.ts` passed (92 tests).
+  The Inbox regression proves `Open pull request` is a button that calls the
+  shared repository-action callback for `task-004`, not a link to Release.
+- Installed t-minus-t Inbox replay, 2026-08-30: after fresh build/install,
+  restart, and `stale:false`, Inbox at 900px showed one visible `Open pull
+  request` button and no horizontal overflow. The button was not clicked:
+  opening a GitHub pull request is an external owner action that requires
+  confirmation at the moment of execution.

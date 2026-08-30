@@ -297,6 +297,28 @@ describe('InboxTab', () => {
     expect(screen.queryByText('Levers')).not.toBeInTheDocument()
   })
 
+  it('executes a repository handoff from the current Inbox action instead of reopening Release', async () => {
+    const runRepositoryAction = vi.fn()
+    render(InboxTab, {
+      items: [],
+      loaded: true,
+      primaryAction: {
+        taskId: 'task-004',
+        ownerHeading: 'Pull request is ready to open',
+        detail: 'The completed branch is shared. Open its pull request to continue the release handoff.',
+        buttonLabel: 'Open pull request',
+        href: '/release',
+        operation: 'open_pull_request',
+      },
+      onRunRepositoryAction: runRepositoryAction,
+    })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open pull request' }))
+
+    expect(runRepositoryAction).toHaveBeenCalledWith('task-004', 'open_pull_request')
+    expect(screen.queryByRole('link', { name: 'Open pull request' })).not.toBeInTheDocument()
+  })
+
   it('uses compact owner-decision rows instead of the old inbox archive', async () => {
     const items = [
       {

@@ -1855,7 +1855,7 @@ import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigra
                 </div>
               {:then module}
                 {@const NeedsYouTab = module.default}
-                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} />
+                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} onRunRepositoryAction={runRepositoryAction} {busy} />
               {/await}
             {:else}
               {#await loadProjectOverviewTab()}
@@ -1894,7 +1894,7 @@ import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigra
               </div>
             {:then module}
               {@const NeedsYouTab = module.default}
-              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} />
+              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} onRunRepositoryAction={runRepositoryAction} {busy} />
             {/await}
           {:else if currentView === 'workspace-import'}
             {#await loadWorkspaceImportTab()}

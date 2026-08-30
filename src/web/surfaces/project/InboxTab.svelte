@@ -12,7 +12,7 @@
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
-  import type { ProjectAction } from '../../lib/types.js'
+  import type { ProjectAction, ProjectActionOperation } from '../../lib/types.js'
 
   interface Props {
     items?: InboxItem[]
@@ -21,6 +21,8 @@
     error?: string | null
     refresh?: (() => Promise<void>) | null
     primaryAction?: ProjectAction | null
+    onRunRepositoryAction?: (taskId: string, operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>) => void | Promise<void>
+    busy?: boolean
   }
 
   let {
@@ -29,6 +31,8 @@
     error: suppliedError = null,
     refresh = null,
     primaryAction = null,
+    onRunRepositoryAction,
+    busy = false,
   }: Props = $props()
 
   let localItems = $state<InboxItem[]>([])
@@ -253,6 +257,17 @@
   function isOpen(item: InboxItem): boolean {
     return !item.status || item.status === 'open'
   }
+
+  function repositoryOperation(action: ProjectAction | null): Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'> | null {
+    if (action?.operation === 'push_branch' || action?.operation === 'open_pull_request') return action.operation
+    return null
+  }
+
+  function runPrimaryRepositoryAction(): void {
+    const operation = repositoryOperation(primaryAction)
+    if (!operation || !primaryAction?.taskId || !onRunRepositoryAction) return
+    void onRunRepositoryAction(primaryAction.taskId, operation)
+  }
 </script>
 
 <div class="wrap">
@@ -282,7 +297,16 @@
           {#if primaryAction.detail}
             <p>{primaryAction.detail}</p>
           {/if}
-          {#if primaryAction.href}
+          {#if repositoryOperation(primaryAction) && primaryAction.taskId && onRunRepositoryAction}
+            <button
+              type="button"
+              class="threads-link threads-action"
+              disabled={busy}
+              onclick={runPrimaryRepositoryAction}
+            >
+              {primaryAction.buttonLabel ?? 'Continue'}
+            </button>
+          {:else if primaryAction.href}
             <a class="threads-link" href={projectActionHref(primaryAction.href)}>{primaryAction.buttonLabel ?? 'Open current work'}</a>
           {/if}
         {:else}
@@ -434,6 +458,17 @@
   }
   .threads-link:hover {
     color: var(--text);
+  }
+  .threads-action {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+  }
+  .threads-action:disabled {
+    cursor: default;
+    opacity: 0.5;
   }
   .group {
     display: grid;
