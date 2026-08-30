@@ -2325,6 +2325,40 @@ describe('TaskDrawer', () => {
     expect(path.href).toBe('/projects/looma-knit/task/task-current')
   })
 
+  it('does not call an automatic spec repair an owner decision', async () => {
+    openDrawerOn('overview')
+    const payload = drawerPayload({
+      threadTurns: [],
+      actionModel: {
+        primaryAction: {
+          label: 'Repair this spec',
+          taskLabel: 'Keep the component roadmap synchronized.',
+          buttonLabel: 'Repair spec',
+          href: '/projects/looma-knit/work?task=task-repair',
+          taskId: 'task-repair',
+          operation: 'repair_spec',
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('One repair is ready')
+    expect(screen.getByText('Keep the component roadmap synchronized.')).toBeInTheDocument()
+    expect(screen.queryByText('Project needs your decision first')).toBeNull()
+  })
+
   it('keeps a shared spec-repair task out of approval in focused and full detail', async () => {
     const repairedProject = {
       ...projectDetail(),

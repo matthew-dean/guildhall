@@ -727,6 +727,11 @@
   // Detail carries a revision-matched action model. The page store may still
   // describe a previous project decision while a drawer is open.
   const projectPrimaryAction = $derived(payload?.actionModel?.primaryAction ?? project.detail?.actionModel?.primaryAction ?? null)
+  const projectDecisionEyebrow = $derived(
+    projectPrimaryAction?.operation === 'repair_spec'
+      ? 'One repair is ready'
+      : 'Project needs your decision first',
+  )
   const projectDecisionElsewhere = $derived(Boolean(
     !fullRecordRequested &&
     !focusedSpecReview &&
@@ -1369,7 +1374,7 @@
         />
       {:else if projectDecisionElsewhere && projectPrimaryAction}
         <UtilityPanel as="section" className="drawer-project-decision" tone="warn" railStrength="strong" ariaLabel="Project decision">
-          <span class="outcome-eyebrow">Project needs your decision first</span>
+          <span class="outcome-eyebrow">{projectDecisionEyebrow}</span>
           <strong>{projectPrimaryAction.label}</strong>
           {#if projectPrimaryAction.taskLabel}
             <span class="drawer-project-decision-task" title={projectPrimaryAction.taskLabel}>
