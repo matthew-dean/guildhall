@@ -62691,6 +62691,12 @@ state.
   900px narrow desktop and 390px mobile widths. All four views reported no
   document-level horizontal overflow. Narrative Harness was inspected only;
   no run was started and its project state was not changed.
+- Replay, 2026-08-30: t-minus-t's paused state agreed across Overview, Work,
+  Thread, Inbox, Release, and task detail on `TMI-004` / `Resume work`; after
+  the owner resumed it, the running state agreed on `Work is underway` / `Open
+  Work`. Narrative Harness independently kept `NAR-091` / `Resume review` on
+  Overview, Work, and Release, with no document-level overflow at 390px mobile
+  or 1024px desktop.
 
 ### Finding: Focused Work must not stack three names for the same live state
 
