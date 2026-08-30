@@ -2646,11 +2646,14 @@ async function refreshProjectProjections(
     }
 }
 
-function pausedThreadFocusTaskId(tasksPath: string): string | undefined {
+export function pausedThreadFocusTaskId(tasksPath: string): string | undefined {
   const decision = readProjectStateDatabaseSummary<ProjectSummaryProjection>(tasksPath, {
     includeOrientation: false,
   })?.payload.decision
-  if (decision?.execution.state !== 'paused') return undefined
+  // Paused work is intentionally resumable, so the shared decision presents
+  // it as runnable with a typed paused-live-work code. Thread must consume
+  // that same authority instead of looking for a second, nonexistent state.
+  if (decision?.execution.code !== 'paused_live_work') return undefined
   const taskId = decision.execution.focus?.taskId ?? decision.execution.focusTaskId
   return typeof taskId === 'string' && taskId.trim() ? taskId.trim() : undefined
 }

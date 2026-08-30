@@ -62022,6 +62022,42 @@ stored data change.
 
 No persisted-schema change.
 
+### Finding: Thread must focus the same paused task as the shared action model
+
+- [x] User job: after pausing focused work, Thread opens on that paused task
+  and its single `Resume work` decision. It must not select an unrelated setup
+  card while Overview and Work correctly identify the paused task.
+- Live finding, 2026-08-30: after pausing t-minus-t `task-005`, Overview and
+  Work exposed `Work paused` and `Resume work`, while `/api/project/thread`
+  returned `activeTurnId: setup:direction` even though
+  `inflight:task-005` was present. The saved decision encoded the pause as
+  `state: runnable, code: paused_live_work`; Thread only recognized a
+  nonexistent `state: paused`.
+
+#### Contract Touch Decision
+
+Work id: `paused-thread-focus-state-agreement-2026-08-30`. Touched contract:
+Thread's focused-task read of the saved shared decision. `paused_live_work` is
+the authoritative typed code for resumable paused work across owner surfaces.
+Considered but not touched: task state, pause persistence, action-model copy,
+Thread turn schema, and route-local selection. Required proof: a persisted
+resumable decision yields the paused task id and a live Thread projection
+selects its inflight turn. Apply/revert: projection interpretation only; no
+task state changes.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- `serve-supervisor` and `thread` regressions passed 92/92, plus
+  `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm build`.
+- Installed-app t-minus-t proof after restart: `/api/stale-server` reported
+  `stale:false`; Overview/Work's primary action and Thread's `activeTurnId`
+  all named `task-005`. Thread selected `inflight:task-005` with “Work is
+  paused. Resume work when you are ready.” rather than `setup:direction`.
+
 ### Live follow-up: focused Work transition proof
 
 - [x] `focused-work-empty-browse-2026-08-30`: focused Work now hides `Browse
