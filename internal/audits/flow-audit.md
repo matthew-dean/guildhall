@@ -61149,3 +61149,39 @@ rule; persisted task and run records remain authoritative and unchanged.
   build, install, restart, and `stale:false`, the real Looma + Knit docs task
   moved from enabled Resume to `Work is underway` with its exact title and
   `0 of 16 complete`, then Pause returned it to the same enabled Resume action.
+
+### Finding: One recovery decision must clear duplicate escalation records
+
+- [ ] User job: when a task stopped for one recoverable reason, the owner can
+  choose its recovery once. Guildhall clears matching duplicate escalation
+  records, returns the task to its named next stage, and says what will happen
+  next. The owner never has to repeat the same approval for historical copies
+  of the same failure.
+- Finding, 2026-08-30: the real Looma + Knit `Build AlertDialog primitive`
+  task carries three unresolved `human_judgment_required` escalations from the
+  same stalled spec-agent loop. All three have the same typed recovery, yet
+  the task would require one resolve action per record before it could leave
+  `blocked`. The release summary consequently reports an owner-blocked item
+  while the canonical decision says no owner input is open and points at the
+  paused current work.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-duplicate-escalation-recovery-2026-08-30`. Touched
+contract: escalation recovery. A direct owner recovery may resolve the
+selected unresolved escalation and its unresolved siblings only when their
+typed recovery identity matches (`reason`, `agentId`, `handling`, and
+`recoveryCode`). It must not group gate-scope exceptions or match prose.
+Considered but not touched: release priority, task ranking, task status
+semantics, and general inbox ranking. Required proof: one direct recovery
+returns a task with duplicate matching records to its requested next state;
+a distinct escalation remains open and keeps the task blocked.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. The repair reuses the existing structured
+escalation resolution fields and writes several matching existing records in
+one atomic task mutation. Older callers retain single-record behavior unless
+they explicitly request grouped recovery. Revert behavior: stop sending the
+optional grouped-recovery request; previously resolved records remain durable
+history and are never silently reopened.

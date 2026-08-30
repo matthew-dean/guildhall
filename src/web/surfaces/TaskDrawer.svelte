@@ -523,6 +523,7 @@
       escalationId: escalation.id,
       resolution: action.resolution,
       nextStatus: action.nextStatus,
+      resolveEquivalent: true,
     }))) return
     await project.refresh()
     toast.success('This task can continue.')

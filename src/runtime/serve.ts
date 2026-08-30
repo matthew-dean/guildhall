@@ -17356,6 +17356,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           escalationId?: string
           resolution?: string
           nextStatus?: 'exploring' | 'spec_review' | 'ready' | 'in_progress' | 'review' | 'gate_check'
+          resolveEquivalent?: boolean
           actor?: unknown
         }
         if (!body.escalationId) return c.json({ error: 'Missing escalationId' }, 400)
@@ -17374,10 +17375,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           resolvedBy: body.actor === 'codex_delegated_owner'
             ? 'codex_delegated_owner'
             : 'human',
+          resolveEquivalent: body.resolveEquivalent === true,
           nextStatus: body.nextStatus ?? 'ready',
         })
         if (!result.success) return c.json({ error: result.error ?? 'resolve failed' }, 400)
-        return c.json({ ok: true })
+        return c.json({ ok: true, resolvedCount: result.resolvedEscalationIds?.length ?? 1 })
       }
 
       // hold / resume-hold / shelve / unshelve: in-place mutation of TASKS.json.

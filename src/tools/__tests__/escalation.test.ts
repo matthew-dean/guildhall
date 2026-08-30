@@ -449,6 +449,42 @@ describe('resolveEscalation', () => {
     expect(effective.escalations[0]?.resolvedBy).toBe('human')
   })
 
+  it('resolves matching duplicate recoveries together without clearing a distinct escalation', async () => {
+    const matching = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'decision_required',
+      summary: 'The same decision was recorded again.',
+    })
+    const distinct = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'reviewer-agent',
+      reason: 'spec_ambiguous',
+      summary: 'A distinct spec recovery remains open.',
+    })
+
+    const result = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolution: 'Proceed with the selected library.',
+      nextStatus: 'in_progress',
+      resolveEquivalent: true,
+    })
+
+    expect(result).toMatchObject({
+      success: true,
+      resolvedEscalationIds: ['esc-task-001-1', matching.escalationId],
+    })
+    const task = await readEffectiveTask()
+    expect(task.status).toBe('blocked')
+    expect(task.escalations.find(escalation => escalation.id === 'esc-task-001-1')?.resolvedAt).toBeTruthy()
+    expect(task.escalations.find(escalation => escalation.id === matching.escalationId)?.resolvedAt).toBeTruthy()
+    expect(task.escalations.find(escalation => escalation.id === distinct.escalationId)?.resolvedAt).toBeUndefined()
+  })
+
   it('persists a gate exception only from an explicit typed owner field', async () => {
     const proseOnly = await resolveEscalation({
       tasksPath,

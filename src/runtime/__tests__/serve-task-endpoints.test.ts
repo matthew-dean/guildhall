@@ -6305,6 +6305,49 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
     expect(task.escalations[0].resolvedBy).toBe('codex_delegated_owner')
   })
 
+  it('collapses identical direct-recovery escalations into one owner action', async () => {
+    const now = new Date().toISOString()
+    await seedTask('task-1', {
+      status: 'blocked',
+      blockReason: 'Escalation raised',
+      escalations: [
+        {
+          id: 'esc-1', taskId: 'task-1', reason: 'human_judgment_required',
+          summary: 'The spec pass stalled.', agentId: 'spec-agent', raisedAt: now,
+        },
+        {
+          id: 'esc-2', taskId: 'task-1', reason: 'human_judgment_required',
+          summary: 'The same spec pass stalled again.', agentId: 'spec-agent', raisedAt: now,
+        },
+        {
+          id: 'esc-3', taskId: 'task-1', reason: 'spec_ambiguous',
+          summary: 'A different recovery remains open.', agentId: 'spec-agent', raisedAt: now,
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resolve-escalation'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          escalationId: 'esc-1',
+          resolution: 'Retry the spec from its saved notes.',
+          nextStatus: 'exploring',
+          resolveEquivalent: true,
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, resolvedCount: 2 })
+    const task = await readEffectiveTask('task-1')
+    expect(task.status).toBe('blocked')
+    expect(task.escalations.find((escalation: { id: string; resolvedAt?: string }) => escalation.id === 'esc-1')?.resolvedAt).toBeTruthy()
+    expect(task.escalations.find((escalation: { id: string; resolvedAt?: string }) => escalation.id === 'esc-2')?.resolvedAt).toBeTruthy()
+    expect(task.escalations.find((escalation: { id: string; resolvedAt?: string }) => escalation.id === 'esc-3')?.resolvedAt).toBeUndefined()
+  })
+
   it('requires both escalationId and resolution', async () => {
     await seedTask('task-1', { status: 'blocked' })
     const { app } = buildServeApp({ projectPath: tmpDir })

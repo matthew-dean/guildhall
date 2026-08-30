@@ -356,6 +356,12 @@ const resolveEscalationInputSchema = z.object({
   resolution: z.string(),
   resolvedBy: z.string().default('human'),
   /**
+   * A one-click recovery may collapse repeated copies of the same typed
+   * escalation. It never uses human prose to decide which records belong
+   * together.
+   */
+  resolveEquivalent: z.boolean().optional(),
+  /**
    * Optional typed disposition for a gate failure outside this task's target
    * surface. Resolution prose alone can never create this exception.
    */
@@ -381,6 +387,14 @@ export type ResolveEscalationInput = z.input<typeof resolveEscalationInputSchema
 export interface ResolveEscalationResult {
   success: boolean
   error?: string
+  resolvedEscalationIds?: string[]
+}
+
+function hasSameRecoveryIdentity(left: Escalation, right: Escalation): boolean {
+  return left.reason === right.reason &&
+    left.agentId === right.agentId &&
+    left.handling === right.handling &&
+    left.recoveryCode === right.recoveryCode
 }
 
 function normalizeAssignmentForResolvedStatus(task: Task, nextStatus: z.infer<typeof resolveEscalationInputSchema>['nextStatus']): void {
@@ -468,10 +482,15 @@ export async function resolveEscalation(
       }
     }
 
+    const resolvedEscalations = input.resolveEquivalent === true && !input.gateScopeException
+      ? effectiveEscalations.filter(candidate => !candidate.resolvedAt && hasSameRecoveryIdentity(candidate, esc))
+      : [esc]
     const now = new Date().toISOString()
-    esc.resolvedAt = now
-    esc.resolution = input.resolution
-    esc.resolvedBy = input.resolvedBy ?? 'human'
+    for (const candidate of resolvedEscalations) {
+      candidate.resolvedAt = now
+      candidate.resolution = input.resolution
+      candidate.resolvedBy = input.resolvedBy ?? 'human'
+    }
     task.escalations = effectiveEscalations
     if (input.gateScopeException) {
       const exception = TaskGateScopeException.parse({
@@ -487,11 +506,11 @@ export async function resolveEscalation(
       ]
     }
 
-    const stillOpen = effectiveEscalations.some((e) => e.id !== esc.id && !e.resolvedAt)
+    const stillOpen = effectiveEscalations.some(e => !e.resolvedAt)
     let retryWindowPatch: Task['retryWindow'] | undefined
     if (!stillOpen) {
       normalizeAssignmentForResolvedStatus(task, input.nextStatus)
-      if (esc.reason === 'max_revisions_exceeded' && supportsRetryWindow(task.status)) {
+      if (resolvedEscalations.some(candidate => candidate.reason === 'max_revisions_exceeded') && supportsRetryWindow(task.status)) {
         ensureRetryWindow(task)
         retryWindowPatch = task.retryWindow ?? {
           startedAt: now,
@@ -506,17 +525,19 @@ export async function resolveEscalation(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    await appendTaskEvidence(projectRoot, task.id, {
-      id: `${esc.id}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
-      kind: 'escalation',
-      recordedAt: now,
-      payload: esc,
-    })
+    for (const resolved of resolvedEscalations) {
+      await appendTaskEvidence(projectRoot, task.id, {
+        id: `${resolved.id}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
+        kind: 'escalation',
+        recordedAt: now,
+        payload: resolved,
+      })
+    }
     await upsertTaskRuntimeState(projectRoot, task.id, {
       ...(task.assignedTo !== undefined ? { assignedTo: task.assignedTo } : {}),
       ...(task.revisionCount !== undefined ? { revisionCount: task.revisionCount } : {}),
       openEscalationIds: effectiveEscalations
-        .filter((candidate) => candidate.id !== esc.id && !candidate.resolvedAt)
+        .filter(candidate => !candidate.resolvedAt)
         .map((candidate) => candidate.id),
       ...(retryWindowPatch ?? task.retryWindow ? { retryWindow: retryWindowPatch ?? task.retryWindow } : {}),
       updatedAt: now,
@@ -536,14 +557,14 @@ export async function resolveEscalation(
         domain: task.domain,
         taskId: task.id,
         summary: stillOpen
-          ? `Escalation ${esc.id} resolved (${effectiveEscalations.filter((e) => e.id !== esc.id && !e.resolvedAt).length} still open): ${input.resolution}`
-          : `Escalation ${esc.id} resolved; task returning to ${input.nextStatus}: ${input.resolution}`,
+          ? `${resolvedEscalations.length} matching escalation${resolvedEscalations.length === 1 ? '' : 's'} resolved (${effectiveEscalations.filter(e => !e.resolvedAt).length} still open): ${input.resolution}`
+          : `${resolvedEscalations.length} matching escalation${resolvedEscalations.length === 1 ? '' : 's'} resolved; task returning to ${input.nextStatus}: ${input.resolution}`,
         type: 'milestone',
       }
       await logProgress({ progressPath: input.progressPath, entry })
     }
 
-    return { success: true }
+    return { success: true, resolvedEscalationIds: resolvedEscalations.map(candidate => candidate.id) }
   } catch (err) {
     return { success: false, error: String(err) }
   }

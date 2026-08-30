@@ -2757,6 +2757,7 @@
           escalationId: turn.escalationId,
           resolution: action.resolution,
           nextStatus: action.nextStatus,
+          resolveEquivalent: true,
         }),
       })
       const body = await res.json().catch(() => ({})) as { error?: string }
