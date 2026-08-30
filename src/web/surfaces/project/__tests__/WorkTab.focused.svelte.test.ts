@@ -52,8 +52,8 @@ describe('focused Work flow', () => {
       actionModel: { primaryAction: { taskId: review.id, label: 'Review the acceptance contract', detail: 'Approve the spec so this work can continue.', buttonLabel: 'Review spec', href: `/work?task=${review.id}`, tone: 'warn' } },
     }) } })
 
-    expect(await screen.findByRole('heading', { name: 'Current work', level: 1 })).toBeInTheDocument()
-    expect(screen.getByText('Stage 1: Release hardening')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Work', level: 1 })).toBeInTheDocument()
+    expect(screen.queryByText('Stage 1: Release hardening')).toBeNull()
     expect(screen.getByText('LOO-142')).toBeInTheDocument()
     expect(screen.getByText('Approve the spec so this work can continue.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Review spec' })).toBeInTheDocument()
@@ -110,7 +110,7 @@ describe('focused Work flow', () => {
       startReadiness: { canStart: true, code: 'ready_work' },
     }) } })
 
-    expect(await screen.findByRole('heading', { name: 'Current work', level: 1 })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Work', level: 1 })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Work is underway' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Keep the live handoff focused' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Work list' })).toBeNull()
@@ -139,6 +139,32 @@ describe('focused Work flow', () => {
     expect(screen.getByText('Progress is saved. Resume continues this task from its current workspace.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Resume work' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull()
+  })
+
+  it('keeps saved implementation in its automated-review handoff after a stopped run', async () => {
+    const review = reviewTask({ id: 'task-review-run', displayKey: 'TMT-4', title: 'Review the saved extension change', status: 'review' })
+    setRoute(`/projects/t-minus-t/work?task=${review.id}`)
+    render(WorkTab, { props: { detail: projectDetail([review], {
+      startReadiness: { canStart: true, code: 'ready_work', focusTaskId: review.id, focusTaskTitle: review.title, focusKind: 'review_work' },
+      actionModel: {
+        primaryAction: {
+          taskId: review.id,
+          code: 'ready_work',
+          ownerHeading: 'Review ready to continue',
+          operation: 'start_focused',
+          detail: 'The implementation is saved. Resume review to have Guildhall check the current change.',
+          buttonLabel: 'Resume review',
+          href: `/work?task=${review.id}`,
+        },
+      },
+    }) } })
+
+    expect(await screen.findByRole('heading', { name: 'Review ready to continue' })).toBeInTheDocument()
+    expect(screen.getByText('Review ready')).toBeInTheDocument()
+    expect(screen.getByText('The implementation is saved. Resume review to have Guildhall check the current change.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume review' })).toBeInTheDocument()
+    expect(screen.queryByText('Ready to continue')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
   })
 
   it('makes repeated worker no-progress a visible retry instead of an ordinary pause', async () => {

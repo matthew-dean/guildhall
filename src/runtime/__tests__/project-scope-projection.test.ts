@@ -423,7 +423,9 @@ describe('buildProjectScopeProjection', () => {
       canStart: true,
       code: 'ready_work',
       focusTaskId: 'task-review',
-      focusKind: 'ready_work',
+      focusKind: 'review_work',
+      label: 'Resume',
+      message: '"Review the desktop adapter" has saved changes ready for automated review.',
     })
   })
 

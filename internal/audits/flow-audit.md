@@ -62608,3 +62608,88 @@ state.
   900px narrow desktop and 390px mobile widths. All four views reported no
   document-level horizontal overflow. Narrative Harness was inspected only;
   no run was started and its project state was not changed.
+
+### Finding: Focused Work must not stack three names for the same live state
+
+- [ ] User job: when an owner opens the one current task, the route names the
+  scope once, gives its bounded progress once, and uses the decision card for
+  the actual execution state and task. A running task must not make the owner
+  read three stacked variants of “current work is underway” before seeing what
+  is running.
+- Live finding, 2026-08-30: t-minus-t's real Work route rendered `Current task
+  scope is underway`, `Current work`, and `Work is underway` above the same
+  `TMI-004` card. All were true, but together they spend the page's scarce
+  first-screen attention on redundant status rather than orientation.
+
+#### Contract Touch Decision
+
+Work id: `focused-work-single-state-handoff-2026-08-30`. Touched contract:
+Focused Work presentation of the existing orientation-spine scope label and
+shared primary-action/running state. The route may change which of those facts
+occupies its single page heading but must not derive new run, progress, task,
+or action facts locally. Considered but not touched: current-scope selection,
+release membership, action ranking, worker execution, task runtime, and
+orientation-spine construction. Required proof: a focused running task has one
+scope heading, one progress readout, and one card state; non-running focused
+states retain their action button. Apply/revert: presentation only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing shared fields remain the authority.
+
+#### Validation
+
+- `WorkTab.focused.svelte.test.ts` passes 13 focused tests. The focused route
+  has one `Work` page heading and no longer renders the orientation headline as
+  a second, competing state label.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass. Installed t-minus-t proof, 2026-08-30: at 1114px, 900px,
+  and 390px the Work route rendered one heading, one `0 of 1 complete` readout,
+  and one action/state card without document-level horizontal overflow.
+
+### Finding: Automated review must not masquerade as fresh implementation work
+
+- [ ] User job: after implementation hands a task to an automated reviewer,
+  including after a local-service restart, the owner can see that the saved
+  change is awaiting review and resume that review without being told the task
+  is a new ready-to-start implementation item.
+- Live finding, 2026-08-30: t-minus-t's `TMI-004` had transitioned to
+  `review`, with the expected changed files preserved in its isolated worktree.
+  After the service restart, shared start readiness flattened it to
+  `ready_work`; Focused Work displayed `READY`, `Ready to continue`, and
+  `Start work`. The command would resume the reviewer, but every visible label
+  described a different operation.
+
+#### Contract Touch Decision
+
+Work id: `review-work-readiness-identity-2026-08-30`. Touched contracts: the
+derived start-readiness focus kind and the shared project action model's labels
+for executable automated review. A review task remains startable through the
+existing focused-run operation, but it gets a typed `review_work` identity so
+all owner-facing surfaces describe that operation as resuming review. Considered
+but not touched: task lifecycle statuses, reviewer assignment, run dispatch,
+owner spec-review authority, worktree recovery, and persisted task schema.
+Required proof: a stopped project with an in-scope `review` task presents
+`Resume review` consistently through start readiness, primary action, run
+control, and Focused Work; ordinary ready implementation work remains
+`Start work`. Apply/revert: derived projection/action behavior only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. `review_work` is an in-memory derived focus kind;
+older saved summaries retain the existing compatibility behavior until rebuilt.
+
+#### Validation
+
+- `project-scope-projection.test.ts`, `project-action-model.test.ts`, and
+  `WorkTab.focused.svelte.test.ts` pass 97 focused tests. They prove a stopped
+  review task retains its review identity through the shared projection, action
+  model, run control, and focused Work card, while normal ready work retains
+  its `Start work` label.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass. After `pnpm dev:install`, `guildhall stop`, and
+  `guildhall start`, `/api/stale-server` reported `stale:false` with zero
+  startup errors. The real t-minus-t route showed `Review ready to continue`,
+  `Review ready`, and one visible `Resume review` control with no overflow at
+  desktop, narrow desktop, or mobile. The owner selected it; the route then
+  changed to the honest running state with the visible `Pause` control.

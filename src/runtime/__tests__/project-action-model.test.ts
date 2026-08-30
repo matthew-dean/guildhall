@@ -377,6 +377,31 @@ describe('buildProjectActionModel', () => {
     })
   })
 
+  it('names resumed automated review instead of fresh implementation work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-review',
+        focusTaskTitle: 'Review the desktop adapter',
+        focusKind: 'review_work',
+        message: '"Review the desktop adapter" has saved changes ready for automated review.',
+        actionHref: '/work?task=task-review',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'ready_work',
+      ownerHeading: 'Review ready to continue',
+      taskId: 'task-review',
+      buttonLabel: 'Resume review',
+      detail: 'The implementation is saved. Resume review to have Guildhall check the current change.',
+      operation: 'start_focused',
+    })
+    expect(model.runControl).toMatchObject({ label: 'Resume review', startEnabled: true })
+  })
+
   it('retains setup state without reopening setup urgency after a release shipped', () => {
     const model = buildProjectActionModel({
       startReadiness: {

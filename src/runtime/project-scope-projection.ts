@@ -146,7 +146,7 @@ export interface ProjectScopeProjection {
     label: 'Start' | 'Resume' | 'Review' | 'Configure' | 'Answer in Thread'
     focusTaskId?: string
     focusTaskTitle?: string
-    focusKind?: 'paused_work' | 'ready_work' | 'spec_repair' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
+    focusKind?: 'paused_work' | 'ready_work' | 'review_work' | 'spec_repair' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
     /** Exact selected-scope records behind an owner-review action. */
     reviewTaskIds?: string[]
     count?: number
@@ -1095,11 +1095,11 @@ export function summarizeProjectScopeStart(
     return {
       canStart: true,
       code: 'ready_work',
-      label: 'Start',
+      label: 'Resume',
       focusTaskId: reviewWork.taskId,
       focusTaskTitle: reviewWork.title,
-      focusKind: 'ready_work',
-      message: `"${reviewWork.title}" is ready to continue review.`,
+      focusKind: 'review_work',
+      message: `"${reviewWork.title}" has saved changes ready for automated review.`,
       actionHref: `/work?task=${encodeURIComponent(reviewWork.taskId)}`,
     }
   }

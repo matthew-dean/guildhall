@@ -397,12 +397,6 @@
         ? countLabel(currentReleaseTasks.length, 'other current item')
         : workListCountLabel,
   )
-  const workMilestone = $derived(
-    detail.orientationSpine?.summary?.headline
-      ?? detail.releaseSummary?.release?.label
-      ?? detail.releaseReadiness?.release?.label
-      ?? 'Current work',
-  )
   const completedWorkLabel = $derived.by(() => {
     const counts = detail.releaseSummary?.counts
     if (!counts || !Number.isFinite(counts.total) || counts.total <= 0) return null
@@ -421,6 +415,9 @@
     if (focusedWork && isFocusedWorkRunning(focusedWork)) return 'Work is underway'
     if (focusedWork && detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === focusedWork.id) {
       return detail.actionModel.primaryAction.ownerHeading ?? 'Worker needs a fresh pass'
+    }
+    if (focusedWork && detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === focusedWork.id) {
+      return detail.actionModel?.primaryAction?.ownerHeading ?? 'Review ready to continue'
     }
     if (focusedWork && detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === focusedWork.id) return 'Work paused'
     if (focusedWork && isFocusedRunnableWork(focusedWork)) return 'Ready to continue'
@@ -812,6 +809,7 @@
   function focusedStatusLabel(task: Task): string {
     if (isFocusedWorkRunning(task)) return 'Working'
     if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'Needs retry'
+    if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'Review ready'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'Paused'
     return isFocusedRunnableWork(task) ? 'Ready' : effectiveStatusLabel(task)
   }
@@ -819,6 +817,7 @@
   function focusedStatusTone(task: Task): ChipTone {
     if (isFocusedWorkRunning(task)) return 'running'
     if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'warn'
+    if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
     return isFocusedRunnableWork(task) ? 'ok' : effectiveStatusTone(task)
   }
@@ -916,8 +915,7 @@
 {#if focusedMode}
   <section class="work-focus" aria-label="Current work">
     <header class="work-focus-header">
-      <p class="work-focus-eyebrow">{workMilestone}</p>
-      <h1>Current work</h1>
+      <h1>Work</h1>
       {#if completedWorkLabel}
         <p class="work-focus-progress">{completedWorkLabel}</p>
       {/if}
@@ -1222,17 +1220,10 @@
   .work-focus-copy {
     min-width: 0;
   }
-  .work-focus-eyebrow,
   .work-focus-progress,
   .work-focus-copy p {
     margin: 0;
     color: var(--text-muted);
-  }
-  .work-focus-eyebrow {
-    font-size: var(--gh-type-size-1);
-    font-weight: var(--gh-type-weight-strong);
-    letter-spacing: 0;
-    text-transform: uppercase;
   }
   .work-focus h1,
   .work-focus h2 {

@@ -172,6 +172,7 @@ export type ProjectActionOwnerHeading =
   | 'Work paused'
   | 'Work is underway'
   | 'Ready to start'
+  | 'Review ready to continue'
   | 'Release is ready'
 
 export interface ProjectAction {
@@ -341,6 +342,7 @@ function workHrefForTask(taskId: string | undefined): string {
 
 function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): string {
   if (readiness.progressState === 'worker_retry_recommended' || readiness.progressState === 'worker_edit_loss') return 'Retry worker'
+  if (readiness.focusKind === 'review_work') return 'Resume review'
   if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Open task'
   if (readiness.code === 'required_migration_pending') return 'Review project update'
   if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
@@ -372,6 +374,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
 function runControlLabel(readiness: ProjectActionStartReadiness | null | undefined, running: boolean, stopping: boolean): string {
   if (stopping) return 'Stopping'
   if (running) return 'Pause'
+  if (readiness?.focusKind === 'review_work') return 'Resume review'
   if (readiness?.code === 'ready_work') return 'Start'
   if (readiness?.progressState === 'worker_retry_recommended' || readiness?.progressState === 'worker_edit_loss') return 'Retry worker'
   if (!readiness || readiness.canStart) return 'Resume'
@@ -644,6 +647,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     readiness.code === 'paused_live_work' ||
     readiness.code === 'worker_recovery'
   const specRepair = readiness.focusKind === 'spec_repair'
+  const reviewWork = readiness.focusKind === 'review_work'
   const blockedWork = readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work'
   const workerRetryRecommended = readiness.progressState === 'worker_retry_recommended'
   const workerEditLoss = readiness.progressState === 'worker_edit_loss'
@@ -654,6 +658,8 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     ? 'Worker discarded its edits'
     : workerRetryRecommended
     ? 'Worker needs a fresh pass'
+    : reviewWork
+    ? 'Review ready to continue'
     : specRepair
     ? 'Repair this spec'
     : ownerReview
@@ -668,6 +674,8 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     ? `Guildhall saw this worker's edits disappear before a handoff. Retry starts a fresh pass from the saved task plan.`
     : workerRetryRecommended
     ? 'The last two worker passes ended without a durable change. Retry starts a fresh pass using this task\'s current plan.'
+    : reviewWork
+    ? 'The implementation is saved. Resume review to have Guildhall check the current change.'
     : blockedWork
     ? 'This task stopped and needs its recovery action before it can continue.'
     : readiness.progressState === 'partial_work_saved'
@@ -692,6 +700,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
         ? 'accent'
         : 'warn',
     code: workerRetryRecommended || workerEditLoss ? 'worker_recovery' : readiness.code,
+    ...(reviewWork ? { ownerHeading: 'Review ready to continue' as const } : {}),
     ...(workerEditLoss ? { ownerHeading: 'Worker discarded its edits' as const } : {}),
     ...(readiness.focusTaskId ? { taskId: readiness.focusTaskId } : {}),
     ...(operation ? { operation } : {}),

@@ -155,6 +155,7 @@ export function taskStagePresentation(
   if (taskId(input) === options.focusTaskId) {
     if (options.focusKind === 'brief_cleanup') return { key: 'brief_review', label: 'Review brief', tone: 'warn' }
     if (options.focusKind === 'spec_review') return { key: 'spec_review', label: 'Review spec', tone: 'warn' }
+    if (options.focusKind === 'review_work') return { key: 'review', label: 'Review ready', tone: 'accent' }
     if (options.focusKind === 'ready_work') return { key: 'ready', label: 'Ready', tone: 'ok' }
   }
 
