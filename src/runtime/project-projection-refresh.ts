@@ -32,12 +32,14 @@ export interface ProjectProjectionRefreshSchedulerOptions {
 export function shouldRefreshProjectAtStartup(input: {
   authority: 'database' | 'legacy'
   summaryFreshness: 'current' | 'stale' | 'missing' | 'error' | undefined
+  threadFreshness?: 'current' | 'stale' | 'missing'
   attentionNeedsRefresh?: boolean
   blockedTaskCount?: number
   externalLandingCandidate?: boolean
 }): boolean {
   return input.authority !== 'database' ||
     input.summaryFreshness !== 'current' ||
+    (input.threadFreshness !== undefined && input.threadFreshness !== 'current') ||
     input.attentionNeedsRefresh === true ||
     input.externalLandingCandidate === true ||
     (input.blockedTaskCount ?? 0) > 0

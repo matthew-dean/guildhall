@@ -24,6 +24,9 @@ describe('project projection refresh scheduler', () => {
     [{ authority: 'database', summaryFreshness: 'stale' }, true],
     [{ authority: 'database', summaryFreshness: 'missing' }, true],
     [{ authority: 'legacy', summaryFreshness: 'current' }, true],
+    [{ authority: 'database', summaryFreshness: 'current', threadFreshness: 'missing' }, true],
+    [{ authority: 'database', summaryFreshness: 'current', threadFreshness: 'stale' }, true],
+    [{ authority: 'database', summaryFreshness: 'current', threadFreshness: 'current' }, false],
     [{ authority: 'database', summaryFreshness: 'current', blockedTaskCount: 1 }, true],
     [{ authority: 'database', summaryFreshness: 'current', externalLandingCandidate: true }, true],
   ] as const)('refreshes startup only when the saved boundary needs it', (input, expected) => {

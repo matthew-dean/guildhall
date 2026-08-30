@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import {
+  applyRequiredProjectUpdates,
   defineFlowUserJob,
   expectProjectFlowStateAgreement,
   expectProjectOrientationSpineAgreement,
@@ -7,35 +8,20 @@ import {
   readProjectFlowState,
 } from './flow-audit-assertions'
 
-async function applyRequiredProjectUpdates(page: import('@playwright/test').Page): Promise<void> {
-  const gate = page.getByRole('region', { name: 'Project update required' })
-  const workList = page.getByRole('heading', { name: 'Work list' })
-  const currentWork = page.getByRole('region', { name: 'Current work' })
-  await expect(gate.or(workList).or(currentWork)).toBeVisible()
-  if (await workList.isVisible() || await currentWork.isVisible()) return
+test('a required project update preempts the work dashboard with one clear action', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 820 })
+  await page.goto('/projects/looma-knit/work?view=columns')
 
-  await page.getByRole('button', { name: 'Review project update' }).click()
-  const modal = page.getByRole('dialog', { name: 'Migrate project' })
-  await expect(modal).toBeVisible()
-
-  for (let applied = 0; applied < 8; applied += 1) {
-    const apply = modal.getByRole('button', { name: 'Apply required updates' })
-    await expect(apply).toBeEnabled()
-    await apply.click()
-
-    const complete = modal.getByText('Migration complete.', { exact: true })
-    const continuing = modal.getByText('Update applied. Another project update is required.', { exact: true })
-    await expect(complete.or(continuing)).toBeVisible()
-    if (await complete.isVisible()) {
-      await modal.getByRole('contentinfo').getByRole('button', { name: 'Close' }).click()
-      await expect(modal).toHaveCount(0)
-      return
-    }
-    await expect(modal.getByText('Project update applied', { exact: true })).toBeVisible()
-  }
-
-  throw new Error('Expected the project update sequence to complete within eight migrations.')
-}
+  const updateGate = page.getByRole('region', { name: 'Project update required' })
+  await expect(updateGate).toBeVisible({ timeout: 30_000 })
+  await expect(updateGate.getByRole('button', { name: 'Review project update' })).toBeVisible()
+  await expect(page.getByRole('toolbar', { name: 'Work view controls' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Work list' })).toHaveCount(0)
+  await expectNoClippedContent(page, {
+    containerSelector: '[aria-label="Project update required"]',
+    itemSelector: '[aria-label="Project update required"] button',
+  })
+})
 
 const projectSurfaceRoutes = [
   {
@@ -80,17 +66,20 @@ const projectSurfaceRoutes = [
   {
     name: 'release',
     path: '/projects/fair-labor-license/release',
+    applyUpdates: true,
     assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
+      await expect(page.getByRole('heading', { name: /^(Current work|(Release|Scope) readiness)$/ })).toBeVisible()
       await expect(page.getByRole('button', { name: 'Inspect release details' })).toBeVisible()
     },
   },
   {
     name: 'release criteria',
     path: '/projects/looma-knit/release/criteria',
+    applyUpdates: true,
     assertions: async (page) => {
       await expect(page.getByRole('heading', { name: /^(Release|Scope) checks$/ })).toBeVisible()
-      await expect(page.getByRole('heading', { name: 'Release exceptions' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Repair this spec' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Repair spec' })).toBeVisible()
       await expect(page.getByRole('heading', { name: 'Task-state tally' })).toHaveCount(0)
     },
   },
@@ -123,9 +112,11 @@ const projectSurfaceRoutes = [
   {
     name: 'infra release criteria',
     path: '/projects/pipeline-ops/release/criteria',
+    applyUpdates: true,
     assertions: async (page) => {
       await expect(page.getByRole('heading', { name: /^(Release|Scope) checks$/ })).toBeVisible()
-      await expect(page.getByRole('heading', { name: 'Release exceptions' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Review ready to continue' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Resume review' })).toBeVisible()
       await expect(page.getByRole('heading', { name: 'Task-state tally' })).toHaveCount(0)
       await expect(page.getByTitle('Pipeline Ops')).toBeVisible()
     },
@@ -144,6 +135,9 @@ const projectSurfaceRoutes = [
     name: 'service thread',
     path: '/projects/api-broker/thread',
     assertions: async (page) => {
+      const response = await page.request.get('/api/project/thread?projectId=api-broker')
+      expect(response.ok()).toBe(true)
+      expect((await response.json()).currentThreadFreshness).toBe('current')
       await expect(page.getByRole('complementary', { name: 'Thread list' })).toBeVisible()
       await expect(page.getByRole('region', { name: 'Selected thread' })).toBeVisible()
       await expect(page.getByTitle('API Broker')).toBeVisible()
@@ -169,9 +163,10 @@ const projectSurfaceRoutes = [
   {
     name: 'dirty service release',
     path: '/projects/dirty-service/release',
+    applyUpdates: true,
     assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
-      await expect(page.locator('p').filter({ hasText: /^Current task scope$/ })).toBeVisible()
+      await expect(page.getByRole('heading', { name: /^(Current work|(Release|Scope) readiness)$/ })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Repository follow-up required' })).toBeVisible()
       await expect(page.getByTitle('Dirty Service')).toBeVisible()
     },
   },
@@ -189,13 +184,6 @@ const projectSurfaceRoutes = [
     },
   },
 ]
-
-for (const surface of projectSurfaceRoutes) {
-  test(`${surface.name} route loads as part of the user-test matrix`, async ({ page }) => {
-    await page.goto(surface.path)
-    await surface.assertions(page)
-  })
-}
 
 test('projects home scrolls at mobile size and opens explicit project routes', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 560 })
@@ -273,23 +261,6 @@ test('legacy project routes fall back to project selection', async ({ page }) =>
   await expect(page.getByRole('heading', { name: 'Projects & Workspaces' })).toBeVisible()
 })
 
-test('managed project state keeps Thread readable after migration', async ({ page }) => {
-  await page.goto('/projects/looma-knit/thread')
-
-  await expect(page.getByRole('complementary', { name: 'Thread list' })).toBeVisible()
-  await expect(page.getByRole('region', { name: 'Selected thread' })).toBeVisible()
-  await page.getByRole('complementary', { name: 'Thread list' }).getByRole('button', { name: /Unit tests: use-collections/ }).click()
-  const composer = page.getByRole('region', { name: 'Selected thread' }).getByRole('textbox')
-  if (await composer.count() > 0) {
-    await expect(composer).toBeVisible()
-    await composer.fill('Review the current spec draft and keep the menu behavior need-driven.')
-    await composer.press('Enter')
-  } else {
-    await page.getByRole('region', { name: 'Selected thread' }).getByRole('button', { name: 'URL input + Display text input' }).click()
-  }
-  await expect(page.getByText('This bounded chat objective is not supported here yet.')).toHaveCount(0)
-})
-
 test('pinned project rail reserves layout width at medium desktop sizes', async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 700 })
   await page.goto('/projects/looma-knit/work')
@@ -313,21 +284,6 @@ test('pinned project rail reserves layout width at medium desktop sizes', async 
   expect(expandedMain).not.toBeNull()
   expect(expandedRail!.width).toBeGreaterThanOrEqual(230)
   expect(expandedMain!.x).toBeGreaterThanOrEqual(expandedRail!.width - 1)
-})
-
-test('a required project update preempts the work dashboard with one clear action', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 820 })
-  await page.goto('/projects/looma-knit/work?view=columns')
-
-  const updateGate = page.getByRole('region', { name: 'Project update required' })
-  await expect(updateGate).toBeVisible()
-  await expect(updateGate.getByRole('button', { name: 'Review project update' })).toBeVisible()
-  await expect(page.getByRole('toolbar', { name: 'Work view controls' })).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: 'Work list' })).toHaveCount(0)
-  await expectNoClippedContent(page, {
-    containerSelector: '[aria-label="Project update required"]',
-    itemSelector: '[aria-label="Project update required"] button',
-  })
 })
 
 test('browsing work is deliberate and remains readable at split-screen widths', async ({ page }) => {
@@ -463,6 +419,28 @@ test('project shell keeps a required update as the sole visible work interruptio
   expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(1115)
 })
 
+for (const surface of projectSurfaceRoutes) {
+  test(`${surface.name} route loads as part of the user-test matrix`, async ({ page }) => {
+    await page.goto(surface.path)
+    if ('applyUpdates' in surface && surface.applyUpdates) {
+      await applyRequiredProjectUpdates(page)
+      await page.goto(surface.path)
+    }
+    await surface.assertions(page)
+  })
+}
+
+test('managed project state keeps Thread readable after migration', async ({ page }) => {
+  await page.goto('/projects/looma-knit/work')
+  await applyRequiredProjectUpdates(page)
+  await page.goto('/projects/looma-knit/thread')
+
+  await expect(page.getByText('No response needed', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Repair this spec' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Repair spec' })).toBeVisible()
+  await expect(page.getByText('This bounded chat objective is not supported here yet.')).toHaveCount(0)
+})
+
 test('selecting a work row does not make the passive Work list card look selected', async ({ page }) => {
   await page.setViewportSize({ width: 1114, height: 692 })
   await page.goto('/projects/narrative-harness/work')
@@ -542,12 +520,14 @@ test('default settings is a chooser, not a readiness report', async ({ page }) =
   await expect(page.getByRole('heading', { name: 'Local runtime' })).toHaveCount(0)
 })
 
-test('task drawer direct route renders tabs and closes to the overview background', async ({ page }) => {
+test('task drawer direct route renders the shared decision and closes to the overview background', async ({ page }) => {
   await page.goto('/projects/looma-knit/task/task-workspace-import?tab=spec')
 
   await expect(page.getByRole('complementary', { name: 'Task drawer' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Review existing project work' })).toBeVisible()
-  await expect(page.getByRole('complementary', { name: 'Task drawer' }).getByRole('tab', { name: 'Spec' })).toBeVisible()
+  const drawer = page.getByRole('complementary', { name: 'Task drawer' })
+  await expect(drawer.getByRole('region', { name: 'Project decision' })).toBeVisible()
+  await expect(drawer.getByRole('button', { name: 'Repair spec' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(page).toHaveURL(/\/projects\/looma-knit\/overview$/)

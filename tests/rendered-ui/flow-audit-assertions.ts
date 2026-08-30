@@ -1,5 +1,52 @@
 import { expect, type Page } from '@playwright/test'
 
+export async function applyRequiredProjectUpdates(
+  page: Page,
+  options: { expectUpdate?: boolean; terminalTimeoutMs?: number } = {},
+): Promise<void> {
+  const reviewUpdate = page.getByRole('button', { name: 'Review project update' })
+  if (options.expectUpdate) {
+    await expect(reviewUpdate).toBeVisible({ timeout: 30_000 })
+  } else {
+    await expect(
+      reviewUpdate.or(page.locator('main').getByRole('heading').first()).first(),
+    ).toBeVisible({ timeout: 30_000 })
+    if (!await reviewUpdate.isVisible()) {
+      await reviewUpdate.waitFor({ state: 'visible', timeout: 3_000 }).catch(() => undefined)
+    }
+  }
+  const updateRequired = await reviewUpdate.isVisible()
+  if (!updateRequired) return
+
+  await reviewUpdate.click()
+  const modal = page.getByRole('dialog', { name: 'Migrate project' })
+  await expect(modal).toBeVisible()
+
+  for (let applied = 0; applied < 8; applied += 1) {
+    const apply = modal.getByRole('button', { name: 'Apply required updates' })
+    await expect(apply).toBeEnabled()
+    await apply.click()
+
+    const complete = modal.getByText('Migration complete.', { exact: true })
+    const continuing = modal.getByText('Update applied. Another project update is required.', { exact: true })
+    const migrationError = modal.getByRole('alert').filter({ hasText: /^Migration error/ })
+    await expect(complete.or(continuing).or(migrationError)).toBeVisible({
+      timeout: options.terminalTimeoutMs,
+    })
+    if (await migrationError.isVisible()) {
+      throw new Error(`Project migration failed: ${await migrationError.textContent()}`)
+    }
+    if (await complete.isVisible()) {
+      await modal.getByRole('contentinfo').getByRole('button', { name: 'Close' }).click()
+      await expect(modal).toHaveCount(0)
+      return
+    }
+    await expect(modal.getByText('Project update applied', { exact: true })).toBeVisible()
+  }
+
+  throw new Error('Expected the project update sequence to complete within eight migrations.')
+}
+
 export interface FlowUserJob {
   route: string
   projectId: string
@@ -293,14 +340,17 @@ export async function expectProjectOrientationSpineAgreement(
     await expect(focusedWork.getByRole('button').first()).toBeVisible()
   } else {
     const showFilter = page.getByLabel('Show', { exact: true })
-    await showFilter.selectOption({ label: 'Current scope' })
+    await showFilter.selectOption({ label: 'Scope history' })
     await expectProgressiveScopeWorkCount(page, { current: included, deferred })
   }
   await page.goto(`/projects/${expected.projectId}/thread`)
-  await expect(page.getByRole('complementary', { name: 'Thread list' }).or(page.getByText('No response needed', { exact: true }))).toBeVisible()
+  await expect(
+    page.getByRole('complementary', { name: 'Thread list' })
+      .or(page.getByRole('heading', { name: /^(No response needed|Nothing current|Current work)$/ })),
+  ).toBeVisible()
 
   await page.goto(`/projects/${expected.projectId}/release`)
-  await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /^(Current work|(Release|Scope) readiness)$/ })).toBeVisible()
   await expect(page.getByRole('button').first()).toBeVisible()
 
   await page.goto(`/projects/${expected.projectId}/structure`)

@@ -3,6 +3,43 @@ import { TaskQueue } from '@guildhall/core'
 import { normalizeLegacyTaskQueueForMigration } from '../task-queue-migration.js'
 
 describe('normalizeLegacyTaskQueueForMigration', () => {
+  it('wraps a legacy task array in the current queue envelope', () => {
+    const now = '2026-08-30T00:00:00.000Z'
+    const normalized = normalizeLegacyTaskQueueForMigration([{
+      id: 'legacy-task',
+      title: 'Legacy task',
+      description: 'Legacy array fixture.',
+      domain: 'core',
+      projectPath: '/tmp/legacy-project',
+      status: 'exploring',
+      priority: 'normal',
+      acceptanceCriteria: [],
+      outOfScope: [],
+      dependsOn: [],
+      notes: [],
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+      escalations: [],
+      agentIssues: [],
+      revisionCount: 0,
+      remediationAttempts: 0,
+      origination: 'human',
+      createdAt: '2026-08-28T00:00:00.000Z',
+      updatedAt: '2026-08-29T00:00:00.000Z',
+    }], now)
+
+    const parsed = TaskQueue.parse(normalized)
+    expect(parsed).toMatchObject({
+      version: 1,
+      lastUpdated: '2026-08-29T00:00:00.000Z',
+      tasks: [{
+        id: 'legacy-task',
+        title: 'Legacy task',
+      }],
+    })
+  })
+
   it('backfills durable task references from legacy imported request-intake evidence', () => {
     const normalized = normalizeLegacyTaskQueueForMigration({
       version: 1,

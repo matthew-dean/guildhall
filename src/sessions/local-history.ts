@@ -205,6 +205,18 @@ export function getProjectSystemStatePathFromMemoryDir(memoryDir: string, relati
   return getProjectSystemStatePath(inferProjectRootFromMemoryDir(resolved), relativePath)
 }
 
+/**
+ * Resolve a project-scoped state file from either a project-state handle or a
+ * standalone directory used by compatibility callers and tests.
+ */
+export function projectScopedStatePath(memoryDir: string, relativePath: string): string {
+  const resolved = resolve(memoryDir)
+  const base = basename(resolved)
+  return base === '.guildhall' || base === 'memory' || base === 'project-state'
+    ? getProjectSystemStatePathFromMemoryDir(resolved, relativePath)
+    : join(resolved, relativePath)
+}
+
 export function getProjectTranscriptPath(
   projectRoot: string,
   kind: 'exploring',
