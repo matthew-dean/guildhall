@@ -63145,7 +63145,7 @@ owner-review projection as the authority for whether a handoff exists.
 
 ### Finding: Shared source references must be unique before any owner surface consumes them
 
-- [ ] User job: when the owner opens a release, task record, or deliberate
+- [x] User job: when the owner opens a release, task record, or deliberate
   source/provenance detail, each source appears once. Repeated internal source
   discovery must not inflate diagnostics, payloads, or future default views.
 - Live finding, 2026-08-30: t-minus-t's live release packet contained the
@@ -63174,6 +63174,49 @@ in task data; the shared projection normalizes it at read time.
 - `pnpm vitest run src/runtime/__tests__/project-scope-projection.test.ts
   --reporter=dot` passed (36 tests), including repeated references from task
   metadata, source claims, and Markdown text plus the no-source fallback.
-- `pnpm typecheck` and `pnpm lint:contracts` passed. The installed t-minus-t
-  run remains active, so the install/restart replay is deliberately deferred
-  until its Guildhall-owned worktree reaches a safe handoff.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm build` passed. Installed
+  t-minus-t replay, 2026-08-30: after the safe pause, rebuild/install/restart,
+  the shared Release scope row had 21 references and 21 distinct references;
+  the old repeated entries were gone without changing the default compact
+  Release view.
+
+### Finding: A paused saved-work handoff must name the work that resumes
+
+- [x] User job: after pausing active work, the owner sees the task that was
+  paused, knows its edits are safe, and can tell that `Resume work` continues
+  that same task. The explanation must not make them infer what “this task” or
+  “its current workspace” refers to.
+- Live finding, 2026-08-30: the owner paused real t-minus-t `TMI-004` after a
+  stalled provider request. Work showed a visible `Resume work` action, but
+  the shared decision/action detail fell back to `Progress is saved. Resume
+  continues this task from its current workspace.` The plan projection already
+  had the concrete task title, but the action model overwrote it with generic
+  wording.
+
+#### Contract Touch Decision
+
+Work id: `paused-saved-work-names-focus-2026-08-30`. Touched contracts: the
+shared project action detail and the action-applied decision execution message
+for paused live work with saved progress. The focused task identity remains the
+existing typed `focusTaskTitle`; no route reconstructs it. Considered but not
+touched: pause persistence, checkpoint schema, worker recovery policy,
+run-control behavior, and worktree ownership. Required proof: the action model
+and decision execution both name the paused task and retain the one `Resume
+work` operation. Apply/revert: shared action projection only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repair uses the existing focus identity and
+partial-work progress state.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/project-action-model.test.ts
+  --reporter=dot` passed (50 tests); `pnpm typecheck`, `pnpm lint:contracts`,
+  and `pnpm build` passed.
+- Installed local proof, 2026-08-30: after `pnpm dev:install`, `guildhall
+  stop`, and `guildhall start` in t-minus-t, `/api/stale-server` returned
+  `stale:false`. Real `TMI-004` paused safely. Work rendered its stable task
+  key, `Work paused`, the task-named saved-work explanation, and one visible
+  `Resume work` action. The shared API action, start readiness, and decision
+  execution used the same exact explanation.
