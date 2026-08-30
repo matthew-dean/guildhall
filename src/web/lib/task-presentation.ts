@@ -18,6 +18,20 @@ export interface TaskPresentation {
   tone: TaskPresentationTone
 }
 
+/** Names the next executable pass using the persisted lifecycle stage. */
+export function taskRunActionLabel(status: string | null | undefined, busy = false): string {
+  switch (status) {
+    case 'in_progress':
+      return busy ? 'Resuming...' : 'Resume work'
+    case 'review':
+      return busy ? 'Continuing review...' : 'Continue review'
+    case 'gate_check':
+      return busy ? 'Checking...' : 'Run checks'
+    default:
+      return busy ? 'Starting...' : 'Start work'
+  }
+}
+
 interface TaskPresentationInput {
   id?: string
   taskId?: string

@@ -6,7 +6,7 @@
   import { currentTaskHref } from '../../lib/project-routes.js'
   import { taskSourceSummary } from '../../lib/task-grounding.js'
   import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
-  import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
+  import { taskRunActionLabel, taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
   import { taskDisplayLabel, taskSourceQuestion, taskShapingBlockerLabel, taskShapingBlockers } from '@guildhall/shared'
   import type { ProjectDetail, Task } from '../../lib/types.js'
@@ -231,8 +231,7 @@
     if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft task brief'
     if (taskShapingBlockers(task).length > 0) return busy ? 'Shaping...' : 'Continue shaping brief'
     if (task.id === readyWorkTaskId) return busy ? 'Resuming...' : 'Resume this work item'
-    if (taskStagePresentation(task, { tasks }).key === 'paused') return busy ? 'Resuming...' : 'Resume'
-    return busy ? 'Starting...' : 'Start work'
+    return taskRunActionLabel(task.status, busy)
   }
 
   function canRunTask(task: Task): boolean {

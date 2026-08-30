@@ -61454,3 +61454,39 @@ docs build failure remains distinguishable from environment setup failure.
 No schema decision yet. The likely repair is executable workspace preparation;
 record a migration decision only if the project bootstrap contract or its
 persisted evidence format changes.
+
+### Finding: Task actions must name the stage they will run
+
+- [ ] User job: after deliberately opening a non-focused work item, the owner
+  can tell what the visible action will do without translating a status chip or
+  guessing whether it restarts implementation, review, or checks.
+- Finding, 2026-08-30: the live Looma + Knit Work inspector labels
+  `LOO-WPL1BT` as `Gates` but offers `Start work`. The task is actually in
+  `gate_check`; the generic label makes an executable action look unrelated to
+  the selected task's stated stage.
+
+#### Contract Touch Decision
+
+Work id: `stage-named-work-actions-2026-08-30`. Touched contract: shared
+owner-facing task run-action presentation. `ready` remains `Start work`, while
+`in_progress`, `review`, and `gate_check` describe their next execution stage
+as `Resume work`, `Continue review`, and `Run checks`. Considered but not
+touched: task lifecycle state, start endpoint, run scheduling, worker prompts,
+and owner-review authority. Required proof: every Work inspector action uses
+the typed status rather than copied route-level logic, and the live gate task
+renders `Run checks`.
+
+#### Schema Migration Decision
+
+No persisted schema change. This is a deterministic presentation mapping over
+existing task status.
+
+- [x] Prove the shared action mapping in focused UI coverage and in the
+  installed project. The Work tests cover ready, active, review, and gate
+  action labels (73 assertions across the focused suites). After `pnpm build`,
+  `pnpm dev:install`, and a fresh installed service (`stale:false`), selecting
+  the live `LOO-WPL1BT` Gates item at
+  `/projects/looma-knit/work?view=queue` renders the visible `Run checks`
+  action. At the 1280px desktop view, the route has no page-level horizontal
+  overflow (`scrollWidth === clientWidth`). The action was not executed during
+  this proof because it would start the task's real gate run.

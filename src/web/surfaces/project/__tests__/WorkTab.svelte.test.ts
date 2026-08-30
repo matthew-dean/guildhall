@@ -2185,9 +2185,30 @@ describe('WorkTab', () => {
     expect(screen.getAllByText('Paused')).toHaveLength(2)
     expect(screen.queryByText('In progress')).toBeNull()
     const inspector = screen.getByLabelText('Selected work inspector')
-    expect(within(inspector).getByRole('button', { name: 'Resume' })).toBeInTheDocument()
+    expect(within(inspector).getByRole('button', { name: 'Resume work' })).toBeInTheDocument()
     expect(within(inspector).queryByRole('button', { name: 'Start work' })).not.toBeInTheDocument()
     expect(inspector).toHaveTextContent('6 completion checks defined')
+  })
+
+  it('names the selected review and gate actions by their next lifecycle stage', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue&task=gate-task')
+    path.value = '/projects/looma-knit/work?view=queue&task=gate-task'
+    const rendered = render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'gate-task', title: 'Verify release checks', status: 'gate_check' }),
+          task({ id: 'review-task', title: 'Review implementation', status: 'review' }),
+        ]),
+      },
+    })
+
+    let inspector = await screen.findByLabelText('Selected work inspector')
+    expect(within(inspector).getByRole('button', { name: 'Run checks' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Inspect work Review implementation' }))
+    inspector = await screen.findByLabelText('Selected work inspector')
+    expect(within(inspector).getByRole('button', { name: 'Continue review' })).toBeInTheDocument()
+    rendered.unmount()
   })
 
   it('does not offer Start work for dependency-waiting work', async () => {
