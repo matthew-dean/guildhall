@@ -298,6 +298,7 @@ export interface PressureTestQuestionTurn extends TurnBase {
     evidence: string[]
   }
   answerEndpoint: string
+  directTaskEndpoint: string
 }
 
 export interface BoundedChatTurn extends TurnBase {
@@ -1143,6 +1144,7 @@ function pressureTestTurns(projectPath: string, intakes: PressureTestIntake[]): 
           evidence: intake.pendingQuestion.evidence,
         },
         answerEndpoint: `/api/project/pressure-test/${encodeURIComponent(intake.id)}/answer`,
+        directTaskEndpoint: `/api/project/pressure-test/${encodeURIComponent(intake.id)}/use-request`,
         at: intake.pendingQuestion.askedAt,
         persona: 'intake',
         status: 'active',

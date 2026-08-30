@@ -296,6 +296,7 @@
       evidence: string[]
     }
     answerEndpoint: string
+    directTaskEndpoint: string
   }
   interface BoundedChatTurn {
     kind: 'bounded_chat'
@@ -2932,6 +2933,23 @@
     }
   }
 
+  async function useRequestAsTaskBrief(turn: PressureTestQuestionTurn): Promise<void> {
+    busyTurnId = turn.id
+    try {
+      const r = await scopedProjectFetch(turn.directTaskEndpoint, { method: 'POST' })
+      const body = await r.json().catch(() => ({})) as { error?: string; taskId?: string }
+      if (!r.ok || body.error) {
+        pressureTestErrors = { ...pressureTestErrors, [turn.id]: body.error ?? `HTTP ${r.status}` }
+        return
+      }
+      await load()
+      await refreshProject()
+      if (body.taskId) focusTurn(`task:${body.taskId}`)
+    } finally {
+      busyTurnId = null
+    }
+  }
+
   // Group co-active agent_question turns by taskId so each card can still show
   // the full number of active questions in its section.
   interface QuestionSection {
@@ -4367,6 +4385,13 @@
                       </div>
                       {#if isMultipleOwnerChoice(t)}
                         <Row justify="end" gap="2">
+                          <Button
+                            variant="secondary"
+                            disabled={busyTurnId === t.id}
+                            onclick={() => useRequestAsTaskBrief(t)}
+                          >
+                            Use request as task brief
+                          </Button>
                           <Button
                             variant="primary"
                             disabled={busyTurnId === t.id || selectedPressureChoices(t.id).length === 0}
@@ -6146,6 +6171,16 @@
                                     }}
                                   >
                                     Cancel
+                                  </Button>
+                                {/if}
+                                {#if footerComposer.kind === 'pressure_test'}
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    disabled={busyTurnId === footerComposer.turn.id}
+                                    onclick={() => useRequestAsTaskBrief(footerComposer.turn)}
+                                  >
+                                    Use request as task brief
                                   </Button>
                                 {/if}
                                 <Button

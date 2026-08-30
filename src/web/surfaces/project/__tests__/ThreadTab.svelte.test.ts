@@ -326,6 +326,7 @@ interface PressureTestQuestionTurnForTest {
     evidence: string[]
   }
   answerEndpoint: string
+  directTaskEndpoint: string
 }
 
 interface BoundedChatTurnForTest {
@@ -388,6 +389,7 @@ function pressureTestQuestionTurn(
       evidence: ['internal/plans/guildhall-0-8.md: release goals'],
     },
     answerEndpoint: '/api/project/pressure-test/pti-guildhall-0-8-0/answer',
+    directTaskEndpoint: '/api/project/pressure-test/pti-guildhall-0-8-0/use-request',
     ...overrides,
   }
 }
@@ -2041,6 +2043,7 @@ describe('ThreadTab', () => {
           evidence: ['project-brief.md: Narrative Harness is fiction-writing software.'],
         },
         answerEndpoint: '/api/project/pressure-test/pti-narrative-harness/answer',
+        directTaskEndpoint: '/api/project/pressure-test/pti-narrative-harness/use-request',
       }),
     ], 'pressure-test:pti-narrative-harness:project-direction-priority')
 

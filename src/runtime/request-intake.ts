@@ -141,6 +141,27 @@ export function analyzeRequestIntake(input: AnalyzeRequestIntakeInput): RequestI
   }
 }
 
+/**
+ * An owner who explicitly starts a bounded task has already made the only
+ * intake decision Guildhall needs. Keep the ordinary analysis as grounding,
+ * but make that decision durable instead of leaving guided checks behind to
+ * look like a future owner checkpoint.
+ */
+export function directRequestIntake(input: AnalyzeRequestIntakeInput): RequestIntake {
+  const analyzed = analyzeRequestIntake(input).requestIntake
+  const { ownerDecisionNeeded: _ownerDecisionNeeded, whyOwnerDecisionMatters: _whyOwnerDecisionMatters, ...direct } = analyzed
+  return {
+    ...direct,
+    intent: 'implementation',
+    recommendedNextAction: 'proceed_to_implementation_spec',
+    missingInformation: [],
+    pressureTestSummary: pressureTestSummary('automatic', {
+      designQuality: isUiLikeRequest([input.title, input.ask].filter(Boolean).join('\n')),
+    }),
+    clarifyingQuestions: [],
+  }
+}
+
 function intakeAssumptions(input: {
   implementationLike: boolean
   specLike: boolean

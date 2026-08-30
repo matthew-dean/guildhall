@@ -190,8 +190,10 @@ import {
   createBugReportTask,
   answerPressureTestQuestionWithMaterialization,
   materializeCompletedPressureTestIntake,
+  materializePressureTestRequestWithoutDiscovery,
   parseStackTraceTopFile,
 } from './intake.js'
+import { directRequestIntake } from './request-intake.js'
 import {
   createPressureTestIntake,
   loadPressureTestIntake,
@@ -12723,6 +12725,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ask?: string
         domain?: string
         title?: string
+        startMode?: 'direct' | 'guided'
       }
       if (!body.ask || body.ask.trim().length === 0) {
         return c.json({ error: 'Missing "ask" in request body' }, 400)
@@ -12739,6 +12742,41 @@ export function buildServeApp(opts: ServeOptions = {}): {
         routeContext: { route: '/api/project/request' },
       })
       const firstAction = routed.actions[0]
+      if (body.startMode === 'direct' && firstAction?.safety === 'project-write') {
+        const now = new Date().toISOString()
+        const title = body.title?.trim() || firstAction.label
+        const task = await createExploringTask({
+          memoryDir: getProjectStateDir(project.path),
+          ask: body.ask,
+          domain,
+          projectPath: resolveTaskPathForDomain(project, domain),
+          title,
+          request: {
+            id: `request-${now.replace(/[^0-9]/g, '')}`,
+            raw: body.ask,
+            kind: 'task_spec',
+            title,
+            routingSummary: 'Owner started a bounded request directly.',
+            pressureTestRequired: false,
+            createdAt: now,
+          },
+          requestIntakeOverride: directRequestIntake({
+            ask: body.ask,
+            title,
+            createdAt: now,
+          }),
+          ownerInputOverride: null,
+        })
+        return c.json({
+          routedActions: routed.actions,
+          routingDecision: {
+            ...routed.routingDecision,
+            matchedSignals: [...routed.routingDecision.matchedSignals, 'owner_direct_start'],
+          },
+          taskId: task.taskId,
+          transcriptPath: task.transcriptPath,
+        })
+      }
       if (firstAction?.kind === 'pressure_test_intake') {
         const result = await createRoutedRequest({
           memoryDir: getProjectStateDir(project.path),
@@ -12956,6 +12994,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } catch {
         // Preserve the original answer error when recovery cannot complete.
       }
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/pressure-test/:id/use-request', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const defaultCoordinator = project.config?.coordinators?.[0]
+      if (!defaultCoordinator) {
+        return c.json({
+          error: 'Guildhall needs a coordinator domain before it can create this task.',
+          code: 'coordinator_required',
+        }, 400)
+      }
+      const materialized = await materializePressureTestRequestWithoutDiscovery({
+        memoryDir: getProjectStateDir(project.path),
+        intakeId: c.req.param('id'),
+        domain: defaultCoordinator.domain,
+        projectPath: resolveTaskPathForDomain(project, defaultCoordinator.domain),
+      })
+      if (!materialized) {
+        return c.json({ error: 'This project check-in cannot become a task brief.' }, 409)
+      }
+      return c.json({ taskId: materialized.taskId })
+    } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })

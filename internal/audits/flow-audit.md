@@ -63783,3 +63783,104 @@ No persisted-schema change.
   Release has no self-linking `Open Release`, Thread reports no current work,
   and the completed task leads with a compact handoff; its record is available
   only after the owner selects `View task details`.
+
+### Finding: A bounded new request must not become a mandatory questionnaire
+
+- [ ] User job: an owner submits a clear, bounded request with its constraints
+  and proof commands. Guildhall creates one task brief directly so the owner
+  can review and approve it. Discovery remains available only when the owner
+  asks for help shaping an unclear request; it must not block a ready request
+  with generic questions, closeout questions, or an "anything else?" loop.
+- Live finding, 2026-08-30: the t-minus-t 0.0.1 documentation request named
+  the exact behavior, non-goal, and `pnpm build`, `pnpm test`, and `pnpm lint`
+  proof. `New thread` nevertheless routed it through pressure-test intake,
+  then asked the owner to restate the goal, answer whether there was anything
+  else, and explain the workflow. Each question blocked the next step despite
+  the answer already being present in the submitted request.
+
+#### Contract Touch Decision
+
+Work id: `direct-new-request-owner-path-2026-08-30`. Touched contracts: the
+typed request-start mode at the New thread/API boundary and direct task
+materialization for owner-authored bounded requests. Considered but not
+touched: task schema, release persistence, pressure-test question schema,
+task approval, worker execution, and route-local next-action ranking. Required
+proof: default New thread creates an exploring task with no owner question;
+the owner can deliberately select guided shaping; a clear request then reaches
+the normal spec-review flow. Apply/revert: direct start creates an ordinary
+existing task-spec request and retains guided intake as an explicit mode.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The start mode is request-local API input; created
+work uses the existing task request fields.
+
+### Finding: A direct owner choice must have one shared actionable state
+
+- [ ] User job: after choosing `Create task` or `Use request as task brief`,
+  the owner sees one clear state across Overview, Work, Thread, and the task:
+  Guildhall is shaping the task, the task is ready for spec review, or the
+  owner has one visible decision to make. A running worker with no primary
+  action, a release blocker without owner input, or guided-pressure language
+  after direct start is a failed state agreement.
+- Live finding, 2026-08-30: after using the t-minus-t request as its task
+  brief, the initial shared response briefly reported a running execution with
+  no primary action while scope/release state described a blocked task. The
+  settled task correctly reached `spec_review`, but its persisted intake still
+  described a guided pressure test with `needs-owner-judgment` checks even
+  though the owner had explicitly bypassed discovery.
+
+#### Contract Touch Decision
+
+Work id: `direct-owner-state-agreement-2026-08-30`. Touched contracts: the
+typed request-intake record created by direct start and direct pressure-test
+materialization. An explicit direct owner choice means automatic system-owned
+checks, no missing-information entries, and implementation-spec progression.
+Considered but not touched: task status schema, owner-input persistence,
+release schema, coordinator scheduling, route-local status ranking, and model
+prose. Required proof: both direct-entry paths store the same automatic
+request-intake contract, then shared decision/action APIs name `review_spec`
+when the task reaches review. Apply/revert: this changes only new direct task
+records; guided requests retain their existing contract.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing task request-intake fields encode the
+owner's direct choice; earlier records remain readable and receive no automatic
+rewrite.
+
+#### Validation
+
+- Focused direct-request and guided-intake API coverage passed 30/30;
+  `IntakeModal` passed 5/5; `ThreadTab` passed 130/130; `pnpm typecheck` and
+  `pnpm lint:contracts` passed.
+- Live t-minus-t proof: the owner used a prior guided request as the task brief,
+  started one bounded worker pass, and the authoritative API settled on one
+  executable next action: `Review a spec` for `task-005`. The installed app
+  was rebuilt, reinstalled, restarted, and reported `stale:false`.
+
+### Finding: A project route must finish hydrating before it can be actionable
+
+- [ ] User job: opening the task that Guildhall just directed the owner to
+  reaches its visible task/review action promptly. It must not remain on
+  `Loading project...` while the corresponding project API has already
+  returned a current, actionable payload.
+- Live finding, 2026-08-30: a fresh installed-app tab at
+  `/projects/t-minus-t/task/task-005` remained on `Loading project...` after
+  six seconds. In the same interval `/api/project?projectId=t-minus-t` returned
+  HTTP 200 with the current project, task inventory, and `Review a spec`
+  primary action. The existing Looma + Knit tab remained rendered normally.
+
+#### Contract Touch Decision
+
+Work id: `t-minus-t-fresh-route-hydration-2026-08-30`. No code change in this
+unit. The suspected boundary is project-scoped client refresh/hydration versus
+the bounded `/api/project` projection. Considered but not touched: task route
+parsing, API payload schema, task review state, and server startup. Required
+proof for follow-up: reproduce in a fresh tab, identify the pending client
+boundary, and show the task CTA after the same API response. Apply/revert:
+diagnostic finding only.
+
+#### Schema Migration Decision
+
+No persisted-schema change.

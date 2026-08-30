@@ -6,12 +6,16 @@ import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
 import {
   getProjectStateDir,
+  getProjectSystemStatePath,
+  readProjectStateDatabaseQueueDefinition,
   readProjectStateJsonAsync,
   readProjectStateTextAsync,
   writeProjectStateTextAsync,
 } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
-import { materializeCompletedPressureTestIntake } from '../intake.js'
+import { materializeCompletedPressureTestIntake, materializePressureTestRequestWithoutDiscovery } from '../intake.js'
+import { applyProjectMigrations } from '../migrations.js'
+import { writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
 import {
   createPressureTestIntake,
   listPressureTestIntakes,
@@ -22,6 +26,20 @@ import {
 let tmpDir: string
 let dataDir: string
 let projectId: string
+
+async function migrateTestProject(projectRoot: string): Promise<void> {
+  writeProjectTaskQueueWithSummary(getProjectSystemStatePath(projectRoot, 'TASKS.json'), {
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [],
+  }, { projectRoot })
+  const migrations = await applyProjectMigrations({
+    projectRoot,
+    includePrompt: true,
+    includeRequired: true,
+  })
+  expect(migrations.failed).toEqual([])
+}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-intake-'))
@@ -52,6 +70,7 @@ beforeEach(async () => {
       },
     ],
   }).id ?? path.basename(tmpDir)
+  await migrateTestProject(tmpDir)
 })
 
 afterEach(async () => {
@@ -61,6 +80,8 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
+  const databaseQueue = readProjectStateDatabaseQueueDefinition(getProjectSystemStatePath(tmpDir, 'TASKS.json'))
+  if (databaseQueue) return TaskQueue.parse(databaseQueue)
   const parsed = await readProjectStateJsonAsync<unknown>(tmpDir, 'TASKS.json').catch((err: unknown) => {
     if (
       err &&
@@ -111,6 +132,7 @@ describe('POST /api/project/intake', () => {
         name: 'Bare Intake',
         coordinators: [],
       }).id ?? path.basename(bareDir)
+      await migrateTestProject(bareDir)
       const url = new URL('http://localhost/api/project/intake')
       url.searchParams.set('projectId', bareProjectId)
 
@@ -162,6 +184,77 @@ describe('POST /api/project/intake', () => {
 })
 
 describe('POST /api/project/request', () => {
+  it('creates a direct owner request as one task without a pressure-test or owner-question detour', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const ask = 'Correct the public command name and verify build, test, and lint.'
+    const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask, title: 'Correct release docs', startMode: 'direct' }),
+    }))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { taskId?: string; routingDecision?: { matchedSignals?: string[] } }
+    expect(body.taskId).toBeTruthy()
+    expect(body.routingDecision?.matchedSignals).toContain('owner_direct_start')
+    const queue = await readQueue()
+    expect(queue.tasks).toHaveLength(1)
+    expect(queue.tasks[0]).toMatchObject({
+      title: 'Correct release docs',
+      description: ask,
+      status: 'exploring',
+      request: {
+        kind: 'task_spec',
+        routingSummary: 'Owner started a bounded request directly.',
+        pressureTestRequired: false,
+      },
+    })
+    expect(queue.tasks[0]?.requestIntake?.recommendedNextAction).not.toBe('ask_clarifying_question')
+    expect(queue.tasks[0]?.requestIntake).toMatchObject({
+      intent: 'implementation',
+      recommendedNextAction: 'proceed_to_implementation_spec',
+      missingInformation: [],
+      pressureTestSummary: {
+        degree: 'automatic',
+        checks: expect.arrayContaining([
+          expect.objectContaining({ id: 'owner-intent', status: 'system-check' }),
+          expect.objectContaining({ id: 'scope-boundary', status: 'system-check' }),
+          expect.objectContaining({ id: 'release-boundary', status: 'system-check' }),
+        ]),
+      },
+    })
+  })
+
+  it('lets an owner turn a guided intake into the supplied task brief without completing generic questions', async () => {
+    const intake = await createPressureTestIntake({
+      memoryDir: getProjectStateDir(tmpDir),
+      target: { type: 'release', id: 'docs-release', title: 'Accurate release docs' },
+      rawRequest: 'Correct the public command name and verify build, test, and lint.',
+    })
+
+    const materialized = await materializePressureTestRequestWithoutDiscovery({
+      memoryDir: getProjectStateDir(tmpDir),
+      intakeId: intake.id,
+      domain: 'knit',
+      projectPath: path.join(tmpDir, 'knit'),
+    })
+
+    expect(materialized?.taskId).toBeTruthy()
+    const completed = await loadPressureTestIntake({ memoryDir: getProjectStateDir(tmpDir), intakeId: intake.id })
+    expect(completed).toMatchObject({ status: 'complete', activeDomainId: null, pendingQuestion: null })
+    expect(completed.domains.every(domain => domain.status === 'closed' || domain.status === 'deferred')).toBe(true)
+    const queue = await readQueue()
+    expect(queue.tasks).toHaveLength(1)
+    expect(queue.tasks[0]).toMatchObject({
+      description: intake.rawRequest,
+      request: {
+        routingSummary: 'Owner used the supplied request as the task brief.',
+        pressureTestRequired: false,
+      },
+    })
+    expect(queue.tasks[0]?.requestIntake?.pressureTestSummary.degree).toBe('automatic')
+  })
+
   it('returns an actionable 400 when a completed intake has no coordinator domain', async () => {
     const bareDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-pressure-intake-bare-'))
     try {
@@ -169,6 +262,7 @@ describe('POST /api/project/request', () => {
         name: 'Bare Pressure Intake',
         coordinators: [],
       }).id ?? path.basename(bareDir)
+      await migrateTestProject(bareDir)
       const memoryDir = getProjectStateDir(bareDir)
       const intake = await createPressureTestIntake({
         memoryDir,

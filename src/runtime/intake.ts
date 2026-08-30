@@ -41,7 +41,7 @@ import {
   savePressureTestIntake,
   type PressureTestIntake,
 } from './pressure-test-intake.js'
-import { analyzeRequestIntake, type RequestIntakeOwnerInput } from './request-intake.js'
+import { analyzeRequestIntake, directRequestIntake, type RequestIntakeOwnerInput } from './request-intake.js'
 import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
 import {
   productBriefFromSpecCompletionBoundary,
@@ -364,11 +364,48 @@ export async function materializeCompletedPressureTestIntake(input: {
   })
 }
 
+export async function materializePressureTestRequestWithoutDiscovery(input: {
+  memoryDir: string
+  intakeId: string
+  domain: string
+  projectPath: string
+}): Promise<MaterializedPressureTestIntake | null> {
+  return withProjectStateWriteLock(tasksPathFor(input.memoryDir), async () => {
+    const intake = await loadPressureTestIntake({
+      memoryDir: input.memoryDir,
+      intakeId: input.intakeId,
+    })
+    if (intake.target.type === 'project') return null
+    if (!intake.handoff) {
+      const now = new Date().toISOString()
+      intake.status = 'complete'
+      intake.activeDomainId = null
+      intake.pendingQuestion = null
+      intake.domains = intake.domains.map(domain => domain.status === 'closed'
+        ? domain
+        : { ...domain, status: 'deferred' as const })
+      if (!intake.outputs.decisions.includes('Owner used the supplied request as the task brief.')) {
+        intake.outputs.decisions.push('Owner used the supplied request as the task brief.')
+      }
+      intake.updatedAt = now
+      await savePressureTestIntake(input.memoryDir, intake)
+    }
+    return materializeCompletedPressureTestIntakeUnlocked({
+      memoryDir: input.memoryDir,
+      intake,
+      domain: input.domain,
+      projectPath: input.projectPath,
+      ownerDirect: true,
+    })
+  })
+}
+
 async function materializeCompletedPressureTestIntakeUnlocked(input: {
   memoryDir: string
   intake: PressureTestIntake
   domain: string
   projectPath: string
+  ownerDirect?: boolean
 }): Promise<MaterializedPressureTestIntake | null> {
   const { intake } = input
   if (intake.status !== 'complete' || intake.target.type === 'project') return null
@@ -394,7 +431,7 @@ async function materializeCompletedPressureTestIntakeUnlocked(input: {
   const now = new Date().toISOString()
   const task = await createExploringTask({
     memoryDir: input.memoryDir,
-    ask: [intake.rawRequest, '', renderPressureTestSpec(intake)].join('\n'),
+    ask: input.ownerDirect ? intake.rawRequest : [intake.rawRequest, '', renderPressureTestSpec(intake)].join('\n'),
     domain: input.domain,
     projectPath: input.projectPath,
     title: intake.target.title,
@@ -403,10 +440,22 @@ async function materializeCompletedPressureTestIntakeUnlocked(input: {
       raw: intake.rawRequest,
       kind: 'task_spec',
       title: intake.target.title,
-      routingSummary: 'Completed pressure-test intake',
-      pressureTestRequired: true,
+      routingSummary: input.ownerDirect
+        ? 'Owner used the supplied request as the task brief.'
+        : 'Completed pressure-test intake',
+      pressureTestRequired: !input.ownerDirect,
       createdAt: intake.createdAt,
     },
+    ...(input.ownerDirect
+      ? {
+          requestIntakeOverride: directRequestIntake({
+            ask: intake.rawRequest,
+            title: intake.target.title,
+            createdAt: now,
+          }),
+          ownerInputOverride: null,
+        }
+      : {}),
   })
   intake.handoff = {
     status: 'materialized',
