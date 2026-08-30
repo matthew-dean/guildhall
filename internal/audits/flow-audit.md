@@ -60590,3 +60590,38 @@ alignment for existing summary data.
   Work`, and an enabled `Resume` run control. The Overview then rendered the
   docs/storybook task, not AlertDialog; that command remained visible without
   horizontal overflow at 1024px and 390px.
+
+### Finding: A routed project decision must name the task before asking for an action
+
+- [x] User job: when a completed task drawer sends the owner to the next
+  project decision, the owner can see which task the command affects and why
+  it is next without opening a second record.
+- Finding, 2026-08-30: after approving Looma's docs/storybook spec, the drawer
+  correctly refreshed to the shared next action but showed only `Repair this
+  spec`. The action packet already held the current roadmap-sync task title
+  and explanation; the handoff presentation discarded both, making the owner
+  guess what would be repaired.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-project-decision-orientation-2026-08-30`.
+Touched contracts: the task-drawer project-decision handoff must present the
+existing shared action's `taskLabel` and detail along with its executable
+button. Long identity is clamped locally for layout but not re-ranked or
+rewritten. Considered but not touched: task selection, action ranking, spec
+repair semantics, and task persistence. Required proof: a cross-task repair
+handoff visibly names its target and presents the action without overflow.
+
+#### Schema Migration Decision
+
+No schema migration. `ProjectActionModel.taskLabel` and `detail` already carry
+the owner orientation contract.
+
+- [x] Regression and installed proof, 2026-08-30: focused TaskDrawer coverage
+  proves a cross-task decision renders its typed task label and that a
+  `repair_spec` operation is not mislabeled as an owner decision. The shared
+  decision projection now preserves `taskLabel` rather than replacing it with
+  the generic action label. After rebuild, install, and restart with
+  `stale:false`, the Looma Activity and project responses agreed on the same
+  task id, action, and full task label; the real prior-task drawer read `One
+  repair is ready`, named the roadmap-sync task, and exposed `Repair spec`.
