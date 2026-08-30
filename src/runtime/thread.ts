@@ -2384,6 +2384,25 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     if (pendingRunnableTurn) pendingRunnableTurn.status = 'active'
   }
 
+  // A pending brief/spec review is already the shared project's next owner
+  // decision. Let it displace leftover setup chrome, but never a real current
+  // question: the latter still has stronger decision priority.
+  const pendingTaskReview = [...turns].reverse().find(turn =>
+    turn.status === 'pending' &&
+    (turn.kind === 'brief_approval' || turn.kind === 'spec_review'),
+  )
+  const activeOwnerQuestion = turns.some(turn =>
+    turn.status === 'active' &&
+    (turn.kind === 'agent_question' || turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat' || turn.kind === 'escalation'),
+  )
+  if (pendingTaskReview && !activeOwnerQuestion) {
+    for (const turn of turns) {
+      if (turn.kind === 'setup_step' && turn.status === 'active') turn.status = 'pending'
+    }
+    pendingTaskReview.status = 'active'
+    pendingTaskReview.phase = pendingTaskReview.kind === 'spec_review' ? 'spec' : 'intake'
+  }
+
   const hasHumanOwnedActiveTurn = turns.some(isHumanOwnedActiveTurn)
   if (hasHumanOwnedActiveTurn) {
     for (const turn of turns) {

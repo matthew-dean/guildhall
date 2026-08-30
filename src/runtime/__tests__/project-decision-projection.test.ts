@@ -34,6 +34,43 @@ describe('project decision projection', () => {
     })
   })
 
+  it('keeps a drafted-brief review ahead of concurrent runner liveness', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-30T08:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: 'Review the drafted brief before work continues.',
+        focusTaskId: 'task-004',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        focusKind: 'brief_cleanup',
+      },
+      release: { scopeMode: 'unreleased', state: 'active', release: null, blockers: [] },
+    })
+
+    const refreshed = applyRuntimeExecutionToProjectDecision(decision, {
+      status: 'running',
+      activeTaskId: 'task-004',
+      activeTaskTitle: 'Open supported documents as TypeScript',
+    })
+
+    expect(refreshed.execution).toMatchObject({
+      state: 'blocked',
+      code: 'no_unattended_progress',
+      focusKind: 'brief_cleanup',
+    })
+    expect(projectDecisionStartReadiness(refreshed)).toMatchObject({
+      code: 'owner_input_required',
+      focusTaskId: 'task-004',
+      focusKind: 'brief_cleanup',
+    })
+    expect(refreshed.primaryAction).toEqual({
+      kind: 'answer_owner_input',
+      targetId: 'task-004',
+      reasonCode: 'owner_input_required',
+    })
+  })
+
   it('does not invent a release-review action after the selected release shipped', () => {
     const decision = buildProjectDecisionProjection({
       generatedAt: '2026-08-08T01:00:00.000Z',

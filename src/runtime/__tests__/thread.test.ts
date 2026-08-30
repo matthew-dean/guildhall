@@ -1799,7 +1799,7 @@ describe('buildThread', () => {
     }
   })
 
-  it('summarizes normal spec_review component tasks as owner approval', async () => {
+  it('promotes a pending spec review over leftover setup chrome', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(statePath(projectPath), { recursive: true })
@@ -1859,7 +1859,7 @@ describe('buildThread', () => {
         },
         bootstrapVerified: true,
         hasProvider: true,
-        hasDirection: true,
+        hasDirection: false,
         workspaceImportReviewed: true,
         taskCount: 1,
         wizardState: emptyWizardsState(),
@@ -1873,8 +1873,11 @@ describe('buildThread', () => {
 
       expect(thread.turns.find(turn => turn.id === 'spec:task-combobox')).toMatchObject({
         kind: 'spec_review',
+        status: 'active',
         phase: 'spec',
       })
+      expect(thread.turns.find(turn => turn.id === 'setup:direction')).toMatchObject({ status: 'pending' })
+      expect(thread.activeTurnId).toBe('spec:task-combobox')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

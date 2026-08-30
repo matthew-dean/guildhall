@@ -61857,3 +61857,54 @@ predecessor; fresh work receives a new identity.
   by archived project state|generates sequential ids when called multiple
   times' --reporter=dot` passed 2 tests.
 - `pnpm typecheck` and `pnpm lint:contracts` passed.
+
+### Finding: A drafted brief must outrank background activity
+
+- [x] User job: after Guildhall drafts a task brief, an owner sees `Review
+  brief` as the one primary action on every owner-facing surface, even while a
+  background run remains live. The action opens that task's review directly;
+  an older pending question can never take over the current handoff.
+- Finding, 2026-08-30: while driving t-minus-t's Open as TypeScript release
+  slice, the authoritative runtime recorded a pending `brief_approval` for
+  `task-004`, and the release decision correctly said owner input was required.
+  The shared top action instead reported generic running work because the
+  runtime execution state outranked the approval. Thread also selected an old
+  pressure-test question as active, burying the new brief in historical turns.
+
+#### Contract Touch Decision
+
+Work id: `owner-handoff-outranks-runtime-liveness-2026-08-30`. Touched
+contracts: shared project decision execution overlay, its typed primary-action
+projection, and current Thread active-turn selection. A typed brief/spec owner
+handoff remains the decision authority while a supervisor is still live; run
+liveness remains available separately for run controls. Thread promotes a
+pending task review over leftover setup chrome only when no real owner question
+is active. Considered but not touched: task lifecycle, supervisor process
+state, release blocker derivation, route-local action ranking, and provider
+prose. Required proof: a concurrent running observation preserves the brief
+review action, and setup cannot hide a pending spec review. Apply/revert: this
+changes no project records and returns to the previous runtime overlay if
+reverted.
+
+#### Schema Migration Decision
+
+No Guildhall persisted-schema change. The t-minus-t duplicate pressure-test
+intake created during this audit was deliberately moved from the existing
+`active` state to the existing `paused` state as an owner action; its question
+and evidence remain intact for an explicit resume, and it is no longer shown
+as current work.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/thread.test.ts
+  src/runtime/__tests__/project-decision-projection.test.ts
+  src/runtime/__tests__/project-action-model.test.ts --reporter=dot` passed
+  152 tests, including concurrent runner/brief-review and setup/spec-review
+  cases.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm build`, `pnpm
+  dev:install`, `guildhall stop`, and `guildhall start`, `/api/stale-server`
+  reported `stale:false`. The real project activity route reported one typed
+  `Review spec` action for `task-004`, and Thread reported only
+  `spec:task-004` as active; the paused duplicate intake no longer appeared.

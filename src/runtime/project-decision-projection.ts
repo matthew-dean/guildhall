@@ -929,6 +929,14 @@ function primaryActionForDecision(input: {
       ? { kind: 'answer_owner_input' as const, targetId: ownerInput.requestId, reasonCode: 'owner_input_required' }
       : ownerReview.state === 'required'
         ? { kind: 'review_spec' as const, targetId: ownerReview.taskId, reasonCode: 'owner_review_required' }
+      : execution.state === 'blocked' && execution.code === 'owner_input_required'
+        ? { kind: 'answer_owner_input' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
+        : execution.state === 'blocked' && execution.code === 'owner_review_required'
+          ? { kind: 'review_spec' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
+          : execution.state === 'blocked' && execution.code === 'no_unattended_progress' && execution.focusKind === 'brief_cleanup'
+            ? { kind: 'answer_owner_input' as const, targetId: execution.focusTaskId, reasonCode: 'owner_input_required' }
+            : execution.state === 'blocked' && execution.code === 'no_unattended_progress' && execution.focusKind === 'spec_review'
+              ? { kind: 'review_spec' as const, targetId: execution.focusTaskId, reasonCode: 'owner_review_required' }
       : execution.state === 'runnable'
         ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
         : execution.state === 'paused'
@@ -1039,6 +1047,34 @@ export function applyRuntimeExecutionToProjectDecision(
     }
   }
   if (decision.conflicts.some(conflict => conflict.field === 'execution')) return decision
+  // A live supervisor can still be flushing state after it has produced a
+  // concrete owner handoff. Preserve that handoff as the decision authority;
+  // callers receive runtime status separately for the pause/control surface.
+  // Otherwise every route would replace "Review brief" with generic work
+  // activity for the same project snapshot.
+  if (
+    decision.planExecution?.state === 'blocked' &&
+    (
+      decision.planExecution.code === 'owner_input_required' ||
+      decision.planExecution.code === 'owner_review_required' ||
+      (
+        decision.planExecution.code === 'no_unattended_progress' &&
+        (decision.planExecution.focusKind === 'brief_cleanup' || decision.planExecution.focusKind === 'spec_review')
+      )
+    )
+  ) {
+    return {
+      ...decision,
+      execution: decision.planExecution,
+      primaryAction: primaryActionForDecision({
+        conflicts: decision.conflicts,
+        ownerInput: decision.ownerInput,
+        ownerReview: decision.ownerReview,
+        execution: decision.planExecution,
+        release: decision.release,
+      }),
+    }
+  }
   const activeTaskId = runtimeExecution?.activeTaskId?.trim()
   const activeTaskTitle = runtimeExecution?.activeTaskTitle?.trim()
   const execution: ProjectDecisionExecution = {
