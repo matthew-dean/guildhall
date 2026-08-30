@@ -61043,7 +61043,9 @@ existing generic fallback until they receive a fresh project packet.
 - [x] Regression repair, 2026-08-30: ProjectView now memoizes each lazy owner
   surface import for the life of the shell, so refreshes preserve the pending
   import rather than replacing it. ProjectView route tests pass alongside the
-  shared-action regressions.
+  shared-action regressions. The packaged Chromium flow test
+  `managed project state keeps Thread readable after migration` also passes on
+  the cold Looma + Knit Thread route.
 - [ ] Remaining installed browser proof: rerun cold Thread, Release, and Inbox
   after the import-cache repair. The browser harness timed out while navigating
   before it could return DOM or console evidence, so the API and unit proof do
