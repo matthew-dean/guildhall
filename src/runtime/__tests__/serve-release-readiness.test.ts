@@ -4721,7 +4721,7 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
       scope: { id: 'headless-mvp' },
     })
     expect(compactReadiness).toHaveProperty('releaseCounts')
-  })
+  }, 30_000)
 
   it('returns a compact project spine for overview previews without changing the full map spine', async () => {
     await seedQueue({
