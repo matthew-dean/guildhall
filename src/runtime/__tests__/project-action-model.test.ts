@@ -1271,6 +1271,7 @@ describe('buildProjectActionModel', () => {
       source: 'task',
       taskId: 'task-stopping',
       tone: 'running',
+      code: 'running',
     })
     expect(stopping.secondaryActions).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ inboxKind: 'bootstrap_missing' }),
@@ -1298,6 +1299,7 @@ describe('buildProjectActionModel', () => {
       buttonLabel: 'Open Work',
       href: '/work?task=task-proof',
       tone: 'running',
+      code: 'running',
       taskId: 'task-proof',
     })
   })

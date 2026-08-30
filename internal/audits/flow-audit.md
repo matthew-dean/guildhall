@@ -60970,14 +60970,20 @@ blocked status only through an explicit recovery decision.
   duplicate decision field is a latent contradiction: any consumer that picks
   the stale plan-execution state can tell the owner the opposite of what just
   happened.
+- Follow-up finding, 2026-08-30: the installed Overview repeats the live
+  action but labels its only card `What needs your attention` even though the
+  card says Guildhall is working and no owner decision exists. A running task
+  is orientation, not a demand for the owner's attention.
 
 #### Contract Touch Decision
 
 Work id: `looma-knit-live-status-authority-2026-08-30`. Candidate touched
 contract: project decision execution status. The repair must identify a single
-authoritative live execution field and make compatibility fields derive from
-it, rather than asking views to choose between `planExecution` and
-`execution`. Considered but not touched: task lifecycle, release ranking,
+authoritative live execution field. `execution` owns liveness;
+`planExecution` is retained only as the stopped-run fallback, not as a
+competing owner-facing status. The shared action packet must also carry the
+typed `running` code whenever it represents live work; presentation cannot
+infer urgency from prose. Considered but not touched: task lifecycle, release ranking,
 owner-input priority, and provider state. Required proof: immediately after a
 real resume, all summary, chrome, overview, Work, drawer, Thread, release,
 inbox, and status consumers show the same running task or intentionally omit
@@ -60988,6 +60994,13 @@ live state.
 No persisted-schema change is proposed. This is an in-memory snapshot contract
 reconciliation; existing task and run records remain unchanged.
 
-- [ ] Regression and installed proof pending: trace the competing decision
-  fields to their shared builder, remove or derive the stale representation,
-  then compare all Looma + Knit owner surfaces during a real one-task run.
+- [x] Regression and installed proof, 2026-08-30: the shared action builder
+  now emits `code: running` for both task-backed and start-readiness-backed
+  live work. Project Overview uses that typed code, not copy or tone, to say
+  `Work is underway`. After a fresh build, install, restart, and `stale:false`,
+  real Looma + Knit changed from one visible `Resume work` action to
+  `Work is underway` plus `Pause` after resume, then returned to exactly one
+  `Resume work` action after pause. Action-model and Overview regressions pass.
+- [ ] Remaining surface proof: compare the authoritative execution state with
+  Work, drawer, Thread, release, inbox, and status during a real one-task run;
+  the saved `planExecution` fallback must never be presented as current work.

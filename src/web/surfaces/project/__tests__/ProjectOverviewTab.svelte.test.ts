@@ -57,6 +57,27 @@ describe('ProjectOverviewTab owner decision', () => {
     expect(screen.queryByText('Signals')).not.toBeInTheDocument()
   })
 
+  it('does not frame live work as an owner-attention demand', () => {
+    const running = detail({
+      actionModel: {
+        primaryAction: {
+          code: 'running',
+          label: 'Build the next primitive',
+          detail: 'Guildhall is working on "Build the next primitive".',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-running',
+          taskId: 'task-running',
+        },
+      },
+    })
+
+    render(ProjectOverviewTab, { detail: running as any, projectTicker: ticker, activeProjectId: 'looma-knit' })
+
+    expect(screen.getByRole('heading', { name: 'Work is underway' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'What needs your attention' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
+  })
+
   it('takes the owner straight to the action selected by the shared model', async () => {
     render(ProjectOverviewTab, { detail: detail() as any, projectTicker: ticker, activeProjectId: 'looma-knit' })
 

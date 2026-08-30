@@ -100,6 +100,7 @@
   const decisionTitle = $derived.by(() => {
     if (releaseShipped) return releaseTitle
     if (detail.actionModel?.primaryAction?.operation === 'repair_spec') return 'Spec repair needed'
+    if (detail.actionModel?.primaryAction?.code === 'running') return 'Work is underway'
     if (detail.actionModel?.primaryAction?.code === 'ready_work') return 'Ready to continue'
     return 'What needs your attention'
   })

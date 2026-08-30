@@ -596,6 +596,7 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
     href: task.status === 'spec_review' || blocked ? taskHrefForTask(task.id) : workHrefForTask(task.id),
     tone: cleanup || blocked || task.status === 'spec_review' ? 'warn' : running ? 'running' : 'accent',
     ...(blockedReason ? { code: 'blocked_work' } : {}),
+    ...(running ? { code: 'running' } : {}),
     taskId: task.id,
   }
 }
@@ -808,6 +809,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
       buttonLabel: 'Open Work',
       href: startReadiness.actionHref ?? workHrefForTask(startReadiness.focusTaskId),
       tone: 'running',
+      code: 'running',
       taskId: startReadiness.focusTaskId,
     })
   }
