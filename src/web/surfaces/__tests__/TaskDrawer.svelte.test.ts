@@ -2203,6 +2203,35 @@ describe('TaskDrawer', () => {
     await waitFor(() => expect(path.href).toContain('?detail=full&tab=overview'))
   })
 
+  it('does not present a coordinator-owned review as an owner approval', async () => {
+    openDrawerOn('overview')
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    payload.task.specReviewGate = {
+      authority: 'coordinator',
+      requestedAt: now,
+      requestedBy: 'coordinator-recovery',
+      reason: 'recovery',
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('tab', { name: 'Spec' })
+    expect(screen.queryByText('Approve this spec?')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
+  })
+
   it('keeps a shared spec-repair task out of approval in focused and full detail', async () => {
     const repairedProject = {
       ...projectDetail(),

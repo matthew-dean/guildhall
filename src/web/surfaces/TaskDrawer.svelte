@@ -709,7 +709,11 @@
     : null)
   const isSpecRepair = $derived(scopeHandoffState === 'spec_shaping')
   const focusedSpecRepair = $derived(task?.status === 'spec_review' && isSpecRepair && !fullRecordRequested)
-  const focusedSpecReview = $derived(task?.status === 'spec_review' && !isSpecRepair && !fullRecordRequested)
+  // Status alone does not grant the owner an approval. Legacy review rows
+  // default to owner authority; an explicit coordinator gate must remain
+  // runnable by Guildhall instead of presenting a false owner decision.
+  const ownerSpecReview = $derived(task?.specReviewGate?.authority !== 'coordinator')
+  const focusedSpecReview = $derived(task?.status === 'spec_review' && ownerSpecReview && !isSpecRepair && !fullRecordRequested)
   const openEscalations = $derived(task ? activeEscalations(task) : [])
   const completionEscalations = $derived(task ? unresolvedCompletionEscalations(task) : [])
   const hasCompletionEscalationHygieneWarning = $derived(completionEscalations.length > 0)

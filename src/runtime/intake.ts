@@ -1358,6 +1358,10 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   task.completedAt = undefined
   task.status = 'exploring'
   task.assignedTo = 'spec-agent'
+  // A reframe is a fresh review lifecycle. The next spec handoff decides
+  // whether it needs owner or coordinator review; carrying the old gate makes
+  // the new contract look actionable by the wrong party.
+  delete task.specReviewGate
   task.productBrief = undefined
   task.spec = undefined
   task.acceptanceCriteria = []

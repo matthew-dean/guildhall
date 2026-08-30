@@ -421,6 +421,13 @@ describe('reframeTask', () => {
       mutate: task => ({
         ...task,
         taskKind: 'research',
+        status: 'spec_review',
+        specReviewGate: {
+          authority: 'coordinator',
+          requestedAt: new Date().toISOString(),
+          requestedBy: 'coordinator-recovery',
+          reason: 'recovery',
+        },
       }),
     })
     expect(mutation).not.toBeNull()
@@ -437,6 +444,7 @@ describe('reframeTask', () => {
     const reframedTask = updated.tasks.find(candidate => candidate.id === result.taskId)!
     expect(reframedTask.status).toBe('exploring')
     expect(reframedTask.taskKind).toBeUndefined()
+    expect(reframedTask.specReviewGate).toBeUndefined()
     expect(reframedTask.notes).toEqual(expect.arrayContaining([
       expect.objectContaining({
         agentId: 'codex_delegated_owner',
