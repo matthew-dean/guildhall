@@ -3977,6 +3977,84 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.notes.at(-1)?.content).toContain('under-shaped recovery spec')
   })
 
+  it('preserves a valid current recovery blueprint when inherited references are missing', () => {
+    const currentStructuredSpec = StructuredSpec.parse({
+      whatThisIs: 'A focused ContextMenu implementation slice.',
+      problemContext: 'The current task contract names the component boundary and proof path.',
+      goals: ['Implement the existing menu surface through its project adapter.'],
+      nonGoals: ['Do not expand into unrelated editor integration work.'],
+      proposedDesign: 'Use the current component surface and its existing adapter boundary.',
+      keyDecisions: ['The current structured contract is reviewable as written.'],
+      targetFiles: ['src/components/ui-context-menu.ts'],
+      acceptanceCriteria: [{
+        scenario: 'Given the component is rendered through the current adapter',
+        expectation: 'Then the menu behavior is covered by its focused proof command.',
+        verificationMode: 'automated',
+        command: 'pnpm test ui-context-menu',
+      }],
+      verification: ['Run the focused component test.'],
+      completionBoundary: {
+        productOutcome: 'The bounded menu slice is ready for review.',
+        whatGuildhallCanCompleteInCode: 'Implement and test the named component surface.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'Local checkout.',
+        whatCountsAsDone: 'The focused proof command passes.',
+        whatMustBeSplitOrBlocked: 'Broader editor integration remains follow-up work.',
+      },
+    })
+    const task = mkTask({
+      id: 'current-child',
+      status: 'spec_review',
+      title: 'Implement the focused ContextMenu slice',
+      spec: 'The structured spec is authoritative.',
+      structuredSpec: currentStructuredSpec,
+      productBrief: {
+        userJob: 'I want the focused ContextMenu slice ready for review.',
+        successMetric: 'The component has a bounded implementation contract and focused proof.',
+        antiPatterns: [],
+        authoredBy: 'coordinator-recovery',
+        authoredAt: '2026-08-30T00:00:00.000Z',
+      },
+      acceptanceCriteria: [{
+        id: 'context-menu-proof',
+        description: 'The focused ContextMenu proof passes.',
+        verifiedBy: 'automated',
+        command: 'pnpm test ui-context-menu',
+        met: false,
+      }],
+      hierarchy: { parentId: 'parent', childIds: [], order: 1, relation: 'decomposes' },
+      notes: [{
+        agentId: 'coordinator-recovery',
+        role: 'system',
+        structured: { event: 'recovery_spec_seed', source: 'deterministic' },
+        content: 'Historical recovery evidence.',
+        timestamp: '2026-07-05T00:00:00.000Z',
+      }],
+    })
+    const before = structuredClone(task)
+    const queue: TaskQueue = {
+      version: 1,
+      lastUpdated: '2026-08-30T00:00:00.000Z',
+      tasks: [
+        mkTask({
+          id: 'parent',
+          status: 'done',
+          references: ['/repo/docs/context-menu.md'],
+          hierarchy: { childIds: ['current-child'], order: 0, relation: 'contains' },
+        }),
+        task,
+      ],
+      releases: [],
+    }
+
+    expect(repairWeakRecoverySpecReviewSeedInQueue(queue, {
+      taskId: task.id,
+      now: '2026-08-30T00:00:00.000Z',
+    })).toBeNull()
+    expect(task).toEqual(before)
+  })
+
   it('does not classify a recovery spec from generator-shaped prose alone', () => {
     const task = mkTask({
       id: 'prose-shaped-recovery',

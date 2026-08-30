@@ -60313,18 +60313,26 @@ as live work.
 
 #### Contract Touch Decision
 
-Pending investigation. The shared spec-repair lifecycle must either preserve a
-valid source-backed structured spec or construct a candidate from typed current
-source/contract fields; resolved escalations and historical checkpoints are
-evidence, never inputs to the owner-visible task contract. Considered but not
-touched yet: task persistence, reframe transport, reviewer approval, and
-worker dispatch. Required proof: a repair pass cannot reduce a valid concrete
-spec to a generic contract, and it cannot surface resolved recovery prose in
-the normal spec view.
+Work id: `looma-knit-preserve-current-spec-repair-2026-08-30`.
+Touched contracts: the shared deterministic spec-repair selector may replace a
+recovery seed only when the task lacks the typed completion-boundary contract.
+A valid structured spec, complete product brief, and nonempty acceptance
+contract are authoritative current planning state; an inherited recovery note
+or missing copied parent references cannot authorize a rewrite. Considered but
+not touched: task persistence, reframe transport, reviewer approval, worker
+dispatch, and inherited-reference storage. Required proof: a repair pass cannot
+reduce a valid concrete spec to a generic contract, and it cannot surface
+resolved recovery prose in the normal spec view.
 
 #### Schema Migration Decision
 
-Pending investigation. The existing typed structured spec, current lifecycle,
-source references, and escalation resolution state may be sufficient; do not
-add persistence until the repair writer's authority and merge behavior are
-traced.
+No schema migration. Existing structured planning and completion-boundary
+contracts establish whether recovery may mutate the task; recovery provenance
+and inherited references remain evidence rather than a new persisted authority.
+
+- [x] Regression proof, 2026-08-30: the recovery queue test now supplies a
+  current, schema-valid ContextMenu contract with a recovery note and missing
+  inherited references. The deterministic repair returns no mutation and
+  preserves the task byte-for-byte. Under-shaped recovery seeds still route
+  through the existing deterministic repair. Focused recovery coverage,
+  `pnpm typecheck`, `pnpm model:independence`, and `pnpm lint:contracts` pass.

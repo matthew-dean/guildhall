@@ -586,6 +586,10 @@ function hasDeterministicSpecRepairNote(task: Task): boolean {
 function shouldRepairWeakRecoverySpecReviewSeed(task: Task, queue: TaskQueue): boolean {
   if (task.status !== 'spec_review') return false
   if (task.id === META_INTAKE_TASK_ID) return false
+  // A valid typed blueprint is current planning state. Recovery provenance and
+  // inherited-reference gaps may warrant separate enrichment, never replacing
+  // the owner's reviewable scope with a synthetic recovery seed.
+  if (hasUsableBlueprint(task)) return false
   const taskWithRuntime = task as Task & {
     proofRecovery?: { kind?: unknown }
     runtime?: { proofRecovery?: { kind?: unknown } }
