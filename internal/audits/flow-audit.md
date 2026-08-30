@@ -61229,7 +61229,7 @@ revert restores the old read behavior only, with no data conversion.
 
 ### Finding: Every live surface must preserve the selected release denominator
 
-- [ ] User job: whether an owner sees progress on Overview, Release, Work, or
+- [x] User job: whether an owner sees progress on Overview, Release, Work, or
   the persistent activity surface, `Stage 1: V1 Release Hardening` means the
   same bounded work. Counts cannot silently include later work in one place
   and exclude it in another.
@@ -61266,7 +61266,11 @@ from falling back to non-authoritative presentation data.
   selected-release counts: `total: 16`, `done: 0`, `active: 2`, `blocked: 4`,
   and `deferred: 0`. The paused Overview stayed oriented and actionable at
   1280px, 1024px, and 390px with no page-level horizontal overflow; its sole
-  enabled `Resume work` control was visible above the mobile fold.
+  enabled `Resume work` control was visible above the mobile fold. A fresh
+  installed Release and Thread route both named the same paused `LOO-1CWL9M`
+  task and sent their lone `Open Work` command directly to its resume handoff.
+  The persistent activity API returned the same counts and `paused_live_work`
+  action as the project read.
 
 ### Finding: Work lists must preserve the active owner decision
 
