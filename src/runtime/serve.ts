@@ -8182,19 +8182,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
       detailResponseTasks as Array<Record<string, unknown>>,
       canonicalPersistedStartReadiness,
     ) ?? canonicalPersistedStartReadiness
-    const responseActionModel = responseStartReadiness !== summary.startReadiness
-      ? buildProjectActionModel({
-          startReadiness: responseStartReadiness,
-          inbox: detailInbox,
-          tasks: detailResponseTasks as never,
-          runStatus: run?.status ?? 'stopped',
-          runMode: run?.mode,
-          availability: overviewState?.availability ?? surfaceState?.availability ?? undefined,
-          releaseLifecycleState: isRecord(compactReleaseReadiness.release) && compactReleaseReadiness.release.state === 'shipped'
-            ? 'shipped'
-            : projection.releaseSummary.release?.state,
-      })
-      : summary.actionModel
+    // A saved action model is only a presentation cache. Even when the
+    // readiness object itself was not rewritten for this response, resolve it
+    // again so an older blocked card cannot overrule the current decision.
+    const responseActionModel = resolveProjectActionModel({
+      stored: summary.actionModel,
+      startReadiness: responseStartReadiness,
+      ownerInput: projection.ownerInput && projection.ownerInput.openCount > 0
+        ? {
+            active: true,
+            label: 'Answer in Thread',
+            detail: projection.ownerInput.next?.prompt ?? 'Open the thread to answer the current question.',
+            href: projection.ownerInput.next?.href ?? `/projects/${encodeURIComponent(project.id)}/thread`,
+          }
+        : null,
+      runStatus: run?.status ?? 'stopped',
+      runMode: run?.mode,
+      releaseLifecycleState: isRecord(compactReleaseReadiness.release) && compactReleaseReadiness.release.state === 'shipped'
+        ? 'shipped'
+        : projection.releaseSummary.release?.state,
+    })
     const cachedFleetActionModel = responseActionModel
       ? null
       : readFleetProjectSummaries([{
