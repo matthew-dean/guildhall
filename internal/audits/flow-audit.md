@@ -63219,4 +63219,6 @@ partial-work progress state.
   `stale:false`. Real `TMI-004` paused safely. Work rendered its stable task
   key, `Work paused`, the task-named saved-work explanation, and one visible
   `Resume work` action. The shared API action, start readiness, and decision
-  execution used the same exact explanation.
+  execution used the same exact explanation. The delegated owner resumed it;
+  Work then returned to the same `TMI-004` running card with `Pause`, and
+  `guildhall status` again reported active work with no blockers.
