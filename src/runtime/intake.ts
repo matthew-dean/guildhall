@@ -5,6 +5,7 @@ import { acceptanceCriteriaFromStructuredSpec, explicitTaskStructuralIdentity, s
 import {
   atomicWriteText,
   appendTaskEvidence,
+  getProjectLocalHistoryDir,
   inferProjectRootFromMemoryDir,
   projectStatePathFromMemoryDir,
   readProjectStateDatabaseQueueRevision,
@@ -153,8 +154,20 @@ function hasDurableImplementationProgress(task: Task): boolean {
   return false
 }
 
-function nextTaskId(queue: TaskQueue): string {
-  const used = new Set(queue.tasks.map((t) => t.id))
+async function nextTaskId(queue: TaskQueue, memoryDir: string): Promise<string> {
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const archiveRoots = [
+    projectStatePathFromMemoryDir(memoryDir, 'tasks/archive'),
+    path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'tasks', 'archive'),
+  ]
+  const used = new Set(queue.tasks.map(task => task.id))
+  for (const archiveRoot of archiveRoots) {
+    const entries = await fs.readdir(archiveRoot).catch(() => [])
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue
+      used.add(entry.slice(0, -'.json'.length))
+    }
+  }
   let n = queue.tasks.length + 1
   while (used.has(`task-${String(n).padStart(3, '0')}`)) n++
   return `task-${String(n).padStart(3, '0')}`
@@ -195,7 +208,7 @@ export interface IntakeResult {
  */
 export async function createExploringTask(input: IntakeInput): Promise<IntakeResult> {
   const queue = await readQueue(input.memoryDir)
-  const id = input.taskId ?? nextTaskId(queue)
+  const id = input.taskId ?? await nextTaskId(queue, input.memoryDir)
   if (queue.tasks.some((t) => t.id === id)) {
     throw new Error(`Task ${id} already exists`)
   }
@@ -988,7 +1001,7 @@ export function parseStackTraceTopFile(stack: string): string | undefined {
 
 export async function createBugReportTask(input: BugReportInput): Promise<BugReportResult> {
   const queue = await readQueue(input.memoryDir)
-  const id = nextTaskId(queue)
+  const id = await nextTaskId(queue, input.memoryDir)
   const now = new Date().toISOString()
 
   const title = `Bug: ${compactStoredLabel(

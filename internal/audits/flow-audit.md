@@ -61822,3 +61822,38 @@ old reader but leaves records and answers intact.
   the same release-intake test when run alone. The focused intake suite and
   installed route above are green; this harness baseline needs a separate
   migration-gate investigation.
+
+### Finding: New tasks must never inherit archived task identity
+
+- [x] User job: when a fresh t-minus-t request becomes a task, its identity
+  starts with no prior checkpoint, transcript, evidence, or worker history.
+- Finding, 2026-08-30: completing the Open as TypeScript intake allocated
+  `task-003` because the allocator looked only at the current queue. That id
+  was still reserved by an evacuated historical task, so the new task rendered
+  an unrelated May checkpoint and a converter implementation history.
+
+#### Contract Touch Decision
+
+Work id: `reserve-archived-task-identities-2026-08-30`. Touched contract: task
+id allocation reserves IDs from both current task definitions and archived
+project-state/evacuation records. Considered but not touched: task id format,
+current task mutation, historical evidence contents, archive retention, and
+pressure-test handoff semantics. Required proof: with `task-001` current and
+`task-002` archived, a new task receives `task-003`. Apply/revert: no stored
+records change; the allocator simply skips names that already belong to
+durable history.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This is allocation-time collision avoidance for
+existing historical files. The contaminated `task-003` materialization is
+kept as evidence and must be shelved rather than rewritten over its archived
+predecessor; fresh work receives a new identity.
+
+#### Validation
+
+- Focused runtime coverage: `pnpm exec vitest run
+  src/runtime/__tests__/intake.test.ts -t 'does not reuse a task id reserved
+  by archived project state|generates sequential ids when called multiple
+  times' --reporter=dot` passed 2 tests.
+- `pnpm typecheck` and `pnpm lint:contracts` passed.

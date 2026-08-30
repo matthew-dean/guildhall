@@ -18,6 +18,7 @@ import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
 import {
   getProjectStateDir,
+  getProjectLocalHistoryDir,
   getProjectSystemStatePathFromMemoryDir,
   getProjectTranscriptPath,
   readTaskRuntimeStore,
@@ -274,6 +275,33 @@ describe('createExploringTask', () => {
     })
     expect(a.taskId).toBe('task-001')
     expect(b.taskId).toBe('task-002')
+  })
+
+  it('does not reuse a task id reserved by archived project state', async () => {
+    await createExploringTask({
+      memoryDir,
+      ask: 'first',
+      domain: 'looma',
+      projectPath: '/x',
+    })
+    const archive = path.join(
+      getProjectLocalHistoryDir(tmpDir),
+      'project-state-evacuation',
+      'tasks',
+      'archive',
+      'task-002.json',
+    )
+    await fs.mkdir(path.dirname(archive), { recursive: true })
+    await fs.writeFile(archive, '{"id":"task-002"}\n', 'utf-8')
+
+    const next = await createExploringTask({
+      memoryDir,
+      ask: 'new work',
+      domain: 'looma',
+      projectPath: '/x',
+    })
+
+    expect(next.taskId).toBe('task-003')
   })
 
   it('respects an explicit task id override', async () => {
