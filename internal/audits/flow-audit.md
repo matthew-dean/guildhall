@@ -60955,3 +60955,39 @@ blocked status only through an explicit recovery decision.
   The repair route had no page-level horizontal overflow at 1280x800,
   1024x800, or 390x844. Migration coverage preserves a separate task with a
   recorded typed failed hard gate as blocked.
+
+### Finding: Live execution must have one authoritative status
+
+- [ ] User job: after choosing `Resume only this work item`, an owner can tell
+  in one glance that Guildhall accepted the instruction, which release work is
+  running, and whether anything is needed from them. Every surface must agree
+  about that state.
+- Finding, 2026-08-30: the real Looma + Knit task drawer correctly switched to
+  `Work is underway` and the chrome exposed `Pause`, but the same project API
+  returned both `decision.planExecution.state: paused` and
+  `decision.execution.state: running` for the exact same focused task. The
+  action model, start readiness, and run state correctly report running. This
+  duplicate decision field is a latent contradiction: any consumer that picks
+  the stale plan-execution state can tell the owner the opposite of what just
+  happened.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-live-status-authority-2026-08-30`. Candidate touched
+contract: project decision execution status. The repair must identify a single
+authoritative live execution field and make compatibility fields derive from
+it, rather than asking views to choose between `planExecution` and
+`execution`. Considered but not touched: task lifecycle, release ranking,
+owner-input priority, and provider state. Required proof: immediately after a
+real resume, all summary, chrome, overview, Work, drawer, Thread, release,
+inbox, and status consumers show the same running task or intentionally omit
+live state.
+
+#### Schema Migration Decision
+
+No persisted-schema change is proposed. This is an in-memory snapshot contract
+reconciliation; existing task and run records remain unchanged.
+
+- [ ] Regression and installed proof pending: trace the competing decision
+  fields to their shared builder, remove or derive the stale representation,
+  then compare all Looma + Knit owner surfaces during a real one-task run.
