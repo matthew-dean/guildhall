@@ -212,6 +212,45 @@ describe('ReleaseTab', () => {
     expect(screen.getByRole('button', { name: 'Open Work' })).toBeTruthy()
   })
 
+  it('runs a focused spec repair instead of navigating to a duplicate repair command', async () => {
+    let completeRun!: () => void
+    const onRunTask = vi.fn(() => new Promise<void>(resolve => {
+      completeRun = resolve
+    }))
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/project/spine')) return json({ spine: null })
+      return json({ ...readyPayload, release: { id: 'stage-2', label: 'Stage 2', state: 'active' } })
+    }))
+
+    render(ReleaseTab, {
+      props: {
+        activeProjectId: 'looma-knit',
+        onRunTask,
+        projectDetail: {
+          actionModel: {
+            primaryAction: {
+              label: 'Repair this spec',
+              taskId: 'task-repair',
+              taskLabel: 'Repair the current component roadmap spec.',
+              buttonLabel: 'Repair spec',
+              href: '/work?task=task-repair',
+              tone: 'accent',
+              code: 'ready_work',
+              operation: 'repair_spec',
+            },
+          },
+        },
+      },
+    })
+
+    await screen.findByRole('button', { name: 'Repair spec' })
+    await userEvent.click(screen.getByRole('button', { name: 'Repair spec' }))
+    expect(onRunTask).toHaveBeenCalledWith('task-repair')
+    expect(screen.getByRole('button', { name: 'Repair spec' }).hasAttribute('disabled')).toBe(true)
+    expect(path.href).not.toBe('/projects/looma-knit/work?task=task-repair')
+    completeRun()
+  })
+
   it('ignores stale release and spine responses after the active project changes', async () => {
     let resolveOldRelease!: (response: Response) => void
     let resolveOldSpine!: (response: Response) => void

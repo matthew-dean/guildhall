@@ -102,8 +102,10 @@
     activeProjectId?: string | null
     projectSummary?: ProjectSummaryRelease | null
     projectDetail?: ProjectDetail | null
+    onRunTask?: (taskId: string) => void | Promise<void>
+    busy?: boolean
   }
-  let { subView = null, activeProjectId = null, projectSummary = null, projectDetail = null }: Props = $props()
+  let { subView = null, activeProjectId = null, projectSummary = null, projectDetail = null, onRunTask, busy = false }: Props = $props()
   const section = $derived(subView ?? 'verdict')
 
   let data = $state<ReleasePayload | null>(null)
@@ -112,6 +114,7 @@
   let initNeeded = $state(false)
   let closeBusy = $state(false)
   let closeError = $state<string | null>(null)
+  let ownerActionBusy = $state(false)
 
   $effect(() => {
     let disposed = false
@@ -218,7 +221,17 @@
     if (id) nav(currentTaskHref(id, activeProjectId))
   }
 
-  function openOwnerAction() {
+  async function openOwnerAction() {
+    if (ownerAction?.operation === 'repair_spec' && ownerAction.taskId && onRunTask) {
+      if (ownerActionBusy) return
+      ownerActionBusy = true
+      try {
+        await onRunTask(ownerAction.taskId)
+      } finally {
+        ownerActionBusy = false
+      }
+      return
+    }
     if (ownerAction?.href) nav(projectActionHref(ownerAction.href, activeProjectId))
   }
 
@@ -514,6 +527,7 @@
               {#if hasOwnerAction}
                 <Button
                   variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'}
+                  disabled={busy || ownerActionBusy}
                   onclick={openOwnerAction}
                 >
                   {ownerAction?.buttonLabel}
@@ -555,6 +569,7 @@
           <div class="release-action-controls">
             <Button
               variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'}
+              disabled={busy || ownerActionBusy}
               onclick={openOwnerAction}
             >
               {ownerAction?.buttonLabel}
