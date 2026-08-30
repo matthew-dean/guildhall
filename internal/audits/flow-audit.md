@@ -62565,3 +62565,46 @@ No persisted-schema change.
   decisions while still presenting the shared `Retry worker` recovery action.
   At 1114px it had no page-level horizontal overflow and did not make the
   owner infer whether the command contradicted the empty state.
+
+### Evidence: Primary owner-driver and secondary-proof baseline
+
+- [x] User job: an owner can enter a real project, identify its current
+  release scope and the single right action, take that action without hunting,
+  and see an honest state transition. A second, unrelated project must present
+  the same compact handoff without receiving a state mutation just to make the
+  demo work.
+- Live evidence, 2026-08-30: t-minus-t exposed one current release item,
+  `TMI-004`, as `Needs retry` after two recorded no-progress passes. The owner
+  selected its visible `Retry worker` command. The route immediately changed
+  to `Work is underway`; the isolated worktree then reported durable edits in
+  the expected extension files. No Inbox decision competed with the run.
+  Narrative Harness, used only as secondary proof, independently showed
+  `Stage 2: Local Desktop Harness MVP`, `5 of 9 complete`, `NAR-091`, and one
+  visible `Start work` command at the same desktop width, with no page-level
+  horizontal overflow.
+
+#### Contract Touch Decision
+
+Work id: `t-minus-t-primary-owner-driver-baseline-2026-08-30`. No contract is
+changed by this evidence run. It exercises the shared current-scope count,
+primary-action, run-state, Inbox, and worktree-observation contracts together.
+Considered but not touched: task specification, release membership, worker
+recovery threshold, project configuration, and Narrative Harness state.
+Required proof: the action is visible and executable before the click; the
+post-action state represents actual execution rather than optimistic copy; a
+separate ready-work project uses the same compact handoff. Apply/revert: the
+only persisted result is the owner's legitimate retry operation in t-minus-t;
+this audit entry can be reverted without altering product state.
+
+#### Schema Migration Decision
+
+No schema change. This is a live owner-flow proof against existing project
+state.
+
+#### Validation
+
+- Browser proof, 2026-08-30: t-minus-t's real in-progress handoff and
+  Narrative Harness's ready-work handoff each kept their visible command at
+  900px narrow desktop and 390px mobile widths. All four views reported no
+  document-level horizontal overflow. Narrative Harness was inspected only;
+  no run was started and its project state was not changed.
