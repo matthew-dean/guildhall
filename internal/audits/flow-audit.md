@@ -62429,3 +62429,49 @@ No persisted-schema change. This consumes an existing shared summary field.
   `stale:false` with zero startup errors. Thread rendered the canonical
   `0 of 1 complete` at 1114px, 900px, and 390px, with no page-level horizontal
   overflow. It no longer presents the three later tasks as current work.
+
+### Finding: An Inbox import reminder must end in an executable decision
+
+- [ ] User job: when Inbox asks an owner to review or dismiss repository
+  intake, its destination either presents actual findings to decide or gives a
+  direct, visible way to clear the reminder. An empty scan cannot strand the
+  owner on a page that contradicts the Inbox.
+- Live finding, 2026-08-30: t-minus-t Inbox kept a months-old `Existing repo
+  detected` decision open. Its `Review import` route said `No importable
+  planning material was found yet` and exposed only `Re-read project notes`,
+  despite the Inbox promising the option to dismiss. The direct dismiss endpoint
+  existed but the empty-state UI failed to render it.
+
+#### Contract Touch Decision
+
+Work id: `empty-import-reminder-resolution-2026-08-30`. Touched contracts:
+the Workspace Import empty-state presentation and the Inbox's typed effective
+workspace-import task status. Inbox must prefer the persisted task authority
+over an older compact queue copy when deciding whether the reminder is open.
+Considered but not touched: importer detection, Inbox ranking, workspace-goals
+persistence, task import, and project task state. Required proof: an empty
+import result visibly offers both a dismissal and a deliberate re-read;
+dismissal calls the existing endpoint and the t-minus-t Inbox no longer retains
+the stale reminder. Apply/revert: no stored-data change; reverting restores an
+inaccessible operation and conflicting reminder state.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The existing dismissal marker and compatibility
+reader remain the authority.
+
+#### Validation
+
+- `WorkspaceImportTab.svelte.test.ts` and `inbox.test.ts` pass 56 focused
+  tests. The empty route exposes both `Dismiss reminder` and `Re-read project
+  notes`; Inbox now suppresses repository-anchor intake when the persisted
+  importer task is terminal, even if an older compact queue copy says
+  `exploring`.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass.
+- Installed t-minus-t proof, 2026-08-30: the owner used `Dismiss reminder` on
+  the empty import route. After reinstall and restart, `/api/stale-server`
+  reported `stale:false`; the former `workspace_import_pending` Inbox item no
+  longer appeared. A separate, explicitly dismissible project-discovery
+  advisory remains for independent review and is not presented as the current
+  work action.

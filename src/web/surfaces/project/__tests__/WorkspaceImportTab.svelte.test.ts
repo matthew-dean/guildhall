@@ -716,13 +716,18 @@ describe('WorkspaceImportTab', () => {
     })
 
     render(WorkspaceImportTab)
-    await screen.findByText('No importable planning material was found yet.')
+    await screen.findByText('There is nothing to review from this import right now.')
 
     const rereadButton = screen.getByRole('button', { name: /re-read project notes/i })
     expect(rereadButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(rereadButton)
     await waitFor(() => {
       expect(calls.some(call => call.url.startsWith('/api/project/workspace-import/rerun'))).toBe(true)
+    })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss reminder' }))
+    await waitFor(() => {
+      expect(calls.some(call => call.url.startsWith('/api/project/workspace-import/dismiss'))).toBe(true)
     })
   })
 })

@@ -2279,6 +2279,7 @@ function formatServerTiming(metrics: Array<{ name: string; startedAt: number; en
       ...buildInbox({
       projectPath: input.projectPath,
       ...(inboxTaskStateOverride ? { taskStateOverride: inboxTaskStateOverride } : {}),
+      workspaceImportTaskStatus: savedWorkspaceImportTaskStatus(input.projectPath),
       allowMembershipScopeFallback: !databaseAuthority,
       }),
   ].filter(isAttentionOwnedInboxItem), releaseTruth)

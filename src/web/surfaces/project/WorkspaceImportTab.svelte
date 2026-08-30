@@ -916,8 +916,11 @@
   {:else if !data.detected}
     <Card>
       <Stack gap="4">
-        <p class="muted">No importable planning material was found yet.</p>
+        <p class="muted">There is nothing to review from this import right now.</p>
         <Row justify="end" gap="3" wrap>
+          <Button variant="secondary" onclick={dismiss} disabled={busy !== null}>
+            {busy === 'dismiss' ? 'Clearing...' : 'Dismiss reminder'}
+          </Button>
           <Button variant="agent" onclick={rerun} disabled={busy !== null}>
             <Icon name="sparkles" size={14} />
             {busy === 'rerun' ? 'Re-reading...' : 'Re-read project notes'}

@@ -411,6 +411,29 @@ describe('buildInbox', () => {
     expect(hit.detail).not.toMatch(/\d+ signals?/i)
   })
 
+  it('uses the persisted workspace-import status to retire an import reminder after dismissal', async () => {
+    await writeCompleteBootstrap()
+    await writeFile('README.md', '# hello')
+    await writeFile('package.json', '{}')
+
+    const items = buildInbox({
+      projectPath: tmpDir,
+      projectStateDir,
+      taskStateOverride: {
+        version: 1,
+        lastUpdated: '2026-08-30T00:00:00.000Z',
+        tasks: [{ id: 'task-workspace-import', status: 'exploring' }],
+      },
+      workspaceImportTaskStatus: 'done',
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
+
+    expect(items.find(item => item.kind === 'workspace_import_pending')).toBeUndefined()
+  })
+
   it('proof_reconciliation: emitted when completed work still has unmet acceptance criteria', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })

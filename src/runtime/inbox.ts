@@ -60,6 +60,8 @@ export interface BuildInboxOptions {
   projectStateDir?: string
   snapshotOptions?: Omit<BuildSnapshotOptions, 'projectPath'>
   taskStateOverride?: unknown
+  /** Effective status from the persisted task authority when it differs from a compact queue copy. */
+  workspaceImportTaskStatus?: string | null
   /** Promoted projects must use persisted scope rows, never membership fallback. */
   selectedScope?: OrientationScope | null
   allowMembershipScopeFallback?: boolean
@@ -452,10 +454,11 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     allowMembershipScopeFallback: opts.allowMembershipScopeFallback,
   }))
   const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
-  const workspaceImportTaskStatus =
+  const rawWorkspaceImportTaskStatus =
     workspaceImportTask && typeof workspaceImportTask.status === 'string'
       ? workspaceImportTask.status
       : ''
+  const workspaceImportTaskStatus = opts.workspaceImportTaskStatus ?? rawWorkspaceImportTaskStatus
   const workspaceImportTaskOpen =
     workspaceImportTask != null &&
     !['done', 'cancelled', 'archived'].includes(workspaceImportTaskStatus)
@@ -484,7 +487,12 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     anchors.includes('packages') ||
     anchors.includes('skills') ||
     anchors.includes('ROADMAP.md')
-  if (workspaceImportTaskOpen || (!hasGoals && hasReadme && hasAnchor)) {
+  // Repository anchors can seed an import only before an importer task exists.
+  // Once the persisted authority says it is terminal, anchors must not
+  // resurrect a reminder that the owner already resolved.
+  const workspaceImportAnchorReviewNeeded =
+    !workspaceImportTaskStatus && !hasGoals && hasReadme && hasAnchor
+  if (workspaceImportTaskOpen || workspaceImportAnchorReviewNeeded) {
     const signals = anchors.length > 0 ? anchors : ['workspace import']
     items.push({
       kind: 'workspace_import_pending',
