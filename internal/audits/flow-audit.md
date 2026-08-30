@@ -61406,8 +61406,8 @@ work survives, and the next worker receives a target-only context.
   horizontal overflow at either constrained width (`scrollWidth ===
   clientWidth`), and the task action was visible without scrolling. This gives
   the owner the current release state and one executable next move in a single
-  read; the direct bounded CLI run separately proved that the same resume
-  action reaches the repaired task workspace.
+  read; the direct bounded CLI run separately proved the target task's repaired
+  execution path without invoking the browser action again.
 
 #### Schema Migration Decision
 
