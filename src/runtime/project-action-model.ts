@@ -10,6 +10,7 @@ export interface ProjectActionStartReadiness {
   focusKind?: string
   count?: number
   progressState?: 'partial_work_saved' | 'worker_retry_recommended' | 'worker_edit_loss'
+  repositoryOperation?: 'push_branch' | 'open_pull_request'
   executionScope?: {
     id: string
     label: string
@@ -162,7 +163,7 @@ export interface ProjectActionScopeAuthorityRequest {
 
 export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
 export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
-export type ProjectActionOperation = 'start_focused' | 'repair_spec'
+export type ProjectActionOperation = 'start_focused' | 'repair_spec' | 'push_branch' | 'open_pull_request'
 export type ProjectActionOwnerHeading =
   | 'What needs your attention'
   | 'Project update required'
@@ -174,6 +175,8 @@ export type ProjectActionOwnerHeading =
   | 'Ready to start'
   | 'Review ready to continue'
   | 'Automated review needs retry'
+  | 'Branch is ready to share'
+  | 'Pull request is ready to open'
   | 'Release is ready'
 
 export interface ProjectAction {
@@ -194,6 +197,8 @@ export interface ProjectAction {
 
 function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): ProjectActionOwnerHeading {
   if (action.operation === 'repair_spec') return 'Spec repair needed'
+  if (action.operation === 'push_branch') return 'Branch is ready to share'
+  if (action.operation === 'open_pull_request') return 'Pull request is ready to open'
   switch (action.code) {
     case 'required_migration_pending': return 'Project update required'
     case 'paused_live_work': return 'Work paused'
@@ -655,16 +660,22 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const specRepair = readiness.focusKind === 'spec_repair'
   const reviewWork = readiness.focusKind === 'review_work'
   const reviewRetry = readiness.focusKind === 'review_retry' || readiness.code === 'review_retry'
+  const repositoryOperation = readiness.repositoryOperation
+  const repositoryFollowup = readiness.code === 'repository_followup_required'
   const blockedWork = readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work'
   const workerRetryRecommended = readiness.progressState === 'worker_retry_recommended'
   const workerEditLoss = readiness.progressState === 'worker_edit_loss'
   const pausedSavedWorkDetail = readiness.focusTaskTitle?.trim()
     ? `"${readiness.focusTaskTitle.trim()}" is paused with saved work. Resume continues the same task.`
     : 'Work is paused with saved progress. Resume continues the same task.'
-  const operation = readiness.canStart && readiness.focusTaskId && (runnableWork || reviewRetry)
+  const operation = repositoryOperation ?? (readiness.canStart && readiness.focusTaskId && (runnableWork || reviewRetry)
     ? (specRepair ? 'repair_spec' : 'start_focused')
-    : undefined
-  const label = workerEditLoss
+    : undefined)
+  const label = repositoryOperation === 'push_branch'
+    ? 'Branch is ready to share'
+    : repositoryOperation === 'open_pull_request'
+      ? 'Pull request is ready to open'
+    : workerEditLoss
     ? 'Worker discarded its edits'
     : workerRetryRecommended
     ? 'Worker needs a fresh pass'
@@ -679,10 +690,14 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     : runnableWork
       ? (readiness.code === 'paused_live_work' ? 'Work paused' : 'Work ready to start')
       : startReadinessActionLabel(readiness)
-  const taskLabel = ownerReview || runnableWork || reviewRetry ? readiness.focusTaskTitle?.trim() : undefined
+  const taskLabel = ownerReview || runnableWork || reviewRetry || repositoryFollowup ? readiness.focusTaskTitle?.trim() : undefined
   // The selected task is the decision. A review-queue count is operational
   // context, not an explanation that competes with that task on every surface.
-  const detail = workerEditLoss
+  const detail = repositoryOperation === 'push_branch'
+    ? 'The completed change is local. Push its branch so Guildhall can prepare the release handoff.'
+    : repositoryOperation === 'open_pull_request'
+      ? 'The completed branch is shared. Open its pull request to continue the release handoff.'
+    : workerEditLoss
     ? `Guildhall saw this worker's edits disappear before a handoff. Retry starts a fresh pass from the saved task plan.`
     : workerRetryRecommended
     ? 'The last two worker passes ended without a durable change. Retry starts a fresh pass using this task\'s current plan.'
@@ -704,7 +719,11 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     label,
     ...(taskLabel ? { taskLabel } : {}),
     detail,
-    buttonLabel: specRepair ? 'Repair spec' : startReadinessButtonLabel(readiness),
+    buttonLabel: repositoryOperation === 'push_branch'
+      ? 'Push branch'
+      : repositoryOperation === 'open_pull_request'
+        ? 'Open pull request'
+        : specRepair ? 'Repair spec' : startReadinessButtonLabel(readiness),
     href: (focusedSpecReview || blockedWork) && readiness.focusTaskId
       ? taskHrefForTask(readiness.focusTaskId)
       : readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
@@ -719,6 +738,8 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     ...(reviewWork ? { ownerHeading: 'Review ready to continue' as const } : {}),
     ...(reviewRetry ? { ownerHeading: 'Automated review needs retry' as const } : {}),
     ...(workerEditLoss ? { ownerHeading: 'Worker discarded its edits' as const } : {}),
+    ...(repositoryOperation === 'push_branch' ? { ownerHeading: 'Branch is ready to share' as const } : {}),
+    ...(repositoryOperation === 'open_pull_request' ? { ownerHeading: 'Pull request is ready to open' as const } : {}),
     ...(readiness.focusTaskId ? { taskId: readiness.focusTaskId } : {}),
     ...(operation ? { operation } : {}),
   }

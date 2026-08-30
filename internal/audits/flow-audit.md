@@ -63467,3 +63467,63 @@ task status, reviewer authority, or stored task-runtime schema.
   changed the card to `Work is underway` for `TMI-004`; the live API confirmed
   `execution.status: running` and `task-004.status: gate_check`. The owner did
   not have to rediscover the task or interpret reviewer plumbing.
+
+### Finding: Release follow-up must execute a repository action, not reopen Release
+
+- [ ] User job: when completed scope is blocked only because its branch is
+  local, the owner sees one concrete next action and can complete it in place.
+  A Release card must never point back to the same Release route or require a
+  trip through a buried task tab to push a branch.
+- Live finding, 2026-08-30: t-minus-t `TMI-004` was complete, but its task
+  branch had no upstream. Overview and Release both said repository follow-up
+  was needed, while the sole `Open release` action navigated to the already
+  visible Release route. The task drawer's distant provenance tab offered only
+  `Open pull request`, even though the branch had not been pushed and the
+  underlying push driver did not establish tracking.
+
+#### Contract Touch Decision
+
+Work id: `repository-followup-executable-owner-action-2026-08-30`. Touched
+contracts: typed repository follow-up readiness, shared owner-action operation,
+release/overview action dispatch, and first-push Git tracking behavior. A
+repository blocker with a focused task may emit only a typed executable action
+when the current Git state supports it: local/no-upstream branches push first;
+pushed branches open a pull request next. Considered but not touched: release
+membership, completion counts, task status, pull-request provider behavior,
+Git-story persistence, and local-only/deferred policy. Required proof: a
+no-upstream completed task renders `Push branch`, explicit owner invocation
+uses the existing policy-confirmed endpoint, the push establishes an upstream,
+and the next shared action is the PR handoff rather than the old self-link.
+Apply/revert: shared readiness/action operation plus Git-driver push behavior.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repository operation is derived from the
+current typed Git-story snapshot and is not stored as task or release state.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/project-action-model.test.ts
+  src/runtime/__tests__/node-git-driver.integration.test.ts
+  src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts` passed (116
+  tests). It covers the typed `push_branch` owner action, direct Overview and
+  Release dispatch, and a real local Git remote whose first publish establishes
+  `origin/<branch>` tracking.
+- `pnpm typecheck` passed.
+- Installed t-minus-t replay, 2026-08-30: after fresh build/install, server
+  restart, and `stale:false`, the completed `TMI-004` Release card showed one
+  `Push branch` action. One click kept the route in place, published
+  `guildhall/task-task-004`, and set its upstream to
+  `origin/guildhall/task-task-004`. The same card then advanced to exactly one
+  `Open pull request` action; it did not reopen Release or expose raw Git
+  diagnostics. The focused action fit without horizontal overflow at the
+  default desktop width, 900px narrow desktop, and 390px mobile
+  (`scrollWidth === clientWidth` at both constrained widths).
+- Installed Narrative Harness secondary proof, 2026-08-30: the independent
+  `NAR-091` review-retry action stayed on focused Work and immediately became
+  `Work is underway` with the named task and the global `Pause` control. Its
+  review run later returned to the same typed `review_retry` state after its
+  bounded recovery was exhausted; the saved change remained in review and was
+  not falsely marked done. Its broader Stage 2 proof blockers remain visible
+  as release state, not as a false completed-release claim.

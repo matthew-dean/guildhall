@@ -345,7 +345,7 @@ export interface GitDriver {
     branch: string,
     baseBranch: string,
   ): Promise<MergeResult>
-  /** Push `branch` to `origin`. */
+  /** Push `branch` to `origin` and establish its tracking ref when needed. */
   push(repoRoot: string, branch: string): Promise<PushResult>
   /** Open a PR via `gh` CLI (or return `ok:false` with a graceful detail). */
   openPullRequest(
@@ -859,7 +859,7 @@ export class NodeGitDriver implements GitDriver {
 
   async push(repoRoot: string, branch: string): Promise<PushResult> {
     try {
-      await execGit(['push', 'origin', branch], { cwd: resolveRuntimePath(repoRoot) })
+      await execGit(['push', '--set-upstream', 'origin', branch], { cwd: resolveRuntimePath(repoRoot) })
       return { ok: true }
     } catch (err) {
       return {

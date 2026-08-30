@@ -819,6 +819,29 @@ describe('buildProjectActionModel', () => {
       pauseEnabled: false,
     })
 
+    const branchReadyToShare = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'repository_followup_required',
+        message: 'Release blocked: the branch has no upstream.',
+        actionHref: '/release',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        focusKind: 'repository_followup',
+        repositoryOperation: 'push_branch',
+      },
+      tasks: [{ id: 'task-current', title: 'Open supported documents as TypeScript', status: 'done' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(branchReadyToShare.primaryAction).toMatchObject({
+      label: 'Branch is ready to share',
+      ownerHeading: 'Branch is ready to share',
+      taskId: 'task-current',
+      buttonLabel: 'Push branch',
+      operation: 'push_branch',
+    })
+
     const sourceConflict = buildProjectActionModel({
       startReadiness: {
         canStart: false,

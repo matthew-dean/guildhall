@@ -317,6 +317,41 @@ describe('ReleaseTab', () => {
     expect(path.href).not.toBe('/projects/t-minus-t/work?task=task-004')
   })
 
+  it('pushes a completed branch directly instead of reopening the release route', async () => {
+    const onRunRepositoryAction = vi.fn()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/project/spine')) return json({ spine: null })
+      return json({ ...readyPayload })
+    }))
+
+    render(ReleaseTab, {
+      props: {
+        activeProjectId: 't-minus-t',
+        onRunRepositoryAction,
+        projectDetail: {
+          actionModel: {
+            primaryAction: {
+              label: 'Branch is ready to share',
+              taskId: 'task-004',
+              taskLabel: 'Open supported documents as TypeScript',
+              detail: 'The completed change is local.',
+              buttonLabel: 'Push branch',
+              href: '/release',
+              tone: 'warn',
+              code: 'repository_followup_required',
+              operation: 'push_branch',
+            },
+          },
+        },
+      },
+    })
+
+    await screen.findByRole('button', { name: 'Push branch' })
+    await userEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    expect(onRunRepositoryAction).toHaveBeenCalledWith('task-004', 'push_branch')
+    expect(path.href).not.toBe('/projects/t-minus-t/release')
+  })
+
   it('ignores a stale release response after the active project changes', async () => {
     let resolveOldRelease!: (response: Response) => void
     const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {

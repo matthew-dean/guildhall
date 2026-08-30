@@ -200,6 +200,36 @@ describe('ProjectOverviewTab owner decision', () => {
     expect(onRunTask).toHaveBeenCalledWith('task-component')
   })
 
+  it('pushes a completed branch directly instead of reopening Release', async () => {
+    const onRunRepositoryAction = vi.fn()
+    render(ProjectOverviewTab, {
+      detail: detail({
+        actionModel: {
+          ...detail().actionModel,
+          primaryAction: {
+            label: 'Branch is ready to share',
+            taskLabel: 'Open supported documents as TypeScript',
+            taskId: 'task-004',
+            detail: 'The completed change is local.',
+            buttonLabel: 'Push branch',
+            href: '/release',
+            tone: 'warn',
+            code: 'repository_followup_required',
+            operation: 'push_branch',
+            ownerHeading: 'Branch is ready to share',
+          },
+        },
+      }) as any,
+      projectTicker: ticker,
+      activeProjectId: 't-minus-t',
+      onRunRepositoryAction,
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    expect(onRunRepositoryAction).toHaveBeenCalledWith('task-004', 'push_branch')
+    expect(path.href).not.toBe('/projects/t-minus-t/release')
+  })
+
   it('runs the supplied repair action instead of exposing a raw migration route', async () => {
     const onMigrate = vi.fn()
     render(ProjectOverviewTab, {

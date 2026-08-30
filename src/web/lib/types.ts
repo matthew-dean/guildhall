@@ -1443,6 +1443,7 @@ export interface StartReadiness {
   focusTaskId?: string
   focusTaskTitle?: string
   focusKind?: string
+  repositoryOperation?: 'push_branch' | 'open_pull_request'
   proofTaskIds?: string[]
   reviewTaskIds?: string[]
   count?: number
@@ -1465,7 +1466,7 @@ export interface ProjectAvailability {
 
 export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
 export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
-export type ProjectActionOperation = 'start_focused' | 'repair_spec'
+export type ProjectActionOperation = 'start_focused' | 'repair_spec' | 'push_branch' | 'open_pull_request'
 export type ProjectActionOwnerHeading =
   | 'What needs your attention'
   | 'Project update required'

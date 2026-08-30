@@ -33,7 +33,7 @@
   import { activeEscalations } from '../lib/escalation.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
-  import type { AgentQuestion, ProjectDetail, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, StartReadiness, Task } from '../lib/types.js'
+import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, StartReadiness, Task } from '../lib/types.js'
 
   type MigrationApplyStage = 'idle' | 'applying' | 'refreshing-project' | 'refreshing-inbox' | 'checking-status' | 'complete'
   type MigrationApplyResult = {
@@ -596,6 +596,34 @@
         return
       }
       scheduleStartedRunReconciliation(mode)
+    } finally {
+      busy = false
+    }
+  }
+
+  async function runRepositoryAction(
+    taskId: string,
+    operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>,
+  ) {
+    busy = true
+    runError = null
+    try {
+      const closureAction = operation === 'push_branch' ? 'push' : 'open-pr'
+      const res = await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/git-story/${closureAction}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        // Clicking this explicit owner action is the project-policy confirmation.
+        body: JSON.stringify({ confirmed: true }),
+      }, activeProjectId)
+      const body = await res.json().catch(() => ({})) as { error?: string; url?: string }
+      if (!res.ok) {
+        runError = body.error ?? `Repository action failed (HTTP ${res.status})`
+        return
+      }
+      toast.success(operation === 'push_branch' ? 'Branch pushed.' : body.url ? 'Pull request opened.' : 'Pull request opened.')
+      await project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)
+    } catch (err) {
+      runError = err instanceof Error ? err.message : String(err)
     } finally {
       busy = false
     }
@@ -1844,6 +1872,7 @@
                   onMigrate={openMigrationModal}
                   onStartNextRelease={newTask}
                   onRunTask={(taskId) => start('one_task', taskId)}
+                  onRunRepositoryAction={runRepositoryAction}
                   busy={busy}
                 />
               {/await}
@@ -1948,7 +1977,7 @@
               </div>
             {:then module}
               {@const ReleaseTab = module.default}
-              <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} projectDetail={detail} onRunTask={(taskId) => start('one_task', taskId)} {busy} />
+              <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} projectDetail={detail} onRunTask={(taskId) => start('one_task', taskId)} onRunRepositoryAction={runRepositoryAction} {busy} />
             {/await}
         {:else if currentView === 'settings'}
           {#await loadSettingsTab()}

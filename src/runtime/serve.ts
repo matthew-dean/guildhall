@@ -675,6 +675,7 @@ interface ServiceProjectSummary {
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: string
+    repositoryOperation?: 'push_branch' | 'open_pull_request'
     proofTaskIds?: string[]
     reviewTaskIds?: string[]
     count?: number
@@ -5848,6 +5849,7 @@ function repositoryFollowupStartReadinessFromReleaseReadiness(
   focusTaskId?: string
   focusTaskTitle?: string
   focusKind: 'repository_followup'
+  repositoryOperation?: 'push_branch' | 'open_pull_request'
   count: number
 } | null {
   if (!isRecord(releaseReadiness)) return null
@@ -5894,6 +5896,7 @@ function repositoryFollowupStartReadinessFromReleaseReadiness(
       ? fallbackStartReadiness.focusTaskTitle.trim()
       : undefined
   const message = repositoryFollowupShellMessage(blockerState, gitStoryBlockingCount)
+  const repositoryOperation = repositoryOperationForGitStory(blockerState, taskId)
   return {
     canStart: false,
     code: 'repository_followup_required',
@@ -5902,8 +5905,19 @@ function repositoryFollowupStartReadinessFromReleaseReadiness(
     ...(taskId ? { focusTaskId: taskId } : {}),
     ...(focusTaskTitle ? { focusTaskTitle } : {}),
     focusKind: 'repository_followup',
+    ...(repositoryOperation ? { repositoryOperation } : {}),
     count: gitStoryBlockingCount,
   }
+}
+
+function repositoryOperationForGitStory(
+  state: string | undefined,
+  taskId: string | undefined,
+): 'push_branch' | 'open_pull_request' | undefined {
+  if (!taskId) return undefined
+  if (state === 'no_upstream' || state === 'committed_local') return 'push_branch'
+  if (state === 'pushed') return 'open_pull_request'
+  return undefined
 }
 
 function canonicalizeStartReadinessTaskTitle<T extends {

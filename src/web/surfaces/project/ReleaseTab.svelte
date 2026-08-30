@@ -14,7 +14,7 @@
   import { nav } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { releaseVerdictSummary } from '../../lib/release-readiness.js'
-  import type { ProjectDetail, ProjectReleaseReadiness, ProjectSummaryRelease } from '../../lib/types.js'
+  import type { ProjectActionOperation, ProjectDetail, ProjectReleaseReadiness, ProjectSummaryRelease } from '../../lib/types.js'
 
   interface ReleaseItem {
     id?: string
@@ -103,9 +103,10 @@
     projectSummary?: ProjectSummaryRelease | null
     projectDetail?: ProjectDetail | null
     onRunTask?: (taskId: string) => void | Promise<void>
+    onRunRepositoryAction?: (taskId: string, operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>) => void | Promise<void>
     busy?: boolean
   }
-  let { subView = null, activeProjectId = null, projectSummary = null, projectDetail = null, onRunTask, busy = false }: Props = $props()
+  let { subView = null, activeProjectId = null, projectSummary = null, projectDetail = null, onRunTask, onRunRepositoryAction, busy = false }: Props = $props()
   const section = $derived(subView ?? 'verdict')
 
   let data = $state<ReleasePayload | null>(null)
@@ -203,6 +204,20 @@
   }
 
   async function openOwnerAction() {
+    if (
+      (ownerAction?.operation === 'push_branch' || ownerAction?.operation === 'open_pull_request') &&
+      ownerAction.taskId &&
+      onRunRepositoryAction
+    ) {
+      if (ownerActionBusy) return
+      ownerActionBusy = true
+      try {
+        await onRunRepositoryAction(ownerAction.taskId, ownerAction.operation)
+      } finally {
+        ownerActionBusy = false
+      }
+      return
+    }
     if (ownerAction?.operation && ownerAction.taskId && onRunTask) {
       if (ownerActionBusy) return
       ownerActionBusy = true

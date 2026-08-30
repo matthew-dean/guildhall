@@ -315,6 +315,22 @@ describe('NodeGitDriver.push', () => {
     expect(result.ok).toBe(false)
     expect(result.detail).toBeDefined()
   })
+
+  it('sets an upstream when publishing a branch for the first time', async () => {
+    const remoteRoot = path.join(repoRoot, 'origin.git')
+    await git(repoRoot, ['init', '--bare', '-q', remoteRoot])
+    await git(repoRoot, ['remote', 'add', 'origin', remoteRoot])
+    await git(repoRoot, ['checkout', '-q', '-b', 'guildhall/task-publish'])
+    await fs.writeFile(path.join(repoRoot, 'published.txt'), 'ready\n', 'utf8')
+    await git(repoRoot, ['add', 'published.txt'])
+    await git(repoRoot, ['commit', '-q', '-m', 'ready to publish'])
+
+    const result = await new NodeGitDriver().push(repoRoot, 'guildhall/task-publish')
+
+    expect(result).toEqual({ ok: true })
+    expect((await git(repoRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])).stdout.trim())
+      .toBe('origin/guildhall/task-publish')
+  })
 })
 
 describe('NodeGitDriver.cherryPickBranch', () => {

@@ -6,7 +6,7 @@
   import { taskDisplayKey } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, projectActionHref } from '../../lib/project-routes.js'
-  import type { ProjectDetail, ProjectActionTone } from '../../lib/types.js'
+import type { ProjectActionOperation, ProjectDetail, ProjectActionTone } from '../../lib/types.js'
 
   interface Props {
     detail: ProjectDetail
@@ -14,6 +14,7 @@
     onMigrate?: () => void | Promise<void>
     onStartNextRelease?: () => void
     onRunTask?: (taskId: string) => void | Promise<void>
+    onRunRepositoryAction?: (taskId: string, operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>) => void | Promise<void>
     busy?: boolean
   }
 
@@ -25,6 +26,7 @@
     onMigrate,
     onStartNextRelease,
     onRunTask,
+    onRunRepositoryAction,
     busy = false,
   }: Props = $props()
 
@@ -105,6 +107,14 @@
   }
 
   function runOrOpen(): void {
+    if (
+      (nextAction.operation === 'push_branch' || nextAction.operation === 'open_pull_request') &&
+      nextAction.taskId &&
+      onRunRepositoryAction
+    ) {
+      void onRunRepositoryAction(nextAction.taskId, nextAction.operation)
+      return
+    }
     if (nextAction.operation && nextAction.taskId && onRunTask) {
       void onRunTask(nextAction.taskId)
       return
