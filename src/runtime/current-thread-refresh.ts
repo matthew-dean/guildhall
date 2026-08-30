@@ -33,6 +33,7 @@ type RecentEvent = NonNullable<BuildThreadOptions['recentEvents']>[number]
 
 export interface RefreshCurrentThreadProjectionOptions {
   runStatus?: string
+  activeTaskId?: string
   recentEvents?: RecentEvent[]
 }
 
@@ -319,6 +320,7 @@ export async function refreshCurrentThreadProjection(
       snapshot,
       tasks,
       ...(options.runStatus !== undefined ? { runStatus: options.runStatus } : {}),
+      ...(options.activeTaskId ? { activeTaskId: options.activeTaskId } : {}),
       ...(options.recentEvents ? { recentEvents: options.recentEvents } : {}),
     })
     if (
@@ -344,6 +346,7 @@ export async function refreshCurrentThreadProjection(
           pressureTestIntakes: fullThreadSource.pressureTestIntakes,
           projectCheckInSummary: fullThreadSource.projectCheckInSummary,
           ...(options.runStatus !== undefined ? { runStatus: options.runStatus } : {}),
+          ...(options.activeTaskId ? { activeTaskId: options.activeTaskId } : {}),
           ...(options.recentEvents ? { recentEvents: options.recentEvents } : {}),
         })
       : null

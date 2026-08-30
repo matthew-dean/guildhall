@@ -358,6 +358,8 @@ export interface BuildThreadOptions {
   projectCheckInSummary?: ProjectCheckInSummary
   /** Current coordinator run status; when stopped, stale task activity should not project as live work. */
   runStatus?: string | undefined
+  /** Typed supervisor focus. A live Thread must use this exact task instead of guessing from turn order. */
+  activeTaskId?: string | undefined
   /** Recent supervisor events, used only for live "agent is currently busy" hints. */
   recentEvents?: Array<{
     at?: string | undefined
@@ -2401,6 +2403,25 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
     pendingTaskReview.status = 'active'
     pendingTaskReview.phase = pendingTaskReview.kind === 'spec_review' ? 'spec' : 'intake'
+  }
+
+  // The supervisor's task identity is the execution authority. While it is
+  // live, Thread must foreground that same task rather than a setup card or a
+  // locally ranked task row. A genuine owner question/review still wins, as
+  // execution should not hide an action that needs the owner first.
+  const activeTaskId = opts.activeTaskId?.trim()
+  const activeRunTurn = activeTaskId && runIsActive
+    ? turns.find(turn => turn.kind === 'inflight' && turn.taskId === activeTaskId)
+    : undefined
+  const hasCurrentOwnerDecision = turns.some(turn =>
+    turn.status === 'active' && turn.kind !== 'setup_step' && isHumanOwnedActiveTurn(turn),
+  )
+  if (activeRunTurn && !hasCurrentOwnerDecision) {
+    for (const turn of turns) {
+      if (turn.kind === 'setup_step' && turn.status === 'active') turn.status = 'pending'
+    }
+    activeRunTurn.status = 'active'
+    activeRunTurn.phase = 'inflight'
   }
 
   const hasHumanOwnedActiveTurn = turns.some(isHumanOwnedActiveTurn)

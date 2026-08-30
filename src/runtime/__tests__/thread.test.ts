@@ -1883,6 +1883,50 @@ describe('buildThread', () => {
     }
   })
 
+  it('uses the supervisor task identity instead of setup while work is running', () => {
+    const projectPath = '/tmp/guildhall-thread-live-focus'
+    const thread = buildCurrentThread({
+      projectPath,
+      snapshot: {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: '2026-08-30T08:00:00.000Z' },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      },
+      tasks: [taskRecord({
+        id: 'task-live',
+        title: 'Run the focused work item',
+        status: 'ready',
+        productBrief: {
+          userJob: 'Run the focused work item.',
+          successMetric: 'The task is ready for its worker.',
+          approvedAt: '2026-08-30T08:00:00.000Z',
+        },
+        spec: '## What this is\nA focused work item.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'The work item runs.', verifiedBy: 'automated', met: false }],
+      })],
+      runStatus: 'running',
+      activeTaskId: 'task-live',
+      recentEvents: [],
+    })
+
+    expect(thread.activeTurnId).toBe('inflight:task-live')
+    expect(thread.turns.find(turn => turn.id === 'inflight:task-live')).toMatchObject({
+      status: 'active',
+      phase: 'inflight',
+    })
+    expect(thread.turns.find(turn => turn.id === 'setup:direction')).toMatchObject({ status: 'pending' })
+  })
+
   it('keeps source-recovery tasks in shaping even when a draft spec exists', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

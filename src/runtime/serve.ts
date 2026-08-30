@@ -2400,8 +2400,10 @@ async function refreshProjectProjections(
     }
     try {
       if (threadOnly) {
+        const run = options.supervisor.get(resolved.id)
         const projection = await refreshCurrentThreadProjection(resolved.path, {
-          runStatus: options.supervisor.get(resolved.id)?.status ?? 'stopped',
+          runStatus: run?.status ?? 'stopped',
+          ...(run?.activeTaskId ? { activeTaskId: run.activeTaskId } : {}),
           recentEvents: options.supervisor.recent(resolved.id, undefined, resolved.path),
         })
         if (!projection) throw new Error('Current Thread projection source changed during refresh')
@@ -2534,8 +2536,10 @@ async function refreshProjectProjections(
       // Keep the current Thread projection independent from the attention
       // projection. A repair or stale-input failure in one read model must not
       // leave the other model missing and make the UI look empty.
+      const run = options.supervisor.get(resolved.id)
       const threadProjection = await refreshCurrentThreadProjection(resolved.path, {
-        runStatus: options.supervisor.get(resolved.id)?.status ?? 'stopped',
+        runStatus: run?.status ?? 'stopped',
+        ...(run?.activeTaskId ? { activeTaskId: run.activeTaskId } : {}),
         recentEvents: options.supervisor.recent(resolved.id, undefined, resolved.path),
       })
       if (!threadProjection) throw new Error('Current Thread projection source changed during refresh')

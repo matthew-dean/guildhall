@@ -110,7 +110,7 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Work ready to resume',
+      label: 'Work ready to start',
       taskLabel: 'Build synopsis expansion',
       buttonLabel: 'Start work',
       href: '/work?task=task-synopsis',
@@ -118,6 +118,7 @@ describe('buildProjectActionModel', () => {
       operation: 'start_focused',
     })
     expect(model.primaryAction?.detail).toBeUndefined()
+    expect(model.runControl).toMatchObject({ label: 'Start', startEnabled: true })
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
   })
 
@@ -473,7 +474,7 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Work ready to resume',
+      label: 'Work ready to start',
       taskLabel: 'Build synopsis expansion',
       buttonLabel: 'Start work',
       href: '/work?task=task-synopsis',
@@ -637,7 +638,7 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Work ready to resume',
+      label: 'Work ready to start',
       taskLabel: 'Build story context',
       buttonLabel: 'Start work',
     })

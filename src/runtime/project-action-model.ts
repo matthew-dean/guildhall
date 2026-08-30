@@ -169,7 +169,7 @@ export type ProjectActionOwnerHeading =
   | 'Spec repair needed'
   | 'Work paused'
   | 'Work is underway'
-  | 'Ready to continue'
+  | 'Ready to start'
   | 'Release is ready'
 
 export interface ProjectAction {
@@ -194,7 +194,7 @@ function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): Pro
     case 'required_migration_pending': return 'Project update required'
     case 'paused_live_work': return 'Work paused'
     case 'running': return 'Work is underway'
-    case 'ready_work': return 'Ready to continue'
+    case 'ready_work': return 'Ready to start'
     case 'release_ready': return 'Release is ready'
     default: return 'What needs your attention'
   }
@@ -368,6 +368,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
 function runControlLabel(readiness: ProjectActionStartReadiness | null | undefined, running: boolean, stopping: boolean): string {
   if (stopping) return 'Stopping'
   if (running) return 'Pause'
+  if (readiness?.code === 'ready_work') return 'Start'
   if (!readiness || readiness.canStart) return 'Resume'
   if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Needs recovery'
   if (readiness.code === 'required_migration_pending') return 'Migrate'
@@ -645,7 +646,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     : ownerReview
     ? 'Review a spec'
     : runnableWork
-      ? (readiness.code === 'paused_live_work' ? 'Work paused' : 'Work ready to resume')
+      ? (readiness.code === 'paused_live_work' ? 'Work paused' : 'Work ready to start')
       : startReadinessActionLabel(readiness)
   const taskLabel = ownerReview || runnableWork ? readiness.focusTaskTitle?.trim() : undefined
   // The selected task is the decision. A review-queue count is operational

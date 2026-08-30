@@ -61908,3 +61908,72 @@ as current work.
   reported `stale:false`. The real project activity route reported one typed
   `Review spec` action for `task-004`, and Thread reported only
   `spec:task-004` as active; the paused duplicate intake no longer appeared.
+
+### Finding: A running task must own Thread, not setup
+
+- [x] User job: after the owner starts the one visible ready task, Overview,
+  Work, top controls, and Thread all identify that same task as in progress;
+  setup cannot look current while the project is executing a task.
+- Finding, 2026-08-30: t-minus-t accepted the owner-approved `task-004` start
+  and the shared action model converged on `Open supported documents as
+  TypeScript`, with a real Pause control. Thread still marked `setup:direction`
+  active while the shared decision recorded `task-004` as running. This is a
+  cross-surface state disagreement, not a Thread copy problem.
+
+#### Contract Touch Decision
+
+Work id: `thread-uses-typed-supervisor-focus-2026-08-30`. Touched contracts:
+the current-Thread refresh input and active-turn selection. The projection now
+receives the typed `activeTaskId` from the same supervisor run used by the
+shared decision packet and promotes only that matching in-flight turn. A real
+owner decision still takes precedence; setup chrome does not. Considered but
+not touched: task status mutation, event prose parsing, task ranking,
+supervisor lifecycle, and route-local Thread selection. Required proof: a
+real selected task start produces matching Work and Thread focus, then Pause
+returns one resume action. Apply/revert: no project records are rewritten.
+
+#### Schema Migration Decision
+
+No persisted-schema change. `activeTaskId` is a transient typed supervisor
+fact supplied only while building the current Thread projection.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/thread.test.ts
+  src/runtime/__tests__/project-decision-projection.test.ts
+  src/runtime/__tests__/project-action-model.test.ts --reporter=dot` passed
+  153 tests, including exact supervisor-focus Thread selection.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed.
+- Installed t-minus-t proof, 2026-08-30: `task-004` was approved as the
+  delegated owner, then started via its task endpoint. The shared decision,
+  primary action, and Thread all focused `task-004` / `inflight:task-004`.
+  Pausing the project returned `Work paused` and one `Resume work` action.
+- Current unrelated-suite note: `pnpm exec vitest run
+  src/runtime/__tests__/current-thread-refresh.test.ts --reporter=verbose`
+  currently has three freshness/rich-detail failures. This change's direct
+  Thread projection coverage is green; the refresh-suite failures need a
+  separate investigation before claiming the broader suite green.
+
+### Finding: New work must start, not resume
+
+- [x] User job: a task that has never been paused is described as ready to
+  start, with a `Start` control; only interrupted work is described as ready
+  to resume.
+- Finding, 2026-08-30: after approving t-minus-t's first task, Guildhall
+  showed `Work ready to resume` and `Resume` before any run had occurred.
+  The action button said `Start work`, so the same state contradicted itself.
+
+#### Contract Touch Decision
+
+Work id: `distinguish-start-from-resume-2026-08-30`. Touched contract: shared
+project action-model presentation for `ready_work`. `ready_work` now produces
+`Ready to start` and `Start`; `paused_live_work` retains `Work paused` and
+`Resume`. Considered but not touched: run-state persistence, pause endpoint,
+task status, and route-level labels. Required proof: the shared action model
+renders each state distinctly. Apply/revert: presentation-only, with no
+stored data change.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
