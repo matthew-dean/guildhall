@@ -61715,3 +61715,52 @@ action-model field and leaves all task, decision, and runtime data unchanged.
   with a visible `Resume work` action. At 1280px, 1024px, and 390px every
   route's page width equals its viewport width; the action remains visible
   without scrolling through diagnostic content.
+
+### Finding: Repository follow-up must clear after an owner push
+
+- [x] User job: after the owner pushes a local commit, Overview stops claiming
+  repository follow-up within the normal refresh interval and instead exposes
+  the real next action. For t-minus-t, that is continuing the active release
+  intake rather than reviewing already-pushed work.
+- Finding, 2026-08-30: t-minus-t's `main` matched `origin/main` after its
+  migration commit was pushed, while the shared project action still said
+  `Release blocked by unpushed commits.` The release-readiness API correctly
+  reported zero Git-story blockers. The projection freshness watcher watched
+  metadata only, so neither a push nor a working-tree change invalidated the
+  cached action model.
+
+#### Contract Touch Decision
+
+Work id: `repository-freshness-after-push-2026-08-30`. Touched contracts: the
+project-projection freshness watcher gains a bounded repository observation
+token, and the shared summary/action projection is refreshed whenever that
+token changes. The token includes Git branch ahead/behind and porcelain
+working-tree state, so owner-visible repository follow-up cannot outlive its
+source facts. Considered but not touched: task lifecycle, release-scope
+calculation, Git-story policy, action ranking, persisted task data, and route
+copy. Required proof: an automated repository fixture changes its token after
+a push and after a dirty-tree edit; an installed t-minus-t project refreshes
+from false repository follow-up to its active intake action. Apply/revert:
+removing the watcher input restores metadata-only refresh behavior without
+changing stored project state.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This invalidates and rebuilds the existing cached
+projection from live repository facts; no project, task, release, or evidence
+record is migrated.
+
+#### Validation
+
+- Focused runtime coverage: `pnpm exec vitest run
+  src/runtime/__tests__/project-repository-signature.test.ts
+  src/runtime/__tests__/project-projection-freshness-watcher.test.ts
+  --reporter=dot` passed 8 tests. It proves branch ahead/behind changes after
+  push, porcelain changes after a dirty edit, and repository-backed projection
+  invalidation on both first observation and later changes.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm build`, `pnpm
+  dev:install`, `guildhall stop`, and `guildhall start`,
+  `/api/stale-server` returned `stale:false`. The project has `main` equal to
+  `origin/main`; its shared release-readiness reports `gitStory.state: clean`
+  with no blockers, and the shared action model no longer tells the owner to
+  perform repository follow-up.

@@ -375,6 +375,7 @@ import {
 import { attentionItemsForReleaseTruth, attentionProjectionNeedsReleaseReconciliation, materializeAttentionProjection, previewAttentionProjection, readSavedAttentionSurface, readSavedAttentionSurfaceFromBoundary, type AttentionReleaseTruth } from './attention-projection.js'
 import { createProjectProjectionRefreshScheduler, shouldRefreshProjectAtStartup, type ProjectProjectionInvalidation, type ProjectProjectionRefreshScheduler } from './project-projection-refresh.js'
 import { createProjectProjectionFreshnessWatcher } from './project-projection-freshness-watcher.js'
+import { readProjectRepositorySignature } from './project-repository-signature.js'
 import { projectRuntimeCompatibilityBlocker, readRuntimePackageVersion } from './runtime-compatibility.js'
 import { reopenLegacyWorktreeSyncRecovery } from './worktree-sync-recovery.js'
 import { ProjectRuntimeSupervisor } from './project-runtime-supervisor.js'
@@ -20202,6 +20203,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   const projectionFreshnessWatcher = createProjectProjectionFreshnessWatcher({
     projectRoots: () => listWorkspaces().map(entry => entry.path),
     readMetadata: projectRoot => readProjectProjectionMetadataAtBoundary(projectRoot),
+    readRepositorySignature: readProjectRepositorySignature,
     schedule: event => projectionRefreshScheduler.schedule(event),
   }, 5000)
 
