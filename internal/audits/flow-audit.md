@@ -61389,9 +61389,25 @@ work survives, and the next worker receives a target-only context.
   verifies the target documentation edit remains as the only pending edit,
   verifies the unrelated core change is absent, and verifies the non-default
   configured base is retained. Focused suite: 4/4; typecheck passed.
-- [ ] Drive the repaired path against the real Looma + Knit paused worktree
-  and confirm the app reports a resumed task whose fresh workspace contains
-  only the documentation task's progress.
+- [x] Drive the repaired path against the real Looma + Knit paused worktree.
+  Evidence: the installed `guildhall run looma-knit --task task-import-gh97p0
+  --max-ticks 1` replaced the stale sandbox with a new `per_task` workspace
+  rooted at its stored `codex/component-audit-roadmap` base. Before the
+  deliberately interrupted provider turn, `git diff --name-only` in that
+  workspace reported only `docs/component-system.md`; the unrelated
+  `packages/core/stencil.config.ts` edit was absent. `localhost:7777` reports
+  the installed build as `stale:false` and the owner-facing next action remains
+  the single explicit `Resume` action for that task.
+
+- [x] Installed owner-orientation proof after recovery. At the default desktop
+  view, 1024px narrow desktop, and 390px mobile, the live Overview presents
+  only the project, active milestone, meaningful completion count, concise
+  task key/title, and visible `Resume work` action. The route had no page-level
+  horizontal overflow at either constrained width (`scrollWidth ===
+  clientWidth`), and the task action was visible without scrolling. This gives
+  the owner the current release state and one executable next move in a single
+  read; the direct bounded CLI run separately proved that the same resume
+  action reaches the repaired task workspace.
 
 #### Schema Migration Decision
 
