@@ -11268,6 +11268,63 @@ export class Orchestrator {
         changed = true
       }
 
+      // A delegated owner may land a finished task directly (for example, by
+      // fast-forwarding and pushing a small docs change). Git containment is
+      // durable evidence that implementation is no longer the next action,
+      // but it is not completion proof. Send the task to the existing review
+      // lane so its recorded commands and review can settle it truthfully.
+      const externallyLandedButUnverified =
+        task.status === 'in_progress' &&
+        taskDoneButProofMissing({ ...task, status: 'done' }) &&
+        task.worktreePath?.trim() &&
+        task.branchName?.trim() &&
+        task.baseBranch?.trim() &&
+        !task.mergeRecord
+      if (externallyLandedButUnverified) {
+        const worktreePath = resolveRuntimePath(task.worktreePath!)
+        const branchName = task.branchName!
+        const baseBranch = task.baseBranch!
+        const worktreeStatus = await this.gitDriver.statusSummary(worktreePath).catch(() => null)
+        const taskHead = worktreeStatus && worktreeStatus.clean
+          ? await this.gitDriver.headSha(worktreePath).catch(() => null)
+          : null
+        const landed = taskHead
+          ? await this.gitDriver.isAncestor(projectRoot, taskHead, baseBranch).catch(() => false)
+          : false
+        if (landed) {
+          const now = this.now()
+          transitionTaskStatus({
+            task,
+            event: 'request_review',
+            actor: 'landing-reconciliation',
+            evidenceRefs: ['task:git-story:externally-landed'],
+            now,
+          })
+          task.assignedTo = 'reviewer-agent'
+          task.mergeRecord = {
+            fromBranch: branchName,
+            toBranch: baseBranch,
+            strategy: landingStrategy,
+            result: 'merged',
+            commitSha: taskHead!,
+            mergedAt: now,
+            detail: 'Guildhall reconciled a clean task worktree already contained in the landing branch.',
+          }
+          delete task.blockReason
+          task.notes.push({
+            agentId: 'landing-reconciliation',
+            role: 'git-story',
+            content:
+              'Guildhall found this task already landed in the project branch. It moved the task to review so verification can finish without another worker pass.',
+            timestamp: now,
+          })
+          task.updatedAt = now
+          queue.lastUpdated = now
+          changed = true
+          continue
+        }
+      }
+
       const alreadyLanded =
         task.status === 'in_progress' &&
         task.mergeRecord?.result === 'merged' &&

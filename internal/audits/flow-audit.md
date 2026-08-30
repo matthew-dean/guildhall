@@ -62022,6 +62022,52 @@ stored data change.
 
 No persisted-schema change.
 
+### Finding: Landed work without proof must advance to verification, not retry implementation
+
+- [ ] User job: when an owner or delegated owner commits and pushes a task's
+  finished change directly, Guildhall detects that the task worktree HEAD is
+  already contained in the project branch. The owner then sees one truthful
+  next step: verify/review the landed change. Guildhall must never call the
+  clean, landed worktree "saved work" or offer to rerun implementation.
+- Live finding, 2026-08-30: t-minus-t `task-005` was committed as
+  `c42a34d` and pushed directly to `main`. Live Git Story returned `merged`,
+  `mergeRecordResult: reconciled`, and "No repository follow-up needed." The
+  shared project decision nevertheless returned `paused_live_work` with
+  `partial_work_saved`, because a stale worker-timeout marker outlived the
+  now-clean worktree. Overview, Work, and Thread therefore offered `Resume
+  work`, which would rerun a worker despite a finished, shipped documentation
+  change. The task's required command and review evidence had not yet been
+  recorded, so treating it as done would be equally wrong.
+
+#### Contract Touch Decision
+
+Work id: `landed-work-verification-handoff-2026-08-30`. Touched contracts:
+the reconciler from live Git containment to task lifecycle, worker-recovery
+projection, and shared owner action. Considered but not touched: task proof
+schema, Git Story snapshot shape, branch/PR policy, completion evidence,
+release persistence, and route-local action ranking. Required proof: a clean
+task worktree whose HEAD is an ancestor of its configured base branch advances
+from active implementation to `review`; every owner surface offers review or
+verification rather than `Resume work`; task completion still requires its
+typed command and review evidence. Apply/revert: reconciliation is monotonic
+from landed implementation to existing review state and does not fabricate
+proof or mutate Git history.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The existing task workspace, branch, lifecycle,
+Git inspection, and worker-recovery records contain the required facts.
+
+#### Validation
+
+- Focused orchestrator regression proves a clean task-worktree commit already
+  contained in `main` advances out of implementation with a `merged` record,
+  never dispatches the worker, and preserves verification before completion.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `pnpm dev:install`
+  passed. The installed t-minus-t task remains intentionally uncompleted until
+  review and command evidence are recorded; it has not been restarted merely
+  to spend another provider turn.
+
 ### Finding: Thread must focus the same paused task as the shared action model
 
 - [x] User job: after pausing focused work, Thread opens on that paused task

@@ -15762,6 +15762,53 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
+  it('sends externally landed active work to review instead of rerunning a worker', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-external-landing')
+    await writeQueue([
+      mkTask({
+        id: 'task-external-landing',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        worktreePath,
+        branchName: 'guildhall/task-external-landing',
+        baseBranch: 'main',
+        acceptanceCriteria: [{
+          id: 'ac-review',
+          description: 'A reviewer approves the landed implementation.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setStatusSummary(worktreePath, {
+      branch: 'guildhall/task-external-landing',
+      clean: true,
+    })
+    gitDriver.setHeadSha(worktreePath, 'landed-commit')
+    gitDriver.setAncestor(tmpDir, 'landed-commit', 'main', true)
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    await orch.tick()
+
+    const task = (await readQueue()).tasks[0]!
+    expect(task.status).not.toBe('in_progress')
+    expect(task.mergeRecord).toMatchObject({
+      result: 'merged',
+      fromBranch: 'guildhall/task-external-landing',
+      toBranch: 'main',
+      commitSha: 'landed-commit',
+    })
+    expect(task.notes.some(note => note.content.includes('moved the task to review'))).toBe(true)
+    expect(worker.calls).toHaveLength(0)
+  })
+
   it('retries cleanup for a completed merged task after a transient removal failure', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-cleanup-retry')
     await writeQueue([
