@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -60,6 +60,18 @@ describe('readProjectRepositorySignature', () => {
     expect(readProjectRepositorySignature(projectRoot)).not.toBe(clean)
   })
 
+  it('changes after a same-length rewrite restores its original mtime', () => {
+    const { projectRoot } = makeRepository()
+    const readmePath = join(projectRoot, 'README.md')
+    const clean = readProjectRepositorySignature(projectRoot)
+    const originalMtime = statSync(readmePath).mtime
+
+    writeFileSync(readmePath, '# revised\n')
+    utimesSync(readmePath, originalMtime, originalMtime)
+
+    expect(readProjectRepositorySignature(projectRoot)).not.toBe(clean)
+  })
+
   it('changes for staged, untracked, and removed worktree paths', () => {
     const { projectRoot } = makeRepository()
     const clean = readProjectRepositorySignature(projectRoot)
@@ -104,6 +116,28 @@ describe('readProjectRepositorySignature', () => {
     writeFileSync(join(projectRoot, 'vendor/component/README.md'), '# changed\n')
 
     expect(readProjectRepositorySignature(projectRoot)).not.toBe(clean)
+  })
+
+  it('keeps parent changes observable when a submodule becomes unavailable', () => {
+    const { projectRoot } = makeRepository()
+    const { projectRoot: submoduleSource } = makeRepository()
+    const submodulePath = join(projectRoot, 'vendor/component')
+    git(projectRoot, [
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'add',
+      submoduleSource,
+      'vendor/component',
+    ])
+    git(projectRoot, ['commit', '-m', 'add component submodule'])
+    readProjectRepositorySignature(projectRoot)
+
+    rmSync(submodulePath, { force: true, recursive: true })
+    const unavailableSubmodule = readProjectRepositorySignature(projectRoot)
+    writeFileSync(join(projectRoot, 'README.md'), '# changed\n')
+
+    expect(readProjectRepositorySignature(projectRoot)).not.toBe(unavailableSubmodule)
   })
 
   it('does not invoke content filters while observing repository freshness', () => {

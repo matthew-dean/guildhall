@@ -26,7 +26,8 @@ for (const relativePath of paths) {
       .update(String(stat.ino)).update(':')
       .update(String(stat.mode)).update(':')
       .update(String(stat.size)).update(':')
-      .update(String(stat.mtimeNs))
+      .update(String(stat.mtimeNs)).update(':')
+      .update(String(stat.ctimeNs))
   } catch (error) {
     fingerprint.update(error && typeof error === 'object' && 'code' in error ? String(error.code) : 'unavailable')
   }
@@ -111,11 +112,19 @@ function readWorktreeFingerprint(root: string, deadline: number): string {
 
   fingerprint.update('\0--filesystem--\0').update(readFilesystemFingerprint(root, paths, deadline))
   for (const submodulePath of submodulePaths) {
+    const submoduleRoot = join(root, submodulePath)
+    let submoduleSignature: string
+    try {
+      submoduleSignature = readRepositoryRootSignature(submoduleRoot, deadline)
+    } catch {
+      submoduleSignature = lastSuccessfulRootSignatures.get(submoduleRoot)
+        ?? `unavailable:${basename(submoduleRoot)}`
+    }
     fingerprint
       .update('\0--submodule--\0')
       .update(submodulePath)
       .update('\0')
-      .update(readRepositoryRootSignature(join(root, submodulePath), deadline))
+      .update(submoduleSignature)
   }
 
   return fingerprint.digest('hex')
