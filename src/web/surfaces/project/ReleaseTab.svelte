@@ -203,7 +203,7 @@
   }
 
   async function openOwnerAction() {
-    if (ownerAction?.operation === 'repair_spec' && ownerAction.taskId && onRunTask) {
+    if (ownerAction?.operation && ownerAction.taskId && onRunTask) {
       if (ownerActionBusy) return
       ownerActionBusy = true
       try {
@@ -366,7 +366,9 @@
   const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
   const openCriteria = $derived(criteria.filter(criterion => criterion.items.length > 0))
   const hasNamedRelease = $derived(Boolean(data?.release?.label ?? projectSummary?.release?.label))
-  const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Release')
+  // A project with no selected release is showing its active work scope. Do
+  // not make that temporary scope look like a named release.
+  const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Current work')
 
   const verdict = $derived(data ? releaseVerdictSummary(data) ?? { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' } : { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' })
   const verdictTitle = $derived(data?.verdict?.title ?? verdict.label)

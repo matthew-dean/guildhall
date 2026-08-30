@@ -59,7 +59,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByRole('heading', { name: 'Release' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Current work' })).toBeTruthy()
     expect(screen.getAllByText('Ready')).toHaveLength(1)
     expect(screen.queryByText('Scope readiness')).toBeNull()
     expect(screen.getByText('4/4 tasks done · no open scope blockers.')).toBeTruthy()
@@ -282,6 +282,41 @@ describe('ReleaseTab', () => {
     completeRun()
   })
 
+  it('resumes focused work directly instead of sending the owner to a second resume button', async () => {
+    const onRunTask = vi.fn()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/project/spine')) return json({ spine: null })
+      return json({ ...readyPayload })
+    }))
+
+    render(ReleaseTab, {
+      props: {
+        activeProjectId: 't-minus-t',
+        onRunTask,
+        projectDetail: {
+          actionModel: {
+            primaryAction: {
+              label: 'Work paused',
+              taskId: 'task-004',
+              taskLabel: 'Open supported documents as TypeScript',
+              detail: 'Saved work is ready to resume.',
+              buttonLabel: 'Resume work',
+              href: '/work?task=task-004',
+              tone: 'accent',
+              code: 'paused_live_work',
+              operation: 'start_focused',
+            },
+          },
+        },
+      },
+    })
+
+    await screen.findByRole('button', { name: 'Resume work' })
+    await userEvent.click(screen.getByRole('button', { name: 'Resume work' }))
+    expect(onRunTask).toHaveBeenCalledWith('task-004')
+    expect(path.href).not.toBe('/projects/t-minus-t/work?task=task-004')
+  })
+
   it('ignores a stale release response after the active project changes', async () => {
     let resolveOldRelease!: (response: Response) => void
     const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
@@ -396,7 +431,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByRole('heading', { name: 'Release' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Current work' })).toBeTruthy()
     expect(screen.queryByText('Current MVP is blocked on proof.')).toBeNull()
     expect(screen.queryByText('Build a fiction-first evaluation and reasoning harness.')).toBeNull()
     expect(screen.queryByText('3 included · 2 later')).toBeNull()
@@ -601,7 +636,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    await screen.findByRole('heading', { name: 'Release' })
+    await screen.findByRole('heading', { name: 'Current work' })
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness/summary?projectId=t-minus-t')
     })
@@ -615,7 +650,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { activeProjectId: 'looma-knit' } })
 
-    await screen.findByRole('heading', { name: 'Release' })
+    await screen.findByRole('heading', { name: 'Current work' })
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness/summary?projectId=looma-knit')
       expect(fetchMock).not.toHaveBeenCalledWith('/api/project/spine?compact=true&projectId=looma-knit', { cache: 'no-store' })
@@ -726,7 +761,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByRole('heading', { name: 'Release' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Current work' })).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(1)
     expect(screen.getByText('No design-system guardrail is captured yet.')).toBeTruthy()
   })
@@ -752,7 +787,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByRole('heading', { name: 'Release' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Current work' })).toBeTruthy()
     expect(screen.getAllByText('Ready')).toHaveLength(1)
     expect(screen.getByText('3/3 tasks done · no open scope blockers.')).toBeTruthy()
     expect(screen.queryByText('not captured')).toBeNull()
@@ -775,7 +810,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByRole('heading', { name: 'Release' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Current work' })).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(1)
     expect(screen.getByText('Answer the pressure-test question before closing this work.')).toBeTruthy()
     expect(screen.queryByText('No design-system guardrail is captured yet.')).toBeNull()
@@ -800,7 +835,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByRole('heading', { name: 'Release' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Current work' })).toBeTruthy()
     expect(screen.getAllByText('Ready')).toHaveLength(1)
     expect(screen.queryByText('detected in repo')).toBeNull()
     expect(screen.queryByText('not drafted')).toBeFalsy()
@@ -821,7 +856,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByRole('heading', { name: 'Release' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Current work' })).toBeTruthy()
     expect(screen.getAllByText('Work remaining')).toHaveLength(1)
     expect(screen.getByText('38 tasks still need shaping, worker execution, review, or recovery.')).toBeTruthy()
     expect(screen.queryByText('38 open scope checks')).toBeNull()
@@ -843,7 +878,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByRole('heading', { name: 'Release' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Current work' })).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(1)
     expect(screen.getByText('3 Guildhall-managed checkout files need cleanup or landing.')).toBeTruthy()
     expect(screen.queryByText('3 managed files dirty')).toBeNull()
@@ -868,7 +903,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByRole('heading', { name: 'Release' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Current work' })).toBeTruthy()
     expect(screen.getByText('Blocked')).toBeTruthy()
     expect(screen.getByText('Could not inspect the project checkout.')).toBeTruthy()
     expect(screen.queryByText(/fatal: not a git repository/)).toBeNull()

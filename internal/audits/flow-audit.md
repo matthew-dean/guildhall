@@ -63222,3 +63222,87 @@ partial-work progress state.
   execution used the same exact explanation. The delegated owner resumed it;
   Work then returned to the same `TMI-004` running card with `Pause`, and
   `guildhall status` again reported active work with no blockers.
+
+### Finding: An inferred task scope must not impersonate a named release
+
+- [x] User job: when a project has current work but no named release, the
+  Release route identifies it as current work, shows the task's real progress,
+  and keeps the shared executable owner action visible. The route must reserve
+  release wording for an actual selected release.
+- Live finding, 2026-08-30: t-minus-t has `release: null` and one active
+  inferred `current-work` scope. Its live Release route rendered only the
+  heading `Release`, `0/1 done`, and the active task. The owner could take the
+  correct `Open Work` action, but could not tell whether this was a real
+  release or a temporary work scope.
+
+#### Contract Touch Decision
+
+Work id: `unreleased-scope-is-current-work-2026-08-30`. Touched contract: the
+Release route's shared scope presentation. The existing release-readiness
+projection remains authoritative for whether the selected scope is a named
+release; route copy must present that typed distinction without deriving a
+release locally. Considered but not touched: release persistence, scope
+selection, action ranking, release lifecycle, task state, and schema. Required
+proof: a no-release packet renders `Current work`, while a named release still
+renders `Release readiness`; both retain the shared owner action. Apply/revert:
+presentation of an existing typed boundary only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The route reads the existing nullable release
+identity and inferred scope contract.
+
+#### Validation
+
+- `pnpm vitest run src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts
+  --reporter=dot` passed (32 tests); `pnpm typecheck`, `pnpm lint:contracts`,
+  and `pnpm model:independence` passed.
+- Installed local proof, 2026-08-30: after `pnpm build`, `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start` in t-minus-t,
+  `/api/stale-server` returned `stale:false`. The real unreleased scope route
+  rendered `Current work`, `0/1 done`, the named TMI-004 task, and one visible
+  action without horizontal overflow at 1280px. A named-release fixture still
+  renders `Release readiness`.
+
+### Finding: A visible resume command must resume, not merely navigate
+
+- [x] User job: when a current-work or Release route presents `Resume work`,
+  the owner can resume the focused task with that one action. It must not open
+  Work and require the owner to find and click the same command again.
+- Live finding, 2026-08-30: after the installed-app restart safely paused
+  t-minus-t `TMI-004`, the Release route showed the named task and `Resume
+  work`. Clicking it navigated to Work, which remained paused and showed a
+  second `Resume work` button. The action model already carried the typed
+  `start_focused` operation and Project Overview ran it directly, but
+  ReleaseTab special-cased only `repair_spec` and discarded the other direct
+  operation.
+
+#### Contract Touch Decision
+
+Work id: `release-resume-runs-shared-focused-operation-2026-08-30`. Touched
+contracts: Release's consumption of the shared `ProjectAction.operation` and
+its existing focused-task dispatch callback. Any supported typed operation
+with a focused task executes directly; navigation remains only for actions
+without an operation. Considered but not touched: action-model ranking,
+operation enum, start endpoint, pause persistence, task state, release
+lifecycle, and schema. Required proof: `start_focused` invokes the supplied
+task runner from Release; `repair_spec` retains its direct path; a navigation
+only action still routes to its target. Apply/revert: one shared-action
+consumer rule.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repair consumes the existing persisted/read
+model operation enum and task ID.
+
+#### Validation
+
+- `pnpm vitest run src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts
+  --reporter=dot` passed (33 tests), including direct `start_focused` and
+  `repair_spec` actions; `pnpm typecheck`, `pnpm lint:contracts`, and
+  `pnpm model:independence` passed.
+- Installed local proof, 2026-08-30: after the same fresh build/install and
+  `stale:false` check, t-minus-t's paused Release route rendered `Current
+  work`, `TMI-004`, and `Resume work`. One click remained on the Release route
+  and changed the shared state to `Work is underway`, the same named task, and
+  `Open Work`; horizontal layout remained within the 1280px viewport.
