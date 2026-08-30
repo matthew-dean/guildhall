@@ -60658,3 +60658,102 @@ mutation.
   `stale:false`, the real Looma repair button disabled as soon as it was
   clicked, stayed on the originating drawer, then refreshed to the next
   shared repair task and re-enabled only after the focused pass had stopped.
+
+### Finding: A release-level repair action must execute rather than route to a duplicate command
+
+- [ ] User job: when Release says a spec repair is the one thing preventing
+  forward progress, the owner can execute that repair from Release. The action
+  must not navigate to Work and present the exact same command again.
+- Finding, 2026-08-30: live Looma Release showed `Repair this spec` and an
+  executable-looking `Repair spec` button for the current editor task. Clicking
+  it navigated to Work, where it rendered the same `Repair spec` command and
+  did not start the repair. The primary action was therefore neither an action
+  nor a useful handoff.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-release-repair-execution-2026-08-30`.
+Touched contracts: Release must consume the shared action model's typed
+`operation`; when that operation is `repair_spec`, it invokes the existing
+ProjectView focused-run boundary for the shared `taskId`, exactly as the task
+drawer does. The release command remains disabled while that mutation is in
+flight. Considered but not touched: action ranking, repair selection, release
+readiness calculation, task persistence, and ordinary review navigation.
+Required proof: a release repair invokes one focused task run without changing
+routes, immediately disables the command, and updates the Release action to
+the next shared state after the run.
+
+#### Schema Migration Decision
+
+No schema migration. `ProjectActionModel.operation` and `taskId` already
+express the typed repair contract; this removes a Release presentation boundary
+that discarded those semantics.
+
+- [x] Regression and installed proof, 2026-08-30: ReleaseTab coverage proves
+  a typed `repair_spec` action calls the focused run boundary without navigating
+  to `/work`, and locks the command while it is in flight. With a rebuilt,
+  installed app reporting `stale:false`, Looma Release stayed at `/release`,
+  disabled `Repair spec` immediately, ran `task-import-twwvys`, and then
+  displayed the next shared repair task. At 1024x800 and 390x844 the entire
+  page had no page-level horizontal overflow and the primary action was visible
+  without scrolling.
+
+### Finding: Release cannot transiently replace the next action with unrelated migration urgency
+
+- [ ] User job: a completed repair settles on the same next owner decision
+  everywhere. A transient response cannot flash an unrelated project update
+  that asks the owner to change course.
+- Finding, 2026-08-30: during the installed release repair refresh, Release
+  briefly rendered `Required migration` and `Review project update` before
+  settling on the authoritative next repair. The later project and activity
+  responses agreed on that repair, so the one-frame migration action is either
+  a stale response or an unstable server projection. Its source remains to be
+  isolated before the overall one-minute route can be called stable.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-release-action-projection-stability-2026-08-30`.
+Touched contracts: pending investigation. The likely boundary is the shared
+project-action projection or its client response ordering, not Release-specific
+ranking. Considered but not touched: migration execution, repair selection,
+release readiness calculation, and task persistence. Required proof: repeated
+focused repair refreshes either retain the same authoritative next action or
+show a migration only when the authoritative API exposes that same action.
+
+#### Schema Migration Decision
+
+Pending investigation. No persisted schema change is implied by the observed
+projection flicker.
+
+### Finding: Global run chrome must reconcile a completed focused pass
+
+- [ ] User job: after the owner runs one focused repair, the global command
+  immediately reflects whether the project is still running. It must never
+  keep offering `Pause` after the repair has already stopped.
+- Finding, 2026-08-30: the real release repair completed in 608ms. Both the
+  authoritative project response and activity response reported `stopped`,
+  but Release chrome still rendered `Pause` more than four seconds later. The
+  optimistic `running` prediction only cleared after observing a running
+  response, so a quick completed pass could make it permanent.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-optimistic-run-reconciliation-2026-08-30`.
+Touched contracts: ProjectView optimistic run chrome is temporary only until
+the first successful authoritative project refresh after start or stop. It
+must yield to the returned shared project run state, even when a one-task pass
+finishes before that refresh. Considered but not touched: run orchestration,
+task selection, agent status persistence, action ranking, and API payload
+shape. Required proof: a focused run whose first refresh is already stopped
+returns chrome to `Resume` rather than leaving a false `Pause` command.
+
+#### Schema Migration Decision
+
+No schema migration. The existing typed project run status remains
+authoritative; this removes a client-side cache state that could outlive it.
+
+- [x] Regression and installed proof, 2026-08-30: ProjectView coverage proves
+  a one-task start whose first refresh is already stopped returns chrome to
+  `Resume`. In the rebuilt installed app, the focused Release repair stopped in
+  608ms; the next settled Release frame and the current project API both
+  omitted `Pause` and named the same next repair action.
