@@ -254,6 +254,15 @@
     return project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)
   }
 
+  async function reconcileRunState(refreshInbox = false): Promise<void> {
+    await refreshVisibleProject()
+    // A one-task pass can begin and finish before the first scheduled refresh.
+    // Once that authoritative refresh succeeds, its run state is the only one
+    // chrome should render instead of the temporary start prediction.
+    if (!project.error) optimisticRunStatus = null
+    if (refreshInbox) await loadInbox()
+  }
+
   $effect(() => {
     if (refreshHandle) clearInterval(refreshHandle)
     refreshHandle = setInterval(() => {
@@ -538,14 +547,12 @@
         optimisticRunStatus = null
         return
       }
-      setTimeout(() => void refreshVisibleProject(), 300)
+      setTimeout(() => void reconcileRunState(), 300)
       setTimeout(() => {
-        void refreshVisibleProject()
-        void loadInbox()
+        void reconcileRunState(true)
       }, 1500)
       setTimeout(() => {
-        void refreshVisibleProject()
-        void loadInbox()
+        void reconcileRunState(true)
       }, 3200)
     } finally {
       busy = false
@@ -568,7 +575,7 @@
         optimisticRunStatus = null
         return
       }
-      setTimeout(() => void refreshVisibleProject(), 300)
+      setTimeout(() => void reconcileRunState(), 300)
     } finally {
       busy = false
     }

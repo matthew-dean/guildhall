@@ -1640,6 +1640,27 @@ describe('ProjectView', () => {
     })
   })
 
+  it('returns chrome to the authoritative stopped state when a focused run finishes before its first refresh', async () => {
+    const user = userEvent.setup()
+    const projectPayload = pausedDetail()
+    const fetchMock = installFetchFakes(projectPayload)
+
+    await renderProjectView('thread', null, 'looma-knit', projectPayload)
+    await user.click(screen.getByRole('button', { name: /^resume$/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/project/start?projectId=looma-knit'),
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
+    expect(screen.getByRole('button', { name: /^pause$/i })).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument()
+    }, { timeout: 1200 })
+  })
+
   it('offers one-task advancement from the overflow menu without changing project context', async () => {
     const user = userEvent.setup()
     const fetchMock = installFetchFakes()
