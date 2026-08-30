@@ -63529,6 +63529,12 @@ current typed Git-story snapshot and is not stored as task or release state.
   Inbox, and Release. On the installed t-minus-t app, both Work and
   `/api/project/task/task-004` return `Pull request is ready to open` with one
   `Open pull request` action for `task-004` at the same current revision.
+- Browser owner pass, 2026-08-30: t-minus-t Overview, focused Work, Thread,
+  and Release all showed the same completed `TMI-004` handoff and exactly one
+  visible `Open pull request` action. The focused Work route had no horizontal
+  overflow at 900px narrow desktop or 390px mobile, and the action remained
+  visible in the mobile viewport. The only unreached step is creating the
+  external GitHub pull request, which requires the owner's action-time consent.
 - Installed Narrative Harness secondary proof, 2026-08-30: the independent
   `NAR-091` review-retry action stayed on focused Work and immediately became
   `Work is underway` with the named task and the global `Pause` control. Its
