@@ -56,6 +56,17 @@ afterEach(async () => {
 })
 
 describe('updateProductBrief', () => {
+  it('advertises the writable product-brief fields to the model', () => {
+    expect(updateProductBriefTool.jsonSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        userJob: { type: 'string' },
+        successMetric: { type: 'string' },
+        nonGoals: { oneOf: expect.any(Array) },
+      },
+    })
+  })
+
   it('writes through a bootstrap projection without treating its revision as a CAS token', async () => {
     const queue = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
     writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })

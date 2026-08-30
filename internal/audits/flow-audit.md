@@ -60355,16 +60355,24 @@ and inherited references remain evidence rather than a new persisted authority.
 
 #### Contract Touch Decision
 
-Pending investigation. The shared spec-repair/approval action model must derive
-the missing typed contract field and offer a single recovery action that cannot
-overwrite the existing structured scope. Considered but not touched yet:
-spec-author tool protocol, product-brief persistence, review approval transport,
-and run-stop semantics. Required proof: a brief-save failure has one focused
-owner action or an automatic retry that records success; the normal task record
-never appears ready for an approval it cannot accept.
+Work id: `looma-knit-product-brief-tool-contract-2026-08-30`.
+Touched contracts: the spec agent's `update-product-brief` tool must advertise
+the same structured fields it accepts at execution time. A model must receive
+the typed user job, success metric, boundary, and optional context fields,
+instead of an empty-object schema that makes a correct durable write
+impossible. The shared spec-repair/approval action model remains a follow-up:
+it must eventually name the missing brief directly rather than calling it a
+spec repair. Considered but not touched: product-brief persistence, review
+approval transport, and run-stop semantics. Required proof: the tool schema
+contains the writable brief fields, a focused spec-agent run saves the brief,
+and the normal task record never appears ready for an approval it cannot accept.
 
 #### Schema Migration Decision
 
-Pending investigation. The existing structured spec, product brief, and tool
-failure evidence may suffice. Do not add persisted recovery state before
-tracing the shared action builder and brief-writer failure path.
+No schema migration. This corrects the model-visible contract for an existing
+write operation; persisted task and product-brief shapes are unchanged.
+
+- [x] Regression proof, 2026-08-30: `update-product-brief` now advertises
+  `userJob`, `successMetric`, non-goals, and supporting structured fields to
+  the model instead of an empty object. The product-brief suite, `pnpm
+  typecheck`, `pnpm model:independence`, and `pnpm lint:contracts` pass.
