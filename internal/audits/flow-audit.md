@@ -60556,3 +60556,37 @@ presentations.
   docs/storybook task's Overview drawer showed `Resume task` and `Mark blocker
   resolved...`; opening `Resume task` presented the concrete recovery modal
   without requiring a tab change.
+
+### Finding: The project response and the always-on activity response must name the same next action
+
+- [x] User job: no matter where the owner looks, Guildhall names one current
+  task and one next action. The header, Overview, Work, and task drawer may
+  present it differently, but they cannot send the owner to competing tasks.
+- Finding, 2026-08-30: the installed Looma `/api/project/activity` response
+  named `Work ready to resume` for the docs/storybook task as its primary
+  action, while `/api/project` named the unrelated AlertDialog recovery as the
+  primary action and demoted the docs task. Both asserted current data. This
+  contradicts the shared-summary contract before the UI even renders.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-project-activity-action-agreement-2026-08-30`.
+Touched contracts: project summary and activity responses must resolve the
+same shared `ProjectActionModel` from the same current projection, readiness,
+task boundary, and run state. Considered but not touched: task ranking policy,
+release persistence, UI component layout, and task mutations. Required proof:
+the two real endpoints agree on primary task, action code, button label, and
+run-control state for Looma after a service restart.
+
+#### Schema Migration Decision
+
+No schema migration. The correction is an API projection/read-authority
+alignment for existing summary data.
+
+- [x] Regression and installed proof, 2026-08-30: the existing
+  `resolveProjectActionModel` stale-action regression and `pnpm typecheck`
+  pass. After rebuilding, installing, and restarting with `stale:false`, both
+  live Looma endpoints named `task-import-gh97p0` with `ready_work`, `Open
+  Work`, and an enabled `Resume` run control. The Overview then rendered the
+  docs/storybook task, not AlertDialog; that command remained visible without
+  horizontal overflow at 1024px and 390px.
