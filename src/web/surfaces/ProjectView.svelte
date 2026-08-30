@@ -1811,10 +1811,12 @@
                 tone="neutral"
                 role="status"
                 density="compact"
-                label="Project summary ready"
-                title={detail.name ?? detail.id ?? 'Project'}
+                label={runStatus === 'running' ? 'Work is underway' : 'Current work updated'}
+                title={runStatus === 'running' ? 'Guildhall is working' : 'Checking what changed'}
               >
-                {detail.summary ?? 'The current project summary is ready.'} Loading the selected view...
+                {runStatus === 'running'
+                  ? 'Guildhall will show the next decision here when this pass finishes.'
+                  : 'Guildhall finished the last pass and is loading the next decision.'}
               </NoticeBand>
             </div>
           {:else if currentView === 'overview'}

@@ -490,6 +490,7 @@ describe('ProjectView', () => {
     const overviewPayload = detail({
       tasks: [task({ id: 'task-overview-only', title: 'Overview ordering task' })],
       taskPayload: { surface: 'overview', kind: 'selected_scope_cards' },
+      summary: 'Old project summary should not replace the Work decision.',
     } as Partial<ProjectDetail>)
     const workPayload = detail({
       tasks: [task({ id: 'task-work-only', title: 'Work inventory task' })],
@@ -507,8 +508,10 @@ describe('ProjectView', () => {
     render(ProjectView, { initialView: 'work', initialSub: null, projectId: 'looma-knit' })
 
     await waitFor(() => {
-      expect(screen.getByText(/Loading the selected view/)).toBeInTheDocument()
+      expect(screen.getByText('Checking what changed')).toBeInTheDocument()
     })
+    expect(screen.getByText('Guildhall finished the last pass and is loading the next decision.')).toBeInTheDocument()
+    expect(screen.queryByText('Old project summary should not replace the Work decision.')).toBeNull()
     expect(screen.queryByText('Overview ordering task')).not.toBeInTheDocument()
 
     pendingProject.resolve(json(workPayload))
