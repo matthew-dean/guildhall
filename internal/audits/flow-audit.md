@@ -61416,3 +61416,41 @@ disposable task-worktree and checkpoint state. Existing task, workspace, and
 checkpoint records retain their format; an invalid workspace is removed through
 the existing lifecycle boundary before dispatch. Revert behavior: stop invoking
 the scope-integrity reset; no owner data is transformed or lost.
+
+### Finding: Isolated worktree proof must prepare generated workspace packages
+
+- [ ] User job: when Guildhall asks an owner to resume or review a task in an
+  isolated workspace, its declared proof commands run in that workspace. A
+  valid docs change must not look broken merely because local workspace package
+  outputs are absent.
+- Finding, 2026-08-30: Looma + Knit's recovered docs task has valid `pnpm`
+  workspace links, but `pnpm build:docs` fails before evaluating the docs
+  change because `@looma/core` and `@looma/layout` point to source packages
+  whose ignored `dist/` outputs are missing. `pnpm check:docs-sync` passes, so
+  this is execution-environment preparation rather than a content failure.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-isolated-worktree-build-preparation-2026-08-30`.
+Contracts considered: project bootstrap, task-worktree preparation, acceptance
+command execution, and task proof classification. No contract is changed by
+this finding yet. Required follow-up: determine whether the project-declared
+bootstrap can prepare workspace package outputs before task proof, then repair
+that shared preparation boundary rather than weakening the proof or marking the
+task complete from a partial check. Required proof: a fresh isolated Looma +
+Knit worktree can run the docs build after its declared setup, while an actual
+docs build failure remains distinguishable from environment setup failure.
+
+- [x] Preserve the valid task-local result without treating the baseline
+  bootstrap failure as a docs regression. The docs-sync command passed and the
+  scoped naming convention is committed as Looma task-branch commit `9148dc0`.
+  The attempted dependency build then failed in `@looma/core` on unresolved
+  generated `../dist/esm/loader.js`, before Docusaurus evaluated the changed
+  document. The task remains resumable for normal Guildhall review; no status
+  was bypassed or marked complete from the partial proof.
+
+#### Schema Migration Decision
+
+No schema decision yet. The likely repair is executable workspace preparation;
+record a migration decision only if the project bootstrap contract or its
+persisted evidence format changes.
