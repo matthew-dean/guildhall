@@ -60181,13 +60181,14 @@ normal presentation chooses the existing typed action state over passive
 operational history. The original transcript remains available through a
 deliberate task/work route when it supports an owner decision.
 
-- [x] Regression proof, 2026-08-30: `ThreadTab` now renders one `No response
+- [x] Regression and installed proof, 2026-08-30: `ThreadTab` now renders one `No response
   needed` handoff for a represented running task with `ownerInput.active:
   false`; it omits the Thread list, selected-thread region, active dock, raw
   worker activity, and queued history. It keeps the shared `Open work` route.
-  The live Looma run ended in a recorded blocker before the repaired build was
-  installed, so the next passive-running project state still needs a fresh
-  installed-browser observation rather than inventing one.
+  The next real Looma reframe run confirmed the installed 1280px route shows
+  only `No response needed`, `Component implementation`, `Guildhall is
+  running...`, and `Open Work`, with global `Pause`; there is no Thread list,
+  worker activity, agent transcript, or disabled composer.
 
 ### Finding: Global run control must not contradict the owner’s actual next action
 
@@ -60225,3 +60226,59 @@ are unchanged.
   focus, and one matching orientation pin. The 1280px installed task drawer
   has no top-bar Resume and exposes `Retry worker`; installed Thread has one
   plain-language `Open task` action with no queue or agent transcript.
+
+### Finding: Repeated no-progress recovery must explain and route to a reframe, not a blind retry
+
+- [ ] User job: when a worker has already failed more than once without a
+  durable change, the task recovery surface tells the owner why retry is no
+  longer the sensible default and offers the corrective action directly. The
+  owner should not have to discover stale checkpoints, generic criteria, or a
+  hidden Reframe menu item to avoid repeating the same failure.
+- Finding, 2026-08-30: the real `Component implementation` task's visible
+  recovery panel offered `Retry worker` as its only direct action. Its actual
+  record has two consecutive `worker_no_progress` escalations, a June
+  checkpoint from an earlier attempt, and a generic recovery-written spec with
+  review-only criteria. The useful corrective action, `Reframe task`, is hidden
+  in `More task actions`. A retry would repeat a known unproductive state with
+  no explanation of what needs to change.
+
+#### Contract Touch Decision
+
+Pending investigation. The task recovery action must be derived from typed
+recovery history and current task-contract quality, then reused by the task
+drawer and project action model. Considered but not touched yet: escalation
+persistence, worker retry transport, task status, product-brief schema, and
+spec schema. Required proof: one no-progress event keeps a retry executable;
+repeated no-progress with an insufficient task contract selects direct
+reframing instead of hiding it in an overflow menu.
+
+#### Schema Migration Decision
+
+Pending investigation. Existing escalation reason, recovery code, resolution
+history, and task-contract fields may already be sufficient; do not introduce
+new stored state until their authoritative read boundary is inspected.
+
+### Finding: Active task detail must not present a historical checkpoint as current work
+
+- [ ] User job: after choosing Reframe, the owner can tell that the new
+  coordinator pass is underway and, if progress is shown, it is from that pass
+  rather than an older worker attempt.
+- Finding, 2026-08-30: immediately after the real reframe began, the task
+  drawer correctly changed to `Working` and `Assigned: Spec author`, but its
+  prominent status panel read `Checkpoint saved` and displayed a June worker
+  checkpoint from an earlier retry. The owner has no timestamp or clear
+  boundary between historical checkpoint and the active reframe.
+
+#### Contract Touch Decision
+
+Pending investigation. The task detail's active-state panel must prefer typed
+current assignment/checkpoint generation over historical evidence. Considered
+but not touched: checkpoint persistence, worker event retention, task status,
+and reframe transport. Required proof: active reframe shows current task phase
+without elevating an unrelated older checkpoint.
+
+#### Schema Migration Decision
+
+Pending investigation. Existing checkpoint timestamps and active assignment
+may be enough to classify the stale panel; do not change persistence merely to
+hide historical activity.
