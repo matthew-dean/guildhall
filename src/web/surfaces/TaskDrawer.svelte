@@ -1437,6 +1437,7 @@
           {task}
           {busy}
           specRepair={isSpecRepair}
+          canApproveSpec={ownerSpecReview && !isSpecRepair}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onPause={handleOpenHold}

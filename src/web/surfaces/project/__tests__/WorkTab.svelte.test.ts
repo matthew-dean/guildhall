@@ -131,6 +131,43 @@ describe('WorkTab', () => {
     expect(screen.queryByText('Recent progress')).toBeNull()
   })
 
+  it('keeps a stale focused route from overriding the shared project action', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-coordinator-review')
+    path.value = '/projects/looma-knit/work?task=task-coordinator-review'
+    const repair = task({ id: 'task-repair', title: 'Repair the current shared spec', status: 'spec_review' })
+    const coordinatorReview = task({
+      id: 'task-coordinator-review',
+      title: 'A coordinator-owned recovery review',
+      status: 'spec_review',
+      specReviewGate: { authority: 'coordinator', requestedAt: '2026-05-19T10:00:00.000Z' },
+    })
+
+    render(WorkTab, {
+      props: {
+        detail: detail([repair, coordinatorReview], {
+          actionModel: {
+            primaryAction: {
+              source: 'start_readiness',
+              label: 'Repair this spec',
+              taskId: repair.id,
+              taskLabel: repair.title,
+              buttonLabel: 'Repair spec',
+              href: `/work?task=${repair.id}`,
+              tone: 'accent',
+              code: 'ready_work',
+              operation: 'repair_spec',
+            },
+          },
+        }),
+      },
+    })
+
+    expect(await screen.findByRole('heading', { name: repair.title })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Repair spec' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: coordinatorReview.title })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Review spec' })).toBeNull()
+  })
+
   it('keeps a selected ready-work action in the current queue and names the shared resume command', async () => {
     window.history.replaceState({}, '', '/projects/narrative-harness/work?view=queue')
     path.value = '/projects/narrative-harness/work'

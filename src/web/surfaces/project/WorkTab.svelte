@@ -368,7 +368,11 @@
     const routeTaskId = readSelectedWorkIdFromUrl()
     const actionTaskId = detail.actionModel?.primaryAction?.taskId
     const readinessTaskId = detail.startReadiness?.focusTaskId
-    const taskId = routeTaskId ?? actionTaskId ?? readinessTaskId
+    // A task URL is a compatibility/deep-link hint, not an authority to
+    // replace the current project decision. The shared action owns the owner
+    // handoff whenever it exists; only an active run may retain its route focus
+    // after that action is consumed.
+    const taskId = actionTaskId ?? readinessTaskId ?? (projectRunActive ? routeTaskId : null)
     return taskId ? allWorkItems.find(task => task.id === taskId) ?? null : null
   })
   const workMilestone = $derived(
@@ -387,7 +391,7 @@
     const sharedDetail = detail.actionModel?.primaryAction?.detail?.trim()
     if (sharedDetail) return sharedDetail
     if (focusedWork && hasSpecRepair(focusedWork)) return 'Guildhall needs to repair this spec before it can ask you to review it.'
-    if (focusedWork?.status === 'spec_review') return 'Review this spec so Guildhall can continue.'
+    if (focusedWork && isOwnerSpecReview(focusedWork)) return 'Review this spec so Guildhall can continue.'
     if (focusedWork?.status === 'exploring') return 'Review the brief before Guildhall starts this work.'
     if (focusedWork?.status === 'blocked') return 'Open this work to resolve what is blocking it.'
     return 'Open this work to take the next step.'
@@ -734,18 +738,21 @@
   }
 
   function openFocusedWork(task: Task): void {
-    const tab = task.status === 'spec_review' && !hasSpecRepair(task) ? '?tab=spec' : ''
+    const tab = isOwnerSpecReview(task) ? '?tab=spec' : ''
     nav(`${currentTaskHref(task.id, detail.id)}${tab}`, { backgroundPath: path.value })
   }
 
   function focusedActionLabel(task: Task): string {
-    if (detail.actionModel?.primaryAction?.operation === 'repair_spec' && detail.actionModel.primaryAction.taskId === task.id) {
-      return 'Repair spec'
+    const action = detail.actionModel?.primaryAction
+    if (isFocusedRunnableWork(task)) {
+      return action?.operation === 'repair_spec' ? 'Repair spec' : 'Resume this work item'
     }
-    if (task.status === 'spec_review' && !hasSpecRepair(task)) return 'Review spec'
+    if (action?.taskId === task.id && action.buttonLabel) {
+      return action.buttonLabel
+    }
+    if (isOwnerSpecReview(task)) return 'Review spec'
     if (task.status === 'blocked') return 'Open task'
     if (task.status === 'done' || task.status === 'pending_pr') return 'View record'
-    if (isFocusedRunnableWork(task)) return 'Resume this work item'
     return 'Open task'
   }
 
@@ -756,6 +763,12 @@
     // their typed code remains a safe executable compatibility contract.
     return action.code === 'ready_work' ||
       (action.code === 'paused_live_work' && action.operation === 'start_focused')
+  }
+
+  function isOwnerSpecReview(task: Task): boolean {
+    return task.status === 'spec_review' &&
+      task.specReviewGate?.authority !== 'coordinator' &&
+      !hasSpecRepair(task)
   }
 
   function isFocusedWorkRunning(task: Task): boolean {
@@ -879,7 +892,7 @@
               <p>{focusedDecisionDetail}</p>
             {/if}
           </div>
-          {#if !isFocusedWorkRunning(focusedWork)}
+          {#if !isFocusedWorkRunning(focusedWork) || !isFocusedRunnableWork(focusedWork)}
             <Button
               variant={effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger' ? 'human' : 'primary'}
               disabled={runWorkBusyId === focusedWork.id || runWorkActiveId === focusedWork.id}

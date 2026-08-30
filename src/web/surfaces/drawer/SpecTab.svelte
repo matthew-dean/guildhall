@@ -33,6 +33,7 @@
     task: Task
     busy?: boolean
     specRepair?: boolean
+    canApproveSpec?: boolean
     onApproveBrief: () => void
     onApproveSpec: () => void
     onPause: () => void
@@ -49,6 +50,7 @@
     task,
     busy = false,
     specRepair = false,
+    canApproveSpec = true,
     onApproveBrief,
     onApproveSpec,
     onPause,
@@ -116,7 +118,7 @@
       ),
   )
   const exploring = $derived(task.status === 'exploring')
-  const specApprovalPending = $derived(!specRepair && task.status === 'spec_review' && specText.length > 0)
+  const specApprovalPending = $derived(canApproveSpec && !specRepair && task.status === 'spec_review' && specText.length > 0)
   const specApprovalNeedsBrief = $derived(specApprovalPending && specApprovalNeedsStructuredBrief(task))
   const needsAcceptance = $derived(exploring && briefApproved && acceptance.length === 0)
 

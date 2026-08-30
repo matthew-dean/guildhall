@@ -2286,6 +2286,65 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
   })
 
+  it('does not expose approval from the full Spec tab for a coordinator-owned recovery', async () => {
+    openDrawerOn('spec', { fullRecord: true })
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    payload.task.specReviewGate = {
+      authority: 'coordinator',
+      requestedAt: now,
+      requestedBy: 'coordinator-recovery',
+      reason: 'recovery',
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, { taskId: 'task-link-editor', projectId: 'looma-knit', onClose: vi.fn() })
+
+    await screen.findByRole('heading', { name: 'Spec' })
+    expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
+  })
+
+  it('keeps an owner review to its two decision outcomes even when stale recovery evidence exists', async () => {
+    openDrawerOn('spec')
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    payload.task.specReviewGate = {
+      authority: 'owner',
+      requestedAt: now,
+      requestedBy: 'coordinator',
+    }
+    payload.task.escalations = [{
+      id: 'esc-stale-worker',
+      taskId: 'task-link-editor',
+      agentId: 'worker',
+      reason: 'decision_required',
+      summary: 'A prior worker command failed.',
+      raisedAt: now,
+    }]
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, { taskId: 'task-link-editor', projectId: 'looma-knit', onClose: vi.fn() })
+
+    await screen.findByText('Approve this spec?')
+    expect(screen.getByRole('button', { name: 'Request changes' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Approve spec' })).toBeInTheDocument()
+    expect(screen.queryByText('Why is this stuck?')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Task brief' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Acceptance criteria' })).toBeNull()
+  })
+
   it('uses the detail revision action instead of a stale project cache action', async () => {
     openDrawerOn('overview')
     project.detail = {
