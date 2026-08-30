@@ -1048,19 +1048,16 @@ export function applyRuntimeExecutionToProjectDecision(
   }
   if (decision.conflicts.some(conflict => conflict.field === 'execution')) return decision
   // A live supervisor can still be flushing state after it has produced a
-  // concrete owner handoff. Preserve that handoff as the decision authority;
-  // callers receive runtime status separately for the pause/control surface.
-  // Otherwise every route would replace "Review brief" with generic work
-  // activity for the same project snapshot.
+  // concrete, typed owner handoff. Preserve that handoff as the decision
+  // authority; callers receive runtime status separately for the
+  // pause/control surface. A planning-only brief/spec state is not enough:
+  // without an open owner request or review it must never eclipse live work
+  // or invent an action the owner cannot take.
   if (
     decision.planExecution?.state === 'blocked' &&
     (
-      decision.planExecution.code === 'owner_input_required' ||
-      decision.planExecution.code === 'owner_review_required' ||
-      (
-        decision.planExecution.code === 'no_unattended_progress' &&
-        (decision.planExecution.focusKind === 'brief_cleanup' || decision.planExecution.focusKind === 'spec_review')
-      )
+      decision.ownerInput.state === 'required' ||
+      decision.ownerReview.state === 'required'
     )
   ) {
     return {

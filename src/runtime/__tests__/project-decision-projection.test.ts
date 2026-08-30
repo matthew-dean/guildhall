@@ -34,7 +34,7 @@ describe('project decision projection', () => {
     })
   })
 
-  it('keeps a drafted-brief review ahead of concurrent runner liveness', () => {
+  it('keeps live work ahead of a planning-only drafted-brief state', () => {
     const decision = buildProjectDecisionProjection({
       generatedAt: '2026-08-30T08:00:00.000Z',
       start: {
@@ -55,18 +55,51 @@ describe('project decision projection', () => {
     })
 
     expect(refreshed.execution).toMatchObject({
-      state: 'blocked',
-      code: 'no_unattended_progress',
-      focusKind: 'brief_cleanup',
+      state: 'running',
+      code: 'running',
+      focusTaskId: 'task-004',
     })
     expect(projectDecisionStartReadiness(refreshed)).toMatchObject({
+      canStart: true,
+      code: 'running',
+      focusTaskId: 'task-004',
+    })
+    expect(refreshed.primaryAction).toEqual({
+      kind: 'open_work',
+      targetId: 'task-004',
+      reasonCode: 'running',
+    })
+  })
+
+  it('keeps a concrete owner handoff ahead of concurrent runner liveness', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-30T08:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Answer the selected question before work continues.',
+        focusTaskId: 'task-004',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        focusKind: 'brief_cleanup',
+      },
+      ownerInput: { openCount: 1, next: { id: 'question-task-004' } },
+      release: { scopeMode: 'unreleased', state: 'active', release: null, blockers: [] },
+    })
+
+    const refreshed = applyRuntimeExecutionToProjectDecision(decision, {
+      status: 'running',
+      activeTaskId: 'task-004',
+      activeTaskTitle: 'Open supported documents as TypeScript',
+    })
+
+    expect(refreshed.execution).toMatchObject({
+      state: 'blocked',
       code: 'owner_input_required',
       focusTaskId: 'task-004',
-      focusKind: 'brief_cleanup',
     })
     expect(refreshed.primaryAction).toEqual({
       kind: 'answer_owner_input',
-      targetId: 'task-004',
+      targetId: 'question-task-004',
       reasonCode: 'owner_input_required',
     })
   })
