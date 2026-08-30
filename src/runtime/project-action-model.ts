@@ -652,6 +652,9 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const blockedWork = readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work'
   const workerRetryRecommended = readiness.progressState === 'worker_retry_recommended'
   const workerEditLoss = readiness.progressState === 'worker_edit_loss'
+  const pausedSavedWorkDetail = readiness.focusTaskTitle?.trim()
+    ? `"${readiness.focusTaskTitle.trim()}" is paused with saved work. Resume continues the same task.`
+    : 'Work is paused with saved progress. Resume continues the same task.'
   const operation = readiness.canStart && readiness.focusTaskId && runnableWork
     ? (specRepair ? 'repair_spec' : 'start_focused')
     : undefined
@@ -678,7 +681,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     : reviewWork
     ? 'The implementation is saved. Resume review to have Guildhall check the current change.'
     : readiness.progressState === 'partial_work_saved'
-    ? 'Progress is saved. Resume continues this task from its current workspace.'
+    ? pausedSavedWorkDetail
     : pausedWork
     ? readiness.message
     : blockedWork

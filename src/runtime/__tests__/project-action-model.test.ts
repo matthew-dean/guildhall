@@ -1825,7 +1825,7 @@ describe('buildProjectActionModel', () => {
       code: 'paused_live_work',
       taskId: 'task-current',
       buttonLabel: 'Resume work',
-      detail: 'Progress is saved. Resume continues this task from its current workspace.',
+      detail: '"Continue current work" is paused with saved work. Resume continues the same task.',
     })
   })
 
