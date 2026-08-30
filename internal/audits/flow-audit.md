@@ -63653,6 +63653,13 @@ No persisted-schema change.
 - Focused `ProjectView` unit coverage passed. Installed t-minus-t replay at
   900px after build/install, restart, and `stale:false` showed one `Open pull
   request` action, no duplicate `Repo follow-up`, and no page-level overflow.
+- Installed cross-route replay, 2026-08-30: t-minus-t Overview, Work, Inbox,
+  Thread, and Release each showed the same single `Open pull request` action
+  at desktop and 390px widths, with no `Repo follow-up` duplicate or
+  page-level overflow. The release has one included completed task and three
+  explicitly later tasks. The action was intentionally not invoked because it
+  creates an external GitHub pull request and requires owner confirmation at
+  execution time.
 
 ### Finding: Every owner surface must execute the typed focused action
 
