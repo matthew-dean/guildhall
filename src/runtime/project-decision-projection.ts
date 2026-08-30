@@ -947,6 +947,7 @@ export function applyProjectActionModelPrimaryAction(
   action: {
     source?: string
     taskId?: string
+    taskLabel?: string
     code?: string
     label?: string
     detail?: string
@@ -967,7 +968,7 @@ export function applyProjectActionModelPrimaryAction(
       : decision.execution.state === 'paused'
         ? 'resume' as const
         : 'open_work' as const
-  const actionTitle = action.label?.trim() || decision.execution.focusTaskTitle || taskId
+  const actionTitle = action.taskLabel?.trim() || action.label?.trim() || decision.execution.focusTaskTitle || taskId
   // The shared action model may surface a concrete blocked task after saved
   // readiness picked unrelated resumable work. Keep every summary consumer on
   // that same focus instead of leaving orientation on the stale task.

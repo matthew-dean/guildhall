@@ -126,13 +126,14 @@ describe('project decision projection', () => {
       taskId: 'review-task',
       code: 'ready_work',
       label: 'Continue review',
+      taskLabel: 'Review the current contract before dependent work.',
       detail: 'Continue the review task before its dependent work.',
     }).execution).toMatchObject({
       state: 'runnable',
       code: 'ready_work',
       focusTaskId: 'review-task',
-      focusTaskTitle: 'Continue review',
-      focus: { taskId: 'review-task', displayTitle: 'Continue review' },
+      focusTaskTitle: 'Review the current contract before dependent work.',
+      focus: { taskId: 'review-task', displayTitle: 'Review the current contract before dependent work.' },
       message: 'Continue the review task before its dependent work.',
     })
   })
