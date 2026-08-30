@@ -205,7 +205,7 @@ export interface ProjectSummaryProjection {
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: string
-    progressState?: 'partial_work_saved'
+    progressState?: 'partial_work_saved' | 'worker_retry_recommended'
   }
   blockers: Array<{
     id: string
@@ -833,7 +833,7 @@ export function buildProjectSummaryProjection(
   )
   const start = {
     ...scopedStart,
-    ...savedPartialWorkProgressState(scopedStart, tasks, input.taskRuntimes),
+    ...pausedWorkProgressState(scopedStart, tasks, input.taskRuntimes),
   }
   const orientationSpine = compactProjectOrientationSpineForMap(buildProjectOrientationSpine({
     projectId: input.projectId ?? '',
@@ -1214,11 +1214,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-function savedPartialWorkProgressState(
+const WORKER_NO_PROGRESS_OWNER_RETRY_AFTER = 2
+
+function pausedWorkProgressState(
   start: Pick<ProjectScopeProjection['start'], 'code' | 'focusTaskId'>,
   tasks: readonly { id: string; status?: string | null }[],
   taskRuntimes: readonly ProjectStateDatabaseTaskRuntime[] | null | undefined,
-): { progressState: 'partial_work_saved' } | Record<string, never> {
+): { progressState: 'partial_work_saved' | 'worker_retry_recommended' } | Record<string, never> {
   if (start.code !== 'paused_live_work' || !start.focusTaskId) return {}
   const focusedTask = tasks.find(task => task.id === start.focusTaskId)
   if (focusedTask?.status !== 'in_progress') return {}
@@ -1226,12 +1228,15 @@ function savedPartialWorkProgressState(
   const recovery = isRecord(runtime?.payload) && isRecord(runtime.payload.workerRecovery)
     ? runtime.payload.workerRecovery
     : null
-  return (
+  if (
     (typeof recovery?.dirtyTimeoutRetries === 'number' && recovery.dirtyTimeoutRetries > 0) ||
     (typeof recovery?.ownerPauseWithSavedWorkAt === 'string' && recovery.ownerPauseWithSavedWorkAt.trim().length > 0)
-  )
-    ? { progressState: 'partial_work_saved' }
-    : {}
+  ) return { progressState: 'partial_work_saved' }
+  if (
+    typeof recovery?.noProgressAttempts === 'number' &&
+    recovery.noProgressAttempts >= WORKER_NO_PROGRESS_OWNER_RETRY_AFTER
+  ) return { progressState: 'worker_retry_recommended' }
+  return {}
 }
 
 function indexedStartReadiness(
@@ -1439,7 +1444,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   )
   const start = {
     ...scopedStart,
-    ...savedPartialWorkProgressState(scopedStart, tasks, indexedRead?.taskOverlays?.runtime),
+    ...pausedWorkProgressState(scopedStart, tasks, indexedRead?.taskOverlays?.runtime),
   }
   let nextAction: ProjectSummaryProjection['nextAction'] = {
     ...(start.code ? { code: start.code } : {}),

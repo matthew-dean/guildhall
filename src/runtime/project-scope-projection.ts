@@ -151,7 +151,7 @@ export interface ProjectScopeProjection {
     reviewTaskIds?: string[]
     count?: number
     /** A bounded worker pass saved scoped work that the next resume will continue. */
-    progressState?: 'partial_work_saved'
+    progressState?: 'partial_work_saved' | 'worker_retry_recommended'
     message: string
     actionHref: string
     executionScope?: {

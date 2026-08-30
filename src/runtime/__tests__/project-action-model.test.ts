@@ -1803,6 +1803,51 @@ describe('buildProjectActionModel', () => {
     })
   })
 
+  it('turns repeated typed no-progress into one explicit worker retry', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        actionHref: '/work?task=task-current',
+        progressState: 'worker_retry_recommended',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      ownerHeading: 'Worker needs a fresh pass',
+      taskId: 'task-current',
+      buttonLabel: 'Retry worker',
+      detail: 'The last two worker passes ended without a durable change. Retry starts a fresh pass using this task\'s current plan.',
+      operation: 'start_focused',
+    })
+    expect(model.runControl).toMatchObject({ label: 'Retry worker', startEnabled: true })
+  })
+
+  it('keeps the retry action after the persisted decision code replaces paused work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'worker_recovery',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        actionHref: '/work?task=task-current',
+        progressState: 'worker_retry_recommended',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      taskId: 'task-current',
+      buttonLabel: 'Retry worker',
+      operation: 'start_focused',
+    })
+  })
+
   it('reconciles a persisted summary when paused work replaces an old approval queue', () => {
     const model = resolveProjectActionModel({
       stored: {

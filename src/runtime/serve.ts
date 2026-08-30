@@ -678,7 +678,7 @@ interface ServiceProjectSummary {
     proofTaskIds?: string[]
     reviewTaskIds?: string[]
     count?: number
-    progressState?: 'partial_work_saved'
+    progressState?: 'partial_work_saved' | 'worker_retry_recommended'
     executionScope?: StartExecutionScopeSummary
   } | null
   migrationSummary?: {

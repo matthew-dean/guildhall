@@ -1546,7 +1546,7 @@
     ownerAction && !projectActivityVisible && (!ownerActionHasThread || ownerActionDirectTaskRoute),
   ))
   const resumableWorkAction = $derived(
-    ownerAction?.code === 'ready_work' || ownerAction?.code === 'paused_live_work',
+    ownerAction?.code === 'ready_work' || ownerAction?.code === 'paused_live_work' || ownerAction?.code === 'worker_recovery',
   )
   // Thread is for a response, not a second work queue. When the shared action
   // says a represented task can resume, leave its history out of the default
@@ -1574,7 +1574,7 @@
     !threadActionModel?.ownerInput?.active,
   ))
   const workHandoffTitle = $derived(
-    ownerAction?.code === 'paused_live_work' ? 'Current work' : 'No response needed',
+    ownerAction?.code === 'paused_live_work' || ownerAction?.code === 'worker_recovery' ? 'Current work' : 'No response needed',
   )
   const readyWorkOrientation = $derived(orientationSpine ?? project.detail?.orientationSpine ?? null)
   const readyWorkScopeLabel = $derived(

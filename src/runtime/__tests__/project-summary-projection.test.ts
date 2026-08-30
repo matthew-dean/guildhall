@@ -2095,6 +2095,31 @@ describe('project-summary-projection', () => {
     })
   })
 
+  it('recommends a fresh worker pass after two typed no-progress attempts', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-worker-retry-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const projection = writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 't-minus-t',
+      queue: queue([task('one', 'in_progress')]),
+      taskRuntimes: [{
+        taskId: 'one',
+        payload: { workerRecovery: { noProgressAttempts: 2 } },
+      }],
+      generatedAt: now,
+    })
+
+    expect(projection.decision?.execution).toMatchObject({
+      state: 'paused',
+      code: 'worker_recovery',
+      progressState: 'worker_retry_recommended',
+    })
+    expect(projection.actionModel?.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      ownerHeading: 'Worker needs a fresh pass',
+      buttonLabel: 'Retry worker',
+    })
+  })
+
   it('persists compact execution and runtime state without replacing task facts', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-supplemental-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')

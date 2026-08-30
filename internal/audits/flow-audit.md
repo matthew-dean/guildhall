@@ -60258,6 +60258,50 @@ Pending investigation. Existing escalation reason, recovery code, resolution
 history, and task-contract fields may already be sufficient; do not introduce
 new stored state until their authoritative read boundary is inspected.
 
+### Finding: A two-pass clean-worktree stall needs an explicit retry
+
+- [x] User job: when a sound, approved task has two worker passes without a
+  durable change, the owner sees one plain-language explanation and one direct
+  action to retry the worker. Guildhall must not call that state ordinary
+  paused work or make the owner infer whether the task contract needs changing.
+- Finding, 2026-08-30: the primary proof project `t-minus-t` had an approved
+  `Open supported documents as TypeScript` task with a concrete implementation
+  contract and clean isolated worktree, while its typed runtime record reported
+  two no-progress attempts. Guildhall previously showed only `Work paused` and
+  `Resume work`. Reframing would discard a sound contract; the correct owner
+  action is a fresh worker retry with its reason visible.
+
+#### Contract Touch Decision
+
+Work id: `t-minus-t-repeated-no-progress-owner-retry-2026-08-30`.
+Touched contracts: the shared summary projection derives a bounded
+`worker_retry_recommended` progress fact from the focused paused task and its
+typed runtime `workerRecovery.noProgressAttempts`; the shared action model
+owns the matching label, explanation, executable retry operation, and
+run-control state. Considered but not touched: escalation persistence, worker
+retry transport, task status, product-brief schema, spec schema, and task
+reframing transport. Required proof: one no-progress event remains an ordinary
+resume; two typed no-progress events with a sound current contract produce one
+direct `Retry worker` action and no competing generic resume across the action
+model and focused Work handoff.
+
+#### Schema Migration Decision
+
+No schema migration. `TaskRuntimeState.workerRecovery.noProgressAttempts` is
+already a validated, persisted runtime field and current task status remains
+the source of execution truth. This work only adds a deterministic read-time
+projection after two consecutive typed no-progress attempts; it neither writes
+new state nor interprets provider prose.
+
+- [x] Regression and installed proof, 2026-08-30: focused action-model,
+  summary-projection, and Work handoff coverage proves one no-progress attempt
+  remains an ordinary resume while two typed attempts produce one
+  `worker_recovery` action, `Retry worker` command, and no `Paused` status.
+  After `pnpm build`, `pnpm dev:install`, restart, and a `stale:false`
+  response, the real `t-minus-t` API reported that same action, task focus,
+  warning detail, and enabled run control at both the project and task
+  boundaries.
+
 ### Finding: Active task detail must not present a historical checkpoint as current work
 
 - [x] User job: after choosing Reframe, the owner can tell that the new

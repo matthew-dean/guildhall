@@ -688,7 +688,7 @@ export interface ProjectDecisionExecution {
   /** Exact selected-scope records behind an owner-review decision. */
   reviewTaskIds?: string[]
   count?: number
-  progressState?: 'partial_work_saved'
+  progressState?: 'partial_work_saved' | 'worker_retry_recommended'
   message?: string
 }
 
@@ -856,7 +856,7 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
   focusKind?: string
   reviewTaskIds?: string[]
   count?: number
-  progressState?: 'partial_work_saved'
+  progressState?: 'partial_work_saved' | 'worker_retry_recommended'
 } {
   const focus = decision.execution.focus
   const code = decision.execution.focusKind === 'brief_cleanup' &&

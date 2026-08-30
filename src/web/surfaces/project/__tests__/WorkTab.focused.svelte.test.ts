@@ -141,6 +141,29 @@ describe('focused Work flow', () => {
     expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull()
   })
 
+  it('makes repeated worker no-progress a visible retry instead of an ordinary pause', async () => {
+    const paused = reviewTask({ id: 'task-retry', displayKey: 'TMT-4', title: 'Open supported documents as TypeScript', status: 'in_progress' })
+    setRoute(`/projects/t-minus-t/work?task=${paused.id}`)
+    render(WorkTab, { props: { detail: projectDetail([paused], {
+      startReadiness: { canStart: true, code: 'paused_live_work', focusTaskId: paused.id, focusTaskTitle: paused.title, focusKind: 'paused_work', progressState: 'worker_retry_recommended' },
+      actionModel: {
+        primaryAction: {
+          taskId: paused.id,
+          code: 'worker_recovery',
+          operation: 'start_focused',
+          detail: 'The last two worker passes ended without a durable change. Retry starts a fresh pass using this task\'s current plan.',
+          buttonLabel: 'Retry worker',
+          href: `/work?task=${paused.id}`,
+        },
+      },
+    }) } })
+
+    expect(await screen.findByRole('heading', { name: 'Worker needs a fresh pass' })).toBeInTheDocument()
+    expect(screen.getByText('Needs retry')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry worker' })).toBeInTheDocument()
+    expect(screen.queryByText('Paused')).toBeNull()
+  })
+
   it('only exposes the legacy inventory after an explicit Browse work action', async () => {
     const user = userEvent.setup()
     const review = reviewTask()

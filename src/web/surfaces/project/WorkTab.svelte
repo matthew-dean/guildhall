@@ -368,7 +368,7 @@
   })
   const focusedQueueWork = $derived(
     queueMode &&
-      detail.actionModel?.primaryAction?.code === 'paused_live_work' &&
+      (detail.actionModel?.primaryAction?.code === 'paused_live_work' || detail.actionModel?.primaryAction?.code === 'worker_recovery') &&
       focusedWork &&
       isFocusedRunnableWork(focusedWork)
       ? focusedWork
@@ -419,6 +419,7 @@
   })
   const focusedCardTitle = $derived.by(() => {
     if (focusedWork && isFocusedWorkRunning(focusedWork)) return 'Work is underway'
+    if (focusedWork && detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === focusedWork.id) return 'Worker needs a fresh pass'
     if (focusedWork && detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === focusedWork.id) return 'Work paused'
     if (focusedWork && isFocusedRunnableWork(focusedWork)) return 'Ready to continue'
     if (focusedWork && (effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger')) {
@@ -790,7 +791,7 @@
     // Older saved ready-work actions predate the explicit operation field;
     // their typed code remains a safe executable compatibility contract.
     return action.code === 'ready_work' ||
-      (action.code === 'paused_live_work' && action.operation === 'start_focused')
+      ((action.code === 'paused_live_work' || action.code === 'worker_recovery') && action.operation === 'start_focused')
   }
 
   function isOwnerSpecReview(task: Task): boolean {
@@ -808,12 +809,14 @@
 
   function focusedStatusLabel(task: Task): string {
     if (isFocusedWorkRunning(task)) return 'Working'
+    if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'Needs retry'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'Paused'
     return isFocusedRunnableWork(task) ? 'Ready' : effectiveStatusLabel(task)
   }
 
   function focusedStatusTone(task: Task): ChipTone {
     if (isFocusedWorkRunning(task)) return 'running'
+    if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'warn'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
     return isFocusedRunnableWork(task) ? 'ok' : effectiveStatusTone(task)
   }

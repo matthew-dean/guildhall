@@ -9,7 +9,7 @@ export interface ProjectActionStartReadiness {
   focusTaskTitle?: string
   focusKind?: string
   count?: number
-  progressState?: 'partial_work_saved'
+  progressState?: 'partial_work_saved' | 'worker_retry_recommended'
   executionScope?: {
     id: string
     label: string
@@ -167,6 +167,7 @@ export type ProjectActionOwnerHeading =
   | 'What needs your attention'
   | 'Project update required'
   | 'Spec repair needed'
+  | 'Worker needs a fresh pass'
   | 'Work paused'
   | 'Work is underway'
   | 'Ready to start'
@@ -193,6 +194,7 @@ function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): Pro
   switch (action.code) {
     case 'required_migration_pending': return 'Project update required'
     case 'paused_live_work': return 'Work paused'
+    case 'worker_recovery': return 'Worker needs a fresh pass'
     case 'running': return 'Work is underway'
     case 'ready_work': return 'Ready to start'
     case 'release_ready': return 'Release is ready'
@@ -337,6 +339,7 @@ function workHrefForTask(taskId: string | undefined): string {
 }
 
 function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): string {
+  if (readiness.progressState === 'worker_retry_recommended') return 'Retry worker'
   if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Open task'
   if (readiness.code === 'required_migration_pending') return 'Review project update'
   if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
@@ -369,6 +372,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (stopping) return 'Stopping'
   if (running) return 'Pause'
   if (readiness?.code === 'ready_work') return 'Start'
+  if (readiness?.progressState === 'worker_retry_recommended') return 'Retry worker'
   if (!readiness || readiness.canStart) return 'Resume'
   if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Needs recovery'
   if (readiness.code === 'required_migration_pending') return 'Migrate'
@@ -635,13 +639,18 @@ function taskHrefForTask(taskId: string | undefined): string {
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
   const ownerReview = readiness.code === 'owner_review_required'
   const focusedSpecReview = ownerReview || readiness.focusKind === 'spec_review'
-  const runnableWork = readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
+  const runnableWork = readiness.code === 'ready_work' ||
+    readiness.code === 'paused_live_work' ||
+    readiness.code === 'worker_recovery'
   const specRepair = readiness.focusKind === 'spec_repair'
   const blockedWork = readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work'
+  const workerRetryRecommended = readiness.progressState === 'worker_retry_recommended'
   const operation = readiness.canStart && readiness.focusTaskId && runnableWork
     ? (specRepair ? 'repair_spec' : 'start_focused')
     : undefined
-  const label = specRepair
+  const label = workerRetryRecommended
+    ? 'Worker needs a fresh pass'
+    : specRepair
     ? 'Repair this spec'
     : ownerReview
     ? 'Review a spec'
@@ -651,7 +660,9 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const taskLabel = ownerReview || runnableWork ? readiness.focusTaskTitle?.trim() : undefined
   // The selected task is the decision. A review-queue count is operational
   // context, not an explanation that competes with that task on every surface.
-  const detail = blockedWork
+  const detail = workerRetryRecommended
+    ? 'The last two worker passes ended without a durable change. Retry starts a fresh pass using this task\'s current plan.'
+    : blockedWork
     ? 'This task stopped and needs its recovery action before it can continue.'
     : readiness.progressState === 'partial_work_saved'
       ? 'Progress is saved. Resume continues this task from its current workspace.'
@@ -669,10 +680,12 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
       : readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
     tone: readiness.code === 'required_migration_pending'
       ? 'danger'
+      : workerRetryRecommended
+        ? 'warn'
       : readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
         ? 'accent'
         : 'warn',
-    code: readiness.code,
+    code: workerRetryRecommended ? 'worker_recovery' : readiness.code,
     ...(readiness.focusTaskId ? { taskId: readiness.focusTaskId } : {}),
     ...(operation ? { operation } : {}),
   }
@@ -826,7 +839,11 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   // blocked or incomplete merely because that detail is intentionally absent.
   if (
     startReadiness?.canStart &&
-    (startReadiness.code === 'ready_work' || startReadiness.code === 'paused_live_work')
+    (
+      startReadiness.code === 'ready_work' ||
+      startReadiness.code === 'paused_live_work' ||
+      startReadiness.code === 'worker_recovery'
+    )
   ) {
     candidates.push(startReadinessAction(startReadiness))
   }
@@ -910,6 +927,8 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
         ? 'Waiting on setup'
         : blockedWork && !running && !stopping
           ? 'Needs recovery'
+        : primaryAction?.code === 'worker_recovery' && !running && !stopping
+          ? 'Retry worker'
         : availabilityPaused && !running && !stopping
           ? 'Resume'
         : ownerInput.active && !running && !stopping
