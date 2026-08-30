@@ -62068,6 +62068,39 @@ Git inspection, and worker-recovery records contain the required facts.
   review and command evidence are recorded; it has not been restarted merely
   to spend another provider turn.
 
+### Finding: Thread must expose the same current owner decision as project summary
+
+- [ ] User job: when a project summary directs the owner to one named task,
+  opening Thread must show that same task, its current phase, and the same
+  available action. Historical turns remain history; they cannot replace the
+  active handoff or leave the owner with a blank Thread state.
+- Live finding, 2026-08-30: Narrative Harness's shared project decision,
+  action model, and task `task-091` agreed on `Resume review` for "Present
+  draft review evaluation and provenance." The Thread endpoint instead
+  returned an old July `brief_approval` turn as the first visible content,
+  `activeTurnId: inflight:task-091`, and `summary: null` / `ownerAction: null`.
+  This contradicts the project action with an empty handoff even though the
+  authoritative task is in `review` and has current recorded command evidence.
+  Its older skipped Git landing record contains a stale index-lock failure;
+  that diagnostic must not displace the current review decision.
+
+#### Contract Touch Decision
+
+Work id: `narrative-thread-current-owner-handoff-2026-08-30`. No code change
+in this unit. The suspected boundary is persisted current Thread projection
+selection and refresh versus historical turn ordering. Considered but not
+touched: task lifecycle, review/gate proof, Git Story persistence, release
+readiness, and route-local rendering. Required proof for follow-up: the
+Thread read model selects `task-091` as its active turn and exposes the same
+`Resume review` action as the shared project action model, while historical
+brief approvals remain available only as history. Apply/revert: diagnostic
+finding only.
+
+#### Schema Migration Decision
+
+No persisted-schema change identified. The failure is a projected-current-turn
+selection mismatch, not missing task or evidence data.
+
 ### Finding: Thread must focus the same paused task as the shared action model
 
 - [x] User job: after pausing focused work, Thread opens on that paused task
