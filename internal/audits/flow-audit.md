@@ -62492,7 +62492,7 @@ reader remain the authority.
 
 ### Finding: System-default settings are not owner Inbox work
 
-- [ ] User job: the Inbox contains only decisions that change or unblock the
+- [x] User job: the Inbox contains only decisions that change or unblock the
   current project. Passive configuration defaults stay discoverable in Settings
   without competing with the project’s one actionable work handoff.
 - Live finding, 2026-08-30: after t-minus-t’s actual import housekeeping was
@@ -62517,9 +62517,20 @@ owner attention.
 
 No persisted-schema change. Settings records are unchanged.
 
+#### Validation
+
+- `InboxTab.svelte.test.ts` passes 11 focused tests, including the
+  no-priority-action state. `pnpm typecheck`, `pnpm lint:contracts`,
+  `pnpm model:independence`, and `pnpm build` pass.
+- Installed t-minus-t proof, 2026-08-30: `/api/project/inbox?projectId=t-minus-t`
+  returned `[]`; the owner Inbox no longer presents default levers as a
+  decision. Settings remains the deliberate configuration path: its Developer
+  panel shows the inherited project behavior and default task behavior controls
+  without turning them into a project interruption.
+
 ### Finding: An empty Inbox must not deny the visible current action
 
-- [ ] User job: when no separate Inbox decisions remain but the project still
+- [x] User job: when no separate Inbox decisions remain but the project still
   has a current owner action, the owner can distinguish those facts instantly.
   The page must name the active action and expose it, not claim no decision is
   needed while presenting a command.
@@ -62543,3 +62554,14 @@ the contradiction.
 #### Schema Migration Decision
 
 No persisted-schema change.
+
+#### Validation
+
+- `InboxTab.svelte.test.ts` passes 11 focused tests. It proves an empty Inbox
+  with a shared action says `No separate Inbox decisions are waiting`, names
+  the current action, and retains its command; a genuinely actionless state
+  still says nothing needs a decision.
+- Installed t-minus-t proof, 2026-08-30: the real Inbox returned no priority
+  decisions while still presenting the shared `Retry worker` recovery action.
+  At 1114px it had no page-level horizontal overflow and did not make the
+  owner infer whether the command contradicted the empty state.
