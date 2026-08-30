@@ -14805,6 +14805,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         decision: decisionIsCurrent ? sharedDecision : null,
         decisionFreshness: decisionIsCurrent ? 'current' : 'stale',
         ...(decisionIsCurrent ? {} : { requiresRefresh: true }),
+        // A drawer can outlive the page-level project cache. Carry the same
+        // current action packet as this task detail's decision so its buttons
+        // never navigate from an older overview response.
+        actionModel: decisionIsCurrent ? projection.actionModel ?? null : null,
         task: compactTaskForInitialDrawer(selectedTask),
         relatedTasks,
         workProgress,

@@ -447,6 +447,7 @@ describe('GET /api/project/task/:id', () => {
       projectRevision: body.projectRevision,
       queueRevision: body.queueRevision,
     })
+    expect(body.actionModel?.primaryAction?.taskId).toBe(body.decision?.primaryAction?.targetId)
     expect(body.recentEvents).toBeUndefined()
     expect(body.contextDebug).toBeUndefined()
     expect(body.exploringTranscript).toBeUndefined()
@@ -471,6 +472,7 @@ describe('GET /api/project/task/:id', () => {
       decision: null,
       decisionFreshness: 'stale',
       requiresRefresh: true,
+      actionModel: null,
     })
   })
 

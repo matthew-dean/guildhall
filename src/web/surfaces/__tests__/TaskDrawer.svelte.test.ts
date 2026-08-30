@@ -2279,6 +2279,49 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
   })
 
+  it('uses the detail revision action instead of a stale project cache action', async () => {
+    openDrawerOn('overview')
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          label: 'Old action',
+          buttonLabel: 'Open old action',
+          href: '/projects/looma-knit/work?task=task-stale',
+          taskId: 'task-stale',
+        },
+      },
+    }
+    const payload = drawerPayload({
+      threadTurns: [],
+      actionModel: {
+        primaryAction: {
+          label: 'Continue current work',
+          buttonLabel: 'Open current work',
+          href: '/projects/looma-knit/work?task=task-current',
+          taskId: 'task-current',
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Continue current work')
+    await userEvent.click(screen.getByRole('button', { name: 'Open current work' }))
+    expect(path.href).toBe('/projects/looma-knit/task/task-current')
+  })
+
   it('keeps a shared spec-repair task out of approval in focused and full detail', async () => {
     const repairedProject = {
       ...projectDetail(),

@@ -1089,6 +1089,8 @@ export interface ContextDebugRecord {
 
 export interface DrawerPayload {
   task: Task
+  /** Current shared action packet from the same summary revision as `decision`. */
+  actionModel?: ProjectActionModel | null
   relatedTasks?: Task[]
   workProgress?: ServiceProjectSummary['workProgress']
   runStatus?: string

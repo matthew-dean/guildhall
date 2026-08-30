@@ -461,7 +461,7 @@
   }
 
   function openProjectDecision(): void {
-    const targetTaskId = project.detail?.actionModel?.primaryAction?.taskId
+    const targetTaskId = projectPrimaryAction?.taskId
     if (!targetTaskId) return
     nav(currentTaskHref(targetTaskId, scopedProjectId()), {
       backgroundPath: drawerBackgroundPath(),
@@ -724,7 +724,9 @@
   const completionEscalations = $derived(task ? unresolvedCompletionEscalations(task) : [])
   const hasCompletionEscalationHygieneWarning = $derived(completionEscalations.length > 0)
   const firstOpenEscalation = $derived(hasCompletionEscalationHygieneWarning ? null : (openEscalations[0] ?? null))
-  const projectPrimaryAction = $derived(project.detail?.actionModel?.primaryAction ?? null)
+  // Detail carries a revision-matched action model. The page store may still
+  // describe a previous project decision while a drawer is open.
+  const projectPrimaryAction = $derived(payload?.actionModel?.primaryAction ?? project.detail?.actionModel?.primaryAction ?? null)
   const projectDecisionElsewhere = $derived(Boolean(
     !fullRecordRequested &&
     !focusedSpecReview &&
