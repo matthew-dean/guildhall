@@ -946,7 +946,7 @@ function primaryActionForDecision(input: {
           ? { kind: 'resume' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
           : execution.state === 'running'
             ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
-            : execution.state === 'complete' && release.state === 'ready' && release.lifecycleState !== 'shipped'
+            : execution.state === 'complete' && release.state === 'ready' && Boolean(release.releaseId) && release.lifecycleState !== 'shipped'
               ? { kind: 'review_release' as const, targetId: release.releaseId, reasonCode: 'release_ready' }
               : release.proofBlockerTaskIds.length > 0
                 ? { kind: 'review_proof' as const, targetId: release.proofBlockerTaskIds[0], reasonCode: 'proof_evidence_missing' }

@@ -131,6 +131,28 @@ describe('project decision projection', () => {
     })
   })
 
+  it('does not invent a release-review action for completed work without a selected release', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-30T17:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Current work has no runnable work remaining.',
+      },
+      release: {
+        scopeMode: 'unreleased',
+        release: null,
+        state: 'ready',
+        blockers: [],
+      },
+    })
+
+    expect(decision.primaryAction).toEqual({
+      kind: 'none',
+      reasonCode: 'all_terminal',
+    })
+  })
+
   it('keeps shipped lifecycle terminal ahead of stale owner review and input', () => {
     const decision = buildProjectDecisionProjection({
       generatedAt: '2026-08-08T01:00:00.000Z',

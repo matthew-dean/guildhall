@@ -904,7 +904,18 @@
     runStatus === 'running' &&
     task.status === 'in_progress',
   ))
-  const showFocusedRunHandoff = $derived(showFocusedRunAction || showFocusedRunningState)
+  const showSettledCompletionHandoff = $derived(Boolean(
+    task &&
+    !fullRecordRequested &&
+    !focusedSpecReview &&
+    !focusedSpecRepair &&
+    !projectDecisionElsewhere &&
+    !hasCompletionEscalationHygieneWarning &&
+    activeTab === 'overview' &&
+    task.status === 'done' &&
+    projectPrimaryAction === null,
+  ))
+  const showFocusedRunHandoff = $derived(showFocusedRunAction || showFocusedRunningState || showSettledCompletionHandoff)
   const canResumeHold = $derived(!projectStartBlocker && isHeld && !firstOpenEscalation)
   const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
   const firstOpenEscalationGuidance = $derived(escalationUserGuidance(firstOpenEscalation))
@@ -947,6 +958,16 @@
         eyebrow: 'Completion hygiene',
         title: 'This task is marked done but still has unresolved escalation history.',
         detail: firstEscalation?.summary ?? 'Review the unresolved escalation before treating the completion as clean.',
+      }
+    }
+    // Once the shared project action has settled, historical landing failures
+    // belong to the explicit record rather than the completion headline.
+    if (task.status === 'done' && projectPrimaryAction === null) {
+      return {
+        tone: 'ok',
+        eyebrow: 'Finished',
+        title: 'This task is complete.',
+        detail: 'Its completed work is already part of the project history.',
       }
     }
     if (task.terminalSummary?.headline) {
@@ -1350,6 +1371,21 @@
           <span class="outcome-eyebrow">Work is underway</span>
           <strong>Guildhall is working on {displayTaskTitle}.</strong>
           <span class="drawer-run-action-copy">Nothing is waiting on you right now. Guildhall will return when it needs a decision or reaches a result.</span>
+          <div class="drawer-run-action-actions">
+            <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View task details</Button>
+          </div>
+        </UtilityPanel>
+      {:else if showSettledCompletionHandoff && task}
+        <UtilityPanel
+          as="section"
+          className="drawer-run-action"
+          tone="ok"
+          railStrength="strong"
+          ariaLabel="Task complete"
+        >
+          <span class="outcome-eyebrow">Finished</span>
+          <strong>This task is complete.</strong>
+          <span class="drawer-run-action-copy">Its completed work is already part of the project history.</span>
           <div class="drawer-run-action-actions">
             <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View task details</Button>
           </div>

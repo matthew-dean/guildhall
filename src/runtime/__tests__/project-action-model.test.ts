@@ -648,6 +648,11 @@ describe('buildProjectActionModel', () => {
         canStart: false,
         code: 'all_terminal',
         message: 'All selected release work is complete.',
+        executionScope: {
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+        },
       },
     })
 
@@ -1029,6 +1034,11 @@ describe('buildProjectActionModel', () => {
         canStart: false,
         code: 'all_terminal',
         message: 'All tasks are already finished.',
+        executionScope: {
+          id: 'release-1',
+          label: 'Current release',
+          kind: 'release',
+        },
       },
       tasks: [{ id: 'task-done', title: 'Done task', status: 'done' }],
       thread: { turns: [], activeTurnId: null },
@@ -1047,6 +1057,18 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
       disabledReason: 'All tasks are already finished.',
     })
+
+    const unscopedTerminal = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Current work has no runnable work remaining.',
+      },
+      tasks: [{ id: 'task-done', title: 'Done task', status: 'done' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(unscopedTerminal.primaryAction).toBeNull()
   })
 
   it('does not surface a decomposed containing parent as the primary task action', () => {

@@ -1765,6 +1765,8 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
+    await screen.findByRole('button', { name: 'View task details' })
+    await userEvent.click(screen.getByRole('button', { name: 'View task details' }))
     await screen.findByRole('tab', { name: 'Overview', selected: true })
     window.history.pushState({}, '', '/projects/looma-knit/task/task-link-editor?tab=journey')
     path.value = '/projects/looma-knit/task/task-link-editor?tab=journey'
@@ -2087,7 +2089,7 @@ describe('TaskDrawer', () => {
     expect(await screen.findByRole('dialog', { name: 'Resume task' })).toBeTruthy()
   })
 
-  it('does not expose run controls for a completed task but keeps copy link available', async () => {
+  it('keeps a completed task focused until the owner explicitly requests details', async () => {
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'done'
     payload.task.terminalSummary = {
@@ -2108,12 +2110,13 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Task completed.')
+    await screen.findByText('This task is complete.')
 
     expect(screen.queryByRole('button', { name: /run this task/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /put on hold/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /put aside/i })).toBeNull()
-    expect(screen.getByRole('button', { name: /copy link/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /view task details/i })).toBeTruthy()
+    expect(screen.queryByText('Task links')).toBeNull()
   })
 
   it('warns when a completed task still carries unresolved escalations', async () => {

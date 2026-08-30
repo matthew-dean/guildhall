@@ -139,6 +139,22 @@ describe('project-summary-projection', () => {
     expect(projectSummaryProjectionIsCurrent({ ...projection, version: 27 })).toBe(false)
   })
 
+  it('settles completed unscoped work without a fake release action', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 't-minus-t',
+      queue: queue([task('task-004', 'done')]),
+      generatedAt: now,
+    })
+
+    expect(projection.releaseSummary.release).toBeNull()
+    expect(projection.nextAction).not.toMatchObject({ code: 'release_ready' })
+    expect(projection.decision.primaryAction).toEqual({
+      kind: 'none',
+      reasonCode: 'all_terminal',
+    })
+    expect(projection.actionModel).toMatchObject({ primaryAction: null })
+  })
+
   it('hydrates a legacy decision from the selected release lifecycle before action reconciliation', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'narrative-harness',

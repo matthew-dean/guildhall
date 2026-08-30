@@ -861,7 +861,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     task.id === taskAction.taskId && taskBlockedReason(task) !== null,
   ))
 
-  if (startReadiness?.code === 'all_terminal') {
+  if (startReadiness?.code === 'all_terminal' && startReadiness.executionScope) {
     candidates.push({
       source: 'start_readiness',
       label: 'Release is ready',

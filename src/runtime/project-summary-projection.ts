@@ -886,6 +886,7 @@ export function buildProjectSummaryProjection(
   const releaseReadyForReview =
     releaseSummary.state === 'ready' &&
     start.code === 'all_terminal' &&
+    Boolean(releaseSummary.release?.id) &&
     releaseSummary.release?.state !== 'shipped'
   const decisionStart = projectDecisionStartReadiness(initialDecision)
   const nextAction: ProjectSummaryProjection['nextAction'] = releaseReadyForReview
@@ -1562,6 +1563,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   if (
     releaseSummary.state === 'ready' &&
     start.code === 'all_terminal' &&
+    Boolean(releaseSummary.release?.id) &&
     releaseSummary.release?.state !== 'shipped'
   ) {
     nextAction = {

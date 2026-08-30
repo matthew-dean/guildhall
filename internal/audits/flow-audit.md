@@ -63735,3 +63735,51 @@ lifecycle fields are reconciled through their current contracts.
   `reviewer-agent` ownership and zero blocked tasks. Overview and Inbox showed
   one `Resume review` action, no `Needs recovery` label, and no page-level
   overflow at desktop and 390px widths.
+
+### Finding: Completed direct work must not invent a release action
+
+- [x] User job: after a project task is reconciled into the project branch,
+  the owner can tell the work is complete in under a minute. Overview, Inbox,
+  Release, Work, Thread, and direct task detail must show either completion or
+  a real next-release command. They must never offer `Open Release` when no
+  selected release exists and the destination has no executable action.
+- Live finding, 2026-08-30: t-minus-t task `TMI-004` was fast-forwarded into
+  `main` and pushed. Its Git Story correctly returned `merged` with `reconciled`
+  evidence, while the shared release decision still returned `review_release`
+  with no release id. Every owner route therefore led to a self-linking,
+  actionless Release screen.
+- Follow-up live finding, 2026-08-30: after the shared action settled, Thread
+  still selected an obsolete setup turn and direct task detail led with the
+  historical stale-lock landing error and then dumped its entire record. Neither
+  is an owner decision after the reconciled completion state; diagnostics must
+  require an explicit owner choice.
+
+#### Contract Touch Decision
+
+Work id: `direct-push-completion-settlement-2026-08-30`. Touched contracts:
+the shared project decision and action-model projection for completed scope.
+`review_release` is valid only for a real selected release record; unscoped
+terminal work settles to no owner action. Considered but not touched: Git
+Story persistence, task completion, release persistence, route-local action
+ranking, and task schema. Required proof: a terminal project without a
+selected release exposes no `review_release` decision or `Open Release`
+self-link; an active selected release still retains its release review action.
+Apply/revert: projection-only behavior; it does not mutate a project or close
+a release.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- Targeted shared decision, action-model, and summary-projection regressions
+  passed; 205 TaskDrawer and ThreadTab tests passed; `pnpm typecheck` and
+  `pnpm lint:contracts` passed.
+- After `pnpm build`, `pnpm dev:install`, and a t-minus-t service restart,
+  `/api/stale-server` reported `stale:false`. Live desktop and 390px checks
+  found no horizontal overflow across Overview, Inbox, Release, Work, Thread,
+  or direct task detail. Overview and Inbox now report no pending owner action,
+  Release has no self-linking `Open Release`, Thread reports no current work,
+  and the completed task leads with a compact handoff; its record is available
+  only after the owner selects `View task details`.

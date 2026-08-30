@@ -1506,11 +1506,18 @@
   const currentTurns = $derived.by(() => {
     const seenQuestionTasks = new Set<string>()
     let seenOwnerInputQuestion = false
+    const settledCompletion =
+      project.detail?.actionModel?.primaryAction === null &&
+      project.detail?.startReadiness?.code === 'all_terminal'
     const hasActiveOwnerInputQuestion = turns.some(
       turn => (turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') && turn.status === 'active',
     )
     return turns.filter(turn => {
       if (turn.phase === 'done') return false
+      // Setup is not a parallel owner decision after the project has already
+      // settled its completed scope. Keep the recorded turn in the full
+      // history, but do not make Thread reopen it as the default conversation.
+      if (settledCompletion && turn.kind === 'setup_step') return false
       if (
         hasActiveOwnerInputQuestion &&
         turn.kind === 'setup_step' &&
@@ -1714,7 +1721,12 @@
           .sort(compareOperationTurns)[0] ?? null
         return { id, turns: ordered, latestTurn, activeTurn, currentTurn }
       })
-      .filter(chain => chain.turns.some(turn => turn.phase !== 'done'))
+      .filter(chain =>
+        chain.turns.some(turn => turn.phase !== 'done') &&
+        !(project.detail?.actionModel?.primaryAction === null &&
+          project.detail?.startReadiness?.code === 'all_terminal' &&
+          chain.id === 'setup'),
+      )
       .sort((left, right) => compareArchiveTurns(left.latestTurn, right.latestTurn))
   })
 
