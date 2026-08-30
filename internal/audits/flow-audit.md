@@ -62875,3 +62875,60 @@ recomposed at the detail boundary.
   record`; the explicitly opened full record kept the shared `Resume work`
   action rather than `Resume only this work item`. Narrative Harness's NAR-091
   task independently rendered one saved-review handoff and `Resume review`.
+
+### Finding: Overview and Work must share the same live owner action
+
+- [x] User job: while one focused task is running, Overview and Work tell the
+  same owner story: work is underway, the same task is active, and the only
+  navigation action is `Open Work`. Overview must never regress to no action or
+  fresh-intake setup merely because it uses its compact surface packet.
+- Live finding, 2026-08-30: after the owner resumed t-minus-t `TMI-004`, the
+  authoritative Work packet had `startReadiness.code: running`, a `Work is
+  underway` / `Open Work` primary action, and ready setup. The concurrently
+  fetched Overview packet had the same running process but `primaryAction:
+  null` and `setup.freshIntakeNeeded:true`. It would therefore lie about the
+  only available action after its loading state settled.
+
+#### Contract Touch Decision
+
+Work id: `overview-work-live-action-agreement-2026-08-30`. Touched contracts:
+the runtime decision overlay and shared summary builder's selection of a live
+run and start readiness before building the action model. Overview and Work may
+differ in inventory density, but must consume the same active-run identity and
+owner-action authority. Considered but not touched: the Overview read boundary,
+run dispatch, task lifecycle, persisted compact projections, action ranking
+semantics, Overview presentation, and task data schema. Required proof: a
+running focused task produces matching action-model code, task id, owner
+heading, and setup state for both `surface=overview` and `surface=work`;
+rendered Overview and Work then agree on the visible handoff. Apply/revert:
+in-memory response composition only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repair reads the existing live-run authority
+consistently before deriving compact surface output.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/project-decision-projection.test.ts
+  src/runtime/__tests__/serve-read-boundary.test.ts --testNamePattern "keeps
+  the planned focus|canonicalizes ready-work identity" --reporter=dot` passed
+  (2 tests): a running supervisor without its persisted active-task fields now
+  retains the runnable decision focus and emits `Open Work` for that task.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm build` passed.
+- Installed local proof, 2026-08-30: after `pnpm dev:install` and
+  `guildhall start`, `/api/stale-server` returned `stale:false`. The real
+  t-minus-t `TMI-004` worker reached its safe review handoff. Compact Overview
+  and Work agreed on `ready_work`, `task-004`, `Review ready to continue`, and
+  the executable `Resume review` link. A Playwright owner pass at 1440px and
+  1024px found no horizontal overflow and one visible `Resume review` button.
+  After the owner took that action, the live compact Overview and Work reads
+  agreed on `running`, `task-004`, `Work is underway`, and the same executable
+  `Open Work` link. Neither surface claimed fresh intake or lost the owner
+  action.
+- Known unrelated baseline: the full
+  `src/runtime/__tests__/serve-read-boundary.test.ts` currently fails before
+  this decision path with fixture state mutated by its own background refresh
+  (including the isolated `compact project does not mutate durable project
+  state` case). This repair did not modify that write boundary; the targeted
+  owner-action regression and all type/build/model-independence gates pass.

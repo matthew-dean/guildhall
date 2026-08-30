@@ -262,6 +262,42 @@ describe('project decision projection', () => {
     })
   })
 
+  it('keeps the planned focus while a live supervisor has not written its task identity yet', () => {
+    const planned = buildProjectDecisionProjection({
+      projectRevision: 42,
+      generatedAt: '2026-08-30T20:00:00.000Z',
+      start: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-004',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        focusKind: 'review_work',
+        message: 'Saved changes are ready for automated review.',
+      },
+      release: { scopeMode: 'unreleased', release: null, state: 'active', blockers: [] },
+    })
+
+    const running = applyRuntimeExecutionToProjectDecision(planned, { status: 'running' })
+
+    expect(running.execution).toMatchObject({
+      state: 'running',
+      code: 'running',
+      focusTaskId: 'task-004',
+      focusTaskTitle: 'Open supported documents as TypeScript',
+      focusKind: 'active_work',
+    })
+    expect(running.primaryAction).toEqual({
+      kind: 'open_work',
+      targetId: 'task-004',
+      reasonCode: 'running',
+    })
+    expect(projectDecisionStartReadiness(running)).toMatchObject({
+      code: 'running',
+      focusTaskId: 'task-004',
+      focusTaskTitle: 'Open supported documents as TypeScript',
+    })
+  })
+
   it('restores the retained plan execution after a supervisor stops', () => {
     const planned = buildProjectDecisionProjection({
       projectRevision: 42,

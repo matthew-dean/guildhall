@@ -2856,8 +2856,26 @@ function summarizeProjectFromProjection(
         deferredTaskCount: projection.scope.deferred,
       }
     : undefined
-  const decisionStartReadiness = projection.decision
-    ? projectDecisionStartReadiness(projection.decision)
+  // Runtime liveness is a transient overlay on the saved owner decision. It
+  // must be applied before any surface turns that decision into readiness or
+  // buttons; otherwise an Overview read can see a running supervisor but lose
+  // the task that the saved runnable plan already identified.
+  const runtimeDecisionExecution = run
+    ? {
+        status: run.status,
+      }
+    : projection.execution
+      ? {
+          status: projection.execution.status,
+          activeTaskId: projection.execution.activeTaskId,
+          activeTaskTitle: projection.execution.activeTaskTitle,
+        }
+      : null
+  const decision = projection.decision
+    ? applyRuntimeExecutionToProjectDecision(projection.decision, runtimeDecisionExecution)
+    : null
+  const decisionStartReadiness = decision
+    ? projectDecisionStartReadiness(decision)
     : null
   const savedStartReadiness = decisionStartReadiness
     ? {
@@ -2962,7 +2980,7 @@ function summarizeProjectFromProjection(
     workProgress: workProgressFromProjectSummaryProjection(projection),
     ...(projection.releaseSummary ? { releaseSummary: projection.releaseSummary } : {}),
     sourceCapabilityCatalog: projection.sourceCapabilityCatalog,
-    ...(projection.decision ? { decision: projection.decision } : {}),
+    ...(decision ? { decision } : {}),
     ...(projection.execution ? { execution: projection.execution } : {}),
     ...(projection.runtime ? { runtime: projection.runtime } : {}),
     ...(projection.ownerInput ? { ownerInput: projection.ownerInput } : {}),

@@ -1075,8 +1075,16 @@ export function applyRuntimeExecutionToProjectDecision(
       }),
     }
   }
-  const activeTaskId = runtimeExecution?.activeTaskId?.trim()
-  const activeTaskTitle = runtimeExecution?.activeTaskTitle?.trim()
+  // A focused run can become live before its supervisor row has written the
+  // active-task identity. In that short window, retain the runnable plan's
+  // exact focus rather than turning a real running task into anonymous work
+  // with no owner action. Blocked plan decisions returned above never take
+  // this fallback.
+  const plannedFocus = decision.planExecution?.state === 'runnable' || decision.planExecution?.state === 'paused'
+    ? decision.planExecution.focus
+    : undefined
+  const activeTaskId = runtimeExecution?.activeTaskId?.trim() || plannedFocus?.taskId
+  const activeTaskTitle = runtimeExecution?.activeTaskTitle?.trim() || plannedFocus?.displayTitle
   const execution: ProjectDecisionExecution = {
     state: 'running',
     code: status,
