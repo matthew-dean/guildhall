@@ -60376,3 +60376,42 @@ write operation; persisted task and product-brief shapes are unchanged.
   `userJob`, `successMetric`, non-goals, and supporting structured fields to
   the model instead of an empty object. The product-brief suite, `pnpm
   typecheck`, `pnpm model:independence`, and `pnpm lint:contracts` pass.
+
+- [ ] Installed regression, 2026-08-30: with the corrected tool schema, the
+  real ContextMenu task's first spec-agent run produced a detailed seven-
+  criterion structured contract but failed the brief write. Starting the
+  visible `Repair spec` action after the preservation fix still replaced that
+  contract with a two-criterion recovery seed. The task detail/API and the
+  queue projection consumed by `/start` disagreed about the current structured
+  contract, and the repair writer's promoted mutation does not copy
+  `structuredSpec`. This is a shared authoritative-state defect; do not treat
+  it as a model retry or copy problem.
+
+### Finding: Start-time recovery must use and preserve the same task contract shown to the owner
+
+- [ ] User job: when the owner starts the one visible recovery action, Guildhall
+  acts on exactly the structured scope they just reviewed. No private queue
+  projection may replace it with older data.
+- Finding, 2026-08-30: the ContextMenu detail endpoint displayed the current
+  seven-criterion structured spec, while `/api/project/task/:id/start` hydrated
+  a different queue record, decided it needed recovery, and wrote a generic
+  two-criterion seed. Its promoted mutation copied `spec`, criteria, and brief
+  but not `structuredSpec`, so the action both chose from and persisted an
+  incomplete authority.
+
+#### Contract Touch Decision
+
+Pending investigation. The start-time repair selector and promoted mutation
+must use the same authoritative effective task detail as task rendering, and
+must atomically preserve or update every planning-contract field including
+`structuredSpec`. Considered but not touched yet: evidence merging order,
+queue/index synchronization, product-brief authoring, UI wording, and review
+approval. Required proof: a current structured task displayed by the API cannot
+be classified as weak by `/start`, and a legitimate recovery writes the full
+typed contract atomically.
+
+#### Schema Migration Decision
+
+Pending investigation. Existing task and promoted-detail stores may be
+sufficient; do not introduce a new field before tracing their authority and
+merge order.
