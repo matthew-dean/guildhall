@@ -169,7 +169,7 @@ export function escalationUserGuidance(
   return {
     title: recovery.headline,
     detail: recovery.detail,
-    nextStep: 'Choose the action that matches what you know: resume if the task can continue, rework the spec if the brief is unclear, or mark it resolved only if you already handled the blocker outside the app.',
+    nextStep: 'Resume the task if it can continue from the saved work. Reframe it only when the task itself is unclear. Mark the blocker resolved only after you handled it outside Guildhall.',
     actionOwner: 'user',
     technicalNote: details ? stripInternalAcceptanceIds(details) : undefined,
   }

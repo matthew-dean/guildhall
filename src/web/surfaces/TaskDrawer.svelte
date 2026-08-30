@@ -1605,12 +1605,13 @@
           {#if firstOpenEscalation && !activeTabOwnsEscalationDecision}
             {#if firstOpenEscalationGuidance.actionOwner === 'user' && canReframeTask}
               <Button
-                variant="secondary"
+                variant="agent"
                 size="sm"
                 disabled={busy || runBusy}
-                onclick={handleOpenReframe}
+                onclick={() => handleOpenEscalationAction(firstOpenEscalation.id, 'retry')}
               >
-                Reframe task...
+                <Icon name="sparkles" size={14} />
+                {firstOpenEscalationAction.label}
               </Button>
               {#if firstOpenEscalationIsWorkspaceBuild}
                 <Button
@@ -1640,7 +1641,7 @@
                 disabled={busy}
                 onclick={() => handleResolveEscalation(firstOpenEscalation, 'resolve')}
               >
-                I handled this...
+                Mark blocker resolved...
               </Button>
             {/if}
           {/if}

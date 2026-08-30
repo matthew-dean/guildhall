@@ -3098,7 +3098,7 @@ describe('ThreadTab', () => {
 
     expect(dock.getByText('Needs recovery')).toBeTruthy()
     expect(dock.getByRole('button', { name: 'Resume task' })).toBeTruthy()
-    expect(dock.getByRole('button', { name: /^I handled this/i })).toBeTruthy()
+    expect(dock.getByRole('button', { name: /^Mark blocker resolved/i })).toBeTruthy()
     expect(footer.queryByText('Needs recovery')).toBeNull()
     expect(footer.getByPlaceholderText(/Add recovery guidance/i)).toBeTruthy()
     expect(listElement ? within(listElement).queryByText('Needs recovery') : null).toBeNull()

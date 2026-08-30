@@ -1926,7 +1926,7 @@ describe('TaskDrawer', () => {
     })
   })
 
-  it('does not offer a generic resume button while a held task still has an open human-owned escalation', async () => {
+  it('keeps the escalation recovery action visible while a held task has an open owner decision', async () => {
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'blocked'
     payload.task.blockReason = 'human_judgment_required: Stripe dashboard setup is required.'
@@ -1968,9 +1968,10 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('This task is out of the active queue for now.')
-    expect(screen.getByRole('button', { name: /^i handled this\.\.\.$/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^mark blocker resolved/i })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /run this task/i })).toBeNull()
-    expect(screen.queryByRole('button', { name: /resume task/i })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /^resume task$/i }))
+    expect(await screen.findByRole('dialog', { name: 'Resume task' })).toBeTruthy()
   })
 
   it('does not expose run controls for a completed task but keeps copy link available', async () => {
@@ -2923,7 +2924,7 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('button', { name: /retry blocker/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /resolve blocker/i })).toBeNull()
 
-    await userEvent.click(screen.getByRole('button', { name: /^i handled this\.\.\.$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^mark blocker resolved/i }))
     await screen.findByText('Use this when you handled the blocker yourself or want to say exactly where to continue.')
     await userEvent.type(
       screen.getByLabelText(/resolution note/i),
@@ -3004,7 +3005,7 @@ describe('TaskDrawer', () => {
     expect(screen.getByText('Add the client ID and secret to Supabase.')).toBeTruthy()
     expect(screen.getByText('Create Apple OAuth credentials')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^retry worker$/i })).toBeNull()
-    expect(screen.getByRole('button', { name: /^i handled this\.\.\.$/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^mark blocker resolved/i })).toBeTruthy()
   })
 
   it('lets the user ask Guildhall to split an active task from the actions menu', async () => {

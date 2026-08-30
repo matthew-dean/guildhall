@@ -4999,7 +4999,7 @@
                         {recoveryAction.label}
                       </Button>
                       <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => openEscalationResolution(t, 'resolve')}>
-                        I handled this...
+                        Mark blocker resolved...
                       </Button>
                     {/if}
                   </Row>
@@ -5762,7 +5762,7 @@
                                 {recoveryAction.label}
                               </Button>
                               <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => openEscalationResolution(activeDockTurn, 'resolve')}>
-                                I handled this...
+                                Mark blocker resolved...
                               </Button>
                             {/if}
                           </Row>

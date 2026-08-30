@@ -574,7 +574,7 @@
                   disabled={busy}
                   onclick={() => onOpenEscalationAction(turn.escalationId, 'resolve')}
                 >
-                  I handled this...
+                  Mark blocker resolved...
                 </Button>
               {:else}
                 <Button
