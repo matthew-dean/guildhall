@@ -20430,9 +20430,11 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
             if (resolved.initializationNeeded) return false
             const authority = readProjectStateAuthorityAtBoundary(projectTasksPath(entry.path))
             const summary = readProjectSummaryShellAtBoundary(entry.path).summary
+            const thread = readThreadReadProjection(entry.path)
             return shouldRefreshProjectAtStartup({
               authority: authority.authority,
               summaryFreshness: summary?.freshness,
+              threadFreshness: thread.currentThreadFreshness,
               attentionNeedsRefresh: attentionProjectionNeedsReleaseReconciliation(
                 entry.path,
                 summary?.releaseSummary ?? null,
