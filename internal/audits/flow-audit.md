@@ -61185,3 +61185,44 @@ one atomic task mutation. Older callers retain single-record behavior unless
 they explicitly request grouped recovery. Revert behavior: stop sending the
 optional grouped-recovery request; previously resolved records remain durable
 history and are never silently reopened.
+
+- [x] Regression and installed proof, 2026-08-30: the duplicate-recovery
+  unit and HTTP regressions prove one direct recovery clears matching records
+  while preserving a distinct escalation. Acting as the delegated Looma + Knit
+  owner resolved all three real records in one request and returned
+  `resolvedCount: 3`; the task then moved to `exploring` and the project
+  owner-blocked count fell to zero.
+
+### Finding: Promoted task details must not leak legacy escalation summaries
+
+- [ ] User job: after resolving a recovery, every route sees the same clear
+  task state. Historical definition fields cannot make a resolved task look
+  blocked again in a drawer, action model, or worker controller.
+- Finding, 2026-08-30: the real Looma + Knit recovery wrote the authoritative
+  runtime `openEscalationIds` as an empty array, but the task-detail API still
+  returned three open IDs. The promoted effective-task boundary correctly
+  stripped legacy escalation records but left behind their old top-level ID
+  summary fields.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-promoted-escalation-summary-2026-08-30`. Touched
+contract: promoted effective-task projection. In database-authoritative
+projects, legacy open escalation and issue ID summaries are excluded with the
+other legacy runtime fields; only the normalized runtime overlay may supply
+them. Considered but not touched: escalation resolution, task status, stored
+runtime rows, and project-summary ranking. Required proof: a promoted task
+with old definition IDs and an empty current runtime exposes no stale IDs.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. This is a read-boundary correction for data
+already migrated into the task runtime overlay. Existing records are untouched;
+revert restores the old read behavior only, with no data conversion.
+
+- [x] Regression and installed proof, 2026-08-30: the effective-task
+  regression proves old top-level summary IDs are excluded from a promoted
+  definition. After build, install, restart, and `stale:false`, the real Looma
+  + Knit task-detail API returned `exploring`, no block reason, no top-level
+  open escalation IDs, an empty runtime list, and all three recovered records
+  marked resolved.

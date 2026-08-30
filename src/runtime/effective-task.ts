@@ -347,6 +347,8 @@ export function stripLegacyRuntimeFields<T extends Record<string, unknown>>(task
     shelveReason: _shelveReason,
     proofRecovery: _proofRecovery,
     currentLifecycle: _currentLifecycle,
+    openEscalationIds: _openEscalationIds,
+    openIssueIds: _openIssueIds,
     doneSummaryBundle: _doneSummaryBundle,
     worktreePath: _worktreePath,
     branchName: _branchName,

@@ -102,6 +102,8 @@ describe('effective task projection', () => {
     expect(stripped).not.toHaveProperty('revisionCount')
     expect(stripped).not.toHaveProperty('shelveReason')
     expect(stripped).not.toHaveProperty('proofRecovery')
+    expect(stripped).not.toHaveProperty('openEscalationIds')
+    expect(stripped).not.toHaveProperty('openIssueIds')
     expect(stripped).toMatchObject({
       id: 'task-auth-complete',
       title: 'Complete auth',
