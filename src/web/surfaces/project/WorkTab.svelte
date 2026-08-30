@@ -358,12 +358,6 @@
       detail.startReadiness?.code === 'owner_review_required' &&
       ownerReviewQueueTasks.length > 0,
   )
-  const displayedTasks = $derived(ownerReviewQueueMode ? ownerReviewQueueTasks : sortedTasks)
-  const displayedWorkListCountLabel = $derived(
-    ownerReviewQueueMode
-      ? `${ownerReviewQueueTasks.length} ${ownerReviewQueueTasks.length === 1 ? 'spec needs' : 'specs need'} your review`
-      : workListCountLabel,
-  )
   const focusedWork = $derived.by(() => {
     path.href
     const routeTaskId = readSelectedWorkIdFromUrl()
@@ -376,6 +370,25 @@
     const taskId = actionTaskId ?? readinessTaskId ?? (projectRunActive ? routeTaskId : null)
     return taskId ? allWorkItems.find(task => task.id === taskId) ?? null : null
   })
+  const focusedQueueWork = $derived(
+    queueMode &&
+      detail.actionModel?.primaryAction?.code === 'paused_live_work' &&
+      focusedWork &&
+      isFocusedRunnableWork(focusedWork)
+      ? focusedWork
+      : null,
+  )
+  const displayedTasks = $derived(
+    (ownerReviewQueueMode ? ownerReviewQueueTasks : sortedTasks)
+      .filter(task => task.id !== focusedQueueWork?.id),
+  )
+  const displayedWorkListCountLabel = $derived(
+    ownerReviewQueueMode
+      ? `${ownerReviewQueueTasks.length} ${ownerReviewQueueTasks.length === 1 ? 'spec needs' : 'specs need'} your review`
+      : focusedQueueWork
+        ? countLabel(displayedTasks.length, 'other current item')
+        : workListCountLabel,
+  )
   const workMilestone = $derived(
     detail.orientationSpine?.summary?.headline
       ?? detail.releaseSummary?.release?.label
@@ -1023,6 +1036,25 @@
         </div>
       </UtilityPanel>
     {/if}
+    {#if focusedQueueWork}
+      <section class="work-queue-current-action" aria-label="Current work">
+        <div class="work-queue-current-copy">
+          <p>Current work</p>
+          <div>
+            <span>{taskDisplayKey(focusedQueueWork, allWorkItems, detail.id)}</span>
+            <Chip label={focusedStatusLabel(focusedQueueWork)} tone={focusedStatusTone(focusedQueueWork)} />
+          </div>
+          <strong>{taskDisplayLabel(focusedQueueWork, focusedQueueWork.id)}</strong>
+        </div>
+        <Button
+          variant="primary"
+          disabled={runWorkBusyId === focusedQueueWork.id || runWorkActiveId === focusedQueueWork.id}
+          onclick={() => void runWorkItem(focusedQueueWork.id)}
+        >
+          {focusedActionLabel(focusedQueueWork)}
+        </Button>
+      </section>
+    {/if}
     <div class="work-list-inspector-layout" class:has-selection={Boolean(selectedWorkId)}>
       <Card title={ownerReviewQueueMode ? 'Specs to review' : 'Work list'} titleTag="h2">
 
@@ -1038,7 +1070,7 @@
           {/if}
         </div>
 
-        {#if visibleImportDraftCount > 0 && nextImportDraft}
+        {#if !focusedQueueWork && visibleImportDraftCount > 0 && nextImportDraft}
           <UtilityPanel as="div" className="draft-queue-card" tone="neutral">
             <div class="draft-queue-copy">
               <p class="draft-queue-label">Imported draft queue</p>
@@ -1265,6 +1297,38 @@
     gap: var(--s-4);
     align-items: start;
   }
+  .work-queue-current-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-4);
+    min-width: 0;
+    padding: var(--s-3) var(--s-4);
+    border-bottom: 1px solid var(--gh-color-border-subtle);
+  }
+  .work-queue-current-copy {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+  .work-queue-current-copy p,
+  .work-queue-current-copy strong {
+    margin: 0;
+  }
+  .work-queue-current-copy p,
+  .work-queue-current-copy span {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    letter-spacing: 0;
+    text-transform: uppercase;
+  }
+  .work-queue-current-copy div {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
   .work-list-inspector-layout.has-selection {
     grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
   }
@@ -1461,6 +1525,13 @@
     .work-list-overview {
       align-items: stretch;
       flex-direction: column;
+    }
+    .work-queue-current-action {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .work-queue-current-action :global(button) {
+      inline-size: 100%;
     }
     :global(.draft-queue-card) {
       flex-direction: column;

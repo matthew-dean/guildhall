@@ -115,6 +115,11 @@ export function taskStagePresentation(
   const waitingOnDependency = hasUnmetDependencies({ id: taskId(input), status, dependsOn: input.dependsOn }, options.tasks)
 
   if (input.status === 'done' || status === 'done') return { key: 'done', label: 'Done', tone: 'ok' }
+  // A paused focused item is the project-level owner decision. Its stale
+  // assignment metadata must not make a stopped run look live in a list.
+  if (taskId(input) === options.focusTaskId && options.focusKind === 'paused_work') {
+    return { key: 'paused', label: 'Paused', tone: 'neutral' }
+  }
   if (needsRecovery({ ...input, taskStatus: status })) return { key: 'needs_recovery', label: 'Needs recovery', tone: 'warn' }
   if (agentName === 'spec-agent') {
     return { key: 'working', label: 'Working', tone: 'running' }

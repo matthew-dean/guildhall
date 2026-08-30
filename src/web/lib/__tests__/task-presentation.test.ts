@@ -103,6 +103,25 @@ describe('taskStagePresentation', () => {
     })
   })
 
+  it('keeps a paused focused task paused when its old worker assignment remains saved', () => {
+    const stage = taskStagePresentation({
+      id: 'task-paused',
+      title: 'Resume this exact work',
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+    }, {
+      runStatus: 'stopped',
+      focusTaskId: 'task-paused',
+      focusKind: 'paused_work',
+    })
+
+    expect(stage).toEqual({
+      label: 'Paused',
+      tone: 'neutral',
+      key: 'paused',
+    })
+  })
+
   it('presents ready work with unmet dependencies as waiting instead of hard blocked', () => {
     const stage = taskStagePresentation({
       id: 'task-storybook-proof',

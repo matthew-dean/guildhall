@@ -178,4 +178,37 @@ describe('focused Work flow', () => {
     expect(screen.getByRole('button', { name: 'Inspect work Focused review' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inspect work Next release work' })).toBeInTheDocument()
   })
+
+  it('keeps paused current work actionable and hides unrelated draft work after Browse work', async () => {
+    const user = userEvent.setup()
+    const paused = reviewTask({
+      id: 'task-paused', displayKey: 'LOO-146', title: 'Resume this exact work', status: 'in_progress', assignedTo: 'worker-agent',
+    })
+    const draft = reviewTask({
+      id: 'task-draft', displayKey: 'LOO-147', title: 'An unrelated imported draft', status: 'import_draft',
+    })
+    setRoute(`/projects/looma-knit/work?task=${paused.id}`)
+    render(WorkTab, { props: { detail: projectDetail([paused, draft], {
+      startReadiness: { canStart: true, code: 'paused_live_work', focusTaskId: paused.id, focusTaskTitle: paused.title, focusKind: 'paused_work' },
+      actionModel: {
+        primaryAction: {
+          taskId: paused.id,
+          code: 'paused_live_work',
+          operation: 'start_focused',
+          href: `/work?task=${paused.id}`,
+        },
+      },
+      orientationSpine: {
+        summary: { headline: 'Stage 1: Release hardening' },
+        scopeRows: [{ taskId: paused.id, scope: 'included' }],
+      },
+    }) } })
+
+    await user.click(await screen.findByRole('button', { name: 'Browse work' }))
+
+    expect(await screen.findByRole('region', { name: 'Current work' })).toHaveTextContent('Paused')
+    expect(screen.getByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Draft task brief' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Inspect work Resume this exact work' })).toBeNull()
+  })
 })

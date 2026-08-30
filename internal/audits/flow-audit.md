@@ -61267,3 +61267,40 @@ from falling back to non-authoritative presentation data.
   and `deferred: 0`. The paused Overview stayed oriented and actionable at
   1280px, 1024px, and 390px with no page-level horizontal overflow; its sole
   enabled `Resume work` control was visible above the mobile fold.
+
+### Finding: Work lists must preserve the active owner decision
+
+- [ ] User job: after choosing `Browse work` from the current-work handoff, an
+  owner sees the same named paused item and the same executable next action.
+  A queue cannot promote an unrelated draft, duplicate the current item, or
+  describe the paused item as working.
+- Finding, 2026-08-30: real Looma + Knit `Browse work` displayed a prominent
+  `Draft task brief` control for a different imported draft and listed the
+  paused `LOO-1CWL9M` item as `WORKING`. The focused handoff correctly said
+  `Work paused` with `Resume this work item`, but the queue discarded that
+  shared execution/action state and re-ranked raw list rows.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-work-queue-active-owner-decision-2026-08-30`. Touched
+contract: shared Work queue presentation model. When the project action model
+has a focused live-work decision, every Work entry surface must retain that
+item, render its current execution state, and expose its one action before
+unrelated queue readiness. Considered but not touched: task lifecycle status,
+task ranking for a project with no focused work, spec approval semantics, and
+worker scheduling. Required proof: a paused focused item remains visibly
+paused and resumeable from the queue without a competing primary action.
+
+#### Schema Migration Decision
+
+No schema migration. The repair consumes the existing shared action and
+execution projections; no durable task or project data changes.
+
+- [x] Regression and installed proof, 2026-08-30: focused Work regressions
+  prove that a paused shared action overrides stale worker assignment metadata,
+  remains the sole queue action after `Browse work`, and removes unrelated
+  imported-draft prompting plus the duplicate task row. After fresh build,
+  install, restart, and `stale:false`, the real Looma + Knit queue showed
+  `LOO-1CWL9M` once as `Paused` with one `Resume this work item` button and
+  `15 other current items`; it showed no `Draft task brief` control. At 390px,
+  the action remained above the fold with no page-level horizontal overflow.
